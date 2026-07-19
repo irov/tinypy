@@ -1,0 +1,107 @@
+# TinyPy
+
+TinyPy is a host-embedded Python 2.7 runtime and compiler written in C99.
+It executes source or bytecode entirely from memory and exposes a versioned C
+ABI with the `tinypy_` prefix.
+
+The runtime has no direct dependency on filesystem, stdio, environment,
+process, locale or thread APIs. Dynamic memory is provided by the host
+allocator. Module resolution, output, diagnostics and interruption are also
+delegated through host callbacks.
+
+Each `tinypy_vm_t` owns all mutable runtime and compiler state. Independent VMs
+may run concurrently without a process-wide lock. A single VM has one owner
+thread and supports synchronous reentrant calls.
+
+## Runtime
+
+The current implementation provides:
+
+- `None`, bool, integer, arbitrary-precision long, float and complex values;
+- byte strings, Unicode strings, tuples, lists, dictionaries, sets,
+  frozensets, byte arrays, buffers and slices;
+- functions, closures, methods, generators, iterators and exceptions;
+- old-style and new-style classes, metaclasses, C3 MRO, descriptors,
+  properties, `__slots__` and `super`;
+- frames, tracebacks and Python 2.7 bytecode execution;
+- memory-only imports with packages, circular imports and failed-import
+  rollback;
+- VM-local cached constants and reference-counted lifetime;
+- a memory-only CPython 2.7 marshal-v2 reader and writer;
+- an artifact container with ABI/profile metadata and SHA-256 integrity.
+
+TinyPy deliberately has no cyclic collector. Embedders must release owned
+values and break owning cycles before destroying a VM.
+
+## Compiler
+
+The embedded compiler accepts sized memory buffers in `exec`, `eval` and
+`single` modes. It contains a Python 2.7.18 tokenizer, parser, CST-to-AST
+conversion, future scanner, symbol table, bytecode generator, assembler,
+stack-depth calculation and peephole optimizer.
+
+Source decoding supports UTF-8 BOM, PEP 263 cookies, ASCII, UTF-8, Latin-1,
+CRLF/CR normalization and structured syntax diagnostics. Compiler limits cover
+source bytes, tokens, syntax nodes, nesting, symbols, blocks, instructions,
+constants and arena memory.
+
+The generated code objects and marshal-v2 payloads follow Python 2.7 semantics.
+The compiler never opens the logical filename supplied for diagnostics.
+
+The frontend is implemented directly on TinyPy values, compiler arenas and
+diagnostics under `src/compiler/`. It has no CPython compatibility headers,
+runtime objects or linked dependency. The Python 2.7.18 algorithms from which
+parts of the frontend were adapted remain covered by the PSF license; exact
+provenance is recorded in `LICENSES/README.md`.
+
+## C API
+
+Include the complete C API with:
+
+```c
+#include <tinypy/tinypy.h>
+```
+
+The only C++ proxy is:
+
+```cpp
+#include <tinypy/tinypy.hpp>
+```
+
+Public types end in `_t`, enums end in `_e`, functions use `tinypy_`, constants
+use `TINYPY_`, and private implementation symbols use `__tinypy_` or
+`tinypy_internal_`.
+
+Invalid pointers, ownership violations and wrong direct-accessor types are
+debug contracts. Python semantic failures, malformed external data, configured
+limits and ABI mismatches remain recoverable.
+
+## Build and test
+
+```sh
+cmake -S . -B build/default -DBUILD_TESTING=ON
+cmake --build build/default -j
+ctest --test-dir build/default --output-on-failure
+
+python3 -m unittest discover -s tests/tools -p 'test_*.py' -v
+python3 tests/artifact/run_tests.py --sanitize
+python3 tests/marshal/run_tests.py --sanitize
+python3 tools/audit_core_symbols.py build/default/libtinypy.a
+```
+
+The symbol audit rejects direct allocator, I/O, environment, process, locale
+and thread dependencies as well as symbols outside the TinyPy namespace.
+
+## Repository layout
+
+- `include/tinypy/` — public C ABI and the single C++ proxy;
+- `src/core/` — values, objects, types and runtime protocols;
+- `src/runtime/` — frame execution, builtins and imports;
+- `src/compiler/` — native memory-only frontend, code generator and compiler integration;
+- `src/bytecode/` — opcode metadata and bytecode verification;
+- `src/marshal/` — marshal-v2 reader and writer;
+- `src/artifact/` — versioned code artifact container;
+- `tests/` — standalone runtime, compiler, format and fuzz tests;
+- `LICENSES/` — third-party attribution and license texts.
+
+The detailed implementation contract is in [SPEC.md](SPEC.md).

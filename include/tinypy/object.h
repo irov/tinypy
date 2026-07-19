@@ -1,0 +1,12 @@
+#ifndef TINYPY_OBJECT_H
+#define TINYPY_OBJECT_H
+
+#include "tinypy/types.h"
+
+/* Generic Python attribute protocol. get returns one owned reference. set
+ * returns non-zero on success and zero with out_error on semantic failure. */
+tinypy_value_t *tinypy_object_get_attr(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error);
+int32_t tinypy_object_set_attr(tinypy_value_t *value, const char *name, size_t name_size, tinypy_value_t *attribute_value, tinypy_error_t **out_error);
+int32_t tinypy_object_delete_attr(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error);
+
+#endif

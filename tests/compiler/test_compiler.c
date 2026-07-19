@@ -1,0 +1,1091 @@
+#include "tinypy/tinypy.h"
+
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
+typedef struct test_allocator_state_t {
+    size_t allocations;
+    size_t bytes;
+} test_allocator_state_t;
+
+typedef struct test_source_host_t {
+    tinypy_module_artifact_t artifact;
+    size_t resolve_count;
+    size_t release_count;
+} test_source_host_t;
+
+typedef struct test_source_multi_host_t {
+    tinypy_module_artifact_t *artifacts;
+    size_t artifact_count;
+    size_t resolve_count;
+    size_t release_count;
+} test_source_multi_host_t;
+
+typedef struct test_reentrant_state_t {
+    tinypy_vm_t *vm;
+    int32_t inherited_future;
+} test_reentrant_state_t;
+
+typedef struct test_compile_thread_state_t {
+    int32_t passed;
+} test_compile_thread_state_t;
+
+static void *__test_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag)
+{
+    test_allocator_state_t *state = (test_allocator_state_t *)user_data;
+    void *memory;
+
+    (void)alignment;
+    (void)tag;
+    memory = malloc(size);
+    assert(memory != NULL);
+    state->allocations += 1U;
+    state->bytes += size;
+    return memory;
+}
+
+static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag)
+{
+    test_allocator_state_t *state = (test_allocator_state_t *)user_data;
+    void *resized;
+
+    (void)alignment;
+    (void)tag;
+    resized = realloc(memory, new_size);
+    assert(resized != NULL);
+    state->bytes -= old_size;
+    state->bytes += new_size;
+    return resized;
+}
+
+static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag)
+{
+    test_allocator_state_t *state = (test_allocator_state_t *)user_data;
+
+    (void)alignment;
+    (void)tag;
+    assert(state->allocations != 0U);
+    assert(state->bytes >= size);
+    state->allocations -= 1U;
+    state->bytes -= size;
+    free(memory);
+}
+
+static tinypy_vm_t *__test_vm_create(test_allocator_state_t *state, int32_t optimize_level)
+{
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = state;
+    allocator.allocate = &__test_allocate;
+    allocator.reallocate = &__test_reallocate;
+    allocator.deallocate = &__test_deallocate;
+    (void)memset(&config, 0, sizeof(config));
+    config.abi_version = TINYPY_ABI_VERSION;
+    config.struct_size = (uint32_t)sizeof(config);
+    config.allocator = &allocator;
+    config.optimize_level = optimize_level;
+    return tinypy_vm_create(&config);
+}
+
+static const tinypy_module_artifact_t *__test_source_resolve(void *user_data, const tinypy_module_request_t *request)
+{
+    test_source_host_t *host = (test_source_host_t *)user_data;
+
+    if (request->canonical_name_size != host->artifact.canonical_name_size || memcmp(request->canonical_name, host->artifact.canonical_name, request->canonical_name_size) != 0) return NULL;
+    host->resolve_count += 1U;
+    return &host->artifact;
+}
+
+static void __test_source_release(void *user_data, const tinypy_module_artifact_t *artifact)
+{
+    test_source_host_t *host = (test_source_host_t *)user_data;
+
+    assert(artifact == &host->artifact);
+    host->release_count += 1U;
+}
+
+static const tinypy_module_artifact_t *__test_source_multi_resolve(void *user_data, const tinypy_module_request_t *request)
+{
+    test_source_multi_host_t *host = (test_source_multi_host_t *)user_data;
+    size_t index;
+
+    for (index = 0U; index < host->artifact_count; index += 1U) {
+        tinypy_module_artifact_t *artifact = &host->artifacts[index];
+
+        if (request->canonical_name_size == artifact->canonical_name_size && memcmp(request->canonical_name, artifact->canonical_name, request->canonical_name_size) == 0) {
+            host->resolve_count += 1U;
+            return artifact;
+        }
+    }
+    return NULL;
+}
+
+static void __test_source_multi_release(void *user_data, const tinypy_module_artifact_t *artifact)
+{
+    test_source_multi_host_t *host = (test_source_multi_host_t *)user_data;
+
+    assert(artifact >= host->artifacts && artifact < host->artifacts + host->artifact_count);
+    host->release_count += 1U;
+}
+
+static tinypy_vm_t *__test_vm_create_with_source_host(test_allocator_state_t *state, test_source_host_t *source_host)
+{
+    tinypy_allocator_t allocator;
+    tinypy_host_t host;
+    tinypy_vm_config_t config;
+
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = state;
+    allocator.allocate = &__test_allocate;
+    allocator.reallocate = &__test_reallocate;
+    allocator.deallocate = &__test_deallocate;
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = source_host;
+    host.resolve_module = &__test_source_resolve;
+    host.release_module_artifact = &__test_source_release;
+    (void)memset(&config, 0, sizeof(config));
+    config.abi_version = TINYPY_ABI_VERSION;
+    config.struct_size = (uint32_t)sizeof(config);
+    config.allocator = &allocator;
+    config.host = &host;
+    return tinypy_vm_create(&config);
+}
+
+static tinypy_vm_t *__test_vm_create_with_source_multi_host(test_allocator_state_t *state, test_source_multi_host_t *source_host)
+{
+    tinypy_allocator_t allocator;
+    tinypy_host_t host;
+    tinypy_vm_config_t config;
+
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = state;
+    allocator.allocate = &__test_allocate;
+    allocator.reallocate = &__test_reallocate;
+    allocator.deallocate = &__test_deallocate;
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = source_host;
+    host.resolve_module = &__test_source_multi_resolve;
+    host.release_module_artifact = &__test_source_multi_release;
+    (void)memset(&config, 0, sizeof(config));
+    config.abi_version = TINYPY_ABI_VERSION;
+    config.struct_size = (uint32_t)sizeof(config);
+    config.allocator = &allocator;
+    config.host = &host;
+    return tinypy_vm_create(&config);
+}
+
+static int __test_empty_exec(void)
+{
+    static const char logical_filename[] = {'e', 'm', 'p', 't', 'y', '.', 'p', 'y'};
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 2);
+    tinypy_compile_options_t options;
+    tinypy_value_t *code;
+    tinypy_value_t *bytecode;
+    tinypy_value_t *consts;
+    size_t bytecode_size;
+    const unsigned char expected[] = {100U, 0U, 0U, 83U};
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.optimize_level = 2;
+    code = tinypy_compile_source(vm, NULL, 0U, logical_filename, sizeof(logical_filename), &options, NULL);
+    assert(code != NULL);
+    assert(tinypy_code_arg_count(code) == 0);
+    assert(tinypy_code_local_count(code) == 0);
+    assert(tinypy_code_stack_size(code) == 1);
+    assert(tinypy_code_flags(code) == TINYPY_CODE_NO_FREE);
+    bytecode = tinypy_code_bytecode(code);
+    assert(memcmp(tinypy_string_view(bytecode, &bytecode_size), expected, sizeof(expected)) == 0);
+    assert(bytecode_size == sizeof(expected));
+    consts = tinypy_code_consts(code);
+    assert(tinypy_tuple_size(consts) == 1U);
+    assert(tinypy_typeof(tinypy_tuple_get(consts, 0U)) == TINYPY_VALUE_NONE);
+    assert(tinypy_typeof(tinypy_code_filename(code)) == TINYPY_VALUE_STRING);
+    assert(tinypy_string_view(tinypy_code_filename(code), &bytecode_size) != NULL);
+    assert(bytecode_size == sizeof(logical_filename));
+    assert(memcmp(tinypy_string_view(tinypy_code_filename(code), &bytecode_size), logical_filename, sizeof(logical_filename)) == 0);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U);
+    assert(state.bytes == 0U);
+    return 0;
+}
+
+static int __test_source_diagnostic(void)
+{
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+    const char source[] = "value =\r\nnext = 2\r";
+    const char *filename;
+    const char *line;
+    size_t filename_size;
+    size_t line_size;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "diagnostic.py", 13U, &options, &error);
+    assert(code == NULL);
+    assert(error != NULL);
+    assert(tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    assert(tinypy_error_line_number(error) == 1);
+    assert(tinypy_error_column_offset(error) == 8);
+    filename = tinypy_error_logical_filename(error, &filename_size);
+    assert(filename_size == 13U && memcmp(filename, "diagnostic.py", 13U) == 0);
+    line = tinypy_error_source_line(error, &line_size);
+    assert(line_size == 8U && memcmp(line, "value =\n", 8U) == 0);
+    tinypy_error_release(error);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U);
+    return 0;
+}
+
+static int __test_source_decoding(void)
+{
+    static const unsigned char latin1_source[] = "#!/usr/bin/env python\n# coding: latin-1\nvalue = u\"\xe9\"\n";
+    static const unsigned char ascii_invalid[] = "# coding: ascii\nvalue = u\"\xc3\xa9\"\n";
+    static const unsigned char bom_utf8[] = "\xef\xbb\xbf# coding: utf-8\nvalue = u\"\xc3\xa9\"\n";
+    static const unsigned char bom_latin1[] = "\xef\xbb\xbf# coding: latin-1\nvalue = 1\n";
+    static const unsigned char invalid_utf8[] = "value = u\"\xff\"\n";
+    static const unsigned char embedded_nul[] = {'v','a','l','u','e','=','1','\0','\n'};
+    static const char coding_in_code[] = "value = 'coding: koala'\n";
+    static const char second_cookie_after_code[] = "value = 1\n# coding: koala\n";
+    static const char unknown_cookie[] = "# comment\n# coding: koala\nvalue = 1\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, latin1_source, sizeof(latin1_source) - 1U, "latin1.py", 9U, &options, NULL);
+    assert(code != NULL);
+    tinypy_release(code);
+    code = tinypy_compile_source(vm, bom_utf8, sizeof(bom_utf8) - 1U, "bom.py", 6U, &options, NULL);
+    assert(code != NULL);
+    tinypy_release(code);
+    code = tinypy_compile_source(vm, coding_in_code, sizeof(coding_in_code) - 1U, "inline.py", 9U, &options, NULL);
+    assert(code != NULL);
+    tinypy_release(code);
+    code = tinypy_compile_source(vm, second_cookie_after_code, sizeof(second_cookie_after_code) - 1U, "second.py", 9U, &options, NULL);
+    assert(code != NULL);
+    tinypy_release(code);
+
+    code = tinypy_compile_source(vm, ascii_invalid, sizeof(ascii_invalid) - 1U, "ascii.py", 8U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SOURCE_DECODING);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, bom_latin1, sizeof(bom_latin1) - 1U, "bom_latin.py", 12U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SOURCE_DECODING);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, invalid_utf8, sizeof(invalid_utf8) - 1U, "utf8.py", 7U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SOURCE_DECODING);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, unknown_cookie, sizeof(unknown_cookie) - 1U, "unknown.py", 10U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    assert(tinypy_error_line_number(error) == 2);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, embedded_nul, sizeof(embedded_nul), "nul.py", 6U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    tinypy_error_release(error);
+
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static void __test_unicode_value(tinypy_value_t *value, const unsigned char *expected, size_t expected_size)
+{
+    const char *bytes;
+    size_t byte_size;
+    size_t code_point_count;
+
+    assert(tinypy_typeof(value) == TINYPY_VALUE_UNICODE);
+    bytes = tinypy_unicode_utf8_view(value, &byte_size, &code_point_count);
+    assert(byte_size == expected_size);
+    assert(memcmp(bytes, expected, expected_size) == 0);
+}
+
+static int __test_named_unicode_escapes(void)
+{
+    static const char source[] = "(u'\\N{LATIN SMALL LETTER A}', u'\\N{GREEK SMALL LETTER PI}', u'\\N{HANGUL SYLLABLE GA}', u'\\N{CJK UNIFIED IDEOGRAPH-4E00}')";
+    static const char invalid_source[] = "u'\\N{NOT A CHARACTER}'";
+    static const char surrogate_source[] = "u'\\ud800'";
+    static const unsigned char latin_a[] = {0x61U};
+    static const unsigned char greek_pi[] = {0xcfU, 0x80U};
+    static const unsigned char hangul_ga[] = {0xeaU, 0xb0U, 0x80U};
+    static const unsigned char cjk_one[] = {0xe4U, 0xb8U, 0x80U};
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *result;
+    tinypy_error_t *error = NULL;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+    result = tinypy_eval_source(vm, source, sizeof(source) - 1U, "unicode.py", 10U, globals, NULL, &options, NULL);
+    assert(result != NULL && tinypy_tuple_size(result) == 4U);
+    __test_unicode_value(tinypy_tuple_get(result, 0U), latin_a, sizeof(latin_a));
+    __test_unicode_value(tinypy_tuple_get(result, 1U), greek_pi, sizeof(greek_pi));
+    __test_unicode_value(tinypy_tuple_get(result, 2U), hangul_ga, sizeof(hangul_ga));
+    __test_unicode_value(tinypy_tuple_get(result, 3U), cjk_one, sizeof(cjk_one));
+    tinypy_release(result);
+    result = tinypy_eval_source(vm, invalid_source, sizeof(invalid_source) - 1U, "unicode.py", 10U, globals, NULL, &options, &error);
+    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    tinypy_error_release(error);
+    error = NULL;
+    result = tinypy_eval_source(vm, surrogate_source, sizeof(surrogate_source) - 1U, "unicode.py", 10U, globals, NULL, &options, &error);
+    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    tinypy_error_release(error);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static tinypy_value_t *__test_dict_get(tinypy_vm_t *vm, tinypy_value_t *dict, const char *name, size_t name_size)
+{
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
+    tinypy_value_t *value;
+
+    assert(tinypy_dict_contains(dict, key) != 0);
+    value = tinypy_dict_get(dict, key);
+    tinypy_release(key);
+    return value;
+}
+
+static int __test_legacy_vm_config_optimize_default(void)
+{
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_vm_t *vm;
+    tinypy_value_t *debug_value;
+
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = &state;
+    allocator.allocate = &__test_allocate;
+    allocator.reallocate = &__test_reallocate;
+    allocator.deallocate = &__test_deallocate;
+    (void)memset(&config, 0, sizeof(config));
+    config.abi_version = TINYPY_ABI_VERSION;
+    config.struct_size = (uint32_t)offsetof(tinypy_vm_config_t, optimize_level);
+    config.allocator = &allocator;
+    vm = tinypy_vm_create(&config);
+    debug_value = __test_dict_get(vm, tinypy_vm_builtins(vm), "__debug__", 9U);
+    assert(tinypy_typeof(debug_value) == TINYPY_VALUE_BOOL && tinypy_bool_as_i32(debug_value) != 0);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static tinypy_value_t *__test_find_nested_code(tinypy_value_t *code, const char *name, size_t name_size)
+{
+    tinypy_value_t *consts = tinypy_code_consts(code);
+    size_t index;
+
+    for (index = 0U; index < tinypy_tuple_size(consts); index += 1U) {
+        tinypy_value_t *nested = tinypy_tuple_get(consts, index);
+
+        if (tinypy_typeof(nested) == TINYPY_VALUE_CODE) {
+            tinypy_value_t *code_name = tinypy_code_name(nested);
+            size_t code_name_size;
+            const char *code_name_bytes = tinypy_string_view(code_name, &code_name_size);
+            tinypy_value_t *found;
+
+            if (code_name_size == name_size && memcmp(code_name_bytes, name, name_size) == 0) return nested;
+            found = __test_find_nested_code(nested, name, name_size);
+            if (found != NULL) return found;
+        }
+    }
+    return NULL;
+}
+
+static int __test_private_name_mangling(void)
+{
+    static const char source[] = "class AnalyticUnit(object):\n    callback = lambda *_, **__: None\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_value_t *code;
+    tinypy_value_t *lambda_code;
+    tinypy_value_t *varnames;
+    size_t name_size;
+    const char *name;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "mangle.py", 9U, &options, NULL);
+    assert(code != NULL);
+    lambda_code = __test_find_nested_code(code, "<lambda>", 8U);
+    assert(lambda_code != NULL);
+    varnames = tinypy_code_varnames(lambda_code);
+    assert(tinypy_tuple_size(varnames) == 2U);
+    name = tinypy_string_view(tinypy_tuple_get(varnames, 1U), &name_size);
+    assert(name_size == 2U && memcmp(name, "__", 2U) == 0);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_compile_marshal_parity(void)
+{
+    static const unsigned char expected[] = {
+        0x63,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x40,0x00,0x00,
+        0x00,0x73,0x0a,0x00,0x00,0x00,0x64,0x00,0x00,0x5a,0x00,0x00,0x64,0x01,0x00,0x53,
+        0x28,0x02,0x00,0x00,0x00,0x69,0x2a,0x00,0x00,0x00,0x4e,0x28,0x01,0x00,0x00,0x00,
+        0x74,0x06,0x00,0x00,0x00,0x72,0x65,0x73,0x75,0x6c,0x74,0x28,0x00,0x00,0x00,0x00,
+        0x28,0x00,0x00,0x00,0x00,0x28,0x00,0x00,0x00,0x00,0x73,0x08,0x00,0x00,0x00,0x73,
+        0x6d,0x61,0x6c,0x6c,0x2e,0x70,0x79,0x74,0x08,0x00,0x00,0x00,0x3c,0x6d,0x6f,0x64,
+        0x75,0x6c,0x65,0x3e,0x01,0x00,0x00,0x00,0x74,0x00,0x00,0x00,0x00
+    };
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_value_t *code;
+    unsigned char output[sizeof(expected)];
+    size_t size;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, "result = 42\n", 12U, "small.py", 8U, &options, NULL);
+    assert(code != NULL);
+    assert(tinypy_marshal_dump_code_v2(code, NULL, 0U, &size, NULL, NULL) == TINYPY_MARSHAL_OK);
+    assert(size == sizeof(expected));
+    assert(tinypy_marshal_dump_code_v2(code, output, sizeof(output), &size, NULL, NULL) == TINYPY_MARSHAL_OK);
+    assert(memcmp(output, expected, sizeof(expected)) == 0);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_exec_eval_and_dynamic_compile(void)
+{
+    static const char source[] =
+        "from __future__ import division\n"
+        "direct = eval('1 / 2')\n"
+        "inherited = eval(compile('1 / 2', 'future.py', 'eval'))\n"
+        "isolated = eval(compile('1 / 2', 'future.py', 'eval', 0, 1))\n"
+        "unicode_eval = eval(u'40 + 2')\n"
+        "unicode_cookie_rejected = False\n"
+        "try:\n"
+        "    compile(u'# coding: utf-8\\npass\\n', 'unicode.py', 'exec')\n"
+        "except SyntaxError:\n"
+        "    unicode_cookie_rejected = True\n"
+        "unicode_exec_cookie_rejected = False\n"
+        "try:\n"
+        "    exec u'# coding: utf-8\\npass\\n'\n"
+        "except SyntaxError:\n"
+        "    unicode_exec_cookie_rejected = True\n"
+        "closure_result = (lambda x: (lambda y: x + y))(40)(2)\n"
+        "payload = 'dynamic = 6 * 7'\n"
+        "exec payload\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *result;
+    tinypy_error_t *error = NULL;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "dynamic.py", 10U, globals, NULL, &options, &error);
+    assert(result != NULL);
+    assert(error == NULL);
+    tinypy_release(result);
+    assert(tinypy_typeof(__test_dict_get(vm, globals, "direct", 6U)) == TINYPY_VALUE_FLOAT);
+    assert(tinypy_float_as_double(__test_dict_get(vm, globals, "direct", 6U)) == 0.5);
+    assert(tinypy_float_as_double(__test_dict_get(vm, globals, "inherited", 9U)) == 0.5);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "isolated", 8U)) == 0);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "unicode_eval", 12U)) == 42);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "unicode_cookie_rejected", 23U)) != 0);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "unicode_exec_cookie_rejected", 28U)) != 0);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "closure_result", 14U)) == 42);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic", 7U)) == 42);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_compile_modes_and_optimize(void)
+{
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *code;
+    tinypy_value_t *result;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+    result = tinypy_eval_source(vm, "40 + 2", 6U, "eval.py", 7U, globals, NULL, &options, NULL);
+    assert(result != NULL && tinypy_integer_as_i64(result) == 42);
+    tinypy_release(result);
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_SINGLE);
+    code = tinypy_compile_source(vm, "single_value = 9\n", 17U, "single.py", 9U, &options, NULL);
+    assert(code != NULL);
+    result = tinypy_exec_code(code, globals, NULL, NULL);
+    assert(result != NULL && tinypy_typeof(result) == TINYPY_VALUE_NONE);
+    tinypy_release(result);
+    tinypy_release(code);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "single_value", 12U)) == 9);
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+    options.optimize_level = 0;
+    result = tinypy_eval_source(vm, "__debug__", 9U, "debug.py", 8U, globals, NULL, &options, NULL);
+    assert(result != NULL && tinypy_bool_as_i32(result) != 0);
+    tinypy_release(result);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    vm = __test_vm_create(&state, 2);
+    globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+    options.optimize_level = 2;
+    result = tinypy_eval_source(vm, "__debug__", 9U, "debug.py", 8U, globals, NULL, &options, NULL);
+    assert(result != NULL && tinypy_bool_as_i32(result) == 0);
+    tinypy_release(result);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_host_call_eval_without_frame(void)
+{
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_value_t *builtins = tinypy_vm_builtins(vm);
+    tinypy_value_t *eval_function = __test_dict_get(vm, builtins, "eval", 4U);
+    tinypy_value_t *source = tinypy_string_from_bytes(vm, "40 + 2", 6U);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &source, 1U);
+    tinypy_value_t *result = tinypy_call(eval_function, args, NULL, NULL);
+
+    assert(result != NULL && tinypy_integer_as_i64(result) == 42);
+    tinypy_release(result);
+    tinypy_release(args);
+    tinypy_release(source);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_indentation_diagnostics(void)
+{
+    static const char unexpected_indent[] = "  value = 1\n";
+    static const char missing_indent[] = "if True:\npass\n";
+    static const char mixed_tabs[] = "if True:\n\tvalue = 1\n        value = 2\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, unexpected_indent, sizeof(unexpected_indent) - 1U, "indent.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDENTATION);
+    assert(tinypy_error_line_number(error) == 1 && tinypy_error_column_offset(error) == 2);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, missing_indent, sizeof(missing_indent) - 1U, "indent.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDENTATION);
+    assert(tinypy_error_line_number(error) == 2 && tinypy_error_column_offset(error) == 4);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, mixed_tabs, sizeof(mixed_tabs) - 1U, "tabs.py", 7U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TAB);
+    tinypy_error_release(error);
+
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_dont_imply_dedent(void)
+{
+    static const char incomplete[] = "if True:\n    pass";
+    static const char complete[] = "if True:\n    pass\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_SINGLE);
+    options.flags = (uint32_t)TINYPY_COMPILE_FLAG_DONT_IMPLY_DEDENT;
+    options.dont_inherit = 1;
+    code = tinypy_compile_source(vm, incomplete, sizeof(incomplete) - 1U, "codeop.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    assert(tinypy_error_line_number(error) == 2 && tinypy_error_column_offset(error) == 8);
+    tinypy_error_release(error);
+    code = tinypy_compile_source(vm, complete, sizeof(complete) - 1U, "codeop.py", 9U, &options, NULL);
+    assert(code != NULL);
+    assert((tinypy_code_flags(code) & (int32_t)TINYPY_COMPILE_FLAG_DONT_IMPLY_DEDENT) == 0);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_future_and_reserved_debug(void)
+{
+    static const char misplaced_future[] = "value = 1\nfrom __future__ import division\n";
+    static const char braces_future[] = "from __future__ import braces\n";
+    static const char unknown_future[] = "from __future__ import koala\n";
+    static const char unknown_message[] = "future feature koala is not defined";
+    static const char debug_assignment[] = "__debug__ = False\n";
+    static const char valid_future[] = "from __future__ import division, absolute_import\nvalue = 1 / 2\n";
+    static const char print_function_future[] = "from __future__ import print_function\nprint = 1\n";
+    const char *invalid_sources[] = {misplaced_future, braces_future, unknown_future, debug_assignment};
+    const size_t invalid_sizes[] = {sizeof(misplaced_future) - 1U, sizeof(braces_future) - 1U, sizeof(unknown_future) - 1U, sizeof(debug_assignment) - 1U};
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    size_t index;
+    tinypy_value_t *code;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    for (index = 0U; index < sizeof(invalid_sources) / sizeof(invalid_sources[0]); index += 1U) {
+        tinypy_error_t *error = NULL;
+
+        code = tinypy_compile_source(vm, invalid_sources[index], invalid_sizes[index], "future.py", 9U, &options, &error);
+        assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+        if (index == 2U) {
+            size_t message_size;
+            const char *message = tinypy_error_message(error, &message_size);
+
+            assert(message_size == sizeof(unknown_message) - 1U && memcmp(message, unknown_message, message_size) == 0);
+        }
+        tinypy_error_release(error);
+    }
+    code = tinypy_compile_source(vm, valid_future, sizeof(valid_future) - 1U, "future.py", 9U, &options, NULL);
+    assert(code != NULL);
+    assert((tinypy_code_flags(code) & TINYPY_CODE_FUTURE_DIVISION) != 0);
+    assert((tinypy_code_flags(code) & TINYPY_CODE_FUTURE_ABSOLUTE_IMPORT) != 0);
+    tinypy_release(code);
+    code = tinypy_compile_source(vm, print_function_future, sizeof(print_function_future) - 1U, "future.py", 9U, &options, NULL);
+    assert(code != NULL);
+    assert((tinypy_code_flags(code) & TINYPY_CODE_FUTURE_PRINT_FUNCTION) != 0);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_symtable_and_ast_error_messages(void)
+{
+    static const char duplicate_argument[] = "def f(value, value): pass\n";
+    static const char local_and_global[] = "def f(value):\n    global value\n";
+    static const char assign_literal[] = "1 = value\n";
+    static const char delete_literal[] = "del 1\n";
+    static const char duplicate_message[] = "duplicate argument 'value' in function definition";
+    static const char global_message[] = "name 'value' is local and global";
+    static const char assign_message[] = "can't assign to literal";
+    static const char delete_message[] = "can't delete literal";
+    const char *sources[] = {duplicate_argument, local_and_global, assign_literal, delete_literal};
+    const size_t source_sizes[] = {sizeof(duplicate_argument) - 1U, sizeof(local_and_global) - 1U, sizeof(assign_literal) - 1U, sizeof(delete_literal) - 1U};
+    const char *messages[] = {duplicate_message, global_message, assign_message, delete_message};
+    const size_t message_sizes[] = {sizeof(duplicate_message) - 1U, sizeof(global_message) - 1U, sizeof(assign_message) - 1U, sizeof(delete_message) - 1U};
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    size_t index;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    for (index = 0U; index < sizeof(sources) / sizeof(sources[0]); index += 1U) {
+        tinypy_error_t *error = NULL;
+        tinypy_value_t *code = tinypy_compile_source(vm, sources[index], source_sizes[index], "semantic.py", 11U, &options, &error);
+        const char *message;
+        size_t message_size;
+
+        assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+        message = tinypy_error_message(error, &message_size);
+        assert(message_size == message_sizes[index] && memcmp(message, messages[index], message_size) == 0);
+        tinypy_error_release(error);
+    }
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_codegen_syntax_errors(void)
+{
+    static const char delete_free[] = "def outer():\n    value = 1\n    def inner(): return value\n    del value\n";
+    static const char delete_message[] = "can not delete variable 'value' referenced in nested scope";
+    static const char block_message[] = "too many statically nested blocks";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+    char nested_blocks[4096];
+    size_t source_size = 0U;
+    size_t depth;
+    size_t index;
+    const char *message;
+    size_t message_size;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, delete_free, sizeof(delete_free) - 1U, "closure.py", 10U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    message = tinypy_error_message(error, &message_size);
+    assert(message_size == sizeof(delete_message) - 1U && memcmp(message, delete_message, message_size) == 0);
+    assert(tinypy_error_line_number(error) == 4);
+    tinypy_error_release(error);
+    error = NULL;
+
+    for (depth = 0U; depth < 25U; depth += 1U) {
+        for (index = 0U; index < depth * 4U; index += 1U) nested_blocks[source_size++] = ' ';
+        (void)memcpy(nested_blocks + source_size, "while 1:\n", 9U);
+        source_size += 9U;
+    }
+    for (index = 0U; index < 25U * 4U; index += 1U) nested_blocks[source_size++] = ' ';
+    (void)memcpy(nested_blocks + source_size, "pass\n", 5U);
+    source_size += 5U;
+    code = tinypy_compile_source(vm, nested_blocks, source_size, "blocks.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    message = tinypy_error_message(error, &message_size);
+    assert(message_size == sizeof(block_message) - 1U && memcmp(message, block_message, message_size) == 0);
+    assert(tinypy_error_line_number(error) > 0);
+    tinypy_error_release(error);
+
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static tinypy_value_t *__test_reentrant_compile_callback(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error)
+{
+    test_reentrant_state_t *state = (test_reentrant_state_t *)user_data;
+    tinypy_compile_options_t options;
+    tinypy_value_t *code;
+
+    (void)function;
+    (void)args;
+    (void)kwargs;
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+    code = tinypy_compile_source(state->vm, "1 / 2", 5U, "reentrant.py", 12U, &options, out_error);
+    if (code == NULL) return NULL;
+    state->inherited_future = (tinypy_code_flags(code) & TINYPY_CODE_FUTURE_DIVISION) != 0 ? 1 : 0;
+    tinypy_release(code);
+    return tinypy_none_get(state->vm);
+}
+
+static int __test_reentrant_compile(void)
+{
+    static const char source[] = "from __future__ import division\nnested_compile()\n";
+    test_allocator_state_t allocator_state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&allocator_state, 0);
+    test_reentrant_state_t reentrant_state;
+    tinypy_compile_options_t options;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *function;
+    tinypy_value_t *key;
+    tinypy_value_t *result;
+
+    reentrant_state.vm = vm;
+    reentrant_state.inherited_future = 0;
+    function = tinypy_native_function_new(vm, "nested_compile", 14U, &__test_reentrant_compile_callback, &reentrant_state, NULL);
+    key = tinypy_string_from_bytes(vm, "nested_compile", 14U);
+    tinypy_dict_set(globals, key, function);
+    tinypy_release(key);
+    tinypy_release(function);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "outer.py", 8U, globals, NULL, &options, NULL);
+    assert(result != NULL);
+    assert(reentrant_state.inherited_future != 0);
+    tinypy_release(result);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(allocator_state.allocations == 0U && allocator_state.bytes == 0U);
+    return 0;
+}
+
+static void __test_compile_thread_run(test_compile_thread_state_t *thread_state)
+{
+    test_allocator_state_t allocator_state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&allocator_state, 0);
+    tinypy_compile_options_t options;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    size_t iteration;
+
+    thread_state->passed = 0;
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+    for (iteration = 0U; iteration < 32U; iteration += 1U) {
+        tinypy_value_t *result = tinypy_eval_source(vm, "6 * 7", 5U, "thread.py", 9U, globals, NULL, &options, NULL);
+
+        if (result == NULL || tinypy_integer_as_i64(result) != 42) {
+            if (result != NULL) tinypy_release(result);
+            tinypy_release(globals);
+            tinypy_vm_destroy(vm);
+            return;
+        }
+        tinypy_release(result);
+    }
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    if (allocator_state.allocations == 0U && allocator_state.bytes == 0U) thread_state->passed = 1;
+}
+
+#if defined(_WIN32)
+static DWORD WINAPI __test_compile_thread_entry(LPVOID user_data)
+{
+    __test_compile_thread_run((test_compile_thread_state_t *)user_data);
+    return 0;
+}
+#else
+static void *__test_compile_thread_entry(void *user_data)
+{
+    __test_compile_thread_run((test_compile_thread_state_t *)user_data);
+    return NULL;
+}
+#endif
+
+static int __test_parallel_compile(void)
+{
+    test_compile_thread_state_t states[4];
+    size_t index;
+
+#if defined(_WIN32)
+    HANDLE threads[4];
+
+    for (index = 0U; index < 4U; index += 1U) {
+        states[index].passed = 0;
+        threads[index] = CreateThread(NULL, 0U, &__test_compile_thread_entry, &states[index], 0U, NULL);
+        assert(threads[index] != NULL);
+    }
+    assert(WaitForMultipleObjects(4U, threads, TRUE, INFINITE) == WAIT_OBJECT_0);
+    for (index = 0U; index < 4U; index += 1U) CloseHandle(threads[index]);
+#else
+    pthread_t threads[4];
+
+    for (index = 0U; index < 4U; index += 1U) {
+        states[index].passed = 0;
+        assert(pthread_create(&threads[index], NULL, &__test_compile_thread_entry, &states[index]) == 0);
+    }
+    for (index = 0U; index < 4U; index += 1U) assert(pthread_join(threads[index], NULL) == 0);
+#endif
+    for (index = 0U; index < 4U; index += 1U) assert(states[index].passed != 0);
+    return 0;
+}
+
+static int __test_compiler_limits(void)
+{
+    static const char source[] = "def f(a):\n    return (a + 123, 'constant payload')\nvalue = f(2)\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_compile_limits_t limits;
+    size_t *limit_fields[] = {
+        &limits.max_tokens,
+        &limits.max_cst_nodes,
+        &limits.max_ast_nodes,
+        &limits.max_nesting,
+        &limits.max_symbols,
+        &limits.max_blocks,
+        &limits.max_instructions,
+        &limits.max_constants,
+        &limits.max_constant_bytes,
+        &limits.max_arena_bytes
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(limit_fields) / sizeof(limit_fields[0]); index += 1U) {
+        tinypy_error_t *error = NULL;
+        tinypy_value_t *code;
+
+        tinypy_compile_limits_init(&limits);
+        *limit_fields[index] = 1U;
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        options.limits = &limits;
+        code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "limits.py", 9U, &options, &error);
+        assert(code == NULL);
+        assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
+        tinypy_error_release(error);
+    }
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_source_import_and_rollback(void)
+{
+    static const char valid_source[] = "value = 42\n";
+    static const char invalid_source[] = "value =\n";
+    test_allocator_state_t state = {0U, 0U};
+    test_source_host_t host;
+    tinypy_vm_t *vm;
+    tinypy_value_t *module;
+    tinypy_value_t *modules;
+    tinypy_value_t *key;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&host, 0, sizeof(host));
+    host.artifact.abi_version = TINYPY_ABI_VERSION;
+    host.artifact.struct_size = (uint32_t)sizeof(host.artifact);
+    host.artifact.content_kind = TINYPY_MODULE_CONTENT_SOURCE;
+    host.artifact.data = valid_source;
+    host.artifact.data_size = sizeof(valid_source) - 1U;
+    host.artifact.canonical_name = "source_module";
+    host.artifact.canonical_name_size = 13U;
+    host.artifact.logical_filename = "source_module.py";
+    host.artifact.logical_filename_size = 16U;
+    vm = __test_vm_create_with_source_host(&state, &host);
+    module = tinypy_import_module(vm, "source_module", 13U, NULL, NULL, 0, &error);
+    assert(module != NULL && error == NULL);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, tinypy_module_dict(module), "value", 5U)) == 42);
+    tinypy_release(module);
+    assert(host.resolve_count == 1U && host.release_count == 1U);
+    host.artifact.canonical_name = "broken_module";
+    host.artifact.canonical_name_size = 13U;
+    host.artifact.logical_filename = "broken_module.py";
+    host.artifact.logical_filename_size = 16U;
+    host.artifact.data = invalid_source;
+    host.artifact.data_size = sizeof(invalid_source) - 1U;
+    module = tinypy_import_module(vm, "broken_module", 13U, NULL, NULL, 0, &error);
+    assert(module == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    tinypy_error_release(error);
+    modules = tinypy_vm_modules(vm);
+    key = tinypy_string_from_bytes(vm, "broken_module", 13U);
+    assert(tinypy_dict_contains(modules, key) == 0);
+    tinypy_release(key);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_source_package_and_circular_imports(void)
+{
+    static const char cycle_a_source[] = "import cycle_b\nvalue = cycle_b.value + 1\n";
+    static const char cycle_b_source[] = "import cycle_a\nvalue = 41\n";
+    static const char package_source[] = "from . import child\nvalue = child.value\n";
+    static const char child_source[] = "value = 42\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_module_artifact_t artifacts[4];
+    test_source_multi_host_t host;
+    tinypy_vm_t *vm;
+    tinypy_value_t *module;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(artifacts, 0, sizeof(artifacts));
+    artifacts[0].abi_version = TINYPY_ABI_VERSION;
+    artifacts[0].struct_size = (uint32_t)sizeof(artifacts[0]);
+    artifacts[0].content_kind = TINYPY_MODULE_CONTENT_SOURCE;
+    artifacts[0].data = cycle_a_source;
+    artifacts[0].data_size = sizeof(cycle_a_source) - 1U;
+    artifacts[0].canonical_name = "cycle_a";
+    artifacts[0].canonical_name_size = 7U;
+    artifacts[0].logical_filename = "cycle_a.py";
+    artifacts[0].logical_filename_size = 10U;
+    artifacts[1] = artifacts[0];
+    artifacts[1].data = cycle_b_source;
+    artifacts[1].data_size = sizeof(cycle_b_source) - 1U;
+    artifacts[1].canonical_name = "cycle_b";
+    artifacts[1].logical_filename = "cycle_b.py";
+    artifacts[2] = artifacts[0];
+    artifacts[2].data = package_source;
+    artifacts[2].data_size = sizeof(package_source) - 1U;
+    artifacts[2].canonical_name = "source_pkg";
+    artifacts[2].canonical_name_size = 10U;
+    artifacts[2].logical_filename = "source_pkg/__init__.py";
+    artifacts[2].logical_filename_size = 22U;
+    artifacts[2].flags = TINYPY_MODULE_ARTIFACT_PACKAGE;
+    artifacts[3] = artifacts[0];
+    artifacts[3].data = child_source;
+    artifacts[3].data_size = sizeof(child_source) - 1U;
+    artifacts[3].canonical_name = "source_pkg.child";
+    artifacts[3].canonical_name_size = 16U;
+    artifacts[3].logical_filename = "source_pkg/child.py";
+    artifacts[3].logical_filename_size = 19U;
+    (void)memset(&host, 0, sizeof(host));
+    host.artifacts = artifacts;
+    host.artifact_count = sizeof(artifacts) / sizeof(artifacts[0]);
+    vm = __test_vm_create_with_source_multi_host(&state, &host);
+
+    module = tinypy_import_module(vm, "cycle_a", 7U, NULL, NULL, 0, &error);
+    assert(module != NULL && error == NULL);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, tinypy_module_dict(module), "value", 5U)) == 42);
+    tinypy_release(module);
+    module = tinypy_import_module(vm, "source_pkg", 10U, NULL, NULL, 0, &error);
+    assert(module != NULL && error == NULL);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, tinypy_module_dict(module), "value", 5U)) == 42);
+    tinypy_release(module);
+    assert(host.resolve_count == 4U && host.release_count == 4U);
+
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+
+static int __test_source_limit(void)
+{
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_compile_limits_t limits;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+
+    tinypy_compile_limits_init(&limits);
+    limits.max_source_bytes = 2U;
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.limits = &limits;
+    code = tinypy_compile_source(vm, "pass", 4U, "limit.py", 8U, &options, &error);
+    assert(code == NULL);
+    assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
+    tinypy_error_release(error);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U);
+    return 0;
+}
+
+int main(void)
+{
+    if (__test_empty_exec() != 0) return EXIT_FAILURE;
+    if (__test_source_diagnostic() != 0) return EXIT_FAILURE;
+    if (__test_source_decoding() != 0) return EXIT_FAILURE;
+    if (__test_named_unicode_escapes() != 0) return EXIT_FAILURE;
+    if (__test_source_limit() != 0) return EXIT_FAILURE;
+    if (__test_private_name_mangling() != 0) return EXIT_FAILURE;
+    if (__test_legacy_vm_config_optimize_default() != 0) return EXIT_FAILURE;
+    if (__test_compile_marshal_parity() != 0) return EXIT_FAILURE;
+    if (__test_exec_eval_and_dynamic_compile() != 0) return EXIT_FAILURE;
+    if (__test_compile_modes_and_optimize() != 0) return EXIT_FAILURE;
+    if (__test_host_call_eval_without_frame() != 0) return EXIT_FAILURE;
+    if (__test_indentation_diagnostics() != 0) return EXIT_FAILURE;
+    if (__test_dont_imply_dedent() != 0) return EXIT_FAILURE;
+    if (__test_future_and_reserved_debug() != 0) return EXIT_FAILURE;
+    if (__test_symtable_and_ast_error_messages() != 0) return EXIT_FAILURE;
+    if (__test_codegen_syntax_errors() != 0) return EXIT_FAILURE;
+    if (__test_reentrant_compile() != 0) return EXIT_FAILURE;
+    if (__test_parallel_compile() != 0) return EXIT_FAILURE;
+    if (__test_compiler_limits() != 0) return EXIT_FAILURE;
+    if (__test_source_import_and_rollback() != 0) return EXIT_FAILURE;
+    if (__test_source_package_and_circular_imports() != 0) return EXIT_FAILURE;
+    return EXIT_SUCCESS;
+}
