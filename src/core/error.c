@@ -192,6 +192,10 @@ const char *tinypy_error_kind_name(tinypy_error_kind_e error_kind)
         return "source decoding error";
     case TINYPY_ERROR_COMPILER_LIMIT:
         return "compiler limit";
+    case TINYPY_ERROR_PREPROCESSOR:
+        return "preprocessor error";
+    case TINYPY_ERROR_META:
+        return "meta error";
     default:
         return "unknown error kind";
     }

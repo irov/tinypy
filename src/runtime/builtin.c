@@ -1273,9 +1273,9 @@ static tinypy_value_t *__tinypy_builtin_compile(tinypy_value_t *function, tinypy
         return NULL;
     }
     tinypy_compile_options_init(&options, mode);
+    if (tinypy_internal_compile_options_inherit_frame(vm, &options) == 0) options.optimize_level = vm->optimize_level;
     options.flags = (uint32_t)flags;
     options.dont_inherit = dont_inherit != 0 ? 1 : 0;
-    options.optimize_level = vm->optimize_level;
     return tinypy_internal_compiler_compile_source(vm, source, source_size, source_is_unicode, filename, filename_size, &options, out_error);
 }
 
@@ -1330,8 +1330,8 @@ static tinypy_value_t *__tinypy_builtin_eval(tinypy_value_t *function, tinypy_va
             source_size -= 1U;
         }
         tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+        if (tinypy_internal_compile_options_inherit_frame(vm, &options) == 0) options.optimize_level = vm->optimize_level;
         options.dont_inherit = 0;
-        options.optimize_level = vm->optimize_level;
         code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, "<string>", 8U, &options, out_error);
         if (code == NULL) return NULL;
         result = tinypy_eval_code(code, globals, locals, out_error);

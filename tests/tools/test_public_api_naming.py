@@ -203,6 +203,7 @@ class PublicApiNamingTests(unittest.TestCase):
                 "tinypy_native_function_new",
                 "tinypy_output_emit",
                 "tinypy_compile_source",
+                "tinypy_preprocess_source",
                 "tinypy_eval_source",
                 "tinypy_exec_source",
                 "tinypy_property_new",

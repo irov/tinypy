@@ -45,6 +45,21 @@ CRLF/CR normalization and structured syntax diagnostics. Compiler limits cover
 source bytes, tokens, syntax nodes, nesting, symbols, blocks, instructions,
 constants and arena memory.
 
+Trusted source can opt into two compiler-only features. The build
+preprocessor replaces reserved `__UPPERCASE__` names with immutable typed
+profile constants and removes fully decidable `if` branches before symbol
+analysis. The `meta` builtin expands valid Python 2 declarations such as
+`@meta.template`, `@meta.emit(...)` and `meta.expand(...)` into ordinary classes
+and functions. Bare `@meta` is not a template marker. Neither profile constants
+nor `meta` exist in runtime globals.
+
+Every compiled code graph owns an immutable compile environment containing its
+feature flags, optimize level and an optional deep-copied build profile. String
+`exec`, `eval` and Python-visible `compile` inherit that environment from the
+current frame; `dont_inherit` continues to control future flags only. The host
+can also request canonical expanded Python source plus a deterministic source
+map through `tinypy_preprocess_source`.
+
 The generated code objects and marshal-v2 payloads follow Python 2.7 semantics.
 The compiler never opens the logical filename supplied for diagnostics.
 
@@ -114,7 +129,7 @@ caller-owned inputs; no external corpus or interpreter is stored in TinyPy.
 - `include/tinypy/` — public C ABI and the single C++ proxy;
 - `src/core/` — values, objects, types and runtime protocols;
 - `src/runtime/` — frame execution, builtins and imports;
-- `src/compiler/` — native memory-only frontend, code generator and compiler integration;
+- `src/compiler/` — native memory-only frontend, preprocessing, metatemplates, code generation and compiler integration;
 - `src/bytecode/` — opcode metadata and bytecode verification;
 - `src/marshal/` — marshal-v2 reader and writer;
 - `src/artifact/` — versioned code artifact container;

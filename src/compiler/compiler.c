@@ -3,6 +3,7 @@
 
 #include "tinypy/code.h"
 #include "tinypy/eval.h"
+#include "tinypy/preprocessor.h"
 #include "opcode.h"
 #include "tinypy/tuple.h"
 #include "tinypy/value.h"
@@ -27,6 +28,14 @@
 #define TINYPY_COMPILE_DEFAULT_INSTRUCTIONS ((size_t)16777216U)
 #define TINYPY_COMPILE_DEFAULT_CONSTANT_BYTES ((size_t)67108864U)
 #define TINYPY_COMPILE_DEFAULT_ARENA_BYTES ((size_t)268435456U)
+#define TINYPY_COMPILE_DEFAULT_PREPROCESSOR_OPERATIONS ((size_t)4194304U)
+#define TINYPY_COMPILE_DEFAULT_PREPROCESSOR_VALUE_NODES ((size_t)1048576U)
+#define TINYPY_COMPILE_DEFAULT_PREPROCESSOR_BYTES ((size_t)67108864U)
+#define TINYPY_COMPILE_DEFAULT_TEMPLATE_EXPANSIONS ((size_t)65536U)
+#define TINYPY_COMPILE_DEFAULT_TEMPLATE_DEPTH ((size_t)128U)
+#define TINYPY_COMPILE_DEFAULT_GENERATED_AST_NODES ((size_t)4194304U)
+#define TINYPY_COMPILE_DEFAULT_GENERATED_SOURCE_BYTES ((size_t)67108864U)
+#define TINYPY_COMPILE_DEFAULT_SOURCE_MAP_ENTRIES ((size_t)1048576U)
 
 static uint32_t __tinypy_compiler_inherited_flags(const tinypy_compile_ctx_t *ctx)
 {
@@ -173,6 +182,14 @@ void tinypy_compile_limits_init(tinypy_compile_limits_t *limits)
     limits->max_constants = TINYPY_COMPILE_DEFAULT_ITEMS;
     limits->max_constant_bytes = TINYPY_COMPILE_DEFAULT_CONSTANT_BYTES;
     limits->max_arena_bytes = TINYPY_COMPILE_DEFAULT_ARENA_BYTES;
+    limits->max_preprocessor_operations = TINYPY_COMPILE_DEFAULT_PREPROCESSOR_OPERATIONS;
+    limits->max_preprocessor_value_nodes = TINYPY_COMPILE_DEFAULT_PREPROCESSOR_VALUE_NODES;
+    limits->max_preprocessor_bytes = TINYPY_COMPILE_DEFAULT_PREPROCESSOR_BYTES;
+    limits->max_template_expansions = TINYPY_COMPILE_DEFAULT_TEMPLATE_EXPANSIONS;
+    limits->max_template_depth = TINYPY_COMPILE_DEFAULT_TEMPLATE_DEPTH;
+    limits->max_generated_ast_nodes = TINYPY_COMPILE_DEFAULT_GENERATED_AST_NODES;
+    limits->max_generated_source_bytes = TINYPY_COMPILE_DEFAULT_GENERATED_SOURCE_BYTES;
+    limits->max_source_map_entries = TINYPY_COMPILE_DEFAULT_SOURCE_MAP_ENTRIES;
 }
 
 void tinypy_compile_options_init(tinypy_compile_options_t *options, tinypy_compile_mode_e mode)
@@ -210,6 +227,14 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
         if (ctx->failed == 0) tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "future scan exceeds compiler arena limit", 1, 1, out_error);
         return NULL;
     }
+    if ((ctx->options.feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) != 0U && tinypy_internal_preprocessor_transform(ctx, module, (uint32_t)future->features | (uint32_t)flags.flags) == 0) {
+        if (ctx->failed == 0) tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "preprocessor exceeds compiler limits", 1, 1, out_error);
+        return NULL;
+    }
+    if ((ctx->options.feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_META) != 0U && tinypy_internal_meta_transform(ctx, module) == 0) {
+        if (ctx->failed == 0) tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "meta expansion exceeds compiler limits", 1, 1, out_error);
+        return NULL;
+    }
     symbols = __tinypy_symbol_table_build(ctx, module, ctx->logical_filename, future);
     if (symbols == NULL) {
         if (ctx->failed == 0) tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "symbol table exceeds compiler limits", 1, 1, out_error);
@@ -233,8 +258,9 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
     assert(options->struct_size >= (uint32_t)sizeof(*options));
     assert(options->mode >= TINYPY_COMPILE_EXEC && options->mode <= TINYPY_COMPILE_SINGLE);
     assert(options->optimize_level >= 0 && options->optimize_level <= 2);
-    assert(options->feature_flags == 0U);
-    assert(options->build_profile == NULL);
+    assert((options->feature_flags & ~((uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_COMPILE_FEATURE_META)) == 0U);
+    assert((options->feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) == 0U ? options->build_profile == NULL : options->build_profile != NULL);
+    assert(options->build_profile == NULL || tinypy_build_profile_optimize_level(options->build_profile) == options->optimize_level);
     tinypy_internal_clear_error(out_error);
     (void)memset(&ctx, 0, sizeof(ctx));
     ctx.vm = vm;
@@ -251,6 +277,7 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
         tinypy_compile_limits_init(&ctx.limits);
     }
     if (tinypy_internal_compiler_source_prepare(&ctx, source, source_size, out_error) != 0) code = tinypy_internal_compiler_compile(&ctx, out_error);
+    if (code != NULL) tinypy_internal_code_attach_compile_options(code, options->feature_flags, options->optimize_level, options->build_profile);
     tinypy_internal_compiler_arena_destroy(&ctx);
     return code;
 }
@@ -258,6 +285,69 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
 tinypy_value_t *tinypy_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error)
 {
     return tinypy_internal_compiler_compile_source(vm, source, source_size, 0, logical_filename, filename_size, options, out_error);
+}
+
+tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error)
+{
+    tinypy_compile_ctx_t ctx;
+    tinypy_preprocess_result_t *result = NULL;
+    tinypy_cst_node_t *tree;
+    tinypy_compiler_flags_t flags;
+    tinypy_ast_module_t module;
+    tinypy_future_features_t *future;
+
+    assert(tinypy_internal_vm_valid(vm));
+    assert(source != NULL || source_size == 0U);
+    assert(logical_filename != NULL || filename_size == 0U);
+    assert(options != NULL);
+    assert(options->abi_version == TINYPY_COMPILER_ABI_VERSION);
+    assert(options->struct_size >= (uint32_t)sizeof(*options));
+    assert(options->mode >= TINYPY_COMPILE_EXEC && options->mode <= TINYPY_COMPILE_SINGLE);
+    assert(options->optimize_level >= 0 && options->optimize_level <= 2);
+    assert((options->feature_flags & ~((uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_COMPILE_FEATURE_META)) == 0U);
+    assert((options->feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) == 0U ? options->build_profile == NULL : options->build_profile != NULL);
+    assert(options->build_profile == NULL || tinypy_build_profile_optimize_level(options->build_profile) == options->optimize_level);
+    tinypy_internal_clear_error(out_error);
+    (void)memset(&ctx, 0, sizeof(ctx));
+    ctx.vm = vm;
+    ctx.options = *options;
+    ctx.logical_filename = logical_filename;
+    ctx.filename_size = filename_size;
+    ctx.out_error = out_error;
+    if (options->limits != NULL) {
+        assert(options->limits->abi_version == TINYPY_COMPILER_ABI_VERSION);
+        assert(options->limits->struct_size >= (uint32_t)sizeof(*options->limits));
+        ctx.limits = *options->limits;
+    } else {
+        tinypy_compile_limits_init(&ctx.limits);
+    }
+    if (tinypy_internal_compiler_source_prepare(&ctx, source, source_size, out_error) == 0) goto complete;
+    tree = __tinypy_compiler_parse(&ctx, out_error);
+    if (tree == NULL) goto complete;
+    flags.flags = (int)__tinypy_compiler_inherited_flags(&ctx) | TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8;
+    module = __tinypy_ast_build(tree, &flags, ctx.logical_filename, &ctx);
+    if (module == NULL) {
+        if (ctx.failed == 0) tinypy_internal_compiler_error(&ctx, TINYPY_ERROR_SYNTAX, "unable to construct compiler AST", 1, 1, out_error);
+        goto complete;
+    }
+    future = __tinypy_future_scan(&ctx, module, ctx.logical_filename);
+    if (future == NULL) {
+        if (ctx.failed == 0) tinypy_internal_compiler_error(&ctx, TINYPY_ERROR_COMPILER_LIMIT, "future scan exceeds compiler arena limit", 1, 1, out_error);
+        goto complete;
+    }
+    if ((ctx.options.feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) != 0U && tinypy_internal_preprocessor_transform(&ctx, module, (uint32_t)future->features | (uint32_t)flags.flags) == 0) {
+        if (ctx.failed == 0) tinypy_internal_compiler_error(&ctx, TINYPY_ERROR_COMPILER_LIMIT, "preprocessor exceeds compiler limits", 1, 1, out_error);
+        goto complete;
+    }
+    if ((ctx.options.feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_META) != 0U && tinypy_internal_meta_transform(&ctx, module) == 0) {
+        if (ctx.failed == 0) tinypy_internal_compiler_error(&ctx, TINYPY_ERROR_COMPILER_LIMIT, "meta expansion exceeds compiler limits", 1, 1, out_error);
+        goto complete;
+    }
+    result = tinypy_internal_preprocessor_render(&ctx, module);
+
+complete:
+    tinypy_internal_compiler_arena_destroy(&ctx);
+    return result;
 }
 
 static tinypy_value_t *__tinypy_compiler_run_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, tinypy_value_t *globals, tinypy_value_t *locals, const tinypy_compile_options_t *options, tinypy_compile_mode_e mode, int32_t discard_result, tinypy_error_t **out_error)

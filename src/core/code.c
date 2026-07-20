@@ -1,4 +1,5 @@
 #include "tinypy/code.h"
+#include "tinypy/compiler.h"
 
 #include "internal.h"
 
@@ -105,6 +106,7 @@ tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t 
     code->name = name;
     code->first_line_number = first_line_number;
     code->lnotab = lnotab;
+    code->compile_environment = NULL;
 
     tinypy_retain(bytecode);
     tinypy_retain(consts);
@@ -132,6 +134,52 @@ void tinypy_internal_code_release_references(tinypy_value_t *value, tinypy_relea
     visit(code->filename, user_data);
     visit(code->name, user_data);
     visit(code->lnotab, user_data);
+    if (code->compile_environment != NULL) {
+        tinypy_internal_compile_environment_release(code->compile_environment);
+        code->compile_environment = NULL;
+    }
+}
+
+void tinypy_internal_code_attach_compile_environment(tinypy_value_t *code_value, tinypy_compile_environment_t *environment)
+{
+    tinypy_code_object_t *code = __tinypy_internal_code_validate(code_value);
+    size_t index;
+
+    if (code->compile_environment != environment) {
+        if (environment != NULL) tinypy_internal_compile_environment_retain(environment);
+        if (code->compile_environment != NULL) tinypy_internal_compile_environment_release(code->compile_environment);
+        code->compile_environment = environment;
+    }
+    for (index = 0U; index < tinypy_tuple_size(code->consts); index += 1U) {
+        tinypy_value_t *constant = tinypy_tuple_get(code->consts, index);
+
+        if (tinypy_internal_value_kind(constant) == TINYPY_VALUE_CODE) tinypy_internal_code_attach_compile_environment(constant, environment);
+    }
+}
+
+void tinypy_internal_code_attach_compile_options(tinypy_value_t *code, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile)
+{
+    tinypy_compile_environment_t *environment;
+
+    assert(code != NULL);
+    environment = tinypy_internal_compile_environment_create(tinypy_internal_value_vm(code), feature_flags, optimize_level, profile);
+    tinypy_internal_code_attach_compile_environment(code, environment);
+    tinypy_internal_compile_environment_release(environment);
+}
+
+int32_t tinypy_internal_compile_options_inherit_frame(tinypy_vm_t *vm, tinypy_compile_options_t *options)
+{
+    tinypy_compile_environment_t *environment;
+
+    assert(tinypy_internal_vm_valid(vm));
+    assert(options != NULL);
+    if (vm->current_frame == NULL) return 0;
+    environment = TINYPY_CODE_OBJECT(vm->current_frame->code)->compile_environment;
+    if (environment == NULL) return 0;
+    options->feature_flags = tinypy_internal_compile_environment_feature_flags(environment);
+    options->optimize_level = tinypy_internal_compile_environment_optimize_level(environment);
+    options->build_profile = tinypy_internal_compile_environment_build_profile(environment);
+    return 1;
 }
 
 int32_t tinypy_code_arg_count(const tinypy_value_t *code) { return __tinypy_internal_code_validate(code)->arg_count; }

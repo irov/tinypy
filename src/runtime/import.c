@@ -136,14 +136,48 @@ static void __tinypy_import_set_metadata(tinypy_vm_t *vm, tinypy_value_t *module
 
 static int __tinypy_import_artifact_valid(const tinypy_module_artifact_t *artifact, const char *name, size_t name_size)
 {
-    if (artifact == NULL || artifact->abi_version != TINYPY_ABI_VERSION || artifact->struct_size < (uint32_t)sizeof(*artifact)) return 0;
+    static const uint32_t compile_features = (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_COMPILE_FEATURE_META;
+
+    if (artifact == NULL || artifact->abi_version != TINYPY_ABI_VERSION || artifact->struct_size < (uint32_t)offsetof(tinypy_module_artifact_t, compile_feature_flags)) return 0;
     if (artifact->content_kind < TINYPY_MODULE_CONTENT_SOURCE || artifact->content_kind > TINYPY_MODULE_CONTENT_NATIVE) return 0;
     if (artifact->canonical_name != NULL || artifact->canonical_name_size != 0U) {
         if (artifact->canonical_name == NULL || artifact->canonical_name_size != name_size || memcmp(artifact->canonical_name, name, name_size) != 0) return 0;
     }
     if ((artifact->content_kind == TINYPY_MODULE_CONTENT_SOURCE || artifact->content_kind == TINYPY_MODULE_CONTENT_MARSHAL_V2) && artifact->data == NULL && artifact->data_size != 0U) return 0;
     if (artifact->content_kind == TINYPY_MODULE_CONTENT_NATIVE && artifact->native_initialize == NULL) return 0;
+    if ((size_t)artifact->struct_size >= offsetof(tinypy_module_artifact_t, build_profile) + sizeof(artifact->build_profile)) {
+        if (artifact->compile_optimize_level < 0 || artifact->compile_optimize_level > 2 || (artifact->compile_feature_flags & ~compile_features) != 0U) return 0;
+        if (((artifact->compile_feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) != 0U) != (artifact->build_profile != NULL)) return 0;
+        if (artifact->build_profile != NULL && tinypy_build_profile_optimize_level(artifact->build_profile) != artifact->compile_optimize_level) return 0;
+    }
     return 1;
+}
+
+static int __tinypy_import_has_compile_environment(const tinypy_module_artifact_t *artifact)
+{
+    return (size_t)artifact->struct_size >= offsetof(tinypy_module_artifact_t, build_profile) + sizeof(artifact->build_profile);
+}
+
+static uint32_t __tinypy_import_compile_feature_flags(const tinypy_module_artifact_t *artifact)
+{
+    if (__tinypy_import_has_compile_environment(artifact) == 0) return 0U;
+    return artifact->compile_feature_flags;
+}
+
+static const tinypy_build_profile_t *__tinypy_import_build_profile(const tinypy_module_artifact_t *artifact)
+{
+    if (__tinypy_import_has_compile_environment(artifact) == 0) return NULL;
+    return artifact->build_profile;
+}
+
+static int32_t __tinypy_import_compile_optimize_level(const tinypy_module_artifact_t *artifact, int32_t default_level)
+{
+    const tinypy_build_profile_t *profile = __tinypy_import_build_profile(artifact);
+
+    if (profile != NULL) return (int32_t)tinypy_build_profile_optimize_level(profile);
+    if (__tinypy_import_has_compile_environment(artifact) == 0) return default_level;
+    assert(artifact->compile_optimize_level >= 0 && artifact->compile_optimize_level <= 2);
+    return artifact->compile_optimize_level;
 }
 
 static void __tinypy_import_make_not_found_error(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_error_t **out_error)
@@ -214,8 +248,13 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
         tinypy_marshal_result_e marshal_result = tinypy_marshal_load_code_v2(vm, artifact->data, artifact->data_size, NULL, &code, &marshal_error);
 
         if (marshal_result == TINYPY_MARSHAL_OK) {
-            tinypy_value_t *eval_result = tinypy_eval_code(code, tinypy_module_dict(module), NULL, out_error);
+            uint32_t feature_flags = __tinypy_import_compile_feature_flags(artifact);
+            const tinypy_build_profile_t *build_profile = __tinypy_import_build_profile(artifact);
+            int32_t optimize_level = __tinypy_import_compile_optimize_level(artifact, vm->optimize_level);
+            tinypy_value_t *eval_result;
 
+            if (__tinypy_import_has_compile_environment(artifact) != 0) tinypy_internal_code_attach_compile_options(code, feature_flags, optimize_level, build_profile);
+            eval_result = tinypy_eval_code(code, tinypy_module_dict(module), NULL, out_error);
             tinypy_release(code);
             if (eval_result != NULL) {
                 tinypy_release(eval_result);
@@ -235,7 +274,9 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
 
         tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
         options.dont_inherit = 1;
-        options.optimize_level = vm->optimize_level;
+        options.optimize_level = __tinypy_import_compile_optimize_level(artifact, vm->optimize_level);
+        options.feature_flags = __tinypy_import_compile_feature_flags(artifact);
+        options.build_profile = __tinypy_import_build_profile(artifact);
         code = tinypy_compile_source(vm, artifact->data, artifact->data_size, logical_filename, logical_filename_size, &options, out_error);
         if (code != NULL) {
             tinypy_value_t *exec_result = tinypy_exec_code(code, tinypy_module_dict(module), NULL, out_error);

@@ -39,6 +39,9 @@ struct tinypy_module_artifact_t {
     size_t package_token_size;
     tinypy_native_module_initialize_t native_initialize;
     void *native_user_data;
+    uint32_t compile_feature_flags;
+    int32_t compile_optimize_level;
+    const tinypy_build_profile_t *build_profile;
 };
 
 tinypy_value_t *tinypy_module_new(tinypy_vm_t *vm, const char *name, size_t name_size);

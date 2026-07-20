@@ -41,6 +41,7 @@
 #include "tinypy/bytearray.h"
 #include "tinypy/weakref.h"
 #include "tinypy/compiler.h"
+#include "tinypy/preprocessor.h"
 #include "tinypy/marshal.h"
 
 #endif

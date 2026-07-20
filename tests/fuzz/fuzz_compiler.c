@@ -60,9 +60,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     tinypy_compile_limits_t limits;
     tinypy_compile_options_t options;
     tinypy_compile_mode_e mode = TINYPY_COMPILE_EXEC;
+    tinypy_build_profile_t *profile = NULL;
     tinypy_vm_t *vm;
     tinypy_value_t *code;
+    tinypy_preprocess_result_t *preprocessed;
     tinypy_error_t *error = NULL;
+    uint8_t selector = size != 0U ? data[0] : 0U;
 
     (void)memset(&allocator, 0, sizeof(allocator));
     allocator.abi_version = TINYPY_ABI_VERSION;
@@ -88,12 +91,31 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     limits.max_constants = 4096U;
     limits.max_constant_bytes = 64U * 1024U;
     limits.max_arena_bytes = 8U * 1024U * 1024U;
-    if (size != 0U) mode = (tinypy_compile_mode_e)(TINYPY_COMPILE_EXEC + data[0] % 3U);
+    limits.max_preprocessor_operations = 4096U;
+    limits.max_preprocessor_value_nodes = 4096U;
+    limits.max_preprocessor_bytes = 64U * 1024U;
+    limits.max_template_expansions = 256U;
+    limits.max_template_depth = 32U;
+    limits.max_generated_ast_nodes = 4096U;
+    limits.max_generated_source_bytes = 64U * 1024U;
+    limits.max_source_map_entries = 256U;
+    if (size != 0U) mode = (tinypy_compile_mode_e)(TINYPY_COMPILE_EXEC + selector % 3U);
     tinypy_compile_options_init(&options, mode);
     options.limits = &limits;
-    code = tinypy_compile_source(vm, size != 0U ? data + 1U : data, size != 0U ? size - 1U : 0U, "fuzz.py", 7U, &options, &error);
-    if (code != NULL) tinypy_release(code);
+    options.feature_flags = (uint32_t)((selector / 3U) % 4U);
+    if ((options.feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) != 0U) {
+        assert(tinypy_build_profile_create(&allocator, 0, NULL, 0U, NULL, &profile, NULL) == TINYPY_BUILD_PROFILE_OK);
+        options.build_profile = profile;
+    }
+    if ((selector & UINT8_C(0x80)) != 0U) {
+        preprocessed = tinypy_preprocess_source(vm, size != 0U ? data + 1U : data, size != 0U ? size - 1U : 0U, "fuzz.py", 7U, &options, &error);
+        if (preprocessed != NULL) tinypy_preprocess_result_destroy(preprocessed);
+    } else {
+        code = tinypy_compile_source(vm, size != 0U ? data + 1U : data, size != 0U ? size - 1U : 0U, "fuzz.py", 7U, &options, &error);
+        if (code != NULL) tinypy_release(code);
+    }
     if (error != NULL) tinypy_error_release(error);
+    if (profile != NULL) tinypy_build_profile_destroy(profile);
     tinypy_vm_destroy(vm);
     assert(allocator_state.allocations == 0U && allocator_state.bytes == 0U);
     return 0;

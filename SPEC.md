@@ -167,6 +167,8 @@ source decoding
 -> parser and CST
 -> AST
 -> future scan
+-> optional build-constant preprocessing
+-> optional metatemplate expansion
 -> symbol table
 -> basic blocks
 -> bytecode generation
@@ -238,7 +240,10 @@ Compiler limits охватывают:
 - basic blocks;
 - instructions;
 - constants и constant bytes;
-- compiler arena bytes.
+- compiler arena bytes;
+- preprocessor operations, value nodes и bytes;
+- template expansions, depth и generated AST nodes;
+- expanded source bytes и source-map entries.
 
 Временные compiler allocations живут в call-local arena и освобождаются целиком
 при success или error.
@@ -261,7 +266,69 @@ Immutable build profile хранит typed constants и deterministic digest.
 Profile полностью копирует входные данные через host allocator. Input order не
 влияет на canonical ordering и digest. Optimize level входит в profile.
 
-## 11. Imports и host callbacks
+При включённом `TINYPY_COMPILE_FEATURE_PREPROCESSOR` каждое чтение bare name
+зарезервированного формата заменяется literal AST до symbol table. Атрибуты
+вида `object.__STATE__` не являются build constants. Отсутствующая константа и
+любая попытка binding зарезервированного имени являются compile error.
+
+`__NDEBUG__` всегда создаётся самим profile: optimize `0` даёт `False`, optimize
+`1` и `2` дают `True`. Передать эту константу явно нельзя.
+
+Pure evaluator поддерживает literals и literal containers, boolean, unary,
+arithmetic и bitwise operations, comparisons, membership и identity с
+`None`/bool. Полностью вычислимый `if` заменяется выбранной suite до symbol
+analysis. Calls, attributes, subscripts, lambdas и comprehensions оставляют
+условие runtime, хотя build constants внутри него уже заменены.
+
+## 11. Metatemplates
+
+При `TINYPY_COMPILE_FEATURE_META` имя `meta` является compiler builtin без
+import и без runtime binding. Базовая форма:
+
+```python
+@meta.template
+def ObjectTemplate(TypeName):
+    ClassName = meta.concat('Mixin', TypeName)
+
+    @meta.emit(name=ClassName)
+    class Generated(object):
+        pass
+
+MixinItem = meta.expand(ObjectTemplate, 'Item')
+```
+
+Маркер шаблона имеет только явную форму `@meta.template`; bare `@meta` не
+распознаётся как metatemplate.
+
+Expansion поддерживает literal arguments, defaults и keywords, staging
+assignments/`if`/`for`, `meta.range`, `meta.concat`, несколько `meta.emit`,
+generated declaration names, `meta.name`, `meta.getattr`, `meta.setattr`,
+`meta.delattr` и `meta.current_class`. Generated class name используется для
+private-name mangling и `super`.
+
+Во время expansion не исполняются Python bytecode, imports, I/O или
+пользовательские runtime functions. После pass любой оставшийся доступ или
+binding имени `meta` является compile error.
+
+`tinypy_preprocess_source` выполняет тот же preprocessing pipeline и возвращает
+owned result с canonical valid Python 2 source, source-map entries и SHA-256
+digest карты. Каждая generated declaration связывает generated position,
+template position, expansion position и semantic symbol.
+
+## 12. Compile environment
+
+Каждый code object graph, полученный из source, разделяет refcounted immutable
+compile environment: feature flags, optimize level и optional deep copy build
+profile. Поэтому исходный host profile можно уничтожить сразу после compile.
+
+Python-visible `compile`, `eval` и string `exec` наследуют environment текущего
+frame. `dont_inherit` отключает только inheritance future flags и не отключает
+build profile, meta/preprocessor flags или optimize level. Вызов C API без
+текущего frame использует явно переданные options; imports используют поля
+module artifact. Marshal code получает environment из size-aware artifact
+descriptor, поскольку marshal v2 его не сериализует.
+
+## 13. Imports и host callbacks
 
 Core не строит filesystem paths. Resolver получает canonical module request и
 возвращает один из memory artifacts:
@@ -278,7 +345,7 @@ Output streams, warnings, diagnostics и formatted tracebacks направляю
 callbacks. Callback input действителен только на время вызова, если явно не
 указано иное.
 
-## 12. Errors
+## 14. Errors
 
 `tinypy_error_t` — optional owned structured error. Он хранит копии message,
 logical filename, source line, line number и column offset.

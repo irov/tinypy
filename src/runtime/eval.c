@@ -101,6 +101,12 @@ static tinypy_value_t *__tinypy_eval_lookup_name(tinypy_frame_object_t *frame, t
         tinypy_retain(value);
         return value;
     }
+    if (TINYPY_CODE_OBJECT(frame->code)->compile_environment != NULL) {
+        size_t name_size;
+        const char *name_bytes = (const char *)tinypy_string_view(name, &name_size);
+
+        if (name_size == 9U && memcmp(name_bytes, "__debug__", 9U) == 0) return tinypy_bool_from_i32(tinypy_internal_value_vm(frame->code), tinypy_internal_compile_environment_optimize_level(TINYPY_CODE_OBJECT(frame->code)->compile_environment) == 0 ? INT32_C(1) : INT32_C(0));
+    }
     if (tinypy_dict_contains(frame->builtins, name) != 0) {
         value = tinypy_dict_get(frame->builtins, name);
         tinypy_retain(value);
@@ -1047,8 +1053,8 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
                     }
                     filename = (const char *)tinypy_string_view(tinypy_code_filename(frame->code), &filename_size);
                     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+                    if (tinypy_internal_compile_options_inherit_frame(vm, &options) == 0) options.optimize_level = vm->optimize_level;
                     options.dont_inherit = 0;
-                    options.optimize_level = vm->optimize_level;
                     execution_code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, filename, filename_size, &options, out_error);
                     if (execution_code != NULL) {
                         execution_result = tinypy_exec_code(execution_code, execution_globals, execution_locals, out_error);

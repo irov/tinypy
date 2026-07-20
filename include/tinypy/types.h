@@ -18,6 +18,9 @@ typedef struct tinypy_type_t tinypy_type_t;
 typedef struct tinypy_error_t tinypy_error_t;
 typedef struct tinypy_module_request_t tinypy_module_request_t;
 typedef struct tinypy_module_artifact_t tinypy_module_artifact_t;
+typedef struct tinypy_build_profile_t tinypy_build_profile_t;
+typedef struct tinypy_preprocess_result_t tinypy_preprocess_result_t;
+typedef struct tinypy_compile_options_t tinypy_compile_options_t;
 
 typedef enum tinypy_error_kind_e {
     TINYPY_ERROR_TYPE = 1,
@@ -37,7 +40,9 @@ typedef enum tinypy_error_kind_e {
     TINYPY_ERROR_INDENTATION = 15,
     TINYPY_ERROR_TAB = 16,
     TINYPY_ERROR_SOURCE_DECODING = 17,
-    TINYPY_ERROR_COMPILER_LIMIT = 18
+    TINYPY_ERROR_COMPILER_LIMIT = 18,
+    TINYPY_ERROR_PREPROCESSOR = 19,
+    TINYPY_ERROR_META = 20
 } tinypy_error_kind_e;
 
 /* Unless a parameter is explicitly documented as optional, pointer validity
@@ -118,7 +123,8 @@ typedef enum tinypy_allocation_tag_e {
     TINYPY_ALLOC_TAG_SRE_DATA = 11,
     TINYPY_ALLOC_TAG_COMPILER_ARENA = 12,
     TINYPY_ALLOC_TAG_COMPILER_DATA = 13,
-    TINYPY_ALLOC_TAG_MARSHAL_WRITE = 14
+    TINYPY_ALLOC_TAG_MARSHAL_WRITE = 14,
+    TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT = 15
 } tinypy_allocation_tag_e;
 
 typedef enum tinypy_output_channel_e {

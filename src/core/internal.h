@@ -126,6 +126,7 @@ typedef enum tinypy_exception_type_index_e {
 } tinypy_exception_type_index_e;
 
 typedef ptrdiff_t tinypy_ref_t;
+typedef struct tinypy_compile_environment_t tinypy_compile_environment_t;
 
 /* Complete universal TinyPy object header. */
 struct tinypy_value_t {
@@ -452,6 +453,7 @@ typedef struct tinypy_code_object_t {
     tinypy_value_t *name;
     int32_t first_line_number;
     tinypy_value_t *lnotab;
+    tinypy_compile_environment_t *compile_environment;
 } tinypy_code_object_t;
 
 typedef struct tinypy_frame_block_t {
@@ -942,6 +944,15 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
 void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e kind, const char *message);
 void tinypy_internal_exception_clear_raised(tinypy_vm_t *vm);
 void tinypy_internal_exception_clear_handled(tinypy_vm_t *vm);
+tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_vm_t *vm, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile);
+void tinypy_internal_compile_environment_retain(tinypy_compile_environment_t *environment);
+void tinypy_internal_compile_environment_release(tinypy_compile_environment_t *environment);
+uint32_t tinypy_internal_compile_environment_feature_flags(const tinypy_compile_environment_t *environment);
+int32_t tinypy_internal_compile_environment_optimize_level(const tinypy_compile_environment_t *environment);
+const tinypy_build_profile_t *tinypy_internal_compile_environment_build_profile(const tinypy_compile_environment_t *environment);
+void tinypy_internal_code_attach_compile_environment(tinypy_value_t *code, tinypy_compile_environment_t *environment);
+void tinypy_internal_code_attach_compile_options(tinypy_value_t *code, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile);
+int32_t tinypy_internal_compile_options_inherit_frame(tinypy_vm_t *vm, tinypy_compile_options_t *options);
 void tinypy_internal_exception_preserve_begin(tinypy_vm_t *vm, tinypy_internal_exception_state_t *state);
 void tinypy_internal_exception_preserve_end(tinypy_vm_t *vm, tinypy_internal_exception_state_t *state);
 void tinypy_internal_exception_set_raised(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *traceback);

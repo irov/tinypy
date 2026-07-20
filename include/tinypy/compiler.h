@@ -5,19 +5,23 @@
 
 #define TINYPY_COMPILER_ABI_VERSION UINT32_C(1)
 #define TINYPY_PREPROCESSOR_ABI_VERSION UINT32_C(1)
+#define TINYPY_META_ABI_VERSION UINT32_C(1)
 #define TINYPY_BUILD_PROFILE_DIGEST_SIZE ((size_t)32U)
 
 /* Required pointers and typed/indexed accessors follow the TinyPy C API
  * precondition policy from tinypy.h. Invalid profile descriptors, ABI
  * versions, limits and constant values remain recoverable result codes. */
 
-typedef struct tinypy_build_profile_t tinypy_build_profile_t;
-
 typedef enum tinypy_compile_mode_e {
     TINYPY_COMPILE_EXEC = 1,
     TINYPY_COMPILE_EVAL = 2,
     TINYPY_COMPILE_SINGLE = 3
 } tinypy_compile_mode_e;
+
+typedef enum tinypy_compile_feature_e {
+    TINYPY_COMPILE_FEATURE_PREPROCESSOR = UINT32_C(1) << 0,
+    TINYPY_COMPILE_FEATURE_META = UINT32_C(1) << 1
+} tinypy_compile_feature_e;
 
 typedef enum tinypy_compile_flag_e {
     TINYPY_COMPILE_FLAG_DONT_IMPLY_DEDENT = 0x0200,
@@ -42,9 +46,17 @@ typedef struct tinypy_compile_limits_t {
     size_t max_constants;
     size_t max_constant_bytes;
     size_t max_arena_bytes;
+    size_t max_preprocessor_operations;
+    size_t max_preprocessor_value_nodes;
+    size_t max_preprocessor_bytes;
+    size_t max_template_expansions;
+    size_t max_template_depth;
+    size_t max_generated_ast_nodes;
+    size_t max_generated_source_bytes;
+    size_t max_source_map_entries;
 } tinypy_compile_limits_t;
 
-typedef struct tinypy_compile_options_t {
+struct tinypy_compile_options_t {
     uint32_t abi_version;
     uint32_t struct_size;
     tinypy_compile_mode_e mode;
@@ -54,7 +66,7 @@ typedef struct tinypy_compile_options_t {
     uint32_t feature_flags;
     const tinypy_compile_limits_t *limits;
     const tinypy_build_profile_t *build_profile;
-} tinypy_compile_options_t;
+};
 
 void tinypy_compile_limits_init(tinypy_compile_limits_t *limits);
 void tinypy_compile_options_init(tinypy_compile_options_t *options, tinypy_compile_mode_e mode);
@@ -152,23 +164,23 @@ void tinypy_build_value_init(tinypy_build_value_t *value, tinypy_build_value_typ
 void tinypy_build_profile_limits_init(tinypy_build_profile_limits_t *limits);
 
 /* Exact bare-name lexical rule: ^__[A-Z][A-Z0-9_]*__$ */
-int tinypy_preprocessor_name_is_reserved(const char *name, size_t name_size);
+int32_t tinypy_preprocessor_name_is_reserved(const char *name, size_t name_size);
 
 /* __NDEBUG__ is synthesized from optimize_level and must not be supplied by
  * the caller. Input order never affects the resulting sorted profile/digest.
  * limits and out_error are optional. */
-tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator_t *allocator, int optimize_level, const tinypy_build_constant_t *constants, size_t constant_count, const tinypy_build_profile_limits_t *limits, tinypy_build_profile_t **out_profile, tinypy_build_profile_error_t *out_error);
+tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator_t *allocator, int32_t optimize_level, const tinypy_build_constant_t *constants, size_t constant_count, const tinypy_build_profile_limits_t *limits, tinypy_build_profile_t **out_profile, tinypy_build_profile_error_t *out_error);
 
 void tinypy_build_profile_destroy(tinypy_build_profile_t *profile);
 
-int tinypy_build_profile_optimize_level(const tinypy_build_profile_t *profile);
+int32_t tinypy_build_profile_optimize_level(const tinypy_build_profile_t *profile);
 size_t tinypy_build_profile_constant_count(const tinypy_build_profile_t *profile);
 
 /* Indexed values are sorted by bytewise ASCII name. Returned pointers/views
  * are borrowed until profile destruction. */
 void tinypy_build_profile_constant_at(const tinypy_build_profile_t *profile, size_t index, const char **out_name, size_t *out_name_size, const tinypy_build_value_t **out_value);
 
-int tinypy_build_profile_find(const tinypy_build_profile_t *profile, const char *name, size_t name_size, const tinypy_build_value_t **out_value);
+int32_t tinypy_build_profile_find(const tinypy_build_profile_t *profile, const char *name, size_t name_size, const tinypy_build_value_t **out_value);
 
 const uint8_t *tinypy_build_profile_digest(const tinypy_build_profile_t *profile);
 const char *tinypy_build_profile_result_name(tinypy_build_profile_result_e result);

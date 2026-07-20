@@ -37,6 +37,9 @@ add_library(tinypy STATIC
     src/bytecode/bytecode_verify.c
     src/bytecode/opcode.c
     src/compiler/profile.c
+    src/compiler/preprocessor.c
+    src/compiler/meta.c
+    src/compiler/render.c
     src/compiler/arena.c
     src/compiler/source.c
     src/compiler/value_ops.c
