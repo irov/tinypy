@@ -92,6 +92,23 @@ python3 tools/audit_core_symbols.py build/default/libtinypy.a
 The symbol audit rejects direct allocator, I/O, environment, process, locale
 and thread dependencies as well as symbols outside the TinyPy namespace.
 
+Exact compiler parity can be checked against an external Python 2.7.18
+executable without adding it to the repository:
+
+```sh
+python3 tests/compiler/run_differential.py \
+    --compiler build/default/tinypy_compile \
+    --reference /path/to/python2.7 \
+    --logical-root /path/to/sources \
+    --source-root /path/to/sources \
+    --expected-count NUMBER
+```
+
+The harness compiles every source at optimize levels 0, 1 and 2, requires
+byte-identical marshal-v2 output, and reports the first differing field of a
+nested code object when bytes diverge. Source roots and the expected count are
+caller-owned inputs; no external corpus or interpreter is stored in TinyPy.
+
 ## Repository layout
 
 - `include/tinypy/` — public C ABI and the single C++ proxy;
