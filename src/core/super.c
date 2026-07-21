@@ -7,12 +7,10 @@
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_super_new(tinypy_type_t *type, tinypy_value_t *object, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
     tinypy_type_t *object_type = NULL;
-    tinypy_super_object_t *super_value;
 
     assert(type != NULL);
-    vm = type->vm;
+    tinypy_vm_t *vm = type->vm;
     assert(tinypy_internal_vm_valid(vm));
     assert(object == NULL || tinypy_internal_value_belongs_to(vm, object));
     TINYPY_CLEAR_ERROR(out_error);
@@ -28,7 +26,7 @@ tinypy_value_t *tinypy_super_new(tinypy_type_t *type, tinypy_value_t *object, ti
             return NULL;
         }
     }
-    super_value = (tinypy_super_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_SUPER, sizeof(*super_value));
+    tinypy_super_object_t *super_value = (tinypy_super_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_SUPER, sizeof(*super_value));
     super_value->type = type;
     super_value->object = object;
     super_value->object_type = object_type;
@@ -90,9 +88,9 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
             }
             continue;
         }
-        if (tinypy_dict_contains(mro_type->dict, name) != 0) {
-            tinypy_value_t *attribute = tinypy_dict_get(mro_type->dict, name);
+        tinypy_value_t *attribute = tinypy_dict_get_optional(mro_type->dict, name);
 
+        if (attribute != NULL) {
             return tinypy_internal_descriptor_get_value(vm, attribute, super_value->object, super_value->object_type, out_error);
         }
     }
@@ -103,13 +101,12 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
 tinypy_value_t *tinypy_internal_super_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t count = TINYPY_TUPLE_SIZE(args);
-    tinypy_value_t *requested_type;
 
     if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || count < 1U || count > 2U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "super requires one or two arguments", out_error);
         return NULL;
     }
-    requested_type = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *requested_type = TINYPY_TUPLE_GET(args, 0U);
     if (TINYPY_VALUE_KIND(requested_type) != TINYPY_VALUE_TYPE) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "super first argument is not a type", out_error);
         return NULL;

@@ -38,14 +38,12 @@ static int __tinypy_comparison_is_exact_builtin(const tinypy_value_t *value) {
 static tinypy_value_t *__tinypy_comparison_call_no_args(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *method = tinypy_object_get_attr(value, name, name_size, out_error);
-    tinypy_value_t *args;
-    tinypy_value_t *result;
 
     if (method == NULL) {
         return NULL;
     }
-    args = tinypy_tuple_from_items(vm, NULL, 0U);
-    result = tinypy_call(method, args, NULL, out_error);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(method);
     return result;
@@ -55,11 +53,10 @@ static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver,
 
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
     tinypy_value_type_e kind;
 
     assert(value != NULL);
-    vm = TINYPY_VALUE_VM(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     assert(tinypy_internal_vm_valid(vm));
     TINYPY_CLEAR_ERROR(out_error);
     kind = TINYPY_VALUE_KIND(value);
@@ -330,11 +327,10 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
     tinypy_value_type_e kind;
 
     assert(container != NULL && item != NULL);
-    vm = TINYPY_VALUE_VM(container);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, item));
     TINYPY_CLEAR_ERROR(out_error);
@@ -450,14 +446,12 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
 static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver, const char *name, size_t name_size, tinypy_value_t *argument, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
     tinypy_value_t *method = tinypy_object_get_attr(receiver, name, name_size, out_error);
-    tinypy_value_t *args;
-    tinypy_value_t *result;
 
     if (method == NULL) {
         return NULL;
     }
-    args = tinypy_tuple_from_items(vm, &argument, 1U);
-    result = tinypy_call(method, args, NULL, out_error);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &argument, 1U);
+    tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(method);
     return result;

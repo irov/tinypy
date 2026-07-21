@@ -40,12 +40,11 @@
 //////////////////////////////////////////////////////////////////////////
 static uint32_t __tinypy_compiler_inherited_flags(const tinypy_compile_ctx_t *ctx) {
     static const uint32_t future_mask = (uint32_t)(TINYPY_CODE_FUTURE_DIVISION | TINYPY_CODE_FUTURE_ABSOLUTE_IMPORT | TINYPY_CODE_FUTURE_WITH_STATEMENT | TINYPY_CODE_FUTURE_PRINT_FUNCTION | TINYPY_CODE_FUTURE_UNICODE_LITERALS);
-    tinypy_value_t *frame;
 
     if (ctx->options.dont_inherit != 0) {
         return ctx->options.flags;
     }
-    frame = tinypy_vm_current_frame(ctx->vm);
+    tinypy_value_t *frame = tinypy_vm_current_frame(ctx->vm);
     if (frame == NULL) {
         return ctx->options.flags;
     }
@@ -80,8 +79,6 @@ static int32_t __tinypy_compiler_source_is_empty_suite(const tinypy_compile_ctx_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_compiler_empty_code(tinypy_compile_ctx_t *ctx) {
     unsigned char instructions[4];
-    tinypy_value_t *none;
-    tinypy_value_t *bytecode;
     tinypy_value_t *consts;
     tinypy_value_t *empty;
     tinypy_value_t *filename;
@@ -94,8 +91,8 @@ static tinypy_value_t *__tinypy_compiler_empty_code(tinypy_compile_ctx_t *ctx) {
     instructions[1] = 0U;
     instructions[2] = 0U;
     instructions[3] = (unsigned char)TINYPY_OP_RETURN_VALUE;
-    none = tinypy_none_get(ctx->vm);
-    bytecode = tinypy_string_from_bytes(ctx->vm, instructions, sizeof(instructions));
+    tinypy_value_t *none = tinypy_none_get(ctx->vm);
+    tinypy_value_t *bytecode = tinypy_string_from_bytes(ctx->vm, instructions, sizeof(instructions));
     consts = tinypy_tuple_from_items(ctx->vm, &none, 1U);
     empty = tinypy_tuple_from_items(ctx->vm, NULL, 0U);
     filename = tinypy_string_from_bytes(ctx->vm, ctx->logical_filename, ctx->filename_size);
@@ -202,10 +199,9 @@ static tinypy_cst_node_t *__tinypy_compiler_parse(tinypy_compile_ctx_t *ctx, tin
     tinypy_parser_error_detail_t detail;
     uint32_t compiler_inherited_flags = __tinypy_compiler_inherited_flags(ctx);
     int flags = __tinypy_compiler_parser_flags(compiler_inherited_flags);
-    tinypy_cst_node_t *tree;
 
     int compiler_parser_start = __tinypy_compiler_parser_start(ctx->options.mode);
-    tree = tinypy_internal_parse_source(ctx, (const char *)ctx->source.bytes, ctx->source.size, ctx->logical_filename, &__tinypy_parser_grammar, compiler_parser_start, &detail, &flags);
+    tinypy_cst_node_t *tree = tinypy_internal_parse_source(ctx, (const char *)ctx->source.bytes, ctx->source.size, ctx->logical_filename, &__tinypy_parser_grammar, compiler_parser_start, &detail, &flags);
     if (tree != NULL) {
         return tree;
     }
@@ -252,10 +248,8 @@ void tinypy_compile_options_init(tinypy_compile_options_t *options, tinypy_compi
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tinypy_error_t **out_error) {
-    tinypy_cst_node_t *tree;
     tinypy_compiler_flags_t flags;
     tinypy_ast_module_t module;
-    tinypy_future_features_t *future;
     tinypy_symbol_table_t *symbols;
     tinypy_code_object_t *code;
 
@@ -265,7 +259,7 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
     if (ctx->options.mode == TINYPY_COMPILE_SINGLE && __tinypy_compiler_source_is_empty_suite(ctx) != 0 && ctx->source.size > 1U) {
         return __tinypy_compiler_empty_code(ctx);
     }
-    tree = __tinypy_compiler_parse(ctx, out_error);
+    tinypy_cst_node_t *tree = __tinypy_compiler_parse(ctx, out_error);
     if (tree == NULL) {
         return NULL;
     }
@@ -277,7 +271,7 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
         }
         return NULL;
     }
-    future = __tinypy_future_scan(ctx, module, ctx->logical_filename);
+    tinypy_future_features_t *future = __tinypy_future_scan(ctx, module, ctx->logical_filename);
     if (future == NULL) {
         if (ctx->failed == 0) {
             tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "future scan exceeds compiler arena limit", 1, 1, out_error);
@@ -358,10 +352,8 @@ tinypy_value_t *tinypy_compile_source(tinypy_vm_t *vm, const void *source, size_
 tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
     tinypy_compile_ctx_t ctx;
     tinypy_preprocess_result_t *result = NULL;
-    tinypy_cst_node_t *tree;
     tinypy_compiler_flags_t flags;
     tinypy_ast_module_t module;
-    tinypy_future_features_t *future;
 
     assert(tinypy_internal_vm_valid(vm));
     assert(source != NULL || source_size == 0U);
@@ -392,7 +384,7 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     if (tinypy_internal_compiler_source_prepare(&ctx, source, source_size, out_error) == 0) {
         goto complete;
     }
-    tree = __tinypy_compiler_parse(&ctx, out_error);
+    tinypy_cst_node_t *tree = __tinypy_compiler_parse(&ctx, out_error);
     if (tree == NULL) {
         goto complete;
     }
@@ -404,7 +396,7 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
         }
         goto complete;
     }
-    future = __tinypy_future_scan(&ctx, module, ctx.logical_filename);
+    tinypy_future_features_t *future = __tinypy_future_scan(&ctx, module, ctx.logical_filename);
     if (future == NULL) {
         if (ctx.failed == 0) {
             tinypy_internal_compiler_error(&ctx, TINYPY_ERROR_COMPILER_LIMIT, "future scan exceeds compiler arena limit", 1, 1, out_error);
@@ -432,15 +424,13 @@ complete:
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_compiler_run_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, tinypy_value_t *globals, tinypy_value_t *locals, const tinypy_compile_options_t *options, tinypy_compile_mode_e mode, int32_t discard_result, tinypy_error_t **out_error) {
     tinypy_compile_options_t local_options = *options;
-    tinypy_value_t *code;
-    tinypy_value_t *result;
 
     local_options.mode = mode;
-    code = tinypy_compile_source(vm, source, source_size, logical_filename, filename_size, &local_options, out_error);
+    tinypy_value_t *code = tinypy_compile_source(vm, source, source_size, logical_filename, filename_size, &local_options, out_error);
     if (code == NULL) {
         return NULL;
     }
-    result = tinypy_eval_code(code, globals, locals, out_error);
+    tinypy_value_t *result = tinypy_eval_code(code, globals, locals, out_error);
     TINYPY_DECREF(code);
     if (result == NULL) {
         return NULL;

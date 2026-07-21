@@ -9,14 +9,11 @@
 #include <string.h>
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_import_dict_value(tinypy_vm_t *vm, tinypy_value_t *dict, const char *name, size_t name_size) {
-    tinypy_value_t *key;
-    tinypy_value_t *value;
-
     if (dict == NULL) {
         return NULL;
     }
-    key = tinypy_string_from_bytes(vm, name, name_size);
-    value = tinypy_dict_contains(dict, key) != 0 ? tinypy_dict_get(dict, key) : NULL;
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
+    tinypy_value_t *value = tinypy_dict_get_optional(dict, key);
     TINYPY_DECREF(key);
     return value;
 }
@@ -236,11 +233,12 @@ static tinypy_value_t *__tinypy_import_finder_path(tinypy_vm_t *vm, const char *
     }
     if (parent_size != 0U) {
         tinypy_value_t *parent_key;
+        tinypy_value_t *parent;
 
         parent_size -= 1U;
         parent_key = tinypy_string_from_bytes(vm, name, parent_size);
-        if (tinypy_dict_contains(vm->modules, parent_key) != 0) {
-            tinypy_value_t *parent = tinypy_dict_get(vm->modules, parent_key);
+        parent = tinypy_dict_get_optional(vm->modules, parent_key);
+        if (parent != NULL) {
             tinypy_value_t *parent_path = tinypy_module_get_value(parent, "__path__", 8U);
 
             if (parent_path != NULL) {
@@ -255,8 +253,6 @@ static tinypy_value_t *__tinypy_import_finder_path(tinypy_vm_t *vm, const char *
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_import_load_finder(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *key, int *out_not_found, tinypy_error_t **out_error) {
-    tinypy_value_t *find_method;
-    tinypy_value_t *name_value;
     tinypy_value_t *path;
     tinypy_value_t *find_items[2];
     tinypy_value_t *find_args;
@@ -266,11 +262,11 @@ static tinypy_value_t *__tinypy_import_load_finder(tinypy_vm_t *vm, const char *
     tinypy_value_t *module;
 
     assert(vm->module_finder != NULL);
-    find_method = tinypy_object_get_attr(vm->module_finder, "find_module", 11U, out_error);
+    tinypy_value_t *find_method = tinypy_object_get_attr(vm->module_finder, "find_module", 11U, out_error);
     if (find_method == NULL) {
         return NULL;
     }
-    name_value = tinypy_string_from_bytes(vm, name, name_size);
+    tinypy_value_t *name_value = tinypy_string_from_bytes(vm, name, name_size);
     path = __tinypy_import_finder_path(vm, name, name_size);
     find_items[0] = name_value;
     find_items[1] = path;
@@ -314,12 +310,12 @@ static tinypy_value_t *__tinypy_import_load_finder(tinypy_vm_t *vm, const char *
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "module loader returned None", out_error);
         return NULL;
     }
-    if (tinypy_dict_contains(vm->modules, key) == 0) {
+    tinypy_value_t *registered = tinypy_dict_get_optional(vm->modules, key);
+
+    if (registered == NULL) {
         tinypy_dict_set(vm->modules, key, module);
     }
     else {
-        tinypy_value_t *registered = tinypy_dict_get(vm->modules, key);
-
         if (registered != module) {
             TINYPY_INCREF(registered);
             TINYPY_DECREF(module);
@@ -331,16 +327,14 @@ static tinypy_value_t *__tinypy_import_load_finder(tinypy_vm_t *vm, const char *
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *name, size_t name_size, const char *importer, size_t importer_size, int *out_not_found, tinypy_error_t **out_error) {
     tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
-    tinypy_value_t *module;
-    const tinypy_module_artifact_t *artifact;
     tinypy_module_request_t request;
     int loaded = 0;
 
     assert(out_not_found != NULL);
     *out_not_found = 0;
 
-    if (tinypy_dict_contains(vm->modules, key) != 0) {
-        module = tinypy_dict_get(vm->modules, key);
+    tinypy_value_t *module = tinypy_dict_get_optional(vm->modules, key);
+    if (module != NULL) {
         TINYPY_INCREF(module);
         TINYPY_DECREF(key);
         return module;
@@ -366,7 +360,7 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
     request.canonical_name_size = name_size;
     request.importer_name = importer;
     request.importer_name_size = importer_size;
-    artifact = vm->host.resolve_module(vm->host.user_data, &request);
+    const tinypy_module_artifact_t *artifact = vm->host.resolve_module(vm->host.user_data, &request);
     if (artifact == NULL) {
         *out_not_found = 1;
         TINYPY_DECREF(key);
@@ -526,7 +520,6 @@ tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t n
     char *canonical;
     int return_full;
     int not_found = 0;
-    tinypy_value_t *result;
 
     assert(tinypy_internal_vm_valid(vm));
     assert(name != NULL || name_size == 0U);
@@ -553,7 +546,7 @@ tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t n
             return_name_size = return_full != 0
                                    ? canonical_size
                                    : package_size + 1U + __tinypy_import_first_component_size(name, name_size);
-            result = __tinypy_import_load_path(vm, canonical, canonical_size, importer, importer_size, return_name_size, &not_found, out_error);
+            tinypy_value_t *result = __tinypy_import_load_path(vm, canonical, canonical_size, importer, importer_size, return_name_size, &not_found, out_error);
             tinypy_internal_vm_deallocate(vm, canonical, canonical_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
             if (result != NULL || not_found == 0) {
                 return result;
@@ -569,21 +562,20 @@ tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t n
     return_name_size = return_full != 0 || level > 0
                            ? canonical_size
                            : __tinypy_import_first_component_size(canonical, canonical_size);
-    result = __tinypy_import_load_path(vm, canonical, canonical_size, importer, importer_size, return_name_size, &not_found, out_error);
+    tinypy_value_t *result = __tinypy_import_load_path(vm, canonical, canonical_size, importer, importer_size, return_name_size, &not_found, out_error);
     tinypy_internal_vm_deallocate(vm, canonical, canonical_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_import_from(tinypy_value_t *module, const char *name, size_t name_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module);
-    tinypy_value_t *value;
     const char *module_name;
     size_t module_name_size;
     char *full_name;
     int not_found;
 
     assert(TINYPY_VALUE_KIND(module) == TINYPY_VALUE_MODULE);
-    value = tinypy_module_get_value(module, name, name_size);
+    tinypy_value_t *value = tinypy_module_get_value(module, name, name_size);
     if (value != NULL) {
         TINYPY_INCREF(value);
         return value;
@@ -602,15 +594,13 @@ tinypy_value_t *tinypy_internal_import_from(tinypy_value_t *module, const char *
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_import_star(tinypy_value_t *module, tinypy_value_t *locals, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module);
-    tinypy_value_t *dict;
-    tinypy_value_t *all;
     size_t index;
 
     assert(TINYPY_VALUE_KIND(module) == TINYPY_VALUE_MODULE);
     assert(TINYPY_VALUE_KIND(locals) == TINYPY_VALUE_DICT);
     TINYPY_CLEAR_ERROR(out_error);
-    dict = tinypy_module_dict(module);
-    all = tinypy_module_get_value(module, "__all__", 7U);
+    tinypy_value_t *dict = tinypy_module_dict(module);
+    tinypy_value_t *all = tinypy_module_get_value(module, "__all__", 7U);
     if (all != NULL) {
         size_t size;
 
@@ -626,12 +616,12 @@ int32_t tinypy_internal_import_star(tinypy_value_t *module, tinypy_value_t *loca
         }
         for (index = 0U; index < size; ++index) {
             tinypy_value_t *key = TINYPY_VALUE_KIND(all) == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(all, index) : TINYPY_LIST_GET(all, index);
+            tinypy_value_t *value = TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING ? tinypy_dict_get_optional(dict, key) : NULL;
 
-            if (TINYPY_VALUE_KIND(key) != TINYPY_VALUE_STRING || tinypy_dict_contains(dict, key) == 0) {
+            if (value == NULL) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "module __all__ names a missing attribute", out_error);
                 return 0;
             }
-            tinypy_value_t *value = tinypy_dict_get(dict, key);
             tinypy_dict_set(locals, key, value);
         }
         return 1;

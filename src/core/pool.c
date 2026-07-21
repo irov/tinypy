@@ -76,7 +76,6 @@ static void __tinypy_pool_raw_deallocate(tinypy_vm_t *vm, void *memory, size_t s
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_pool_grow_arena_table(tinypy_vm_t *vm) {
-    tinypy_pool_allocator_t *allocator;
     tinypy_pool_arena_t *arenas;
     uint32_t old_count;
     uint32_t new_count;
@@ -84,7 +83,7 @@ static void __tinypy_pool_grow_arena_table(tinypy_vm_t *vm) {
     size_t old_size;
     size_t new_size;
 
-    allocator = &vm->pool_allocator;
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
     old_count = allocator->maximum_arena_count;
     new_count = old_count != 0U ? old_count << 1U : TINYPY_INTERNAL_POOL_INITIAL_ARENAS;
     assert(new_count > old_count);
@@ -108,18 +107,16 @@ static void __tinypy_pool_grow_arena_table(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_pool_arena_t *__tinypy_pool_new_arena(tinypy_vm_t *vm) {
-    tinypy_pool_allocator_t *allocator;
-    tinypy_pool_arena_t *arena;
     void *memory;
     uintptr_t address;
     uintptr_t aligned_address;
     size_t excess;
 
-    allocator = &vm->pool_allocator;
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
     if (allocator->unused_arenas == NULL) {
         __tinypy_pool_grow_arena_table(vm);
     }
-    arena = allocator->unused_arenas;
+    tinypy_pool_arena_t *arena = allocator->unused_arenas;
     allocator->unused_arenas = arena->next_arena;
     assert(arena->address == 0U);
 
@@ -140,21 +137,17 @@ static tinypy_pool_arena_t *__tinypy_pool_new_arena(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_pool_unlink_used(tinypy_pool_t *pool) {
-    tinypy_pool_t *next;
-    tinypy_pool_t *previous;
 
-    next = pool->next_pool;
-    previous = pool->previous_pool;
+    tinypy_pool_t *next = pool->next_pool;
+    tinypy_pool_t *previous = pool->previous_pool;
     next->previous_pool = previous;
     previous->next_pool = next;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_pool_link_used_front(tinypy_pool_allocator_t *allocator, tinypy_pool_t *pool, uint32_t size_class) {
-    tinypy_pool_t *head;
-    tinypy_pool_t *next;
 
-    head = &allocator->used_pools[size_class];
-    next = head->next_pool;
+    tinypy_pool_t *head = &allocator->used_pools[size_class];
+    tinypy_pool_t *next = head->next_pool;
     pool->next_pool = next;
     pool->previous_pool = head;
     next->previous_pool = pool;
@@ -175,10 +168,9 @@ static void __tinypy_pool_remove_usable_arena(tinypy_pool_allocator_t *allocator
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_pool_release_arena(tinypy_vm_t *vm, tinypy_pool_arena_t *arena) {
-    tinypy_pool_allocator_t *allocator;
     void *memory;
 
-    allocator = &vm->pool_allocator;
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
     __tinypy_pool_remove_usable_arena(allocator, arena);
     memory = (void *)arena->address;
     arena->next_arena = allocator->unused_arenas;
@@ -220,10 +212,9 @@ static void __tinypy_pool_slide_usable_arena(tinypy_pool_allocator_t *allocator,
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_pool_initialize(tinypy_vm_t *vm) {
-    tinypy_pool_allocator_t *allocator;
     uint32_t size_class;
 
-    allocator = &vm->pool_allocator;
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
     (void)memset(allocator, 0, sizeof(*allocator));
     assert(TINYPY_INTERNAL_ALIGNMENT >= sizeof(void *));
     assert((TINYPY_INTERNAL_ALIGNMENT & (TINYPY_INTERNAL_ALIGNMENT - 1U)) == 0U);
@@ -240,10 +231,9 @@ void tinypy_internal_pool_initialize(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_pool_finalize(tinypy_vm_t *vm) {
-    tinypy_pool_allocator_t *allocator;
     uint32_t size_class;
 
-    allocator = &vm->pool_allocator;
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
     assert(allocator->active_arena_count == 0U);
     assert(allocator->usable_arenas == NULL);
     for (size_class = 0U; size_class < TINYPY_INTERNAL_POOL_CLASS_COUNT; ++size_class) {
@@ -264,8 +254,6 @@ void tinypy_internal_pool_finalize(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size, uint32_t tag) {
-    tinypy_pool_allocator_t *allocator;
-    tinypy_pool_arena_t *arena;
     tinypy_pool_t *head;
     tinypy_pool_t *pool;
     tinypy_pool_block_t *block;
@@ -277,7 +265,7 @@ void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size, uint32_t tag) 
         return __tinypy_pool_raw_allocate(vm, size, TINYPY_INTERNAL_ALIGNMENT, tag);
     }
 
-    allocator = &vm->pool_allocator;
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
     size_class = (uint32_t)((size - 1U) / TINYPY_INTERNAL_ALIGNMENT);
     head = &allocator->used_pools[size_class];
     pool = head->next_pool;
@@ -301,7 +289,7 @@ void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size, uint32_t tag) 
         return block;
     }
 
-    arena = allocator->usable_arenas;
+    tinypy_pool_arena_t *arena = allocator->usable_arenas;
     if (arena == NULL) {
         arena = __tinypy_pool_new_arena(vm);
         allocator->usable_arenas = arena;
@@ -359,8 +347,6 @@ void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size, uint32_t tag) 
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size, uint32_t tag) {
-    tinypy_pool_allocator_t *allocator;
-    tinypy_pool_arena_t *arena;
     tinypy_pool_t *pool;
     tinypy_pool_block_t *last_free;
     uintptr_t pool_address;
@@ -373,11 +359,11 @@ void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size,
         return;
     }
 
-    allocator = &vm->pool_allocator;
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
     pool_address = (uintptr_t)memory & ~(uintptr_t)TINYPY_INTERNAL_POOL_SIZE_MASK;
     pool = (tinypy_pool_t *)pool_address;
     assert(pool->arena_index < allocator->maximum_arena_count);
-    arena = &allocator->arenas[pool->arena_index];
+    tinypy_pool_arena_t *arena = &allocator->arenas[pool->arena_index];
     assert(arena->address != 0U);
     assert((uintptr_t)memory - arena->address < TINYPY_INTERNAL_POOL_ARENA_SIZE);
     assert(size <= __tinypy_pool_block_size(pool->size_class));

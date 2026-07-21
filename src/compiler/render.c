@@ -254,7 +254,6 @@ static int32_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, ti
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_double_literal(tinypy_render_builder_t *builder, double value) {
-    tinypy_value_t *temporary;
     int32_t result;
 
     if (value != value) {
@@ -266,7 +265,7 @@ static int32_t __tinypy_render_double_literal(tinypy_render_builder_t *builder, 
     if (value < -DBL_MAX) {
         return __tinypy_render_text(builder, "-1e400");
     }
-    temporary = tinypy_float_from_double(builder->compile->vm, value);
+    tinypy_value_t *temporary = tinypy_float_from_double(builder->compile->vm, value);
     result = __tinypy_render_repr_literal(builder, temporary);
     TINYPY_DECREF(temporary);
     return result;
@@ -950,7 +949,6 @@ static int __tinypy_render_record_compare(const tinypy_source_map_record_t *left
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compile_ctx_t *ctx) {
-    tinypy_source_map_record_t **records;
     tinypy_source_map_record_t *record;
     size_t count = 0U;
     size_t index;
@@ -958,7 +956,7 @@ static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compil
     if (ctx->source_map_entries == 0U) {
         return NULL;
     }
-    records = (tinypy_source_map_record_t **)tinypy_internal_compiler_arena_allocate(ctx, ctx->source_map_entries * sizeof(*records));
+    tinypy_source_map_record_t **records = (tinypy_source_map_record_t **)tinypy_internal_compiler_arena_allocate(ctx, ctx->source_map_entries * sizeof(*records));
     if (records == NULL) {
         return NULL;
     }
@@ -981,8 +979,6 @@ static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compil
 tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_ctx_t *ctx, tinypy_ast_module_t module) {
     tinypy_render_builder_t source_builder;
     tinypy_render_builder_t map_builder;
-    tinypy_source_map_record_t **records;
-    tinypy_preprocess_result_t *result;
     size_t symbol_bytes = 0U;
     size_t allocation_size;
     size_t index;
@@ -1014,7 +1010,7 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
     else {
         return NULL;
     }
-    records = __tinypy_render_sorted_records(ctx);
+    tinypy_source_map_record_t **records = __tinypy_render_sorted_records(ctx);
     if (ctx->source_map_entries != 0U && records == NULL) {
         (void)__tinypy_render_limit(&source_builder, "source map exceeds compiler arena limit", 1, 0);
         return NULL;
@@ -1034,15 +1030,15 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
         assert(symbol_size <= SIZE_MAX - symbol_bytes);
         symbol_bytes += symbol_size;
     }
-    assert(ctx->source_map_entries <= (SIZE_MAX - sizeof(*result)) / sizeof(tinypy_source_map_entry_t));
-    allocation_size = sizeof(*result) + ctx->source_map_entries * sizeof(tinypy_source_map_entry_t);
+    assert(ctx->source_map_entries <= (SIZE_MAX - sizeof(tinypy_preprocess_result_t)) / sizeof(tinypy_source_map_entry_t));
+    allocation_size = sizeof(tinypy_preprocess_result_t) + ctx->source_map_entries * sizeof(tinypy_source_map_entry_t);
     assert(source_builder.size + 1U <= SIZE_MAX - allocation_size);
     allocation_size += source_builder.size + 1U;
     assert(map_builder.size + 1U <= SIZE_MAX - allocation_size);
     allocation_size += map_builder.size + 1U;
     assert(symbol_bytes <= SIZE_MAX - allocation_size);
     allocation_size += symbol_bytes;
-    result = (tinypy_preprocess_result_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_COMPILER_DATA);
+    tinypy_preprocess_result_t *result = (tinypy_preprocess_result_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_COMPILER_DATA);
     (void)memset(result, 0, sizeof(*result));
     result->state = TINYPY_PREPROCESS_RESULT_STATE;
     result->vm = ctx->vm;
@@ -1087,11 +1083,10 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_preprocess_result_destroy(tinypy_preprocess_result_t *result) {
-    tinypy_vm_t *vm;
     size_t allocation_size;
 
     assert(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
-    vm = result->vm;
+    tinypy_vm_t *vm = result->vm;
     allocation_size = result->allocation_size;
     result->state = 0U;
     tinypy_internal_vm_deallocate(vm, result, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_COMPILER_DATA);

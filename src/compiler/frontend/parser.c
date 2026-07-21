@@ -140,9 +140,8 @@ static int __tinypy_frontend_state_transition(const tinypy_parser_grammar_t *g, 
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_parser_t *tinypy_internal_parser_new(tinypy_compile_ctx_t *ctx, const tinypy_parser_grammar_t *g, int start) {
-    tinypy_parser_t *ps;
 
-    ps = (tinypy_parser_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(tinypy_parser_t));
+    tinypy_parser_t *ps = (tinypy_parser_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(tinypy_parser_t));
     if (ps == NULL) {
         return NULL;
     }

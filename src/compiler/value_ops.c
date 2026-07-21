@@ -26,10 +26,7 @@ int __tinypy_frontend_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *__tinypy_frontend_dict_get(tinypy_value_t *dict, tinypy_value_t *key) {
-    if (tinypy_dict_contains(dict, key) == 0) {
-        return NULL;
-    }
-    return tinypy_dict_get(dict, key);
+    return tinypy_dict_get_optional(dict, key);
 }
 //////////////////////////////////////////////////////////////////////////
 int __tinypy_frontend_dict_delete(tinypy_value_t *dict, tinypy_value_t *key) {
@@ -107,11 +104,9 @@ tinypy_value_t *__tinypy_frontend_string_from_owner(tinypy_value_t *owner, const
 }
 //////////////////////////////////////////////////////////////////////////
 int __tinypy_frontend_dict_set_none(tinypy_value_t *dict, tinypy_value_t *key) {
-    tinypy_value_t *none;
-
     assert(dict != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
-    none = tinypy_none_get(vm);
+    tinypy_value_t *none = tinypy_none_get(vm);
     tinypy_dict_set(dict, key, none);
     TINYPY_DECREF(none);
     return 0;
@@ -157,7 +152,6 @@ tinypy_value_t *__tinypy_frontend_mangle(tinypy_compile_ctx_t *arena, tinypy_val
     size_t name_size;
     size_t class_size;
     char *buffer;
-    tinypy_value_t *result;
 
     assert(arena != NULL);
     assert(identifier != NULL);
@@ -186,28 +180,25 @@ tinypy_value_t *__tinypy_frontend_mangle(tinypy_compile_ctx_t *arena, tinypy_val
     (void)memcpy(buffer + 1U, class_name, class_size);
     (void)memcpy(buffer + 1U + class_size, name, name_size);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(identifier);
-    result = tinypy_string_from_bytes(vm, buffer, class_size + name_size + 1U);
+    tinypy_value_t *result = tinypy_string_from_bytes(vm, buffer, class_size + name_size + 1U);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *__tinypy_frontend_tuple_new(tinypy_value_t *owner, tinypy_compiler_size_t size) {
-    tinypy_vm_t *vm;
-    tinypy_tuple_object_t *tuple;
-    tinypy_value_t *none;
     size_t allocation_size;
     size_t index;
 
     assert(owner != NULL);
     assert(size >= 0);
-    vm = TINYPY_VALUE_VM(owner);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(owner);
     if (size == 0) {
         return tinypy_tuple_from_items(vm, NULL, 0U);
     }
     assert((size_t)size <= (SIZE_MAX - offsetof(tinypy_tuple_object_t, items)) / sizeof(tinypy_value_t *));
     allocation_size = offsetof(tinypy_tuple_object_t, items) + (size_t)size * sizeof(tinypy_value_t *);
-    tuple = (tinypy_tuple_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_TUPLE, allocation_size);
+    tinypy_tuple_object_t *tuple = (tinypy_tuple_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_TUPLE, allocation_size);
     tuple->base.size = size;
-    none = tinypy_none_get(vm);
+    tinypy_value_t *none = tinypy_none_get(vm);
     for (index = 0U; index < (size_t)size; ++index) {
         tuple->items[index] = none;
         TINYPY_INCREF(none);
@@ -217,24 +208,21 @@ tinypy_value_t *__tinypy_frontend_tuple_new(tinypy_value_t *owner, tinypy_compil
 }
 //////////////////////////////////////////////////////////////////////////
 void __tinypy_frontend_tuple_set(tinypy_value_t *tuple_value, tinypy_compiler_size_t index, tinypy_value_t *value) {
-    tinypy_tuple_object_t *tuple;
-
     assert(tuple_value != NULL);
     assert(value != NULL);
     assert(index >= 0 && index < TINYPY_COMPILER_TUPLE_GET_SIZE(tuple_value));
-    tuple = TINYPY_TUPLE_OBJECT(tuple_value);
+    tinypy_tuple_object_t *tuple = TINYPY_TUPLE_OBJECT(tuple_value);
     TINYPY_DECREF(tuple->items[index]);
     tuple->items[index] = value;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *__tinypy_frontend_dict_keys(tinypy_value_t *dict) {
-    tinypy_value_t *list;
     tinypy_compiler_size_t position = 0;
     tinypy_value_t *key;
     tinypy_value_t *value;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
-    list = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *list = tinypy_list_from_items(vm, NULL, 0U);
     while (__tinypy_frontend_dict_next(dict, &position, &key, &value) != 0) {
         tinypy_list_append(list, key);
     }
@@ -289,7 +277,6 @@ tinypy_value_t *__tinypy_frontend_sequence_list(tinypy_value_t *sequence) {
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_frontend_string_allocate(tinypy_vm_t *vm, size_t size) {
-    tinypy_string_object_t *string;
     size_t allocation_size;
 
     if (size == 0U) {
@@ -297,15 +284,13 @@ static tinypy_value_t *__tinypy_frontend_string_allocate(tinypy_vm_t *vm, size_t
     }
     assert(size <= SIZE_MAX - offsetof(tinypy_string_object_t, bytes) - 1U);
     allocation_size = offsetof(tinypy_string_object_t, bytes) + size + 1U;
-    string = (tinypy_string_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_STRING, allocation_size);
+    tinypy_string_object_t *string = (tinypy_string_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_STRING, allocation_size);
     string->base.size = size;
     (void)memset(string->bytes, 0, size + 1U);
     return &string->base.base;
 }
 //////////////////////////////////////////////////////////////////////////
 int __tinypy_frontend_string_resize(tinypy_value_t **string, tinypy_compiler_size_t size) {
-    tinypy_value_t *old_value;
-    tinypy_value_t *new_value;
     size_t old_size;
     const void *old_bytes;
     size_t copy_size;
@@ -313,10 +298,10 @@ int __tinypy_frontend_string_resize(tinypy_value_t **string, tinypy_compiler_siz
     assert(string != NULL);
     assert(*string != NULL);
     assert(size >= 0);
-    old_value = *string;
+    tinypy_value_t *old_value = *string;
     old_bytes = tinypy_string_view(old_value, &old_size);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(old_value);
-    new_value = __tinypy_frontend_string_allocate(vm, (size_t)size);
+    tinypy_value_t *new_value = __tinypy_frontend_string_allocate(vm, (size_t)size);
     copy_size = old_size < (size_t)size ? old_size : (size_t)size;
     if (copy_size != 0U) {
         (void)memcpy(TINYPY_STRING_OBJECT(new_value)->bytes, old_bytes, copy_size);
@@ -405,13 +390,11 @@ size_t __tinypy_frontend_constant_size(tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_frontend_constant_key_with_extra(tinypy_value_t *object, tinypy_value_t *extra) {
-    tinypy_value_t *tag;
-    tinypy_value_t *key;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
     tinypy_value_type_e typeof = tinypy_typeof(object);
-    tag = tinypy_integer_from_i64(vm, (int64_t)typeof);
-    key = __tinypy_frontend_tuple_new(object, extra != NULL ? 3 : 2);
+    tinypy_value_t *tag = tinypy_integer_from_i64(vm, (int64_t)typeof);
+    tinypy_value_t *key = __tinypy_frontend_tuple_new(object, extra != NULL ? 3 : 2);
     TINYPY_COMPILER_TUPLE_SET_ITEM(key, 0, tag);
     TINYPY_INCREF(object);
     TINYPY_COMPILER_TUPLE_SET_ITEM(key, 1, object);
@@ -461,7 +444,6 @@ tinypy_code_object_t *__tinypy_frontend_code_new(int arg_count, int local_count,
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_sequence_t *tinypy_internal_compiler_ast_sequence_new(int size, tinypy_compile_ctx_t *arena) {
     size_t allocation_size;
-    tinypy_ast_sequence_t *sequence;
 
     assert(size >= 0);
     assert(arena != NULL);
@@ -470,7 +452,7 @@ tinypy_ast_sequence_t *tinypy_internal_compiler_ast_sequence_new(int size, tinyp
     if (allocation_size == 0U) {
         allocation_size = 1U;
     }
-    sequence = (tinypy_ast_sequence_t *)tinypy_internal_compiler_arena_allocate(arena, allocation_size);
+    tinypy_ast_sequence_t *sequence = (tinypy_ast_sequence_t *)tinypy_internal_compiler_arena_allocate(arena, allocation_size);
     if (sequence == NULL) {
         return NULL;
     }
@@ -480,7 +462,6 @@ tinypy_ast_sequence_t *tinypy_internal_compiler_ast_sequence_new(int size, tinyp
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_integer_sequence_t *tinypy_internal_compiler_ast_integer_sequence_new(int size, tinypy_compile_ctx_t *arena) {
     size_t allocation_size;
-    tinypy_ast_integer_sequence_t *sequence;
 
     assert(size >= 0);
     assert(arena != NULL);
@@ -489,7 +470,7 @@ tinypy_ast_integer_sequence_t *tinypy_internal_compiler_ast_integer_sequence_new
     if (allocation_size == 0U) {
         allocation_size = 1U;
     }
-    sequence = (tinypy_ast_integer_sequence_t *)tinypy_internal_compiler_arena_allocate(arena, allocation_size);
+    tinypy_ast_integer_sequence_t *sequence = (tinypy_ast_integer_sequence_t *)tinypy_internal_compiler_arena_allocate(arena, allocation_size);
     if (sequence == NULL) {
         return NULL;
     }

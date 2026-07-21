@@ -8,6 +8,7 @@
 tinypy_value_t *tinypy_dict_new(tinypy_vm_t *vm);
 size_t tinypy_dict_size(const tinypy_value_t *dict);
 tinypy_value_t *tinypy_dict_get(const tinypy_value_t *dict, const tinypy_value_t *key);
+tinypy_value_t *tinypy_dict_get_optional(const tinypy_value_t *dict, const tinypy_value_t *key);
 int32_t tinypy_dict_contains(const tinypy_value_t *dict, const tinypy_value_t *key);
 void tinypy_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value);
 void tinypy_dict_delete(tinypy_value_t *dict, const tinypy_value_t *key);

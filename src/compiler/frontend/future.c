@@ -9,11 +9,10 @@
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_statement_t s, const char *filename) {
     int i;
-    tinypy_ast_sequence_t *names;
 
     assert(s->kind == TINYPY_AST_KIND_IMPORT_FROM);
 
-    names = s->v.ImportFrom.names;
+    tinypy_ast_sequence_t *names = s->v.ImportFrom.names;
     for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(names); i++) {
         tinypy_ast_alias_t name = (tinypy_ast_alias_t)TINYPY_AST_SEQUENCE_GET(names, i);
         const char *feature = TINYPY_COMPILER_STRING_AS_STRING(name->name);
@@ -126,9 +125,8 @@ static int __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinypy_fu
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_future_features_t *__tinypy_future_scan(tinypy_compile_ctx_t *arena, tinypy_ast_module_t mod, const char *filename) {
-    tinypy_future_features_t *ff;
 
-    ff = (tinypy_future_features_t *)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(tinypy_future_features_t));
+    tinypy_future_features_t *ff = (tinypy_future_features_t *)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(tinypy_future_features_t));
     if (ff == NULL) {
         return NULL;
     }

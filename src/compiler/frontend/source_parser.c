@@ -37,8 +37,6 @@ static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char 
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const char *source, size_t source_size, const char *filename, const tinypy_parser_grammar_t *g, int start, tinypy_parser_error_detail_t *error, int *flags) {
-    tinypy_tokenizer_t *tok;
-    tinypy_parser_t *parser;
     tinypy_cst_node_t *result = NULL;
     int started = 0;
 
@@ -49,14 +47,14 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
     assert(error != NULL);
     assert(flags != NULL);
     __tinypy_frontend_init_error(error, filename);
-    tok = tinypy_internal_tokenizer_from_string(ctx, source, source_size, start == TINYPY_GRAMMAR_FILE_INPUT);
+    tinypy_tokenizer_t *tok = tinypy_internal_tokenizer_from_string(ctx, source, source_size, start == TINYPY_GRAMMAR_FILE_INPUT);
     if (tok == NULL) {
         error->result = TINYPY_PARSER_OUT_OF_MEMORY;
         return NULL;
     }
     tok->filename = filename;
     tok->alterror = 1;
-    parser = tinypy_internal_parser_new(ctx, g, start);
+    tinypy_parser_t *parser = tinypy_internal_parser_new(ctx, g, start);
     if (parser == NULL) {
         error->result = TINYPY_PARSER_OUT_OF_MEMORY;
         return NULL;

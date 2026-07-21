@@ -14,12 +14,10 @@ tinypy_value_t **tinypy_internal_weakref_head_slot(tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_weakref_unlink(tinypy_weakref_object_t *weakref) {
-    tinypy_value_t **head_slot;
-
     if (weakref->object == NULL) {
         return;
     }
-    head_slot = tinypy_internal_weakref_head_slot(weakref->object);
+    tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(weakref->object);
     assert(head_slot != NULL);
     if (weakref->previous != NULL) {
         TINYPY_WEAKREF_OBJECT(weakref->previous)->next = weakref->next;
@@ -39,7 +37,6 @@ static void __tinypy_weakref_unlink(tinypy_weakref_object_t *weakref) {
 static tinypy_value_t *__tinypy_weakref_new_with_type(tinypy_type_t *type, tinypy_value_t *object, tinypy_value_t *callback, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(object);
-    tinypy_weakref_object_t *weakref;
 
     if (head_slot == NULL) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot create weak reference to this object", out_error);
@@ -49,7 +46,7 @@ static tinypy_value_t *__tinypy_weakref_new_with_type(tinypy_type_t *type, tinyp
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak reference callback must be callable", out_error);
         return NULL;
     }
-    weakref = (tinypy_weakref_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
+    tinypy_weakref_object_t *weakref = (tinypy_weakref_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
     weakref->object = object;
     weakref->callback = callback;
     weakref->next = *head_slot;
@@ -64,10 +61,8 @@ static tinypy_value_t *__tinypy_weakref_new_with_type(tinypy_type_t *type, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_weakref_new(tinypy_value_t *object, tinypy_value_t *callback, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
-
     assert(object != NULL);
-    vm = TINYPY_VALUE_VM(object);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
     assert(tinypy_internal_vm_valid(vm));
     assert(callback == NULL || tinypy_internal_value_belongs_to(vm, callback));
     TINYPY_CLEAR_ERROR(out_error);
@@ -83,15 +78,13 @@ tinypy_value_t *tinypy_weakref_get(const tinypy_value_t *value) {
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_weakref_clear(tinypy_value_t *value) {
     tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(value);
-    tinypy_value_t *weakref_value;
-    tinypy_value_t *current;
 
     if (head_slot == NULL || *head_slot == NULL) {
         return;
     }
-    weakref_value = *head_slot;
+    tinypy_value_t *weakref_value = *head_slot;
     *head_slot = NULL;
-    current = weakref_value;
+    tinypy_value_t *current = weakref_value;
     while (current != NULL) {
         tinypy_weakref_object_t *weakref = TINYPY_WEAKREF_OBJECT(current);
 
@@ -131,7 +124,6 @@ void tinypy_internal_weakref_clear(tinypy_value_t *value) {
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_weakref_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_weakref_object_t *weakref = TINYPY_WEAKREF_OBJECT(value);
-    size_t index;
 
     if (weakref->callback != NULL) {
         visit(weakref->callback, user_data);
@@ -139,7 +131,7 @@ void tinypy_internal_weakref_release_references(tinypy_value_t *value, tinypy_re
     if (weakref->dict != NULL) {
         visit(weakref->dict, user_data);
     }
-    for (index = 0U; index < value->type->slot_count; ++index) {
+    for (size_t index = 0U; index < value->type->slot_count; ++index) {
         tinypy_value_t **slot = tinypy_internal_object_member_slot(value, index);
 
         if (*slot != NULL) {
@@ -148,8 +140,7 @@ void tinypy_internal_weakref_release_references(tinypy_value_t *value, tinypy_re
     }
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_weakref_destroy(tinypy_vm_t *vm, tinypy_value_t *value) {
-    (void)vm;
+void tinypy_internal_weakref_destroy(tinypy_value_t *value) {
     __tinypy_weakref_unlink(TINYPY_WEAKREF_OBJECT(value));
 }
 //////////////////////////////////////////////////////////////////////////
@@ -183,12 +174,11 @@ tinypy_value_t *tinypy_internal_weakref_create(tinypy_type_t *type, tinypy_value
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_weakref_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
-    tinypy_value_t *object;
 
     if (__tinypy_weakref_arguments(vm, args, kwargs, 0U, 0U, out_error) == 0) {
         return NULL;
     }
-    object = TINYPY_WEAKREF_OBJECT(callable)->object;
+    tinypy_value_t *object = TINYPY_WEAKREF_OBJECT(callable)->object;
     if (object == NULL) {
         return tinypy_none_get(vm);
     }
@@ -198,14 +188,13 @@ tinypy_value_t *tinypy_internal_weakref_call(tinypy_value_t *callable, tinypy_va
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *type_value;
     tinypy_value_t *callback = NULL;
 
     (void)user_data;
     if (__tinypy_weakref_arguments(vm, args, kwargs, 2U, 3U, out_error) == 0) {
         return NULL;
     }
-    type_value = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);
     if (TINYPY_VALUE_KIND(type_value) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype((tinypy_type_t *)type_value, &vm->weakref_type) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref.__new__ requires a weakref subtype", out_error);
         return NULL;
@@ -234,13 +223,12 @@ static tinypy_value_t *__tinypy_weakref_init_method(tinypy_value_t *function, ti
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_hash_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_weakref_object_t *weakref;
 
     (void)user_data;
     if (__tinypy_weakref_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
         return NULL;
     }
-    weakref = TINYPY_WEAKREF_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_weakref_object_t *weakref = TINYPY_WEAKREF_OBJECT(TINYPY_TUPLE_GET(args, 0U));
     if (weakref->hash_computed == 0) {
         if (weakref->object == NULL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak object has gone away", out_error);
@@ -273,8 +261,6 @@ void tinypy_internal_initialize_weakref_type(tinypy_vm_t *vm) {
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_count_function(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t **head_slot;
-    tinypy_value_t *current;
     int64_t count = INT64_C(0);
 
     (void)user_data;
@@ -282,8 +268,8 @@ static tinypy_value_t *__tinypy_weakref_count_function(tinypy_value_t *function,
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-    head_slot = tinypy_internal_weakref_head_slot(item);
-    current = head_slot != NULL ? *head_slot : NULL;
+    tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(item);
+    tinypy_value_t *current = head_slot != NULL ? *head_slot : NULL;
     while (current != NULL) {
         count += INT64_C(1);
         current = TINYPY_WEAKREF_OBJECT(current)->next;
@@ -293,18 +279,15 @@ static tinypy_value_t *__tinypy_weakref_count_function(tinypy_value_t *function,
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_list_function(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *result;
-    tinypy_value_t **head_slot;
-    tinypy_value_t *current;
 
     (void)user_data;
     if (__tinypy_weakref_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
         return NULL;
     }
-    result = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-    head_slot = tinypy_internal_weakref_head_slot(item);
-    current = head_slot != NULL ? *head_slot : NULL;
+    tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(item);
+    tinypy_value_t *current = head_slot != NULL ? *head_slot : NULL;
     while (current != NULL) {
         tinypy_list_append(result, current);
         current = TINYPY_WEAKREF_OBJECT(current)->next;
@@ -334,22 +317,20 @@ static tinypy_value_t *__tinypy_weakref_proxy_function(tinypy_value_t *function,
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_remove_function(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *dict;
-    tinypy_value_t *key;
 
     (void)user_data;
     if (__tinypy_weakref_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
         return NULL;
     }
-    dict = TINYPY_TUPLE_GET(args, 0U);
-    key = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_t *dict = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *key = TINYPY_TUPLE_GET(args, 1U);
     if (TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_DICT) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref removal requires a dictionary", out_error);
         return NULL;
     }
-    if (tinypy_dict_contains(dict, key) != 0) {
-        tinypy_value_t *candidate = tinypy_dict_get(dict, key);
+    tinypy_value_t *candidate = tinypy_dict_get_optional(dict, key);
 
+    if (candidate != NULL) {
         if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_WEAKREF && TINYPY_WEAKREF_OBJECT(candidate)->object == NULL) {
             tinypy_dict_delete(dict, key);
         }

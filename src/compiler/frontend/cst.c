@@ -74,7 +74,6 @@ int tinypy_internal_compiler_cst_add_child(register tinypy_cst_node_t *n1, int t
     const int nch = n1->child_count;
     int current_capacity;
     int required_capacity;
-    tinypy_cst_node_t *n;
 
     if (n1->context->limits.max_cst_nodes != 0U && n1->context->cst_node_count >= n1->context->limits.max_cst_nodes) {
         return TINYPY_PARSER_OUT_OF_MEMORY;
@@ -92,18 +91,18 @@ int tinypy_internal_compiler_cst_add_child(register tinypy_cst_node_t *n1, int t
         if ((size_t)required_capacity > SIZE_MAX / sizeof(tinypy_cst_node_t)) {
             return TINYPY_PARSER_OUT_OF_MEMORY;
         }
-        n = (tinypy_cst_node_t *)tinypy_internal_compiler_arena_allocate(n1->context,
-                                                                         (size_t)required_capacity * sizeof(tinypy_cst_node_t));
-        if (n == NULL) {
+        tinypy_cst_node_t *new_children = (tinypy_cst_node_t *)tinypy_internal_compiler_arena_allocate(n1->context,
+                                                                                                       (size_t)required_capacity * sizeof(tinypy_cst_node_t));
+        if (new_children == NULL) {
             return TINYPY_PARSER_OUT_OF_MEMORY;
         }
         if (n1->children != NULL) {
-            memcpy(n, n1->children, (size_t)nch * sizeof(tinypy_cst_node_t));
+            memcpy(new_children, n1->children, (size_t)nch * sizeof(tinypy_cst_node_t));
         }
-        n1->children = n;
+        n1->children = new_children;
     }
 
-    n = &n1->children[n1->child_count++];
+    tinypy_cst_node_t *n = &n1->children[n1->child_count++];
     n1->context->cst_node_count += 1U;
     n->context = n1->context;
     n->type = type;

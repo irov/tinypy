@@ -96,8 +96,6 @@ static void __tinypy_internal_dict_lookup(const tinypy_vm_t *vm, const tinypy_va
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_dict_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    const tinypy_dict_entry_t *iterator;
-    const tinypy_dict_entry_t *iterator_end;
 
     if (left == right) {
         return 1;
@@ -110,8 +108,8 @@ int32_t tinypy_internal_dict_equal(const tinypy_value_t *left, const tinypy_valu
     assert(vm->equality_depth < 1000U);
     vm->equality_depth += 1U;
 #endif
-    iterator = TINYPY_DICT_ITERATOR_BEGIN(left);
-    iterator_end = TINYPY_DICT_ITERATOR_END(left);
+    const tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(left);
+    const tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(left);
     for (; iterator != iterator_end; ++iterator) {
         tinypy_dict_lookup_t lookup;
 
@@ -160,11 +158,9 @@ static void __tinypy_internal_dict_insert_clean(tinypy_dict_entry_t *entries, si
 static void __tinypy_internal_dict_resize(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_capacity) {
     tinypy_dict_entry_t *old_entries = TINYPY_DICT_OBJECT(dict)->table;
     size_t old_capacity = TINYPY_DICT_CAPACITY(dict);
-    tinypy_dict_entry_t *new_entries;
     size_t new_capacity = TINYPY_DICT_INITIAL_CAPACITY;
     size_t new_size;
     size_t old_size;
-    tinypy_dict_entry_t *iterator;
     tinypy_dict_entry_t *iterator_end;
 
     while (new_capacity < minimum_capacity) {
@@ -173,11 +169,11 @@ static void __tinypy_internal_dict_resize(tinypy_vm_t *vm, tinypy_value_t *dict,
     }
     new_size = __tinypy_internal_dict_table_size(new_capacity);
 
-    new_entries = (tinypy_dict_entry_t *)tinypy_internal_vm_allocate(
+    tinypy_dict_entry_t *new_entries = (tinypy_dict_entry_t *)tinypy_internal_vm_allocate(
         vm, new_size, (uint32_t)TINYPY_ALLOC_TAG_DICT_TABLE);
     (void)memset(new_entries, 0, new_size);
 
-    iterator = old_entries;
+    tinypy_dict_entry_t *iterator = old_entries;
     iterator_end = old_entries + old_capacity;
     for (; iterator != iterator_end; ++iterator) {
         if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE) {
@@ -222,14 +218,14 @@ void tinypy_internal_dict_release_references(tinypy_value_t *value, tinypy_relea
     }
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_dict_destroy(tinypy_vm_t *vm, tinypy_value_t *value) {
+void tinypy_internal_dict_destroy(tinypy_value_t *value) {
     tinypy_dict_entry_t *entries = TINYPY_DICT_OBJECT(value)->table;
 
     if (entries != TINYPY_DICT_OBJECT(value)->small_table) {
         size_t table_size = __tinypy_internal_dict_table_size(TINYPY_DICT_CAPACITY(value));
 
         tinypy_internal_vm_deallocate(
-            vm,
+            TINYPY_VALUE_VM(value),
             entries,
             table_size,
             (uint32_t)TINYPY_ALLOC_TAG_DICT_TABLE);
@@ -237,10 +233,8 @@ void tinypy_internal_dict_destroy(tinypy_vm_t *vm, tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_dict_new(tinypy_vm_t *vm) {
-    tinypy_value_t *dict;
-
     assert(tinypy_internal_vm_valid(vm));
-    dict = tinypy_internal_value_allocate(
+    tinypy_value_t *dict = tinypy_internal_value_allocate(
         vm, TINYPY_VALUE_DICT, sizeof(tinypy_dict_object_t));
     TINYPY_DICT_OBJECT(dict)->table = TINYPY_DICT_OBJECT(dict)->small_table;
     TINYPY_DICT_OBJECT(dict)->mask = TINYPY_DICT_MIN_SIZE - 1U;
@@ -261,12 +255,11 @@ static void __tinypy_internal_dict_find_public(const tinypy_vm_t *vm, const tiny
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_dict_get(const tinypy_value_t *dict, const tinypy_value_t *key) {
-    const tinypy_vm_t *vm;
     tinypy_dict_lookup_t lookup;
     tinypy_hash_t hash;
 
     assert(dict != NULL);
-    vm = TINYPY_VALUE_VM(dict);
+    const tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
     assert(tinypy_internal_vm_valid(vm));
     assert(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
     assert(tinypy_internal_value_belongs_to(
@@ -274,6 +267,15 @@ tinypy_value_t *tinypy_dict_get(const tinypy_value_t *dict, const tinypy_value_t
     __tinypy_internal_dict_find_public(vm, dict, key, &lookup, &hash);
     assert(lookup.found != 0);
     return TINYPY_DICT_OBJECT(dict)->table[lookup.index].value;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_dict_get_optional(const tinypy_value_t *dict, const tinypy_value_t *key) {
+    assert(dict != NULL);
+    const tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
+    assert(tinypy_internal_vm_valid(vm));
+    assert(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
+    assert(tinypy_internal_value_belongs_to(vm, key));
+    return tinypy_internal_dict_get_optional(vm, dict, key);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_dict_get_optional(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key) {
@@ -296,12 +298,11 @@ tinypy_value_t *tinypy_internal_dict_get_optional_index(const tinypy_vm_t *vm, c
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_dict_get_index_hint(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, size_t index) {
     const tinypy_dict_object_t *dict_object = TINYPY_DICT_OBJECT((tinypy_value_t *)dict);
-    const tinypy_dict_entry_t *entry;
 
     if (index > dict_object->mask) {
         return NULL;
     }
-    entry = &dict_object->table[index];
+    const tinypy_dict_entry_t *entry = &dict_object->table[index];
     if (entry->state != TINYPY_DICT_ENTRY_ACTIVE || __tinypy_internal_dict_keys_equal(vm, entry->key, key) == 0) {
         return NULL;
     }
@@ -309,12 +310,11 @@ tinypy_value_t *tinypy_internal_dict_get_index_hint(const tinypy_vm_t *vm, const
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_dict_contains(const tinypy_value_t *dict, const tinypy_value_t *key) {
-    const tinypy_vm_t *vm;
     tinypy_dict_lookup_t lookup;
     tinypy_hash_t hash;
 
     assert(dict != NULL);
-    vm = TINYPY_VALUE_VM(dict);
+    const tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
     assert(tinypy_internal_vm_valid(vm));
     assert(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
     assert(tinypy_internal_value_belongs_to(
@@ -324,13 +324,11 @@ int32_t tinypy_dict_contains(const tinypy_value_t *dict, const tinypy_value_t *k
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value) {
-    tinypy_vm_t *vm;
     tinypy_dict_lookup_t lookup;
     tinypy_hash_t hash;
-    tinypy_dict_entry_t *entry;
 
     assert(dict != NULL);
-    vm = TINYPY_VALUE_VM(dict);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
     assert(tinypy_internal_vm_valid(vm));
     assert(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
     assert(tinypy_internal_value_belongs_to(vm, key));
@@ -342,11 +340,9 @@ void tinypy_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *
     }
 
     if (lookup.found != 0) {
-        tinypy_value_t *previous;
-
         TINYPY_INCREF(value);
-        entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
-        previous = entry->value;
+        tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
+        tinypy_value_t *previous = entry->value;
         entry->value = value;
         TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
         TINYPY_DECREF(previous);
@@ -362,7 +358,7 @@ void tinypy_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *
 
     TINYPY_INCREF(key);
     TINYPY_INCREF(value);
-    entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
+    tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
     if (entry->state == TINYPY_DICT_ENTRY_EMPTY) {
         TINYPY_DICT_OBJECT(dict)->fill += 1U;
     }
@@ -376,8 +372,6 @@ void tinypy_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_dict_delete_optional(tinypy_vm_t *vm, tinypy_value_t *dict, const tinypy_value_t *key) {
     tinypy_dict_lookup_t lookup;
-    tinypy_dict_entry_t *entry;
-    tinypy_value_t *owned_key;
     tinypy_value_t *owned_value;
     tinypy_hash_t hash;
 
@@ -390,8 +384,8 @@ int32_t tinypy_internal_dict_delete_optional(tinypy_vm_t *vm, tinypy_value_t *di
         tinypy_internal_type_lookup_cache_invalidate(vm);
     }
 
-    entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
-    owned_key = entry->key;
+    tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
+    tinypy_value_t *owned_key = entry->key;
     owned_value = entry->value;
     entry->key = NULL;
     entry->value = NULL;
@@ -404,11 +398,10 @@ int32_t tinypy_internal_dict_delete_optional(tinypy_vm_t *vm, tinypy_value_t *di
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_dict_delete(tinypy_value_t *dict, const tinypy_value_t *key) {
-    tinypy_vm_t *vm;
     int32_t deleted;
 
     assert(dict != NULL);
-    vm = TINYPY_VALUE_VM(dict);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
     assert(tinypy_internal_vm_valid(vm));
     assert(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
     assert(tinypy_internal_value_belongs_to(vm, key));
@@ -418,14 +411,11 @@ void tinypy_dict_delete(tinypy_value_t *dict, const tinypy_value_t *key) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_dict_clear(tinypy_value_t *dict) {
-    tinypy_vm_t *vm;
-    tinypy_dict_entry_t *entries;
-    tinypy_dict_entry_t *iterator;
     tinypy_dict_entry_t *iterator_end;
     size_t capacity;
 
     assert(dict != NULL);
-    vm = TINYPY_VALUE_VM(dict);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
     assert(tinypy_internal_vm_valid(vm));
     assert(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
     if (TINYPY_DICT_OBJECT(dict)->used == 0U) {
@@ -436,12 +426,12 @@ void tinypy_dict_clear(tinypy_value_t *dict) {
         tinypy_internal_type_lookup_cache_invalidate(vm);
     }
 
-    entries = TINYPY_DICT_OBJECT(dict)->table;
+    tinypy_dict_entry_t *entries = TINYPY_DICT_OBJECT(dict)->table;
     capacity = TINYPY_DICT_CAPACITY(dict);
     TINYPY_DICT_OBJECT(dict)->used = 0U;
     TINYPY_DICT_OBJECT(dict)->fill = 0U;
     TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
-    iterator = TINYPY_DICT_ITERATOR_BEGIN(dict);
+    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(dict);
     iterator_end = TINYPY_DICT_ITERATOR_END(dict);
     for (; iterator != iterator_end; ++iterator) {
         if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE) {
@@ -484,15 +474,13 @@ uint64_t tinypy_dict_version(const tinypy_value_t *dict) {
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_dict_next(const tinypy_value_t *dict, size_t *position, tinypy_value_t **out_key, tinypy_value_t **out_value) {
-    const tinypy_dict_object_t *object;
-
     assert(dict != NULL);
     assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(dict)));
     assert(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
     assert(position != NULL);
     assert(out_key != NULL);
     assert(out_value != NULL);
-    object = TINYPY_DICT_OBJECT((tinypy_value_t *)dict);
+    const tinypy_dict_object_t *object = TINYPY_DICT_OBJECT((tinypy_value_t *)dict);
     while (*position <= object->mask) {
         const tinypy_dict_entry_t *entry = &object->table[*position];
 

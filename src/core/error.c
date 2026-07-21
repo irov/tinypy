@@ -21,7 +21,6 @@ static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allo
     size_t message_size;
     size_t allocation_size;
     char *cursor;
-    tinypy_error_t *error;
 
     if (out_error == NULL) {
         return;
@@ -43,7 +42,7 @@ static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allo
     assert(source_line_size <= SIZE_MAX - allocation_size - 1U);
     allocation_size += source_line_size + 1U;
 
-    error = (tinypy_error_t *)allocator->allocate(allocator->user_data, allocation_size, TINYPY_INTERNAL_ALIGNMENT, (uint32_t)TINYPY_ALLOC_TAG_ERROR);
+    tinypy_error_t *error = (tinypy_error_t *)allocator->allocate(allocator->user_data, allocation_size, TINYPY_INTERNAL_ALIGNMENT, (uint32_t)TINYPY_ALLOC_TAG_ERROR);
     assert(error != NULL);
 
     error->allocator = *allocator;
@@ -75,8 +74,6 @@ static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allo
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size) {
     tinypy_value_t *exception = vm->raised_value;
-    tinypy_value_t *message_value;
-    tinypy_value_t *filename_value;
     tinypy_value_t *line_value;
     tinypy_value_t *offset_value;
     tinypy_value_t *text_value;
@@ -89,8 +86,8 @@ static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, con
         return;
     }
     size_t string_length = __tinypy_internal_string_length(message);
-    message_value = tinypy_string_from_bytes(vm, message, string_length);
-    filename_value = logical_filename != NULL ? tinypy_string_from_bytes(vm, logical_filename, filename_size) : tinypy_none_get(vm);
+    tinypy_value_t *message_value = tinypy_string_from_bytes(vm, message, string_length);
+    tinypy_value_t *filename_value = logical_filename != NULL ? tinypy_string_from_bytes(vm, logical_filename, filename_size) : tinypy_none_get(vm);
     line_value = tinypy_integer_from_i64(vm, line_number);
     offset_value = tinypy_integer_from_i64(vm, column_offset);
     text_value = source_line != NULL ? tinypy_string_from_bytes(vm, source_line, source_line_size) : tinypy_none_get(vm);

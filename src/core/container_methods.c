@@ -87,13 +87,12 @@ static int32_t __tinypy_container_list_index(tinypy_vm_t *vm, tinypy_value_t *va
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_container_collect(tinypy_vm_t *vm, tinypy_value_t *iterable, tinypy_error_t **out_error) {
     tinypy_value_t *iterator = tinypy_iter(iterable, out_error);
-    tinypy_value_t *result;
     tinypy_error_t *iteration_error = NULL;
 
     if (iterator == NULL) {
         return NULL;
     }
-    result = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
     for (;;) {
         tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
 
@@ -132,14 +131,13 @@ static tinypy_value_t *__tinypy_list_append_method(tinypy_value_t *function, tin
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_extend_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *collected;
 
     (void)user_data;
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 2U, 2U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
-    collected = __tinypy_container_collect(vm, item, out_error);
+    tinypy_value_t *collected = __tinypy_container_collect(vm, item, out_error);
     if (collected == NULL) {
         return NULL;
     }
@@ -152,14 +150,13 @@ static tinypy_value_t *__tinypy_list_extend_method(tinypy_value_t *function, tin
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_insert_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *list;
     size_t index;
 
     (void)user_data;
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 3U, 3U, out_error) == 0) {
         return NULL;
     }
-    list = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
     size_t list_size = TINYPY_LIST_SIZE(list);
     if (__tinypy_container_list_index(vm, item_2, list_size, INT32_C(1), &index, out_error) == 0) {
@@ -172,7 +169,6 @@ static tinypy_value_t *__tinypy_list_insert_method(tinypy_value_t *function, tin
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_pop_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *list;
     size_t size;
     size_t index;
 
@@ -180,7 +176,7 @@ static tinypy_value_t *__tinypy_list_pop_method(tinypy_value_t *function, tinypy
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 1U, 2U, out_error) == 0) {
         return NULL;
     }
-    list = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
     size = TINYPY_LIST_SIZE(list);
     if (size == 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "pop from empty list", out_error);
@@ -200,8 +196,6 @@ static tinypy_value_t *__tinypy_list_pop_method(tinypy_value_t *function, tinypy
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_remove_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *list;
-    tinypy_value_t *needle;
     tinypy_value_t *const *iterator_begin;
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
@@ -210,8 +204,8 @@ static tinypy_value_t *__tinypy_list_remove_method(tinypy_value_t *function, tin
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 2U, 2U, out_error) == 0) {
         return NULL;
     }
-    list = TINYPY_TUPLE_GET(args, 0U);
-    needle = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *needle = TINYPY_TUPLE_GET(args, 1U);
     iterator_begin = TINYPY_LIST_ITERATOR_BEGIN(list);
     iterator = iterator_begin;
     iterator_end = TINYPY_LIST_ITERATOR_END(list);
@@ -227,8 +221,6 @@ static tinypy_value_t *__tinypy_list_remove_method(tinypy_value_t *function, tin
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_count_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *list;
-    tinypy_value_t *needle;
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
     int64_t count = 0;
@@ -237,8 +229,8 @@ static tinypy_value_t *__tinypy_list_count_method(tinypy_value_t *function, tiny
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 2U, 2U, out_error) == 0) {
         return NULL;
     }
-    list = TINYPY_TUPLE_GET(args, 0U);
-    needle = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *needle = TINYPY_TUPLE_GET(args, 1U);
     iterator = TINYPY_LIST_ITERATOR_BEGIN(list);
     iterator_end = TINYPY_LIST_ITERATOR_END(list);
     for (; iterator != iterator_end; ++iterator) {
@@ -252,8 +244,6 @@ static tinypy_value_t *__tinypy_list_count_method(tinypy_value_t *function, tiny
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_index_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *list;
-    tinypy_value_t *needle;
     int64_t start = 0;
     int64_t stop;
     int64_t size;
@@ -263,8 +253,8 @@ static tinypy_value_t *__tinypy_list_index_method(tinypy_value_t *function, tiny
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 2U, 4U, out_error) == 0) {
         return NULL;
     }
-    list = TINYPY_TUPLE_GET(args, 0U);
-    needle = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *needle = TINYPY_TUPLE_GET(args, 1U);
     size = (int64_t)TINYPY_LIST_SIZE(list);
     stop = size;
     int condition = TINYPY_TUPLE_SIZE(args) >= 3U;
@@ -307,7 +297,6 @@ static tinypy_value_t *__tinypy_list_index_method(tinypy_value_t *function, tiny
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_reverse_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *list;
     size_t left;
     size_t right;
 
@@ -315,7 +304,7 @@ static tinypy_value_t *__tinypy_list_reverse_method(tinypy_value_t *function, ti
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
-    list = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
     left = 0U;
     right = TINYPY_LIST_SIZE(list);
     while (left < right && left < --right) {
@@ -365,7 +354,6 @@ static int32_t __tinypy_list_sort_compare(tinypy_vm_t *vm, tinypy_value_t *left,
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *list;
     tinypy_value_t *compare = NULL;
     tinypy_value_t *key_function = NULL;
     int32_t reverse = INT32_C(0);
@@ -377,7 +365,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     if (__tinypy_container_argument_count(vm, args, 1U, 4U, out_error) == 0) {
         return NULL;
     }
-    list = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
     if (TINYPY_TUPLE_SIZE(args) >= 2U) {
         compare = TINYPY_TUPLE_GET(args, 1U);
     }
@@ -492,16 +480,14 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_get_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *dict;
-    tinypy_value_t *key;
     tinypy_value_t *result;
 
     (void)user_data;
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 2U, 3U, out_error) == 0) {
         return NULL;
     }
-    dict = TINYPY_TUPLE_GET(args, 0U);
-    key = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_t *dict = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *key = TINYPY_TUPLE_GET(args, 1U);
     result = tinypy_internal_dict_get_optional(vm, dict, key);
     if (result == NULL && TINYPY_TUPLE_SIZE(args) == 3U) {
         result = TINYPY_TUPLE_GET(args, 2U);
@@ -603,8 +589,6 @@ static tinypy_value_t *__tinypy_dict_clear_method(tinypy_value_t *function, tiny
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_copy_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *source;
-    tinypy_value_t *result;
     tinypy_dict_entry_t *iterator;
     tinypy_dict_entry_t *iterator_end;
 
@@ -612,8 +596,8 @@ static tinypy_value_t *__tinypy_dict_copy_method(tinypy_value_t *function, tinyp
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
-    source = TINYPY_TUPLE_GET(args, 0U);
-    result = tinypy_dict_new(vm);
+    tinypy_value_t *source = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *result = tinypy_dict_new(vm);
     iterator = TINYPY_DICT_ITERATOR_BEGIN(source);
     iterator_end = TINYPY_DICT_ITERATOR_END(source);
     for (; iterator != iterator_end; ++iterator) {
@@ -670,13 +654,12 @@ static int32_t __tinypy_dict_update_from(tinypy_value_t *target, tinypy_value_t 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_update_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *target;
 
     (void)user_data;
     if (__tinypy_container_argument_count(vm, args, 1U, 2U, out_error) == 0) {
         return NULL;
     }
-    target = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *target = TINYPY_TUPLE_GET(args, 0U);
     int condition_3 = TINYPY_TUPLE_SIZE(args) == 2U;
     if (condition_3 != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
@@ -693,20 +676,16 @@ static tinypy_value_t *__tinypy_dict_update_method(tinypy_value_t *function, tin
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_setdefault_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *dict;
-    tinypy_value_t *key;
     tinypy_value_t *value;
 
     (void)user_data;
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 2U, 3U, out_error) == 0) {
         return NULL;
     }
-    dict = TINYPY_TUPLE_GET(args, 0U);
-    key = TINYPY_TUPLE_GET(args, 1U);
-    if (tinypy_dict_contains(dict, key) != 0) {
-        value = tinypy_dict_get(dict, key);
-    }
-    else {
+    tinypy_value_t *dict = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *key = TINYPY_TUPLE_GET(args, 1U);
+    value = tinypy_dict_get_optional(dict, key);
+    if (value == NULL) {
         if (TINYPY_TUPLE_SIZE(args) == 3U) {
             value = TINYPY_TUPLE_GET(args, 2U);
         }
@@ -723,17 +702,16 @@ static tinypy_value_t *__tinypy_dict_setdefault_method(tinypy_value_t *function,
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_pop_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *dict;
-    tinypy_value_t *key;
     tinypy_value_t *value;
 
     (void)user_data;
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 2U, 3U, out_error) == 0) {
         return NULL;
     }
-    dict = TINYPY_TUPLE_GET(args, 0U);
-    key = TINYPY_TUPLE_GET(args, 1U);
-    if (tinypy_dict_contains(dict, key) == 0) {
+    tinypy_value_t *dict = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *key = TINYPY_TUPLE_GET(args, 1U);
+    value = tinypy_dict_get_optional(dict, key);
+    if (value == NULL) {
         if (TINYPY_TUPLE_SIZE(args) == 3U) {
             value = TINYPY_TUPLE_GET(args, 2U);
             TINYPY_INCREF(value);
@@ -742,7 +720,6 @@ static tinypy_value_t *__tinypy_dict_pop_method(tinypy_value_t *function, tinypy
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_KEY, "dictionary key is absent", out_error);
         return NULL;
     }
-    value = tinypy_dict_get(dict, key);
     TINYPY_INCREF(value);
     tinypy_dict_delete(dict, key);
     return value;
@@ -750,16 +727,14 @@ static tinypy_value_t *__tinypy_dict_pop_method(tinypy_value_t *function, tinypy
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_popitem_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *dict_value;
-    tinypy_dict_entry_t *iterator;
     tinypy_dict_entry_t *iterator_begin;
 
     (void)user_data;
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
-    dict_value = TINYPY_TUPLE_GET(args, 0U);
-    iterator = TINYPY_DICT_ITERATOR_END(dict_value);
+    tinypy_value_t *dict_value = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_END(dict_value);
     iterator_begin = TINYPY_DICT_ITERATOR_BEGIN(dict_value);
     while (iterator != iterator_begin) {
         iterator -= 1;

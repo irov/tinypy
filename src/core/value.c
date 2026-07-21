@@ -124,13 +124,11 @@ tinypy_value_t *tinypy_internal_value_allocate(tinypy_vm_t *vm, tinypy_value_typ
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *object_type, size_t allocation_size) {
-    tinypy_value_t *value;
-
     assert(object_type != NULL);
     assert(object_type->vm == vm);
     assert(allocation_size >= object_type->basic_size);
 
-    value = (tinypy_value_t *)tinypy_internal_vm_allocate(
+    tinypy_value_t *value = (tinypy_value_t *)tinypy_internal_vm_allocate(
         vm,
         allocation_size,
         (uint32_t)TINYPY_ALLOC_TAG_VALUE);
@@ -165,15 +163,12 @@ size_t tinypy_internal_value_allocation_size(const tinypy_value_t *value) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_value_destroy(tinypy_vm_t *vm, tinypy_value_t *value) {
-    size_t allocation_size;
-
+void tinypy_internal_value_destroy(tinypy_value_t *value) {
     assert(value != NULL);
-    assert(TINYPY_VALUE_VM(value) == vm);
-
-    allocation_size = tinypy_internal_value_allocation_size(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    size_t allocation_size = tinypy_internal_value_allocation_size(value);
     if (value->type != NULL && value->type->destroy != NULL) {
-        value->type->destroy(vm, value);
+        value->type->destroy(value);
     }
     tinypy_internal_vm_deallocate(
         vm,
@@ -281,7 +276,6 @@ int tinypy_internal_value_is_vm_embedded(const tinypy_vm_t *vm, const tinypy_val
 static int32_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_internal_exception_state_t exception_state;
-    tinypy_value_t *method;
     tinypy_value_t *args;
     tinypy_value_t *result;
     tinypy_error_t *error = NULL;
@@ -291,7 +285,7 @@ static int32_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     }
     value->ref = 1;
     tinypy_internal_exception_preserve_begin(vm, &exception_state);
-    method = tinypy_object_get_attr(value, "__del__", 7U, &error);
+    tinypy_value_t *method = tinypy_object_get_attr(value, "__del__", 7U, &error);
     if (method != NULL) {
         args = tinypy_tuple_from_items(vm, NULL, 0U);
         result = tinypy_call(method, args, NULL, &error);
@@ -345,7 +339,7 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
         tinypy_internal_method_free_list_push(vm, value);
         return;
     }
-    tinypy_internal_value_destroy(vm, value);
+    tinypy_internal_value_destroy(value);
     if (type != NULL) {
         __tinypy_internal_release_visit(&type->base.base, NULL);
     }
@@ -367,12 +361,11 @@ static inline size_t __tinypy_internal_text_allocation_size(tinypy_value_type_e 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_text_from_bytes(tinypy_vm_t *vm, const unsigned char *bytes, size_t byte_size, size_t code_point_count, tinypy_value_type_e type) {
     size_t allocation_size;
-    tinypy_value_t *value;
     unsigned char *payload;
 
     allocation_size = __tinypy_internal_text_allocation_size(type, byte_size);
 
-    value = tinypy_internal_value_allocate(vm, type, allocation_size);
+    tinypy_value_t *value = tinypy_internal_value_allocate(vm, type, allocation_size);
 
     if (type == TINYPY_VALUE_STRING) {
         TINYPY_SIZED_SIZE(value) = byte_size;
@@ -478,38 +471,30 @@ int tinypy_internal_value_belongs_to(const tinypy_vm_t *vm, const tinypy_value_t
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_none_get(tinypy_vm_t *vm) {
-    tinypy_value_t *result;
-
     assert(tinypy_internal_vm_valid(vm));
-    result = &vm->none_object.base;
+    tinypy_value_t *result = &vm->none_object.base;
     TINYPY_INCREF(result);
 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_not_implemented_get(tinypy_vm_t *vm) {
-    tinypy_value_t *result;
-
     assert(tinypy_internal_vm_valid(vm));
-    result = &vm->not_implemented_object.base;
+    tinypy_value_t *result = &vm->not_implemented_object.base;
     TINYPY_INCREF(result);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_ellipsis_get(tinypy_vm_t *vm) {
-    tinypy_value_t *result;
-
     assert(tinypy_internal_vm_valid(vm));
-    result = &vm->ellipsis_object.base;
+    tinypy_value_t *result = &vm->ellipsis_object.base;
     TINYPY_INCREF(result);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_bool_from_i32(tinypy_vm_t *vm, int32_t value) {
-    tinypy_value_t *result;
-
     assert(tinypy_internal_vm_valid(vm));
-    result = value != 0
+    tinypy_value_t *result = value != 0
                  ? &vm->true_object.base
                  : &vm->false_object.base;
     TINYPY_INCREF(result);
@@ -654,12 +639,12 @@ void tinypy_internal_type_release_references(tinypy_value_t *value, tinypy_relea
     }
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_type_destroy(tinypy_vm_t *vm, tinypy_value_t *value) {
+void tinypy_internal_type_destroy(tinypy_value_t *value) {
     tinypy_type_t *type = (tinypy_type_t *)value;
 
     if (type->mro != NULL) {
-        tinypy_internal_value_destroy(vm, type->mro);
-        TINYPY_DECREF(&vm->tuple_type.base.base);
+        tinypy_internal_value_destroy(type->mro);
+        TINYPY_DECREF(&type->vm->tuple_type.base.base);
     }
 }
 //////////////////////////////////////////////////////////////////////////

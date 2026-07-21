@@ -100,7 +100,6 @@ static int32_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t *sourc
     unsigned char *bytes = NULL;
     size_t size = 0U;
     size_t capacity = 0U;
-    tinypy_value_t *iterator;
     tinypy_error_t *iteration_error = NULL;
 
     *out_bytes = NULL;
@@ -114,7 +113,7 @@ static int32_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t *sourc
         *out_size = view_size;
         return INT32_C(1);
     }
-    iterator = tinypy_iter(source, out_error);
+    tinypy_value_t *iterator = tinypy_iter(source, out_error);
     if (iterator == NULL) {
         return INT32_C(0);
     }
@@ -313,11 +312,9 @@ static void __tinypy_bytearray_delete_index(tinypy_value_t *value, size_t index)
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_bytearray_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size) {
-    tinypy_bytearray_object_t *bytearray;
-
     assert(tinypy_internal_vm_valid(vm));
     assert(bytes != NULL || size == 0U);
-    bytearray = (tinypy_bytearray_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_BYTEARRAY, sizeof(*bytearray));
+    tinypy_bytearray_object_t *bytearray = (tinypy_bytearray_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_BYTEARRAY, sizeof(*bytearray));
     if (size != 0U) {
         bytearray->bytes = (unsigned char *)tinypy_internal_vm_allocate(vm, size, (uint32_t)TINYPY_ALLOC_TAG_BYTEARRAY_DATA);
         bytearray->capacity = size;
@@ -351,22 +348,20 @@ void tinypy_bytearray_set(tinypy_value_t *value, size_t index, uint8_t byte) {
     TINYPY_BYTEARRAY_OBJECT(value)->bytes[index] = byte;
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_bytearray_destroy(tinypy_vm_t *vm, tinypy_value_t *value) {
+void tinypy_internal_bytearray_destroy(tinypy_value_t *value) {
     tinypy_bytearray_object_t *bytearray = TINYPY_BYTEARRAY_OBJECT(value);
 
     if (bytearray->bytes == NULL) {
         return;
     }
-    tinypy_internal_vm_deallocate(vm, bytearray->bytes, bytearray->capacity, (uint32_t)TINYPY_ALLOC_TAG_BYTEARRAY_DATA);
+    tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), bytearray->bytes, bytearray->capacity, (uint32_t)TINYPY_ALLOC_TAG_BYTEARRAY_DATA);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
-    tinypy_value_t *source;
     unsigned char *bytes;
     size_t size;
     int64_t requested_size;
-    tinypy_value_t *result;
 
     if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) > 1U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bytearray constructor received invalid arguments", out_error);
@@ -375,14 +370,14 @@ tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_val
     if (TINYPY_TUPLE_SIZE(args) == 0U) {
         return tinypy_bytearray_from_bytes(vm, NULL, 0U);
     }
-    source = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *source = TINYPY_TUPLE_GET(args, 0U);
     if (__tinypy_bytearray_integer(source, &requested_size) != 0) {
         if (requested_size < 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "negative count", out_error);
             return NULL;
         }
         assert((uint64_t)requested_size <= (uint64_t)SIZE_MAX);
-        result = tinypy_bytearray_from_bytes(vm, NULL, 0U);
+        tinypy_value_t *result = tinypy_bytearray_from_bytes(vm, NULL, 0U);
         if (requested_size != 0) {
             __tinypy_bytearray_reserve(result, (size_t)requested_size);
             (void)memset(TINYPY_BYTEARRAY_OBJECT(result)->bytes, 0, (size_t)requested_size);
@@ -393,7 +388,7 @@ tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_val
     if (__tinypy_bytearray_collect(vm, source, &bytes, &size, out_error) == 0) {
         return NULL;
     }
-    result = tinypy_bytearray_from_bytes(vm, bytes, size);
+    tinypy_value_t *result = tinypy_bytearray_from_bytes(vm, bytes, size);
     if (bytes != NULL) {
         tinypy_internal_vm_deallocate(vm, bytes, size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     }
@@ -505,16 +500,14 @@ tinypy_value_t *tinypy_internal_bytearray_string(tinypy_value_t *value, tinypy_e
 tinypy_value_t *tinypy_internal_bytearray_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *string = tinypy_internal_bytearray_string(value, out_error);
-    tinypy_value_t *quoted;
     const unsigned char *quoted_bytes;
     size_t quoted_size;
     unsigned char *bytes;
-    tinypy_value_t *result;
 
     if (string == NULL) {
         return NULL;
     }
-    quoted = tinypy_object_repr(string, out_error);
+    tinypy_value_t *quoted = tinypy_object_repr(string, out_error);
     TINYPY_DECREF(string);
     if (quoted == NULL) {
         return NULL;
@@ -525,7 +518,7 @@ tinypy_value_t *tinypy_internal_bytearray_repr(tinypy_value_t *value, tinypy_err
     (void)memcpy(bytes, "bytearray(b", 11U);
     (void)memcpy(bytes + 11U, quoted_bytes, quoted_size);
     bytes[quoted_size + 11U] = (unsigned char)')';
-    result = tinypy_string_from_bytes(vm, bytes, quoted_size + 12U);
+    tinypy_value_t *result = tinypy_string_from_bytes(vm, bytes, quoted_size + 12U);
     tinypy_internal_vm_deallocate(vm, bytes, quoted_size + 12U, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     TINYPY_DECREF(quoted);
     return result;
@@ -548,18 +541,16 @@ static int32_t __tinypy_bytearray_method_arguments(tinypy_vm_t *vm, tinypy_value
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_add_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *left;
     const unsigned char *right_bytes;
     size_t left_size;
     size_t right_size;
     unsigned char *bytes;
-    tinypy_value_t *result;
 
     (void)user_data;
     if (__tinypy_bytearray_method_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
         return NULL;
     }
-    left = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
     if (tinypy_internal_bytes_view(item, &right_bytes, &right_size) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot concatenate bytearray with this value", out_error);
@@ -577,14 +568,13 @@ static tinypy_value_t *__tinypy_bytearray_add_method(tinypy_value_t *function, t
     if (right_size != 0U) {
         (void)memcpy(bytes + left_size, right_bytes, right_size);
     }
-    result = tinypy_bytearray_from_bytes(vm, bytes, left_size + right_size);
+    tinypy_value_t *result = tinypy_bytearray_from_bytes(vm, bytes, left_size + right_size);
     tinypy_internal_vm_deallocate(vm, bytes, left_size + right_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_append_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *value;
     unsigned char byte;
     size_t size;
 
@@ -596,7 +586,7 @@ static tinypy_value_t *__tinypy_bytearray_append_method(tinypy_value_t *function
     if (__tinypy_bytearray_item(vm, item, &byte, out_error) == 0) {
         return NULL;
     }
-    value = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
     size = TINYPY_SIZED_SIZE(value);
     assert(size != SIZE_MAX);
     __tinypy_bytearray_reserve(value, size + 1U);
@@ -607,7 +597,6 @@ static tinypy_value_t *__tinypy_bytearray_append_method(tinypy_value_t *function
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_extend_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *value;
     unsigned char *extension;
     size_t extension_size;
     size_t size;
@@ -620,7 +609,7 @@ static tinypy_value_t *__tinypy_bytearray_extend_method(tinypy_value_t *function
     if (__tinypy_bytearray_collect(vm, item, &extension, &extension_size, out_error) == 0) {
         return NULL;
     }
-    value = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
     size = TINYPY_SIZED_SIZE(value);
     assert(size <= SIZE_MAX - extension_size);
     __tinypy_bytearray_reserve(value, size + extension_size);
@@ -655,7 +644,6 @@ static int64_t __tinypy_bytearray_bound(tinypy_vm_t *vm, tinypy_value_t *value, 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *value;
     const unsigned char *needle;
     size_t size;
     size_t needle_size;
@@ -664,14 +652,13 @@ static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, 
     ptrdiff_t found = -1;
     size_t index;
     size_t argument_count;
-    tinypy_value_t *start_value;
     tinypy_value_t *stop_value;
 
     (void)user_data;
     if (__tinypy_bytearray_method_arguments(vm, args, kwargs, 2U, 4U, out_error) == 0) {
         return NULL;
     }
-    value = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
     if (tinypy_internal_bytes_view(item, &needle, &needle_size) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "substring must support the buffer interface", out_error);
@@ -679,7 +666,7 @@ static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, 
     }
     size = TINYPY_SIZED_SIZE(value);
     argument_count = TINYPY_TUPLE_SIZE(args);
-    start_value = argument_count >= 3U ? TINYPY_TUPLE_GET(args, 2U) : NULL;
+    tinypy_value_t *start_value = argument_count >= 3U ? TINYPY_TUPLE_GET(args, 2U) : NULL;
     start = __tinypy_bytearray_bound(vm, start_value, size, 0, out_error);
     if (start == INT64_MIN && out_error != NULL && *out_error != NULL) {
         return NULL;

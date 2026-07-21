@@ -32,13 +32,13 @@ void tinypy_internal_tuple_subclass_release_references(tinypy_value_t *value, ti
     }
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_tuple_subclass_destroy(tinypy_vm_t *vm, tinypy_value_t *value) {
+void tinypy_internal_tuple_subclass_destroy(tinypy_value_t *value) {
     tinypy_tuple_subclass_object_t *tuple = TINYPY_TUPLE_SUBCLASS_OBJECT(value);
 
     if (tuple->items == NULL) {
         return;
     }
-    tinypy_internal_vm_deallocate(vm, tuple->items, TINYPY_SIZED_SIZE(value) * sizeof(*tuple->items), (uint32_t)TINYPY_ALLOC_TAG_TUPLE_ITEMS);
+    tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), tuple->items, TINYPY_SIZED_SIZE(value) * sizeof(*tuple->items), (uint32_t)TINYPY_ALLOC_TAG_TUPLE_ITEMS);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, tinypy_value_t *const *items, size_t size) {
@@ -159,9 +159,6 @@ tinypy_value_t *tinypy_tuple_get(const tinypy_value_t *value, size_t index) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_tuple_set(tinypy_value_t *value, size_t index, tinypy_value_t *item) {
-    tinypy_value_t **items;
-    tinypy_value_t *previous;
-
     assert(value != NULL);
     assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     assert(value->type == &TINYPY_VALUE_VM(value)->tuple_type);
@@ -169,8 +166,8 @@ void tinypy_tuple_set(tinypy_value_t *value, size_t index, tinypy_value_t *item)
     assert(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(value), item));
     assert(value != item);
 
-    items = TINYPY_TUPLE_OBJECT(value)->items;
-    previous = items[index];
+    tinypy_value_t **items = TINYPY_TUPLE_OBJECT(value)->items;
+    tinypy_value_t *previous = items[index];
     TINYPY_INCREF(item);
     items[index] = item;
     TINYPY_DECREF(previous);

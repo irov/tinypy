@@ -209,7 +209,6 @@ static tinypy_ast_identifier_t __tinypy_meta_identifier_from_value(tinypy_meta_c
     const char *bytes;
     size_t size;
     size_t index;
-    tinypy_value_t *identifier;
 
     if (tinypy_typeof(value) == TINYPY_VALUE_STRING) {
         bytes = (const char *)tinypy_string_view(value, &size);
@@ -232,7 +231,7 @@ static tinypy_ast_identifier_t __tinypy_meta_identifier_from_value(tinypy_meta_c
             return NULL;
         }
     }
-    identifier = tinypy_string_from_bytes(meta->compile->vm, bytes, size);
+    tinypy_value_t *identifier = tinypy_string_from_bytes(meta->compile->vm, bytes, size);
     return (tinypy_ast_identifier_t)__tinypy_meta_track(meta, identifier, line, column);
 }
 
@@ -565,13 +564,12 @@ static tinypy_value_t *__tinypy_meta_eval(tinypy_meta_context_t *meta, tinypy_as
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__tinypy_meta_clone_expression_sequence(tinypy_meta_context_t *meta, tinypy_ast_sequence_t *source) {
-    tinypy_ast_sequence_t *result;
     int index;
 
     if (source == NULL) {
         return NULL;
     }
-    result = TINYPY_AST_SEQUENCE_NEW(TINYPY_AST_SEQUENCE_LENGTH(source), meta->compile);
+    tinypy_ast_sequence_t *result = TINYPY_AST_SEQUENCE_NEW(TINYPY_AST_SEQUENCE_LENGTH(source), meta->compile);
     if (result == NULL) {
         return NULL;
     }
@@ -582,13 +580,12 @@ static tinypy_ast_sequence_t *__tinypy_meta_clone_expression_sequence(tinypy_met
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_integer_sequence_t *__tinypy_meta_clone_integer_sequence(tinypy_meta_context_t *meta, tinypy_ast_integer_sequence_t *source) {
-    tinypy_ast_integer_sequence_t *result;
     int index;
 
     if (source == NULL) {
         return NULL;
     }
-    result = TINYPY_AST_INTEGER_SEQUENCE_NEW(source->size, meta->compile);
+    tinypy_ast_integer_sequence_t *result = TINYPY_AST_INTEGER_SEQUENCE_NEW(source->size, meta->compile);
     if (result == NULL) {
         return NULL;
     }
@@ -634,11 +631,10 @@ static tinypy_ast_arguments_t __tinypy_meta_clone_arguments(tinypy_meta_context_
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__tinypy_meta_clone_comprehensions(tinypy_meta_context_t *meta, tinypy_ast_sequence_t *source) {
-    tinypy_ast_sequence_t *result;
     int index;
 
     assert(TINYPY_AST_SEQUENCE_LENGTH(source) != 0);
-    result = TINYPY_AST_SEQUENCE_NEW(TINYPY_AST_SEQUENCE_LENGTH(source), meta->compile);
+    tinypy_ast_sequence_t *result = TINYPY_AST_SEQUENCE_NEW(TINYPY_AST_SEQUENCE_LENGTH(source), meta->compile);
     if (result == NULL) {
         return NULL;
     }
@@ -869,7 +865,6 @@ static tinypy_ast_identifier_t __tinypy_meta_decorated_name(tinypy_meta_context_
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__tinypy_meta_clone_decorators(tinypy_meta_context_t *meta, tinypy_ast_sequence_t *source) {
-    tinypy_ast_sequence_t *result;
     int index;
     int count = 0;
 
@@ -879,7 +874,7 @@ static tinypy_ast_sequence_t *__tinypy_meta_clone_decorators(tinypy_meta_context
             count += 1;
         }
     }
-    result = TINYPY_AST_SEQUENCE_NEW(count, meta->compile);
+    tinypy_ast_sequence_t *result = TINYPY_AST_SEQUENCE_NEW(count, meta->compile);
     count = 0;
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(source); ++index) {
         tinypy_ast_expression_t decorator = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(source, index);
@@ -892,13 +887,12 @@ static tinypy_ast_sequence_t *__tinypy_meta_clone_decorators(tinypy_meta_context
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__tinypy_meta_clone_statement_sequence(tinypy_meta_context_t *meta, tinypy_ast_sequence_t *source) {
-    tinypy_ast_sequence_t *result;
     int index;
 
     if (source == NULL) {
         return NULL;
     }
-    result = TINYPY_AST_SEQUENCE_NEW(TINYPY_AST_SEQUENCE_LENGTH(source), meta->compile);
+    tinypy_ast_sequence_t *result = TINYPY_AST_SEQUENCE_NEW(TINYPY_AST_SEQUENCE_LENGTH(source), meta->compile);
     if (result == NULL) {
         return NULL;
     }
@@ -1056,12 +1050,10 @@ static tinypy_ast_statement_t __tinypy_meta_clone_statement(tinypy_meta_context_
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_meta_builder_append(tinypy_meta_context_t *meta, tinypy_meta_statement_builder_t *builder, tinypy_ast_statement_t statement) {
-    tinypy_meta_statement_node_t *node;
-
     if (statement == NULL) {
         return 0;
     }
-    node = (tinypy_meta_statement_node_t *)tinypy_internal_compiler_arena_allocate(meta->compile, sizeof(*node));
+    tinypy_meta_statement_node_t *node = (tinypy_meta_statement_node_t *)tinypy_internal_compiler_arena_allocate(meta->compile, sizeof(*node));
     if (node == NULL) {
         return 0;
     }
@@ -1080,12 +1072,10 @@ static int32_t __tinypy_meta_builder_append(tinypy_meta_context_t *meta, tinypy_
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_meta_source_map_add(tinypy_meta_context_t *meta, tinypy_ast_statement_t statement, tinypy_ast_identifier_t symbol, int32_t template_line, int32_t template_column, int32_t expansion_line, int32_t expansion_column) {
-    tinypy_source_map_record_t *record;
-
     if (meta->compile->limits.max_source_map_entries != 0U && meta->compile->source_map_entries >= meta->compile->limits.max_source_map_entries) {
         return __tinypy_meta_limit(meta, "source map entry limit exceeded", expansion_line, expansion_column);
     }
-    record = (tinypy_source_map_record_t *)tinypy_internal_compiler_arena_allocate(meta->compile, sizeof(*record));
+    tinypy_source_map_record_t *record = (tinypy_source_map_record_t *)tinypy_internal_compiler_arena_allocate(meta->compile, sizeof(*record));
     if (record == NULL) {
         return 0;
     }
@@ -1122,13 +1112,12 @@ static int32_t __tinypy_meta_is_template(tinypy_ast_statement_t statement) {
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_meta_is_emit(tinypy_ast_statement_t statement) {
-    tinypy_ast_sequence_t *decorators;
     int index;
 
     if (statement->kind != TINYPY_AST_KIND_FUNCTION_DEF && statement->kind != TINYPY_AST_KIND_CLASS_DEF) {
         return 0;
     }
-    decorators = statement->kind == TINYPY_AST_KIND_FUNCTION_DEF ? statement->v.FunctionDef.decorator_list : statement->v.ClassDef.decorator_list;
+    tinypy_ast_sequence_t *decorators = statement->kind == TINYPY_AST_KIND_FUNCTION_DEF ? statement->v.FunctionDef.decorator_list : statement->v.ClassDef.decorator_list;
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(decorators); ++index) {
         if (__tinypy_meta_decorator((tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(decorators, index), "emit", 4U) != 0) {
             return 1;
@@ -1318,10 +1307,8 @@ static int32_t __tinypy_meta_bind_arguments(tinypy_meta_context_t *meta, tinypy_
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_meta_expand_call(tinypy_meta_context_t *meta, tinypy_ast_expression_t call, tinypy_meta_statement_builder_t *output, tinypy_ast_expression_t *out_result) {
     tinypy_ast_expression_t template_name;
-    tinypy_meta_template_t *template_item;
     tinypy_meta_binding_t *saved_bindings = meta->bindings;
     tinypy_meta_statement_builder_t emitted;
-    tinypy_meta_statement_node_t *node;
     tinypy_ast_sequence_t *result_items;
     int32_t saved_expansion_line = meta->expansion_line;
     int32_t saved_expansion_column = meta->expansion_column;
@@ -1334,7 +1321,7 @@ static int32_t __tinypy_meta_expand_call(tinypy_meta_context_t *meta, tinypy_ast
     if (template_name->kind != TINYPY_AST_KIND_NAME) {
         return __tinypy_meta_fail(meta, "meta.expand template must be a template name", call->lineno, call->col_offset);
     }
-    template_item = __tinypy_meta_template_find(meta, template_name->v.Name.id);
+    tinypy_meta_template_t *template_item = __tinypy_meta_template_find(meta, template_name->v.Name.id);
     if (template_item == NULL) {
         return __tinypy_meta_fail(meta, "meta.expand references an unknown template", call->lineno, call->col_offset);
     }
@@ -1368,7 +1355,7 @@ static int32_t __tinypy_meta_expand_call(tinypy_meta_context_t *meta, tinypy_ast
     if (result_items == NULL) {
         goto failed;
     }
-    node = emitted.head;
+    tinypy_meta_statement_node_t *node = emitted.head;
     while (node != NULL) {
         tinypy_ast_identifier_t name = node->statement->kind == TINYPY_AST_KIND_FUNCTION_DEF ? node->statement->v.FunctionDef.name : node->statement->v.ClassDef.name;
         if (__tinypy_meta_builder_append(meta, output, node->statement) == 0) {
@@ -1456,8 +1443,6 @@ static int32_t __tinypy_meta_expand_statement(tinypy_meta_context_t *meta, tinyp
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__tinypy_meta_expand_sequence(tinypy_meta_context_t *meta, tinypy_ast_sequence_t *sequence) {
     tinypy_meta_statement_builder_t builder;
-    tinypy_meta_statement_node_t *node;
-    tinypy_ast_sequence_t *result;
     int source_index;
     int result_index = 0;
 
@@ -1477,8 +1462,8 @@ static tinypy_ast_sequence_t *__tinypy_meta_expand_sequence(tinypy_meta_context_
         (void)__tinypy_meta_limit(meta, "expanded suite is too large", 1, 0);
         return NULL;
     }
-    result = TINYPY_AST_SEQUENCE_NEW((int)builder.size, meta->compile);
-    node = builder.head;
+    tinypy_ast_sequence_t *result = TINYPY_AST_SEQUENCE_NEW((int)builder.size, meta->compile);
+    tinypy_meta_statement_node_t *node = builder.head;
     while (node != NULL) {
         TINYPY_AST_SEQUENCE_SET(result, result_index, node->statement);
         result_index += 1;
@@ -1708,7 +1693,6 @@ static int32_t __tinypy_meta_runtime_statement_validate(tinypy_meta_context_t *m
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_meta_collect_templates(tinypy_meta_context_t *meta, tinypy_ast_sequence_t *source, tinypy_ast_sequence_t **out_runtime) {
     tinypy_meta_statement_builder_t runtime;
-    tinypy_meta_statement_node_t *node;
     int index;
     int output_index = 0;
 
@@ -1735,7 +1719,7 @@ static int32_t __tinypy_meta_collect_templates(tinypy_meta_context_t *meta, tiny
         }
     }
     *out_runtime = TINYPY_AST_SEQUENCE_NEW((int)runtime.size, meta->compile);
-    node = runtime.head;
+    tinypy_meta_statement_node_t *node = runtime.head;
     while (node != NULL) {
         TINYPY_AST_SEQUENCE_SET(*out_runtime, output_index, node->statement);
         output_index += 1;

@@ -579,8 +579,6 @@ static int __tinypy_verify_marker_expected_depth(const tinypy_verify_marker_t *m
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t parent, tinypy_verify_reason_e reason, size_t resume_depth, size_t continue_target, uint8_t needs_with_cleanup, size_t *out_index) {
-    tinypy_verify_marker_t *marker;
-
     if (context->marker_count == context->marker_capacity) {
         return __tinypy_verify_fail(
             context,
@@ -591,7 +589,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify
             TINYPY_OPCODE_DECODE_OK);
     }
 
-    marker = &context->markers[context->marker_count];
+    tinypy_verify_marker_t *marker = &context->markers[context->marker_count];
     marker->parent = parent;
     marker->resume_depth = resume_depth;
     marker->continue_target = continue_target;
@@ -605,7 +603,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_context_t *context, size_t offset, size_t stack_depth, size_t block_index, size_t marker_index, size_t source_offset, uint8_t source_opcode) {
     size_t state_index;
-    tinypy_verify_state_t *state;
 
     while (marker_index != TINYPY_VERIFY_NO_MARKER) {
         const tinypy_verify_marker_t *marker =
@@ -695,7 +692,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
 
     state_index = context->state_heads[offset];
     while (state_index != TINYPY_VERIFY_NO_STATE) {
-        state = &context->states[state_index];
+        tinypy_verify_state_t *state = &context->states[state_index];
 
         if (__tinypy_verify_markers_equal(
                 context,
@@ -743,7 +740,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
 
     state_index = context->state_count;
     context->state_count += 1U;
-    state = &context->states[state_index];
+    tinypy_verify_state_t *state = &context->states[state_index];
     state->offset = offset;
     state->stack_depth = stack_depth;
     state->block_index = block_index;
@@ -1037,7 +1034,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_apply_effect(tinypy_verif
 static tinypy_bytecode_verify_status_e __tinypy_verify_push_block(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t parent, size_t level, uint8_t type, size_t *out_index) {
     size_t parent_depth = 0U;
     size_t depth;
-    tinypy_verify_block_t *block;
 
     if (parent != TINYPY_VERIFY_NO_BLOCK) {
         parent_depth = context->blocks[parent].depth;
@@ -1070,7 +1066,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_push_block(tinypy_verify_
             TINYPY_OPCODE_DECODE_OK);
     }
 
-    block = &context->blocks[context->block_count];
+    tinypy_verify_block_t *block = &context->blocks[context->block_count];
     block->parent = parent;
     (void)__tinypy_verify_jump_target(instruction, &block->handler);
     block->level = level;

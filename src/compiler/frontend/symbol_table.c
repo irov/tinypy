@@ -17,10 +17,8 @@
 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_symbol_entry_t *__tinypy_symbol_entry_new(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_symbol_block_e block, void *key, int lineno) {
-    tinypy_symbol_entry_t *ste;
-    tinypy_value_t *handle;
 
-    ste = (tinypy_symbol_entry_t *)TINYPY_COMPILER_ARENA_MALLOC(st->arena, sizeof(*ste));
+    tinypy_symbol_entry_t *ste = (tinypy_symbol_entry_t *)TINYPY_COMPILER_ARENA_MALLOC(st->arena, sizeof(*ste));
     if (ste == NULL) {
         return NULL;
     }
@@ -29,7 +27,7 @@ static tinypy_symbol_entry_t *__tinypy_symbol_entry_new(tinypy_symbol_table_t *s
     if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, ste->id) != 0) {
         return NULL;
     }
-    handle = tinypy_string_from_bytes(st->arena->vm, &ste, sizeof(ste));
+    tinypy_value_t *handle = tinypy_string_from_bytes(st->arena->vm, &ste, sizeof(ste));
     if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, handle) != 0) {
         return NULL;
     }
@@ -107,9 +105,8 @@ static int __tinypy_symbol_implicit_arg(tinypy_symbol_table_t *st, int pos);
 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_symbol_table_t *__tinypy_symbol_table_new(tinypy_compile_ctx_t *arena) {
-    tinypy_symbol_table_t *st;
 
-    st = (tinypy_symbol_table_t *)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(tinypy_symbol_table_t));
+    tinypy_symbol_table_t *st = (tinypy_symbol_table_t *)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(tinypy_symbol_table_t));
     if (st == NULL) {
         return NULL;
     }
@@ -645,9 +642,8 @@ static int __analyze_block(tinypy_symbol_entry_t *ste, tinypy_value_t *bound, ti
     }
     for (i = 0; i < TINYPY_COMPILER_LIST_GET_SIZE(ste->children); ++i) {
         tinypy_value_t *c = TINYPY_COMPILER_LIST_GET_ITEM(ste->children, i);
-        tinypy_symbol_entry_t *entry;
         assert(c != NULL);
-        entry = __tinypy_symbol_entry_from_handle(c);
+        tinypy_symbol_entry_t *entry = __tinypy_symbol_entry_from_handle(c);
         if (!__analyze_child_block(entry, newbound, newfree, newglobal,
                                    allfree)) {
             goto error;
@@ -815,12 +811,11 @@ static int __tinypy_symbol_enter_block(tinypy_symbol_table_t *st, tinypy_ast_ide
 }
 //////////////////////////////////////////////////////////////////////////
 static long __tinypy_symbol_lookup(tinypy_symbol_table_t *st, tinypy_value_t *name) {
-    tinypy_value_t *o;
     tinypy_value_t *mangled = __tinypy_frontend_mangle(st->arena, st->private_name, name);
     if (!mangled) {
         return 0;
     }
-    o = TINYPY_COMPILER_DICT_GET_ITEM(st->current->symbols, mangled);
+    tinypy_value_t *o = TINYPY_COMPILER_DICT_GET_ITEM(st->current->symbols, mangled);
     TINYPY_COMPILER_DECREF(mangled);
     if (!o) {
         return 0;
@@ -829,16 +824,15 @@ static long __tinypy_symbol_lookup(tinypy_symbol_table_t *st, tinypy_value_t *na
 }
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_symbol_add_def(tinypy_symbol_table_t *st, tinypy_value_t *name, int flag) {
-    tinypy_value_t *o;
-    tinypy_value_t *dict;
     long val;
     tinypy_value_t *mangled = __tinypy_frontend_mangle(st->arena, st->private_name, name);
 
     if (!mangled) {
         return 0;
     }
-    dict = st->current->symbols;
-    if ((o = TINYPY_COMPILER_DICT_GET_ITEM(dict, mangled))) {
+    tinypy_value_t *dict = st->current->symbols;
+    tinypy_value_t *o = TINYPY_COMPILER_DICT_GET_ITEM(dict, mangled);
+    if (o != NULL) {
         val = TINYPY_COMPILER_INT_AS_LONG(o);
         if ((flag & TINYPY_SYMBOL_DEFINITION_PARAMETER) && (val & TINYPY_SYMBOL_DEFINITION_PARAMETER)) {
             /* Is it better to use 'mangled' or 'name' here? */

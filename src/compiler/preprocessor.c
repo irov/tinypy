@@ -1172,8 +1172,6 @@ static int32_t __tinypy_preprocessor_sequence_append_transformed(tinypy_compile_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__tinypy_preprocessor_sequence_transform_with_flags(tinypy_compile_ctx_t *ctx, tinypy_ast_sequence_t *sequence, uint32_t future_flags) {
     tinypy_preprocessor_sequence_builder_t builder;
-    tinypy_preprocessor_sequence_node_t *node;
-    tinypy_ast_sequence_t *result;
     size_t index = 0U;
 
     (void)memset(&builder, 0, sizeof(builder));
@@ -1191,11 +1189,11 @@ static tinypy_ast_sequence_t *__tinypy_preprocessor_sequence_transform_with_flag
             return NULL;
         }
     }
-    result = TINYPY_AST_SEQUENCE_NEW((int)builder.size, ctx);
+    tinypy_ast_sequence_t *result = TINYPY_AST_SEQUENCE_NEW((int)builder.size, ctx);
     if (result == NULL) {
         return NULL;
     }
-    node = builder.head;
+    tinypy_preprocessor_sequence_node_t *node = builder.head;
     while (node != NULL) {
         TINYPY_AST_SEQUENCE_SET(result, (int)index, node->statement);
         index += 1U;

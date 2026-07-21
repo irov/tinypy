@@ -665,7 +665,6 @@ static int32_t __tinypy_internal_sequence_equal(const tinypy_value_t *left, cons
     size_t right_size;
     size_t index;
 #ifndef NDEBUG
-    tinypy_vm_t *vm;
 #endif
 
     if (TINYPY_VALUE_KIND(left) != TINYPY_VALUE_KIND(right)) {
@@ -687,7 +686,7 @@ static int32_t __tinypy_internal_sequence_equal(const tinypy_value_t *left, cons
         return 0;
     }
 #ifndef NDEBUG
-    vm = TINYPY_VALUE_VM(left);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     assert(vm->equality_depth < TINYPY_COMPARE_RECURSION_LIMIT);
     vm->equality_depth += 1U;
 #endif

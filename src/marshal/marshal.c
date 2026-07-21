@@ -243,10 +243,9 @@ static int __tinypy_marshal_multiply_size(size_t left, size_t right, size_t *out
 //////////////////////////////////////////////////////////////////////////
 static void *__tinypy_marshal_graph_allocate(tinypy_marshal_parser_t *parser, size_t payload_size) {
     tinypy_marshal_document_t *document = parser->document;
-    tinypy_marshal_allocation_t *allocation;
     size_t total_size;
 
-    if (payload_size > SIZE_MAX - sizeof(*allocation)) {
+    if (payload_size > SIZE_MAX - sizeof(tinypy_marshal_allocation_t)) {
         __tinypy_marshal_parser_fail(
             parser,
             TINYPY_MARSHAL_BYTE_LIMIT,
@@ -254,7 +253,7 @@ static void *__tinypy_marshal_graph_allocate(tinypy_marshal_parser_t *parser, si
             "marshal allocation size overflow");
         return NULL;
     }
-    total_size = sizeof(*allocation) + payload_size;
+    total_size = sizeof(tinypy_marshal_allocation_t) + payload_size;
     if (total_size > document->limits.max_allocated_bytes - document->allocated_bytes) {
         __tinypy_marshal_parser_fail(
             parser,
@@ -264,7 +263,7 @@ static void *__tinypy_marshal_graph_allocate(tinypy_marshal_parser_t *parser, si
         return NULL;
     }
 
-    allocation = (tinypy_marshal_allocation_t *)document->allocator.allocate(
+    tinypy_marshal_allocation_t *allocation = (tinypy_marshal_allocation_t *)document->allocator.allocate(
         document->allocator.user_data,
         total_size,
         TINYPY_MARSHAL_ALIGNMENT,
@@ -642,7 +641,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_string(tinypy_marshal_par
     size_t size_offset = parser->offset;
     const unsigned char *source;
     unsigned char *copy;
-    tinypy_marshal_object_t *object;
     size_t code_points = 0U;
 
     if (!__tinypy_marshal_read_size32(
@@ -671,7 +669,7 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_string(tinypy_marshal_par
         return NULL;
     }
 
-    object = __tinypy_marshal_object_allocate(
+    tinypy_marshal_object_t *object = __tinypy_marshal_object_allocate(
         parser,
         unicode_value ? TINYPY_MARSHAL_TYPE_UNICODE : TINYPY_MARSHAL_TYPE_BYTES,
         wire_type);
@@ -710,7 +708,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_long(tinypy_marshal_parse
     size_t count;
     size_t bytes_size;
     size_t size_offset = parser->offset;
-    tinypy_marshal_object_t *object;
     uint16_t *digits = NULL;
     size_t index;
 
@@ -743,7 +740,7 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_long(tinypy_marshal_parse
         return NULL;
     }
 
-    object = __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_LONG, wire_type);
+    tinypy_marshal_object_t *object = __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_LONG, wire_type);
     if (object == NULL) {
         return NULL;
     }
@@ -785,7 +782,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_sequence(tinypy_marshal_p
     size_t bytes_size;
     size_t size_offset = parser->offset;
     size_t index;
-    tinypy_marshal_object_t *object;
 
     if (!__tinypy_marshal_read_size32(parser, &count, "negative marshal container size")) {
         return NULL;
@@ -807,7 +803,7 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_sequence(tinypy_marshal_p
         return NULL;
     }
 
-    object = __tinypy_marshal_object_allocate(parser, type, wire_type);
+    tinypy_marshal_object_t *object = __tinypy_marshal_object_allocate(parser, type, wire_type);
     if (object == NULL) {
         return NULL;
     }
@@ -921,13 +917,12 @@ static int __tinypy_marshal_code_fields_valid(const tinypy_marshal_code_t *code)
 static tinypy_marshal_object_t *__tinypy_marshal_parse_code(tinypy_marshal_parser_t *parser, uint8_t wire_type, size_t code_offset) {
     tinypy_marshal_object_t *object =
         __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_CODE, wire_type);
-    tinypy_marshal_code_t *code;
     int is_null = 0;
 
     if (object == NULL) {
         return NULL;
     }
-    code = &object->as.code_value;
+    tinypy_marshal_code_t *code = &object->as.code_value;
     code->abi_version = TINYPY_MARSHAL_ABI_VERSION;
     code->struct_size = (uint32_t)sizeof(*code);
 
@@ -1227,7 +1222,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_object(tinypy_marshal_par
 //////////////////////////////////////////////////////////////////////////
 tinypy_marshal_result_e tinypy_marshal_read_v2(const void *bytes, size_t size, const tinypy_allocator_t *allocator, const tinypy_marshal_limits_t *limits, tinypy_marshal_document_t **out_document, tinypy_marshal_error_t *out_error) {
     tinypy_marshal_limits_t effective_limits;
-    tinypy_marshal_document_t *document;
     tinypy_marshal_parser_t parser;
     int root_is_null = 0;
 
@@ -1282,7 +1276,7 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(const void *bytes, size_t size, c
             "marshal input-byte limit exceeded");
         return TINYPY_MARSHAL_BYTE_LIMIT;
     }
-    if (sizeof(*document) > effective_limits.max_allocated_bytes) {
+    if (sizeof(tinypy_marshal_document_t) > effective_limits.max_allocated_bytes) {
         __tinypy_marshal_set_error_direct(
             out_error,
             TINYPY_MARSHAL_BYTE_LIMIT,
@@ -1292,7 +1286,7 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(const void *bytes, size_t size, c
         return TINYPY_MARSHAL_BYTE_LIMIT;
     }
 
-    document = (tinypy_marshal_document_t *)allocator->allocate(
+    tinypy_marshal_document_t *document = (tinypy_marshal_document_t *)allocator->allocate(
         allocator->user_data,
         sizeof(*document),
         TINYPY_MARSHAL_ALIGNMENT,
@@ -1858,13 +1852,12 @@ tinypy_marshal_result_e tinypy_marshal_write_v2(const tinypy_marshal_document_t 
 //////////////////////////////////////////////////////////////////////////
 void tinypy_marshal_document_destroy(tinypy_marshal_document_t *document) {
     tinypy_allocator_t allocator;
-    tinypy_marshal_allocation_t *allocation;
 
     assert(document != NULL);
     assert(document->state == TINYPY_MARSHAL_DOCUMENT_LIVE);
     document->state = 0U;
     allocator = document->allocator;
-    allocation = document->allocations;
+    tinypy_marshal_allocation_t *allocation = document->allocations;
     while (allocation != NULL) {
         tinypy_marshal_allocation_t *next = allocation->next;
         allocator.deallocate(
@@ -2004,11 +1997,10 @@ size_t tinypy_marshal_dict_size(const tinypy_marshal_object_t *object) {
 }
 //////////////////////////////////////////////////////////////////////////
 static const tinypy_marshal_dict_entry_t *__tinypy_marshal_dict_entry_at(const tinypy_marshal_object_t *object, size_t index) {
-    const tinypy_marshal_dict_entry_t *entry;
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_DICT);
     assert(index < object->as.dict_value.count);
-    entry = object->as.dict_value.first;
+    const tinypy_marshal_dict_entry_t *entry = object->as.dict_value.first;
     while (index != 0U) {
         entry = entry->next;
         index -= 1U;

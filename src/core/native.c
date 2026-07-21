@@ -6,12 +6,10 @@
 #include <string.h>
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
-    tinypy_native_function_object_t *function;
-
     assert(tinypy_internal_vm_valid(vm));
     assert(name != NULL || name_size == 0U);
     assert(callback != NULL);
-    function = (tinypy_native_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_NATIVE_FUNCTION, sizeof(*function));
+    tinypy_native_function_object_t *function = (tinypy_native_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_NATIVE_FUNCTION, sizeof(*function));
     function->name = tinypy_string_from_bytes(vm, name, name_size);
     function->callback = callback;
     function->user_data = user_data;
@@ -23,10 +21,9 @@ void tinypy_internal_native_function_release_references(tinypy_value_t *value, t
     visit(TINYPY_NATIVE_FUNCTION_OBJECT(value)->name, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_native_function_destroy(tinypy_vm_t *vm, tinypy_value_t *value) {
+void tinypy_internal_native_function_destroy(tinypy_value_t *value) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(value);
 
-    (void)vm;
     if (function->finalize != NULL) {
         tinypy_native_function_finalize_t finalize = function->finalize;
         void *user_data = function->user_data;
@@ -281,7 +278,6 @@ static void __tinypy_internal_native_configure_slots(tinypy_type_t *type) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
-    tinypy_type_t *type;
     size_t copied_size;
     size_t basic_size;
 
@@ -296,7 +292,7 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "native payload alignment is unsupported", out_error);
         return NULL;
     }
-    type = tinypy_type_new(vm, name, name_size, bases, base_count, NULL, namespace_dict, out_error);
+    tinypy_type_t *type = tinypy_type_new(vm, name, name_size, bases, base_count, NULL, namespace_dict, out_error);
     if (type == NULL) {
         return NULL;
     }
@@ -343,14 +339,12 @@ tinypy_value_t *tinypy_native_instance_new(tinypy_type_t *type) {
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_native_instance_construct(tinypy_value_t *instance, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    tinypy_native_type_spec_t *spec;
-
     assert(instance != NULL);
     assert(TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_NATIVE_INSTANCE);
     assert(args != NULL && TINYPY_VALUE_KIND(args) == TINYPY_VALUE_TUPLE);
     assert(kwargs == NULL || TINYPY_VALUE_KIND(kwargs) == TINYPY_VALUE_DICT);
     TINYPY_CLEAR_ERROR(out_error);
-    spec = &instance->type->native_spec;
+    tinypy_native_type_spec_t *spec = &instance->type->native_spec;
     if (spec->construct == NULL) {
         return INT32_C(1);
     }
@@ -379,10 +373,9 @@ void tinypy_internal_native_instance_release_references(tinypy_value_t *value, t
     tinypy_internal_instance_release_references(value, visit, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_native_instance_destroy(tinypy_vm_t *vm, tinypy_value_t *value) {
+void tinypy_internal_native_instance_destroy(tinypy_value_t *value) {
     tinypy_native_type_spec_t *spec = &value->type->native_spec;
 
-    (void)vm;
     if (spec->finalize != NULL) {
         void *native_payload = __tinypy_internal_native_payload(value);
         spec->finalize(value, native_payload, spec->user_data);

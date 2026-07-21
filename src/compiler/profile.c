@@ -164,7 +164,6 @@ static int __tinypy_profile_multiply_size(size_t left, size_t right, size_t *out
 static void *__tinypy_profile_allocate(tinypy_build_profile_t *profile, size_t payload_size, size_t constant_index, size_t depth, tinypy_build_profile_error_t *error, tinypy_build_profile_result_e *out_result) {
     size_t total_size;
     size_t new_allocated;
-    tinypy_profile_allocation_t *allocation;
 
     if (!__tinypy_profile_add_size(
             sizeof(tinypy_profile_allocation_t), payload_size, &total_size) || !__tinypy_profile_add_size(
@@ -186,7 +185,7 @@ static void *__tinypy_profile_allocate(tinypy_build_profile_t *profile, size_t p
             "build profile allocation limit exceeded");
         return NULL;
     }
-    allocation = (tinypy_profile_allocation_t *)profile->allocator.allocate(
+    tinypy_profile_allocation_t *allocation = (tinypy_profile_allocation_t *)profile->allocator.allocate(
         profile->allocator.user_data,
         total_size,
         TINYPY_PROFILE_ALIGNMENT,
@@ -660,10 +659,9 @@ static void __tinypy_profile_compute_digest(tinypy_build_profile_t *profile) {
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_profile_destroy_partial(tinypy_build_profile_t *profile) {
     tinypy_allocator_t allocator;
-    tinypy_profile_allocation_t *allocation;
     assert(profile != NULL);
     allocator = profile->allocator;
-    allocation = profile->allocations;
+    tinypy_profile_allocation_t *allocation = profile->allocations;
     while (allocation != NULL) {
         tinypy_profile_allocation_t *next = allocation->next;
         allocator.deallocate(
@@ -685,7 +683,6 @@ static void __tinypy_profile_destroy_partial(tinypy_build_profile_t *profile) {
 tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator_t *allocator, int32_t optimize_level, const tinypy_build_constant_t *constants, size_t constant_count, const tinypy_build_profile_limits_t *limits, tinypy_build_profile_t **out_profile, tinypy_build_profile_error_t *out_error) {
     tinypy_build_profile_limits_t default_limits;
     const tinypy_build_profile_limits_t *effective_limits = limits;
-    tinypy_build_profile_t *profile;
     size_t total_constants;
     size_t constant_bytes;
     size_t index;
@@ -738,7 +735,7 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
             0U,
             "build profile constant count overflow");
     }
-    if (total_constants > effective_limits->max_constants || sizeof(*profile) > effective_limits->max_allocated_bytes) {
+    if (total_constants > effective_limits->max_constants || sizeof(tinypy_build_profile_t) > effective_limits->max_allocated_bytes) {
         return __tinypy_profile_fail(
             out_error,
             TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED,
@@ -747,7 +744,7 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
             "build profile constant/allocation limit exceeded");
     }
 
-    profile = (tinypy_build_profile_t *)allocator->allocate(
+    tinypy_build_profile_t *profile = (tinypy_build_profile_t *)allocator->allocate(
         allocator->user_data,
         sizeof(*profile),
         TINYPY_PROFILE_ALIGNMENT,
@@ -870,14 +867,13 @@ size_t tinypy_build_profile_constant_count(const tinypy_build_profile_t *profile
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_build_profile_constant_at(const tinypy_build_profile_t *profile, size_t index, const char **out_name, size_t *out_name_size, const tinypy_build_value_t **out_value) {
-    const tinypy_profile_constant_t *constant;
     assert(profile != NULL);
     assert(profile->state == TINYPY_BUILD_PROFILE_STATE);
     assert(out_name != NULL);
     assert(out_name_size != NULL);
     assert(out_value != NULL);
     assert(index < profile->constant_count);
-    constant = &profile->constants[index];
+    const tinypy_profile_constant_t *constant = &profile->constants[index];
     *out_name = constant->name;
     *out_name_size = constant->name_size;
     *out_value = &constant->value;
@@ -951,7 +947,6 @@ const char *tinypy_build_profile_result_name(tinypy_build_profile_result_e resul
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_vm_t *vm, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile) {
-    tinypy_compile_environment_t *environment;
     tinypy_build_constant_t *constants = NULL;
     size_t source_count;
     size_t constant_count = 0U;
@@ -990,7 +985,7 @@ tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_
     }
     assert(result == TINYPY_BUILD_PROFILE_OK);
     (void)result;
-    environment = (tinypy_compile_environment_t *)tinypy_internal_vm_allocate(vm, sizeof(*environment), (uint32_t)TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT);
+    tinypy_compile_environment_t *environment = (tinypy_compile_environment_t *)tinypy_internal_vm_allocate(vm, sizeof(*environment), (uint32_t)TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT);
     environment->state = TINYPY_COMPILE_ENVIRONMENT_STATE;
     environment->ref = 1;
     environment->vm = vm;
@@ -1007,15 +1002,13 @@ void tinypy_internal_compile_environment_retain(tinypy_compile_environment_t *en
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compile_environment_release(tinypy_compile_environment_t *environment) {
-    tinypy_vm_t *vm;
-
     assert(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
     assert(environment->ref > 0);
     environment->ref -= 1;
     if (environment->ref != 0) {
         return;
     }
-    vm = environment->vm;
+    tinypy_vm_t *vm = environment->vm;
     environment->state = 0U;
     if (environment->profile != NULL) {
         tinypy_build_profile_destroy(environment->profile);

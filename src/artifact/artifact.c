@@ -329,8 +329,6 @@ static int __tinypy_artifact_field_equal(uint32_t flags, uint32_t flag, uint32_t
 //////////////////////////////////////////////////////////////////////////
 tinypy_artifact_status_e tinypy_artifact_check_profile(const tinypy_artifact_view_t *view, const tinypy_artifact_expectation_t *expectation) {
     uint32_t flags;
-    const tinypy_artifact_metadata_t *actual;
-    const tinypy_artifact_metadata_t *expected;
 
     assert(view != NULL);
     assert(expectation != NULL);
@@ -344,8 +342,8 @@ tinypy_artifact_status_e tinypy_artifact_check_profile(const tinypy_artifact_vie
         return TINYPY_ARTIFACT_INVALID_ARGUMENT;
     }
 
-    actual = &view->metadata;
-    expected = &expectation->expected;
+    const tinypy_artifact_metadata_t *actual = &view->metadata;
+    const tinypy_artifact_metadata_t *expected = &expectation->expected;
     if (!__tinypy_artifact_field_equal(flags, TINYPY_ARTIFACT_CHECK_BYTECODE_MAGIC,
                                        actual->bytecode_magic, expected->bytecode_magic) || !__tinypy_artifact_field_equal(flags, TINYPY_ARTIFACT_CHECK_RUNTIME_ABI,
                                        actual->runtime_abi, expected->runtime_abi) || !__tinypy_artifact_field_equal(flags, TINYPY_ARTIFACT_CHECK_COMPILER_ABI,

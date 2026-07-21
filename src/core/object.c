@@ -47,21 +47,19 @@ static tinypy_value_t *__tinypy_object_optional(tinypy_vm_t *vm, tinypy_value_t 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_type_tuple(tinypy_vm_t *vm, tinypy_type_t *type, int32_t mro) {
     size_t size = mro != 0 ? tinypy_type_mro_size(type) : tinypy_type_bases_size(type);
-    tinypy_value_t **items;
-    tinypy_value_t *result;
     size_t index;
 
     if (size == 0U) {
         return tinypy_tuple_from_items(vm, NULL, 0U);
     }
-    assert(size <= SIZE_MAX / sizeof(*items));
-    items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    assert(size <= SIZE_MAX / sizeof(tinypy_value_t *));
+    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     for (index = 0U; index < size; ++index) {
         tinypy_type_t *item = (tinypy_type_t *)(mro != 0 ? tinypy_type_mro_at(type, index) : tinypy_type_base_at(type, index));
 
         items[index] = &item->base.base;
     }
-    result = tinypy_tuple_from_items(vm, items, size);
+    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, size);
     tinypy_internal_vm_deallocate(vm, items, size * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
@@ -324,16 +322,14 @@ static tinypy_value_t *__tinypy_object_builtin_attribute(tinypy_value_t *value, 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_call_attribute_hook(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *hook_key, tinypy_value_t *name_key, tinypy_error_t **out_error) {
     tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, hook_key);
-    tinypy_value_t *method;
-    tinypy_value_t *args;
     tinypy_value_t *result;
 
     assert(attribute != NULL);
-    method = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
+    tinypy_value_t *method = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
     if (method == NULL) {
         return NULL;
     }
-    args = tinypy_tuple_from_items(vm, &name_key, 1U);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &name_key, 1U);
     result = tinypy_call(method, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(method);
@@ -468,12 +464,11 @@ static tinypy_value_t *__tinypy_internal_type_attribute(tinypy_vm_t *vm, tinypy_
     tinypy_type_t *type = (tinypy_type_t *)value;
     tinypy_type_t *metaclass = value->type;
     tinypy_value_t *metaclass_attribute = tinypy_internal_type_lookup_key(vm, metaclass, key);
-    tinypy_value_t *attribute;
 
     if (metaclass_attribute != NULL && tinypy_internal_descriptor_is_data(vm, metaclass_attribute) != 0) {
         return tinypy_internal_descriptor_get_value(vm, metaclass_attribute, value, metaclass, out_error);
     }
-    attribute = tinypy_internal_type_lookup_key(vm, type, key);
+    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, type, key);
     if (attribute != NULL) {
         return tinypy_internal_descriptor_get_value(vm, attribute, NULL, type, out_error);
     }
@@ -483,7 +478,27 @@ static tinypy_value_t *__tinypy_internal_type_attribute(tinypy_vm_t *vm, tinypy_
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_getattr_fallback(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *result, tinypy_error_t **out_error) {
+static int32_t __tinypy_object_attribute_error(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    if (vm->raised_type != NULL) {
+        return tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_ATTRIBUTE_ERROR]);
+    }
+    return out_error != NULL && *out_error != NULL && tinypy_error_kind(*out_error) == TINYPY_ERROR_ATTRIBUTE ? INT32_C(1) : INT32_C(0);
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_object_error_present(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    return vm->raised_type != NULL || (out_error != NULL && *out_error != NULL) ? INT32_C(1) : INT32_C(0);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_object_clear_attribute_error(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    assert(__tinypy_object_attribute_error(vm, out_error) != 0);
+    if (out_error != NULL && *out_error != NULL) {
+        tinypy_error_release(*out_error);
+        *out_error = NULL;
+    }
+    tinypy_internal_exception_clear_raised(vm);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_object_getattr_fallback(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *result, int32_t suppress_missing, int32_t *out_missing, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     const char *name = (const char *)TINYPY_TEXT_BYTES(key);
     size_t name_size = TINYPY_TEXT_BYTE_SIZE(key);
@@ -495,24 +510,26 @@ static tinypy_value_t *__tinypy_object_getattr_fallback(tinypy_value_t *value, t
     }
     has_getattr = (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && kind != TINYPY_VALUE_TYPE && __tinypy_object_name_equal(name, name_size, "__getattr__", 11U) == 0 && tinypy_internal_type_lookup_key(vm, value->type, vm->special_getattr_key) != NULL ? INT32_C(1) : INT32_C(0);
     if (has_getattr != 0) {
-        if (vm->raised_type != NULL) {
-            if (tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_ATTRIBUTE_ERROR]) == 0) {
+        if (__tinypy_object_error_present(vm, out_error) != 0) {
+            if (__tinypy_object_attribute_error(vm, out_error) == 0) {
                 return NULL;
             }
-            if (out_error != NULL && *out_error != NULL) {
-                tinypy_error_release(*out_error);
-                *out_error = NULL;
-            }
-            tinypy_internal_exception_clear_raised(vm);
+            __tinypy_object_clear_attribute_error(vm, out_error);
         }
-        else if (out_error != NULL && *out_error != NULL) {
-            if (tinypy_error_kind(*out_error) != TINYPY_ERROR_ATTRIBUTE) {
+        result = __tinypy_object_call_attribute_hook(vm, value, vm->special_getattr_key, key, out_error);
+        if (result != NULL) {
+            return result;
+        }
+    }
+    if (suppress_missing != 0) {
+        if (__tinypy_object_error_present(vm, out_error) != 0) {
+            if (__tinypy_object_attribute_error(vm, out_error) == 0) {
                 return NULL;
             }
-            tinypy_error_release(*out_error);
-            *out_error = NULL;
+            __tinypy_object_clear_attribute_error(vm, out_error);
         }
-        return __tinypy_object_call_attribute_hook(vm, value, vm->special_getattr_key, key, out_error);
+        *out_missing = INT32_C(1);
+        return NULL;
     }
     if (vm->raised_type == NULL && (out_error == NULL || *out_error == NULL)) {
         __tinypy_object_make_attribute_error(vm, name, name_size, out_error);
@@ -520,7 +537,7 @@ static tinypy_value_t *__tinypy_object_getattr_fallback(tinypy_value_t *value, t
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_object_get_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinypy_value_t *key, int32_t suppress_missing, int32_t *out_missing, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     const char *name = (const char *)TINYPY_TEXT_BYTES(key);
     size_t name_size = TINYPY_TEXT_BYTE_SIZE(key);
@@ -528,17 +545,18 @@ tinypy_value_t *tinypy_internal_object_get_attr_key(tinypy_value_t *value, tinyp
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     TINYPY_CLEAR_ERROR(out_error);
+    *out_missing = INT32_C(0);
     result = __tinypy_object_builtin_attribute(value, name, name_size);
     if (result != NULL) {
         return result;
     }
     if ((value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && kind != TINYPY_VALUE_TYPE && __tinypy_object_name_equal(name, name_size, "__getattribute__", 16U) == 0 && tinypy_internal_type_lookup_key(vm, value->type, vm->special_getattribute_key) != NULL) {
         result = __tinypy_object_call_attribute_hook(vm, value, vm->special_getattribute_key, key, out_error);
-        return __tinypy_object_getattr_fallback(value, key, result, out_error);
+        return __tinypy_object_getattr_fallback(value, key, result, suppress_missing, out_missing, out_error);
     }
     if (value->type->get_attribute != NULL) {
         result = value->type->get_attribute(value, key, out_error);
-        return __tinypy_object_getattr_fallback(value, key, result, out_error);
+        return __tinypy_object_getattr_fallback(value, key, result, suppress_missing, out_missing, out_error);
     }
     if (kind == TINYPY_VALUE_INSTANCE || value->type->dict_offset != 0U) {
         result = __tinypy_internal_instance_attribute(vm, value, key, out_error);
@@ -567,33 +585,78 @@ tinypy_value_t *tinypy_internal_object_get_attr_key(tinypy_value_t *value, tinyp
             result = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
         }
     }
-    return __tinypy_object_getattr_fallback(value, key, result, out_error);
+    return __tinypy_object_getattr_fallback(value, key, result, suppress_missing, out_missing, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_object_get_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
+    int32_t missing;
+
+    return __tinypy_object_get_attr_key(value, key, INT32_C(0), &missing, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_internal_object_get_optional_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t **out_value, tinypy_error_t **out_error) {
+    int32_t missing;
+
+    assert(out_value != NULL);
+    *out_value = __tinypy_object_get_attr_key(value, key, INT32_C(1), &missing, out_error);
+    if (*out_value != NULL) {
+        return INT32_C(1);
+    }
+    return missing != 0 ? INT32_C(0) : -INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_object_get_attr(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
-    tinypy_value_t *key;
-    tinypy_value_t *result;
-
     assert(value != NULL);
-    vm = TINYPY_VALUE_VM(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     assert(tinypy_internal_vm_valid(vm));
     assert(name != NULL || name_size == 0U);
-    key = tinypy_string_from_bytes(vm, name, name_size);
-    result = tinypy_internal_object_get_attr_key(value, key, out_error);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
+    tinypy_value_t *result = tinypy_internal_object_get_attr_key(value, key, out_error);
     TINYPY_DECREF(key);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+int32_t tinypy_object_has_attr(tinypy_value_t *value, const char *name, size_t name_size) {
+    int32_t result;
+
+    assert(value != NULL);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    assert(tinypy_internal_vm_valid(vm));
+    assert(name != NULL || name_size == 0U);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
+    result = tinypy_object_has_attr_value(value, key);
+    TINYPY_DECREF(key);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_object_has_attr_value(tinypy_value_t *value, tinypy_value_t *name) {
+    tinypy_value_t *result;
+    int32_t status;
+
+    assert(value != NULL && name != NULL);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    assert(tinypy_internal_vm_valid(vm));
+    assert(tinypy_internal_value_belongs_to(vm, name));
+    assert(TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(name) == TINYPY_VALUE_UNICODE);
+    status = tinypy_internal_object_get_optional_attr_key(value, name, &result, NULL);
+    if (result != NULL) {
+        TINYPY_DECREF(result);
+    }
+    if (status < 0) {
+        tinypy_internal_exception_clear_raised(vm);
+        return INT32_C(0);
+    }
+    return status;
+}
+//////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *descriptor;
 
     assert(tinypy_internal_value_belongs_to(vm, key));
     assert(TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(key) == TINYPY_VALUE_UNICODE);
     assert(tinypy_internal_value_belongs_to(vm, attribute_value));
     TINYPY_CLEAR_ERROR(out_error);
-    descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
+    tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
     if (descriptor != NULL && tinypy_internal_descriptor_is_data(vm, descriptor) != 0) {
         return tinypy_internal_descriptor_set_value(vm, descriptor, value, attribute_value, out_error);
     }
@@ -635,17 +698,15 @@ int32_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_value_
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_object_set_attr(tinypy_value_t *value, const char *name, size_t name_size, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
-    tinypy_value_t *key;
     int32_t result;
 
     assert(value != NULL);
-    vm = TINYPY_VALUE_VM(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     assert(tinypy_internal_vm_valid(vm));
     assert(name != NULL || name_size == 0U);
     assert(attribute_value != NULL);
     assert(tinypy_internal_value_belongs_to(vm, attribute_value));
-    key = tinypy_string_from_bytes(vm, name, name_size);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
     result = tinypy_internal_object_set_attr_key(value, key, attribute_value, out_error);
     TINYPY_DECREF(key);
     return result;
@@ -653,13 +714,12 @@ int32_t tinypy_object_set_attr(tinypy_value_t *value, const char *name, size_t n
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *descriptor;
     tinypy_value_t *dict = NULL;
 
     assert(tinypy_internal_value_belongs_to(vm, key));
     assert(TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(key) == TINYPY_VALUE_UNICODE);
     TINYPY_CLEAR_ERROR(out_error);
-    descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
+    tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
     if (descriptor != NULL && tinypy_internal_descriptor_is_data(vm, descriptor) != 0) {
         return tinypy_internal_descriptor_delete_value(vm, descriptor, value, out_error);
     }
@@ -703,15 +763,13 @@ int32_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tinypy_val
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_object_delete_attr(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
-    tinypy_value_t *key;
     int32_t result;
 
     assert(value != NULL);
-    vm = TINYPY_VALUE_VM(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     assert(tinypy_internal_vm_valid(vm));
     assert(name != NULL || name_size == 0U);
-    key = tinypy_string_from_bytes(vm, name, name_size);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
     result = tinypy_internal_object_delete_attr_key(value, key, out_error);
     TINYPY_DECREF(key);
     return result;

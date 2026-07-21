@@ -6,13 +6,11 @@
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_slice_new(tinypy_vm_t *vm, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *step) {
-    tinypy_slice_object_t *slice;
-
     assert(tinypy_internal_vm_valid(vm));
     assert(start == NULL || tinypy_internal_value_belongs_to(vm, start));
     assert(stop == NULL || tinypy_internal_value_belongs_to(vm, stop));
     assert(step == NULL || tinypy_internal_value_belongs_to(vm, step));
-    slice = (tinypy_slice_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_SLICE, sizeof(*slice));
+    tinypy_slice_object_t *slice = (tinypy_slice_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_SLICE, sizeof(*slice));
     slice->start = start != NULL ? start : &vm->none_object.base;
     slice->stop = stop != NULL ? stop : &vm->none_object.base;
     slice->step = step != NULL ? step : &vm->none_object.base;

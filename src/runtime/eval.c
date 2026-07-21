@@ -58,15 +58,13 @@ static tinypy_value_t *__tinypy_eval_peek(const tinypy_frame_object_t *frame, si
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_next(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_iterator_object_t *iterator;
-    tinypy_value_t *iterable;
     tinypy_value_t *item;
     size_t size;
 
     if (value->type != &vm->iterator_type) {
         return tinypy_next(value, out_error);
     }
-    iterator = TINYPY_ITERATOR_OBJECT(value);
+    tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(value);
     if (iterator->mode == INT32_C(3)) {
         if (iterator->remaining == 0U) {
             return NULL;
@@ -82,7 +80,7 @@ static tinypy_value_t *__tinypy_eval_next(tinypy_vm_t *vm, tinypy_value_t *value
     if (iterator->mode != INT32_C(0)) {
         return tinypy_next(value, out_error);
     }
-    iterable = iterator->iterable;
+    tinypy_value_t *iterable = iterator->iterable;
     if (iterable->type == &vm->tuple_type) {
         size = TINYPY_TUPLE_SIZE(iterable);
         if (iterator->index == size) {
@@ -167,8 +165,6 @@ static int32_t __tinypy_eval_set_item(tinypy_vm_t *vm, tinypy_value_t *container
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_value_t *object, tinypy_value_t *name, size_t name_index, tinypy_error_t **out_error) {
-    tinypy_attribute_lookup_cache_entry_t *cache;
-    tinypy_value_t **dict_slot;
     tinypy_value_t *attribute;
     tinypy_value_t *stored;
     const unsigned char *name_bytes;
@@ -183,12 +179,12 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         return tinypy_internal_object_get_attr_key(object, name, out_error);
     }
     TINYPY_CLEAR_ERROR(out_error);
-    cache = &TINYPY_CODE_OBJECT(code)->attribute_cache[name_index & (TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE - 1U)];
+    tinypy_attribute_lookup_cache_entry_t *cache = &TINYPY_CODE_OBJECT(code)->attribute_cache[name_index & (TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE - 1U)];
     if (cache->epoch == vm->type_lookup_cache_epoch && cache->name_index == name_index && cache->type == object->type) {
         if (cache->data_descriptor != 0) {
             return tinypy_internal_descriptor_get_value(vm, cache->attribute, object, object->type, out_error);
         }
-        dict_slot = tinypy_internal_object_dict_slot(object);
+        tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(object);
         if (dict_slot != NULL && *dict_slot != NULL) {
             stored = cache->dict_index_valid != 0 ? tinypy_internal_dict_get_index_hint(vm, *dict_slot, cache->dict_key, cache->dict_index) : NULL;
             if (stored == NULL) {
@@ -238,7 +234,7 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
     if (cache->data_descriptor != 0) {
         return tinypy_internal_descriptor_get_value(vm, attribute, object, object->type, out_error);
     }
-    dict_slot = tinypy_internal_object_dict_slot(object);
+    tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(object);
     if (dict_slot != NULL && *dict_slot != NULL) {
         stored = tinypy_internal_dict_get_optional_index(vm, *dict_slot, name, &cache->dict_index, &cache->dict_key);
         if (stored != NULL) {
@@ -282,10 +278,9 @@ static void __tinypy_eval_clear_local_slots(tinypy_frame_object_t *frame) {
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_lookup_name(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *name, size_t name_index, int include_locals) {
     tinypy_global_cache_entry_t *cache = NULL;
-    tinypy_value_t *value;
 
     if (include_locals != 0) {
-        value = tinypy_internal_dict_get_optional(vm, tinypy_internal_frame_locals(frame), name);
+        tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, tinypy_internal_frame_locals(frame), name);
         if (value != NULL) {
             TINYPY_INCREF(value);
             return value;
@@ -300,7 +295,7 @@ static tinypy_value_t *__tinypy_eval_lookup_name(tinypy_vm_t *vm, tinypy_frame_o
             return cache->value;
         }
     }
-    value = tinypy_internal_dict_get_optional(vm, frame->globals, name);
+    tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, frame->globals, name);
     if (value != NULL) {
         if (cache != NULL) {
             cache->name_index = name_index;
@@ -347,13 +342,11 @@ static tinypy_value_t *__tinypy_eval_lookup_name(tinypy_vm_t *vm, tinypy_frame_o
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_default_output(tinypy_vm_t *vm, const char *name, size_t name_size) {
     tinypy_value_t *key = tinypy_string_from_bytes(vm, "sys", 3U);
-    tinypy_value_t *module;
-    tinypy_value_t *target;
 
     assert(tinypy_dict_contains(vm->modules, key) != 0);
-    module = tinypy_dict_get(vm->modules, key);
+    tinypy_value_t *module = tinypy_dict_get(vm->modules, key);
     TINYPY_DECREF(key);
-    target = tinypy_module_get_value(module, name, name_size);
+    tinypy_value_t *target = tinypy_module_get_value(module, name, name_size);
     assert(target != NULL);
     TINYPY_INCREF(target);
     return target;
@@ -424,12 +417,10 @@ static void __tinypy_eval_make_name_error(tinypy_vm_t *vm, tinypy_value_t *name,
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_build_sequence(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t count, int as_list) {
-    tinypy_value_t *result;
-    tinypy_value_t **items;
     size_t index;
 
     assert(count <= __tinypy_eval_stack_depth(frame));
-    items = frame->stack_top - count;
+    tinypy_value_t **items = frame->stack_top - count;
     tinypy_value_t *selected_value;
     if (as_list != 0) {
         selected_value = tinypy_list_from_items(vm, items, count);
@@ -437,7 +428,7 @@ static tinypy_value_t *__tinypy_eval_build_sequence(tinypy_vm_t *vm, tinypy_fram
     else {
         selected_value = tinypy_tuple_from_items(vm, items, count);
     }
-    result = selected_value;
+    tinypy_value_t *result = selected_value;
     for (index = 0U; index < count; ++index) {
         TINYPY_DECREF(items[index]);
     }
@@ -625,21 +616,19 @@ static tinypy_eval_reason_e __tinypy_eval_end_finally(tinypy_vm_t *vm, tinypy_fr
 static int __tinypy_eval_setup_with(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t handler, tinypy_error_t **out_error) {
     tinypy_value_t *context = __tinypy_eval_pop_owned(frame);
     tinypy_value_t *exit_method = tinypy_object_get_attr(context, "__exit__", 8U, out_error);
-    tinypy_value_t *enter_method;
-    tinypy_value_t *args;
     tinypy_value_t *enter_result;
 
     if (exit_method == NULL) {
         TINYPY_DECREF(context);
         return 0;
     }
-    enter_method = tinypy_object_get_attr(context, "__enter__", 9U, out_error);
+    tinypy_value_t *enter_method = tinypy_object_get_attr(context, "__enter__", 9U, out_error);
     TINYPY_DECREF(context);
     if (enter_method == NULL) {
         TINYPY_DECREF(exit_method);
         return 0;
     }
-    args = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, NULL, 0U);
     enter_result = tinypy_call(enter_method, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(enter_method);
@@ -661,8 +650,6 @@ static tinypy_eval_reason_e __tinypy_eval_with_cleanup(tinypy_vm_t *vm, tinypy_f
     tinypy_value_t *payload = NULL;
     tinypy_value_t *exit_method;
     tinypy_value_t *arguments[3];
-    tinypy_value_t *args;
-    tinypy_value_t *call_result;
     int is_exception = 0;
 
     if (TINYPY_VALUE_KIND(top) == TINYPY_VALUE_NONE) {
@@ -694,13 +681,13 @@ static tinypy_eval_reason_e __tinypy_eval_with_cleanup(tinypy_vm_t *vm, tinypy_f
         arguments[1] = tinypy_none_get(vm);
         arguments[2] = tinypy_none_get(vm);
     }
-    args = tinypy_tuple_from_items(vm, arguments, 3U);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, arguments, 3U);
     if (is_exception == 0) {
         TINYPY_DECREF(arguments[2]);
         TINYPY_DECREF(arguments[1]);
         TINYPY_DECREF(arguments[0]);
     }
-    call_result = tinypy_call(exit_method, args, NULL, out_error);
+    tinypy_value_t *call_result = tinypy_call(exit_method, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(exit_method);
     if (call_result == NULL) {
@@ -926,13 +913,12 @@ static tinypy_value_t *__tinypy_eval_pop_slice_key(tinypy_vm_t *vm, tinypy_frame
 }
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_eval_push_block(tinypy_frame_object_t *frame, int32_t type, size_t handler) {
-    tinypy_frame_block_t *block;
     size_t stack_depth = __tinypy_eval_stack_depth(frame);
 
     assert(frame->block_count < TINYPY_FRAME_MAX_BLOCKS);
     assert(handler <= (size_t)UINT32_MAX);
     assert(stack_depth <= (size_t)UINT32_MAX);
-    block = &frame->blocks[frame->block_count];
+    tinypy_frame_block_t *block = &frame->blocks[frame->block_count];
     frame->block_count += 1U;
     block->type = type;
     block->handler = (uint32_t)handler;
@@ -974,7 +960,6 @@ static void __tinypy_eval_push_exception_triple(tinypy_vm_t *vm, tinypy_frame_ob
 }
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_eval_unwind_reason(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_eval_reason_e *reason, size_t *out_instruction_offset, tinypy_value_t **in_out_result, tinypy_error_t **out_error) {
-
     if (*reason == TINYPY_EVAL_REASON_EXCEPTION) {
         assert(vm->raised_type != NULL && vm->raised_value != NULL);
         tinypy_internal_traceback_here(vm, frame);
@@ -1135,15 +1120,12 @@ static int __tinypy_eval_call_append_iterable(tinypy_value_t *arguments, tinypy_
 }
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_eval_call_merge_keywords(tinypy_vm_t *vm, tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error) {
-    tinypy_dict_entry_t *iterator;
-    tinypy_dict_entry_t *iterator_end;
-
     if (TINYPY_VALUE_KIND(source) != TINYPY_VALUE_DICT) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "double-star argument is not a dictionary", out_error);
         return 0;
     }
-    iterator = TINYPY_DICT_ITERATOR_BEGIN(source);
-    iterator_end = TINYPY_DICT_ITERATOR_END(source);
+    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(source);
+    tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(source);
     for (; iterator != iterator_end; ++iterator) {
         if (iterator->state != TINYPY_DICT_ENTRY_ACTIVE) {
             continue;
@@ -1165,7 +1147,6 @@ static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_ob
     size_t positional_count = argument & 0xffU;
     size_t keyword_count = (argument >> 8U) & 0xffU;
     size_t consumed = 1U + positional_count + keyword_count * 2U + (has_varargs != 0 ? 1U : 0U) + (has_var_keywords != 0 ? 1U : 0U);
-    tinypy_value_t **first;
     tinypy_value_t *args = NULL;
     tinypy_value_t *kwargs = NULL;
     tinypy_value_t *result;
@@ -1174,7 +1155,7 @@ static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_ob
     size_t index;
 
     assert(consumed <= __tinypy_eval_stack_depth(frame));
-    first = frame->stack_top - consumed;
+    tinypy_value_t **first = frame->stack_top - consumed;
     direct_function = has_varargs == 0 && first[0]->type == &vm->function_type;
     direct_bound_function = 0;
     if (has_varargs == 0 && first[0]->type == &vm->method_type) {
@@ -1250,8 +1231,6 @@ cleanup:
 
 static tinypy_value_t *__tinypy_eval_build_class(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *namespace_dict, tinypy_value_t *bases, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_value_t *metaclass = NULL;
-    tinypy_value_t *class_value;
-    tinypy_value_t *class_arguments;
     tinypy_value_t *class_argument_items[3];
     size_t base_count;
     size_t index;
@@ -1265,12 +1244,11 @@ static tinypy_value_t *__tinypy_eval_build_class(tinypy_vm_t *vm, tinypy_frame_o
     }
     base_count = TINYPY_TUPLE_SIZE(bases);
     metaclass_key = tinypy_string_from_bytes(vm, "__metaclass__", 13U);
-    if (tinypy_dict_contains(namespace_dict, metaclass_key) != 0) {
-        metaclass = tinypy_dict_get(namespace_dict, metaclass_key);
-        TINYPY_INCREF(metaclass);
+    metaclass = tinypy_dict_get_optional(namespace_dict, metaclass_key);
+    if (metaclass == NULL) {
+        metaclass = tinypy_dict_get_optional(frame->globals, metaclass_key);
     }
-    else if (tinypy_dict_contains(frame->globals, metaclass_key) != 0) {
-        metaclass = tinypy_dict_get(frame->globals, metaclass_key);
+    if (metaclass != NULL) {
         TINYPY_INCREF(metaclass);
     }
     TINYPY_DECREF(metaclass_key);
@@ -1311,8 +1289,8 @@ static tinypy_value_t *__tinypy_eval_build_class(tinypy_vm_t *vm, tinypy_frame_o
     class_argument_items[0] = name;
     class_argument_items[1] = bases;
     class_argument_items[2] = namespace_dict;
-    class_arguments = tinypy_tuple_from_items(vm, class_argument_items, 3U);
-    class_value = tinypy_call(metaclass, class_arguments, NULL, out_error);
+    tinypy_value_t *class_arguments = tinypy_tuple_from_items(vm, class_argument_items, 3U);
+    tinypy_value_t *class_value = tinypy_call(metaclass, class_arguments, NULL, out_error);
     TINYPY_DECREF(class_arguments);
     TINYPY_DECREF(metaclass);
     return class_value;
@@ -2015,11 +1993,10 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
         case TINYPY_OP_LOAD_DEREF: {
             size_t local_count = (size_t)TINYPY_CODE_LOCAL_COUNT(code);
             tinypy_value_t *cell = frame->locals_plus[local_count + argument];
-            tinypy_value_t *content;
 
             assert(cell != NULL);
             assert(TINYPY_VALUE_KIND(cell) == TINYPY_VALUE_CELL);
-            content = tinypy_cell_get(cell);
+            tinypy_value_t *content = tinypy_cell_get(cell);
             if (content == NULL) {
                 int selected_value_2;
                 tinypy_value_t *cellvars = TINYPY_CODE_CELLVARS(code);
@@ -2321,10 +2298,9 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
         case TINYPY_OP_MAKE_FUNCTION: {
             tinypy_value_t *function_code = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *defaults = argument != 0U ? __tinypy_eval_build_sequence(vm, frame, argument, 0) : NULL;
-            tinypy_value_t *created_function;
 
             assert(TINYPY_VALUE_KIND(function_code) == TINYPY_VALUE_CODE);
-            created_function = tinypy_function_new(function_code, frame->globals, defaults, NULL);
+            tinypy_value_t *created_function = tinypy_function_new(function_code, frame->globals, defaults, NULL);
             if (defaults != NULL) {
                 TINYPY_DECREF(defaults);
             }
@@ -2336,11 +2312,10 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             tinypy_value_t *function_code = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *closure = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *defaults = argument != 0U ? __tinypy_eval_build_sequence(vm, frame, argument, 0) : NULL;
-            tinypy_value_t *created_function;
 
             assert(TINYPY_VALUE_KIND(function_code) == TINYPY_VALUE_CODE);
             assert(TINYPY_VALUE_KIND(closure) == TINYPY_VALUE_TUPLE);
-            created_function = tinypy_function_new(function_code, frame->globals, defaults, closure);
+            tinypy_value_t *created_function = tinypy_function_new(function_code, frame->globals, defaults, closure);
             if (defaults != NULL) {
                 TINYPY_DECREF(defaults);
             }
@@ -2558,17 +2533,14 @@ tinypy_value_t *tinypy_eval_code(tinypy_value_t *code, tinypy_value_t *globals, 
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_exec_code(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
-    tinypy_value_t *result;
-
     assert(code != NULL);
     assert(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    vm = TINYPY_VALUE_VM(code);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
     assert(tinypy_internal_vm_valid(vm));
     assert(globals != NULL);
     assert(tinypy_internal_value_belongs_to(vm, globals));
     assert(locals == NULL || tinypy_internal_value_belongs_to(vm, locals));
-    result = tinypy_eval_code(code, globals, locals, out_error);
+    tinypy_value_t *result = tinypy_eval_code(code, globals, locals, out_error);
     if (result == NULL) {
         return NULL;
     }
@@ -2581,15 +2553,13 @@ tinypy_value_t *tinypy_internal_eval_function(tinypy_value_t *function_value, ti
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_eval_function_items(tinypy_value_t *function_value, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    tinypy_function_object_t *function;
-    tinypy_vm_t *vm;
     tinypy_value_t *result;
 
     assert(function_value != NULL);
     assert(TINYPY_VALUE_KIND(function_value) == TINYPY_VALUE_FUNCTION);
     assert(items != NULL || item_count == 0U);
-    function = TINYPY_FUNCTION_OBJECT(function_value);
-    vm = TINYPY_VALUE_VM(function->code);
+    tinypy_function_object_t *function = TINYPY_FUNCTION_OBJECT(function_value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function->code);
     if ((TINYPY_CODE_FLAGS(function->code) & TINYPY_CODE_GENERATOR) != 0) {
         tinypy_value_t *frame_value = tinypy_internal_frame_new_function(function->code, function->globals);
         tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT(frame_value);

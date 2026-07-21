@@ -6,11 +6,10 @@
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_method_new(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *owner) {
-    tinypy_vm_t *vm;
     tinypy_method_object_t *method;
 
     assert(function != NULL);
-    vm = TINYPY_VALUE_VM(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     assert(tinypy_internal_vm_valid(vm));
     assert(function->type->call != NULL);
     assert(self == NULL || tinypy_internal_value_belongs_to(vm, self));
@@ -83,8 +82,6 @@ tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_val
     tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(callable);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     tinypy_value_t *bound_self = method->self;
-    tinypy_value_t *call_args;
-    tinypy_value_t *result;
     tinypy_value_t **items;
     size_t argument_count = TINYPY_TUPLE_SIZE(args);
     size_t output_count;
@@ -132,9 +129,9 @@ tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_val
     for (index = 0U; index < argument_count; ++index) {
         items[index + 1U] = TINYPY_TUPLE_GET(args, index);
     }
-    call_args = tinypy_tuple_from_items(vm, items, output_count);
+    tinypy_value_t *call_args = tinypy_tuple_from_items(vm, items, output_count);
     tinypy_internal_vm_deallocate(vm, items, output_count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
-    result = tinypy_call(method->function, call_args, kwargs, out_error);
+    tinypy_value_t *result = tinypy_call(method->function, call_args, kwargs, out_error);
     TINYPY_DECREF(call_args);
     return result;
 }

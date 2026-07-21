@@ -537,12 +537,11 @@ static tinypy_ast_compare_operator_e __ast_for_comp_op(tinypy_ast_builder_t *c, 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__seq_for_testlist(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     /* TINYPY_GRAMMAR_TESTLIST: TINYPY_GRAMMAR_TEST (',' TINYPY_GRAMMAR_TEST)* [','] */
-    tinypy_ast_sequence_t *seq;
     tinypy_ast_expression_t expression;
     int i;
     assert(TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_LISTMAKER || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST_COMP || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST_SAFE || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST1);
 
-    seq = TINYPY_AST_SEQUENCE_NEW((TINYPY_CST_CHILD_COUNT(n) + 1) / 2, c->c_arena);
+    tinypy_ast_sequence_t *seq = TINYPY_AST_SEQUENCE_NEW((TINYPY_CST_CHILD_COUNT(n) + 1) / 2, c->c_arena);
     if (!seq) {
         return NULL;
     }
@@ -836,12 +835,11 @@ static tinypy_ast_expression_t __ast_for_decorator(tinypy_ast_builder_t *c, cons
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__ast_for_decorators(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
-    tinypy_ast_sequence_t *decorator_seq;
     tinypy_ast_expression_t d;
     int i;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_DECORATORS);
-    decorator_seq = TINYPY_AST_SEQUENCE_NEW(TINYPY_CST_CHILD_COUNT(n), c->c_arena);
+    tinypy_ast_sequence_t *decorator_seq = TINYPY_AST_SEQUENCE_NEW(TINYPY_CST_CHILD_COUNT(n), c->c_arena);
     if (!decorator_seq) {
         return NULL;
     }
@@ -860,7 +858,6 @@ static tinypy_ast_statement_t __ast_for_funcdef(tinypy_ast_builder_t *c, const t
     /* TINYPY_GRAMMAR_FUNCDEF: 'def' TINYPY_TOKEN_NAME TINYPY_GRAMMAR_PARAMETERS ':' TINYPY_GRAMMAR_SUITE */
     tinypy_ast_identifier_t name;
     tinypy_ast_arguments_t args;
-    tinypy_ast_sequence_t *body;
     int name_i = 1;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_FUNCDEF);
@@ -876,7 +873,7 @@ static tinypy_ast_statement_t __ast_for_funcdef(tinypy_ast_builder_t *c, const t
     if (!args) {
         return NULL;
     }
-    body = __ast_for_suite(c, TINYPY_CST_CHILD(n, name_i + 3));
+    tinypy_ast_sequence_t *body = __ast_for_suite(c, TINYPY_CST_CHILD(n, name_i + 3));
     if (!body) {
         return NULL;
     }
@@ -1043,9 +1040,7 @@ static tinypy_ast_expression_t __ast_for_listcomp(tinypy_ast_builder_t *c, const
        TINYPY_GRAMMAR_TESTLIST_SAFE: TINYPY_GRAMMAR_TEST [(',' TINYPY_GRAMMAR_TEST)+ [',']]
     */
     tinypy_ast_expression_t elt, first;
-    tinypy_ast_sequence_t *listcomps;
     int i, n_fors;
-    tinypy_cst_node_t *ch;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_LISTMAKER);
     assert(TINYPY_CST_CHILD_COUNT(n) > 1);
@@ -1060,12 +1055,12 @@ static tinypy_ast_expression_t __ast_for_listcomp(tinypy_ast_builder_t *c, const
         return NULL;
     }
 
-    listcomps = TINYPY_AST_SEQUENCE_NEW(n_fors, c->c_arena);
+    tinypy_ast_sequence_t *listcomps = TINYPY_AST_SEQUENCE_NEW(n_fors, c->c_arena);
     if (!listcomps) {
         return NULL;
     }
 
-    ch = TINYPY_CST_CHILD(n, 1);
+    tinypy_cst_node_t *ch = TINYPY_CST_CHILD(n, 1);
     for (i = 0; i < n_fors; i++) {
         tinypy_ast_comprehension_t lc;
         tinypy_ast_sequence_t *t;
@@ -1213,14 +1208,13 @@ static int __count_comp_ifs(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n)
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__ast_for_comprehension(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     int i, n_fors;
-    tinypy_ast_sequence_t *comps;
 
     n_fors = __count_comp_fors(c, n);
     if (n_fors == -1) {
         return NULL;
     }
 
-    comps = TINYPY_AST_SEQUENCE_NEW(n_fors, c->c_arena);
+    tinypy_ast_sequence_t *comps = TINYPY_AST_SEQUENCE_NEW(n_fors, c->c_arena);
     if (!comps) {
         return NULL;
     }
@@ -1301,7 +1295,6 @@ static tinypy_ast_sequence_t *__ast_for_comprehension(tinypy_ast_builder_t *c, c
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_itercomp(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, int type) {
     tinypy_ast_expression_t elt;
-    tinypy_ast_sequence_t *comps;
 
     assert(TINYPY_CST_CHILD_COUNT(n) > 1);
 
@@ -1310,7 +1303,7 @@ static tinypy_ast_expression_t __ast_for_itercomp(tinypy_ast_builder_t *c, const
         return NULL;
     }
 
-    comps = __ast_for_comprehension(c, TINYPY_CST_CHILD(n, 1));
+    tinypy_ast_sequence_t *comps = __ast_for_comprehension(c, TINYPY_CST_CHILD(n, 1));
     if (!comps) {
         return NULL;
     }
@@ -1329,7 +1322,6 @@ static tinypy_ast_expression_t __ast_for_itercomp(tinypy_ast_builder_t *c, const
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_dictcomp(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     tinypy_ast_expression_t key, value;
-    tinypy_ast_sequence_t *comps;
 
     assert(TINYPY_CST_CHILD_COUNT(n) > 3);
     TINYPY_CST_REQUIRE(TINYPY_CST_CHILD(n, 1), TINYPY_TOKEN_COLON);
@@ -1344,7 +1336,7 @@ static tinypy_ast_expression_t __ast_for_dictcomp(tinypy_ast_builder_t *c, const
         return NULL;
     }
 
-    comps = __ast_for_comprehension(c, TINYPY_CST_CHILD(n, 3));
+    tinypy_ast_sequence_t *comps = __ast_for_comprehension(c, TINYPY_CST_CHILD(n, 3));
     if (!comps) {
         return NULL;
     }
@@ -1516,7 +1508,6 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_slice_t __ast_for_slice(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
-    tinypy_cst_node_t *ch;
     tinypy_ast_expression_t lower = NULL, upper = NULL, step = NULL;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_SUBSCRIPT);
@@ -1524,7 +1515,7 @@ static tinypy_ast_slice_t __ast_for_slice(tinypy_ast_builder_t *c, const tinypy_
     /* TINYPY_GRAMMAR_SUBSCRIPT: '.' '.' '.' | TINYPY_GRAMMAR_TEST | [TINYPY_GRAMMAR_TEST] ':' [TINYPY_GRAMMAR_TEST] [TINYPY_GRAMMAR_SLICEOP]
        TINYPY_GRAMMAR_SLICEOP: ':' [TINYPY_GRAMMAR_TEST]
     */
-    ch = TINYPY_CST_CHILD(n, 0);
+    tinypy_cst_node_t *ch = TINYPY_CST_CHILD(n, 0);
     if (TINYPY_CST_TYPE(ch) == TINYPY_TOKEN_DOT) {
         return __tinypy_ast_ellipsis(c->c_arena);
     }
@@ -2005,8 +1996,6 @@ static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *c, const tin
     */
 
     int i, nargs, nkeywords, ngens;
-    tinypy_ast_sequence_t *args;
-    tinypy_ast_sequence_t *keywords;
     tinypy_ast_expression_t vararg = NULL, kwarg = NULL;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_ARGLIST);
@@ -2039,11 +2028,11 @@ static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *c, const tin
         return NULL;
     }
 
-    args = TINYPY_AST_SEQUENCE_NEW(nargs + ngens, c->c_arena);
+    tinypy_ast_sequence_t *args = TINYPY_AST_SEQUENCE_NEW(nargs + ngens, c->c_arena);
     if (!args) {
         return NULL;
     }
-    keywords = TINYPY_AST_SEQUENCE_NEW(nkeywords, c->c_arena);
+    tinypy_ast_sequence_t *keywords = TINYPY_AST_SEQUENCE_NEW(nkeywords, c->c_arena);
     if (!keywords) {
         return NULL;
     }
@@ -2349,13 +2338,12 @@ static tinypy_ast_statement_t __ast_for_print_stmt(tinypy_ast_builder_t *c, cons
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__ast_for_exprlist(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, tinypy_ast_expression_context_e context) {
-    tinypy_ast_sequence_t *seq;
     int i;
     tinypy_ast_expression_t e;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_EXPRLIST);
 
-    seq = TINYPY_AST_SEQUENCE_NEW((TINYPY_CST_CHILD_COUNT(n) + 1) / 2, c->c_arena);
+    tinypy_ast_sequence_t *seq = TINYPY_AST_SEQUENCE_NEW((TINYPY_CST_CHILD_COUNT(n) + 1) / 2, c->c_arena);
     if (!seq) {
         return NULL;
     }
@@ -2373,12 +2361,11 @@ static tinypy_ast_sequence_t *__ast_for_exprlist(tinypy_ast_builder_t *c, const 
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_del_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
-    tinypy_ast_sequence_t *expr_list;
 
     /* TINYPY_GRAMMAR_DEL_STMT: 'del' TINYPY_GRAMMAR_EXPRLIST */
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_DEL_STMT);
 
-    expr_list = __ast_for_exprlist(c, TINYPY_CST_CHILD(n, 1), TINYPY_AST_CONTEXT_DELETE);
+    tinypy_ast_sequence_t *expr_list = __ast_for_exprlist(c, TINYPY_CST_CHILD(n, 1), TINYPY_AST_CONTEXT_DELETE);
     if (!expr_list) {
         return NULL;
     }
@@ -2395,10 +2382,9 @@ static tinypy_ast_statement_t __ast_for_flow_stmt(tinypy_ast_builder_t *c, const
       TINYPY_GRAMMAR_YIELD_EXPR: 'yield' TINYPY_GRAMMAR_TESTLIST
       TINYPY_GRAMMAR_RAISE_STMT: 'raise' [TINYPY_GRAMMAR_TEST [',' TINYPY_GRAMMAR_TEST [',' TINYPY_GRAMMAR_TEST]]]
     */
-    tinypy_cst_node_t *ch;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_FLOW_STMT);
-    ch = TINYPY_CST_CHILD(n, 0);
+    tinypy_cst_node_t *ch = TINYPY_CST_CHILD(n, 0);
     switch (TINYPY_CST_TYPE(ch)) {
     case TINYPY_GRAMMAR_BREAK_STMT:
         return __tinypy_ast_break(TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
@@ -2712,11 +2698,10 @@ static tinypy_ast_statement_t __ast_for_import_stmt(tinypy_ast_builder_t *c, con
 static tinypy_ast_statement_t __ast_for_global_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     /* TINYPY_GRAMMAR_GLOBAL_STMT: 'global' TINYPY_TOKEN_NAME (',' TINYPY_TOKEN_NAME)* */
     tinypy_ast_identifier_t name;
-    tinypy_ast_sequence_t *s;
     int i;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_GLOBAL_STMT);
-    s = TINYPY_AST_SEQUENCE_NEW(TINYPY_CST_CHILD_COUNT(n) / 2, c->c_arena);
+    tinypy_ast_sequence_t *s = TINYPY_AST_SEQUENCE_NEW(TINYPY_CST_CHILD_COUNT(n) / 2, c->c_arena);
     if (!s) {
         return NULL;
     }
@@ -2806,7 +2791,6 @@ static tinypy_ast_statement_t __ast_for_assert_stmt(tinypy_ast_builder_t *c, con
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__ast_for_suite(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     /* TINYPY_GRAMMAR_SUITE: TINYPY_GRAMMAR_SIMPLE_STMT | TINYPY_TOKEN_NEWLINE TINYPY_TOKEN_INDENT TINYPY_GRAMMAR_STMT+ TINYPY_TOKEN_DEDENT */
-    tinypy_ast_sequence_t *seq;
     tinypy_ast_statement_t s;
     int i, total, num, end, pos = 0;
     tinypy_cst_node_t *ch;
@@ -2814,7 +2798,7 @@ static tinypy_ast_sequence_t *__ast_for_suite(tinypy_ast_builder_t *c, const tin
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_SUITE);
 
     total = __num_stmts(n);
-    seq = TINYPY_AST_SEQUENCE_NEW(total, c->c_arena);
+    tinypy_ast_sequence_t *seq = TINYPY_AST_SEQUENCE_NEW(total, c->c_arena);
     if (!seq) {
         return NULL;
     }
@@ -3053,7 +3037,6 @@ static tinypy_ast_statement_t __ast_for_for_stmt(tinypy_ast_builder_t *c, const 
     tinypy_ast_sequence_t *_target, *seq = NULL, *suite_seq;
     tinypy_ast_expression_t expression;
     tinypy_ast_expression_t target, first;
-    const tinypy_cst_node_t *node_target;
     /* TINYPY_GRAMMAR_FOR_STMT: 'for' TINYPY_GRAMMAR_EXPRLIST 'in' TINYPY_GRAMMAR_TESTLIST ':' TINYPY_GRAMMAR_SUITE ['else' ':' TINYPY_GRAMMAR_SUITE] */
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_FOR_STMT);
 
@@ -3064,7 +3047,7 @@ static tinypy_ast_statement_t __ast_for_for_stmt(tinypy_ast_builder_t *c, const 
         }
     }
 
-    node_target = TINYPY_CST_CHILD(n, 1);
+    const tinypy_cst_node_t *node_target = TINYPY_CST_CHILD(n, 1);
     _target = __ast_for_exprlist(c, node_target, TINYPY_AST_CONTEXT_STORE);
     if (!_target) {
         return NULL;
@@ -3265,14 +3248,13 @@ static tinypy_ast_statement_t __ast_for_with_item(tinypy_ast_builder_t *c, const
 static tinypy_ast_statement_t __ast_for_with_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     int i;
     tinypy_ast_statement_t ret;
-    tinypy_ast_sequence_t *inner;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_WITH_STMT);
 
     /* process the with items inside-out */
     i = TINYPY_CST_CHILD_COUNT(n) - 1;
     /* the TINYPY_GRAMMAR_SUITE of the innermost with item is the TINYPY_GRAMMAR_SUITE of the with TINYPY_GRAMMAR_STMT */
-    inner = __ast_for_suite(c, TINYPY_CST_CHILD(n, i));
+    tinypy_ast_sequence_t *inner = __ast_for_suite(c, TINYPY_CST_CHILD(n, i));
     if (!inner) {
         return NULL;
     }
@@ -3300,7 +3282,6 @@ static tinypy_ast_statement_t __ast_for_with_stmt(tinypy_ast_builder_t *c, const
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_classdef(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, tinypy_ast_sequence_t *decorator_seq) {
     /* TINYPY_GRAMMAR_CLASSDEF: 'class' TINYPY_TOKEN_NAME ['(' TINYPY_GRAMMAR_TESTLIST ')'] ':' TINYPY_GRAMMAR_SUITE */
-    tinypy_value_t *classname;
     tinypy_ast_sequence_t *bases, *s;
 
     TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_CLASSDEF);
@@ -3314,7 +3295,7 @@ static tinypy_ast_statement_t __ast_for_classdef(tinypy_ast_builder_t *c, const 
         if (!s) {
             return NULL;
         }
-        classname = TINYPY_AST_NEW_IDENTIFIER(TINYPY_CST_CHILD(n, 1));
+        tinypy_value_t *classname = TINYPY_AST_NEW_IDENTIFIER(TINYPY_CST_CHILD(n, 1));
         if (!classname) {
             return NULL;
         }
@@ -3327,7 +3308,7 @@ static tinypy_ast_statement_t __ast_for_classdef(tinypy_ast_builder_t *c, const 
         if (!s) {
             return NULL;
         }
-        classname = TINYPY_AST_NEW_IDENTIFIER(TINYPY_CST_CHILD(n, 1));
+        tinypy_value_t *classname = TINYPY_AST_NEW_IDENTIFIER(TINYPY_CST_CHILD(n, 1));
         if (!classname) {
             return NULL;
         }
@@ -3345,7 +3326,7 @@ static tinypy_ast_statement_t __ast_for_classdef(tinypy_ast_builder_t *c, const 
     if (!s) {
         return NULL;
     }
-    classname = TINYPY_AST_NEW_IDENTIFIER(TINYPY_CST_CHILD(n, 1));
+    tinypy_value_t *classname = TINYPY_AST_NEW_IDENTIFIER(TINYPY_CST_CHILD(n, 1));
     if (!classname) {
         return NULL;
     }
@@ -3435,11 +3416,10 @@ static tinypy_value_t *__parsestr(tinypy_ast_builder_t *c, const tinypy_cst_node
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__parsestrplus(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
-    tinypy_value_t *value;
     int index;
 
     TINYPY_CST_REQUIRE(TINYPY_CST_CHILD(n, 0), TINYPY_TOKEN_STRING);
-    value = __parsestr(c, n, TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 0)));
+    tinypy_value_t *value = __parsestr(c, n, TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 0)));
     if (value == NULL) {
         return NULL;
     }

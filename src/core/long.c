@@ -34,7 +34,6 @@ static inline size_t __tinypy_internal_long_allocation_size(size_t digit_count) 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int sign, const uint16_t *digits, size_t digit_count) {
     size_t allocation_size;
-    tinypy_value_t *result;
 
     assert(tinypy_internal_vm_valid(vm));
     assert(digits != NULL || digit_count == 0U);
@@ -44,7 +43,7 @@ tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int sign, const 
     assert(__tinypy_internal_long_digits_valid(digits, digit_count));
     assert(digit_count == 0U || digits[digit_count - 1U] != 0U);
 
-    result = tinypy_internal_value_allocate(
+    tinypy_value_t *result = tinypy_internal_value_allocate(
         vm,
         TINYPY_VALUE_LONG,
         allocation_size);

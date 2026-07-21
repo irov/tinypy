@@ -20,6 +20,7 @@ typedef union test_allocation_header_t {
 //////////////////////////////////////////////////////////////////////////
 typedef struct test_allocator_state_t {
     size_t allocation_calls;
+    size_t error_allocation_calls;
     size_t deallocation_calls;
     size_t outstanding_allocations;
     size_t outstanding_bytes;
@@ -44,6 +45,9 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment, uin
     test_allocation_header_t *header;
 
     state->allocation_calls += 1U;
+    if (tag == (uint32_t)TINYPY_ALLOC_TAG_ERROR) {
+        state->error_allocation_calls += 1U;
+    }
     state->last_allocation_size = size;
 
     if (size > SIZE_MAX - sizeof(*header)) {
@@ -73,6 +77,9 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
     }
 
     state->allocation_calls += 1U;
+    if (tag == (uint32_t)TINYPY_ALLOC_TAG_ERROR) {
+        state->error_allocation_calls += 1U;
+    }
     header = ((test_allocation_header_t *)memory) - 1;
     state->last_allocation_size = new_size;
     if (header->fields.size != old_size || header->fields.alignment != alignment || header->fields.tag != tag || new_size > SIZE_MAX - sizeof(*header)) {
@@ -1101,6 +1108,8 @@ static int __test_dictionary_runtime(void) {
     TEST_CHECK(contains == 1);
     borrowed = tinypy_dict_get(dict, key_a_equal);
     TEST_CHECK(borrowed == value_one);
+    borrowed = tinypy_dict_get_optional(dict, key_a_equal);
+    TEST_CHECK(borrowed == value_one);
     tinypy_dict_set(dict, key_a_equal, value_two);
     TEST_CHECK(tinypy_equal(dict, dict_equal) == 0);
     size = tinypy_dict_size(dict);
@@ -1122,6 +1131,7 @@ static int __test_dictionary_runtime(void) {
 
     tinypy_dict_delete(dict, key_a_equal);
     TEST_CHECK(tinypy_dict_contains(dict, key_a) == 0);
+    TEST_CHECK(tinypy_dict_get_optional(dict, key_a) == NULL);
 
     tinypy_dict_set(dict, key_a, dict);
     tinypy_dict_clear(dict);
@@ -1168,6 +1178,8 @@ static int __test_type_class_runtime(void) {
     const tinypy_type_t *type_type;
     const tinypy_type_t *observed_type;
     const tinypy_type_t *bases[2];
+    size_t error_allocation_calls;
+    size_t probe;
     size_t size;
 
     (void)memset(&state, 0, sizeof(state));
@@ -1280,6 +1292,18 @@ static int __test_type_class_runtime(void) {
     TEST_CHECK(tinypy_typeof(tinypy_instance_dict(instance)) == TINYPY_VALUE_DICT);
     borrowed = tinypy_instance_get_attr(instance, "answer", 6U);
     TEST_CHECK(borrowed == integer);
+    TEST_CHECK(tinypy_object_has_attr(instance, "answer", 6U) != 0);
+    TEST_CHECK(tinypy_object_has_attr(instance, "absent", 6U) == 0);
+    key = tinypy_string_from_bytes(vm, "answer", 6U);
+    TEST_CHECK(tinypy_object_has_attr_value(instance, key) != 0);
+    tinypy_release(key);
+    key = NULL;
+    error_allocation_calls = state.error_allocation_calls;
+    for (probe = 0U; probe != 100000U; ++probe) {
+        TEST_CHECK(tinypy_object_has_attr(instance, "absent", 6U) == 0);
+    }
+    TEST_CHECK(state.error_allocation_calls == error_allocation_calls);
+    TEST_CHECK(tinypy_vm_has_error(vm) == 0);
 
     bases[0] = base_a;
     bases[1] = base_b;
@@ -1732,8 +1756,10 @@ typedef struct test_native_payload_t {
 } test_native_payload_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct test_native_state_t {
+    tinypy_vm_t *vm;
     int32_t constructed;
     int32_t finalized;
+    int32_t attribute_calls;
 } test_native_state_t;
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_native_construct(tinypy_value_t *instance, void *payload, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1773,6 +1799,40 @@ static tinypy_value_t *__test_native_repr(tinypy_value_t *instance, void *payloa
     return tinypy_string_from_bytes(value_vm, "native-73", 9U);
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __test_native_attribute_name_equal(tinypy_value_t *name, const char *expected, size_t expected_size) {
+    const void *bytes;
+    size_t size;
+
+    if (tinypy_typeof(name) == TINYPY_VALUE_STRING) {
+        bytes = tinypy_string_view(name, &size);
+    }
+    else if (tinypy_typeof(name) == TINYPY_VALUE_UNICODE) {
+        size_t code_point_count;
+
+        bytes = tinypy_unicode_utf8_view(name, &size, &code_point_count);
+    }
+    else {
+        return INT32_C(0);
+    }
+    return size == expected_size && (size == 0U || memcmp(bytes, expected, size) == 0) ? INT32_C(1) : INT32_C(0);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_get_attribute(tinypy_value_t *instance, void *payload, tinypy_value_t *name, void *user_data, tinypy_error_t **out_error) {
+    test_native_state_t *state = (test_native_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    state->attribute_calls += 1;
+    if (__test_native_attribute_name_equal(name, "present", 7U) != 0) {
+        return tinypy_integer_from_i64(state->vm, 73);
+    }
+    if (__test_native_attribute_name_equal(name, "failure", 7U) != 0) {
+        tinypy_vm_raise_error(state->vm, TINYPY_ERROR_VALUE, "native attribute failure");
+    }
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 static int __test_native_embedding(void) {
     test_allocator_state_t allocator_state;
     test_native_state_t native_state;
@@ -1805,12 +1865,14 @@ static int __test_native_embedding(void) {
     allocator = __test_make_allocator(&allocator_state);
     config = __test_make_config(&allocator);
     vm = tinypy_vm_create(&config);
+    native_state.vm = vm;
     tinypy_native_type_spec_init(&spec);
     spec.payload_size = sizeof(test_native_payload_t);
     spec.user_data = &native_state;
     spec.construct = __test_native_construct;
     spec.finalize = __test_native_finalize;
     spec.repr = __test_native_repr;
+    spec.get_attribute = __test_native_get_attribute;
     native_type = tinypy_native_type_new(vm, "Native", 6U, NULL, 0U, NULL, &spec, &error);
     TEST_CHECK(native_type != NULL);
     TEST_CHECK(error == NULL);
@@ -1834,6 +1896,11 @@ static int __test_native_embedding(void) {
     TEST_CHECK(representation != NULL);
     bytes = tinypy_string_view(representation, &byte_size);
     TEST_CHECK(byte_size == 9U && memcmp(bytes, "native-73", 9U) == 0);
+    TEST_CHECK(tinypy_object_has_attr(instance, "present", 7U) != 0);
+    TEST_CHECK(tinypy_object_has_attr(instance, "missing", 7U) == 0);
+    TEST_CHECK(tinypy_object_has_attr(instance, "failure", 7U) == 0);
+    TEST_CHECK(tinypy_vm_has_error(vm) == 0);
+    TEST_CHECK(native_state.attribute_calls == 3);
 
     value = tinypy_integer_from_i64(vm, 11);
     TEST_CHECK(tinypy_object_set_attr(instance, "answer", 6U, value, &error) != 0);

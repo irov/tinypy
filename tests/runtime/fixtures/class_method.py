@@ -56,6 +56,47 @@ builtin_isinstance_result = isinstance(Pair(1), Pair)
 builtin_callable_result = callable(collect)
 builtin_getattr_result = getattr(Pair(7), "value")
 builtin_hasattr_result = hasattr(Pair(7), "value")
+
+
+class OptionalLookup(object):
+    plain = 11
+
+    @property
+    def broken_property(self):
+        raise ValueError("property failure")
+
+    def __getattr__(self, name):
+        if name == "dynamic":
+            return 12
+        if name == "runtime_failure":
+            raise RuntimeError("runtime failure")
+        raise AttributeError(name)
+
+
+optional_lookup = OptionalLookup()
+assert hasattr(optional_lookup, "plain")
+assert hasattr(optional_lookup, "dynamic")
+assert not hasattr(optional_lookup, "missing")
+assert not hasattr(optional_lookup, "broken_property")
+assert not hasattr(optional_lookup, "runtime_failure")
+assert getattr(optional_lookup, "dynamic", 17) == 12
+assert getattr(optional_lookup, "missing", 17) == 17
+
+try:
+    getattr(optional_lookup, "broken_property", 17)
+except ValueError:
+    pass
+else:
+    raise AssertionError("getattr default swallowed ValueError")
+
+try:
+    getattr(optional_lookup, "runtime_failure", 17)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("getattr default swallowed RuntimeError")
+
+
 builtin_abs_result = abs(-7)
 builtin_ord_result = ord("A")
 builtin_id_result = id(Pair(1)) > 0

@@ -440,16 +440,14 @@ static void __tinypy_representation_pointer(tinypy_representation_builder_t *bui
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
-    tinypy_value_t *attribute;
-    tinypy_value_t *method;
     tinypy_value_t *args;
     tinypy_value_t *result;
 
-    attribute = tinypy_internal_object_has_special(value, name, name_size) != 0 ? value : NULL;
+    tinypy_value_t *attribute = tinypy_internal_object_has_special(value, name, name_size) != 0 ? value : NULL;
     if (attribute == NULL) {
         return NULL;
     }
-    method = tinypy_object_get_attr(value, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_object_get_attr(value, name, name_size, out_error);
     if (method == NULL) {
         return NULL;
     }
@@ -627,7 +625,6 @@ static int32_t __tinypy_representation_value(tinypy_representation_builder_t *bu
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, int32_t raw, tinypy_error_t **out_error) {
     tinypy_representation_builder_t builder;
-    tinypy_value_t *result;
 
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = TINYPY_VALUE_VM(value);
@@ -642,7 +639,7 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, int3
         return NULL;
     }
     assert(builder.active_count == 0U);
-    result = tinypy_string_from_bytes(builder.vm, builder.bytes, builder.size);
+    tinypy_value_t *result = tinypy_string_from_bytes(builder.vm, builder.bytes, builder.size);
     if (builder.active != NULL) {
         tinypy_internal_vm_deallocate(builder.vm, builder.active, builder.active_capacity * sizeof(*builder.active), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     }

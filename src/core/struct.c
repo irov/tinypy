@@ -168,8 +168,6 @@ static tinypy_value_t *__tinypy_struct_unpack(tinypy_value_t *function, tinypy_v
     tinypy_struct_format_t format;
     const unsigned char *bytes;
     size_t byte_size;
-    tinypy_value_t **items;
-    tinypy_value_t *result;
     size_t index;
 
     (void)user_data;
@@ -192,8 +190,8 @@ static tinypy_value_t *__tinypy_struct_unpack(tinypy_value_t *function, tinypy_v
     if (format.item_count == 0U) {
         return tinypy_tuple_from_items(vm, NULL, 0U);
     }
-    assert(format.item_count <= SIZE_MAX / sizeof(*items));
-    items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, format.item_count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    assert(format.item_count <= SIZE_MAX / sizeof(tinypy_value_t *));
+    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, format.item_count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     for (index = 0U; index < format.item_count; ++index) {
         uint64_t bits = __tinypy_struct_read_u64(bytes + index * 8U, format.byte_order);
         double value;
@@ -201,7 +199,7 @@ static tinypy_value_t *__tinypy_struct_unpack(tinypy_value_t *function, tinypy_v
         (void)memcpy(&value, &bits, sizeof(value));
         items[index] = tinypy_float_from_double(vm, value);
     }
-    result = tinypy_tuple_from_items(vm, items, format.item_count);
+    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, format.item_count);
     for (index = 0U; index < format.item_count; ++index) {
         TINYPY_DECREF(items[index]);
     }
@@ -213,7 +211,6 @@ static tinypy_value_t *__tinypy_struct_pack(tinypy_value_t *function, tinypy_val
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_struct_format_t format;
     unsigned char *bytes;
-    tinypy_value_t *result;
     size_t index;
 
     (void)user_data;
@@ -244,7 +241,7 @@ static tinypy_value_t *__tinypy_struct_pack(tinypy_value_t *function, tinypy_val
         (void)memcpy(&bits, &value, sizeof(bits));
         __tinypy_struct_write_u64(bytes + index * 8U, bits, format.byte_order);
     }
-    result = tinypy_string_from_bytes(vm, bytes, format.byte_size);
+    tinypy_value_t *result = tinypy_string_from_bytes(vm, bytes, format.byte_size);
     tinypy_internal_vm_deallocate(vm, bytes, format.byte_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }

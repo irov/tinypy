@@ -6,14 +6,11 @@
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *defaults, tinypy_value_t *closure) {
-    tinypy_vm_t *vm;
-    tinypy_function_object_t *function;
-    tinypy_value_t *consts;
     tinypy_value_t *doc;
     tinypy_value_t *module_name;
 
     assert(code != NULL);
-    vm = TINYPY_VALUE_VM(code);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
     assert(tinypy_internal_vm_valid(vm));
     assert(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
     assert(globals != NULL);
@@ -26,13 +23,13 @@ tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *global
     assert(closure == NULL || TINYPY_TUPLE_SIZE(closure) == TINYPY_TUPLE_SIZE(TINYPY_CODE_FREEVARS(code)));
     assert(closure == NULL || __tinypy_internal_values_have_kind(TINYPY_TUPLE_ITERATOR_BEGIN(closure), TINYPY_TUPLE_SIZE(closure), TINYPY_VALUE_CELL));
 
-    function = (tinypy_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_FUNCTION, sizeof(*function));
+    tinypy_function_object_t *function = (tinypy_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_FUNCTION, sizeof(*function));
     function->code = code;
     function->globals = globals;
     function->defaults = defaults;
     function->closure = closure;
     function->name = TINYPY_CODE_NAME(code);
-    consts = TINYPY_CODE_CONSTS(code);
+    tinypy_value_t *consts = TINYPY_CODE_CONSTS(code);
     int condition = TINYPY_TUPLE_SIZE(consts) != 0U;
     if (condition != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(consts, 0U);
@@ -52,8 +49,8 @@ tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *global
         function->doc = doc;
     }
     module_name = tinypy_string_from_bytes(vm, "__name__", 8U);
-    if (tinypy_dict_contains(globals, module_name) != 0) {
-        function->module = tinypy_dict_get(globals, module_name);
+    function->module = tinypy_dict_get_optional(globals, module_name);
+    if (function->module != NULL) {
         TINYPY_INCREF(function->module);
     }
     TINYPY_DECREF(module_name);
@@ -96,10 +93,8 @@ tinypy_value_t *tinypy_internal_function_call(tinypy_value_t *callable, tinypy_v
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
-
     assert(callable != NULL);
-    vm = TINYPY_VALUE_VM(callable);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     assert(tinypy_internal_vm_valid(vm));
     assert(args != NULL);
     assert(tinypy_internal_value_belongs_to(vm, args));

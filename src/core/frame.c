@@ -43,15 +43,13 @@ static int32_t __tinypy_internal_frame_line_number(const tinypy_frame_object_t *
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, tinypy_value_t *globals) {
-    tinypy_value_t *builtins;
-
     if (vm->current_frame != NULL && vm->current_frame->globals == globals) {
-        builtins = vm->current_frame->builtins;
+        tinypy_value_t *builtins = vm->current_frame->builtins;
         TINYPY_INCREF(builtins);
         return builtins;
     }
 
-    builtins = tinypy_internal_dict_get_optional(vm, globals, vm->builtins_key);
+    tinypy_value_t *builtins = tinypy_internal_dict_get_optional(vm, globals, vm->builtins_key);
 
     if (builtins != NULL && TINYPY_VALUE_KIND(builtins) == TINYPY_VALUE_DICT) {
         TINYPY_INCREF(builtins);
@@ -157,7 +155,7 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
         tinypy_internal_frame_free_list_push(vm, &frame->base.base);
     }
     else {
-        tinypy_internal_value_destroy(vm, &frame->base.base);
+        tinypy_internal_value_destroy(&frame->base.base);
         TINYPY_DECREF(&vm->frame_type.base.base);
     }
 }
@@ -207,8 +205,6 @@ tinypy_value_t *tinypy_internal_frame_locals(tinypy_frame_object_t *frame) {
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, int32_t function_frame) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
-    tinypy_frame_object_t *frame;
-    tinypy_value_t *builtins;
     size_t local_count;
     size_t cell_count;
     size_t free_count;
@@ -229,8 +225,8 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
     extras = local_count + cell_count + free_count + stack_size;
     assert(extras <= (SIZE_MAX - offsetof(tinypy_frame_object_t, locals_plus)) / sizeof(tinypy_value_t *));
     allocation_size = offsetof(tinypy_frame_object_t, locals_plus) + extras * sizeof(tinypy_value_t *);
-    builtins = __tinypy_internal_frame_make_builtins(vm, globals);
-    frame = __tinypy_internal_frame_allocate(vm, allocation_size, local_count + cell_count + free_count);
+    tinypy_value_t *builtins = __tinypy_internal_frame_make_builtins(vm, globals);
+    tinypy_frame_object_t *frame = __tinypy_internal_frame_allocate(vm, allocation_size, local_count + cell_count + free_count);
     TINYPY_SIZED_SIZE(&frame->base) = extras;
     frame->back = vm->current_frame != NULL ? &vm->current_frame->base.base : NULL;
     frame->code = code;
@@ -379,12 +375,10 @@ int32_t tinypy_frame_line_number(const tinypy_value_t *frame) {
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_frame_stack_depth(const tinypy_value_t *frame) {
-    tinypy_frame_object_t *object;
-
     assert(frame != NULL);
     assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(frame)));
     assert(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
-    object = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame);
+    tinypy_frame_object_t *object = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame);
     return (size_t)(object->stack_top - object->value_stack);
 }
 //////////////////////////////////////////////////////////////////////////

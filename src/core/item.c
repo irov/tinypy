@@ -184,14 +184,12 @@ static int __tinypy_item_normalize_index(tinypy_vm_t *vm, tinypy_value_t *key, s
 static tinypy_value_t *__tinypy_item_call_method(tinypy_value_t *container, const char *name, size_t name_size, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_value_t *method = tinypy_object_get_attr(container, name, name_size, out_error);
-    tinypy_value_t *args;
-    tinypy_value_t *result;
 
     if (method == NULL) {
         return NULL;
     }
-    args = tinypy_tuple_from_items(vm, items, item_count);
-    result = tinypy_call(method, args, NULL, out_error);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, items, item_count);
+    tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(method);
     return result;
@@ -222,7 +220,6 @@ static tinypy_value_t *__tinypy_item_unicode_get(tinypy_value_t *container, size
 static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, const tinypy_item_slice_indices_t *indices) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_value_t **items = NULL;
-    tinypy_value_t *result;
     size_t index;
     int64_t source_index = indices->start;
 
@@ -234,7 +231,7 @@ static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, c
             source_index += indices->step;
         }
     }
-    result = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_TUPLE ? tinypy_tuple_from_items(vm, items, indices->length) : tinypy_list_from_items(vm, items, indices->length);
+    tinypy_value_t *result = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_TUPLE ? tinypy_tuple_from_items(vm, items, indices->length) : tinypy_list_from_items(vm, items, indices->length);
     if (items != NULL) {
         tinypy_internal_vm_deallocate(vm, items, indices->length * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     }
@@ -245,7 +242,6 @@ static tinypy_value_t *__tinypy_item_string_slice(tinypy_value_t *container, con
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     const unsigned char *bytes;
     unsigned char *selected;
-    tinypy_value_t *result;
     size_t byte_size;
     size_t index;
     int64_t source_index = indices->start;
@@ -262,7 +258,7 @@ static tinypy_value_t *__tinypy_item_string_slice(tinypy_value_t *container, con
         selected[index] = bytes[(size_t)source_index];
         source_index += indices->step;
     }
-    result = tinypy_string_from_bytes(vm, selected, indices->length);
+    tinypy_value_t *result = tinypy_string_from_bytes(vm, selected, indices->length);
     tinypy_internal_vm_deallocate(vm, selected, indices->length, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
@@ -279,7 +275,6 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
     size_t scalar_index;
     size_t index;
     int64_t source_index = indices->start;
-    tinypy_value_t *result;
 
     utf8 = tinypy_unicode_utf8_view(container, &byte_size, &code_point_count);
     if (indices->length == 0U) {
@@ -303,7 +298,7 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
         selected_size += scalar_size;
         source_index += indices->step;
     }
-    result = tinypy_unicode_from_utf8(vm, selected, selected_size);
+    tinypy_value_t *result = tinypy_unicode_from_utf8(vm, selected, selected_size);
     tinypy_internal_vm_deallocate(vm, selected, byte_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     tinypy_internal_vm_deallocate(vm, offsets, (code_point_count + 1U) * sizeof(*offsets), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
@@ -313,7 +308,6 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, tin
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_error_t *iteration_error = NULL;
     tinypy_value_t *iterator = tinypy_iter(value, &iteration_error);
-    tinypy_value_t *items;
 
     if (iterator == NULL) {
         if (out_error != NULL) {
@@ -324,7 +318,7 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, tin
         }
         return NULL;
     }
-    items = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *items = tinypy_list_from_items(vm, NULL, 0U);
     for (;;) {
         tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
 
@@ -351,7 +345,6 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, tin
 static int32_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_value_t *slice, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
     tinypy_item_slice_indices_t indices;
-    tinypy_value_t *replacement;
     size_t replacement_size;
     size_t index;
     int64_t target_index;
@@ -360,7 +353,7 @@ static int32_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_value_t
     if (__tinypy_item_slice_indices(vm, slice, list_size, &indices, out_error) == 0) {
         return 0;
     }
-    replacement = __tinypy_item_collect_iterable(value, out_error);
+    tinypy_value_t *replacement = __tinypy_item_collect_iterable(value, out_error);
     if (replacement == NULL) {
         return 0;
     }
@@ -414,13 +407,12 @@ static int32_t __tinypy_item_list_delete_slice(tinypy_value_t *list, tinypy_valu
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
     tinypy_value_type_e kind;
     size_t index;
     tinypy_value_t *item;
 
     assert(container != NULL && key != NULL);
-    vm = TINYPY_VALUE_VM(container);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, key));
     TINYPY_CLEAR_ERROR(out_error);
@@ -527,12 +519,11 @@ tinypy_value_t *tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, 
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_set_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
     tinypy_value_type_e kind;
     size_t index;
 
     assert(container != NULL && key != NULL && value != NULL);
-    vm = TINYPY_VALUE_VM(container);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, key));
     assert(tinypy_internal_value_belongs_to(vm, value));
@@ -571,12 +562,11 @@ int32_t tinypy_set_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_v
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_delete_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm;
     tinypy_value_type_e kind;
     size_t index;
 
     assert(container != NULL && key != NULL);
-    vm = TINYPY_VALUE_VM(container);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, key));
     TINYPY_CLEAR_ERROR(out_error);

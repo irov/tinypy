@@ -323,7 +323,6 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
 tinypy_marshal_result_e tinypy_marshal_load_code_v2(tinypy_vm_t *vm, const void *bytes, size_t size, const tinypy_marshal_limits_t *limits, tinypy_value_t **out_code, tinypy_marshal_error_t *out_error) {
     tinypy_allocator_t allocator;
     tinypy_marshal_document_t *document = NULL;
-    const tinypy_marshal_object_t *root;
     tinypy_marshal_materializer_t materializer;
     tinypy_marshal_result_e result;
 
@@ -337,7 +336,7 @@ tinypy_marshal_result_e tinypy_marshal_load_code_v2(tinypy_vm_t *vm, const void 
         return result;
     }
 
-    root = tinypy_marshal_document_root(document);
+    const tinypy_marshal_object_t *root = tinypy_marshal_document_root(document);
     if (tinypy_marshal_object_type(root) != TINYPY_MARSHAL_TYPE_CODE) {
         uint8_t marshal_object_wire_type = tinypy_marshal_object_wire_type(root);
         __tinypy_marshal_load_set_error(out_error, TINYPY_MARSHAL_ROOT_NOT_CODE, marshal_object_wire_type, "top-level marshal object is not a code object");
