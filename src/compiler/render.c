@@ -56,13 +56,11 @@ static int32_t __tinypy_render_fail(tinypy_render_builder_t *builder, const char
     tinypy_internal_compiler_error(builder->compile, TINYPY_ERROR_PREPROCESSOR, message, line, column + 1, builder->compile->out_error);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_limit(tinypy_render_builder_t *builder, const char *message, int32_t line, int32_t column) {
     tinypy_internal_compiler_error(builder->compile, TINYPY_ERROR_COMPILER_LIMIT, message, line, column + 1, builder->compile->out_error);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_append(tinypy_render_builder_t *builder, const void *data, size_t size) {
     const unsigned char *bytes = (const unsigned char *)data;
@@ -95,7 +93,7 @@ static int32_t __tinypy_render_append(tinypy_render_builder_t *builder, const vo
         available = TINYPY_RENDER_CHUNK_SIZE - builder->tail->size;
         copied = size < available ? size : available;
         (void)memcpy(builder->tail->bytes + builder->tail->size, bytes, copied);
-        for (index = 0U; index < copied; index += 1U) {
+        for (index = 0U; index < copied; ++index) {
             if (bytes[index] == (unsigned char)'\n') {
                 builder->line += 1;
                 builder->column = 0;
@@ -111,18 +109,15 @@ static int32_t __tinypy_render_append(tinypy_render_builder_t *builder, const vo
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_text(tinypy_render_builder_t *builder, const char *text) {
     unsigned long size = strlen(text);
     return __tinypy_render_append(builder, text, size);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_character(tinypy_render_builder_t *builder, char character) {
     return __tinypy_render_append(builder, &character, 1U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_identifier(tinypy_render_builder_t *builder, tinypy_ast_identifier_t identifier) {
     size_t size;
@@ -134,19 +129,17 @@ static int32_t __tinypy_render_identifier(tinypy_render_builder_t *builder, tiny
     data = tinypy_string_view(identifier, &size);
     return __tinypy_render_append(builder, data, size);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_indent(tinypy_render_builder_t *builder, size_t indentation) {
     size_t index;
 
-    for (index = 0U; index < indentation; index += 1U) {
+    for (index = 0U; index < indentation; ++index) {
         if (__tinypy_render_text(builder, "    ") == 0) {
             return 0;
         }
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_repr_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
     tinypy_error_t *error = NULL;
@@ -165,13 +158,12 @@ static int32_t __tinypy_render_repr_literal(tinypy_render_builder_t *builder, ti
     }
     bytes = tinypy_string_view(representation, &size);
     if (__tinypy_render_append(builder, bytes, size) == 0) {
-        tinypy_release(representation);
+        TINYPY_DECREF(representation);
         return 0;
     }
-    tinypy_release(representation);
+    TINYPY_DECREF(representation);
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_hex(tinypy_render_builder_t *builder, uint32_t value, size_t width) {
     static const char digits[] = "0123456789abcdef";
@@ -179,12 +171,11 @@ static int32_t __tinypy_render_hex(tinypy_render_builder_t *builder, uint32_t va
     size_t index;
 
     assert(width <= sizeof(output));
-    for (index = 0U; index < width; index += 1U) {
+    for (index = 0U; index < width; ++index) {
         output[width - index - 1U] = digits[(value >> (index * 4U)) & UINT32_C(0xf)];
     }
     return __tinypy_render_append(builder, output, width);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_escaped_code_point(tinypy_render_builder_t *builder, uint32_t code_point, int32_t unicode) {
     if (code_point == (uint32_t)'\\' || code_point == (uint32_t)'\'') {
@@ -210,7 +201,6 @@ static int32_t __tinypy_render_escaped_code_point(tinypy_render_builder_t *build
     }
     return __tinypy_render_text(builder, "\\U") && __tinypy_render_hex(builder, code_point, 8U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
     int32_t unicode = tinypy_typeof(value) == TINYPY_VALUE_UNICODE ? INT32_C(1) : INT32_C(0);
@@ -252,7 +242,7 @@ static int32_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, ti
                 continuation_count = 3U;
             }
             assert(continuation_count <= size - index);
-            for (continuation = 0U; continuation < continuation_count; continuation += 1U) {
+            for (continuation = 0U; continuation < continuation_count; ++continuation) {
                 code_point = (code_point << 6U) | (uint32_t)(bytes[index++] & UINT8_C(0x3f));
             }
         }
@@ -262,7 +252,6 @@ static int32_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, ti
     }
     return __tinypy_render_character(builder, '\'');
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_double_literal(tinypy_render_builder_t *builder, double value) {
     tinypy_value_t *temporary;
@@ -279,10 +268,9 @@ static int32_t __tinypy_render_double_literal(tinypy_render_builder_t *builder, 
     }
     temporary = tinypy_float_from_double(builder->compile->vm, value);
     result = __tinypy_render_repr_literal(builder, temporary);
-    tinypy_release(temporary);
+    TINYPY_DECREF(temporary);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
     tinypy_value_type_e type = tinypy_typeof(value);
@@ -291,17 +279,19 @@ static int32_t __tinypy_render_literal(tinypy_render_builder_t *builder, tinypy_
         return __tinypy_render_text_literal(builder, value);
     }
     if (type == TINYPY_VALUE_TUPLE) {
-        size_t index;
-        size_t size = tinypy_tuple_size(value);
+        size_t size = TINYPY_TUPLE_SIZE(value);
+        tinypy_value_t *const *iterator = TINYPY_TUPLE_ITERATOR_BEGIN(value);
+        tinypy_value_t *const *iterator_begin = iterator;
+        tinypy_value_t *const *iterator_end = TINYPY_TUPLE_ITERATOR_END(value);
 
         if (__tinypy_render_character(builder, '(') == 0) {
             return 0;
         }
-        for (index = 0U; index < size; index += 1U) {
-            if (index != 0U && __tinypy_render_text(builder, ", ") == 0) {
+        for (; iterator != iterator_end; ++iterator) {
+            if (iterator != iterator_begin && __tinypy_render_text(builder, ", ") == 0) {
                 return 0;
             }
-            tinypy_value_t *item = tinypy_tuple_get(value, index);
+            tinypy_value_t *item = *iterator;
             if (__tinypy_render_literal(builder, item) == 0) {
                 return 0;
             }
@@ -327,7 +317,6 @@ static int32_t __tinypy_render_literal(tinypy_render_builder_t *builder, tinypy_
     }
     return __tinypy_render_repr_literal(builder, value);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static const char *__tinypy_render_binary_operator(tinypy_ast_binary_operator_e operation) {
     switch (operation) {
@@ -359,7 +348,6 @@ static const char *__tinypy_render_binary_operator(tinypy_ast_binary_operator_e 
         return "?";
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static const char *__tinypy_render_compare_operator(int operation) {
     switch (operation) {
@@ -387,12 +375,11 @@ static const char *__tinypy_render_compare_operator(int operation) {
         return "?";
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_expression_sequence(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *sequence, const char *separator) {
     int index;
 
-    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(sequence); index += 1) {
+    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(sequence); ++index) {
         if (index != 0 && __tinypy_render_text(builder, separator) == 0) {
             return 0;
         }
@@ -402,7 +389,6 @@ static int32_t __tinypy_render_expression_sequence(tinypy_render_builder_t *buil
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_slice(tinypy_render_builder_t *builder, tinypy_ast_slice_t slice) {
     int index;
@@ -429,7 +415,7 @@ static int32_t __tinypy_render_slice(tinypy_render_builder_t *builder, tinypy_as
         }
         return 1;
     case TINYPY_AST_KIND_EXT_SLICE:
-        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(slice->v.ExtSlice.dims); index += 1) {
+        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(slice->v.ExtSlice.dims); ++index) {
             if (index != 0 && __tinypy_render_text(builder, ", ") == 0) {
                 return 0;
             }
@@ -442,19 +428,18 @@ static int32_t __tinypy_render_slice(tinypy_render_builder_t *builder, tinypy_as
         return 0;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_comprehensions(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *generators) {
     int index;
 
-    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(generators); index += 1) {
+    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(generators); ++index) {
         tinypy_ast_comprehension_t generator = (tinypy_ast_comprehension_t)TINYPY_AST_SEQUENCE_GET(generators, index);
         int if_index;
 
         if (__tinypy_render_text(builder, " for ") == 0 || __tinypy_render_expression(builder, generator->target) == 0 || __tinypy_render_text(builder, " in ") == 0 || __tinypy_render_expression(builder, generator->iter) == 0) {
             return 0;
         }
-        for (if_index = 0; if_index < TINYPY_AST_SEQUENCE_LENGTH(generator->ifs); if_index += 1) {
+        for (if_index = 0; if_index < TINYPY_AST_SEQUENCE_LENGTH(generator->ifs); ++if_index) {
             if (__tinypy_render_text(builder, " if ") == 0 || __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(generator->ifs, if_index)) == 0) {
                 return 0;
             }
@@ -462,7 +447,6 @@ static int32_t __tinypy_render_comprehensions(tinypy_render_builder_t *builder, 
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_call(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
     int emitted = 0;
@@ -471,7 +455,7 @@ static int32_t __tinypy_render_call(tinypy_render_builder_t *builder, tinypy_ast
     if (__tinypy_render_expression(builder, expression->v.Call.func) == 0 || __tinypy_render_character(builder, '(') == 0) {
         return 0;
     }
-    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.args); index += 1) {
+    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.args); ++index) {
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
             return 0;
         }
@@ -480,7 +464,7 @@ static int32_t __tinypy_render_call(tinypy_render_builder_t *builder, tinypy_ast
         }
         emitted = 1;
     }
-    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.keywords); index += 1) {
+    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.keywords); ++index) {
         tinypy_ast_keyword_t keyword = (tinypy_ast_keyword_t)TINYPY_AST_SEQUENCE_GET(expression->v.Call.keywords, index);
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
             return 0;
@@ -509,7 +493,6 @@ static int32_t __tinypy_render_call(tinypy_render_builder_t *builder, tinypy_ast
     }
     return __tinypy_render_character(builder, ')');
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
     int index;
@@ -532,7 +515,7 @@ static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tiny
         if (__tinypy_render_character(builder, '(') == 0) {
             return 0;
         }
-        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.BoolOp.values); index += 1) {
+        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.BoolOp.values); ++index) {
             if (index != 0 && __tinypy_render_text(builder, expression->v.BoolOp.op == TINYPY_AST_BOOLEAN_AND ? " and " : " or ") == 0) {
                 return 0;
             }
@@ -567,7 +550,7 @@ static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tiny
         if (__tinypy_render_character(builder, '{') == 0) {
             return 0;
         }
-        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Dict.keys); index += 1) {
+        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Dict.keys); ++index) {
             if (index != 0 && __tinypy_render_text(builder, ", ") == 0) {
                 return 0;
             }
@@ -592,7 +575,7 @@ static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tiny
         if (__tinypy_render_character(builder, '(') == 0 || __tinypy_render_expression(builder, expression->v.Compare.left) == 0) {
             return 0;
         }
-        for (index = 0; index < expression->v.Compare.ops->size; index += 1) {
+        for (index = 0; index < expression->v.Compare.ops->size; ++index) {
             const char *operator_text = __tinypy_render_compare_operator(expression->v.Compare.ops->elements[index]);
             int condition_2 = __tinypy_render_character(builder, ' ') == 0 || __tinypy_render_text(builder, operator_text) == 0;
             if (condition_2 == 0) {
@@ -625,7 +608,6 @@ static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tiny
         return __tinypy_render_fail(builder, "unsupported AST expression in expanded source", expression->lineno, expression->col_offset);
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_arguments(tinypy_render_builder_t *builder, tinypy_ast_arguments_t arguments) {
     int parameter_count = TINYPY_AST_SEQUENCE_LENGTH(arguments->args);
@@ -633,7 +615,7 @@ static int32_t __tinypy_render_arguments(tinypy_render_builder_t *builder, tinyp
     int emitted = 0;
     int index;
 
-    for (index = 0; index < parameter_count; index += 1) {
+    for (index = 0; index < parameter_count; ++index) {
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
             return 0;
         }
@@ -666,7 +648,6 @@ static int32_t __tinypy_render_arguments(tinypy_render_builder_t *builder, tinyp
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_source_map_record_t *__tinypy_render_source_map_record(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement) {
     tinypy_source_map_record_t *record = builder->compile->source_map_records;
@@ -679,36 +660,33 @@ static tinypy_source_map_record_t *__tinypy_render_source_map_record(tinypy_rend
     }
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_statement_sequence(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *sequence, size_t indentation) {
     int index;
 
-    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(sequence); index += 1) {
+    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(sequence); ++index) {
         if (__tinypy_render_statement(builder, (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(sequence, index), indentation) == 0) {
             return 0;
         }
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_decorators(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *decorators, size_t indentation) {
     int index;
 
-    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(decorators); index += 1) {
+    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(decorators); ++index) {
         if (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_character(builder, '@') == 0 || __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(decorators, index)) == 0 || __tinypy_render_character(builder, '\n') == 0) {
             return 0;
         }
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_aliases(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *aliases) {
     int index;
 
-    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(aliases); index += 1) {
+    for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(aliases); ++index) {
         tinypy_ast_alias_t alias = (tinypy_ast_alias_t)TINYPY_AST_SEQUENCE_GET(aliases, index);
         if (index != 0 && __tinypy_render_text(builder, ", ") == 0) {
             return 0;
@@ -722,7 +700,6 @@ static int32_t __tinypy_render_aliases(tinypy_render_builder_t *builder, tinypy_
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement, size_t indentation) {
     tinypy_source_map_record_t *record = __tinypy_render_source_map_record(builder, statement);
@@ -838,7 +815,7 @@ static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinyp
         if (__tinypy_render_text(builder, "try:\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.TryExcept.body, indentation + 1U) == 0) {
             return 0;
         }
-        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(statement->v.TryExcept.handlers); index += 1) {
+        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(statement->v.TryExcept.handlers); ++index) {
             tinypy_ast_exception_handler_t handler = (tinypy_ast_exception_handler_t)TINYPY_AST_SEQUENCE_GET(statement->v.TryExcept.handlers, index);
             if (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_text(builder, "except") == 0 || (handler->v.ExceptHandler.type != NULL && (__tinypy_render_character(builder, ' ') == 0 || __tinypy_render_expression(builder, handler->v.ExceptHandler.type) == 0)) || (handler->v.ExceptHandler.name != NULL && (__tinypy_render_text(builder, " as ") == 0 || __tinypy_render_expression(builder, handler->v.ExceptHandler.name) == 0)) || __tinypy_render_text(builder, ":\n") == 0 || __tinypy_render_statement_sequence(builder, handler->v.ExceptHandler.body, indentation + 1U) == 0) {
                 return 0;
@@ -867,7 +844,7 @@ static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinyp
         if (__tinypy_render_text(builder, "from ") == 0) {
             return 0;
         }
-        for (index = 0; index < statement->v.ImportFrom.level; index += 1) {
+        for (index = 0; index < statement->v.ImportFrom.level; ++index) {
             if (__tinypy_render_character(builder, '.') == 0) {
                 return 0;
             }
@@ -893,7 +870,7 @@ static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinyp
         if (__tinypy_render_text(builder, "global ") == 0) {
             return 0;
         }
-        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(statement->v.Global.names); index += 1) {
+        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(statement->v.Global.names); ++index) {
             if (index != 0 && __tinypy_render_text(builder, ", ") == 0) {
                 return 0;
             }
@@ -927,7 +904,6 @@ static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinyp
     }
     return __tinypy_render_character(builder, '\n');
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_render_flatten(const tinypy_render_builder_t *builder, unsigned char *output) {
     tinypy_render_chunk_t *chunk = builder->head;
@@ -942,7 +918,6 @@ static void __tinypy_render_flatten(const tinypy_render_builder_t *builder, unsi
     }
     assert(offset == builder->size);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_decimal(tinypy_render_builder_t *builder, int32_t value) {
     char reverse[16];
@@ -963,7 +938,6 @@ static int32_t __tinypy_render_decimal(tinypy_render_builder_t *builder, int32_t
     }
     return __tinypy_render_append(builder, output, index);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_render_record_compare(const tinypy_source_map_record_t *left, const tinypy_source_map_record_t *right) {
     if (left->generated_line != right->generated_line) {
@@ -974,7 +948,6 @@ static int __tinypy_render_record_compare(const tinypy_source_map_record_t *left
     }
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compile_ctx_t *ctx) {
     tinypy_source_map_record_t **records;
@@ -993,7 +966,7 @@ static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compil
         records[count++] = record;
     }
     assert(count == ctx->source_map_entries);
-    for (index = 1U; index < count; index += 1U) {
+    for (index = 1U; index < count; ++index) {
         tinypy_source_map_record_t *item = records[index];
         size_t position = index;
         while (position != 0U && __tinypy_render_record_compare(records[position - 1U], item) > 0) {
@@ -1004,7 +977,6 @@ static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compil
     }
     return records;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_ctx_t *ctx, tinypy_ast_module_t module) {
     tinypy_render_builder_t source_builder;
@@ -1053,7 +1025,7 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
     if (__tinypy_render_text(&map_builder, "tinypy-source-map-v1\n") == 0) {
         return NULL;
     }
-    for (index = 0U; index < ctx->source_map_entries; index += 1U) {
+    for (index = 0U; index < ctx->source_map_entries; ++index) {
         size_t symbol_size;
         const void *symbol = tinypy_string_view(records[index]->symbol, &symbol_size);
         if (__tinypy_render_decimal(&map_builder, records[index]->generated_line) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->generated_column) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->template_line) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->template_column) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->expansion_line) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->expansion_column) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_append(&map_builder, symbol, symbol_size) == 0 || __tinypy_render_character(&map_builder, '\n') == 0) {
@@ -1089,7 +1061,7 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
     __tinypy_render_flatten(&map_builder, cursor);
     cursor[map_builder.size] = 0U;
     cursor += map_builder.size + 1U;
-    for (index = 0U; index < ctx->source_map_entries; index += 1U) {
+    for (index = 0U; index < ctx->source_map_entries; ++index) {
         tinypy_source_map_entry_t *entry = &result->entries[index];
         size_t symbol_size;
         const void *symbol = tinypy_string_view(records[index]->symbol, &symbol_size);
@@ -1113,7 +1085,6 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
     tinypy_sha256_digest(result->source_map, result->source_map_size, result->source_map_digest);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_preprocess_result_destroy(tinypy_preprocess_result_t *result) {
     tinypy_vm_t *vm;
@@ -1125,7 +1096,6 @@ void tinypy_preprocess_result_destroy(tinypy_preprocess_result_t *result) {
     result->state = 0U;
     tinypy_internal_vm_deallocate(vm, result, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_COMPILER_DATA);
 }
-
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_preprocess_result_expanded_source(const tinypy_preprocess_result_t *result, size_t *out_size) {
     assert(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);

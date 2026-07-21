@@ -18,6 +18,7 @@ INTERNAL_CORE_UNITS = {
     "constructors",
     "container_methods",
     "functools",
+    "pool",
     "sre",
     "string_methods",
     "struct",
@@ -100,7 +101,7 @@ class PublicApiNamingTests(unittest.TestCase):
         proxies = tuple(sorted(INCLUDE.glob("*.hpp")))
         self.assertEqual(tuple(path.name for path in proxies), ("tinypy.hpp",))
         text = proxies[0].read_text(encoding="utf-8")
-        self.assertIn('extern "C" {', text)
+        self.assertRegex(text, r'extern\s+"C"\s*\{')
         self.assertIn('#include "tinypy/tinypy.h"', text)
 
     def test_tinypy_header_aggregates_the_entire_c_api(self) -> None:
@@ -181,6 +182,7 @@ class PublicApiNamingTests(unittest.TestCase):
             {
                 "tinypy_vm_destroy",
                 "tinypy_none_get",
+                "tinypy_not_implemented_get",
                 "tinypy_bool_from_i32",
                 "tinypy_integer_from_i64",
                 "tinypy_string_from_bytes",
@@ -190,6 +192,7 @@ class PublicApiNamingTests(unittest.TestCase):
                 "tinypy_float_from_double",
                 "tinypy_complex_from_doubles",
                 "tinypy_tuple_from_items",
+                "tinypy_tuple_new",
                 "tinypy_list_from_items",
                 "tinypy_dict_new",
                 "tinypy_type_new",
@@ -201,6 +204,7 @@ class PublicApiNamingTests(unittest.TestCase):
                 "tinypy_marshal_load_code_v2",
                 "tinypy_module_new",
                 "tinypy_native_function_new",
+                "tinypy_native_type_new",
                 "tinypy_output_emit",
                 "tinypy_compile_source",
                 "tinypy_preprocess_source",
@@ -212,8 +216,15 @@ class PublicApiNamingTests(unittest.TestCase):
                 "tinypy_vm_builtins",
                 "tinypy_vm_current_frame",
                 "tinypy_vm_handled_exception",
+                "tinypy_vm_has_error",
+                "tinypy_vm_clear_error",
+                "tinypy_vm_raise_error",
                 "tinypy_vm_modules",
+                "tinypy_vm_module_finder",
+                "tinypy_vm_set_module_finder",
                 "tinypy_vm_raised_exception",
+                "tinypy_vm_raised_exception_type",
+                "tinypy_vm_raised_traceback",
             },
         )
 
@@ -223,16 +234,16 @@ class PublicApiNamingTests(unittest.TestCase):
             self.assertNotIn("OUT_OF_MEMORY", text, header.name)
 
     def test_refcount_max_is_an_assertion_not_an_immortal_sentinel(self) -> None:
-        value_source = (ROOT / "src/core/value.c").read_text(encoding="utf-8")
+        internal_header = (ROOT / "src/core/internal.h").read_text(encoding="utf-8")
         vm_source = (ROOT / "src/core/vm.c").read_text(encoding="utf-8")
 
         self.assertIn(
-            "assert(value->ref != PTRDIFF_MAX);",
-            value_source,
+            "assert(TINYPY_REFCNT(__tinypy_incref_value) < PTRDIFF_MAX);",
+            internal_header,
         )
         self.assertNotIn(
-            "if (value->ref == PTRDIFF_MAX)",
-            value_source,
+            "if (TINYPY_REFCNT(__tinypy_incref_value) == PTRDIFF_MAX)",
+            internal_header,
         )
         self.assertNotRegex(
             vm_source,
@@ -249,7 +260,7 @@ class PublicApiNamingTests(unittest.TestCase):
         long_body = long_source.split("int64_t tinypy_long_as_i64(", 1)[1]
         long_body = long_body.split("\n}", 1)[0]
         self.assertIn(
-            "assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));",
+            "assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));",
             long_body,
         )
         self.assertIn("assert(magnitude <= (UINT64_MAX >> 15U));", long_body)
@@ -259,12 +270,8 @@ class PublicApiNamingTests(unittest.TestCase):
 
         release_body = value_source.split("void tinypy_release(tinypy_value_t *value)", 1)[1]
         release_body = release_body.split("\n}\n", 1)[0]
-        self.assertLess(
-            release_body.index("if (value->ref != 0U)"),
-            release_body.index("vm = tinypy_internal_value_vm(value);"),
-        )
-        self.assertNotIn("tinypy_internal_value_release", value_source)
-        self.assertNotIn("tinypy_internal_value_release", internal_header)
+        self.assertIn("TINYPY_DECREF(value);", release_body)
+        self.assertNotIn("tinypy_internal_value_release(value)", value_source)
 
     def test_comparison_recursion_is_a_debug_contract(self) -> None:
         public_header = public_api_text()
@@ -406,15 +413,9 @@ class PublicApiNamingTests(unittest.TestCase):
             ("src/core/value.c", "tinypy_value_t *tinypy_internal_object_allocate("),
             ("src/core/value.c", "void tinypy_internal_value_destroy("),
             ("src/core/error.c", "void tinypy_internal_make_vm_error("),
-            ("src/core/list.c", "static void __tinypy_internal_list_validate("),
             (
                 "src/core/tuple.c",
                 "tinypy_value_t *tinypy_internal_tuple_from_borrowed_items(",
-            ),
-            ("src/core/dict.c", "static void __tinypy_internal_dict_validate("),
-            (
-                "src/core/type.c",
-                "static tinypy_instance_object_t *__tinypy_internal_instance_validate(",
             ),
         )
 
@@ -454,7 +455,7 @@ class PublicApiNamingTests(unittest.TestCase):
         self.assertIn("float_zero_object", internal_header)
         self.assertIn("empty_string_object", internal_header)
         self.assertIn("empty_tuple_object", internal_header)
-        self.assertIn("value >= TINYPY_INTEGER_CONSTANT_MIN", value_source)
+        self.assertIn("value >= TINYPY_INTEGER_CONSTANT_MIN", internal_header)
         self.assertIn("size == 0U", value_source)
         self.assertIn("value == 0.0 && signbit(value) == 0", numeric_source)
         self.assertIn("result = &vm->empty_tuple_object.base.base", tuple_source)
@@ -469,7 +470,10 @@ class PublicApiNamingTests(unittest.TestCase):
                 if path.suffix not in STATIC_FUNCTION_SUFFIXES:
                     continue
                 text = path.read_text(encoding="utf-8")
+                text = re.sub(r"^\s*#define[^\n]*(?:\\\n[^\n]*)*", "", text, flags=re.MULTILINE)
                 for match in declaration.finditer(text):
+                    if "##" in match.group(0):
+                        continue
                     name = match.group(1)
                     self.assertTrue(
                         name.startswith("__"),

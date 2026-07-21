@@ -19,7 +19,6 @@ static void __tinypy_frontend_init_error(tinypy_parser_error_detail_t *error, co
     error->token = -1;
     error->expected = -1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char *begin, const char *end) {
     size_t size = begin != NULL && end != NULL ? (size_t)(end - begin) : 0U;
@@ -36,7 +35,6 @@ static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char 
     copy[size] = '\0';
     return copy;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const char *source, size_t source_size, const char *filename, const tinypy_parser_grammar_t *g, int start, tinypy_parser_error_detail_t *error, int *flags) {
     tinypy_tokenizer_t *tok;

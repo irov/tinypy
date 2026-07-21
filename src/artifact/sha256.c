@@ -27,7 +27,6 @@ static const uint32_t tinypy_sha256_round_constants[64] = {
 static uint32_t __tinypy_sha256_read_u32_be(const uint8_t *data) {
     return ((uint32_t)data[0] << 24U) | ((uint32_t)data[1] << 16U) | ((uint32_t)data[2] << 8U) | (uint32_t)data[3];
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_sha256_write_u32_be(uint8_t *data, uint32_t value) {
     data[0] = (uint8_t)(value >> 24U);
@@ -35,7 +34,6 @@ static void __tinypy_sha256_write_u32_be(uint8_t *data, uint32_t value) {
     data[2] = (uint8_t)(value >> 8U);
     data[3] = (uint8_t)value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_sha256_transform(tinypy_sha256_context_t *context, const uint8_t block[64]) {
     uint32_t words[64];
@@ -97,7 +95,6 @@ static void __tinypy_sha256_transform(tinypy_sha256_context_t *context, const ui
     context->state[6] += g;
     context->state[7] += h;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_sha256_initialize(tinypy_sha256_context_t *context) {
     context->state[0] = UINT32_C(0x6a09e667);
@@ -111,7 +108,6 @@ void tinypy_sha256_initialize(tinypy_sha256_context_t *context) {
     context->total_size = UINT64_C(0);
     context->block_size = 0U;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_sha256_update(tinypy_sha256_context_t *context, const void *data, size_t size) {
     const uint8_t *bytes = (const uint8_t *)data;
@@ -147,7 +143,6 @@ void tinypy_sha256_update(tinypy_sha256_context_t *context, const void *data, si
         context->block_size = size;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_sha256_finalize(tinypy_sha256_context_t *context, uint8_t digest[32]) {
     uint64_t bit_size = context->total_size * UINT64_C(8);
@@ -178,7 +173,6 @@ void tinypy_sha256_finalize(tinypy_sha256_context_t *context, uint8_t digest[32]
 
     (void)memset(context, 0, sizeof(*context));
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_sha256_digest(const void *data, size_t size, uint8_t digest[32]) {
     tinypy_sha256_context_t context;

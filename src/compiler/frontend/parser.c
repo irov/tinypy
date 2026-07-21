@@ -52,26 +52,19 @@ static int __tinypy_frontend_stack_push(register tinypy_parser_stack_t *s, const
     top->state_index = 0;
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_frontend_stack_pop(register tinypy_parser_stack_t *s) {
     assert(!TINYPY_PARSER_STACK_EMPTY(s));
     s->top++;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static const tinypy_parser_dfa_t *__tinypy_frontend_find_dfa(const tinypy_parser_grammar_t *g, int type) {
-    int index;
+    int index = type - g->rules[0].symbol;
 
-    for (index = 0; index < g->rule_count; index++) {
-        if (g->rules[index].symbol == type) {
-            return &g->rules[index];
-        }
-    }
-    assert(0 && "parser tinypy_parser_grammar_t does not contain requested DFA");
-    return NULL;
+    assert(index >= 0 && index < g->rule_count);
+    assert(g->rules[index].symbol == type);
+    return &g->rules[index];
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_frontend_state_accepts(const tinypy_parser_dfa_state_t *s) {
     int index;
@@ -83,7 +76,6 @@ static int __tinypy_frontend_state_accepts(const tinypy_parser_dfa_state_t *s) {
     }
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_frontend_state_expected(const tinypy_parser_grammar_t *g, const tinypy_parser_dfa_state_t *s) {
     int expected = -1;
@@ -107,7 +99,6 @@ static int __tinypy_frontend_state_expected(const tinypy_parser_grammar_t *g, co
     }
     return expected;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_frontend_state_transition(const tinypy_parser_grammar_t *g, const tinypy_parser_dfa_state_t *s, int ilabel, int *arrow, const tinypy_parser_dfa_t **push_dfa, int *push_type) {
     int index;
@@ -169,7 +160,6 @@ tinypy_parser_t *tinypy_internal_parser_new(tinypy_compile_ctx_t *ctx, const tin
                                        ps->tree);
     return ps;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_parser_release(tinypy_parser_t *ps) {
     /* NB If you want to save the parse tree,
@@ -191,7 +181,6 @@ static int __tinypy_frontend_shift(register tinypy_parser_stack_t *s, int type, 
     s->top->state_index = newstate;
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_frontend_push(register tinypy_parser_stack_t *s, int type, const tinypy_parser_dfa_t *d, int newstate, int lineno, int col_offset) {
     int err;
@@ -209,41 +198,158 @@ static int __tinypy_frontend_push(register tinypy_parser_stack_t *s, int type, c
 /* PARSER PROPER */
 
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_classify(tinypy_parser_t *ps, int type, char *str) {
-    const tinypy_parser_grammar_t *g = ps->grammar;
-    register int n = g->labels.count;
-
-    if (type == TINYPY_TOKEN_NAME) {
-        register char *s = str;
-        register const tinypy_parser_label_t *l = g->labels.items;
-        register int i;
-        for (i = n; i > 0; i--, l++) {
-            if (l->token_type != TINYPY_TOKEN_NAME || l->text == NULL || l->text[0] != s[0] || strcmp(l->text, s) != 0) {
-                continue;
-            }
-            if (ps->flags & TINYPY_CODE_FUTURE_PRINT_FUNCTION && s[0] == 'p' && strcmp(s, "print") == 0) {
-                break; /* no longer a keyword */
-            }
-            TINYPY_PARSER_TRACE("It's a keyword\n");
-            return n - i;
+static int __tinypy_frontend_keyword_label(const char *text) {
+    switch (text[0]) {
+    case 'a':
+        if (strcmp(text, "and") == 0) {
+            return 114;
         }
-    }
-
-    {
-        register const tinypy_parser_label_t *l = g->labels.items;
-        register int i;
-        for (i = n; i > 0; i--, l++) {
-            if (l->token_type == type && l->text == NULL) {
-                TINYPY_PARSER_TRACE("It's a token we know\n");
-                return n - i;
-            }
+        if (strcmp(text, "as") == 0) {
+            return 80;
         }
+        if (strcmp(text, "assert") == 0) {
+            return 86;
+        }
+        break;
+    case 'b':
+        if (strcmp(text, "break") == 0) {
+            return 68;
+        }
+        break;
+    case 'c':
+        if (strcmp(text, "class") == 0) {
+            return 161;
+        }
+        if (strcmp(text, "continue") == 0) {
+            return 69;
+        }
+        break;
+    case 'd':
+        if (strcmp(text, "def") == 0) {
+            return 20;
+        }
+        if (strcmp(text, "del") == 0) {
+            return 60;
+        }
+        break;
+    case 'e':
+        if (strcmp(text, "elif") == 0) {
+            return 93;
+        }
+        if (strcmp(text, "else") == 0) {
+            return 94;
+        }
+        if (strcmp(text, "except") == 0) {
+            return 102;
+        }
+        if (strcmp(text, "exec") == 0) {
+            return 83;
+        }
+        break;
+    case 'f':
+        if (strcmp(text, "finally") == 0) {
+            return 99;
+        }
+        if (strcmp(text, "for") == 0) {
+            return 96;
+        }
+        if (strcmp(text, "from") == 0) {
+            return 76;
+        }
+        break;
+    case 'g':
+        if (strcmp(text, "global") == 0) {
+            return 82;
+        }
+        break;
+    case 'i':
+        if (strcmp(text, "if") == 0) {
+            return 92;
+        }
+        if (strcmp(text, "import") == 0) {
+            return 74;
+        }
+        if (strcmp(text, "in") == 0) {
+            return 85;
+        }
+        if (strcmp(text, "is") == 0) {
+            return 125;
+        }
+        break;
+    case 'l':
+        if (strcmp(text, "lambda") == 0) {
+            return 109;
+        }
+        break;
+    case 'n':
+        if (strcmp(text, "not") == 0) {
+            return 115;
+        }
+        break;
+    case 'o':
+        if (strcmp(text, "or") == 0) {
+            return 112;
+        }
+        break;
+    case 'p':
+        if (strcmp(text, "pass") == 0) {
+            return 62;
+        }
+        if (strcmp(text, "print") == 0) {
+            return 58;
+        }
+        break;
+    case 'r':
+        if (strcmp(text, "raise") == 0) {
+            return 71;
+        }
+        if (strcmp(text, "return") == 0) {
+            return 70;
+        }
+        break;
+    case 't':
+        if (strcmp(text, "try") == 0) {
+            return 97;
+        }
+        break;
+    case 'w':
+        if (strcmp(text, "while") == 0) {
+            return 95;
+        }
+        if (strcmp(text, "with") == 0) {
+            return 100;
+        }
+        break;
+    case 'y':
+        if (strcmp(text, "yield") == 0) {
+            return 168;
+        }
+        break;
+    default:
+        break;
     }
-
-    TINYPY_PARSER_TRACE("Illegal token\n");
     return -1;
 }
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_frontend_classify(tinypy_parser_t *ps, int type, char *str) {
+    static const int16_t token_labels[TINYPY_TOKEN_COUNT] = {
+        7, 21, 154, 155, 2, 103, 104, 13, 15, 146, 148, 23, 29, 34,
+        135, 136, 30, 138, 127, 131, 118, 119, 27, 77, 139, 152, 149,
+        151, 120, 124, 122, 121, 141, 129, 133, 59, 31, 46, 47, 48, 49,
+        50, 51, 52, 53, 54, 55, 56, 140, 57, 11, -1, -1};
 
+    if (type == TINYPY_TOKEN_NAME) {
+        int keyword_label = __tinypy_frontend_keyword_label(str);
+
+        if (keyword_label >= 0 && !(keyword_label == 58 && (ps->flags & TINYPY_CODE_FUTURE_PRINT_FUNCTION) != 0U)) {
+            return keyword_label;
+        }
+    }
+    if (type >= 0 && type < TINYPY_TOKEN_COUNT) {
+        return token_labels[type];
+    }
+    return -1;
+}
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_frontend_future_hack(tinypy_parser_t *ps) {
     tinypy_cst_node_t *n = ps->stack.top->parent;
@@ -288,7 +394,6 @@ static void __tinypy_frontend_future_hack(tinypy_parser_t *ps) {
         }
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 int tinypy_internal_parser_add_token(register tinypy_parser_t *ps, register int type, char *str, int lineno, int col_offset, int *expected_ret) {
     register int ilabel;

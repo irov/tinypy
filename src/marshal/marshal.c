@@ -169,7 +169,6 @@ static size_t __tinypy_marshal_cstring_size(const char *text) {
 
     return size;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_set_error_direct(tinypy_marshal_error_t *error, tinypy_marshal_result_e code, size_t offset, uint8_t wire_type, const char *message) {
     if (error == NULL) {
@@ -187,7 +186,6 @@ static void __tinypy_marshal_set_error_direct(tinypy_marshal_error_t *error, tin
     error->message = message;
     error->message_size = __tinypy_marshal_cstring_size(message);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_parser_fail(tinypy_marshal_parser_t *parser, tinypy_marshal_result_e code, size_t offset, const char *message) {
     if (parser->result != TINYPY_MARSHAL_OK) {
@@ -205,13 +203,11 @@ static void __tinypy_marshal_parser_fail(tinypy_marshal_parser_t *parser, tinypy
         parser->error->object_index = parser->objects_seen - 1U;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_limits_valid(const tinypy_marshal_limits_t *limits) {
     assert(limits != NULL);
     return limits->abi_version == TINYPY_MARSHAL_ABI_VERSION && limits->struct_size >= (uint32_t)sizeof(*limits) && limits->max_input_bytes != 0U && limits->max_allocated_bytes != 0U && limits->max_depth != 0U && limits->max_objects != 0U && limits->max_string_bytes != 0U && limits->max_container_items != 0U;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_marshal_limits_init(tinypy_marshal_limits_t *limits) {
     assert(limits != NULL);
@@ -226,7 +222,6 @@ void tinypy_marshal_limits_init(tinypy_marshal_limits_t *limits) {
     limits->max_string_bytes = TINYPY_MARSHAL_DEFAULT_STRING_BYTES;
     limits->max_container_items = TINYPY_MARSHAL_DEFAULT_CONTAINER_ITEMS;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_marshal_write_options_init(tinypy_marshal_write_options_t *options) {
     assert(options != NULL);
@@ -237,7 +232,6 @@ void tinypy_marshal_write_options_init(tinypy_marshal_write_options_t *options) 
     options->max_output_bytes = TINYPY_MARSHAL_DEFAULT_INPUT_BYTES;
     options->max_depth = TINYPY_MARSHAL_DEFAULT_DEPTH;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_multiply_size(size_t left, size_t right, size_t *out) {
     if (left != 0U && right > SIZE_MAX / left) {
@@ -246,7 +240,6 @@ static int __tinypy_marshal_multiply_size(size_t left, size_t right, size_t *out
     *out = left * right;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void *__tinypy_marshal_graph_allocate(tinypy_marshal_parser_t *parser, size_t payload_size) {
     tinypy_marshal_document_t *document = parser->document;
@@ -285,7 +278,6 @@ static void *__tinypy_marshal_graph_allocate(tinypy_marshal_parser_t *parser, si
     (void)memset((void *)(allocation + 1), 0, payload_size);
     return (void *)(allocation + 1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_object_t *__tinypy_marshal_object_allocate(tinypy_marshal_parser_t *parser, tinypy_marshal_type_e type, uint8_t wire_type) {
     tinypy_marshal_object_t *object =
@@ -297,7 +289,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_object_allocate(tinypy_marshal_
     }
     return object;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static unsigned char *__tinypy_marshal_graph_copy(tinypy_marshal_parser_t *parser, const unsigned char *source, size_t size) {
     unsigned char *copy;
@@ -311,7 +302,6 @@ static unsigned char *__tinypy_marshal_graph_copy(tinypy_marshal_parser_t *parse
     }
     return copy;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_take(tinypy_marshal_parser_t *parser, size_t count, const unsigned char **out_bytes) {
     if (count > parser->size - parser->offset) {
@@ -327,7 +317,6 @@ static int __tinypy_marshal_take(tinypy_marshal_parser_t *parser, size_t count, 
     parser->offset += count;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_read_u8(tinypy_marshal_parser_t *parser, uint8_t *out_value) {
     const unsigned char *bytes;
@@ -337,7 +326,6 @@ static int __tinypy_marshal_read_u8(tinypy_marshal_parser_t *parser, uint8_t *ou
     *out_value = bytes[0];
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_read_u16(tinypy_marshal_parser_t *parser, uint16_t *out_value) {
     const unsigned char *bytes;
@@ -347,7 +335,6 @@ static int __tinypy_marshal_read_u16(tinypy_marshal_parser_t *parser, uint16_t *
     *out_value = (uint16_t)((uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8U));
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_read_u32(tinypy_marshal_parser_t *parser, uint32_t *out_value) {
     const unsigned char *bytes;
@@ -358,7 +345,6 @@ static int __tinypy_marshal_read_u32(tinypy_marshal_parser_t *parser, uint32_t *
         (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8U) | ((uint32_t)bytes[2] << 16U) | ((uint32_t)bytes[3] << 24U);
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_marshal_u32_as_i32(uint32_t value) {
     if (value <= (uint32_t)INT32_MAX) {
@@ -366,7 +352,6 @@ static int32_t __tinypy_marshal_u32_as_i32(uint32_t value) {
     }
     return INT32_MIN + (int32_t)(value - UINT32_C(0x80000000));
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_read_i32(tinypy_marshal_parser_t *parser, int32_t *out_value) {
     uint32_t value;
@@ -376,7 +361,6 @@ static int __tinypy_marshal_read_i32(tinypy_marshal_parser_t *parser, int32_t *o
     *out_value = __tinypy_marshal_u32_as_i32(value);
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_read_i64(tinypy_marshal_parser_t *parser, int64_t *out_value) {
     uint32_t low;
@@ -395,7 +379,6 @@ static int __tinypy_marshal_read_i64(tinypy_marshal_parser_t *parser, int64_t *o
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_read_size32(tinypy_marshal_parser_t *parser, size_t *out_size, const char *description) {
     int32_t value;
@@ -415,7 +398,6 @@ static int __tinypy_marshal_read_size32(tinypy_marshal_parser_t *parser, size_t 
     *out_size = (size_t)value;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_utf8_validate(const unsigned char *bytes, size_t size, size_t *out_code_points) {
     size_t index = 0U;
@@ -471,14 +453,12 @@ static int __tinypy_marshal_utf8_validate(const unsigned char *bytes, size_t siz
     *out_code_points = count;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static double __tinypy_marshal_double_from_bits(uint64_t bits) {
     double result = 0.0;
     (void)memcpy(&result, &bits, sizeof(result));
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_binary_double(const unsigned char *bytes, double *out_value) {
     uint64_t bits = 0U;
@@ -493,7 +473,6 @@ static int __tinypy_marshal_binary_double(const unsigned char *bytes, double *ou
     *out_value = __tinypy_marshal_double_from_bits(bits);
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_ascii_equal(const unsigned char *bytes, size_t size, const char *text) {
     size_t index;
@@ -513,7 +492,6 @@ static int __tinypy_marshal_ascii_equal(const unsigned char *bytes, size_t size,
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_text_double(const unsigned char *bytes, size_t size, double *out_value) {
     size_t index = 0U;
@@ -614,7 +592,6 @@ static int __tinypy_marshal_text_double(const unsigned char *bytes, size_t size,
     *out_value = (double)(negative ? -value : value);
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_intern_append(tinypy_marshal_parser_t *parser, tinypy_marshal_object_t *object) {
     tinypy_marshal_document_t *document = parser->document;
@@ -643,7 +620,6 @@ static int __tinypy_marshal_intern_append(tinypy_marshal_parser_t *parser, tinyp
     document->intern_count += 1U;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_object_t *__tinypy_marshal_intern_get(const tinypy_marshal_document_t *document, size_t index) {
     const tinypy_marshal_intern_chunk_t *chunk = document->intern_first;
@@ -728,7 +704,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_string(tinypy_marshal_par
     }
     return object;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_object_t *__tinypy_marshal_parse_long(tinypy_marshal_parser_t *parser, uint8_t wire_type) {
     int32_t signed_count;
@@ -804,7 +779,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_long(tinypy_marshal_parse
     object->as.long_value.digits = digits;
     return object;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_object_t *__tinypy_marshal_parse_sequence(tinypy_marshal_parser_t *parser, uint8_t wire_type, tinypy_marshal_type_e type) {
     size_t count;
@@ -864,7 +838,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_sequence(tinypy_marshal_p
     }
     return object;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_object_t *__tinypy_marshal_parse_dict(tinypy_marshal_parser_t *parser, uint8_t wire_type) {
     tinypy_marshal_object_t *object =
@@ -926,7 +899,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_dict(tinypy_marshal_parse
         object->as.dict_value.count += 1U;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_tuple_of_bytes(const tinypy_marshal_object_t *object) {
     size_t index;
@@ -941,12 +913,10 @@ static int __tinypy_marshal_tuple_of_bytes(const tinypy_marshal_object_t *object
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_code_fields_valid(const tinypy_marshal_code_t *code) {
     return code->argcount >= 0 && code->nlocals >= 0 && code->stacksize >= 0 && code->firstlineno >= 0 && code->bytecode != NULL && code->bytecode->type == TINYPY_MARSHAL_TYPE_BYTES && code->consts != NULL && code->consts->type == TINYPY_MARSHAL_TYPE_TUPLE && __tinypy_marshal_tuple_of_bytes(code->names) && __tinypy_marshal_tuple_of_bytes(code->varnames) && __tinypy_marshal_tuple_of_bytes(code->freevars) && __tinypy_marshal_tuple_of_bytes(code->cellvars) && code->filename != NULL && code->filename->type == TINYPY_MARSHAL_TYPE_BYTES && code->name != NULL && code->name->type == TINYPY_MARSHAL_TYPE_BYTES && code->lnotab != NULL && code->lnotab->type == TINYPY_MARSHAL_TYPE_BYTES;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_object_t *__tinypy_marshal_parse_code(tinypy_marshal_parser_t *parser, uint8_t wire_type, size_t code_offset) {
     tinypy_marshal_object_t *object =
@@ -1007,7 +977,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_code(tinypy_marshal_parse
     }
     return object;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_object_t *__tinypy_marshal_parse_object(tinypy_marshal_parser_t *parser, int *out_is_null) {
     size_t object_offset = parser->offset;
@@ -1255,7 +1224,6 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_object(tinypy_marshal_par
     parser->depth -= 1U;
     return object;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_marshal_result_e tinypy_marshal_read_v2(const void *bytes, size_t size, const tinypy_allocator_t *allocator, const tinypy_marshal_limits_t *limits, tinypy_marshal_document_t **out_document, tinypy_marshal_error_t *out_error) {
     tinypy_marshal_limits_t effective_limits;
@@ -1369,7 +1337,6 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(const void *bytes, size_t size, c
     *out_document = document;
     return TINYPY_MARSHAL_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_writer_fail(tinypy_marshal_writer_t *writer, tinypy_marshal_result_e result, const char *message) {
     if (writer->result != TINYPY_MARSHAL_OK) {
@@ -1387,7 +1354,6 @@ static void __tinypy_marshal_writer_fail(tinypy_marshal_writer_t *writer, tinypy
         writer->error->object_index = writer->current_object_index;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_writer_put(tinypy_marshal_writer_t *writer, const unsigned char *bytes, size_t size) {
     if (size > writer->max_output_bytes - writer->offset) {
@@ -1412,12 +1378,10 @@ static int __tinypy_marshal_writer_put(tinypy_marshal_writer_t *writer, const un
     writer->offset += size;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_writer_byte(tinypy_marshal_writer_t *writer, uint8_t value) {
     return __tinypy_marshal_writer_put(writer, &value, 1U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_writer_u16(tinypy_marshal_writer_t *writer, uint16_t value) {
     unsigned char bytes[2];
@@ -1425,7 +1389,6 @@ static int __tinypy_marshal_writer_u16(tinypy_marshal_writer_t *writer, uint16_t
     bytes[1] = (unsigned char)((value >> 8U) & UINT16_C(0xff));
     return __tinypy_marshal_writer_put(writer, bytes, sizeof(bytes));
 }
-
 //////////////////////////////////////////////////////////////////////////
 static uint32_t __tinypy_marshal_i32_as_u32(int32_t value) {
     if (value >= 0) {
@@ -1433,7 +1396,6 @@ static uint32_t __tinypy_marshal_i32_as_u32(int32_t value) {
     }
     return UINT32_MAX - (uint32_t)(-(int64_t)(value + 1));
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_writer_i32(tinypy_marshal_writer_t *writer, int32_t value) {
     uint32_t bits = __tinypy_marshal_i32_as_u32(value);
@@ -1444,7 +1406,6 @@ static int __tinypy_marshal_writer_i32(tinypy_marshal_writer_t *writer, int32_t 
     bytes[3] = (unsigned char)((bits >> 24U) & UINT32_C(0xff));
     return __tinypy_marshal_writer_put(writer, bytes, sizeof(bytes));
 }
-
 //////////////////////////////////////////////////////////////////////////
 static uint64_t __tinypy_marshal_i64_as_u64(int64_t value) {
     if (value >= 0) {
@@ -1452,7 +1413,6 @@ static uint64_t __tinypy_marshal_i64_as_u64(int64_t value) {
     }
     return UINT64_MAX - (uint64_t)(-(value + 1));
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_writer_i64(tinypy_marshal_writer_t *writer, int64_t value) {
     uint64_t bits = __tinypy_marshal_i64_as_u64(value);
@@ -1463,7 +1423,6 @@ static int __tinypy_marshal_writer_i64(tinypy_marshal_writer_t *writer, int64_t 
     }
     return __tinypy_marshal_writer_put(writer, bytes, sizeof(bytes));
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_writer_size32(tinypy_marshal_writer_t *writer, size_t size) {
     if (size > (size_t)INT32_MAX) {
@@ -1475,7 +1434,6 @@ static int __tinypy_marshal_writer_size32(tinypy_marshal_writer_t *writer, size_
     }
     return __tinypy_marshal_writer_i32(writer, (int32_t)size);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_writer_binary_double(tinypy_marshal_writer_t *writer, double value) {
     uint64_t bits;
@@ -1495,7 +1453,6 @@ static int __tinypy_marshal_writer_binary_double(tinypy_marshal_writer_t *writer
     }
     return __tinypy_marshal_writer_put(writer, bytes, sizeof(bytes));
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_intern_index(const tinypy_marshal_document_t *document, const tinypy_marshal_object_t *object, size_t *out_index) {
     const tinypy_marshal_intern_chunk_t *chunk = document->intern_first;
@@ -1552,7 +1509,6 @@ static int __tinypy_marshal_write_bytes_object(tinypy_marshal_writer_t *writer, 
 
     return __tinypy_marshal_writer_size32(writer, size) && __tinypy_marshal_writer_put(writer, bytes, size);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_write_sequence(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object, uint8_t wire_type) {
     size_t index;
@@ -1568,7 +1524,6 @@ static int __tinypy_marshal_write_sequence(tinypy_marshal_writer_t *writer, cons
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_write_dict(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object) {
     const tinypy_marshal_dict_entry_t *entry = object->as.dict_value.first;
@@ -1593,7 +1548,6 @@ static int __tinypy_marshal_write_dict(tinypy_marshal_writer_t *writer, const ti
     }
     return __tinypy_marshal_writer_byte(writer, TYPE_NULL);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_write_code(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object) {
     const tinypy_marshal_code_t *code = &object->as.code_value;
@@ -1607,7 +1561,6 @@ static int __tinypy_marshal_write_code(tinypy_marshal_writer_t *writer, const ti
     }
     return __tinypy_marshal_writer_byte(writer, TYPE_CODE) && __tinypy_marshal_writer_i32(writer, code->argcount) && __tinypy_marshal_writer_i32(writer, code->nlocals) && __tinypy_marshal_writer_i32(writer, code->stacksize) && __tinypy_marshal_writer_i32(writer, code->flags) && __tinypy_marshal_write_object(writer, code->bytecode) && __tinypy_marshal_write_object(writer, code->consts) && __tinypy_marshal_write_object(writer, code->names) && __tinypy_marshal_write_object(writer, code->varnames) && __tinypy_marshal_write_object(writer, code->freevars) && __tinypy_marshal_write_object(writer, code->cellvars) && __tinypy_marshal_write_object(writer, code->filename) && __tinypy_marshal_write_object(writer, code->name) && __tinypy_marshal_writer_i32(writer, code->firstlineno) && __tinypy_marshal_write_object(writer, code->lnotab);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_marshal_write_object(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object) {
     size_t object_index = writer->object_count;
@@ -1807,7 +1760,6 @@ static int __tinypy_marshal_write_object(tinypy_marshal_writer_t *writer, const 
     writer->depth -= 1U;
     return result && writer->result == TINYPY_MARSHAL_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_result_e __tinypy_marshal_writer_run(const tinypy_marshal_document_t *document, unsigned char *buffer, size_t capacity, const tinypy_marshal_write_options_t *options, size_t *out_size, tinypy_marshal_error_t *out_error) {
     tinypy_marshal_writer_t writer;
@@ -1834,7 +1786,6 @@ static tinypy_marshal_result_e __tinypy_marshal_writer_run(const tinypy_marshal_
     *out_size = writer.offset;
     return TINYPY_MARSHAL_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_marshal_result_e tinypy_marshal_write_v2(const tinypy_marshal_document_t *document, void *buffer, size_t capacity, size_t *out_size, const tinypy_marshal_write_options_t *options, tinypy_marshal_error_t *out_error) {
     tinypy_marshal_write_options_t effective_options;
@@ -1904,7 +1855,6 @@ tinypy_marshal_result_e tinypy_marshal_write_v2(const tinypy_marshal_document_t 
         out_size,
         out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_marshal_document_destroy(tinypy_marshal_document_t *document) {
     tinypy_allocator_t allocator;
@@ -1932,61 +1882,52 @@ void tinypy_marshal_document_destroy(tinypy_marshal_document_t *document) {
         TINYPY_MARSHAL_ALIGNMENT,
         (uint32_t)TINYPY_MARSHAL_ALLOC_TAG_DOCUMENT);
 }
-
 //////////////////////////////////////////////////////////////////////////
 const tinypy_marshal_object_t *tinypy_marshal_document_root(const tinypy_marshal_document_t *document) {
     assert(document != NULL);
     assert(document->state == TINYPY_MARSHAL_DOCUMENT_LIVE);
     return document->root;
 }
-
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_marshal_document_input_size(const tinypy_marshal_document_t *document) {
     assert(document != NULL);
     assert(document->state == TINYPY_MARSHAL_DOCUMENT_LIVE);
     return document->input_size;
 }
-
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_marshal_document_object_count(const tinypy_marshal_document_t *document) {
     assert(document != NULL);
     assert(document->state == TINYPY_MARSHAL_DOCUMENT_LIVE);
     return document->object_count;
 }
-
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_marshal_document_allocated_bytes(const tinypy_marshal_document_t *document) {
     assert(document != NULL);
     assert(document->state == TINYPY_MARSHAL_DOCUMENT_LIVE);
     return document->allocated_bytes;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_marshal_type_e tinypy_marshal_object_type(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     return object->type;
 }
-
 //////////////////////////////////////////////////////////////////////////
 uint8_t tinypy_marshal_object_wire_type(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     return object->wire_type;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int tinypy_marshal_bool_value(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_BOOL);
     return object->as.boolean_value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int64_t tinypy_marshal_integer_value(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_INTEGER);
     return object->as.integer_value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_marshal_long_view(const tinypy_marshal_object_t *object, int *out_sign, const uint16_t **out_digits, size_t *out_digit_count) {
     assert(object != NULL);
@@ -1998,14 +1939,12 @@ void tinypy_marshal_long_view(const tinypy_marshal_object_t *object, int *out_si
     *out_digits = object->as.long_value.digits;
     *out_digit_count = object->as.long_value.count;
 }
-
 //////////////////////////////////////////////////////////////////////////
 double tinypy_marshal_float_value(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_FLOAT);
     return object->as.float_value.value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_marshal_complex_value(const tinypy_marshal_object_t *object, double *out_real, double *out_imaginary) {
     assert(object != NULL);
@@ -2015,7 +1954,6 @@ void tinypy_marshal_complex_value(const tinypy_marshal_object_t *object, double 
     *out_real = object->as.complex_value.real;
     *out_imaginary = object->as.complex_value.imaginary;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_marshal_bytes_view(const tinypy_marshal_object_t *object, const void **out_bytes, size_t *out_size, int *out_interned) {
     assert(object != NULL);
@@ -2027,7 +1965,6 @@ void tinypy_marshal_bytes_view(const tinypy_marshal_object_t *object, const void
     *out_size = object->as.string_value.size;
     *out_interned = object->as.string_value.interned;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_marshal_unicode_view(const tinypy_marshal_object_t *object, const char **out_utf8, size_t *out_size, size_t *out_code_point_count) {
     assert(object != NULL);
@@ -2053,21 +1990,18 @@ size_t tinypy_marshal_sequence_size(const tinypy_marshal_object_t *object) {
     assert(__tinypy_marshal_is_sequence(object));
     return object->as.sequence_value.count;
 }
-
 //////////////////////////////////////////////////////////////////////////
 const tinypy_marshal_object_t *tinypy_marshal_sequence_item(const tinypy_marshal_object_t *object, size_t index) {
     assert(__tinypy_marshal_is_sequence(object));
     assert(index < object->as.sequence_value.count);
     return object->as.sequence_value.items[index];
 }
-
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_marshal_dict_size(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_DICT);
     return object->as.dict_value.count;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static const tinypy_marshal_dict_entry_t *__tinypy_marshal_dict_entry_at(const tinypy_marshal_object_t *object, size_t index) {
     const tinypy_marshal_dict_entry_t *entry;
@@ -2081,26 +2015,22 @@ static const tinypy_marshal_dict_entry_t *__tinypy_marshal_dict_entry_at(const t
     }
     return entry;
 }
-
 //////////////////////////////////////////////////////////////////////////
 const tinypy_marshal_object_t *tinypy_marshal_dict_key(const tinypy_marshal_object_t *object, size_t index) {
     const tinypy_marshal_dict_entry_t *entry = __tinypy_marshal_dict_entry_at(object, index);
     return entry->key;
 }
-
 //////////////////////////////////////////////////////////////////////////
 const tinypy_marshal_object_t *tinypy_marshal_dict_value(const tinypy_marshal_object_t *object, size_t index) {
     const tinypy_marshal_dict_entry_t *entry = __tinypy_marshal_dict_entry_at(object, index);
     return entry->value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 const tinypy_marshal_code_t *tinypy_marshal_code_view(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_CODE);
     return &object->as.code_value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_marshal_result_name(tinypy_marshal_result_e result) {
     switch (result) {

@@ -34,7 +34,6 @@ static int32_t __tinypy_decimal_bigint_reserve(tinypy_decimal_bigint_t *value, s
     value->capacity = new_capacity;
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_decimal_bigint_set_u32(tinypy_decimal_bigint_t *value, uint32_t integer) {
     if (__tinypy_decimal_bigint_reserve(value, 1U) == 0) {
@@ -44,7 +43,6 @@ static int32_t __tinypy_decimal_bigint_set_u32(tinypy_decimal_bigint_t *value, u
     value->count = integer == 0U ? 0U : 1U;
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_decimal_bigint_multiply_add(tinypy_decimal_bigint_t *value, uint32_t multiplier, uint32_t addition) {
     uint64_t carry = addition;
@@ -53,7 +51,7 @@ static int32_t __tinypy_decimal_bigint_multiply_add(tinypy_decimal_bigint_t *val
     if (__tinypy_decimal_bigint_reserve(value, value->count + 1U) == 0) {
         return INT32_C(0);
     }
-    for (index = 0U; index < value->count; index += 1U) {
+    for (index = 0U; index < value->count; ++index) {
         uint64_t product = (uint64_t)value->words[index] * (uint64_t)multiplier + carry;
 
         value->words[index] = (uint32_t)product;
@@ -69,7 +67,6 @@ static int32_t __tinypy_decimal_bigint_multiply_add(tinypy_decimal_bigint_t *val
     }
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_decimal_bigint_bit_length(const tinypy_decimal_bigint_t *value) {
     uint32_t high;
@@ -86,7 +83,6 @@ static size_t __tinypy_decimal_bigint_bit_length(const tinypy_decimal_bigint_t *
     }
     return bits;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static uint32_t __tinypy_decimal_bigint_shifted_word(const tinypy_decimal_bigint_t *value, size_t output_index, size_t shift) {
     size_t word_shift = shift / 32U;
@@ -105,7 +101,6 @@ static uint32_t __tinypy_decimal_bigint_shifted_word(const tinypy_decimal_bigint
     }
     return (uint32_t)word;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_decimal_bigint_shifted_count(const tinypy_decimal_bigint_t *value, size_t shift) {
     size_t count;
@@ -119,7 +114,6 @@ static size_t __tinypy_decimal_bigint_shifted_count(const tinypy_decimal_bigint_
     }
     return count;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_decimal_bigint_compare_shifted(const tinypy_decimal_bigint_t *left, const tinypy_decimal_bigint_t *right, size_t right_shift) {
     size_t right_count = __tinypy_decimal_bigint_shifted_count(right, right_shift);
@@ -142,7 +136,6 @@ static int32_t __tinypy_decimal_bigint_compare_shifted(const tinypy_decimal_bigi
     }
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_decimal_bigint_subtract_shifted(tinypy_decimal_bigint_t *left, const tinypy_decimal_bigint_t *right, size_t right_shift) {
     size_t right_count = __tinypy_decimal_bigint_shifted_count(right, right_shift);
@@ -150,7 +143,7 @@ static void __tinypy_decimal_bigint_subtract_shifted(tinypy_decimal_bigint_t *le
     size_t index;
 
     assert(__tinypy_decimal_bigint_compare_shifted(left, right, right_shift) >= 0);
-    for (index = 0U; index < left->count; index += 1U) {
+    for (index = 0U; index < left->count; ++index) {
         uint64_t subtrahend = (index < right_count ? (uint64_t)__tinypy_decimal_bigint_shifted_word(right, index, right_shift) : 0U) + borrow;
         uint64_t minuend = left->words[index];
 
@@ -162,7 +155,6 @@ static void __tinypy_decimal_bigint_subtract_shifted(tinypy_decimal_bigint_t *le
         left->count -= 1U;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_decimal_bigint_shift_left(tinypy_decimal_bigint_t *output, const tinypy_decimal_bigint_t *input, size_t shift) {
     size_t count = __tinypy_decimal_bigint_shifted_count(input, shift);
@@ -174,13 +166,12 @@ static int32_t __tinypy_decimal_bigint_shift_left(tinypy_decimal_bigint_t *outpu
     if (__tinypy_decimal_bigint_reserve(output, count) == 0) {
         return INT32_C(0);
     }
-    for (index = 0U; index < count; index += 1U) {
+    for (index = 0U; index < count; ++index) {
         output->words[index] = __tinypy_decimal_bigint_shifted_word(input, index, shift);
     }
     output->count = count;
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_decimal_bigint_copy(tinypy_decimal_bigint_t *output, const tinypy_decimal_bigint_t *input) {
     if (input->count == 0U) {
@@ -193,7 +184,6 @@ static int32_t __tinypy_decimal_bigint_copy(tinypy_decimal_bigint_t *output, con
     output->count = input->count;
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_decimal_bigint_quotient_u64(tinypy_decimal_bigint_t *numerator, const tinypy_decimal_bigint_t *denominator, uint64_t *out_quotient) {
     size_t numerator_bits = __tinypy_decimal_bigint_bit_length(numerator);
@@ -221,13 +211,11 @@ static int32_t __tinypy_decimal_bigint_quotient_u64(tinypy_decimal_bigint_t *num
     *out_quotient = quotient;
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_decimal_fail_limit(tinypy_compile_ctx_t *ctx, int32_t line_number, int32_t column_offset) {
     tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "floating-point literal exceeds compiler arena limit", line_number, column_offset, ctx->out_error);
     return INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const char *text, size_t size, double *out_value, int32_t line_number, int32_t column_offset) {
     tinypy_decimal_bigint_t numerator = {ctx, NULL, 0U, 0U};
@@ -323,14 +311,14 @@ int32_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const
         return INT32_C(1);
     }
     if (decimal_exponent >= 0) {
-        for (index = 0U; index < (size_t)decimal_exponent; index += 1U) {
+        for (index = 0U; index < (size_t)decimal_exponent; ++index) {
             if (__tinypy_decimal_bigint_multiply_add(&numerator, 5U, 0U) == 0) {
                 return __tinypy_decimal_fail_limit(ctx, line_number, column_offset);
             }
         }
     }
     else {
-        for (index = 0U; index < (size_t)(-decimal_exponent); index += 1U) {
+        for (index = 0U; index < (size_t)(-decimal_exponent); ++index) {
             if (__tinypy_decimal_bigint_multiply_add(&denominator, 5U, 0U) == 0) {
                 return __tinypy_decimal_fail_limit(ctx, line_number, column_offset);
             }

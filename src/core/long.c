@@ -7,10 +7,23 @@
 #define TINYPY_LONG_BASE15_MASK UINT16_C(0x7fff)
 
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_internal_long_allocation_size(size_t digit_count) {
+#ifndef NDEBUG
+static inline int __tinypy_internal_long_digits_valid(const uint16_t *digits, size_t digit_count) {
+    size_t index;
+
+    for (index = 0U; index < digit_count; ++index) {
+        if (digits[index] > TINYPY_LONG_BASE15_MASK) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+#endif
+//////////////////////////////////////////////////////////////////////////
+static inline size_t __tinypy_internal_long_allocation_size(size_t digit_count) {
     size_t payload_size;
 
-    assert(digit_count <= (size_t)PTRDIFF_MAX);
     assert(digit_count <=
            (SIZE_MAX - offsetof(tinypy_long_object_t, digits)) /
                sizeof(uint16_t));
@@ -18,11 +31,9 @@ static size_t __tinypy_internal_long_allocation_size(size_t digit_count) {
     payload_size = digit_count * sizeof(uint16_t);
     return offsetof(tinypy_long_object_t, digits) + payload_size;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int sign, const uint16_t *digits, size_t digit_count) {
     size_t allocation_size;
-    size_t index;
     tinypy_value_t *result;
 
     assert(tinypy_internal_vm_valid(vm));
@@ -30,16 +41,15 @@ tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int sign, const 
     allocation_size = __tinypy_internal_long_allocation_size(digit_count);
     assert(sign >= -1 && sign <= 1);
     assert((digit_count == 0U) == (sign == 0));
-    for (index = 0U; index < digit_count; index += 1U) {
-        assert(digits[index] <= TINYPY_LONG_BASE15_MASK);
-    }
+    assert(__tinypy_internal_long_digits_valid(digits, digit_count));
     assert(digit_count == 0U || digits[digit_count - 1U] != 0U);
 
     result = tinypy_internal_value_allocate(
         vm,
         TINYPY_VALUE_LONG,
         allocation_size);
-    TINYPY_SIZE(result) = (ptrdiff_t)digit_count * (ptrdiff_t)sign;
+    TINYPY_LONG_OBJECT(result)->digit_count = digit_count;
+    TINYPY_LONG_OBJECT(result)->sign = (int32_t)sign;
     if (digit_count != 0U) {
         (void)memcpy(
             TINYPY_LONG_OBJECT(result)->digits,
@@ -49,7 +59,6 @@ tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int sign, const 
 
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_long_from_i64(tinypy_vm_t *vm, int64_t value) {
     uint16_t digits[5];
@@ -83,14 +92,13 @@ tinypy_value_t *tinypy_long_from_i64(tinypy_vm_t *vm, int64_t value) {
         digits,
         digit_count);
 }
-
 //////////////////////////////////////////////////////////////////////////
 const uint16_t *tinypy_long_base15_view(const tinypy_value_t *value, int *out_sign, size_t *out_digit_count) {
     assert(value != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     assert(out_sign != NULL);
     assert(out_digit_count != NULL);
-    assert(tinypy_internal_value_kind(value) == TINYPY_VALUE_LONG);
+    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG);
 
     *out_sign = TINYPY_LONG_SIGN(value);
     *out_digit_count = TINYPY_LONG_DIGIT_COUNT(value);
@@ -98,7 +106,6 @@ const uint16_t *tinypy_long_base15_view(const tinypy_value_t *value, int *out_si
                ? TINYPY_LONG_OBJECT(value)->digits
                : NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int64_t tinypy_long_as_i64(const tinypy_value_t *value) {
     const uint16_t *digits;
@@ -107,8 +114,8 @@ int64_t tinypy_long_as_i64(const tinypy_value_t *value) {
     uint64_t negative_limit = (uint64_t)INT64_MAX + UINT64_C(1);
 
     assert(value != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
-    assert(tinypy_internal_value_kind(value) == TINYPY_VALUE_LONG);
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG);
 
     digits = TINYPY_LONG_OBJECT(value)->digits;
     index = TINYPY_LONG_DIGIT_COUNT(value);

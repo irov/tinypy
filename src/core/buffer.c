@@ -6,14 +6,13 @@
 
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_buffer_supported(const tinypy_value_t *value) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     return kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_BYTEARRAY;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static const unsigned char *__tinypy_buffer_owner_view(const tinypy_value_t *owner, size_t *out_size) {
-    switch (tinypy_internal_value_kind(owner)) {
+    switch (TINYPY_VALUE_KIND(owner)) {
     case TINYPY_VALUE_STRING:
         return (const unsigned char *)tinypy_string_view(owner, out_size);
     case TINYPY_VALUE_UNICODE: {
@@ -31,7 +30,6 @@ static const unsigned char *__tinypy_buffer_owner_view(const tinypy_value_t *own
         return NULL;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_buffer_from_object(tinypy_value_t *object, size_t offset, size_t size) {
     tinypy_vm_t *vm;
@@ -39,7 +37,7 @@ tinypy_value_t *tinypy_buffer_from_object(tinypy_value_t *object, size_t offset,
     size_t owner_size;
 
     assert(object != NULL);
-    vm = tinypy_internal_value_vm(object);
+    vm = TINYPY_VALUE_VM(object);
     assert(tinypy_internal_vm_valid(vm));
     assert(__tinypy_buffer_supported(object) != 0);
     (void)__tinypy_buffer_owner_view(object, &owner_size);
@@ -52,10 +50,9 @@ tinypy_value_t *tinypy_buffer_from_object(tinypy_value_t *object, size_t offset,
     buffer->owner = object;
     buffer->offset = offset;
     buffer->size = size;
-    tinypy_retain(object);
+    TINYPY_INCREF(object);
     return &buffer->base;
 }
-
 //////////////////////////////////////////////////////////////////////////
 const void *tinypy_buffer_view(const tinypy_value_t *value, size_t *out_size) {
     const tinypy_buffer_object_t *buffer;
@@ -63,8 +60,8 @@ const void *tinypy_buffer_view(const tinypy_value_t *value, size_t *out_size) {
     size_t owner_size;
 
     assert(value != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
-    assert(tinypy_internal_value_kind(value) == TINYPY_VALUE_BUFFER);
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BUFFER);
     assert(out_size != NULL);
     buffer = TINYPY_BUFFER_OBJECT((tinypy_value_t *)value);
     bytes = __tinypy_buffer_owner_view(buffer->owner, &owner_size);
@@ -73,15 +70,13 @@ const void *tinypy_buffer_view(const tinypy_value_t *value, size_t *out_size) {
     *out_size = buffer->size;
     return bytes + buffer->offset;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_buffer_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     visit(TINYPY_BUFFER_OBJECT(value)->owner, user_data);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_buffer_integer_as_i64(tinypy_value_t *value, int64_t *out_value) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
         *out_value = TINYPY_INTEGER_VALUE(value);
@@ -110,7 +105,6 @@ static int32_t __tinypy_buffer_integer_as_i64(tinypy_value_t *value, int64_t *ou
     }
     return INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_buffer_constructor_integer(tinypy_vm_t *vm, tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
     if (__tinypy_buffer_integer_as_i64(value, out_value) == 0) {
@@ -119,28 +113,27 @@ static int32_t __tinypy_buffer_constructor_integer(tinypy_vm_t *vm, tinypy_value
     }
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
-    size_t argument_count = tinypy_tuple_size(args);
+    size_t argument_count = TINYPY_TUPLE_SIZE(args);
     tinypy_value_t *owner;
     size_t owner_size;
     int64_t offset = INT64_C(0);
     int64_t requested_size = INT64_C(-1);
 
-    if ((kwargs != NULL && tinypy_dict_size(kwargs) != 0U) || argument_count < 1U || argument_count > 3U) {
+    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || argument_count < 1U || argument_count > 3U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "buffer constructor expects object, optional offset and size", out_error);
         return NULL;
     }
-    owner = tinypy_tuple_get(args, 0U);
+    owner = TINYPY_TUPLE_GET(args, 0U);
     if (__tinypy_buffer_supported(owner) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not support the buffer interface", out_error);
         return NULL;
     }
     int condition = argument_count >= 2U;
     if (condition != 0) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 1U);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
         condition = __tinypy_buffer_constructor_integer(vm, item, &offset, out_error) == 0;
     }
     if (condition) {
@@ -148,7 +141,7 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
     }
     int condition_2 = argument_count >= 3U;
     if (condition_2 != 0) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 2U);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 2U);
         condition_2 = __tinypy_buffer_constructor_integer(vm, item, &requested_size, out_error) == 0;
     }
     if (condition_2) {
@@ -165,16 +158,14 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
     }
     return tinypy_buffer_from_object(owner, (size_t)offset, requested_size < 0 ? TINYPY_BUFFER_TO_END : (size_t)requested_size);
 }
-
 //////////////////////////////////////////////////////////////////////////
 ptrdiff_t tinypy_internal_buffer_length(tinypy_value_t *value, tinypy_error_t **out_error) {
     size_t size = TINYPY_BUFFER_OBJECT(value)->size;
 
-    tinypy_internal_clear_error(out_error);
+    TINYPY_CLEAR_ERROR(out_error);
     assert(size <= (size_t)PTRDIFF_MAX);
     return (ptrdiff_t)size;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_buffer_normalize_index(tinypy_vm_t *vm, tinypy_value_t *key, size_t size, size_t *out_index, tinypy_error_t **out_error) {
     int64_t index;
@@ -201,19 +192,17 @@ out_of_range:
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "buffer index is out of range", out_error);
     return INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_buffer_slice_bound(tinypy_value_t *value, int64_t fallback, int64_t *out_value) {
-    if (tinypy_internal_value_kind(value) == TINYPY_VALUE_NONE) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
         *out_value = fallback;
         return INT32_C(1);
     }
     return __tinypy_buffer_integer_as_i64(value, out_value);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value_t *slice, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     const unsigned char *bytes = (const unsigned char *)tinypy_buffer_view(value, &(size_t){0U});
     size_t size = TINYPY_BUFFER_OBJECT(value)->size;
     int64_t step;
@@ -252,7 +241,7 @@ static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value
         int condition_6 = step < 0;
         if (condition_6 != 0) {
             tinypy_value_t *slice_stop_2 = tinypy_slice_stop(slice);
-            condition_6 = tinypy_internal_value_kind(slice_stop_2) == TINYPY_VALUE_NONE;
+            condition_6 = TINYPY_VALUE_KIND(slice_stop_2) == TINYPY_VALUE_NONE;
         }
         condition_5 = !(condition_6);
     }
@@ -301,7 +290,7 @@ static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value
     }
     selected = (unsigned char *)tinypy_internal_vm_allocate(vm, length, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     source = start;
-    for (index = 0U; index < length; index += 1U) {
+    for (index = 0U; index < length; ++index) {
         selected[index] = bytes[(size_t)source];
         source += step;
     }
@@ -309,16 +298,15 @@ static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value
     tinypy_internal_vm_deallocate(vm, selected, length, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_buffer_get_item(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     const unsigned char *bytes;
     size_t size;
     size_t index;
 
-    tinypy_internal_clear_error(out_error);
-    if (tinypy_internal_value_kind(key) == TINYPY_VALUE_SLICE) {
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE) {
         return __tinypy_buffer_slice(value, key, out_error);
     }
     bytes = (const unsigned char *)tinypy_buffer_view(value, &size);
@@ -327,22 +315,20 @@ tinypy_value_t *tinypy_internal_buffer_get_item(tinypy_value_t *value, tinypy_va
     }
     return tinypy_string_from_bytes(vm, bytes + index, 1U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_buffer_string(tinypy_value_t *value, tinypy_error_t **out_error) {
     const void *bytes;
     size_t size;
 
-    tinypy_internal_clear_error(out_error);
+    TINYPY_CLEAR_ERROR(out_error);
     bytes = tinypy_buffer_view(value, &size);
-    tinypy_vm_t *vm = tinypy_internal_value_vm(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     return tinypy_string_from_bytes(vm, bytes, size);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_buffer_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
     (void)value;
-    tinypy_internal_clear_error(out_error);
-    tinypy_vm_t *vm = tinypy_internal_value_vm(value);
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     return tinypy_string_from_bytes(vm, "<read-only buffer>", 18U);
 }

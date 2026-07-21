@@ -122,7 +122,6 @@ static tinypy_compiler_size_t __tinypy_frontend_size_of_children(tinypy_cst_node
 void tinypy_internal_compiler_cst_release(tinypy_cst_node_t *n) {
     (void)n;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_compiler_size_t tinypy_internal_compiler_cst_size(tinypy_cst_node_t *n) {
     tinypy_compiler_size_t res = 0;
@@ -132,7 +131,6 @@ tinypy_compiler_size_t tinypy_internal_compiler_cst_size(tinypy_cst_node_t *n) {
     }
     return res;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_compiler_size_t __tinypy_frontend_size_of_children(tinypy_cst_node_t *n) {
     tinypy_compiler_size_t res = 0;

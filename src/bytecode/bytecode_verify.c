@@ -97,7 +97,6 @@ static int __tinypy_verify_add_size(size_t left, size_t right, size_t *out_value
     *out_value = left + right;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_multiply_size(size_t left, size_t right, size_t *out_value) {
     assert(out_value != NULL);
@@ -108,7 +107,6 @@ static int __tinypy_verify_multiply_size(size_t left, size_t right, size_t *out_
     *out_value = left * right;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_align_size(size_t value, size_t *out_value) {
     size_t remainder;
@@ -128,7 +126,6 @@ static int __tinypy_verify_align_size(size_t value, size_t *out_value) {
     padding = TINYPY_VERIFY_ALIGNMENT - remainder;
     return __tinypy_verify_add_size(value, padding, out_value);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_verify_clear_result(tinypy_bytecode_verify_result_t *result) {
     size_t index;
@@ -146,7 +143,6 @@ static void __tinypy_verify_clear_result(tinypy_bytecode_verify_result_t *result
         result->reserved[index] = 0U;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_fail(tinypy_verify_context_t *context, tinypy_bytecode_verify_status_e status, size_t offset, uint8_t opcode, uint64_t argument, tinypy_opcode_decode_status_e decode_status) {
     context->result->status = status;
@@ -156,12 +152,10 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_fail(tinypy_verify_contex
     context->result->error_argument = argument;
     return status;
 }
-
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_bytecode_verify_scratch_alignment(void) {
     return TINYPY_VERIFY_ALIGNMENT;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_bytecode_verify_status_e tinypy_bytecode_verify_scratch_size(size_t bytecode_size, size_t *out_size) {
     size_t state_count;
@@ -208,7 +202,6 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify_scratch_size(size_t bytec
     *out_size = total;
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_verify_apply_default_limits(const tinypy_bytecode_verify_limits_t *source, tinypy_bytecode_verify_limits_t *destination) {
     if (source == NULL) {
@@ -226,7 +219,6 @@ static void __tinypy_verify_apply_default_limits(const tinypy_bytecode_verify_li
             TINYPY_BYTECODE_VERIFY_DEFAULT_MAX_BLOCK_DEPTH;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_verify_bind_scratch(tinypy_verify_context_t *context, void *scratch) {
     uint8_t *base = (uint8_t *)scratch;
@@ -252,7 +244,6 @@ static void __tinypy_verify_bind_scratch(tinypy_verify_context_t *context, void 
     context->block_capacity = state_count;
     context->marker_capacity = state_count;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_argument_to_size(uint64_t argument, size_t *out_value) {
     assert(out_value != NULL);
@@ -263,7 +254,6 @@ static int __tinypy_verify_argument_to_size(uint64_t argument, size_t *out_value
     *out_value = (size_t)argument;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_operand(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction) {
     uint32_t categories = tinypy_opcode_categories(instruction->opcode);
@@ -397,7 +387,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_operand(tinypy_verify_con
 
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_first_pass(tinypy_verify_context_t *context) {
     size_t offset = 0U;
@@ -454,7 +443,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_first_pass(tinypy_verify_
 
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_jump_target(const tinypy_decoded_instruction_t *instruction, size_t *out_target) {
     size_t argument;
@@ -474,7 +462,6 @@ static int __tinypy_verify_jump_target(const tinypy_decoded_instruction_t *instr
     *out_target = argument;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_jumps(tinypy_verify_context_t *context) {
     size_t offset = 0U;
@@ -518,7 +505,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_jumps(tinypy_verify_conte
 
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static uint8_t __tinypy_verify_opcode_at(const tinypy_verify_context_t *context, size_t offset) {
     tinypy_decoded_instruction_t instruction;
@@ -533,7 +519,6 @@ static uint8_t __tinypy_verify_opcode_at(const tinypy_verify_context_t *context,
 
     return instruction.opcode;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_blocks_equal(const tinypy_verify_context_t *context, size_t left, size_t right) {
     while (left != TINYPY_VERIFY_NO_BLOCK && right != TINYPY_VERIFY_NO_BLOCK) {
@@ -550,7 +535,6 @@ static int __tinypy_verify_blocks_equal(const tinypy_verify_context_t *context, 
 
     return left == TINYPY_VERIFY_NO_BLOCK && right == TINYPY_VERIFY_NO_BLOCK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_verify_reason_item_count(tinypy_verify_reason_e reason) {
     switch (reason) {
@@ -567,7 +551,6 @@ static size_t __tinypy_verify_reason_item_count(tinypy_verify_reason_e reason) {
         return 0U;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_markers_equal(const tinypy_verify_context_t *context, size_t left, size_t right) {
     while (left != TINYPY_VERIFY_NO_MARKER && right != TINYPY_VERIFY_NO_MARKER) {
@@ -585,7 +568,6 @@ static int __tinypy_verify_markers_equal(const tinypy_verify_context_t *context,
 
     return left == TINYPY_VERIFY_NO_MARKER && right == TINYPY_VERIFY_NO_MARKER;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_marker_expected_depth(const tinypy_verify_marker_t *marker, size_t *out_depth) {
     size_t verify_reason_item_count = __tinypy_verify_reason_item_count(
@@ -595,7 +577,6 @@ static int __tinypy_verify_marker_expected_depth(const tinypy_verify_marker_t *m
         verify_reason_item_count,
         out_depth);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t parent, tinypy_verify_reason_e reason, size_t resume_depth, size_t continue_target, uint8_t needs_with_cleanup, size_t *out_index) {
     tinypy_verify_marker_t *marker;
@@ -621,7 +602,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify
     context->marker_count += 1U;
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_context_t *context, size_t offset, size_t stack_depth, size_t block_index, size_t marker_index, size_t source_offset, uint8_t source_opcode) {
     size_t state_index;
@@ -775,7 +755,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
     context->worklist_tail += 1U;
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_effect_set(tinypy_verify_effect_t *effect, size_t required, size_t pop_count, size_t push_count) {
     effect->required = required;
@@ -783,14 +762,12 @@ static int __tinypy_verify_effect_set(tinypy_verify_effect_t *effect, size_t req
     effect->push_count = push_count;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_effect_from_argument(uint64_t argument, size_t extra, size_t *out_value) {
     size_t value;
 
     return __tinypy_verify_argument_to_size(argument, &value) && __tinypy_verify_add_size(value, extra, out_value);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tinypy_verify_effect_t *effect) {
     size_t count;
@@ -1028,7 +1005,6 @@ static int __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tinypy_
         return 0;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_apply_effect(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t stack_depth, const tinypy_verify_effect_t *effect, size_t *out_depth) {
     size_t depth;
@@ -1057,7 +1033,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_apply_effect(tinypy_verif
     *out_depth = depth;
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_push_block(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t parent, size_t level, uint8_t type, size_t *out_index) {
     size_t parent_depth = 0U;
@@ -1106,7 +1081,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_push_block(tinypy_verify_
     context->block_count += 1U;
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t stack_depth, size_t block_index, tinypy_verify_reason_e reason, size_t continue_target) {
     while (block_index != TINYPY_VERIFY_NO_BLOCK) {
@@ -1244,7 +1218,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
 
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_fallthrough(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t stack_depth, size_t block_index, size_t marker_index) {
     if (instruction->next_offset == context->bytecode_size) {
@@ -1266,7 +1239,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_fallthrough(tinypy_verify
         instruction->offset,
         instruction->opcode);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_verify_context_t *context, size_t state_index) {
     tinypy_verify_state_t state = context->states[state_index];
@@ -1865,7 +1837,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             state.marker_index);
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_control_flow(tinypy_verify_context_t *context) {
     tinypy_bytecode_verify_status_e status;
@@ -1894,7 +1865,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_control_flow(tinypy_verif
 
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_bytecode_verify_status_e tinypy_bytecode_verify(const uint8_t *bytecode, size_t bytecode_size, const tinypy_bytecode_metadata_t *metadata, const tinypy_bytecode_verify_limits_t *limits, void *scratch, size_t scratch_size, tinypy_bytecode_verify_result_t *out_result) {
     tinypy_verify_context_t context;
@@ -1981,7 +1951,6 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify(const uint8_t *bytecode, 
     out_result->error_argument = UINT64_C(0);
     return TINYPY_BYTECODE_VERIFY_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_bytecode_verify_status_name(tinypy_bytecode_verify_status_e status) {
     switch (status) {

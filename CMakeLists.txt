@@ -7,6 +7,7 @@ project(tinypy
 )
 
 option(TINYPY_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
+option(TINYPY_BUILD_CLI "Build the optional TinyPy CLI library and executables" OFF)
 
 function(tinypy_enable_strict_warnings target)
     if(MSVC)
@@ -28,6 +29,14 @@ function(tinypy_enable_strict_warnings target)
         if(TINYPY_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE -Werror)
         endif()
+    endif()
+endfunction()
+
+function(tinypy_enable_test_assertions target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(${target} PRIVATE -UNDEBUG)
     endif()
 endfunction()
 
@@ -88,6 +97,7 @@ add_library(tinypy STATIC
     src/core/native.c
     src/core/object.c
     src/core/output.c
+    src/core/pool.c
     src/core/representation.c
     src/core/operator.c
     src/core/slice.c
@@ -138,14 +148,12 @@ tinypy_enable_strict_warnings(tinypy)
 
 include(CTest)
 
+if(TINYPY_BUILD_CLI)
+    add_subdirectory(cli)
+endif()
+
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)
-
-    add_executable(tinypy_compile tools/tinypy_compile.c)
-    target_link_libraries(tinypy_compile PRIVATE tinypy::tinypy)
-    target_compile_features(tinypy_compile PRIVATE c_std_99)
-    set_target_properties(tinypy_compile PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
-    tinypy_enable_strict_warnings(tinypy_compile)
 
     add_executable(tinypy_core_tests
         tests/core/test_core.c
@@ -158,6 +166,7 @@ if(BUILD_TESTING)
         C_STANDARD 99
         C_STANDARD_REQUIRED YES
     )
+    tinypy_enable_test_assertions(tinypy_core_tests)
     tinypy_enable_strict_warnings(tinypy_core_tests)
 
     add_executable(tinypy_load_code_tests
@@ -166,6 +175,7 @@ if(BUILD_TESTING)
     target_link_libraries(tinypy_load_code_tests PRIVATE tinypy::tinypy)
     target_compile_features(tinypy_load_code_tests PRIVATE c_std_99)
     set_target_properties(tinypy_load_code_tests PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+    tinypy_enable_test_assertions(tinypy_load_code_tests)
     tinypy_enable_strict_warnings(tinypy_load_code_tests)
 
     add_executable(tinypy_compiler_tests
@@ -174,12 +184,14 @@ if(BUILD_TESTING)
     target_link_libraries(tinypy_compiler_tests PRIVATE tinypy::tinypy Threads::Threads)
     target_compile_features(tinypy_compiler_tests PRIVATE c_std_99)
     set_target_properties(tinypy_compiler_tests PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+    tinypy_enable_test_assertions(tinypy_compiler_tests)
     tinypy_enable_strict_warnings(tinypy_compiler_tests)
 
     add_library(tinypy_compiler_fuzz OBJECT tests/fuzz/fuzz_compiler.c)
     target_link_libraries(tinypy_compiler_fuzz PRIVATE tinypy::tinypy)
     target_compile_features(tinypy_compiler_fuzz PRIVATE c_std_99)
     set_target_properties(tinypy_compiler_fuzz PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+    tinypy_enable_test_assertions(tinypy_compiler_fuzz)
     tinypy_enable_strict_warnings(tinypy_compiler_fuzz)
 
     add_executable(tinypy_compiler_fuzz_standalone tests/fuzz/fuzz_compiler.c)
@@ -187,9 +199,11 @@ if(BUILD_TESTING)
     target_link_libraries(tinypy_compiler_fuzz_standalone PRIVATE tinypy::tinypy)
     target_compile_features(tinypy_compiler_fuzz_standalone PRIVATE c_std_99)
     set_target_properties(tinypy_compiler_fuzz_standalone PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+    tinypy_enable_test_assertions(tinypy_compiler_fuzz_standalone)
     tinypy_enable_strict_warnings(tinypy_compiler_fuzz_standalone)
 
     add_test(NAME core_allocator_accounting COMMAND tinypy_core_tests allocator)
+    add_test(NAME core_pool_allocator COMMAND tinypy_core_tests pool_allocator)
     add_test(NAME core_independent_vms COMMAND tinypy_core_tests independent_vms)
     add_test(NAME core_value_lifetime COMMAND tinypy_core_tests value_lifetime)
     add_test(NAME core_constant_cache COMMAND tinypy_core_tests constant_cache)

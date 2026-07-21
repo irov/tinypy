@@ -128,7 +128,9 @@ typedef enum tinypy_allocation_tag_e {
     TINYPY_ALLOC_TAG_COMPILER_ARENA = 12,
     TINYPY_ALLOC_TAG_COMPILER_DATA = 13,
     TINYPY_ALLOC_TAG_MARSHAL_WRITE = 14,
-    TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT = 15
+    TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT = 15,
+    TINYPY_ALLOC_TAG_POOL_ARENA = 16,
+    TINYPY_ALLOC_TAG_POOL_TABLE = 17
 } tinypy_allocation_tag_e;
 //////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_output_channel_e {

@@ -41,24 +41,24 @@ typedef struct tinypy_compiler_complex_t {
 #define TINYPY_COMPILER_ERR_WARN_EXPLICIT(exception, message, filename, line, module, registry) ((void)(exception), (void)(message), (void)(filename), (void)(line), (void)(module), (void)(registry), 0)
 #define TINYPY_COMPILER_ARENA_MALLOC(arena, size) tinypy_internal_compiler_arena_allocate((arena), (size))
 #define TINYPY_COMPILER_ARENA_ADD_VALUE(arena, value) tinypy_internal_compiler_arena_add_value((arena), (value))
-#define TINYPY_COMPILER_INCREF(value) tinypy_retain((tinypy_value_t *)(value))
+#define TINYPY_COMPILER_INCREF(value) TINYPY_INCREF((tinypy_value_t *)(value))
 #define TINYPY_COMPILER_XINCREF(value)                \
     do { \
         if ((value) != NULL)                          \
-            tinypy_retain((tinypy_value_t *)(value)); \
+            TINYPY_INCREF((tinypy_value_t *)(value)); \
     } while (0)
-#define TINYPY_COMPILER_DECREF(value) tinypy_release((tinypy_value_t *)(value))
+#define TINYPY_COMPILER_DECREF(value) TINYPY_DECREF((tinypy_value_t *)(value))
 #define TINYPY_COMPILER_XDECREF(value)                 \
     do { \
         if ((value) != NULL)                           \
-            tinypy_release((tinypy_value_t *)(value)); \
+            TINYPY_DECREF((tinypy_value_t *)(value)); \
     } while (0)
 #define TINYPY_COMPILER_CLEAR(value)                                          \
     do { \
         if ((value) != NULL) { \
             tinypy_value_t *__tinypy_clear_value = (tinypy_value_t *)(value); \
             (value) = NULL;                                                   \
-            tinypy_release(__tinypy_clear_value);                             \
+            TINYPY_DECREF(__tinypy_clear_value);                              \
         }                                                                     \
     } while (0)
 #define TINYPY_COMPILER_XSETREF(destination, value)         \
@@ -68,14 +68,14 @@ typedef struct tinypy_compiler_complex_t {
         TINYPY_COMPILER_XDECREF(__tinypy_old_value);        \
     } while (0)
 #define TINYPY_COMPILER_OBJECT_IS_TRUE(value) ((int)tinypy_truth((value), NULL))
-#define TINYPY_COMPILER_STRING_CHECK(value) (tinypy_typeof((value)) == TINYPY_VALUE_STRING)
-#define TINYPY_COMPILER_UNICODE_CHECK(value) (tinypy_typeof((value)) == TINYPY_VALUE_UNICODE)
+#define TINYPY_COMPILER_STRING_CHECK(value) (TINYPY_VALUE_KIND((value)) == TINYPY_VALUE_STRING)
+#define TINYPY_COMPILER_UNICODE_CHECK(value) (TINYPY_VALUE_KIND((value)) == TINYPY_VALUE_UNICODE)
 #define TINYPY_COMPILER_STRING_AS_STRING(value) ((char *)__tinypy_frontend_string_data((value)))
 #define TINYPY_COMPILER_BYTES_AS_STRING(value) TINYPY_COMPILER_STRING_AS_STRING(value)
 #define TINYPY_COMPILER_STRING_GET_SIZE(value) ((tinypy_compiler_size_t)__tinypy_frontend_string_size((value)))
 #define TINYPY_COMPILER_STRING_SIZE(value) ((tinypy_compiler_size_t)__tinypy_frontend_string_size((value)))
-#define TINYPY_COMPILER_INT_CHECK(value) (tinypy_typeof((value)) == TINYPY_VALUE_INTEGER || tinypy_typeof((value)) == TINYPY_VALUE_BOOL)
-#define TINYPY_COMPILER_INT_AS_LONG(value) ((long)tinypy_integer_as_i64((value)))
+#define TINYPY_COMPILER_INT_CHECK(value) (TINYPY_VALUE_KIND((value)) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND((value)) == TINYPY_VALUE_BOOL)
+#define TINYPY_COMPILER_INT_AS_LONG(value) ((long)TINYPY_INTEGER_VALUE((value)))
 #define TINYPY_COMPILER_DICT_GET_ITEM(dict, key) __tinypy_frontend_dict_get((dict), (key))
 #define TINYPY_COMPILER_DICT_SET_ITEM(dict, key, value) __tinypy_frontend_dict_set((dict), (key), (value))
 #define TINYPY_COMPILER_DICT_DEL_ITEM(dict, key) __tinypy_frontend_dict_delete((dict), (key))

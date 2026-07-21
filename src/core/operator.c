@@ -21,15 +21,13 @@ typedef struct tinypy_integer_view_t {
 static int __tinypy_operator_is_integer(tinypy_value_type_e kind) {
     return kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_operator_is_number(tinypy_value_type_e kind) {
     return __tinypy_operator_is_integer(kind) != 0 || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_operator_integer_view(const tinypy_value_t *value, tinypy_integer_view_t *view) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (kind == TINYPY_VALUE_LONG) {
         view->sign = TINYPY_LONG_SIGN(value);
@@ -50,7 +48,6 @@ static void __tinypy_operator_integer_view(const tinypy_value_t *value, tinypy_i
         view->digits = view->local_digits;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_operator_magnitude_compare(const tinypy_integer_view_t *left, const tinypy_integer_view_t *right) {
     size_t index;
@@ -65,7 +62,6 @@ static int __tinypy_operator_magnitude_compare(const tinypy_integer_view_t *left
     }
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const tinypy_integer_view_t *left, const tinypy_integer_view_t *right, int subtract_right) {
     int right_sign = subtract_right != 0 ? -right->sign : right->sign;
@@ -83,7 +79,7 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
     if (left->sign == 0) {
         size_t index;
         sign = right_sign;
-        for (index = 0U; index < right->count; index += 1U) {
+        for (index = 0U; index < right->count; ++index) {
             digits[index] = right->digits[index];
         }
         count = right->count;
@@ -91,7 +87,7 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
     else if (right_sign == 0) {
         size_t index;
         sign = left->sign;
-        for (index = 0U; index < left->count; index += 1U) {
+        for (index = 0U; index < left->count; ++index) {
             digits[index] = left->digits[index];
         }
         count = left->count;
@@ -101,7 +97,7 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
         size_t index;
         sign = left->sign;
         count = left->count > right->count ? left->count : right->count;
-        for (index = 0U; index < count; index += 1U) {
+        for (index = 0U; index < count; ++index) {
             uint32_t sum = carry;
             if (index < left->count) {
                 sum += left->digits[index];
@@ -133,7 +129,7 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
             smaller = comparison > 0 ? right : left;
             sign = comparison > 0 ? left->sign : right_sign;
             count = larger->count;
-            for (index = 0U; index < count; index += 1U) {
+            for (index = 0U; index < count; ++index) {
                 int32_t difference = (int32_t)larger->digits[index] - borrow - (index < smaller->count ? (int32_t)smaller->digits[index] : 0);
                 if (difference < 0) {
                     difference += (int32_t)TINYPY_LONG_BASE;
@@ -156,7 +152,6 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
     tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_long_multiply_views(tinypy_vm_t *vm, const tinypy_integer_view_t *left, const tinypy_integer_view_t *right) {
     size_t capacity;
@@ -173,11 +168,11 @@ static tinypy_value_t *__tinypy_operator_long_multiply_views(tinypy_vm_t *vm, co
     assert(capacity <= SIZE_MAX / sizeof(*digits));
     digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     (void)memset(digits, 0, capacity * sizeof(*digits));
-    for (left_index = 0U; left_index < left->count; left_index += 1U) {
+    for (left_index = 0U; left_index < left->count; ++left_index) {
         uint32_t carry = 0U;
         size_t right_index;
 
-        for (right_index = 0U; right_index < right->count; right_index += 1U) {
+        for (right_index = 0U; right_index < right->count; ++right_index) {
             size_t output_index = left_index + right_index;
             uint32_t product = (uint32_t)digits[output_index] + (uint32_t)left->digits[left_index] * (uint32_t)right->digits[right_index] + carry;
 
@@ -194,7 +189,6 @@ static tinypy_value_t *__tinypy_operator_long_multiply_views(tinypy_vm_t *vm, co
     tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_operator_trim_digits(const uint16_t *digits, size_t count) {
     while (count != 0U && digits[count - 1U] == 0U) {
@@ -202,7 +196,6 @@ static size_t __tinypy_operator_trim_digits(const uint16_t *digits, size_t count
     }
     return count;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_operator_compare_digits(const uint16_t *left, size_t left_count, const uint16_t *right, size_t right_count) {
     size_t index;
@@ -219,14 +212,13 @@ static int __tinypy_operator_compare_digits(const uint16_t *left, size_t left_co
     }
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_operator_subtract_digits(uint16_t *left, size_t left_count, const uint16_t *right, size_t right_count) {
     int32_t borrow = 0;
     size_t index;
 
     assert(__tinypy_operator_compare_digits(left, left_count, right, right_count) >= 0);
-    for (index = 0U; index < left_count; index += 1U) {
+    for (index = 0U; index < left_count; ++index) {
         int32_t difference = (int32_t)left[index] - borrow - (index < right_count ? (int32_t)right[index] : 0);
         if (difference < 0) {
             difference += (int32_t)TINYPY_LONG_BASE;
@@ -240,7 +232,6 @@ static size_t __tinypy_operator_subtract_digits(uint16_t *left, size_t left_coun
     assert(borrow == 0);
     return __tinypy_operator_trim_digits(left, left_count);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, const tinypy_integer_view_t *left, const tinypy_integer_view_t *right, int want_remainder, tinypy_error_t **out_error) {
     size_t quotient_capacity;
@@ -275,7 +266,7 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
         uint32_t carry = (uint32_t)((left->digits[(bit_index - 1U) / 15U] >> ((bit_index - 1U) % 15U)) & UINT16_C(1));
         size_t index;
 
-        for (index = 0U; index < remainder_count; index += 1U) {
+        for (index = 0U; index < remainder_count; ++index) {
             uint32_t shifted = (uint32_t)remainder_digits[index] * 2U + carry;
             remainder_digits[index] = (uint16_t)(shifted & TINYPY_LONG_MASK);
             carry = shifted >> 15U;
@@ -296,7 +287,7 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
         uint32_t carry = 1U;
         size_t index;
 
-        for (index = 0U; index < quotient_capacity && carry != 0U; index += 1U) {
+        for (index = 0U; index < quotient_capacity && carry != 0U; ++index) {
             uint32_t incremented = (uint32_t)quotient[index] + carry;
             quotient[index] = (uint16_t)(incremented & TINYPY_LONG_MASK);
             carry = incremented >> 15U;
@@ -307,7 +298,7 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
             int32_t borrow = 0;
             size_t previous_remainder_count = remainder_count;
 
-            for (index = 0U; index < right->count; index += 1U) {
+            for (index = 0U; index < right->count; ++index) {
                 int32_t difference = (int32_t)right->digits[index] - borrow - (index < previous_remainder_count ? (int32_t)remainder_digits[index] : 0);
                 if (difference < 0) {
                     difference += (int32_t)TINYPY_LONG_BASE;
@@ -328,7 +319,6 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
     tinypy_internal_vm_deallocate(vm, quotient, quotient_capacity * sizeof(*quotient), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_operator_add_overflow(int64_t left, int64_t right, int64_t *result) {
     if ((right > 0 && left > INT64_MAX - right) || (right < 0 && left < INT64_MIN - right)) {
@@ -337,7 +327,6 @@ static int __tinypy_operator_add_overflow(int64_t left, int64_t right, int64_t *
     *result = left + right;
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_operator_subtract_overflow(int64_t left, int64_t right, int64_t *result) {
     if ((right < 0 && left > INT64_MAX + right) || (right > 0 && left < INT64_MIN + right)) {
@@ -346,7 +335,6 @@ static int __tinypy_operator_subtract_overflow(int64_t left, int64_t right, int6
     *result = left - right;
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_operator_multiply_overflow(int64_t left, int64_t right, int64_t *result) {
     if (left == 0 || right == 0) {
@@ -367,10 +355,9 @@ static int __tinypy_operator_multiply_overflow(int64_t left, int64_t right, int6
     *result = left * right;
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static double __tinypy_operator_as_double(const tinypy_value_t *value) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (kind == TINYPY_VALUE_FLOAT) {
         return TINYPY_FLOAT_OBJECT(value)->value;
@@ -387,10 +374,9 @@ static double __tinypy_operator_as_double(const tinypy_value_t *value) {
         return TINYPY_LONG_SIGN(value) < 0 ? -result : result;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_operator_as_complex(const tinypy_value_t *value, double *real, double *imaginary) {
-    if (tinypy_internal_value_kind(value) == TINYPY_VALUE_COMPLEX) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_COMPLEX) {
         *real = TINYPY_COMPLEX_OBJECT(value)->real;
         *imaginary = TINYPY_COMPLEX_OBJECT(value)->imaginary;
     }
@@ -399,11 +385,10 @@ static void __tinypy_operator_as_complex(const tinypy_value_t *value, double *re
         *imaginary = 0.0;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_numeric_add(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right, int subtract, tinypy_error_t **out_error) {
-    tinypy_value_type_e left_kind = tinypy_internal_value_kind(left);
-    tinypy_value_type_e right_kind = tinypy_internal_value_kind(right);
+    tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
+    tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
 
     if (__tinypy_operator_is_number(left_kind) == 0 || __tinypy_operator_is_number(right_kind) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unsupported numeric operands", out_error);
@@ -439,7 +424,6 @@ static tinypy_value_t *__tinypy_operator_numeric_add(tinypy_vm_t *vm, tinypy_val
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unsupported numeric operands", out_error);
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_concat_text(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right, int unicode) {
     const void *left_bytes;
@@ -475,7 +459,6 @@ static tinypy_value_t *__tinypy_operator_concat_text(tinypy_vm_t *vm, tinypy_val
     tinypy_internal_vm_deallocate(vm, buffer, left_size + right_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_operator_digits_as_i64(int sign, const uint16_t *digits, size_t count, int64_t *out_value) {
     uint64_t magnitude = 0U;
@@ -506,7 +489,6 @@ static int __tinypy_operator_digits_as_i64(int sign, const uint16_t *digits, siz
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_integer_from_digits(tinypy_vm_t *vm, int sign, uint16_t *digits, size_t count, int prefer_long) {
     int64_t integer;
@@ -520,18 +502,17 @@ static tinypy_value_t *__tinypy_operator_integer_from_digits(tinypy_vm_t *vm, in
     }
     return tinypy_long_from_base15_digits(vm, sign, digits, count);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_operator_twos_complement(const tinypy_integer_view_t *view, uint16_t *digits, size_t width) {
     size_t index;
 
-    for (index = 0U; index < width; index += 1U) {
+    for (index = 0U; index < width; ++index) {
         digits[index] = index < view->count ? view->digits[index] : 0U;
     }
     if (view->sign < 0) {
         uint32_t carry = 1U;
 
-        for (index = 0U; index < width; index += 1U) {
+        for (index = 0U; index < width; ++index) {
             uint32_t value = (uint32_t)(TINYPY_LONG_MASK ^ digits[index]) + carry;
 
             digits[index] = (uint16_t)(value & TINYPY_LONG_MASK);
@@ -539,11 +520,10 @@ static void __tinypy_operator_twos_complement(const tinypy_integer_view_t *view,
         }
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_integer_bitwise(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right, int operation, tinypy_error_t **out_error) {
-    tinypy_value_type_e left_kind = tinypy_internal_value_kind(left);
-    tinypy_value_type_e right_kind = tinypy_internal_value_kind(right);
+    tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
+    tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
     tinypy_integer_view_t left_view;
     tinypy_integer_view_t right_view;
     size_t width;
@@ -576,14 +556,14 @@ static tinypy_value_t *__tinypy_operator_integer_bitwise(tinypy_vm_t *vm, tinypy
     right_digits = (uint16_t *)tinypy_internal_vm_allocate(vm, width * sizeof(*right_digits), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     __tinypy_operator_twos_complement(&left_view, left_digits, width);
     __tinypy_operator_twos_complement(&right_view, right_digits, width);
-    for (index = 0U; index < width; index += 1U) {
+    for (index = 0U; index < width; ++index) {
         left_digits[index] = (uint16_t)(operation == 0 ? left_digits[index] & right_digits[index] : (operation == 1 ? left_digits[index] ^ right_digits[index] : left_digits[index] | right_digits[index]));
     }
     sign = (left_digits[width - 1U] & UINT16_C(0x4000)) != 0U ? -1 : 1;
     if (sign < 0) {
         uint32_t carry = 1U;
 
-        for (index = 0U; index < width; index += 1U) {
+        for (index = 0U; index < width; ++index) {
             uint32_t value = (uint32_t)(TINYPY_LONG_MASK ^ left_digits[index]) + carry;
 
             left_digits[index] = (uint16_t)(value & TINYPY_LONG_MASK);
@@ -596,36 +576,40 @@ static tinypy_value_t *__tinypy_operator_integer_bitwise(tinypy_vm_t *vm, tinypy
     tinypy_internal_vm_deallocate(vm, left_digits, width * sizeof(*left_digits), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_operator_shift_count(tinypy_vm_t *vm, tinypy_value_t *value, size_t *out_shift, tinypy_error_t **out_error) {
     tinypy_integer_view_t view;
     size_t shift = 0U;
+    size_t limit;
     size_t index;
 
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     if (__tinypy_operator_is_integer(kind) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "shift count must be an integer", out_error);
         return 0;
     }
     __tinypy_operator_integer_view(value, &view);
-    if (view.sign < 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "negative shift count", out_error);
-        return 0;
-    }
+    limit = view.sign < 0 ? (size_t)PTRDIFF_MAX + 1U : (size_t)PTRDIFF_MAX;
     for (index = view.count; index != 0U; index -= 1U) {
-        if (shift > (SIZE_MAX >> 15U)) {
+        if (shift > (limit >> 15U)) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "shift count is too large", out_error);
             return 0;
         }
         shift = (shift << 15U) | view.digits[index - 1U];
+        if (shift > limit) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "shift count is too large", out_error);
+            return 0;
+        }
+    }
+    if (view.sign < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "negative shift count", out_error);
+        return 0;
     }
     *out_shift = shift;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tinypy_value_t *left, size_t shift, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tinypy_value_t *left, size_t shift, int prefer_long, tinypy_error_t **out_error) {
     tinypy_integer_view_t view;
     size_t digit_shift = shift / 15U;
     size_t bit_shift = shift % 15U;
@@ -637,7 +621,7 @@ static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tin
 
     __tinypy_operator_integer_view(left, &view);
     if (view.sign == 0) {
-        return tinypy_internal_value_kind(left) == TINYPY_VALUE_LONG ? tinypy_long_from_base15_digits(vm, 0, NULL, 0U) : tinypy_integer_from_i64(vm, 0);
+        return prefer_long != 0 ? tinypy_long_from_base15_digits(vm, 0, NULL, 0U) : tinypy_integer_from_i64(vm, 0);
     }
     if (digit_shift > (size_t)PTRDIFF_MAX - view.count - 1U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "left shift result is too large", out_error);
@@ -647,7 +631,7 @@ static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tin
     assert(capacity != 0U && capacity <= SIZE_MAX / sizeof(*digits));
     digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     (void)memset(digits, 0, capacity * sizeof(*digits));
-    for (index = 0U; index < view.count; index += 1U) {
+    for (index = 0U; index < view.count; ++index) {
         uint32_t shifted = ((uint32_t)view.digits[index] << bit_shift) | carry;
 
         digits[index + digit_shift] = (uint16_t)(shifted & TINYPY_LONG_MASK);
@@ -656,14 +640,12 @@ static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tin
     if (bit_shift != 0U) {
         digits[view.count + digit_shift] = (uint16_t)carry;
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
-    result = __tinypy_operator_integer_from_digits(vm, view.sign, digits, capacity, kind == TINYPY_VALUE_LONG);
+    result = __tinypy_operator_integer_from_digits(vm, view.sign, digits, capacity, prefer_long);
     tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, tinypy_value_t *left, size_t shift) {
+static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, tinypy_value_t *left, size_t shift, int prefer_long) {
     tinypy_integer_view_t view;
     size_t digit_shift = shift / 15U;
     size_t bit_shift = shift % 15U;
@@ -672,8 +654,6 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
     int discarded = 0;
     size_t index;
     tinypy_value_t *result;
-    int prefer_long = tinypy_internal_value_kind(left) == TINYPY_VALUE_LONG;
-
     __tinypy_operator_integer_view(left, &view);
     if (view.sign == 0) {
         return prefer_long != 0 ? tinypy_long_from_base15_digits(vm, 0, NULL, 0U) : tinypy_integer_from_i64(vm, 0);
@@ -685,7 +665,7 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
     assert(capacity <= SIZE_MAX / sizeof(*digits));
     digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     (void)memset(digits, 0, capacity * sizeof(*digits));
-    for (index = 0U; index < digit_shift; index += 1U) {
+    for (index = 0U; index < digit_shift; ++index) {
         if (view.digits[index] != 0U) {
             discarded = 1;
         }
@@ -693,7 +673,7 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
     if (bit_shift != 0U && (view.digits[digit_shift] & (uint16_t)((UINT16_C(1) << bit_shift) - 1U)) != 0U) {
         discarded = 1;
     }
-    for (index = 0U; index < view.count - digit_shift; index += 1U) {
+    for (index = 0U; index < view.count - digit_shift; ++index) {
         size_t source = index + digit_shift;
         uint32_t value = (uint32_t)view.digits[source] >> bit_shift;
 
@@ -705,7 +685,7 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
     if (view.sign < 0 && discarded != 0) {
         uint32_t carry = 1U;
 
-        for (index = 0U; index < capacity && carry != 0U; index += 1U) {
+        for (index = 0U; index < capacity && carry != 0U; ++index) {
             uint32_t value = (uint32_t)digits[index] + carry;
 
             digits[index] = (uint16_t)(value & TINYPY_LONG_MASK);
@@ -717,14 +697,13 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
     tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_operator_integer_exponent(tinypy_vm_t *vm, tinypy_value_t *value, size_t *out_exponent, tinypy_error_t **out_error) {
     tinypy_integer_view_t view;
     size_t exponent = 0U;
     size_t index;
 
-    assert(__tinypy_operator_is_integer(tinypy_internal_value_kind(value)) != 0);
+    assert(__tinypy_operator_is_integer(TINYPY_VALUE_KIND(value)) != 0);
     __tinypy_operator_integer_view(value, &view);
     assert(view.sign >= 0);
     for (index = view.count; index != 0U; index -= 1U) {
@@ -737,7 +716,6 @@ static int __tinypy_operator_integer_exponent(tinypy_vm_t *vm, tinypy_value_t *v
     *out_exponent = exponent;
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_call_unary_special(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
     tinypy_value_t *method = tinypy_object_get_attr(value, name, name_size, out_error);
@@ -747,24 +725,23 @@ static tinypy_value_t *__tinypy_operator_call_unary_special(tinypy_value_t *valu
     if (method == NULL) {
         return NULL;
     }
-    tinypy_vm_t *vm = tinypy_internal_value_vm(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     args = tinypy_tuple_from_items(vm, NULL, 0U);
     result = tinypy_call(method, args, NULL, out_error);
-    tinypy_release(args);
-    tinypy_release(method);
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(method);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_positive(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_type_e kind;
 
     assert(value != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
-    tinypy_internal_clear_error(out_error);
-    kind = tinypy_internal_value_kind(value);
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_CLEAR_ERROR(out_error);
+    kind = TINYPY_VALUE_KIND(value);
     if (__tinypy_operator_is_integer(kind) != 0 || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX) {
-        tinypy_retain(value);
+        TINYPY_INCREF(value);
         return value;
     }
     if (value->type->number_slots != NULL && value->type->number_slots->positive != NULL) {
@@ -773,21 +750,20 @@ tinypy_value_t *tinypy_positive(tinypy_value_t *value, tinypy_error_t **out_erro
     if (tinypy_internal_object_has_special(value, "__pos__", 7U) != 0) {
         return __tinypy_operator_call_unary_special(value, "__pos__", 7U, out_error);
     }
-    tinypy_vm_t *vm = tinypy_internal_value_vm(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bad operand for unary plus", out_error);
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_negative(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm;
     tinypy_value_type_e kind;
 
     assert(value != NULL);
-    vm = tinypy_internal_value_vm(value);
+    vm = TINYPY_VALUE_VM(value);
     assert(tinypy_internal_vm_valid(vm));
-    tinypy_internal_clear_error(out_error);
-    kind = tinypy_internal_value_kind(value);
+    TINYPY_CLEAR_ERROR(out_error);
+    kind = TINYPY_VALUE_KIND(value);
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
         int64_t integer = TINYPY_INTEGER_VALUE(value);
         if (integer != INT64_MIN) {
@@ -814,17 +790,16 @@ tinypy_value_t *tinypy_negative(tinypy_value_t *value, tinypy_error_t **out_erro
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bad operand for unary minus", out_error);
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_invert(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm;
     tinypy_value_type_e kind;
 
     assert(value != NULL);
-    vm = tinypy_internal_value_vm(value);
+    vm = TINYPY_VALUE_VM(value);
     assert(tinypy_internal_vm_valid(vm));
-    tinypy_internal_clear_error(out_error);
-    kind = tinypy_internal_value_kind(value);
+    TINYPY_CLEAR_ERROR(out_error);
+    kind = TINYPY_VALUE_KIND(value);
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
         return tinypy_integer_from_i64(vm, ~TINYPY_INTEGER_VALUE(value));
     }
@@ -838,8 +813,8 @@ tinypy_value_t *tinypy_invert(tinypy_value_t *value, tinypy_error_t **out_error)
         }
         one = tinypy_integer_from_i64(vm, 1);
         result = tinypy_subtract(negative, one, out_error);
-        tinypy_release(one);
-        tinypy_release(negative);
+        TINYPY_DECREF(one);
+        TINYPY_DECREF(negative);
         return result;
     }
     if (value->type->number_slots != NULL && value->type->number_slots->invert != NULL) {
@@ -851,10 +826,9 @@ tinypy_value_t *tinypy_invert(tinypy_value_t *value, tinypy_error_t **out_error)
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bad operand for unary invert", out_error);
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_call_special(tinypy_value_t *receiver, const char *name, size_t name_size, tinypy_value_t *argument, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(receiver);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
     tinypy_value_t *method = tinypy_object_get_attr(receiver, name, name_size, out_error);
     tinypy_value_t *args;
     tinypy_value_t *result;
@@ -864,14 +838,13 @@ static tinypy_value_t *__tinypy_operator_call_special(tinypy_value_t *receiver, 
     }
     args = tinypy_tuple_from_items(vm, &argument, 1U);
     result = tinypy_call(method, args, NULL, out_error);
-    tinypy_release(args);
-    tinypy_release(method);
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(method);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, tinypy_value_t *right, const char *name, size_t name_size, const char *reverse_name, size_t reverse_name_size, int32_t *out_handled, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(left);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
 
     *out_handled = INT32_C(0);
     if (tinypy_internal_object_has_special(left, name, name_size) != 0) {
@@ -885,7 +858,7 @@ static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, ti
         if (result != &vm->not_implemented_object.base) {
             return result;
         }
-        tinypy_release(result);
+        TINYPY_DECREF(result);
     }
     if (tinypy_internal_object_has_special(right, reverse_name, reverse_name_size) != 0) {
         tinypy_value_t *result;
@@ -898,28 +871,27 @@ static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, ti
         if (result != &vm->not_implemented_object.base) {
             return result;
         }
-        tinypy_release(result);
+        TINYPY_DECREF(result);
     }
     *out_handled = INT32_C(0);
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_concat_sequence(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
-    size_t left_size = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_size(left) : tinypy_list_size(left);
-    size_t right_size = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_size(right) : tinypy_list_size(right);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
+    size_t left_size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(left) : TINYPY_LIST_SIZE(left);
+    size_t right_size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(right) : TINYPY_LIST_SIZE(right);
     tinypy_value_t **items;
     tinypy_value_t *result;
     size_t index;
 
     assert(left_size <= SIZE_MAX - right_size);
     items = left_size + right_size != 0U ? (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (left_size + right_size) * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
-    for (index = 0U; index < left_size; index += 1U) {
-        items[index] = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_get(left, index) : tinypy_list_get(left, index);
+    for (index = 0U; index < left_size; ++index) {
+        items[index] = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(left, index) : TINYPY_LIST_GET(left, index);
     }
-    for (index = 0U; index < right_size; index += 1U) {
-        items[left_size + index] = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_get(right, index) : tinypy_list_get(right, index);
+    for (index = 0U; index < right_size; ++index) {
+        items[left_size + index] = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(right, index) : TINYPY_LIST_GET(right, index);
     }
     result = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_from_items(vm, items, left_size + right_size) : tinypy_list_from_items(vm, items, left_size + right_size);
     if (items != NULL) {
@@ -927,10 +899,9 @@ static tinypy_value_t *__tinypy_operator_concat_sequence(tinypy_vm_t *vm, tinypy
     }
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_operator_repeat_count(tinypy_value_t *value, size_t *out_count) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
         int64_t count = TINYPY_INTEGER_VALUE(value);
@@ -957,17 +928,16 @@ static int32_t __tinypy_operator_repeat_count(tinypy_value_t *value, size_t *out
     }
     return INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t *sequence, size_t count) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(sequence);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(sequence);
     size_t unit_size;
     size_t total_size;
     size_t index;
 
     if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
-        const unsigned char *bytes = tinypy_internal_text_bytes(sequence);
-        unit_size = tinypy_internal_text_byte_size(sequence);
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(sequence);
+        unit_size = TINYPY_TEXT_BYTE_SIZE(sequence);
         assert(unit_size == 0U || count <= SIZE_MAX / unit_size);
         total_size = unit_size * count;
         if (total_size == 0U) {
@@ -976,7 +946,7 @@ static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t 
             unsigned char *buffer = (unsigned char *)tinypy_internal_vm_allocate(vm, total_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
             tinypy_value_t *result;
 
-            for (index = 0U; index < count; index += 1U) {
+            for (index = 0U; index < count; ++index) {
                 (void)memcpy(buffer + index * unit_size, bytes, unit_size);
             }
             result = kind == TINYPY_VALUE_STRING ? tinypy_string_from_bytes(vm, buffer, total_size) : tinypy_unicode_from_utf8(vm, (const char *)buffer, total_size);
@@ -984,14 +954,14 @@ static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t 
             return result;
         }
     }
-    unit_size = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_size(sequence) : tinypy_list_size(sequence);
+    unit_size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(sequence) : TINYPY_LIST_SIZE(sequence);
     assert(unit_size == 0U || count <= SIZE_MAX / unit_size);
     total_size = unit_size * count; {
         tinypy_value_t **items = total_size != 0U ? (tinypy_value_t **)tinypy_internal_vm_allocate(vm, total_size * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
         tinypy_value_t *result;
 
-        for (index = 0U; index < total_size; index += 1U) {
-            items[index] = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_get(sequence, index % unit_size) : tinypy_list_get(sequence, index % unit_size);
+        for (index = 0U; index < total_size; ++index) {
+            items[index] = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(sequence, index % unit_size) : TINYPY_LIST_GET(sequence, index % unit_size);
         }
         result = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_from_items(vm, items, total_size) : tinypy_list_from_items(vm, items, total_size);
         if (items != NULL) {
@@ -1000,7 +970,6 @@ static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t 
         return result;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_add(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm;
@@ -1008,12 +977,12 @@ tinypy_value_t *tinypy_add(tinypy_value_t *left, tinypy_value_t *right, tinypy_e
     tinypy_value_type_e right_kind;
 
     assert(left != NULL && right != NULL);
-    vm = tinypy_internal_value_vm(left);
+    vm = TINYPY_VALUE_VM(left);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, right));
-    tinypy_internal_clear_error(out_error);
-    left_kind = tinypy_internal_value_kind(left);
-    right_kind = tinypy_internal_value_kind(right);
+    TINYPY_CLEAR_ERROR(out_error);
+    left_kind = TINYPY_VALUE_KIND(left);
+    right_kind = TINYPY_VALUE_KIND(right);
     if (left_kind == TINYPY_VALUE_STRING && right_kind == TINYPY_VALUE_STRING) {
         return __tinypy_operator_concat_text(vm, left, right, 0);
     }
@@ -1035,21 +1004,20 @@ tinypy_value_t *tinypy_add(tinypy_value_t *left, tinypy_value_t *right, tinypy_e
     }
     return __tinypy_operator_numeric_add(vm, left, right, 0, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_subtract(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(left);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     assert(left != NULL && right != NULL);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, right));
-    tinypy_internal_clear_error(out_error);
-    if (tinypy_internal_value_kind(left) == TINYPY_VALUE_SET || tinypy_internal_value_kind(left) == TINYPY_VALUE_FROZENSET) {
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_SET || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_FROZENSET) {
         return tinypy_internal_set_binary(left, right, INT32_C(3), out_error);
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition = __tinypy_operator_is_number(kind) == 0;
     if (condition == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition = __tinypy_operator_is_number(kind_2) == 0;
     }
     if (condition) {
@@ -1062,10 +1030,9 @@ tinypy_value_t *tinypy_subtract(tinypy_value_t *left, tinypy_value_t *right, tin
     }
     return __tinypy_operator_numeric_add(vm, left, right, 1, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(left);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_value_type_e left_kind;
     tinypy_value_type_e right_kind;
     size_t repeat_count;
@@ -1073,9 +1040,9 @@ tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tin
     assert(left != NULL && right != NULL);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, right));
-    tinypy_internal_clear_error(out_error);
-    left_kind = tinypy_internal_value_kind(left);
-    right_kind = tinypy_internal_value_kind(right);
+    TINYPY_CLEAR_ERROR(out_error);
+    left_kind = TINYPY_VALUE_KIND(left);
+    right_kind = TINYPY_VALUE_KIND(right);
     if ((left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE || left_kind == TINYPY_VALUE_TUPLE || left_kind == TINYPY_VALUE_LIST) && __tinypy_operator_repeat_count(right, &repeat_count) != 0) {
         return __tinypy_operator_repeat(vm, left, repeat_count);
     }
@@ -1122,12 +1089,11 @@ tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tin
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unsupported multiply operands", out_error);
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_divide(tinypy_value_t *left, tinypy_value_t *right, int true_division, int remainder, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(left);
-    tinypy_value_type_e left_kind = tinypy_internal_value_kind(left);
-    tinypy_value_type_e right_kind = tinypy_internal_value_kind(right);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
+    tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
 
     if (__tinypy_operator_is_number(left_kind) == 0 || __tinypy_operator_is_number(right_kind) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unsupported division operands", out_error);
@@ -1206,20 +1172,19 @@ static tinypy_value_t *__tinypy_operator_divide(tinypy_value_t *left, tinypy_val
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unsupported division operands", out_error);
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     int32_t handled;
     tinypy_value_t *special;
 
     assert(left != NULL && right != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(left)));
-    assert(tinypy_internal_value_belongs_to(tinypy_internal_value_vm(left), right));
-    tinypy_internal_clear_error(out_error);
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(left)));
+    assert(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(left), right));
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition_2 = __tinypy_operator_is_number(kind) == 0;
     if (condition_2 == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition_2 = __tinypy_operator_is_number(kind_2) == 0;
     }
     if (condition_2) {
@@ -1230,20 +1195,19 @@ tinypy_value_t *tinypy_divide(tinypy_value_t *left, tinypy_value_t *right, tinyp
     }
     return __tinypy_operator_divide(left, right, 0, 0, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_floor_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     int32_t handled;
     tinypy_value_t *special;
 
     assert(left != NULL && right != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(left)));
-    assert(tinypy_internal_value_belongs_to(tinypy_internal_value_vm(left), right));
-    tinypy_internal_clear_error(out_error);
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(left)));
+    assert(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(left), right));
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition_3 = __tinypy_operator_is_number(kind) == 0;
     if (condition_3 == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition_3 = __tinypy_operator_is_number(kind_2) == 0;
     }
     if (condition_3) {
@@ -1254,20 +1218,19 @@ tinypy_value_t *tinypy_floor_divide(tinypy_value_t *left, tinypy_value_t *right,
     }
     return __tinypy_operator_divide(left, right, 0, 0, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_true_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     int32_t handled;
     tinypy_value_t *special;
 
     assert(left != NULL && right != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(left)));
-    assert(tinypy_internal_value_belongs_to(tinypy_internal_value_vm(left), right));
-    tinypy_internal_clear_error(out_error);
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(left)));
+    assert(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(left), right));
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition_4 = __tinypy_operator_is_number(kind) == 0;
     if (condition_4 == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition_4 = __tinypy_operator_is_number(kind_2) == 0;
     }
     if (condition_4) {
@@ -1278,23 +1241,22 @@ tinypy_value_t *tinypy_true_divide(tinypy_value_t *left, tinypy_value_t *right, 
     }
     return __tinypy_operator_divide(left, right, 1, 0, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_remainder(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     int32_t handled;
     tinypy_value_t *special;
 
     assert(left != NULL && right != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(left)));
-    assert(tinypy_internal_value_belongs_to(tinypy_internal_value_vm(left), right));
-    tinypy_internal_clear_error(out_error);
-    if (tinypy_internal_value_kind(left) == TINYPY_VALUE_STRING || tinypy_internal_value_kind(left) == TINYPY_VALUE_UNICODE) {
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(left)));
+    assert(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(left), right));
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_UNICODE) {
         return tinypy_internal_string_percent(left, right, out_error);
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition_5 = __tinypy_operator_is_number(kind) == 0;
     if (condition_5 == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition_5 = __tinypy_operator_is_number(kind_2) == 0;
     }
     if (condition_5) {
@@ -1305,7 +1267,6 @@ tinypy_value_t *tinypy_remainder(tinypy_value_t *left, tinypy_value_t *right, ti
     }
     return __tinypy_operator_divide(left, right, 0, 1, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm;
@@ -1313,12 +1274,12 @@ tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy
     tinypy_value_type_e right_kind;
 
     assert(left != NULL && right != NULL);
-    vm = tinypy_internal_value_vm(left);
+    vm = TINYPY_VALUE_VM(left);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, right));
-    tinypy_internal_clear_error(out_error);
-    left_kind = tinypy_internal_value_kind(left);
-    right_kind = tinypy_internal_value_kind(right);
+    TINYPY_CLEAR_ERROR(out_error);
+    left_kind = TINYPY_VALUE_KIND(left);
+    right_kind = TINYPY_VALUE_KIND(right);
     if (__tinypy_operator_is_number(left_kind) == 0 || __tinypy_operator_is_number(right_kind) == 0) {
         int32_t handled;
         tinypy_value_t *special = __tinypy_operator_special_binary(left, right, "__pow__", 7U, "__rpow__", 8U, &handled, out_error);
@@ -1394,14 +1355,14 @@ tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy
         }
         result = prefer_long != 0 ? tinypy_long_from_i64(vm, 1) : tinypy_integer_from_i64(vm, 1);
         base = left;
-        tinypy_retain(base);
+        TINYPY_INCREF(base);
         while (exponent != 0U) {
             if ((exponent & 1U) != 0U) {
                 tinypy_value_t *multiplied = tinypy_multiply(result, base, out_error);
 
-                tinypy_release(result);
+                TINYPY_DECREF(result);
                 if (multiplied == NULL) {
-                    tinypy_release(base);
+                    TINYPY_DECREF(base);
                     return NULL;
                 }
                 result = multiplied;
@@ -1410,33 +1371,32 @@ tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy
             if (exponent != 0U) {
                 tinypy_value_t *squared = tinypy_multiply(base, base, out_error);
 
-                tinypy_release(base);
+                TINYPY_DECREF(base);
                 if (squared == NULL) {
-                    tinypy_release(result);
+                    TINYPY_DECREF(result);
                     return NULL;
                 }
                 base = squared;
             }
         }
-        tinypy_release(base);
+        TINYPY_DECREF(base);
         return result;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_left_shift(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm;
     size_t shift;
 
     assert(left != NULL && right != NULL);
-    vm = tinypy_internal_value_vm(left);
+    vm = TINYPY_VALUE_VM(left);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, right));
-    tinypy_internal_clear_error(out_error);
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition_6 = __tinypy_operator_is_integer(kind) == 0;
     if (condition_6 == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition_6 = __tinypy_operator_is_integer(kind_2) == 0;
     }
     if (condition_6) {
@@ -1452,23 +1412,22 @@ tinypy_value_t *tinypy_left_shift(tinypy_value_t *left, tinypy_value_t *right, t
     if (__tinypy_operator_shift_count(vm, right, &shift, out_error) == 0) {
         return NULL;
     }
-    return __tinypy_operator_integer_left_shift(vm, left, shift, out_error);
+    return __tinypy_operator_integer_left_shift(vm, left, shift, TINYPY_VALUE_KIND(left) == TINYPY_VALUE_LONG || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_LONG, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_right_shift(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm;
     size_t shift;
 
     assert(left != NULL && right != NULL);
-    vm = tinypy_internal_value_vm(left);
+    vm = TINYPY_VALUE_VM(left);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, right));
-    tinypy_internal_clear_error(out_error);
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition_7 = __tinypy_operator_is_integer(kind) == 0;
     if (condition_7 == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition_7 = __tinypy_operator_is_integer(kind_2) == 0;
     }
     if (condition_7) {
@@ -1484,24 +1443,23 @@ tinypy_value_t *tinypy_right_shift(tinypy_value_t *left, tinypy_value_t *right, 
     if (__tinypy_operator_shift_count(vm, right, &shift, out_error) == 0) {
         return NULL;
     }
-    return __tinypy_operator_integer_right_shift(vm, left, shift);
+    return __tinypy_operator_integer_right_shift(vm, left, shift, TINYPY_VALUE_KIND(left) == TINYPY_VALUE_LONG || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_LONG);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_bit_and(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(left);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
 
     assert(left != NULL && right != NULL);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, right));
-    tinypy_internal_clear_error(out_error);
-    if (tinypy_internal_value_kind(left) == TINYPY_VALUE_SET || tinypy_internal_value_kind(left) == TINYPY_VALUE_FROZENSET) {
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_SET || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_FROZENSET) {
         return tinypy_internal_set_binary(left, right, INT32_C(0), out_error);
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition_8 = __tinypy_operator_is_integer(kind) == 0;
     if (condition_8 == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition_8 = __tinypy_operator_is_integer(kind_2) == 0;
     }
     if (condition_8) {
@@ -1514,22 +1472,21 @@ tinypy_value_t *tinypy_bit_and(tinypy_value_t *left, tinypy_value_t *right, tiny
     }
     return __tinypy_operator_integer_bitwise(vm, left, right, 0, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_bit_xor(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(left);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
 
     assert(left != NULL && right != NULL);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, right));
-    tinypy_internal_clear_error(out_error);
-    if (tinypy_internal_value_kind(left) == TINYPY_VALUE_SET || tinypy_internal_value_kind(left) == TINYPY_VALUE_FROZENSET) {
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_SET || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_FROZENSET) {
         return tinypy_internal_set_binary(left, right, INT32_C(1), out_error);
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition_9 = __tinypy_operator_is_integer(kind) == 0;
     if (condition_9 == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition_9 = __tinypy_operator_is_integer(kind_2) == 0;
     }
     if (condition_9) {
@@ -1542,22 +1499,21 @@ tinypy_value_t *tinypy_bit_xor(tinypy_value_t *left, tinypy_value_t *right, tiny
     }
     return __tinypy_operator_integer_bitwise(vm, left, right, 1, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_bit_or(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(left);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
 
     assert(left != NULL && right != NULL);
     assert(tinypy_internal_vm_valid(vm));
     assert(tinypy_internal_value_belongs_to(vm, right));
-    tinypy_internal_clear_error(out_error);
-    if (tinypy_internal_value_kind(left) == TINYPY_VALUE_SET || tinypy_internal_value_kind(left) == TINYPY_VALUE_FROZENSET) {
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_SET || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_FROZENSET) {
         return tinypy_internal_set_binary(left, right, INT32_C(2), out_error);
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(left);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     int condition_10 = __tinypy_operator_is_integer(kind) == 0;
     if (condition_10 == 0) {
-        tinypy_value_type_e kind_2 = tinypy_internal_value_kind(right);
+        tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(right);
         condition_10 = __tinypy_operator_is_integer(kind_2) == 0;
     }
     if (condition_10) {

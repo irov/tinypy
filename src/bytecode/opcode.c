@@ -145,7 +145,6 @@ static void __tinypy_opcode_clear_instruction(tinypy_decoded_instruction_t *inst
     instruction->has_argument = 0U;
     instruction->reserved = 0U;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_opcode_name_equal(const char *candidate, const char *name, size_t name_size) {
     size_t index;
@@ -158,34 +157,28 @@ static int __tinypy_opcode_name_equal(const char *candidate, const char *name, s
 
     return candidate[name_size] == '\0';
 }
-
 //////////////////////////////////////////////////////////////////////////
 const tinypy_opcode_info_t *tinypy_opcode_get_info(uint8_t opcode) {
     const tinypy_opcode_info_t *info = &__tinypy_opcode_table[opcode];
 
     return info->name != NULL ? info : NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_opcode_name(uint8_t opcode) {
     return __tinypy_opcode_table[opcode].name;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int tinypy_opcode_is_defined(uint8_t opcode) {
     return __tinypy_opcode_table[opcode].name != NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int tinypy_opcode_has_argument(uint8_t opcode) {
     return opcode >= (uint8_t)TINYPY_OPCODE_HAVE_ARGUMENT;
 }
-
 //////////////////////////////////////////////////////////////////////////
 uint32_t tinypy_opcode_categories(uint8_t opcode) {
     return __tinypy_opcode_table[opcode].categories;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int tinypy_opcode_has_category(uint8_t opcode, tinypy_opcode_category_e category) {
     uint32_t requested = (uint32_t)category;
@@ -195,7 +188,6 @@ int tinypy_opcode_has_category(uint8_t opcode, tinypy_opcode_category_e category
 
     return (__tinypy_opcode_table[opcode].categories & requested) == requested;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int tinypy_opcode_lookup(const char *name, size_t name_size, uint8_t *out_opcode) {
     size_t opcode;
@@ -219,7 +211,6 @@ int tinypy_opcode_lookup(const char *name, size_t name_size, uint8_t *out_opcode
 
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_opcode_decode_status_e tinypy_opcode_decode(const uint8_t *bytecode, size_t bytecode_size, size_t offset, tinypy_decoded_instruction_t *out_instruction) {
     size_t cursor;
@@ -298,7 +289,6 @@ tinypy_opcode_decode_status_e tinypy_opcode_decode(const uint8_t *bytecode, size
         return TINYPY_OPCODE_DECODE_OK;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_opcode_decode_status_name(tinypy_opcode_decode_status_e status) {
     switch (status) {

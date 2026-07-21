@@ -4,31 +4,28 @@
 
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_functools_no_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    if (kwargs == NULL || tinypy_dict_size(kwargs) == 0U) {
+    if (kwargs == NULL || TINYPY_DICT_SIZE(kwargs) == 0U) {
         return INT32_C(1);
     }
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function does not accept keyword arguments", out_error);
     return INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_functools_dict_update(tinypy_value_t *target, tinypy_value_t *source) {
-    tinypy_dict_object_t *dict;
-    size_t index;
+    tinypy_dict_entry_t *iterator;
+    tinypy_dict_entry_t *iterator_end;
 
     if (source == NULL) {
         return;
     }
-    dict = TINYPY_DICT_OBJECT(source);
-    for (index = 0U; index <= dict->mask; index += 1U) {
-        tinypy_dict_entry_t *entry = &dict->table[index];
-
-        if (entry->state == TINYPY_DICT_ENTRY_ACTIVE) {
-            tinypy_dict_set(target, entry->key, entry->value);
+    iterator = TINYPY_DICT_ITERATOR_BEGIN(source);
+    iterator_end = TINYPY_DICT_ITERATOR_END(source);
+    for (; iterator != iterator_end; ++iterator) {
+        if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE) {
+            tinypy_dict_set(target, iterator->key, iterator->value);
         }
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_partial_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_partial_object_t *partial = TINYPY_PARTIAL_OBJECT(value);
@@ -40,26 +37,25 @@ void tinypy_internal_partial_release_references(tinypy_value_t *value, tinypy_re
         visit(partial->dict, user_data);
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     tinypy_partial_object_t *partial;
     tinypy_value_t *callable;
-    size_t argument_count = tinypy_tuple_size(args);
+    size_t argument_count = TINYPY_TUPLE_SIZE(args);
 
     if (argument_count == 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "partial expected at least one argument", out_error);
         return NULL;
     }
-    callable = tinypy_tuple_get(args, 0U);
+    callable = TINYPY_TUPLE_GET(args, 0U);
     if (callable->type->call == NULL && tinypy_internal_object_has_special(callable, "__call__", 8U) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "the first argument must be callable", out_error);
         return NULL;
     }
     partial = (tinypy_partial_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_PARTIAL, sizeof(*partial));
     partial->callable = callable;
-    tinypy_retain(callable);
+    TINYPY_INCREF(callable);
     tinypy_value_t *selected_value;
     if (argument_count == 1U) {
         selected_value = tinypy_tuple_from_items(vm, NULL, 0U);
@@ -73,13 +69,12 @@ tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value
     __tinypy_functools_dict_update(partial->keywords, kwargs);
     return &partial->base;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_partial_object_t *partial = TINYPY_PARTIAL_OBJECT(callable);
-    tinypy_vm_t *vm = tinypy_internal_value_vm(callable);
-    size_t bound_count = tinypy_tuple_size(partial->args);
-    size_t call_count = tinypy_tuple_size(args);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+    size_t bound_count = TINYPY_TUPLE_SIZE(partial->args);
+    size_t call_count = TINYPY_TUPLE_SIZE(args);
     tinypy_value_t **items;
     tinypy_value_t *combined_args;
     tinypy_value_t *combined_kwargs;
@@ -93,11 +88,11 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
     }
     else {
         items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (bound_count + call_count) * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
-        for (index = 0U; index < bound_count; index += 1U) {
-            items[index] = tinypy_tuple_get(partial->args, index);
+        for (index = 0U; index < bound_count; ++index) {
+            items[index] = TINYPY_TUPLE_GET(partial->args, index);
         }
-        for (index = 0U; index < call_count; index += 1U) {
-            items[bound_count + index] = tinypy_tuple_get(args, index);
+        for (index = 0U; index < call_count; ++index) {
+            items[bound_count + index] = TINYPY_TUPLE_GET(args, index);
         }
         combined_args = tinypy_tuple_from_items(vm, items, bound_count + call_count);
         tinypy_internal_vm_deallocate(vm, items, (bound_count + call_count) * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
@@ -106,15 +101,14 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
     __tinypy_functools_dict_update(combined_kwargs, partial->keywords);
     __tinypy_functools_dict_update(combined_kwargs, kwargs);
     result = tinypy_call(partial->callable, combined_args, combined_kwargs, out_error);
-    tinypy_release(combined_kwargs);
-    tinypy_release(combined_args);
+    TINYPY_DECREF(combined_kwargs);
+    TINYPY_DECREF(combined_args);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_functools_reduce(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
-    size_t argument_count = tinypy_tuple_size(args);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    size_t argument_count = TINYPY_TUPLE_SIZE(args);
     tinypy_value_t *iterator;
     tinypy_value_t *accumulator;
     tinypy_error_t *iteration_error = NULL;
@@ -127,19 +121,19 @@ static tinypy_value_t *__tinypy_functools_reduce(tinypy_value_t *function, tinyp
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reduce expected two or three arguments", out_error);
         return NULL;
     }
-    tinypy_value_t *item_2 = tinypy_tuple_get(args, 1U);
+    tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
     iterator = tinypy_iter(item_2, out_error);
     if (iterator == NULL) {
         return NULL;
     }
     if (argument_count == 3U) {
-        accumulator = tinypy_tuple_get(args, 2U);
-        tinypy_retain(accumulator);
+        accumulator = TINYPY_TUPLE_GET(args, 2U);
+        TINYPY_INCREF(accumulator);
     }
     else {
         accumulator = tinypy_next(iterator, &iteration_error);
         if (accumulator == NULL) {
-            tinypy_release(iterator);
+            TINYPY_DECREF(iterator);
             if (iteration_error != NULL) {
                 if (out_error != NULL) {
                     *out_error = iteration_error;
@@ -166,21 +160,21 @@ static tinypy_value_t *__tinypy_functools_reduce(tinypy_value_t *function, tinyp
         call_items[0] = accumulator;
         call_items[1] = item;
         call_args = tinypy_tuple_from_items(vm, call_items, 2U);
-        tinypy_value_t *item_3 = tinypy_tuple_get(args, 0U);
+        tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 0U);
         next = tinypy_call(item_3, call_args, NULL, out_error);
-        tinypy_release(call_args);
-        tinypy_release(item);
+        TINYPY_DECREF(call_args);
+        TINYPY_DECREF(item);
         if (next == NULL) {
-            tinypy_release(accumulator);
-            tinypy_release(iterator);
+            TINYPY_DECREF(accumulator);
+            TINYPY_DECREF(iterator);
             return NULL;
         }
-        tinypy_release(accumulator);
+        TINYPY_DECREF(accumulator);
         accumulator = next;
     }
-    tinypy_release(iterator);
+    TINYPY_DECREF(iterator);
     if (iteration_error != NULL) {
-        tinypy_release(accumulator);
+        TINYPY_DECREF(accumulator);
         if (out_error != NULL) {
             *out_error = iteration_error;
         }
@@ -191,7 +185,6 @@ static tinypy_value_t *__tinypy_functools_reduce(tinypy_value_t *function, tinyp
     }
     return accumulator;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_functools_module(tinypy_vm_t *vm) {
     tinypy_value_t *module = tinypy_module_new(vm, "_functools", 10U);
@@ -201,8 +194,8 @@ void tinypy_internal_initialize_functools_module(tinypy_vm_t *vm) {
     tinypy_module_add_value(module, "__name__", 8U, name);
     tinypy_module_add_value(module, "partial", 7U, &vm->partial_type.base.base);
     tinypy_module_add_value(module, "reduce", 6U, reduce);
-    tinypy_release(reduce);
-    tinypy_release(name);
+    TINYPY_DECREF(reduce);
+    TINYPY_DECREF(name);
     tinypy_internal_register_module(vm, "_functools", 10U, module);
-    tinypy_release(module);
+    TINYPY_DECREF(module);
 }

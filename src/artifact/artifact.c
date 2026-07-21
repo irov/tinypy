@@ -54,12 +54,10 @@ static const uint8_t tinypy_artifact_magic[8] = {
 static uint16_t __tinypy_artifact_read_u16_le(const uint8_t *data) {
     return (uint16_t)((uint16_t)data[0] | ((uint16_t)data[1] << 8U));
 }
-
 //////////////////////////////////////////////////////////////////////////
 static uint32_t __tinypy_artifact_read_u32_le(const uint8_t *data) {
     return (uint32_t)data[0] | ((uint32_t)data[1] << 8U) | ((uint32_t)data[2] << 16U) | ((uint32_t)data[3] << 24U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static uint64_t __tinypy_artifact_read_u64_le(const uint8_t *data) {
     uint64_t value = UINT64_C(0);
@@ -69,13 +67,11 @@ static uint64_t __tinypy_artifact_read_u64_le(const uint8_t *data) {
     }
     return value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_artifact_write_u16_le(uint8_t *data, uint16_t value) {
     data[0] = (uint8_t)value;
     data[1] = (uint8_t)(value >> 8U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_artifact_write_u32_le(uint8_t *data, uint32_t value) {
     data[0] = (uint8_t)value;
@@ -83,7 +79,6 @@ static void __tinypy_artifact_write_u32_le(uint8_t *data, uint32_t value) {
     data[2] = (uint8_t)(value >> 16U);
     data[3] = (uint8_t)(value >> 24U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_artifact_write_u64_le(uint8_t *data, uint64_t value) {
     size_t index;
@@ -91,7 +86,6 @@ static void __tinypy_artifact_write_u64_le(uint8_t *data, uint64_t value) {
         data[index] = (uint8_t)(value >> (index * 8U));
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static uint32_t __tinypy_artifact_crc32(const uint8_t *data, size_t size) {
     uint32_t crc = UINT32_C(0xffffffff);
@@ -107,7 +101,6 @@ static uint32_t __tinypy_artifact_crc32(const uint8_t *data, size_t size) {
     }
     return ~crc;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_artifact_metadata_valid(const tinypy_artifact_metadata_t *metadata) {
     static const uint8_t zero_digest[32] = {0};
@@ -123,7 +116,6 @@ static int __tinypy_artifact_metadata_valid(const tinypy_artifact_metadata_t *me
 
     return metadata->abi_version == TINYPY_ARTIFACT_ABI_VERSION && metadata->struct_size >= sizeof(tinypy_artifact_metadata_t) && metadata->reserved == 0U && metadata->bytecode_magic == TINYPY_CPYTHON_27_MAGIC && metadata->runtime_abi != 0U && metadata->compiler_abi != 0U && metadata->meta_abi != 0U && metadata->preprocessor_abi != 0U && metadata->optimize_level <= 2U && metadata->payload_kind == (uint8_t)TINYPY_ARTIFACT_PAYLOAD_MARSHAL_V2 && (metadata->feature_flags & ~TINYPY_ARTIFACT_ALL_FEATURES) == 0U && has_source_map == (source_map_is_zero == 0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_artifact_status_e tinypy_artifact_encode(const tinypy_artifact_metadata_t *metadata, const void *payload, size_t payload_size, void *output, size_t output_capacity, size_t *out_size) {
     uint8_t *bytes;
@@ -218,7 +210,6 @@ tinypy_artifact_status_e tinypy_artifact_encode(const tinypy_artifact_metadata_t
     }
     return TINYPY_ARTIFACT_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_artifact_status_e tinypy_artifact_decode(const void *artifact, size_t artifact_size, size_t max_payload_size, tinypy_artifact_view_t *out_view) {
     const uint8_t *bytes = (const uint8_t *)artifact;
@@ -331,12 +322,10 @@ tinypy_artifact_status_e tinypy_artifact_decode(const void *artifact, size_t art
     }
     return TINYPY_ARTIFACT_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_artifact_field_equal(uint32_t flags, uint32_t flag, uint32_t actual, uint32_t expected) {
     return (flags & flag) == 0U || actual == expected;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_artifact_status_e tinypy_artifact_check_profile(const tinypy_artifact_view_t *view, const tinypy_artifact_expectation_t *expectation) {
     uint32_t flags;
@@ -371,7 +360,6 @@ tinypy_artifact_status_e tinypy_artifact_check_profile(const tinypy_artifact_vie
     }
     return TINYPY_ARTIFACT_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_artifact_status_name(tinypy_artifact_status_e status) {
     switch (status) {

@@ -37,6 +37,11 @@ typedef struct test_compile_thread_state_t {
     int32_t passed;
 } test_compile_thread_state_t;
 
+typedef struct test_interrupt_host_t {
+    size_t polls;
+    size_t interrupt_after;
+} test_interrupt_host_t;
+
 //////////////////////////////////////////////////////////////////////////
 static void *__test_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
@@ -50,7 +55,6 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment, uin
     state->bytes += size;
     return memory;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
@@ -64,7 +68,6 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
     state->bytes += new_size;
     return resized;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
@@ -77,7 +80,13 @@ static void __test_deallocate(void *user_data, void *memory, size_t size, size_t
     state->bytes -= size;
     free(memory);
 }
+//////////////////////////////////////////////////////////////////////////
+static int __test_poll_interrupt(void *user_data) {
+    test_interrupt_host_t *host = (test_interrupt_host_t *)user_data;
 
+    host->polls += 1U;
+    return host->polls >= host->interrupt_after ? 1 : 0;
+}
 //////////////////////////////////////////////////////////////////////////
 static tinypy_vm_t *__test_vm_create(test_allocator_state_t *state, int32_t optimize_level) {
     tinypy_allocator_t allocator;
@@ -97,7 +106,6 @@ static tinypy_vm_t *__test_vm_create(test_allocator_state_t *state, int32_t opti
     config.optimize_level = optimize_level;
     return tinypy_vm_create(&config);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static const tinypy_module_artifact_t *__test_source_resolve(void *user_data, const tinypy_module_request_t *request) {
     test_source_host_t *host = (test_source_host_t *)user_data;
@@ -108,7 +116,6 @@ static const tinypy_module_artifact_t *__test_source_resolve(void *user_data, co
     host->resolve_count += 1U;
     return &host->artifact;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __test_source_release(void *user_data, const tinypy_module_artifact_t *artifact) {
     test_source_host_t *host = (test_source_host_t *)user_data;
@@ -116,7 +123,6 @@ static void __test_source_release(void *user_data, const tinypy_module_artifact_
     assert(artifact == &host->artifact);
     host->release_count += 1U;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static const tinypy_module_artifact_t *__test_source_multi_resolve(void *user_data, const tinypy_module_request_t *request) {
     test_source_multi_host_t *host = (test_source_multi_host_t *)user_data;
@@ -132,7 +138,6 @@ static const tinypy_module_artifact_t *__test_source_multi_resolve(void *user_da
     }
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __test_source_multi_release(void *user_data, const tinypy_module_artifact_t *artifact) {
     test_source_multi_host_t *host = (test_source_multi_host_t *)user_data;
@@ -140,7 +145,6 @@ static void __test_source_multi_release(void *user_data, const tinypy_module_art
     assert(artifact >= host->artifacts && artifact < host->artifacts + host->artifact_count);
     host->release_count += 1U;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_vm_t *__test_vm_create_with_source_host(test_allocator_state_t *state, test_source_host_t *source_host) {
     tinypy_allocator_t allocator;
@@ -167,7 +171,6 @@ static tinypy_vm_t *__test_vm_create_with_source_host(test_allocator_state_t *st
     config.host = &host;
     return tinypy_vm_create(&config);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_vm_t *__test_vm_create_with_source_multi_host(test_allocator_state_t *state, test_source_multi_host_t *source_host) {
     tinypy_allocator_t allocator;
@@ -194,7 +197,6 @@ static tinypy_vm_t *__test_vm_create_with_source_multi_host(test_allocator_state
     config.host = &host;
     return tinypy_vm_create(&config);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_empty_exec(void) {
     static const char logical_filename[] = {'e', 'm', 'p', 't', 'y', '.', 'p', 'y'};
@@ -231,7 +233,6 @@ static int __test_empty_exec(void) {
     assert(state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_source_diagnostic(void) {
     test_allocator_state_t state = {0U, 0U};
@@ -261,7 +262,6 @@ static int __test_source_diagnostic(void) {
     assert(state.allocations == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_source_decoding(void) {
     static const unsigned char latin1_source[] = "#!/usr/bin/env python\n# coding: latin-1\nvalue = u\"\xe9\"\n";
@@ -318,7 +318,6 @@ static int __test_source_decoding(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __test_unicode_value(tinypy_value_t *value, const unsigned char *expected, size_t expected_size) {
     const char *bytes;
@@ -330,7 +329,6 @@ static void __test_unicode_value(tinypy_value_t *value, const unsigned char *exp
     assert(byte_size == expected_size);
     assert(memcmp(bytes, expected, expected_size) == 0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_named_unicode_escapes(void) {
     static const char source[] = "(u'\\N{LATIN SMALL LETTER A}', u'\\N{GREEK SMALL LETTER PI}', u'\\N{HANGUL SYLLABLE GA}', u'\\N{CJK UNIFIED IDEOGRAPH-4E00}')";
@@ -371,7 +369,6 @@ static int __test_named_unicode_escapes(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_dict_get(tinypy_vm_t *vm, tinypy_value_t *dict, const char *name, size_t name_size) {
     tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
@@ -382,7 +379,6 @@ static tinypy_value_t *__test_dict_get(tinypy_vm_t *vm, tinypy_value_t *dict, co
     tinypy_release(key);
     return value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_legacy_vm_config_optimize_default(void) {
     test_allocator_state_t state = {0U, 0U};
@@ -410,7 +406,6 @@ static int __test_legacy_vm_config_optimize_default(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_find_nested_code(tinypy_value_t *code, const char *name, size_t name_size) {
     tinypy_value_t *consts = tinypy_code_consts(code);
@@ -436,7 +431,6 @@ static tinypy_value_t *__test_find_nested_code(tinypy_value_t *code, const char 
     }
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_private_name_mangling(void) {
     static const char source[] = "class AnalyticUnit(object):\n    callback = lambda *_, **__: None\n";
@@ -464,7 +458,6 @@ static int __test_private_name_mangling(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_compile_marshal_parity(void) {
     static const unsigned char expected[] = {
@@ -494,7 +487,6 @@ static int __test_compile_marshal_parity(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_exec_eval_and_dynamic_compile(void) {
     static const char source[] =
@@ -542,7 +534,198 @@ static int __test_exec_eval_and_dynamic_compile(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
+//////////////////////////////////////////////////////////////////////////
+static int __test_runtime_cache_invalidation(void) {
+    static const char source[] =
+        "import sys\n"
+        "len = 7\n"
+        "def mutate_global():\n"
+        "    global len\n"
+        "    before = len\n"
+        "    len = 8\n"
+        "    after_store = len\n"
+        "    del len\n"
+        "    after_delete = len((1, 2, 3))\n"
+        "    len = 9\n"
+        "    after_restore = len\n"
+        "    return (before, after_store, after_delete, after_restore)\n"
+        "global_cache_result = mutate_global()\n"
+        "class CacheBase(object):\n"
+        "    value = 11\n"
+        "class CacheChild(CacheBase):\n"
+        "    pass\n"
+        "cache_instance = CacheChild()\n"
+        "cache_before = cache_instance.value\n"
+        "CacheBase.value = 12\n"
+        "cache_after_set = cache_instance.value\n"
+        "del CacheBase.value\n"
+        "try:\n"
+        "    cache_instance.value\n"
+        "    cache_after_delete = False\n"
+        "except AttributeError:\n"
+        "    cache_after_delete = True\n"
+        "CacheBase.value = 14\n"
+        "cache_after_restore = cache_instance.value\n"
+        "class AttributeFallback(object):\n"
+        "    @property\n"
+        "    def missing(self):\n"
+        "        raise AttributeError('missing')\n"
+        "    def __getattr__(self, name):\n"
+        "        return 42\n"
+        "attribute_fallback = AttributeFallback().missing\n"
+        "class AttributeValueError(object):\n"
+        "    @property\n"
+        "    def missing(self):\n"
+        "        raise ValueError('missing')\n"
+        "    def __getattr__(self, name):\n"
+        "        return 43\n"
+        "try:\n"
+        "    AttributeValueError().missing\n"
+        "    attribute_value_error = False\n"
+        "except ValueError:\n"
+        "    attribute_value_error = True\n"
+        "class GetattributeFallback(object):\n"
+        "    def __getattribute__(self, name):\n"
+        "        raise AttributeError(name)\n"
+        "    def __getattr__(self, name):\n"
+        "        return 44\n"
+        "getattribute_fallback = GetattributeFallback().missing\n"
+        "class DynamicGetattr(object):\n"
+        "    pass\n"
+        "dynamic_getattr_owner = DynamicGetattr()\n"
+        "try:\n"
+        "    dynamic_getattr_owner.missing\n"
+        "except AttributeError:\n"
+        "    pass\n"
+        "def dynamic_getattr(self, name):\n"
+        "    return 45\n"
+        "DynamicGetattr.__getattr__ = dynamic_getattr\n"
+        "dynamic_getattr_result = dynamic_getattr_owner.missing\n"
+        "class DynamicGetattribute(object):\n"
+        "    value = 46\n"
+        "dynamic_getattribute_owner = DynamicGetattribute()\n"
+        "dynamic_getattribute_before = dynamic_getattribute_owner.value\n"
+        "def dynamic_getattribute(self, name):\n"
+        "    return 47\n"
+        "DynamicGetattribute.__getattribute__ = dynamic_getattribute\n"
+        "dynamic_getattribute_after = dynamic_getattribute_owner.value\n"
+        "class InstanceHint(object):\n"
+        "    pass\n"
+        "instance_hint = InstanceHint()\n"
+        "instance_hint.value = 48\n"
+        "instance_hint_before = instance_hint.value\n"
+        "instance_hint.value = 49\n"
+        "instance_hint_after_set = instance_hint.value\n"
+        "del instance_hint.value\n"
+        "try:\n"
+        "    instance_hint.value\n"
+        "    instance_hint_after_delete = False\n"
+        "except AttributeError:\n"
+        "    instance_hint_after_delete = True\n"
+        "instance_hint.value = 50\n"
+        "instance_hint_after_restore = instance_hint.value\n"
+        "class MethodOwner(object):\n"
+        "    def add(self, value):\n"
+        "        return value + 1\n"
+        "method_owner = MethodOwner()\n"
+        "saved_method = method_owner.add\n"
+        "method_total = 0\n"
+        "for method_index in xrange(1024):\n"
+        "    method_total += method_owner.add(method_index)\n"
+        "saved_method_result = saved_method(41)\n"
+        "def retain_current_frame():\n"
+        "    current_frame = sys._getframe()\n"
+        "def retain_current_exception():\n"
+        "    try:\n"
+        "        raise ValueError('frame cycle')\n"
+        "    except ValueError:\n"
+        "        current_exception = sys.exc_info()\n"
+        "for frame_index in xrange(64):\n"
+        "    retain_current_frame()\n"
+        "    retain_current_exception()\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *global_cache_result;
+    tinypy_value_t *result;
+    tinypy_error_t *error = NULL;
 
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "runtime_cache.py", 15U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    tinypy_release(result);
+    global_cache_result = __test_dict_get(vm, globals, "global_cache_result", 19U);
+    assert(tinypy_tuple_size(global_cache_result) == 4U);
+    assert(tinypy_integer_as_i64(tinypy_tuple_get(global_cache_result, 0U)) == 7);
+    assert(tinypy_integer_as_i64(tinypy_tuple_get(global_cache_result, 1U)) == 8);
+    assert(tinypy_integer_as_i64(tinypy_tuple_get(global_cache_result, 2U)) == 3);
+    assert(tinypy_integer_as_i64(tinypy_tuple_get(global_cache_result, 3U)) == 9);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "cache_before", 12U)) == 11);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "cache_after_set", 15U)) == 12);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "cache_after_delete", 18U)) != 0);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "cache_after_restore", 19U)) == 14);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "attribute_fallback", 18U)) == 42);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "attribute_value_error", 21U)) != 0);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "getattribute_fallback", 21U)) == 44);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic_getattr_result", 22U)) == 45);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic_getattribute_before", 27U)) == 46);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic_getattribute_after", 26U)) == 47);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "instance_hint_before", 20U)) == 48);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "instance_hint_after_set", 23U)) == 49);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "instance_hint_after_delete", 26U)) != 0);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "instance_hint_after_restore", 27U)) == 50);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "method_total", 12U)) == 524800);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "saved_method_result", 19U)) == 42);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int __test_runtime_interrupt_polling(void) {
+    static const char source[] = "while True:\n    pass\n";
+    test_allocator_state_t state = {0U, 0U};
+    test_interrupt_host_t interrupt_host = {0U, 2U};
+    tinypy_allocator_t allocator;
+    tinypy_host_t host;
+    tinypy_vm_config_t config;
+    tinypy_compile_options_t options;
+    tinypy_vm_t *vm;
+    tinypy_value_t *globals;
+    tinypy_value_t *result;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = &state;
+    allocator.allocate = &__test_allocate;
+    allocator.reallocate = &__test_reallocate;
+    allocator.deallocate = &__test_deallocate;
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &interrupt_host;
+    host.poll_interrupt = &__test_poll_interrupt;
+    (void)memset(&config, 0, sizeof(config));
+    config.abi_version = TINYPY_ABI_VERSION;
+    config.struct_size = (uint32_t)sizeof(config);
+    config.allocator = &allocator;
+    config.host = &host;
+    vm = tinypy_vm_create(&config);
+    globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "interrupt.py", 12U, globals, NULL, &options, &error);
+    assert(result == NULL);
+    assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+    assert(interrupt_host.polls == 2U);
+    tinypy_error_release(error);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
 //////////////////////////////////////////////////////////////////////////
 static int __test_compile_modes_and_optimize(void) {
     test_allocator_state_t state = {0U, 0U};
@@ -590,7 +773,6 @@ static int __test_compile_modes_and_optimize(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_host_call_eval_without_frame(void) {
     test_allocator_state_t state = {0U, 0U};
@@ -609,7 +791,6 @@ static int __test_host_call_eval_without_frame(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_indentation_diagnostics(void) {
     static const char unexpected_indent[] = "  value = 1\n";
@@ -640,7 +821,6 @@ static int __test_indentation_diagnostics(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_dont_imply_dedent(void) {
     static const char incomplete[] = "if True:\n    pass";
@@ -666,7 +846,6 @@ static int __test_dont_imply_dedent(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_future_and_reserved_debug(void) {
     static const char misplaced_future[] = "value = 1\nfrom __future__ import division\n";
@@ -711,7 +890,6 @@ static int __test_future_and_reserved_debug(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_symtable_and_ast_error_messages(void) {
     static const char duplicate_argument[] = "def f(value, value): pass\n";
@@ -747,7 +925,6 @@ static int __test_symtable_and_ast_error_messages(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_codegen_syntax_errors(void) {
     static const char delete_free[] = "def outer():\n    value = 1\n    def inner(): return value\n    del value\n";
@@ -797,7 +974,6 @@ static int __test_codegen_syntax_errors(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_reentrant_compile_callback(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     test_reentrant_state_t *state = (test_reentrant_state_t *)user_data;
@@ -816,7 +992,6 @@ static tinypy_value_t *__test_reentrant_compile_callback(tinypy_value_t *functio
     tinypy_release(code);
     return tinypy_none_get(state->vm);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_reentrant_compile(void) {
     static const char source[] = "from __future__ import division\nnested_compile()\n";
@@ -846,7 +1021,6 @@ static int __test_reentrant_compile(void) {
     assert(allocator_state.allocations == 0U && allocator_state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __test_compile_thread_run(test_compile_thread_state_t *thread_state) {
     test_allocator_state_t allocator_state = {0U, 0U};
@@ -923,7 +1097,6 @@ static int __test_parallel_compile(void) {
     }
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_compiler_limits(void) {
     static const char source[] = "def f(a):\n    return (a + 123, 'constant payload')\nvalue = f(2)\n";
@@ -961,7 +1134,6 @@ static int __test_compiler_limits(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_source_import_and_rollback(void) {
     static const char valid_source[] = "value = 42\n";
@@ -1007,7 +1179,6 @@ static int __test_source_import_and_rollback(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_source_package_and_circular_imports(void) {
     static const char cycle_a_source[] = "import cycle_b\nvalue = cycle_b.value + 1\n";
@@ -1070,7 +1241,6 @@ static int __test_source_package_and_circular_imports(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_source_limit(void) {
     test_allocator_state_t state = {0U, 0U};
@@ -1092,7 +1262,6 @@ static int __test_source_limit(void) {
     assert(state.allocations == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_build_preprocessor(void) {
     static const char source[] = "if __FEATURE__ and (1 + 1 == 2):\n    result = __VALUE__\nelse:\n    missing_runtime_name\nif __NDEBUG__:\n    ndebug = 1\nelse:\n    ndebug = 0\nif True:\n    literal_true = 1\nif False:\n    dead_runtime_name\nelse:\n    literal_false = 0\nruntime_flag = True\nif __FEATURE__ and runtime_flag:\n    mixed = __VALUE__\nprofile_values = (__TEXT__, __FLOAT__, __TUPLE__, __LONG__)\ndynamic_eval = eval('__VALUE__ + 1')\ndynamic_code = compile('__VALUE__ + 2', '<dynamic>', 'eval')\ndynamic_compile = eval(dynamic_code)\nexec 'dynamic_exec = __VALUE__ + 3'\n";
@@ -1254,7 +1423,6 @@ static int __test_build_preprocessor(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_preprocess_renderer(void) {
     static const char source[] = "from __future__ import division, with_statement\nimport package.module as module\nfrom package import value as imported\n\nglobal_value = 1\nunicode_value = u'\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442'\ninfinite = 1e400\ncomplex_infinite = 1e400j\n\ndef generator(argument, optional=2, *args, **kwargs):\n    global global_value\n    assert argument, 'argument'\n    target = lambda item=1: item + optional\n    sequence = [item for item in (1, 2, 3) if item]\n    mapping = {item: item * 2 for item in sequence}\n    unique = {item for item in sequence}\n    sliced = sequence[0:2:1]\n    extended = sequence[0:1, ...]\n    representation = `mapping`\n    print >>kwargs['stream'], representation,\n    exec kwargs['code'] in kwargs, mapping\n    try:\n        with kwargs['context'] as context_value:\n            yield context_value\n    except ValueError as error:\n        raise TypeError, error, None\n    else:\n        pass\n    finally:\n        global_value += 1\n    del mapping[argument]\n\n@decorator\nclass Example(object):\n    @staticmethod\n    def method():\n        return u'value'\n";
@@ -1290,7 +1458,6 @@ static int __test_preprocess_renderer(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_meta_template(void) {
     static const char source[] = "class Base(object):\n    def initialize(self):\n        self.base = 1\n\n@meta.template\ndef ObjectTemplate(TypeName):\n    ClassName = meta.concat('Mixin', TypeName)\n\n    @meta.emit(name=ClassName)\n    class Generated(Base):\n        def initialize(self):\n            super(meta.current_class(), self).initialize()\n            meta.setattr(self, TypeName, 42)\n\n@meta.template\ndef PairTemplate(Prefix):\n    @meta.emit(name=meta.concat(Prefix, 'Class'))\n    class GeneratedClass(object):\n        values = [value for value in (1, 2, 3)]\n\n    @meta.emit(name=meta.concat(Prefix, 'Function'))\n    def generated_function():\n        return 7\n\nMixinItem = meta.expand(ObjectTemplate, 'Item')\nPairClass, PairFunction = meta.expand(PairTemplate, 'Pair')\nobj = MixinItem()\nobj.initialize()\ndynamic = eval('40 + 2')\ndynamic_debug = eval('__debug__')\nresult = (MixinItem.__name__, obj.Item, obj.base, dynamic, PairClass.values, PairFunction(), dynamic_debug)\n";
@@ -1371,7 +1538,6 @@ static int __test_meta_template(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_compile_environment_imports(void) {
     static const char source[] = "value = __IMPORT_VALUE__\ndynamic = eval('__IMPORT_VALUE__ + 1')\n";
@@ -1458,7 +1624,6 @@ static int __test_compile_environment_imports(void) {
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int main(void) {
     if (__test_empty_exec() != 0) {
@@ -1486,6 +1651,12 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_exec_eval_and_dynamic_compile() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_runtime_cache_invalidation() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_runtime_interrupt_polling() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_compile_modes_and_optimize() != 0) {

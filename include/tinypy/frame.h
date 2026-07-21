@@ -3,9 +3,10 @@
 
 #include "tinypy/types.h"
 
-/* Frames follow the CPython 2.7 locals-plus layout: fast locals, cell/free
- * slots and the value stack share one inline allocation. locals may be NULL,
- * in which case globals is used. Returned object fields are borrowed. */
+/* Frames use one inline locals-plus allocation for fast locals, cell/free
+ * slots and the value stack. A NULL locals argument aliases globals. Runtime
+ * function locals are materialized only when observed. Returned object fields
+ * are borrowed. */
 tinypy_value_t *tinypy_frame_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals);
 tinypy_value_t *tinypy_frame_back(const tinypy_value_t *frame);
 tinypy_value_t *tinypy_frame_code(const tinypy_value_t *frame);

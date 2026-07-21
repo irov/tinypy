@@ -11,7 +11,7 @@ static int32_t __tinypy_compiler_is_utf8_cookie(const unsigned char *name, size_
     if (size >= sizeof(normalized)) {
         return 0;
     }
-    for (index = 0U; index < size; index += 1U) {
+    for (index = 0U; index < size; ++index) {
         unsigned char byte = name[index];
 
         if (byte == '-' || byte == '_' || byte == ' ') {
@@ -25,7 +25,6 @@ static int32_t __tinypy_compiler_is_utf8_cookie(const unsigned char *name, size_
     }
     return output_size == 4U && memcmp(normalized, "utf8", 4U) == 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_compiler_is_ascii_cookie(const unsigned char *name, size_t size) {
     char normalized[16];
@@ -35,7 +34,7 @@ static int32_t __tinypy_compiler_is_ascii_cookie(const unsigned char *name, size
     if (size >= sizeof(normalized)) {
         return 0;
     }
-    for (index = 0U; index < size; index += 1U) {
+    for (index = 0U; index < size; ++index) {
         unsigned char byte = name[index];
 
         if (byte == '-' || byte == '_' || byte == ' ') {
@@ -49,7 +48,6 @@ static int32_t __tinypy_compiler_is_ascii_cookie(const unsigned char *name, size
     }
     return (output_size == 5U && memcmp(normalized, "ascii", 5U) == 0) || (output_size == 7U && memcmp(normalized, "usascii", 7U) == 0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_compiler_is_latin1_cookie(const unsigned char *name, size_t size) {
     static const char latin1[] = "latin1";
@@ -61,7 +59,7 @@ static int32_t __tinypy_compiler_is_latin1_cookie(const unsigned char *name, siz
     if (size >= sizeof(normalized)) {
         return 0;
     }
-    for (index = 0U; index < size; index += 1U) {
+    for (index = 0U; index < size; ++index) {
         unsigned char byte = name[index];
 
         if (byte == '-' || byte == '_' || byte == ' ') {
@@ -75,7 +73,6 @@ static int32_t __tinypy_compiler_is_latin1_cookie(const unsigned char *name, siz
     }
     return (output_size == sizeof(latin1) - 1U && memcmp(normalized, latin1, sizeof(latin1) - 1U) == 0) || (output_size == sizeof(iso88591) - 1U && memcmp(normalized, iso88591, sizeof(iso88591) - 1U) == 0) || (output_size == 9U && memcmp(normalized, "isolatin1", 9U) == 0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_compiler_encoding_cookie(const unsigned char *source, size_t size, const unsigned char **out_name, size_t *out_size, int32_t *out_line) {
     size_t line = 0U;
@@ -95,7 +92,7 @@ static int32_t __tinypy_compiler_encoding_cookie(const unsigned char *source, si
         if (marker < line_end && source[marker] != '#') {
             return 0;
         }
-        for (; marker + 6U <= line_end; marker += 1U) {
+        for (; marker + 6U <= line_end; ++marker) {
             size_t name_start;
             size_t name_end;
 
@@ -132,19 +129,17 @@ static int32_t __tinypy_compiler_encoding_cookie(const unsigned char *source, si
     }
     return 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_compiler_ascii_valid(const unsigned char *bytes, size_t size) {
     size_t index;
 
-    for (index = 0U; index < size; index += 1U) {
+    for (index = 0U; index < size; ++index) {
         if (bytes[index] >= 0x80U) {
             return 0;
         }
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_compiler_utf8_valid(const unsigned char *bytes, size_t size) {
     size_t index = 0U;
@@ -177,7 +172,7 @@ static int32_t __tinypy_compiler_utf8_valid(const unsigned char *bytes, size_t s
         if (length > size - index) {
             return 0;
         }
-        for (continuation = 1U; continuation < length; continuation += 1U) {
+        for (continuation = 1U; continuation < length; ++continuation) {
             unsigned char byte = bytes[index + continuation];
 
             if ((byte & 0xc0U) != 0x80U) {
@@ -192,7 +187,6 @@ static int32_t __tinypy_compiler_utf8_valid(const unsigned char *bytes, size_t s
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, tinypy_error_t **out_error) {
     const char *line_bytes = NULL;
@@ -228,7 +222,6 @@ void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind
     }
     tinypy_internal_make_vm_error_location(ctx->vm, error_kind, message, ctx->logical_filename, ctx->filename_size, line_number, column_offset, line_bytes, line_size, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, int32_t column_offset) {
     size_t message_size = 0U;
@@ -239,7 +232,7 @@ void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_erro
     assert(ctx != NULL);
     assert(parts != NULL || part_count == 0U);
     assert(part_sizes != NULL || part_count == 0U);
-    for (index = 0U; index < part_count; index += 1U) {
+    for (index = 0U; index < part_count; ++index) {
         assert(parts[index] != NULL || part_sizes[index] == 0U);
         assert(part_sizes[index] <= SIZE_MAX - message_size - 1U);
         message_size += part_sizes[index];
@@ -249,7 +242,7 @@ void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_erro
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", line_number, column_offset, ctx->out_error);
         return;
     }
-    for (index = 0U; index < part_count; index += 1U) {
+    for (index = 0U; index < part_count; ++index) {
         if (part_sizes[index] != 0U) {
             (void)memcpy(message + offset, parts[index], part_sizes[index]);
         }
@@ -258,7 +251,6 @@ void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_erro
     message[offset] = '\0';
     tinypy_internal_compiler_error(ctx, error_kind, message, line_number, column_offset, ctx->out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const void *source, size_t source_size, tinypy_error_t **out_error) {
     const unsigned char *input = (const unsigned char *)source;
@@ -325,12 +317,12 @@ int32_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "source normalization exceeds compiler arena limit", 0, 0, out_error);
         return 0;
     }
-    for (input_index = input_offset; input_index < source_size; input_index += 1U) {
+    for (input_index = input_offset; input_index < source_size; ++input_index) {
         unsigned char byte = input[input_index];
 
         if (byte == '\r') {
             if (input_index + 1U < source_size && input[input_index + 1U] == '\n') {
-                input_index += 1U;
+                ++input_index;
             }
             output[output_size] = '\n';
             output_size += 1U;

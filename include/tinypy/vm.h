@@ -46,7 +46,8 @@ typedef struct tinypy_vm_config_t {
     /* Optional. NULL disables host callbacks. */
     const tinypy_host_t *host;
 
-    /* Zero means unlimited. The VM object itself counts against the limit. */
+    /* Zero means unlimited. The VM object and reserved pool arenas count
+     * against the limit. */
     size_t max_heap_bytes;
     uint64_t feature_flags;
     int32_t optimize_level;

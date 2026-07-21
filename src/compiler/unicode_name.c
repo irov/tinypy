@@ -34,13 +34,12 @@ static unsigned char __tinypy_unicode_name_upper(unsigned char byte) {
     }
     return byte;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static uint32_t __tinypy_unicode_name_hash(const char *name, size_t name_size) {
     uint32_t hash = 0U;
     size_t index;
 
-    for (index = 0U; index < name_size; index += 1U) {
+    for (index = 0U; index < name_size; ++index) {
         uint32_t overflow;
 
         hash = hash * (uint32_t)code_magic + (uint32_t)__tinypy_unicode_name_upper((unsigned char)name[index]);
@@ -51,12 +50,10 @@ static uint32_t __tinypy_unicode_name_hash(const char *name, size_t name_size) {
     }
     return hash;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_unicode_name_is_unified_ideograph(uint32_t code_point) {
     return (code_point >= UINT32_C(0x3400) && code_point <= UINT32_C(0x4db5)) || (code_point >= UINT32_C(0x4e00) && code_point <= UINT32_C(0x9fcb)) || (code_point >= UINT32_C(0x20000) && code_point <= UINT32_C(0x2a6d6)) || (code_point >= UINT32_C(0x2a700) && code_point <= UINT32_C(0x2b734));
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_unicode_name_append(char *buffer, size_t capacity, size_t *size, const char *text) {
     size_t text_size = strlen(text);
@@ -68,7 +65,6 @@ static int32_t __tinypy_unicode_name_append(char *buffer, size_t capacity, size_
     *size += text_size;
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_unicode_name_code_to_name(uint32_t code_point, char *buffer, size_t capacity) {
     size_t size = 0U;
@@ -155,7 +151,6 @@ static int32_t __tinypy_unicode_name_code_to_name(uint32_t code_point, char *buf
     }
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_unicode_name_equal(uint32_t code_point, const char *name, size_t name_size) {
     char buffer[NAME_MAXLEN];
@@ -164,21 +159,20 @@ static int32_t __tinypy_unicode_name_equal(uint32_t code_point, const char *name
     if (name_size >= sizeof(buffer) || __tinypy_unicode_name_code_to_name(code_point, buffer, sizeof(buffer)) == 0) {
         return INT32_C(0);
     }
-    for (index = 0U; index < name_size; index += 1U) {
+    for (index = 0U; index < name_size; ++index) {
         if (__tinypy_unicode_name_upper((unsigned char)name[index]) != (unsigned char)buffer[index]) {
             return INT32_C(0);
         }
     }
     return buffer[name_size] == '\0' ? INT32_C(1) : INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_unicode_name_find_syllable(const char *text, size_t text_size, size_t count, size_t column, size_t *out_length, int32_t *out_position) {
     size_t index;
 
     *out_length = 0U;
     *out_position = -1;
-    for (index = 0U; index < count; index += 1U) {
+    for (index = 0U; index < count; ++index) {
         const char *syllable = __tinypy_unicode_name_hangul_syllables[index][column];
         size_t syllable_size;
 
@@ -193,7 +187,6 @@ static void __tinypy_unicode_name_find_syllable(const char *text, size_t text_si
         *out_position = (int32_t)index;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size, uint32_t *out_code_point) {
     static const char hangul_prefix[] = "HANGUL SYLLABLE ";

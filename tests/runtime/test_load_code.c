@@ -64,7 +64,6 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment, uin
     }
     return header + 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
@@ -83,7 +82,6 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
     state->outstanding_bytes += new_size;
     return resized + 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
@@ -99,7 +97,6 @@ static void __test_deallocate(void *user_data, void *memory, size_t size, size_t
     }
     free(header);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_vm_t *__test_vm_create_with_host(test_allocator_state_t *state, const tinypy_host_t *host) {
     tinypy_allocator_t allocator;
@@ -119,12 +116,10 @@ static tinypy_vm_t *__test_vm_create_with_host(test_allocator_state_t *state, co
     config.host = host;
     return tinypy_vm_create(&config);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_vm_t *__test_vm_create(test_allocator_state_t *state) {
     return __test_vm_create_with_host(state, NULL);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static const tinypy_module_artifact_t *__test_resolve_module(void *user_data, const tinypy_module_request_t *request) {
     test_import_host_state_t *state = (test_import_host_state_t *)user_data;
@@ -141,7 +136,6 @@ static const tinypy_module_artifact_t *__test_resolve_module(void *user_data, co
     }
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __test_release_module_artifact(void *user_data, const tinypy_module_artifact_t *artifact) {
     test_import_host_state_t *state = (test_import_host_state_t *)user_data;
@@ -149,7 +143,6 @@ static void __test_release_module_artifact(void *user_data, const tinypy_module_
     (void)artifact;
     state->release_count += 1U;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __test_emit_output(void *user_data, tinypy_output_channel_e channel, const void *bytes, size_t size) {
     test_output_state_t *state = (test_output_state_t *)user_data;
@@ -173,7 +166,6 @@ static void __test_emit_output(void *user_data, tinypy_output_channel_e channel,
     }
     *target_size += size;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_load_bytes(tinypy_vm_t *vm, const void *bytes, size_t size, const char *label) {
     tinypy_marshal_error_t error;
@@ -198,7 +190,6 @@ static int __test_load_bytes(tinypy_vm_t *vm, const void *bytes, size_t size, co
     tinypy_release(code);
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_fixture(tinypy_vm_t *vm) {
     static const unsigned char bytes[] = {
@@ -211,7 +202,6 @@ static int __test_fixture(tinypy_vm_t *vm) {
 
     return __test_load_bytes(vm, bytes, sizeof(bytes), "embedded fixture");
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_file(tinypy_vm_t *vm, const char *path) {
     FILE *stream;
@@ -248,7 +238,6 @@ static int __test_file(tinypy_vm_t *vm, const char *path) {
     free(bytes);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_module_entry_load(test_module_entry_t *entry, const char *name, const char *path, uint32_t flags) {
     FILE *stream;
@@ -295,7 +284,6 @@ static int __test_module_entry_load(test_module_entry_t *entry, const char *name
     entry->artifact.logical_filename_size = strlen(path);
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __test_module_entries_release(test_module_entry_t *entries, size_t count) {
     size_t index;
@@ -304,7 +292,6 @@ static void __test_module_entries_release(test_module_entry_t *entries, size_t c
         free(entries[index].bytes);
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_global(tinypy_vm_t *vm, tinypy_value_t *globals, const char *name, size_t name_size) {
     tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
@@ -313,28 +300,24 @@ static tinypy_value_t *__test_global(tinypy_vm_t *vm, tinypy_value_t *globals, c
     tinypy_release(key);
     return value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_global_integer(tinypy_vm_t *vm, tinypy_value_t *globals, const char *name, size_t name_size, int64_t expected) {
     tinypy_value_t *value = __test_global(vm, globals, name, name_size);
 
     return value != NULL && tinypy_typeof(value) == TINYPY_VALUE_INTEGER && tinypy_integer_as_i64(value) == expected;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_global_long(tinypy_vm_t *vm, tinypy_value_t *globals, const char *name, size_t name_size, int64_t expected) {
     tinypy_value_t *value = __test_global(vm, globals, name, name_size);
 
     return value != NULL && tinypy_typeof(value) == TINYPY_VALUE_LONG && tinypy_long_as_i64(value) == expected;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_global_bool(tinypy_vm_t *vm, tinypy_value_t *globals, const char *name, size_t name_size, int32_t expected) {
     tinypy_value_t *value = __test_global(vm, globals, name, name_size);
 
     return value != NULL && tinypy_typeof(value) == TINYPY_VALUE_BOOL && tinypy_bool_as_i32(value) == expected;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_global_sequence(tinypy_vm_t *vm, tinypy_value_t *globals, const char *name, size_t name_size, tinypy_value_type_e kind, const int64_t *expected, size_t expected_size) {
     tinypy_value_t *value = __test_global(vm, globals, name, name_size);
@@ -357,7 +340,6 @@ static int __test_global_sequence(tinypy_vm_t *vm, tinypy_value_t *globals, cons
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_global_string(tinypy_vm_t *vm, tinypy_value_t *globals, const char *name, size_t name_size, const char *expected, size_t expected_size) {
     tinypy_value_t *value = __test_global(vm, globals, name, name_size);
@@ -370,7 +352,6 @@ static int __test_global_string(tinypy_vm_t *vm, tinypy_value_t *globals, const 
     bytes = tinypy_string_view(value, &size);
     return size == expected_size && memcmp(bytes, expected, expected_size) == 0;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_import_files(const char *const *paths) {
     static const char *const names[] = {"main", "helper", "package", "package.child", "package.fallback", "package.failure", "package.implicit", "package.sibling", "package.broken_target", "absolute_only", "broken_target", "star_module"};
@@ -436,7 +417,6 @@ cleanup_entries:
     __test_module_entries_release(entries, loaded_count);
     return success;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_eval_file(tinypy_vm_t *vm, const char *path, int check_fixture) {
     static const int64_t loop_expected[] = {2, 9, 6};
@@ -517,7 +497,6 @@ static int __test_eval_file(tinypy_vm_t *vm, const char *path, int check_fixture
     tinypy_release(code);
     return success;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __test_eval_output(const char *path, const char *expected_stdout, const char *expected_stderr) {
     test_allocator_state_t allocator_state;
@@ -544,7 +523,6 @@ static int __test_eval_output(const char *path, const char *expected_stdout, con
     }
     return success;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
     test_allocator_state_t state;

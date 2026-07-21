@@ -100,7 +100,6 @@ static tinypy_tokenizer_t *__tok_new(tinypy_compile_ctx_t *ctx) {
     tok->cont_line = 0;
     return tok;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static char *__new_string(tinypy_compile_ctx_t *ctx, const char *s, tinypy_compiler_size_t len) {
     char *result = (char *)tinypy_internal_compiler_arena_allocate(ctx, (size_t)len + 1U);
@@ -110,7 +109,6 @@ static char *__new_string(tinypy_compile_ctx_t *ctx, const char *s, tinypy_compi
     }
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static char *__decode_str(const char *str, size_t source_size, int exec_input, tinypy_tokenizer_t *tok) {
     (void)exec_input;
@@ -183,7 +181,8 @@ static int __tok_nextc(register tinypy_tokenizer_t *tok) {
 //////////////////////////////////////////////////////////////////////////
 static void __tok_backup(register tinypy_tokenizer_t *tok, register int c) {
     if (c != TINYPY_TOKENIZER_END_OF_INPUT) {
-        assert(--tok->cur >= tok->buf);
+        tok->cur -= 1;
+        assert(tok->cur >= tok->buf);
         if (*tok->cur != c) {
             *tok->cur = c;
         }
@@ -247,7 +246,6 @@ int __tinypy_token_one_character(int c) {
         return TINYPY_TOKEN_OPERATOR;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 int __tinypy_token_two_characters(int c1, int c2) {
     switch (c1) {
@@ -336,7 +334,6 @@ int __tinypy_token_two_characters(int c1, int c2) {
     }
     return TINYPY_TOKEN_OPERATOR;
 }
-
 //////////////////////////////////////////////////////////////////////////
 int __tinypy_token_three_characters(int c1, int c2, int c3) {
     switch (c1) {
@@ -383,7 +380,6 @@ int __tinypy_token_three_characters(int c1, int c2, int c3) {
     }
     return TINYPY_TOKEN_OPERATOR;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __indenterror(tinypy_tokenizer_t *tok) {
     if (tok->alterror) {
@@ -865,7 +861,6 @@ letter_quote:
     *p_end = tok->cur;
     return __tinypy_token_one_character(c);
 }
-
 //////////////////////////////////////////////////////////////////////////
 int tinypy_internal_tokenizer_get(tinypy_tokenizer_t *tok, char **p_start, char **p_end) {
     return __tok_get(tok, p_start, p_end);

@@ -59,7 +59,6 @@ static int __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *arena, 
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_module_t mod, const char *filename) {
     int i, found_docstring = 0, done = 0, prev_line = 0;
@@ -125,7 +124,6 @@ static int __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinypy_fu
     }
     return 1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_future_features_t *__tinypy_future_scan(tinypy_compile_ctx_t *arena, tinypy_ast_module_t mod, const char *filename) {
     tinypy_future_features_t *ff;

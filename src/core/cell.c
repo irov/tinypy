@@ -5,14 +5,6 @@
 #include <assert.h>
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_cell_object_t *__tinypy_internal_cell_validate(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
-    assert(tinypy_internal_value_kind(value) == TINYPY_VALUE_CELL);
-    return TINYPY_CELL_OBJECT((tinypy_value_t *)value);
-}
-
-//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_cell_new(tinypy_vm_t *vm, tinypy_value_t *content) {
     tinypy_cell_object_t *cell;
 
@@ -21,11 +13,10 @@ tinypy_value_t *tinypy_cell_new(tinypy_vm_t *vm, tinypy_value_t *content) {
     cell = (tinypy_cell_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_CELL, sizeof(*cell));
     cell->content = content;
     if (content != NULL) {
-        tinypy_retain(content);
+        TINYPY_INCREF(content);
     }
     return &cell->base;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_cell_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_cell_object_t *cell = TINYPY_CELL_OBJECT(value);
@@ -34,23 +25,29 @@ void tinypy_internal_cell_release_references(tinypy_value_t *value, tinypy_relea
         visit(cell->content, user_data);
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_cell_get(const tinypy_value_t *cell) {
-    return __tinypy_internal_cell_validate(cell)->content;
+    assert(cell != NULL);
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(cell)));
+    assert(TINYPY_VALUE_KIND(cell) == TINYPY_VALUE_CELL);
+    return TINYPY_CELL_OBJECT((tinypy_value_t *)cell)->content;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_cell_set(tinypy_value_t *cell_value, tinypy_value_t *content) {
-    tinypy_cell_object_t *cell = __tinypy_internal_cell_validate(cell_value);
-    tinypy_value_t *previous = cell->content;
+    tinypy_cell_object_t *cell;
+    tinypy_value_t *previous;
 
-    assert(content == NULL || tinypy_internal_value_belongs_to(tinypy_internal_value_vm(cell_value), content));
+    assert(cell_value != NULL);
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(cell_value)));
+    assert(TINYPY_VALUE_KIND(cell_value) == TINYPY_VALUE_CELL);
+    assert(content == NULL || tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(cell_value), content));
+    cell = TINYPY_CELL_OBJECT(cell_value);
+    previous = cell->content;
     if (content != NULL) {
-        tinypy_retain(content);
+        TINYPY_INCREF(content);
     }
     cell->content = content;
     if (previous != NULL) {
-        tinypy_release(previous);
+        TINYPY_DECREF(previous);
     }
 }

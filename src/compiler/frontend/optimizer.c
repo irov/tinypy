@@ -22,6 +22,20 @@
 #define TINYPY_OPTIMIZER_CODE_SIZE(op) (TINYPY_COMPILER_OPCODE_HAS_ARGUMENT(op) ? 3 : 1)
 #define TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, start, bytes) \
     (blocks[start] == blocks[start + bytes - 1])
+//////////////////////////////////////////////////////////////////////////
+#ifndef NDEBUG
+static inline int __tinypy_optimizer_load_constants_valid(const unsigned char *codestr, tinypy_compiler_size_t count) {
+    tinypy_compiler_size_t index;
+
+    for (index = 0; index < count; ++index) {
+        if (codestr[index * 3] != TINYPY_OP_LOAD_CONST) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+#endif
 /* Replace TINYPY_OP_LOAD_CONST c1. TINYPY_OP_LOAD_CONST c2 ... TINYPY_OP_LOAD_CONST cn TINYPY_OP_BUILD_TUPLE n
    with    TINYPY_OP_LOAD_CONST (c1, c2, ... cn).
    The consts table must still be in list form so that the
@@ -39,9 +53,7 @@ static int __tuple_of_constants(unsigned char *codestr, tinypy_compiler_size_t n
     assert(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
     assert(codestr[n * 3] == TINYPY_OP_BUILD_TUPLE || codestr[n * 3] == TINYPY_OP_BUILD_LIST);
     assert(TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, (n * 3)) == n);
-    for (i = 0; i < n; i++) {
-        assert(codestr[i * 3] == TINYPY_OP_LOAD_CONST);
-    }
+    assert(__tinypy_optimizer_load_constants_valid(codestr, n));
 
     /* Buildup new tuple of constants */
     newconst = __tinypy_frontend_tuple_new(consts, n);
@@ -397,7 +409,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
                 }
             }
             if (j == TINYPY_COMPILER_LIST_GET_SIZE(consts)) {
-                tinypy_vm_t *vm = tinypy_internal_value_vm(consts);
+                tinypy_vm_t *vm = TINYPY_VALUE_VM(consts);
                 tinypy_value_t *none = tinypy_none_get(vm);
                 if (TINYPY_COMPILER_LIST_APPEND(consts, none) == -1) {
                     TINYPY_COMPILER_DECREF(none);

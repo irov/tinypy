@@ -22,7 +22,6 @@ static void *__fuzz_allocate(void *user_data, size_t size, size_t alignment, uin
     state->bytes += size;
     return memory;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void *__fuzz_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
     fuzz_allocator_state_t *state = (fuzz_allocator_state_t *)user_data;
@@ -37,7 +36,6 @@ static void *__fuzz_reallocate(void *user_data, void *memory, size_t old_size, s
     state->bytes += new_size;
     return resized;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __fuzz_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
     fuzz_allocator_state_t *state = (fuzz_allocator_state_t *)user_data;
@@ -161,7 +159,7 @@ int main(void) {
         size_t size = (size_t)(__fuzz_random(&random_state) % sizeof(buffer));
         size_t byte_index;
 
-        for (byte_index = 0U; byte_index < size; byte_index += 1U) {
+        for (byte_index = 0U; byte_index < size; ++byte_index) {
             buffer[byte_index] = (unsigned char)__fuzz_random(&random_state);
         }
         (void)LLVMFuzzerTestOneInput(buffer, size);

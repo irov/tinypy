@@ -1830,6 +1830,9 @@ static int __tinypy_codegen_import_as(tinypy_codegen_t *c, tinypy_ast_identifier
                 return 0;
             }
             TINYPY_CODEGEN_ADD_NEW_OBJECT_OPCODE(c, TINYPY_OP_LOAD_ATTR, attr, names);
+            if (dot == NULL) {
+                break;
+            }
             src = dot + 1;
         }
     }
@@ -3105,8 +3108,9 @@ static void __tinypy_codegen_pop_fblock(tinypy_codegen_t *c, tinypy_codegen_fram
     u->u_nfblocks--;
     assert(u->u_fblock[u->u_nfblocks].fb_type == t);
     assert(u->u_fblock[u->u_nfblocks].fb_block == b);
+    (void)t;
+    (void)b;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int __tinypy_codegen_in_loop(tinypy_codegen_t *c) {
     int i;

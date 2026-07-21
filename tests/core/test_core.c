@@ -183,7 +183,6 @@ static int __test_allocator_accounting(void) {
     TEST_CHECK(state.outstanding_allocations == base_allocations);
 
     integer_value = tinypy_integer_from_i64(vm, INT64_C(1234567));
-    TEST_CHECK(state.outstanding_allocations == base_allocations + 1U);
     TEST_CHECK(tinypy_typeof(integer_value) == TINYPY_VALUE_INTEGER);
     extracted = tinypy_integer_as_i64(integer_value);
     TEST_CHECK(extracted == INT64_C(1234567));
@@ -197,6 +196,45 @@ static int __test_allocator_accounting(void) {
     TEST_CHECK(state.outstanding_allocations == 0U);
     TEST_CHECK(state.outstanding_bytes == 0U);
     TEST_CHECK(state.deallocation_calls == state.allocation_calls);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int __test_pool_allocator(void) {
+    const size_t value_count = 20000U;
+    test_allocator_state_t state;
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_vm_t *vm;
+    tinypy_value_t **values;
+    size_t base_allocations;
+    size_t allocation_calls;
+    size_t pooled_allocation_calls;
+    size_t index;
+
+    (void)memset(&state, 0, sizeof(state));
+    allocator = __test_make_allocator(&state);
+    config = __test_make_config(&allocator);
+    vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    values = (tinypy_value_t **)malloc(value_count * sizeof(*values));
+    TEST_CHECK(values != NULL);
+    base_allocations = state.outstanding_allocations;
+    allocation_calls = state.allocation_calls;
+
+    for (index = 0U; index < value_count; index += 1U) {
+        values[index] = tinypy_integer_from_i64(vm, INT64_C(1000000) + (int64_t)index);
+    }
+    pooled_allocation_calls = state.allocation_calls - allocation_calls;
+    TEST_CHECK(pooled_allocation_calls < value_count / 100U);
+    for (index = 0U; index < value_count; index += 1U) {
+        tinypy_release(values[index]);
+    }
+    TEST_CHECK(state.outstanding_allocations == base_allocations);
+
+    free(values);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -263,12 +301,10 @@ static int __test_value_lifetime(void) {
     retained_value = tinypy_integer_from_i64(vm, INT64_C(2048));
     tinypy_retain(retained_value);
     tinypy_release(retained_value);
-    TEST_CHECK(state.outstanding_allocations == vm_allocations + 1U);
     tinypy_release(retained_value);
     TEST_CHECK(state.outstanding_allocations == vm_allocations);
 
     unreleased_value = tinypy_integer_from_i64(vm, INT64_C(2049));
-    TEST_CHECK(state.outstanding_allocations == vm_allocations + 1U);
     tinypy_release(unreleased_value);
     TEST_CHECK(state.outstanding_allocations == vm_allocations);
     tinypy_vm_destroy(vm);
@@ -350,7 +386,6 @@ static int __test_constant_cache(void) {
     TEST_CHECK(outside_low != integer_min_a);
     TEST_CHECK(outside_high != integer_max_a);
     TEST_CHECK(float_negative_zero != float_zero_a);
-    TEST_CHECK(state.allocation_calls == allocation_calls + 3U);
 
     tinypy_release(float_negative_zero);
     tinypy_release(outside_high);
@@ -515,7 +550,6 @@ static int __test_string_release_contract(void) {
         sizeof(unicode_bytes));
     tinypy_retain(string_value);
     tinypy_retain(unicode_value);
-    TEST_CHECK(state.outstanding_allocations == base_allocations + 2U);
 
     tinypy_release(string_value);
     tinypy_release(string_value);
@@ -630,7 +664,7 @@ static int __test_long_canonical(void) {
 
     for (value_index = 0U;
          value_index < sizeof(values) / sizeof(values[0]);
-         value_index += 1U) {
+         ++value_index) {
         uint16_t expected_digits[5];
         uint64_t magnitude;
         size_t expected_count = 0U;
@@ -663,7 +697,7 @@ static int __test_long_canonical(void) {
         TEST_CHECK((digit_count == 0U) == (digits == NULL));
         for (digit_index = 0U;
              digit_index < digit_count;
-             digit_index += 1U) {
+             ++digit_index) {
             TEST_CHECK(digits[digit_index] == expected_digits[digit_index]);
         }
         extracted = tinypy_long_as_i64(value);
@@ -837,7 +871,6 @@ static int __test_tuple_deep_release(void) {
         tinypy_release(current);
         current = next;
     }
-    TEST_CHECK(state.outstanding_allocations == depth + base_allocations);
     calls_before = state.allocation_calls;
     tinypy_release(current);
     TEST_CHECK(state.allocation_calls == calls_before);
@@ -853,7 +886,6 @@ static int __test_tuple_deep_release(void) {
         tinypy_release(current);
         current = next;
     }
-    TEST_CHECK(state.outstanding_allocations == depth + base_allocations);
     tinypy_release(current);
     TEST_CHECK(state.outstanding_allocations == base_allocations);
     tinypy_vm_destroy(vm);
@@ -1119,6 +1151,10 @@ static int __test_type_class_runtime(void) {
     tinypy_value_t *integer = NULL;
     tinypy_value_t *instance = NULL;
     tinypy_value_t *attribute = NULL;
+    tinypy_value_t *replacement = NULL;
+    tinypy_value_t *direct_attribute = NULL;
+    tinypy_value_t *type_dict = NULL;
+    tinypy_value_t *key = NULL;
     tinypy_value_t *borrowed = NULL;
     tinypy_type_t *metaclass = NULL;
     tinypy_type_t *base_a = NULL;
@@ -1200,6 +1236,34 @@ static int __test_type_class_runtime(void) {
     borrowed = tinypy_type_get_attr(child, "answer", 6U);
     TEST_CHECK(borrowed == attribute);
     TEST_CHECK(tinypy_type_get_attr(child, "missing", 7U) == NULL);
+    replacement = tinypy_integer_from_i64(vm, 8);
+    tinypy_type_set_attr(base_a, "answer", 6U, replacement);
+    borrowed = tinypy_type_get_attr(child, "answer", 6U);
+    TEST_CHECK(borrowed == replacement);
+
+    type_dict = tinypy_object_get_attr(tinypy_type_as_value(base_a), "__dict__", 8U, &error);
+    TEST_CHECK(type_dict != NULL);
+    TEST_CHECK(error == NULL);
+    direct_attribute = tinypy_integer_from_i64(vm, 9);
+    key = tinypy_string_from_bytes(vm, "missing", 7U);
+    tinypy_dict_set(type_dict, key, direct_attribute);
+    borrowed = tinypy_type_get_attr(child, "missing", 7U);
+    TEST_CHECK(borrowed == direct_attribute);
+    tinypy_dict_delete(type_dict, key);
+    TEST_CHECK(tinypy_type_get_attr(child, "missing", 7U) == NULL);
+    tinypy_dict_set(type_dict, key, direct_attribute);
+    TEST_CHECK(tinypy_type_get_attr(child, "missing", 7U) == direct_attribute);
+    tinypy_release(key);
+    key = tinypy_string_from_bytes(vm, "answer", 6U);
+    tinypy_dict_set(type_dict, key, direct_attribute);
+    borrowed = tinypy_type_get_attr(child, "answer", 6U);
+    TEST_CHECK(borrowed == direct_attribute);
+    tinypy_dict_delete(type_dict, key);
+    TEST_CHECK(tinypy_type_get_attr(child, "answer", 6U) == NULL);
+    tinypy_dict_set(type_dict, key, direct_attribute);
+    TEST_CHECK(tinypy_type_get_attr(child, "answer", 6U) == direct_attribute);
+    tinypy_release(key);
+    tinypy_release(type_dict);
 
     instance = tinypy_instance_new(child);
     TEST_CHECK(tinypy_typeof(instance) == TINYPY_VALUE_INSTANCE);
@@ -1209,8 +1273,8 @@ static int __test_type_class_runtime(void) {
     (void)tinypy_hash(instance);
     TEST_CHECK(tinypy_instance_dict(instance) == NULL);
     borrowed = tinypy_instance_get_attr(instance, "answer", 6U);
-    TEST_CHECK(borrowed == attribute);
-    TEST_CHECK(tinypy_instance_get_attr(instance, "missing", 7U) == NULL);
+    TEST_CHECK(borrowed == direct_attribute);
+    TEST_CHECK(tinypy_instance_get_attr(instance, "missing", 7U) == direct_attribute);
     tinypy_instance_set_attr(instance, "answer", 6U, integer);
     TEST_CHECK(tinypy_instance_dict(instance) != NULL);
     TEST_CHECK(tinypy_typeof(tinypy_instance_dict(instance)) == TINYPY_VALUE_DICT);
@@ -1240,6 +1304,8 @@ static int __test_type_class_runtime(void) {
     error = NULL;
 
     tinypy_release(instance);
+    tinypy_release(direct_attribute);
+    tinypy_release(replacement);
     tinypy_release(attribute);
     tinypy_value_t *type_value_2 = tinypy_type_as_value(right);
     tinypy_release(type_value_2);
@@ -1950,6 +2016,9 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "allocator") == 0) {
         return __test_allocator_accounting();
+    }
+    if (strcmp(argv[1], "pool_allocator") == 0) {
+        return __test_pool_allocator();
     }
     if (strcmp(argv[1], "independent_vms") == 0) {
         return __test_independent_vms();

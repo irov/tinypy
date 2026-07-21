@@ -39,7 +39,6 @@ static void __tinypy_representation_reserve(tinypy_representation_builder_t *bui
     }
     builder->capacity = capacity;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_append(tinypy_representation_builder_t *builder, const void *bytes, size_t size) {
     assert(bytes != NULL || size == 0U);
@@ -50,17 +49,15 @@ static void __tinypy_representation_append(tinypy_representation_builder_t *buil
     (void)memcpy(builder->bytes + builder->size, bytes, size);
     builder->size += size;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_append_character(tinypy_representation_builder_t *builder, unsigned char character) {
     __tinypy_representation_append(builder, &character, 1U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_representation_enter(tinypy_representation_builder_t *builder, tinypy_value_t *value) {
     size_t index;
 
-    for (index = 0U; index < builder->active_count; index += 1U) {
+    for (index = 0U; index < builder->active_count; ++index) {
         if (builder->active[index] == value) {
             return INT32_C(0);
         }
@@ -83,7 +80,6 @@ static int32_t __tinypy_representation_enter(tinypy_representation_builder_t *bu
     builder->active_count += 1U;
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_leave(tinypy_representation_builder_t *builder, tinypy_value_t *value) {
     assert(builder->active_count != 0U);
@@ -91,7 +87,6 @@ static void __tinypy_representation_leave(tinypy_representation_builder_t *build
     (void)value;
     builder->active_count -= 1U;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_unsigned_decimal(tinypy_representation_builder_t *builder, uint64_t value, size_t minimum_digits) {
     unsigned char reverse[32];
@@ -111,7 +106,6 @@ static void __tinypy_representation_unsigned_decimal(tinypy_representation_build
         __tinypy_representation_append_character(builder, reverse[count]);
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_integer(tinypy_representation_builder_t *builder, int64_t value) {
     uint64_t magnitude;
@@ -125,7 +119,6 @@ static void __tinypy_representation_integer(tinypy_representation_builder_t *bui
     }
     __tinypy_representation_unsigned_decimal(builder, magnitude, 1U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_long(tinypy_representation_builder_t *builder, const tinypy_value_t *value) {
     size_t digit_count = TINYPY_LONG_DIGIT_COUNT(value);
@@ -176,7 +169,6 @@ static void __tinypy_representation_long(tinypy_representation_builder_t *builde
     tinypy_internal_vm_deallocate(builder->vm, chunks, chunks_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     tinypy_internal_vm_deallocate(builder->vm, work, work_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_double(tinypy_representation_builder_t *builder, double value) {
     unsigned int digits[18];
@@ -217,7 +209,7 @@ static void __tinypy_representation_double(tinypy_representation_builder_t *buil
         normalized *= 10.0;
         exponent -= 1;
     }
-    for (index = 0U; index < 18U; index += 1U) {
+    for (index = 0U; index < 18U; ++index) {
         unsigned int digit = (unsigned int)floor(normalized);
 
         if (digit > 9U) {
@@ -249,7 +241,7 @@ static void __tinypy_representation_double(tinypy_representation_builder_t *buil
         __tinypy_representation_append_character(builder, (unsigned char)('0' + digits[0]));
         if (digit_count > 1U) {
             __tinypy_representation_append_character(builder, (unsigned char)'.');
-            for (index = 1U; index < digit_count; index += 1U) {
+            for (index = 1U; index < digit_count; ++index) {
                 __tinypy_representation_append_character(builder, (unsigned char)('0' + digits[index]));
             }
         }
@@ -266,22 +258,22 @@ static void __tinypy_representation_double(tinypy_representation_builder_t *buil
     }
     if (exponent < 0) {
         __tinypy_representation_append(builder, "0.", 2U);
-        for (index = 0U; index < (size_t)(-exponent - 1); index += 1U) {
+        for (index = 0U; index < (size_t)(-exponent - 1); ++index) {
             __tinypy_representation_append_character(builder, (unsigned char)'0');
         }
-        for (index = 0U; index < digit_count; index += 1U) {
+        for (index = 0U; index < digit_count; ++index) {
             __tinypy_representation_append_character(builder, (unsigned char)('0' + digits[index]));
         }
         return;
     }
-    for (index = 0U; index <= (size_t)exponent; index += 1U) {
+    for (index = 0U; index <= (size_t)exponent; ++index) {
         unsigned int digit = index < digit_count ? digits[index] : 0U;
 
         __tinypy_representation_append_character(builder, (unsigned char)('0' + digit));
     }
     if ((size_t)exponent + 1U < digit_count) {
         __tinypy_representation_append_character(builder, (unsigned char)'.');
-        for (index = (size_t)exponent + 1U; index < digit_count; index += 1U) {
+        for (index = (size_t)exponent + 1U; index < digit_count; ++index) {
             __tinypy_representation_append_character(builder, (unsigned char)('0' + digits[index]));
         }
     }
@@ -289,19 +281,18 @@ static void __tinypy_representation_double(tinypy_representation_builder_t *buil
         __tinypy_representation_append(builder, ".0", 2U);
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_quoted(tinypy_representation_builder_t *builder, const tinypy_value_t *value) {
-    const unsigned char *bytes = tinypy_internal_text_bytes(value);
-    size_t size = tinypy_internal_text_byte_size(value);
+    const unsigned char *bytes = TINYPY_TEXT_BYTES(value);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(value);
     size_t index;
     static const unsigned char hexadecimal[] = "0123456789abcdef";
 
-    if (tinypy_internal_value_kind(value) == TINYPY_VALUE_UNICODE) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE) {
         __tinypy_representation_append_character(builder, (unsigned char)'u');
     }
     __tinypy_representation_append_character(builder, (unsigned char)'\'');
-    for (index = 0U; index < size; index += 1U) {
+    for (index = 0U; index < size; ++index) {
         unsigned char byte = bytes[index];
 
         if (byte == '\\' || byte == '\'') {
@@ -337,19 +328,21 @@ static int32_t __tinypy_representation_value(tinypy_representation_builder_t *bu
 
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_representation_sequence(tinypy_representation_builder_t *builder, tinypy_value_t *value, unsigned char open, unsigned char close, tinypy_error_t **out_error) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
-    size_t size = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_size(value) : tinypy_list_size(value);
-    size_t index;
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    size_t size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(value) : TINYPY_LIST_SIZE(value);
+    tinypy_value_t *const *iterator = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_ITERATOR_BEGIN(value) : TINYPY_LIST_ITERATOR_BEGIN(value);
+    tinypy_value_t *const *iterator_begin = iterator;
+    tinypy_value_t *const *iterator_end = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_ITERATOR_END(value) : TINYPY_LIST_ITERATOR_END(value);
 
     if (__tinypy_representation_enter(builder, value) == 0) {
         __tinypy_representation_append(builder, kind == TINYPY_VALUE_TUPLE ? "(...)" : "[...]", 5U);
         return INT32_C(1);
     }
     __tinypy_representation_append_character(builder, open);
-    for (index = 0U; index < size; index += 1U) {
-        tinypy_value_t *item = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_get(value, index) : tinypy_list_get(value, index);
+    for (; iterator != iterator_end; ++iterator) {
+        tinypy_value_t *item = *iterator;
 
-        if (index != 0U) {
+        if (iterator != iterator_begin) {
             __tinypy_representation_append(builder, ", ", 2U);
         }
         if (__tinypy_representation_value(builder, item, INT32_C(0), out_error) == 0) {
@@ -364,11 +357,10 @@ static int32_t __tinypy_representation_sequence(tinypy_representation_builder_t 
     __tinypy_representation_leave(builder, value);
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_representation_dict(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_dict_object_t *dict = TINYPY_DICT_OBJECT(value);
-    size_t index;
+    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(value);
+    tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(value);
     size_t emitted = 0U;
 
     if (__tinypy_representation_enter(builder, value) == 0) {
@@ -376,21 +368,19 @@ static int32_t __tinypy_representation_dict(tinypy_representation_builder_t *bui
         return INT32_C(1);
     }
     __tinypy_representation_append_character(builder, (unsigned char)'{');
-    for (index = 0U; index <= dict->mask; index += 1U) {
-        tinypy_dict_entry_t *entry = &dict->table[index];
-
-        if (entry->state != TINYPY_DICT_ENTRY_ACTIVE) {
+    for (; iterator != iterator_end; ++iterator) {
+        if (iterator->state != TINYPY_DICT_ENTRY_ACTIVE) {
             continue;
         }
         if (emitted != 0U) {
             __tinypy_representation_append(builder, ", ", 2U);
         }
-        if (__tinypy_representation_value(builder, entry->key, INT32_C(0), out_error) == 0) {
+        if (__tinypy_representation_value(builder, iterator->key, INT32_C(0), out_error) == 0) {
             __tinypy_representation_leave(builder, value);
             return INT32_C(0);
         }
         __tinypy_representation_append(builder, ": ", 2U);
-        if (__tinypy_representation_value(builder, entry->value, INT32_C(0), out_error) == 0) {
+        if (__tinypy_representation_value(builder, iterator->value, INT32_C(0), out_error) == 0) {
             __tinypy_representation_leave(builder, value);
             return INT32_C(0);
         }
@@ -400,12 +390,12 @@ static int32_t __tinypy_representation_dict(tinypy_representation_builder_t *bui
     __tinypy_representation_leave(builder, value);
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_representation_set(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_dict_object_t *dict = TINYPY_DICT_OBJECT(TINYPY_SET_OBJECT(value)->dict);
-    int32_t frozen = tinypy_internal_value_kind(value) == TINYPY_VALUE_FROZENSET;
-    size_t index;
+    tinypy_value_t *dict = TINYPY_SET_OBJECT(value)->dict;
+    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(dict);
+    tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(dict);
+    int32_t frozen = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_FROZENSET;
     size_t emitted = 0U;
 
     if (__tinypy_representation_enter(builder, value) == 0) {
@@ -413,16 +403,14 @@ static int32_t __tinypy_representation_set(tinypy_representation_builder_t *buil
         return INT32_C(1);
     }
     __tinypy_representation_append(builder, frozen != 0 ? "frozenset([" : "set([", frozen != 0 ? 11U : 5U);
-    for (index = 0U; index <= dict->mask; index += 1U) {
-        tinypy_dict_entry_t *entry = &dict->table[index];
-
-        if (entry->state != TINYPY_DICT_ENTRY_ACTIVE) {
+    for (; iterator != iterator_end; ++iterator) {
+        if (iterator->state != TINYPY_DICT_ENTRY_ACTIVE) {
             continue;
         }
         if (emitted != 0U) {
             __tinypy_representation_append(builder, ", ", 2U);
         }
-        if (__tinypy_representation_value(builder, entry->key, INT32_C(0), out_error) == 0) {
+        if (__tinypy_representation_value(builder, iterator->key, INT32_C(0), out_error) == 0) {
             __tinypy_representation_leave(builder, value);
             return INT32_C(0);
         }
@@ -432,7 +420,6 @@ static int32_t __tinypy_representation_set(tinypy_representation_builder_t *buil
     __tinypy_representation_leave(builder, value);
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_pointer(tinypy_representation_builder_t *builder, const void *pointer) {
     uintptr_t value = (uintptr_t)pointer;
@@ -451,7 +438,6 @@ static void __tinypy_representation_pointer(tinypy_representation_builder_t *bui
         __tinypy_representation_append_character(builder, reverse[count]);
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
     tinypy_value_t *attribute;
@@ -467,25 +453,24 @@ static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, con
     if (method == NULL) {
         return NULL;
     }
-    tinypy_vm_t *vm = tinypy_internal_value_vm(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     args = tinypy_tuple_from_items(vm, NULL, 0U);
     result = tinypy_call(method, args, NULL, out_error);
-    tinypy_release(args);
-    tinypy_release(method);
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(method);
     if (result == NULL) {
         return NULL;
     }
-    if (tinypy_internal_value_kind(result) != TINYPY_VALUE_STRING && tinypy_internal_value_kind(result) != TINYPY_VALUE_UNICODE) {
-        tinypy_release(result);
+    if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_UNICODE) {
+        TINYPY_DECREF(result);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object representation method returned a non-string", out_error);
         return NULL;
     }
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_representation_value(tinypy_representation_builder_t *builder, tinypy_value_t *value, int32_t raw, tinypy_error_t **out_error) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_unary_slot_t representation_slot = raw != 0 ? value->type->string : value->type->repr;
 
     if (representation_slot != NULL) {
@@ -494,21 +479,21 @@ static int32_t __tinypy_representation_value(tinypy_representation_builder_t *bu
         if (representation == NULL) {
             return INT32_C(0);
         }
-        if (tinypy_internal_value_kind(representation) != TINYPY_VALUE_STRING && tinypy_internal_value_kind(representation) != TINYPY_VALUE_UNICODE) {
-            tinypy_release(representation);
+        if (TINYPY_VALUE_KIND(representation) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(representation) != TINYPY_VALUE_UNICODE) {
+            TINYPY_DECREF(representation);
             tinypy_internal_make_vm_error(builder->vm, TINYPY_ERROR_TYPE, "representation slot returned a non-string", out_error);
             return INT32_C(0);
         }
-        const unsigned char *bytes = tinypy_internal_text_bytes(representation);
-        size_t byte_size = tinypy_internal_text_byte_size(representation);
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(representation);
+        size_t byte_size = TINYPY_TEXT_BYTE_SIZE(representation);
         __tinypy_representation_append(builder, bytes, byte_size);
-        tinypy_release(representation);
+        TINYPY_DECREF(representation);
         return INT32_C(1);
     }
 
     if (raw != 0 && (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE)) {
-        const unsigned char *bytes = tinypy_internal_text_bytes(value);
-        size_t byte_size = tinypy_internal_text_byte_size(value);
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(value);
+        size_t byte_size = TINYPY_TEXT_BYTE_SIZE(value);
         __tinypy_representation_append(builder, bytes, byte_size);
         return INT32_C(1);
     }
@@ -564,8 +549,8 @@ static int32_t __tinypy_representation_value(tinypy_representation_builder_t *bu
     case TINYPY_VALUE_FUNCTION:
         __tinypy_representation_append(builder, "<function ", 10U);
         tinypy_value_t *function_name = tinypy_function_name(value);
-        const unsigned char *bytes_2 = tinypy_internal_text_bytes(function_name);
-        size_t byte_size_2 = tinypy_internal_text_byte_size(function_name);
+        const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(function_name);
+        size_t byte_size_2 = TINYPY_TEXT_BYTE_SIZE(function_name);
         __tinypy_representation_append(builder, bytes_2, byte_size_2);
         __tinypy_representation_append(builder, " at ", 4U);
         __tinypy_representation_pointer(builder, value);
@@ -574,8 +559,8 @@ static int32_t __tinypy_representation_value(tinypy_representation_builder_t *bu
     case TINYPY_VALUE_MODULE:
         __tinypy_representation_append(builder, "<module '", 9U);
         tinypy_value_t *module_name = tinypy_module_name(value);
-        const unsigned char *bytes_3 = tinypy_internal_text_bytes(module_name);
-        size_t byte_size_3 = tinypy_internal_text_byte_size(module_name);
+        const unsigned char *bytes_3 = TINYPY_TEXT_BYTES(module_name);
+        size_t byte_size_3 = TINYPY_TEXT_BYTE_SIZE(module_name);
         __tinypy_representation_append(builder, bytes_3, byte_size_3);
         __tinypy_representation_append(builder, "'>", 2U);
         return INT32_C(1);
@@ -621,10 +606,10 @@ static int32_t __tinypy_representation_value(tinypy_representation_builder_t *bu
         tinypy_value_t *custom = __tinypy_representation_custom(value, raw != 0 ? "__str__" : "__repr__", raw != 0 ? 7U : 8U, out_error);
 
         if (custom != NULL) {
-            const unsigned char *bytes = tinypy_internal_text_bytes(custom);
-            size_t byte_size = tinypy_internal_text_byte_size(custom);
+            const unsigned char *bytes = TINYPY_TEXT_BYTES(custom);
+            size_t byte_size = TINYPY_TEXT_BYTE_SIZE(custom);
             __tinypy_representation_append(builder, bytes, byte_size);
-            tinypy_release(custom);
+            TINYPY_DECREF(custom);
             return INT32_C(1);
         }
         if (out_error != NULL && *out_error != NULL) {
@@ -639,15 +624,14 @@ static int32_t __tinypy_representation_value(tinypy_representation_builder_t *bu
     }
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, int32_t raw, tinypy_error_t **out_error) {
     tinypy_representation_builder_t builder;
     tinypy_value_t *result;
 
     (void)memset(&builder, 0, sizeof(builder));
-    builder.vm = tinypy_internal_value_vm(value);
-    tinypy_internal_clear_error(out_error);
+    builder.vm = TINYPY_VALUE_VM(value);
+    TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_representation_value(&builder, value, raw, out_error) == 0) {
         if (builder.active != NULL) {
             tinypy_internal_vm_deallocate(builder.vm, builder.active, builder.active_capacity * sizeof(*builder.active), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
@@ -667,29 +651,26 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, int3
     }
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_object_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
     assert(value != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     return __tinypy_representation_build(value, INT32_C(0), out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_object_str(tinypy_value_t *value, tinypy_error_t **out_error) {
     assert(value != NULL);
-    assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
+    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     return __tinypy_representation_build(value, INT32_C(1), out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    int condition = (kwargs != NULL && tinypy_dict_size(kwargs) != 0U) || tinypy_tuple_size(args) != 1U;
+    int condition = (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U;
     if (condition == 0) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 0U);
-        condition = tinypy_internal_value_kind(item) != TINYPY_VALUE_FLOAT;
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
+        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_FLOAT;
     }
     if (condition) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor requires a float object", out_error);
@@ -697,16 +678,15 @@ static tinypy_value_t *__tinypy_representation_method(tinypy_value_t *function, 
     }
     tinypy_value_t *selected_value;
     if (user_data != NULL) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 0U);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
         selected_value = tinypy_object_str(item, out_error);
     }
     else {
-        tinypy_value_t *item = tinypy_tuple_get(args, 0U);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
         selected_value = tinypy_object_repr(item, out_error);
     }
     return selected_value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
     tinypy_value_t *repr_function = tinypy_native_function_new(vm, "__repr__", 8U, __tinypy_representation_method, NULL, NULL);
@@ -716,28 +696,27 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
 
     tinypy_dict_set(vm->float_type.dict, repr_key, repr_function);
     tinypy_dict_set(vm->float_type.dict, str_key, str_function);
-    tinypy_release(str_key);
-    tinypy_release(repr_key);
-    tinypy_release(str_function);
-    tinypy_release(repr_function);
+    TINYPY_DECREF(str_key);
+    TINYPY_DECREF(repr_key);
+    TINYPY_DECREF(str_function);
+    TINYPY_DECREF(repr_function);
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_string_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
 
-    if ((kwargs != NULL && tinypy_dict_size(kwargs) != 0U) || tinypy_tuple_size(args) > 1U) {
+    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) > 1U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "str constructor received invalid arguments", out_error);
         return NULL;
     }
-    if (tinypy_tuple_size(args) == 0U) {
+    if (TINYPY_TUPLE_SIZE(args) == 0U) {
         return tinypy_string_from_bytes(vm, NULL, 0U);
     }
-    tinypy_value_t *item = tinypy_tuple_get(args, 0U);
-    if (tinypy_internal_value_kind(item) == TINYPY_VALUE_BYTEARRAY) {
-        tinypy_value_t *item_3 = tinypy_tuple_get(args, 0U);
+    tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_BYTEARRAY) {
+        tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 0U);
         return tinypy_internal_bytearray_string(item_3, out_error);
     }
-    tinypy_value_t *item_2 = tinypy_tuple_get(args, 0U);
+    tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
     return tinypy_object_str(item_2, out_error);
 }

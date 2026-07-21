@@ -33,7 +33,6 @@ static void __tinypy_string_builder_reserve(tinypy_string_builder_t *builder, si
     }
     builder->capacity = capacity;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_string_builder_append(tinypy_string_builder_t *builder, const void *bytes, size_t size) {
     if (size == 0U) {
@@ -43,12 +42,10 @@ static void __tinypy_string_builder_append(tinypy_string_builder_t *builder, con
     (void)memcpy(builder->bytes + builder->size, bytes, size);
     builder->size += size;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_string_builder_character(tinypy_string_builder_t *builder, unsigned char character) {
     __tinypy_string_builder_append(builder, &character, 1U);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_builder_finish(tinypy_string_builder_t *builder, int32_t unicode) {
     tinypy_value_t *result = unicode != 0 ? tinypy_unicode_from_utf8(builder->vm, (const char *)builder->bytes, builder->size) : tinypy_string_from_bytes(builder->vm, builder->bytes, builder->size);
@@ -61,7 +58,6 @@ static tinypy_value_t *__tinypy_string_builder_finish(tinypy_string_builder_t *b
     builder->capacity = 0U;
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_string_builder_discard(tinypy_string_builder_t *builder) {
     if (builder->bytes != NULL) {
@@ -69,25 +65,23 @@ static void __tinypy_string_builder_discard(tinypy_string_builder_t *builder) {
     }
     builder->bytes = NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_string_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, int32_t keywords, tinypy_error_t **out_error) {
-    size_t count = tinypy_tuple_size(args);
+    size_t count = TINYPY_TUPLE_SIZE(args);
 
     if (count < minimum || count > maximum) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "string method received the wrong number of arguments", out_error);
         return INT32_C(0);
     }
-    if (keywords == 0 && kwargs != NULL && tinypy_dict_size(kwargs) != 0U) {
+    if (keywords == 0 && kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "string method does not accept keyword arguments", out_error);
         return INT32_C(0);
     }
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_string_integer(tinypy_vm_t *vm, tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
         *out_value = TINYPY_INTEGER_VALUE(value);
@@ -116,7 +110,6 @@ static int32_t __tinypy_string_integer(tinypy_vm_t *vm, tinypy_value_t *value, i
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument required", out_error);
     return INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_format_hex(tinypy_vm_t *vm, tinypy_value_t *value, const unsigned char *spec, size_t spec_size, tinypy_error_t **out_error) {
     int64_t number;
@@ -135,7 +128,7 @@ static tinypy_value_t *__tinypy_string_format_hex(tinypy_vm_t *vm, tinypy_value_
     uppercase = spec[spec_size - 1U] == (unsigned char)'X';
     while (spec_index + 1U < spec_size && spec[spec_index] >= (unsigned char)'0' && spec[spec_index] <= (unsigned char)'9') {
         width = width * 10U + (size_t)(spec[spec_index] - (unsigned char)'0');
-        spec_index += 1U;
+        ++spec_index;
     }
     magnitude = number < 0 ? (uint64_t)(-(number + INT64_C(1))) + UINT64_C(1) : (uint64_t)number;
     do {
@@ -155,7 +148,6 @@ static tinypy_value_t *__tinypy_string_format_hex(tinypy_vm_t *vm, tinypy_value_
     }
     return tinypy_string_from_bytes(vm, output, output_size);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_format_value(tinypy_vm_t *vm, tinypy_value_t *value, int32_t conversion, const unsigned char *spec, size_t spec_size, tinypy_error_t **out_error) {
     if (spec_size != 0U && (spec[spec_size - 1U] == (unsigned char)'x' || spec[spec_size - 1U] == (unsigned char)'X')) {
@@ -166,7 +158,6 @@ static tinypy_value_t *__tinypy_string_format_value(tinypy_vm_t *vm, tinypy_valu
     }
     return tinypy_object_str(value, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, const unsigned char *field, size_t field_size, size_t *auto_index, tinypy_error_t **out_error) {
     tinypy_value_t *value = NULL;
@@ -177,19 +168,19 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
         head_size += 1U;
     }
     if (head_size == 0U) {
-        if (*auto_index + 1U >= tinypy_tuple_size(args)) {
+        if (*auto_index + 1U >= TINYPY_TUPLE_SIZE(args)) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "format positional argument is missing", out_error);
             return NULL;
         }
-        value = tinypy_tuple_get(args, *auto_index + 1U);
-        *auto_index += 1U;
-        tinypy_retain(value);
+        value = TINYPY_TUPLE_GET(args, *auto_index + 1U);
+        ++(*auto_index);
+        TINYPY_INCREF(value);
     }
     else {
         size_t index;
         int32_t numeric = INT32_C(1);
 
-        for (index = 0U; index < head_size; index += 1U) {
+        for (index = 0U; index < head_size; ++index) {
             if (field[index] < (unsigned char)'0' || field[index] > (unsigned char)'9') {
                 numeric = INT32_C(0);
             }
@@ -197,24 +188,24 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
         if (numeric != 0) {
             size_t position = 0U;
 
-            for (index = 0U; index < head_size; index += 1U) {
+            for (index = 0U; index < head_size; ++index) {
                 position = position * 10U + (size_t)(field[index] - (unsigned char)'0');
             }
-            if (position + 1U >= tinypy_tuple_size(args)) {
+            if (position + 1U >= TINYPY_TUPLE_SIZE(args)) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "format positional argument is missing", out_error);
                 return NULL;
             }
-            value = tinypy_tuple_get(args, position + 1U);
-            tinypy_retain(value);
+            value = TINYPY_TUPLE_GET(args, position + 1U);
+            TINYPY_INCREF(value);
         }
         else if (kwargs != NULL) {
             tinypy_value_t *key = tinypy_string_from_bytes(vm, field, head_size);
 
             if (tinypy_dict_contains(kwargs, key) != 0) {
                 value = tinypy_dict_get(kwargs, key);
-                tinypy_retain(value);
+                TINYPY_INCREF(value);
             }
-            tinypy_release(key);
+            TINYPY_DECREF(key);
         }
     }
     if (value == NULL) {
@@ -232,7 +223,7 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
                 path_offset += 1U;
             }
             if (name_begin == path_offset) {
-                tinypy_release(value);
+                TINYPY_DECREF(value);
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "empty attribute in format field", out_error);
                 return NULL;
             }
@@ -249,12 +240,12 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
                 path_offset += 1U;
             }
             if (path_offset == field_size) {
-                tinypy_release(value);
+                TINYPY_DECREF(value);
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "missing ']' in format field", out_error);
                 return NULL;
             }
             key_end = path_offset++;
-            for (index = key_begin; index < key_end; index += 1U) {
+            for (index = key_begin; index < key_end; ++index) {
                 if (field[index] < (unsigned char)'0' || field[index] > (unsigned char)'9') {
                     numeric = INT32_C(0);
                 }
@@ -262,7 +253,7 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
             if (numeric != 0 && key_begin != key_end) {
                 int64_t integer = 0;
 
-                for (index = key_begin; index < key_end; index += 1U) {
+                for (index = key_begin; index < key_end; ++index) {
                     integer = integer * 10 + (int64_t)(field[index] - (unsigned char)'0');
                 }
                 key = tinypy_integer_from_i64(vm, integer);
@@ -271,9 +262,9 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
                 key = tinypy_string_from_bytes(vm, field + key_begin, key_end - key_begin);
             }
             next = tinypy_get_item(value, key, out_error);
-            tinypy_release(key);
+            TINYPY_DECREF(key);
         }
-        tinypy_release(value);
+        TINYPY_DECREF(value);
         if (next == NULL) {
             return NULL;
         }
@@ -281,13 +272,12 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
     }
     return value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_format_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
-    tinypy_value_t *format = tinypy_tuple_get(args, 0U);
-    const unsigned char *bytes = tinypy_internal_text_bytes(format);
-    size_t size = tinypy_internal_text_byte_size(format);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *format = TINYPY_TUPLE_GET(args, 0U);
+    const unsigned char *bytes = TINYPY_TEXT_BYTES(format);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(format);
     size_t offset = 0U;
     size_t automatic_index = 0U;
     tinypy_string_builder_t builder;
@@ -354,15 +344,15 @@ static tinypy_value_t *__tinypy_string_format_method(tinypy_value_t *function, t
                 return NULL;
             }
             text = __tinypy_string_format_value(vm, value, conversion, bytes + spec_begin, end - spec_begin, out_error);
-            tinypy_release(value);
+            TINYPY_DECREF(value);
             if (text == NULL) {
                 __tinypy_string_builder_discard(&builder);
                 return NULL;
             }
-            const unsigned char *bytes_2 = tinypy_internal_text_bytes(text);
-            size_t byte_size = tinypy_internal_text_byte_size(text);
+            const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(text);
+            size_t byte_size = TINYPY_TEXT_BYTE_SIZE(text);
             __tinypy_string_builder_append(&builder, bytes_2, byte_size);
-            tinypy_release(text);
+            TINYPY_DECREF(text);
             offset = end + 1U;
             continue;
         }
@@ -373,17 +363,16 @@ static tinypy_value_t *__tinypy_string_format_method(tinypy_value_t *function, t
         }
         __tinypy_string_builder_character(&builder, bytes[offset++]);
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(format);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(format);
     return __tinypy_string_builder_finish(&builder, kind == TINYPY_VALUE_UNICODE);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_align_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
-    tinypy_value_t *text = tinypy_tuple_get(args, 0U);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *text = TINYPY_TUPLE_GET(args, 0U);
     int64_t width;
     unsigned char fill = (unsigned char)' ';
-    size_t size = tinypy_internal_text_byte_size(text);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(text);
     size_t padding;
     size_t left;
     size_t right;
@@ -392,29 +381,29 @@ static tinypy_value_t *__tinypy_string_align_method(tinypy_value_t *function, ti
 
     int condition = __tinypy_string_method_arguments(vm, args, kwargs, 2U, 3U, INT32_C(0), out_error) == 0;
     if (condition == 0) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 1U);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
         condition = __tinypy_string_integer(vm, item, &width, out_error) == 0;
     }
     if (condition) {
         return NULL;
     }
-    if (tinypy_tuple_size(args) == 3U) {
-        tinypy_value_t *fill_value = tinypy_tuple_get(args, 2U);
+    if (TINYPY_TUPLE_SIZE(args) == 3U) {
+        tinypy_value_t *fill_value = TINYPY_TUPLE_GET(args, 2U);
 
-        if ((tinypy_internal_value_kind(fill_value) != TINYPY_VALUE_STRING && tinypy_internal_value_kind(fill_value) != TINYPY_VALUE_UNICODE) || tinypy_internal_text_byte_size(fill_value) != 1U) {
+        if ((TINYPY_VALUE_KIND(fill_value) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(fill_value) != TINYPY_VALUE_UNICODE) || TINYPY_TEXT_BYTE_SIZE(fill_value) != 1U) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "fill character must be exactly one character", out_error);
             return NULL;
         }
-        fill = tinypy_internal_text_bytes(fill_value)[0];
+        fill = TINYPY_TEXT_BYTES(fill_value)[0];
     }
     if (width <= 0 || (uint64_t)width <= size) {
         tinypy_value_t *selected_value;
-        if (tinypy_internal_value_kind(text) == TINYPY_VALUE_UNICODE) {
-            const unsigned char *bytes_2 = tinypy_internal_text_bytes(text);
+        if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
+            const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(text);
             selected_value = tinypy_unicode_from_utf8(vm, (const char *)bytes_2, size);
         }
         else {
-            const unsigned char *bytes_2 = tinypy_internal_text_bytes(text);
+            const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(text);
             selected_value = tinypy_string_from_bytes(vm, bytes_2, size);
         }
         return selected_value;
@@ -435,30 +424,29 @@ static tinypy_value_t *__tinypy_string_align_method(tinypy_value_t *function, ti
     while (left-- != 0U) {
         __tinypy_string_builder_character(&builder, fill);
     }
-    const unsigned char *bytes = tinypy_internal_text_bytes(text);
+    const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
     __tinypy_string_builder_append(&builder, bytes, size);
     while (right-- != 0U) {
         __tinypy_string_builder_character(&builder, fill);
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(text);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(text);
     return __tinypy_string_builder_finish(&builder, kind == TINYPY_VALUE_UNICODE);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_join_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
-    tinypy_value_t *separator = tinypy_tuple_get(args, 0U);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *separator = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *iterator;
     tinypy_error_t *iteration_error = NULL;
     tinypy_string_builder_t builder;
     size_t count = 0U;
-    int32_t unicode = tinypy_internal_value_kind(separator) == TINYPY_VALUE_UNICODE;
+    int32_t unicode = TINYPY_VALUE_KIND(separator) == TINYPY_VALUE_UNICODE;
 
     (void)user_data;
     if (__tinypy_string_method_arguments(vm, args, kwargs, 2U, 2U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *item_2 = tinypy_tuple_get(args, 1U);
+    tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
     iterator = tinypy_iter(item_2, out_error);
     if (iterator == NULL) {
         return NULL;
@@ -471,28 +459,28 @@ static tinypy_value_t *__tinypy_string_join_method(tinypy_value_t *function, tin
         if (item == NULL) {
             break;
         }
-        if (tinypy_internal_value_kind(item) != TINYPY_VALUE_STRING && tinypy_internal_value_kind(item) != TINYPY_VALUE_UNICODE) {
-            tinypy_release(item);
-            tinypy_release(iterator);
+        if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_UNICODE) {
+            TINYPY_DECREF(item);
+            TINYPY_DECREF(iterator);
             __tinypy_string_builder_discard(&builder);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "join sequence item is not a string", out_error);
             return NULL;
         }
         if (count != 0U) {
-            const unsigned char *bytes_2 = tinypy_internal_text_bytes(separator);
-            size_t byte_size_2 = tinypy_internal_text_byte_size(separator);
+            const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(separator);
+            size_t byte_size_2 = TINYPY_TEXT_BYTE_SIZE(separator);
             __tinypy_string_builder_append(&builder, bytes_2, byte_size_2);
         }
-        const unsigned char *bytes = tinypy_internal_text_bytes(item);
-        size_t byte_size = tinypy_internal_text_byte_size(item);
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(item);
+        size_t byte_size = TINYPY_TEXT_BYTE_SIZE(item);
         __tinypy_string_builder_append(&builder, bytes, byte_size);
-        if (tinypy_internal_value_kind(item) == TINYPY_VALUE_UNICODE) {
+        if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_UNICODE) {
             unicode = INT32_C(1);
         }
         count += 1U;
-        tinypy_release(item);
+        TINYPY_DECREF(item);
     }
-    tinypy_release(iterator);
+    TINYPY_DECREF(iterator);
     if (iteration_error != NULL) {
         __tinypy_string_builder_discard(&builder);
         if (out_error != NULL) {
@@ -505,19 +493,16 @@ static tinypy_value_t *__tinypy_string_join_method(tinypy_value_t *function, tin
     }
     return __tinypy_string_builder_finish(&builder, unicode);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_string_is_text(const tinypy_value_t *value) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     return kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_string_character_count(const tinypy_value_t *value) {
-    return tinypy_internal_value_kind(value) == TINYPY_VALUE_UNICODE ? (size_t)TINYPY_SIZE(value) : tinypy_internal_text_byte_size(value);
+    return TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE ? TINYPY_SIZED_SIZE(value) : TINYPY_TEXT_BYTE_SIZE(value);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_string_utf8_width(unsigned char first) {
     if (first < 0x80U) {
@@ -531,7 +516,6 @@ static size_t __tinypy_string_utf8_width(unsigned char first) {
     }
     return 4U;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_string_byte_offset(const tinypy_value_t *value, size_t character_index) {
     const unsigned char *bytes;
@@ -539,52 +523,49 @@ static size_t __tinypy_string_byte_offset(const tinypy_value_t *value, size_t ch
     size_t offset = 0U;
     size_t index = 0U;
 
-    if (tinypy_internal_value_kind(value) == TINYPY_VALUE_STRING) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
         return character_index;
     }
-    bytes = tinypy_internal_text_bytes(value);
-    byte_size = tinypy_internal_text_byte_size(value);
+    bytes = TINYPY_TEXT_BYTES(value);
+    byte_size = TINYPY_TEXT_BYTE_SIZE(value);
     while (offset < byte_size && index < character_index) {
         offset += __tinypy_string_utf8_width(bytes[offset]);
         index += 1U;
     }
     return offset;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_string_character_index(const tinypy_value_t *value, size_t byte_offset) {
     const unsigned char *bytes;
     size_t offset = 0U;
     size_t index = 0U;
 
-    if (tinypy_internal_value_kind(value) == TINYPY_VALUE_STRING) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
         return byte_offset;
     }
-    bytes = tinypy_internal_text_bytes(value);
+    bytes = TINYPY_TEXT_BYTES(value);
     while (offset < byte_offset) {
         offset += __tinypy_string_utf8_width(bytes[offset]);
         index += 1U;
     }
     return index;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_from_span(tinypy_vm_t *vm, const tinypy_value_t *source, size_t begin, size_t end) {
     assert(begin <= end);
-    assert(end <= tinypy_internal_text_byte_size(source));
-    if (tinypy_internal_value_kind(source) == TINYPY_VALUE_UNICODE) {
-        const unsigned char *bytes_2 = tinypy_internal_text_bytes(source);
+    assert(end <= TINYPY_TEXT_BYTE_SIZE(source));
+    if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_UNICODE) {
+        const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(source);
         return tinypy_unicode_from_utf8(vm, (const char *)bytes_2 + begin, end - begin);
     }
-    const unsigned char *bytes = tinypy_internal_text_bytes(source);
+    const unsigned char *bytes = TINYPY_TEXT_BYTES(source);
     return tinypy_string_from_bytes(vm, bytes + begin, end - begin);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int64_t __tinypy_string_normalized_bound(tinypy_vm_t *vm, tinypy_value_t *value, size_t length, int64_t fallback, tinypy_error_t **out_error) {
     int64_t bound;
 
-    if (value == NULL || tinypy_internal_value_kind(value) == TINYPY_VALUE_NONE) {
+    if (value == NULL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
         return fallback;
     }
     if (__tinypy_string_integer(vm, value, &bound, out_error) == 0) {
@@ -601,14 +582,12 @@ static int64_t __tinypy_string_normalized_bound(tinypy_vm_t *vm, tinypy_value_t 
     }
     return bound;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int64_t __tinypy_string_optional_bound(tinypy_vm_t *vm, tinypy_value_t *args, size_t index, size_t length, int64_t fallback, tinypy_error_t **out_error) {
-    size_t argument_count = tinypy_tuple_size(args);
-    tinypy_value_t *value = argument_count > index ? tinypy_tuple_get(args, index) : NULL;
+    size_t argument_count = TINYPY_TUPLE_SIZE(args);
+    tinypy_value_t *value = argument_count > index ? TINYPY_TUPLE_GET(args, index) : NULL;
     return __tinypy_string_normalized_bound(vm, value, length, fallback, out_error);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_string_require_text(tinypy_vm_t *vm, tinypy_value_t *value, const char *message, tinypy_error_t **out_error) {
     if (__tinypy_string_is_text(value) != 0) {
@@ -617,7 +596,6 @@ static int32_t __tinypy_string_require_text(tinypy_vm_t *vm, tinypy_value_t *val
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, message, out_error);
     return INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static ptrdiff_t __tinypy_string_find_bytes(const unsigned char *haystack, size_t haystack_size, const unsigned char *needle, size_t needle_size, int32_t reverse) {
     size_t offset;
@@ -629,7 +607,7 @@ static ptrdiff_t __tinypy_string_find_bytes(const unsigned char *haystack, size_
         return -1;
     }
     if (reverse == 0) {
-        for (offset = 0U; offset <= haystack_size - needle_size; offset += 1U) {
+        for (offset = 0U; offset <= haystack_size - needle_size; ++offset) {
             if (memcmp(haystack + offset, needle, needle_size) == 0) {
                 return (ptrdiff_t)offset;
             }
@@ -646,10 +624,9 @@ static ptrdiff_t __tinypy_string_find_bytes(const unsigned char *haystack, size_
     }
     return -1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_search_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *needle;
     size_t length;
@@ -663,8 +640,8 @@ static tinypy_value_t *__tinypy_string_search_method(tinypy_value_t *function, t
     if (__tinypy_string_method_arguments(vm, args, kwargs, 2U, 4U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    needle = tinypy_tuple_get(args, 1U);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    needle = TINYPY_TUPLE_GET(args, 1U);
     if (__tinypy_string_require_text(vm, needle, "substring must be a string", out_error) == 0) {
         return NULL;
     }
@@ -683,9 +660,9 @@ static tinypy_value_t *__tinypy_string_search_method(tinypy_value_t *function, t
     else {
         byte_start = __tinypy_string_byte_offset(text, (size_t)start);
         byte_end = __tinypy_string_byte_offset(text, (size_t)end);
-        const unsigned char *bytes = tinypy_internal_text_bytes(text);
-        const unsigned char *bytes_2 = tinypy_internal_text_bytes(needle);
-        size_t byte_size = tinypy_internal_text_byte_size(needle);
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
+        const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(needle);
+        size_t byte_size = TINYPY_TEXT_BYTE_SIZE(needle);
         found = __tinypy_string_find_bytes(bytes + byte_start, byte_end - byte_start, bytes_2, byte_size, (int32_t)(mode & 1));
         if (found >= 0) {
             found = (ptrdiff_t)__tinypy_string_character_index(text, byte_start + (size_t)found);
@@ -697,12 +674,11 @@ static tinypy_value_t *__tinypy_string_search_method(tinypy_value_t *function, t
     }
     return tinypy_integer_from_i64(vm, (int64_t)found);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_string_matches_at(const tinypy_value_t *text, size_t begin, size_t end, const tinypy_value_t *candidate, int32_t suffix) {
-    const unsigned char *bytes = tinypy_internal_text_bytes(text);
-    const unsigned char *candidate_bytes = tinypy_internal_text_bytes(candidate);
-    size_t candidate_size = tinypy_internal_text_byte_size(candidate);
+    const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
+    const unsigned char *candidate_bytes = TINYPY_TEXT_BYTES(candidate);
+    size_t candidate_size = TINYPY_TEXT_BYTE_SIZE(candidate);
 
     if (candidate_size > end - begin) {
         return INT32_C(0);
@@ -712,10 +688,9 @@ static int32_t __tinypy_string_matches_at(const tinypy_value_t *text, size_t beg
     }
     return memcmp(bytes + begin, candidate_bytes, candidate_size) == 0 ? INT32_C(1) : INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_prefix_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *candidate;
     size_t length;
@@ -723,15 +698,13 @@ static tinypy_value_t *__tinypy_string_prefix_method(tinypy_value_t *function, t
     int64_t end;
     size_t begin;
     size_t finish;
-    size_t index;
-    size_t count;
     int32_t suffix = user_data != NULL;
 
     if (__tinypy_string_method_arguments(vm, args, kwargs, 2U, 4U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    candidate = tinypy_tuple_get(args, 1U);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    candidate = TINYPY_TUPLE_GET(args, 1U);
     length = __tinypy_string_character_count(text);
     start = __tinypy_string_optional_bound(vm, args, 2U, length, 0, out_error);
     if (start == INT64_MIN && out_error != NULL && *out_error != NULL) {
@@ -746,10 +719,12 @@ static tinypy_value_t *__tinypy_string_prefix_method(tinypy_value_t *function, t
     }
     begin = __tinypy_string_byte_offset(text, (size_t)start);
     finish = __tinypy_string_byte_offset(text, (size_t)end);
-    if (tinypy_internal_value_kind(candidate) == TINYPY_VALUE_TUPLE) {
-        count = tinypy_tuple_size(candidate);
-        for (index = 0U; index < count; index += 1U) {
-            tinypy_value_t *item = tinypy_tuple_get(candidate, index);
+    if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_TUPLE) {
+        tinypy_value_t *const *iterator = TINYPY_TUPLE_ITERATOR_BEGIN(candidate);
+        tinypy_value_t *const *iterator_end = TINYPY_TUPLE_ITERATOR_END(candidate);
+
+        for (; iterator != iterator_end; ++iterator) {
+            tinypy_value_t *item = *iterator;
 
             if (__tinypy_string_require_text(vm, item, "prefix tuple contains a non-string", out_error) == 0) {
                 return NULL;
@@ -766,10 +741,9 @@ static tinypy_value_t *__tinypy_string_prefix_method(tinypy_value_t *function, t
     int32_t string_matches_at = __tinypy_string_matches_at(text, begin, finish, candidate, suffix);
     return tinypy_bool_from_i32(vm, string_matches_at);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_count_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *needle;
     size_t length;
@@ -785,8 +759,8 @@ static tinypy_value_t *__tinypy_string_count_method(tinypy_value_t *function, ti
     if (__tinypy_string_method_arguments(vm, args, kwargs, 2U, 4U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    needle = tinypy_tuple_get(args, 1U);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    needle = TINYPY_TUPLE_GET(args, 1U);
     if (__tinypy_string_require_text(vm, needle, "substring must be a string", out_error) == 0) {
         return NULL;
     }
@@ -804,14 +778,14 @@ static tinypy_value_t *__tinypy_string_count_method(tinypy_value_t *function, ti
     }
     begin = __tinypy_string_byte_offset(text, (size_t)start);
     finish = __tinypy_string_byte_offset(text, (size_t)end);
-    needle_size = tinypy_internal_text_byte_size(needle);
+    needle_size = TINYPY_TEXT_BYTE_SIZE(needle);
     if (needle_size == 0U) {
         return tinypy_integer_from_i64(vm, (int64_t)((size_t)(end - start) + 1U));
     }
     offset = begin;
     while (offset + needle_size <= finish) {
-        const unsigned char *bytes = tinypy_internal_text_bytes(text);
-        const unsigned char *bytes_2 = tinypy_internal_text_bytes(needle);
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
+        const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(needle);
         ptrdiff_t found = __tinypy_string_find_bytes(bytes + offset, finish - offset, bytes_2, needle_size, INT32_C(0));
 
         if (found < 0) {
@@ -822,30 +796,27 @@ static tinypy_value_t *__tinypy_string_count_method(tinypy_value_t *function, ti
     }
     return tinypy_integer_from_i64(vm, (int64_t)count);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_string_ascii_space(unsigned char character) {
     return character == (unsigned char)' ' || character == (unsigned char)'\t' || character == (unsigned char)'\n' || character == (unsigned char)'\r' || character == (unsigned char)'\v' || character == (unsigned char)'\f';
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_string_strip_contains(tinypy_value_t *characters, unsigned char character) {
     size_t index;
 
-    if (characters == NULL || tinypy_internal_value_kind(characters) == TINYPY_VALUE_NONE) {
+    if (characters == NULL || TINYPY_VALUE_KIND(characters) == TINYPY_VALUE_NONE) {
         return __tinypy_string_ascii_space(character);
     }
-    for (index = 0U; index < tinypy_internal_text_byte_size(characters); index += 1U) {
-        if (tinypy_internal_text_bytes(characters)[index] == character) {
+    for (index = 0U; index < TINYPY_TEXT_BYTE_SIZE(characters); ++index) {
+        if (TINYPY_TEXT_BYTES(characters)[index] == character) {
             return INT32_C(1);
         }
     }
     return INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_strip_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *characters = NULL;
     size_t begin = 0U;
@@ -855,18 +826,18 @@ static tinypy_value_t *__tinypy_string_strip_method(tinypy_value_t *function, ti
     if (__tinypy_string_method_arguments(vm, args, kwargs, 1U, 2U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    if (tinypy_tuple_size(args) == 2U) {
-        characters = tinypy_tuple_get(args, 1U);
-        if (tinypy_internal_value_kind(characters) != TINYPY_VALUE_NONE && __tinypy_string_require_text(vm, characters, "strip characters must be a string", out_error) == 0) {
+    text = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_TUPLE_SIZE(args) == 2U) {
+        characters = TINYPY_TUPLE_GET(args, 1U);
+        if (TINYPY_VALUE_KIND(characters) != TINYPY_VALUE_NONE && __tinypy_string_require_text(vm, characters, "strip characters must be a string", out_error) == 0) {
             return NULL;
         }
     }
-    end = tinypy_internal_text_byte_size(text);
+    end = TINYPY_TEXT_BYTE_SIZE(text);
     if (mode <= 0) {
         int condition_2 = begin < end;
         if (condition_2 != 0) {
-            const unsigned char *bytes = tinypy_internal_text_bytes(text);
+            const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
             condition_2 = __tinypy_string_strip_contains(characters, bytes[begin]) != 0;
         }
         while (condition_2) {
@@ -876,7 +847,7 @@ static tinypy_value_t *__tinypy_string_strip_method(tinypy_value_t *function, ti
     if (mode >= 0) {
         int condition_3 = end > begin;
         if (condition_3 != 0) {
-            const unsigned char *bytes = tinypy_internal_text_bytes(text);
+            const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
             condition_3 = __tinypy_string_strip_contains(characters, bytes[end - 1U]) != 0;
         }
         while (condition_3) {
@@ -885,10 +856,9 @@ static tinypy_value_t *__tinypy_string_strip_method(tinypy_value_t *function, ti
     }
     return __tinypy_string_from_span(vm, text, begin, end);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_replace_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *old_value;
     tinypy_value_t *new_value;
@@ -905,24 +875,24 @@ static tinypy_value_t *__tinypy_string_replace_method(tinypy_value_t *function, 
     if (__tinypy_string_method_arguments(vm, args, kwargs, 3U, 4U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    old_value = tinypy_tuple_get(args, 1U);
-    new_value = tinypy_tuple_get(args, 2U);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    old_value = TINYPY_TUPLE_GET(args, 1U);
+    new_value = TINYPY_TUPLE_GET(args, 2U);
     if (__tinypy_string_require_text(vm, old_value, "replace argument must be a string", out_error) == 0 || __tinypy_string_require_text(vm, new_value, "replace argument must be a string", out_error) == 0) {
         return NULL;
     }
-    int condition_4 = tinypy_tuple_size(args) == 4U;
+    int condition_4 = TINYPY_TUPLE_SIZE(args) == 4U;
     if (condition_4 != 0) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 3U);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 3U);
         condition_4 = __tinypy_string_integer(vm, item, &maximum, out_error) == 0;
     }
     if (condition_4) {
         return NULL;
     }
-    bytes = tinypy_internal_text_bytes(text);
-    size = tinypy_internal_text_byte_size(text);
-    old_size = tinypy_internal_text_byte_size(old_value);
-    unicode = tinypy_internal_value_kind(text) == TINYPY_VALUE_UNICODE || tinypy_internal_value_kind(new_value) == TINYPY_VALUE_UNICODE;
+    bytes = TINYPY_TEXT_BYTES(text);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
+    old_size = TINYPY_TEXT_BYTE_SIZE(old_value);
+    unicode = TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE || TINYPY_VALUE_KIND(new_value) == TINYPY_VALUE_UNICODE;
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
     if (maximum == 0) {
@@ -932,12 +902,12 @@ static tinypy_value_t *__tinypy_string_replace_method(tinypy_value_t *function, 
         size_t positions = __tinypy_string_character_count(text) + 1U;
         size_t position;
 
-        for (position = 0U; position < positions; position += 1U) {
+        for (position = 0U; position < positions; ++position) {
             size_t next = position < positions - 1U ? __tinypy_string_byte_offset(text, position + 1U) : size;
 
             if (maximum < 0 || (int64_t)replaced < maximum) {
-                const unsigned char *bytes_2 = tinypy_internal_text_bytes(new_value);
-                size_t byte_size = tinypy_internal_text_byte_size(new_value);
+                const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(new_value);
+                size_t byte_size = TINYPY_TEXT_BYTE_SIZE(new_value);
                 __tinypy_string_builder_append(&builder, bytes_2, byte_size);
                 replaced += 1U;
             }
@@ -949,15 +919,15 @@ static tinypy_value_t *__tinypy_string_replace_method(tinypy_value_t *function, 
         return __tinypy_string_builder_finish(&builder, unicode);
     }
     while (offset < size && (maximum < 0 || (int64_t)replaced < maximum)) {
-        const unsigned char *bytes_2 = tinypy_internal_text_bytes(old_value);
+        const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(old_value);
         ptrdiff_t found = __tinypy_string_find_bytes(bytes + offset, size - offset, bytes_2, old_size, INT32_C(0));
 
         if (found < 0) {
             break;
         }
         __tinypy_string_builder_append(&builder, bytes + offset, (size_t)found);
-        const unsigned char *bytes_3 = tinypy_internal_text_bytes(new_value);
-        size_t byte_size = tinypy_internal_text_byte_size(new_value);
+        const unsigned char *bytes_3 = TINYPY_TEXT_BYTES(new_value);
+        size_t byte_size = TINYPY_TEXT_BYTE_SIZE(new_value);
         __tinypy_string_builder_append(&builder, bytes_3, byte_size);
         offset += (size_t)found + old_size;
         replaced += 1U;
@@ -965,19 +935,17 @@ static tinypy_value_t *__tinypy_string_replace_method(tinypy_value_t *function, 
     __tinypy_string_builder_append(&builder, bytes + offset, size - offset);
     return __tinypy_string_builder_finish(&builder, unicode);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_string_list_append_span(tinypy_vm_t *vm, tinypy_value_t *list, tinypy_value_t *text, size_t begin, size_t end) {
     tinypy_value_t *item = __tinypy_string_from_span(vm, text, begin, end);
 
     tinypy_list_append(list, item);
-    tinypy_release(item);
+    TINYPY_DECREF(item);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_string_list_reverse(tinypy_value_t *list) {
     size_t left = 0U;
-    size_t right = tinypy_list_size(list);
+    size_t right = TINYPY_LIST_SIZE(list);
 
     while (left < right && left < --right) {
         tinypy_value_t *value = TINYPY_LIST_OBJECT(list)->items[left];
@@ -987,10 +955,9 @@ static void __tinypy_string_list_reverse(tinypy_value_t *list) {
         left += 1U;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_split_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *separator = NULL;
     tinypy_value_t *result;
@@ -1004,34 +971,34 @@ static tinypy_value_t *__tinypy_string_split_method(tinypy_value_t *function, ti
     if (__tinypy_string_method_arguments(vm, args, kwargs, 1U, 3U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    int condition_5 = tinypy_tuple_size(args) >= 2U;
+    text = TINYPY_TUPLE_GET(args, 0U);
+    int condition_5 = TINYPY_TUPLE_SIZE(args) >= 2U;
     if (condition_5 != 0) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 1U);
-        condition_5 = tinypy_internal_value_kind(item) != TINYPY_VALUE_NONE;
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
+        condition_5 = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE;
     }
     if (condition_5) {
-        separator = tinypy_tuple_get(args, 1U);
+        separator = TINYPY_TUPLE_GET(args, 1U);
         if (__tinypy_string_require_text(vm, separator, "separator must be a string", out_error) == 0) {
             return NULL;
         }
-        separator_size = tinypy_internal_text_byte_size(separator);
+        separator_size = TINYPY_TEXT_BYTE_SIZE(separator);
         if (separator_size == 0U) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "empty separator", out_error);
             return NULL;
         }
     }
-    int condition_6 = tinypy_tuple_size(args) == 3U;
+    int condition_6 = TINYPY_TUPLE_SIZE(args) == 3U;
     if (condition_6 != 0) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 2U);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 2U);
         condition_6 = __tinypy_string_integer(vm, item, &maximum, out_error) == 0;
     }
     if (condition_6) {
         return NULL;
     }
     result = tinypy_list_from_items(vm, NULL, 0U);
-    bytes = tinypy_internal_text_bytes(text);
-    size = tinypy_internal_text_byte_size(text);
+    bytes = TINYPY_TEXT_BYTES(text);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
     if (separator == NULL) {
         if (reverse == 0) {
             size_t begin = 0U;
@@ -1096,7 +1063,7 @@ static tinypy_value_t *__tinypy_string_split_method(tinypy_value_t *function, ti
                 __tinypy_string_list_append_span(vm, result, text, begin, size);
                 break;
             }
-            const unsigned char *bytes_2 = tinypy_internal_text_bytes(separator);
+            const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(separator);
             found = __tinypy_string_find_bytes(bytes + begin, size - begin, bytes_2, separator_size, INT32_C(0));
             if (found < 0) {
                 __tinypy_string_list_append_span(vm, result, text, begin, size);
@@ -1117,7 +1084,7 @@ static tinypy_value_t *__tinypy_string_split_method(tinypy_value_t *function, ti
                 __tinypy_string_list_append_span(vm, result, text, 0U, end);
                 break;
             }
-            const unsigned char *bytes_2 = tinypy_internal_text_bytes(separator);
+            const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(separator);
             found = __tinypy_string_find_bytes(bytes, end, bytes_2, separator_size, INT32_C(1));
             if (found < 0) {
                 __tinypy_string_list_append_span(vm, result, text, 0U, end);
@@ -1131,10 +1098,9 @@ static tinypy_value_t *__tinypy_string_split_method(tinypy_value_t *function, ti
     }
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *table;
     tinypy_value_t *delete_characters = NULL;
@@ -1153,39 +1119,39 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
     if (__tinypy_string_method_arguments(vm, args, kwargs, 2U, 3U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    table = tinypy_tuple_get(args, 1U);
-    if (tinypy_internal_value_kind(text) != TINYPY_VALUE_STRING || tinypy_internal_value_kind(table) != TINYPY_VALUE_STRING) {
+    text = TINYPY_TUPLE_GET(args, 0U);
+    table = TINYPY_TUPLE_GET(args, 1U);
+    if (TINYPY_VALUE_KIND(text) != TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(table) != TINYPY_VALUE_STRING) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "translate requires byte strings", out_error);
         return NULL;
     }
-    translation = tinypy_internal_text_bytes(table);
-    translation_size = tinypy_internal_text_byte_size(table);
+    translation = TINYPY_TEXT_BYTES(table);
+    translation_size = TINYPY_TEXT_BYTE_SIZE(table);
     if (translation_size != 256U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "translation table must be 256 characters long", out_error);
         return NULL;
     }
-    if (tinypy_tuple_size(args) == 3U) {
-        delete_characters = tinypy_tuple_get(args, 2U);
-        if (tinypy_internal_value_kind(delete_characters) != TINYPY_VALUE_STRING) {
+    if (TINYPY_TUPLE_SIZE(args) == 3U) {
+        delete_characters = TINYPY_TUPLE_GET(args, 2U);
+        if (TINYPY_VALUE_KIND(delete_characters) != TINYPY_VALUE_STRING) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "delete characters must be a string", out_error);
             return NULL;
         }
-        deleted = tinypy_internal_text_bytes(delete_characters);
-        deleted_size = tinypy_internal_text_byte_size(delete_characters);
+        deleted = TINYPY_TEXT_BYTES(delete_characters);
+        deleted_size = TINYPY_TEXT_BYTE_SIZE(delete_characters);
     }
-    source = tinypy_internal_text_bytes(text);
-    source_size = tinypy_internal_text_byte_size(text);
+    source = TINYPY_TEXT_BYTES(text);
+    source_size = TINYPY_TEXT_BYTE_SIZE(text);
     if (source_size == 0U) {
         return tinypy_string_from_bytes(vm, NULL, 0U);
     }
     output = (unsigned char *)tinypy_internal_vm_allocate(vm, source_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
-    for (input_index = 0U; input_index < source_size; input_index += 1U) {
+    for (input_index = 0U; input_index < source_size; ++input_index) {
         unsigned char character = source[input_index];
         size_t deleted_index;
         int32_t remove = INT32_C(0);
 
-        for (deleted_index = 0U; deleted_index < deleted_size; deleted_index += 1U) {
+        for (deleted_index = 0U; deleted_index < deleted_size; ++deleted_index) {
             if (deleted[deleted_index] == character) {
                 remove = INT32_C(1);
                 break;
@@ -1199,10 +1165,9 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
     tinypy_internal_vm_deallocate(vm, output, source_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_case_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_string_builder_t builder;
     const unsigned char *bytes;
@@ -1214,12 +1179,12 @@ static tinypy_value_t *__tinypy_string_case_method(tinypy_value_t *function, tin
     if (__tinypy_string_method_arguments(vm, args, kwargs, 1U, 1U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    bytes = tinypy_internal_text_bytes(text);
-    size = tinypy_internal_text_byte_size(text);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    bytes = TINYPY_TEXT_BYTES(text);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
-    for (index = 0U; index < size; index += 1U) {
+    for (index = 0U; index < size; ++index) {
         unsigned char character = bytes[index];
         int32_t alpha = (character >= (unsigned char)'A' && character <= (unsigned char)'Z') || (character >= (unsigned char)'a' && character <= (unsigned char)'z');
 
@@ -1253,13 +1218,12 @@ static tinypy_value_t *__tinypy_string_case_method(tinypy_value_t *function, tin
         }
         __tinypy_string_builder_character(&builder, character);
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(text);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(text);
     return __tinypy_string_builder_finish(&builder, kind == TINYPY_VALUE_UNICODE);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_predicate_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     const unsigned char *bytes;
     size_t size;
@@ -1272,13 +1236,13 @@ static tinypy_value_t *__tinypy_string_predicate_method(tinypy_value_t *function
     if (__tinypy_string_method_arguments(vm, args, kwargs, 1U, 1U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    bytes = tinypy_internal_text_bytes(text);
-    size = tinypy_internal_text_byte_size(text);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    bytes = TINYPY_TEXT_BYTES(text);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
     if (size == 0U) {
         return tinypy_bool_from_i32(vm, INT32_C(0));
     }
-    for (index = 0U; index < size && result != 0; index += 1U) {
+    for (index = 0U; index < size && result != 0; ++index) {
         unsigned char character = bytes[index];
         int32_t lower = character >= (unsigned char)'a' && character <= (unsigned char)'z';
         int32_t upper = character >= (unsigned char)'A' && character <= (unsigned char)'Z';
@@ -1331,10 +1295,9 @@ static tinypy_value_t *__tinypy_string_predicate_method(tinypy_value_t *function
     }
     return tinypy_bool_from_i32(vm, result);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_zfill_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     int64_t width;
     size_t size;
@@ -1345,43 +1308,42 @@ static tinypy_value_t *__tinypy_string_zfill_method(tinypy_value_t *function, ti
     (void)user_data;
     int condition_7 = __tinypy_string_method_arguments(vm, args, kwargs, 2U, 2U, INT32_C(0), out_error) == 0;
     if (condition_7 == 0) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 1U);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
         condition_7 = __tinypy_string_integer(vm, item, &width, out_error) == 0;
     }
     if (condition_7) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    size = tinypy_internal_text_byte_size(text);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
     if (width <= 0 || (uint64_t)width <= size) {
         return __tinypy_string_from_span(vm, text, 0U, size);
     }
     padding = (size_t)width - size;
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
-    if (size != 0U && (tinypy_internal_text_bytes(text)[0] == (unsigned char)'+' || tinypy_internal_text_bytes(text)[0] == (unsigned char)'-')) {
-        const unsigned char *bytes = tinypy_internal_text_bytes(text);
+    if (size != 0U && (TINYPY_TEXT_BYTES(text)[0] == (unsigned char)'+' || TINYPY_TEXT_BYTES(text)[0] == (unsigned char)'-')) {
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
         __tinypy_string_builder_character(&builder, bytes[0]);
-        for (index = 0U; index < padding; index += 1U) {
+        for (index = 0U; index < padding; ++index) {
             __tinypy_string_builder_character(&builder, (unsigned char)'0');
         }
-        const unsigned char *bytes_2 = tinypy_internal_text_bytes(text);
+        const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(text);
         __tinypy_string_builder_append(&builder, bytes_2 + 1U, size - 1U);
     }
     else {
-        for (index = 0U; index < padding; index += 1U) {
+        for (index = 0U; index < padding; ++index) {
             __tinypy_string_builder_character(&builder, (unsigned char)'0');
         }
-        const unsigned char *bytes = tinypy_internal_text_bytes(text);
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
         __tinypy_string_builder_append(&builder, bytes, size);
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(text);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(text);
     return __tinypy_string_builder_finish(&builder, kind == TINYPY_VALUE_UNICODE);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_splitlines_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *result;
     const unsigned char *bytes;
@@ -1394,17 +1356,17 @@ static tinypy_value_t *__tinypy_string_splitlines_method(tinypy_value_t *functio
     if (__tinypy_string_method_arguments(vm, args, kwargs, 1U, 2U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    if (tinypy_tuple_size(args) == 2U) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 1U);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_TUPLE_SIZE(args) == 2U) {
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
         keep_ends = tinypy_truth(item, out_error);
         if (keep_ends < 0) {
             return NULL;
         }
     }
     result = tinypy_list_from_items(vm, NULL, 0U);
-    bytes = tinypy_internal_text_bytes(text);
-    size = tinypy_internal_text_byte_size(text);
+    bytes = TINYPY_TEXT_BYTES(text);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
     while (offset < size) {
         size_t content_end;
         size_t line_end;
@@ -1429,10 +1391,9 @@ static tinypy_value_t *__tinypy_string_splitlines_method(tinypy_value_t *functio
     }
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     int64_t tab_size = 8;
     size_t column = 0U;
@@ -1443,10 +1404,10 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
     if (__tinypy_string_method_arguments(vm, args, kwargs, 1U, 2U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    int condition_8 = tinypy_tuple_size(args) == 2U;
+    text = TINYPY_TUPLE_GET(args, 0U);
+    int condition_8 = TINYPY_TUPLE_SIZE(args) == 2U;
     if (condition_8 != 0) {
-        tinypy_value_t *item = tinypy_tuple_get(args, 1U);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
         condition_8 = __tinypy_string_integer(vm, item, &tab_size, out_error) == 0;
     }
     if (condition_8) {
@@ -1454,8 +1415,8 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
     }
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
-    for (offset = 0U; offset < tinypy_internal_text_byte_size(text); offset += 1U) {
-        unsigned char character = tinypy_internal_text_bytes(text)[offset];
+    for (offset = 0U; offset < TINYPY_TEXT_BYTE_SIZE(text); ++offset) {
+        unsigned char character = TINYPY_TEXT_BYTES(text)[offset];
 
         if (character == (unsigned char)'\t') {
             size_t spaces = tab_size > 0 ? (size_t)tab_size - column % (size_t)tab_size : 0U;
@@ -1475,13 +1436,12 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
             }
         }
     }
-    tinypy_value_type_e kind = tinypy_internal_value_kind(text);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(text);
     return __tinypy_string_builder_finish(&builder, kind == TINYPY_VALUE_UNICODE);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_partition_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *separator;
     tinypy_value_t *items[3];
@@ -1494,19 +1454,19 @@ static tinypy_value_t *__tinypy_string_partition_method(tinypy_value_t *function
     if (__tinypy_string_method_arguments(vm, args, kwargs, 2U, 2U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    separator = tinypy_tuple_get(args, 1U);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    separator = TINYPY_TUPLE_GET(args, 1U);
     if (__tinypy_string_require_text(vm, separator, "separator must be a string", out_error) == 0) {
         return NULL;
     }
-    separator_size = tinypy_internal_text_byte_size(separator);
+    separator_size = TINYPY_TEXT_BYTE_SIZE(separator);
     if (separator_size == 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "empty separator", out_error);
         return NULL;
     }
-    size = tinypy_internal_text_byte_size(text);
-    const unsigned char *bytes = tinypy_internal_text_bytes(text);
-    const unsigned char *bytes_2 = tinypy_internal_text_bytes(separator);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
+    const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
+    const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(separator);
     found = __tinypy_string_find_bytes(bytes, size, bytes_2, separator_size, reverse);
     if (found < 0) {
         if (reverse == 0) {
@@ -1526,16 +1486,15 @@ static tinypy_value_t *__tinypy_string_partition_method(tinypy_value_t *function
         items[2] = __tinypy_string_from_span(vm, text, (size_t)found + separator_size, size);
     }
     result = tinypy_tuple_from_items(vm, items, 3U);
-    tinypy_release(items[2]);
-    tinypy_release(items[1]);
-    tinypy_release(items[0]);
+    TINYPY_DECREF(items[2]);
+    TINYPY_DECREF(items[1]);
+    TINYPY_DECREF(items[0]);
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_codec_name_equal(const tinypy_value_t *name, const char *canonical) {
-    const unsigned char *bytes = tinypy_internal_text_bytes(name);
-    size_t size = tinypy_internal_text_byte_size(name);
+    const unsigned char *bytes = TINYPY_TEXT_BYTES(name);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(name);
     size_t offset = 0U;
     size_t canonical_offset = 0U;
 
@@ -1561,7 +1520,6 @@ static int32_t __tinypy_codec_name_equal(const tinypy_value_t *name, const char 
     }
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_codec_error_mode(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
     if (value == NULL || __tinypy_codec_name_equal(value, "strict") != 0) {
@@ -1576,7 +1534,6 @@ static int32_t __tinypy_codec_error_mode(tinypy_vm_t *vm, tinypy_value_t *value,
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unknown codec error handler", out_error);
     return -1;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_utf8_decode(const unsigned char *bytes, size_t size, uint32_t *out_code_point) {
     unsigned char first;
@@ -1597,7 +1554,7 @@ static size_t __tinypy_utf8_decode(const unsigned char *bytes, size_t size, uint
         return 0U;
     }
     code_point = first & (uint32_t)(0x7fU >> width);
-    for (index = 1U; index < width; index += 1U) {
+    for (index = 1U; index < width; ++index) {
         if ((bytes[index] & 0xc0U) != 0x80U) {
             return 0U;
         }
@@ -1609,7 +1566,6 @@ static size_t __tinypy_utf8_decode(const unsigned char *bytes, size_t size, uint
     *out_code_point = code_point;
     return width;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_utf8_append(tinypy_string_builder_t *builder, uint32_t code_point) {
     unsigned char bytes[4];
@@ -1639,10 +1595,9 @@ static void __tinypy_utf8_append(tinypy_string_builder_t *builder, uint32_t code
     }
     __tinypy_string_builder_append(builder, bytes, size);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(function);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
     tinypy_value_t *encoding = NULL;
     tinypy_value_t *errors = NULL;
@@ -1657,15 +1612,15 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
     if (__tinypy_string_method_arguments(vm, args, kwargs, 1U, 3U, INT32_C(0), out_error) == 0) {
         return NULL;
     }
-    text = tinypy_tuple_get(args, 0U);
-    if (tinypy_tuple_size(args) >= 2U) {
-        encoding = tinypy_tuple_get(args, 1U);
+    text = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_TUPLE_SIZE(args) >= 2U) {
+        encoding = TINYPY_TUPLE_GET(args, 1U);
         if (__tinypy_string_require_text(vm, encoding, "encoding name must be a string", out_error) == 0) {
             return NULL;
         }
     }
-    if (tinypy_tuple_size(args) == 3U) {
-        errors = tinypy_tuple_get(args, 2U);
+    if (TINYPY_TUPLE_SIZE(args) == 3U) {
+        errors = TINYPY_TUPLE_GET(args, 2U);
         if (__tinypy_string_require_text(vm, errors, "error handler name must be a string", out_error) == 0) {
             return NULL;
         }
@@ -1689,10 +1644,10 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
     }
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
-    bytes = tinypy_internal_text_bytes(text);
-    size = tinypy_internal_text_byte_size(text);
+    bytes = TINYPY_TEXT_BYTES(text);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
     if (decode != 0) {
-        if (tinypy_internal_value_kind(text) == TINYPY_VALUE_UNICODE) {
+        if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
             return __tinypy_string_from_span(vm, text, 0U, size);
         }
         if (codec == 2) {
@@ -1737,7 +1692,7 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
         }
         return __tinypy_string_builder_finish(&builder, INT32_C(1));
     }
-    if (tinypy_internal_value_kind(text) == TINYPY_VALUE_STRING) {
+    if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_STRING) {
         return __tinypy_string_from_span(vm, text, 0U, size);
     }
     while (offset < size) {
@@ -1788,7 +1743,6 @@ static void __tinypy_percent_unsigned(tinypy_string_builder_t *builder, uint64_t
         __tinypy_string_builder_character(builder, reverse[--count]);
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_percent_long_digits(tinypy_string_builder_t *builder, const tinypy_value_t *value, uint32_t base, int32_t uppercase, size_t minimum_digits) {
     size_t digit_count = TINYPY_LONG_DIGIT_COUNT(value);
@@ -1837,10 +1791,9 @@ static void __tinypy_percent_long_digits(tinypy_string_builder_t *builder, const
     tinypy_internal_vm_deallocate(builder->vm, reverse, reverse_capacity, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     tinypy_internal_vm_deallocate(builder->vm, work, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_percent_append_integer(tinypy_vm_t *vm, tinypy_string_builder_t *builder, tinypy_value_t *value, unsigned char conversion, int32_t alternate, int32_t plus, int32_t space, int64_t precision, size_t *out_prefix_size, tinypy_error_t **out_error) {
-    tinypy_value_type_e kind = tinypy_internal_value_kind(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     int32_t negative = INT32_C(0);
     uint32_t base = conversion == (unsigned char)'o' ? 8U : ((conversion == (unsigned char)'x' || conversion == (unsigned char)'X') ? 16U : 10U);
     int32_t uppercase = conversion == (unsigned char)'X';
@@ -1902,7 +1855,6 @@ static int32_t __tinypy_percent_append_integer(tinypy_vm_t *vm, tinypy_string_bu
     }
     return INT32_C(1);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_percent_fixed(tinypy_string_builder_t *builder, double magnitude, size_t precision) {
     uint64_t integer;
@@ -1929,7 +1881,7 @@ static void __tinypy_percent_fixed(tinypy_string_builder_t *builder, double magn
     }
     __tinypy_percent_unsigned(builder, integer, 10U, INT32_C(0), 1U);
     __tinypy_string_builder_character(builder, (unsigned char)'.');
-    for (index = 0U; index < precision; index += 1U) {
+    for (index = 0U; index < precision; ++index) {
         unsigned char digit;
 
         fraction *= 10.0;
@@ -1941,7 +1893,6 @@ static void __tinypy_percent_fixed(tinypy_string_builder_t *builder, double magn
         fraction -= digit;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_percent_append_float(tinypy_vm_t *vm, tinypy_string_builder_t *builder, tinypy_value_t *value, unsigned char conversion, int32_t alternate, int32_t plus, int32_t space, int64_t precision_value, size_t *out_prefix_size, tinypy_error_t **out_error) {
     double number;
@@ -1950,13 +1901,13 @@ static int32_t __tinypy_percent_append_float(tinypy_vm_t *vm, tinypy_string_buil
     int32_t uppercase = conversion == (unsigned char)'E' || conversion == (unsigned char)'F' || conversion == (unsigned char)'G';
     unsigned char lower = (unsigned char)(conversion >= (unsigned char)'A' && conversion <= (unsigned char)'Z' ? conversion + ('a' - 'A') : conversion);
 
-    if (tinypy_internal_value_kind(value) == TINYPY_VALUE_FLOAT) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_FLOAT) {
         number = TINYPY_FLOAT_OBJECT(value)->value;
     }
-    else if (tinypy_internal_value_kind(value) == TINYPY_VALUE_BOOL || tinypy_internal_value_kind(value) == TINYPY_VALUE_INTEGER) {
+    else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_INTEGER) {
         number = (double)TINYPY_INTEGER_VALUE(value);
     }
-    else if (tinypy_internal_value_kind(value) == TINYPY_VALUE_LONG) {
+    else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG) {
         size_t index = TINYPY_LONG_DIGIT_COUNT(value);
 
         number = 0.0;
@@ -2061,17 +2012,16 @@ static int32_t __tinypy_percent_append_float(tinypy_vm_t *vm, tinypy_string_buil
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "float is too large for fixed format", out_error);
     return INT32_C(0);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_percent_next_argument(tinypy_vm_t *vm, tinypy_percent_arguments_t *arguments, tinypy_error_t **out_error) {
     tinypy_value_t *value;
 
-    if (tinypy_internal_value_kind(arguments->value) == TINYPY_VALUE_TUPLE) {
-        if (arguments->index >= tinypy_tuple_size(arguments->value)) {
+    if (TINYPY_VALUE_KIND(arguments->value) == TINYPY_VALUE_TUPLE) {
+        if (arguments->index >= TINYPY_TUPLE_SIZE(arguments->value)) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "not enough arguments for format string", out_error);
             return NULL;
         }
-        value = tinypy_tuple_get(arguments->value, arguments->index++);
+        value = TINYPY_TUPLE_GET(arguments->value, arguments->index++);
     }
     else {
         if (arguments->consumed != 0U) {
@@ -2081,32 +2031,30 @@ static tinypy_value_t *__tinypy_percent_next_argument(tinypy_vm_t *vm, tinypy_pe
         value = arguments->value;
         arguments->consumed = 1U;
     }
-    tinypy_retain(value);
+    TINYPY_INCREF(value);
     return value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_percent_mapping_argument(tinypy_vm_t *vm, tinypy_value_t *format, tinypy_value_t *mapping, const unsigned char *key_bytes, size_t key_size, tinypy_error_t **out_error) {
-    tinypy_value_t *key = tinypy_internal_value_kind(format) == TINYPY_VALUE_UNICODE ? tinypy_unicode_from_utf8(vm, (const char *)key_bytes, key_size) : tinypy_string_from_bytes(vm, key_bytes, key_size);
+    tinypy_value_t *key = TINYPY_VALUE_KIND(format) == TINYPY_VALUE_UNICODE ? tinypy_unicode_from_utf8(vm, (const char *)key_bytes, key_size) : tinypy_string_from_bytes(vm, key_bytes, key_size);
     tinypy_value_t *value = tinypy_get_item(mapping, key, out_error);
 
-    tinypy_release(key);
+    TINYPY_DECREF(key);
     return value;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_percent_append_padded(tinypy_string_builder_t *output, tinypy_string_builder_t *field, size_t prefix_size, int64_t width, int32_t left, int32_t zero) {
     size_t padding = width > 0 && (uint64_t)width > field->size ? (size_t)width - field->size : 0U;
     size_t index;
 
     if (left == 0 && zero == 0) {
-        for (index = 0U; index < padding; index += 1U) {
+        for (index = 0U; index < padding; ++index) {
             __tinypy_string_builder_character(output, (unsigned char)' ');
         }
     }
     if (left == 0 && zero != 0 && padding != 0U) {
         __tinypy_string_builder_append(output, field->bytes, prefix_size);
-        for (index = 0U; index < padding; index += 1U) {
+        for (index = 0U; index < padding; ++index) {
             __tinypy_string_builder_character(output, (unsigned char)'0');
         }
         __tinypy_string_builder_append(output, field->bytes + prefix_size, field->size - prefix_size);
@@ -2115,19 +2063,18 @@ static void __tinypy_percent_append_padded(tinypy_string_builder_t *output, tiny
         __tinypy_string_builder_append(output, field->bytes, field->size);
     }
     if (left != 0) {
-        for (index = 0U; index < padding; index += 1U) {
+        for (index = 0U; index < padding; ++index) {
             __tinypy_string_builder_character(output, (unsigned char)' ');
         }
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_value_t *argument_value, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = tinypy_internal_value_vm(format);
-    const unsigned char *bytes = tinypy_internal_text_bytes(format);
-    size_t size = tinypy_internal_text_byte_size(format);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(format);
+    const unsigned char *bytes = TINYPY_TEXT_BYTES(format);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(format);
     size_t offset = 0U;
-    int32_t unicode = tinypy_internal_value_kind(format) == TINYPY_VALUE_UNICODE;
+    int32_t unicode = TINYPY_VALUE_KIND(format) == TINYPY_VALUE_UNICODE;
     tinypy_string_builder_t output;
     tinypy_percent_arguments_t arguments;
 
@@ -2215,12 +2162,12 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
 
             if (width_value == NULL || __tinypy_string_integer(vm, width_value, &width, out_error) == 0) {
                 if (width_value != NULL) {
-                    tinypy_release(width_value);
+                    TINYPY_DECREF(width_value);
                 }
                 __tinypy_string_builder_discard(&output);
                 return NULL;
             }
-            tinypy_release(width_value);
+            TINYPY_DECREF(width_value);
             if (width < 0) {
                 left = INT32_C(1);
                 width = -width;
@@ -2240,12 +2187,12 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
 
                 if (precision_value == NULL || __tinypy_string_integer(vm, precision_value, &precision, out_error) == 0) {
                     if (precision_value != NULL) {
-                        tinypy_release(precision_value);
+                        TINYPY_DECREF(precision_value);
                     }
                     __tinypy_string_builder_discard(&output);
                     return NULL;
                 }
-                tinypy_release(precision_value);
+                TINYPY_DECREF(precision_value);
                 if (precision < 0) {
                     precision = -1;
                 }
@@ -2278,11 +2225,11 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
             size_t text_size;
 
             if (text == NULL) {
-                tinypy_release(value);
+                TINYPY_DECREF(value);
                 __tinypy_string_builder_discard(&output);
                 return NULL;
             }
-            text_size = tinypy_internal_text_byte_size(text);
+            text_size = TINYPY_TEXT_BYTE_SIZE(text);
             if (precision >= 0) {
                 size_t character_count = __tinypy_string_character_count(text);
 
@@ -2290,19 +2237,19 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
                     text_size = __tinypy_string_byte_offset(text, (size_t)precision);
                 }
             }
-            const unsigned char *bytes_2 = tinypy_internal_text_bytes(text);
+            const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(text);
             __tinypy_string_builder_append(&field, bytes_2, text_size);
-            if (tinypy_internal_value_kind(text) == TINYPY_VALUE_UNICODE) {
+            if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
                 unicode = INT32_C(1);
             }
-            tinypy_release(text);
+            TINYPY_DECREF(text);
         }
         else if (conversion == (unsigned char)'c') {
             if (__tinypy_string_is_text(value) != 0 && __tinypy_string_character_count(value) == 1U) {
-                const unsigned char *bytes_2 = tinypy_internal_text_bytes(value);
-                size_t byte_size = tinypy_internal_text_byte_size(value);
+                const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(value);
+                size_t byte_size = TINYPY_TEXT_BYTE_SIZE(value);
                 __tinypy_string_builder_append(&field, bytes_2, byte_size);
-                if (tinypy_internal_value_kind(value) == TINYPY_VALUE_UNICODE) {
+                if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE) {
                     unicode = INT32_C(1);
                 }
             }
@@ -2313,7 +2260,7 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
                     if (out_error == NULL || *out_error == NULL) {
                         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "%c argument is out of range", out_error);
                     }
-                    tinypy_release(value);
+                    TINYPY_DECREF(value);
                     __tinypy_string_builder_discard(&field);
                     __tinypy_string_builder_discard(&output);
                     return NULL;
@@ -2323,7 +2270,7 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
         }
         else if (conversion == (unsigned char)'d' || conversion == (unsigned char)'i' || conversion == (unsigned char)'u' || conversion == (unsigned char)'o' || conversion == (unsigned char)'x' || conversion == (unsigned char)'X') {
             if (__tinypy_percent_append_integer(vm, &field, value, conversion, alternate, plus, space, precision, &prefix_size, out_error) == 0) {
-                tinypy_release(value);
+                TINYPY_DECREF(value);
                 __tinypy_string_builder_discard(&field);
                 __tinypy_string_builder_discard(&output);
                 return NULL;
@@ -2334,57 +2281,55 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
         }
         else if (conversion == (unsigned char)'e' || conversion == (unsigned char)'E' || conversion == (unsigned char)'f' || conversion == (unsigned char)'F' || conversion == (unsigned char)'g' || conversion == (unsigned char)'G') {
             if (__tinypy_percent_append_float(vm, &field, value, conversion, alternate, plus, space, precision, &prefix_size, out_error) == 0) {
-                tinypy_release(value);
+                TINYPY_DECREF(value);
                 __tinypy_string_builder_discard(&field);
                 __tinypy_string_builder_discard(&output);
                 return NULL;
             }
         }
         else {
-            tinypy_release(value);
+            TINYPY_DECREF(value);
             __tinypy_string_builder_discard(&field);
             __tinypy_string_builder_discard(&output);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unsupported format character", out_error);
             return NULL;
         }
-        tinypy_release(value);
+        TINYPY_DECREF(value);
         if (left != 0) {
             zero = INT32_C(0);
         }
         __tinypy_percent_append_padded(&output, &field, prefix_size, width, left, zero);
         __tinypy_string_builder_discard(&field);
     }
-    if (tinypy_internal_value_kind(argument_value) == TINYPY_VALUE_TUPLE) {
-        if (arguments.index != tinypy_tuple_size(argument_value)) {
+    if (TINYPY_VALUE_KIND(argument_value) == TINYPY_VALUE_TUPLE) {
+        if (arguments.index != TINYPY_TUPLE_SIZE(argument_value)) {
             __tinypy_string_builder_discard(&output);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "not all arguments converted during string formatting", out_error);
             return NULL;
         }
     }
-    else if (arguments.consumed == 0U && tinypy_internal_value_kind(argument_value) != TINYPY_VALUE_DICT) {
+    else if (arguments.consumed == 0U && TINYPY_VALUE_KIND(argument_value) != TINYPY_VALUE_DICT) {
         __tinypy_string_builder_discard(&output);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "not all arguments converted during string formatting", out_error);
         return NULL;
     }
     return __tinypy_string_builder_finish(&output, unicode);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_string_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
     tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
     tinypy_value_t *key = tinypy_string_from_bytes(type->vm, name, name_size);
 
     tinypy_dict_set(type->dict, key, function);
-    tinypy_release(key);
-    tinypy_release(function);
+    TINYPY_DECREF(key);
+    TINYPY_DECREF(function);
 }
-
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_string_types(tinypy_vm_t *vm) {
     tinypy_type_t *types[2] = {&vm->string_type, &vm->unicode_type};
     size_t index;
 
-    for (index = 0U; index < 2U; index += 1U) {
+    for (index = 0U; index < 2U; ++index) {
         __tinypy_string_add_method(types[index], "format", 6U, __tinypy_string_format_method, NULL);
         __tinypy_string_add_method(types[index], "center", 6U, __tinypy_string_align_method, NULL);
         __tinypy_string_add_method(types[index], "ljust", 5U, __tinypy_string_align_method, (void *)(intptr_t)-1);

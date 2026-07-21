@@ -25,7 +25,6 @@ tinypy_ast_module_t __tinypy_ast_module(tinypy_ast_sequence_t *body, tinypy_comp
     p->v.Module.body = body;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_module_t __tinypy_ast_interactive(tinypy_ast_sequence_t *body, tinypy_compile_ctx_t *arena) {
     tinypy_ast_module_t p;
@@ -37,7 +36,6 @@ tinypy_ast_module_t __tinypy_ast_interactive(tinypy_ast_sequence_t *body, tinypy
     p->v.Interactive.body = body;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_module_t __tinypy_ast_expression(tinypy_ast_expression_t body, tinypy_compile_ctx_t *arena) {
     tinypy_ast_module_t p;
@@ -54,7 +52,6 @@ tinypy_ast_module_t __tinypy_ast_expression(tinypy_ast_expression_t body, tinypy
     p->v.Expression.body = body;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_module_t __tinypy_ast_suite(tinypy_ast_sequence_t *body, tinypy_compile_ctx_t *arena) {
     tinypy_ast_module_t p;
@@ -66,7 +63,6 @@ tinypy_ast_module_t __tinypy_ast_suite(tinypy_ast_sequence_t *body, tinypy_compi
     p->v.Suite.body = body;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_function_def(tinypy_ast_identifier_t name, tinypy_ast_arguments_t args, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *decorator_list, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -93,7 +89,6 @@ tinypy_ast_statement_t __tinypy_ast_function_def(tinypy_ast_identifier_t name, t
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_class_def(tinypy_ast_identifier_t name, tinypy_ast_sequence_t *bases, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *decorator_list, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -115,7 +110,6 @@ tinypy_ast_statement_t __tinypy_ast_class_def(tinypy_ast_identifier_t name, tiny
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_return(tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -129,7 +123,6 @@ tinypy_ast_statement_t __tinypy_ast_return(tinypy_ast_expression_t value, int li
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_delete(tinypy_ast_sequence_t *targets, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -143,7 +136,6 @@ tinypy_ast_statement_t __tinypy_ast_delete(tinypy_ast_sequence_t *targets, int l
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_assign(tinypy_ast_sequence_t *targets, tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -163,7 +155,6 @@ tinypy_ast_statement_t __tinypy_ast_assign(tinypy_ast_sequence_t *targets, tinyp
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_aug_assign(tinypy_ast_expression_t target, tinypy_ast_binary_operator_e op, tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -194,7 +185,6 @@ tinypy_ast_statement_t __tinypy_ast_aug_assign(tinypy_ast_expression_t target, t
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_print(tinypy_ast_expression_t dest, tinypy_ast_sequence_t *values, tinypy_compiler_boolean_e nl, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -210,7 +200,6 @@ tinypy_ast_statement_t __tinypy_ast_print(tinypy_ast_expression_t dest, tinypy_a
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_for(tinypy_ast_expression_t target, tinypy_ast_expression_t iter, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -237,7 +226,6 @@ tinypy_ast_statement_t __tinypy_ast_for(tinypy_ast_expression_t target, tinypy_a
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_while(tinypy_ast_expression_t test, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -258,7 +246,6 @@ tinypy_ast_statement_t __tinypy_ast_while(tinypy_ast_expression_t test, tinypy_a
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_if(tinypy_ast_expression_t test, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -279,7 +266,6 @@ tinypy_ast_statement_t __tinypy_ast_if(tinypy_ast_expression_t test, tinypy_ast_
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_with(tinypy_ast_expression_t context_expr, tinypy_ast_expression_t optional_vars, tinypy_ast_sequence_t *body, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -300,7 +286,6 @@ tinypy_ast_statement_t __tinypy_ast_with(tinypy_ast_expression_t context_expr, t
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_raise(tinypy_ast_expression_t type, tinypy_ast_expression_t inst, tinypy_ast_expression_t tback, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -316,7 +301,6 @@ tinypy_ast_statement_t __tinypy_ast_raise(tinypy_ast_expression_t type, tinypy_a
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_try_except(tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *handlers, tinypy_ast_sequence_t *orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -332,7 +316,6 @@ tinypy_ast_statement_t __tinypy_ast_try_except(tinypy_ast_sequence_t *body, tiny
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_try_finally(tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *finalbody, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -347,7 +330,6 @@ tinypy_ast_statement_t __tinypy_ast_try_finally(tinypy_ast_sequence_t *body, tin
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_assert(tinypy_ast_expression_t test, tinypy_ast_expression_t msg, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -367,7 +349,6 @@ tinypy_ast_statement_t __tinypy_ast_assert(tinypy_ast_expression_t test, tinypy_
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_import(tinypy_ast_sequence_t *names, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -381,7 +362,6 @@ tinypy_ast_statement_t __tinypy_ast_import(tinypy_ast_sequence_t *names, int lin
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_import_from(tinypy_ast_identifier_t module, tinypy_ast_sequence_t *names, int level, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -397,7 +377,6 @@ tinypy_ast_statement_t __tinypy_ast_import_from(tinypy_ast_identifier_t module, 
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_exec(tinypy_ast_expression_t body, tinypy_ast_expression_t globals, tinypy_ast_expression_t locals, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -418,7 +397,6 @@ tinypy_ast_statement_t __tinypy_ast_exec(tinypy_ast_expression_t body, tinypy_as
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_global(tinypy_ast_sequence_t *names, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -432,7 +410,6 @@ tinypy_ast_statement_t __tinypy_ast_global(tinypy_ast_sequence_t *names, int lin
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_expr(tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -451,7 +428,6 @@ tinypy_ast_statement_t __tinypy_ast_expr(tinypy_ast_expression_t value, int line
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_pass(int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -464,7 +440,6 @@ tinypy_ast_statement_t __tinypy_ast_pass(int lineno, int col_offset, tinypy_comp
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_break(int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -477,7 +452,6 @@ tinypy_ast_statement_t __tinypy_ast_break(int lineno, int col_offset, tinypy_com
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_statement_t __tinypy_ast_continue(int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
@@ -490,7 +464,6 @@ tinypy_ast_statement_t __tinypy_ast_continue(int lineno, int col_offset, tinypy_
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_bool_op(tinypy_ast_boolean_operator_e op, tinypy_ast_sequence_t *values, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -510,7 +483,6 @@ tinypy_ast_expression_t __tinypy_ast_bool_op(tinypy_ast_boolean_operator_e op, t
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_bin_op(tinypy_ast_expression_t left, tinypy_ast_binary_operator_e op, tinypy_ast_expression_t right, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -541,7 +513,6 @@ tinypy_ast_expression_t __tinypy_ast_bin_op(tinypy_ast_expression_t left, tinypy
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_unary_op(tinypy_ast_unary_operator_e op, tinypy_ast_expression_t operand, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -566,7 +537,6 @@ tinypy_ast_expression_t __tinypy_ast_unary_op(tinypy_ast_unary_operator_e op, ti
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_lambda(tinypy_ast_arguments_t args, tinypy_ast_expression_t body, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -591,7 +561,6 @@ tinypy_ast_expression_t __tinypy_ast_lambda(tinypy_ast_arguments_t args, tinypy_
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_if_exp(tinypy_ast_expression_t test, tinypy_ast_expression_t body, tinypy_ast_expression_t orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -622,7 +591,6 @@ tinypy_ast_expression_t __tinypy_ast_if_exp(tinypy_ast_expression_t test, tinypy
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_dict(tinypy_ast_sequence_t *keys, tinypy_ast_sequence_t *values, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -637,7 +605,6 @@ tinypy_ast_expression_t __tinypy_ast_dict(tinypy_ast_sequence_t *keys, tinypy_as
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_set(tinypy_ast_sequence_t *elts, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -651,7 +618,6 @@ tinypy_ast_expression_t __tinypy_ast_set(tinypy_ast_sequence_t *elts, int lineno
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_list_comp(tinypy_ast_expression_t elt, tinypy_ast_sequence_t *generators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -671,7 +637,6 @@ tinypy_ast_expression_t __tinypy_ast_list_comp(tinypy_ast_expression_t elt, tiny
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_set_comp(tinypy_ast_expression_t elt, tinypy_ast_sequence_t *generators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -691,7 +656,6 @@ tinypy_ast_expression_t __tinypy_ast_set_comp(tinypy_ast_expression_t elt, tinyp
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_dict_comp(tinypy_ast_expression_t key, tinypy_ast_expression_t value, tinypy_ast_sequence_t *generators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -717,7 +681,6 @@ tinypy_ast_expression_t __tinypy_ast_dict_comp(tinypy_ast_expression_t key, tiny
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_generator_exp(tinypy_ast_expression_t elt, tinypy_ast_sequence_t *generators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -737,7 +700,6 @@ tinypy_ast_expression_t __tinypy_ast_generator_exp(tinypy_ast_expression_t elt, 
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_yield(tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -751,7 +713,6 @@ tinypy_ast_expression_t __tinypy_ast_yield(tinypy_ast_expression_t value, int li
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_compare(tinypy_ast_expression_t left, tinypy_ast_integer_sequence_t *ops, tinypy_ast_sequence_t *comparators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -772,7 +733,6 @@ tinypy_ast_expression_t __tinypy_ast_compare(tinypy_ast_expression_t left, tinyp
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_call(tinypy_ast_expression_t func, tinypy_ast_sequence_t *args, tinypy_ast_sequence_t *keywords, tinypy_ast_expression_t starargs, tinypy_ast_expression_t kwargs, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -795,7 +755,6 @@ tinypy_ast_expression_t __tinypy_ast_call(tinypy_ast_expression_t func, tinypy_a
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_repr(tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -814,7 +773,6 @@ tinypy_ast_expression_t __tinypy_ast_repr(tinypy_ast_expression_t value, int lin
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_num(tinypy_ast_literal_t n, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -833,7 +791,6 @@ tinypy_ast_expression_t __tinypy_ast_num(tinypy_ast_literal_t n, int lineno, int
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_str(tinypy_ast_string_t s, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -852,7 +809,6 @@ tinypy_ast_expression_t __tinypy_ast_str(tinypy_ast_string_t s, int lineno, int 
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_attribute(tinypy_ast_expression_t value, tinypy_ast_identifier_t attr, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -883,7 +839,6 @@ tinypy_ast_expression_t __tinypy_ast_attribute(tinypy_ast_expression_t value, ti
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_subscript(tinypy_ast_expression_t value, tinypy_ast_slice_t slice, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -914,7 +869,6 @@ tinypy_ast_expression_t __tinypy_ast_subscript(tinypy_ast_expression_t value, ti
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_name(tinypy_ast_identifier_t id, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -939,7 +893,6 @@ tinypy_ast_expression_t __tinypy_ast_name(tinypy_ast_identifier_t id, tinypy_ast
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_list(tinypy_ast_sequence_t *elts, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -959,7 +912,6 @@ tinypy_ast_expression_t __tinypy_ast_list(tinypy_ast_sequence_t *elts, tinypy_as
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_expression_t __tinypy_ast_tuple(tinypy_ast_sequence_t *elts, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
@@ -979,7 +931,6 @@ tinypy_ast_expression_t __tinypy_ast_tuple(tinypy_ast_sequence_t *elts, tinypy_a
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_slice_t __tinypy_ast_ellipsis(tinypy_compile_ctx_t *arena) {
     tinypy_ast_slice_t p;
@@ -990,7 +941,6 @@ tinypy_ast_slice_t __tinypy_ast_ellipsis(tinypy_compile_ctx_t *arena) {
     p->kind = TINYPY_AST_KIND_ELLIPSIS;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_slice_t __tinypy_ast_slice(tinypy_ast_expression_t lower, tinypy_ast_expression_t upper, tinypy_ast_expression_t step, tinypy_compile_ctx_t *arena) {
     tinypy_ast_slice_t p;
@@ -1004,7 +954,6 @@ tinypy_ast_slice_t __tinypy_ast_slice(tinypy_ast_expression_t lower, tinypy_ast_
     p->v.Slice.step = step;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_slice_t __tinypy_ast_ext_slice(tinypy_ast_sequence_t *dims, tinypy_compile_ctx_t *arena) {
     tinypy_ast_slice_t p;
@@ -1016,7 +965,6 @@ tinypy_ast_slice_t __tinypy_ast_ext_slice(tinypy_ast_sequence_t *dims, tinypy_co
     p->v.ExtSlice.dims = dims;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_slice_t __tinypy_ast_index(tinypy_ast_expression_t value, tinypy_compile_ctx_t *arena) {
     tinypy_ast_slice_t p;
@@ -1033,7 +981,6 @@ tinypy_ast_slice_t __tinypy_ast_index(tinypy_ast_expression_t value, tinypy_comp
     p->v.Index.value = value;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_comprehension_t __tinypy_ast_comprehension(tinypy_ast_expression_t target, tinypy_ast_expression_t iter, tinypy_ast_sequence_t *ifs, tinypy_compile_ctx_t *arena) {
     tinypy_ast_comprehension_t p;
@@ -1056,7 +1003,6 @@ tinypy_ast_comprehension_t __tinypy_ast_comprehension(tinypy_ast_expression_t ta
     p->ifs = ifs;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_exception_handler_t __tinypy_ast_except_handler(tinypy_ast_expression_t type, tinypy_ast_expression_t name, tinypy_ast_sequence_t *body, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_exception_handler_t p;
@@ -1072,7 +1018,6 @@ tinypy_ast_exception_handler_t __tinypy_ast_except_handler(tinypy_ast_expression
     p->col_offset = col_offset;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_arguments_t __tinypy_ast_arguments(tinypy_ast_sequence_t *args, tinypy_ast_identifier_t vararg, tinypy_ast_identifier_t kwarg, tinypy_ast_sequence_t *defaults, tinypy_compile_ctx_t *arena) {
     tinypy_ast_arguments_t p;
@@ -1086,7 +1031,6 @@ tinypy_ast_arguments_t __tinypy_ast_arguments(tinypy_ast_sequence_t *args, tinyp
     p->defaults = defaults;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_keyword_t __tinypy_ast_keyword(tinypy_ast_identifier_t arg, tinypy_ast_expression_t value, tinypy_compile_ctx_t *arena) {
     tinypy_ast_keyword_t p;
@@ -1108,7 +1052,6 @@ tinypy_ast_keyword_t __tinypy_ast_keyword(tinypy_ast_identifier_t arg, tinypy_as
     p->value = value;
     return p;
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_ast_alias_t __tinypy_ast_alias(tinypy_ast_identifier_t name, tinypy_ast_identifier_t asname, tinypy_compile_ctx_t *arena) {
     tinypy_ast_alias_t p;

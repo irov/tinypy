@@ -27,7 +27,6 @@ static size_t __tinypy_marshal_load_cstring_size(const char *text) {
     }
     return size;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_load_set_error(tinypy_marshal_error_t *error, tinypy_marshal_result_e result, uint8_t wire_type, const char *message) {
     if (error == NULL) {
@@ -43,7 +42,6 @@ static void __tinypy_marshal_load_set_error(tinypy_marshal_error_t *error, tinyp
     error->message = message;
     error->message_size = __tinypy_marshal_load_cstring_size(message);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void *__tinypy_marshal_vm_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
@@ -52,7 +50,6 @@ static void *__tinypy_marshal_vm_allocate(void *user_data, size_t size, size_t a
     (void)alignment;
     return tinypy_internal_vm_allocate(vm, size, tag);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void *__tinypy_marshal_vm_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
@@ -61,7 +58,6 @@ static void *__tinypy_marshal_vm_reallocate(void *user_data, void *memory, size_
     (void)alignment;
     return tinypy_internal_vm_reallocate(vm, memory, old_size, new_size, tag);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_vm_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
@@ -70,7 +66,6 @@ static void __tinypy_marshal_vm_deallocate(void *user_data, void *memory, size_t
     (void)alignment;
     tinypy_internal_vm_deallocate(vm, memory, size, tag);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_allocator_t __tinypy_marshal_vm_allocator(tinypy_vm_t *vm) {
     tinypy_allocator_t allocator;
@@ -84,19 +79,17 @@ static tinypy_allocator_t __tinypy_marshal_vm_allocator(tinypy_vm_t *vm) {
     allocator.deallocate = __tinypy_marshal_vm_deallocate;
     return allocator;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_marshal_cache_find(const tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source) {
     size_t index;
 
-    for (index = 0U; index < materializer->cache_size; index += 1U) {
+    for (index = 0U; index < materializer->cache_size; ++index) {
         if (materializer->cache[index].source == source) {
             return materializer->cache[index].value;
         }
     }
     return NULL;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_cache_append(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t *value) {
     size_t old_size;
@@ -121,15 +114,14 @@ static void __tinypy_marshal_cache_append(tinypy_marshal_materializer_t *materia
     materializer->cache[materializer->cache_size].source = source;
     materializer->cache[materializer->cache_size].value = value;
     materializer->cache_size += 1U;
-    tinypy_retain(value);
+    TINYPY_INCREF(value);
 }
-
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_cache_destroy(tinypy_marshal_materializer_t *materializer) {
     size_t index;
 
-    for (index = 0U; index < materializer->cache_size; index += 1U) {
-        tinypy_release(materializer->cache[index].value);
+    for (index = 0U; index < materializer->cache_size; ++index) {
+        TINYPY_DECREF(materializer->cache[index].value);
     }
     if (materializer->cache != NULL) {
         tinypy_internal_vm_deallocate(materializer->vm, materializer->cache, materializer->cache_capacity * sizeof(*materializer->cache), (uint32_t)TINYPY_ALLOC_TAG_MARSHAL_CACHE);
@@ -149,7 +141,7 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_sequence(tinypy_mars
         assert(count <= SIZE_MAX / sizeof(*items));
         items = (tinypy_value_t **)tinypy_internal_vm_allocate(materializer->vm, count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_MARSHAL_CACHE);
     }
-    for (index = 0U; index < count; index += 1U) {
+    for (index = 0U; index < count; ++index) {
         const tinypy_marshal_object_t *marshal_sequence_item = tinypy_marshal_sequence_item(source, index);
         result = __tinypy_marshal_materialize_object(materializer, marshal_sequence_item, &items[index]);
         if (result != TINYPY_MARSHAL_OK) {
@@ -161,21 +153,20 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_sequence(tinypy_mars
     }
     while (index != 0U) {
         index -= 1U;
-        tinypy_release(items[index]);
+        TINYPY_DECREF(items[index]);
     }
     if (items != NULL) {
         tinypy_internal_vm_deallocate(materializer->vm, items, count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_MARSHAL_CACHE);
     }
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_result_e __tinypy_marshal_materialize_dict(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t **out_value) {
     tinypy_value_t *dict = tinypy_dict_new(materializer->vm);
     size_t count = tinypy_marshal_dict_size(source);
     size_t index;
 
-    for (index = 0U; index < count; index += 1U) {
+    for (index = 0U; index < count; ++index) {
         tinypy_value_t *key = NULL;
         tinypy_value_t *value = NULL;
         tinypy_marshal_result_e result;
@@ -188,19 +179,18 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_dict(tinypy_marshal_
         }
         if (result != TINYPY_MARSHAL_OK) {
             if (key != NULL) {
-                tinypy_release(key);
+                TINYPY_DECREF(key);
             }
-            tinypy_release(dict);
+            TINYPY_DECREF(dict);
             return result;
         }
         tinypy_dict_set(dict, key, value);
-        tinypy_release(value);
-        tinypy_release(key);
+        TINYPY_DECREF(value);
+        TINYPY_DECREF(key);
     }
     *out_value = dict;
     return TINYPY_MARSHAL_OK;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_result_e __tinypy_marshal_materialize_code(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t **out_value) {
     const tinypy_marshal_code_t *source_code = tinypy_marshal_code_view(source);
@@ -219,7 +209,7 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_code(tinypy_marshal_
     source_fields[7] = source_code->name;
     source_fields[8] = source_code->lnotab;
 
-    for (index = 0U; index < 9U; index += 1U) {
+    for (index = 0U; index < 9U; ++index) {
         result = __tinypy_marshal_materialize_object(materializer, source_fields[index], &fields[index]);
         if (result != TINYPY_MARSHAL_OK) {
             break;
@@ -230,11 +220,10 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_code(tinypy_marshal_
     }
     while (index != 0U) {
         index -= 1U;
-        tinypy_release(fields[index]);
+        TINYPY_DECREF(fields[index]);
     }
     return result;
 }
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t **out_value) {
     tinypy_marshal_type_e type = tinypy_marshal_object_type(source);
@@ -285,7 +274,7 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         if (interned != 0) {
             *out_value = __tinypy_marshal_cache_find(materializer, source);
             if (*out_value != NULL) {
-                tinypy_retain(*out_value);
+                TINYPY_INCREF(*out_value);
                 return TINYPY_MARSHAL_OK;
             }
         }
@@ -330,7 +319,6 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         return TINYPY_MARSHAL_INVALID_GRAPH;
     }
 }
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_marshal_result_e tinypy_marshal_load_code_v2(tinypy_vm_t *vm, const void *bytes, size_t size, const tinypy_marshal_limits_t *limits, tinypy_value_t **out_code, tinypy_marshal_error_t *out_error) {
     tinypy_allocator_t allocator;

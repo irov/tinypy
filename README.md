@@ -26,7 +26,8 @@ The current implementation provides:
 - frames, tracebacks and Python 2.7 bytecode execution;
 - memory-only imports with packages, circular imports and failed-import
   rollback;
-- VM-local cached constants and reference-counted lifetime;
+- VM-local cached constants, reference-counted lifetime and a VM-local
+  arena/pool allocator for small objects;
 - a memory-only CPython 2.7 marshal-v2 reader and writer;
 - an artifact container with ABI/profile metadata and SHA-256 integrity.
 
@@ -91,6 +92,10 @@ Invalid pointers, ownership violations and wrong direct-accessor types are
 debug contracts. Python semantic failures, malformed external data, configured
 limits and ABI mismatches remain recoverable.
 
+The optional [CLI library](cli/README.md) is a separate target inside this
+project. It is disabled by default and is never linked into the embedding
+`tinypy` target.
+
 ## Build and test
 
 ```sh
@@ -111,8 +116,11 @@ Exact compiler parity can be checked against an external Python 2.7.18
 executable without adding it to the repository:
 
 ```sh
+cmake -S . -B build/cli -DTINYPY_BUILD_CLI=ON
+cmake --build build/cli -j
+
 python3 tests/compiler/run_differential.py \
-    --compiler build/default/tinypy_compile \
+    --compiler build/cli/cli/tinypy_compile \
     --reference /path/to/python2.7 \
     --logical-root /path/to/sources \
     --source-root /path/to/sources \
@@ -133,6 +141,7 @@ caller-owned inputs; no external corpus or interpreter is stored in tinypy.
 - `src/bytecode/` — opcode metadata and bytecode verification;
 - `src/marshal/` — marshal-v2 reader and writer;
 - `src/artifact/` — versioned code artifact container;
+- `cli/` — optional CLI library and thin executable entrypoints;
 - `tests/` — standalone runtime, compiler, format and fuzz tests;
 - `LICENSES/` — third-party attribution and license texts.
 
