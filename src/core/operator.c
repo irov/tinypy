@@ -3,7 +3,6 @@
 #include "internal.h"
 
 #include <assert.h>
-#include <complex.h>
 #include <math.h>
 #include <string.h>
 
@@ -381,6 +380,20 @@ static void __tinypy_operator_as_complex(const tinypy_value_t *value, double *re
         *real = __tinypy_operator_as_double(value);
         *imaginary = 0.0;
     }
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_operator_complex_power(double left_real, double left_imaginary, double right_real, double right_imaginary, double *result_real, double *result_imaginary) {
+    double radius = hypot(left_real, left_imaginary);
+    double magnitude = pow(radius, right_real);
+    double argument = atan2(left_imaginary, left_real);
+    double phase = argument * right_real;
+
+    if (right_imaginary != 0.0) {
+        magnitude /= exp(argument * right_imaginary);
+        phase += right_imaginary * log(radius);
+    }
+    *result_real = magnitude * cos(phase);
+    *result_imaginary = magnitude * sin(phase);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_numeric_add(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right, int subtract, tinypy_error_t **out_error) {
@@ -1278,17 +1291,22 @@ tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy
         double left_imaginary;
         double right_real;
         double right_imaginary;
-        double complex result;
 
         __tinypy_operator_as_complex(left, &left_real, &left_imaginary);
         __tinypy_operator_as_complex(right, &right_real, &right_imaginary);
-        if (left_real == 0.0 && left_imaginary == 0.0 && (right_real < 0.0 || right_imaginary != 0.0)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "zero cannot be raised to a negative or complex power", out_error);
-            return NULL;
+        if (left_real == 0.0 && left_imaginary == 0.0) {
+            if (right_real < 0.0 || right_imaginary != 0.0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "zero cannot be raised to a negative or complex power", out_error);
+                return NULL;
+            }
+            if (right_real == 0.0) {
+                return tinypy_complex_from_doubles(vm, 1.0, 0.0);
+            }
+            return tinypy_complex_from_doubles(vm, 0.0, 0.0);
         }
-        result = cpow(left_real + left_imaginary * I, right_real + right_imaginary * I);
-        double real = creal(result);
-        double imaginary = cimag(result);
+        double real;
+        double imaginary;
+        __tinypy_operator_complex_power(left_real, left_imaginary, right_real, right_imaginary, &real, &imaginary);
         return tinypy_complex_from_doubles(vm, real, imaginary);
     }
     if (left_kind == TINYPY_VALUE_FLOAT || right_kind == TINYPY_VALUE_FLOAT) {

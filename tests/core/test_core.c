@@ -1,5 +1,6 @@
 #include "tinypy/tinypy.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1724,6 +1725,29 @@ static int __test_operator_numeric_runtime(void) {
     bytes = tinypy_string_view(joined_text, &byte_size);
     TEST_CHECK(byte_size == 6U);
     TEST_CHECK(memcmp(bytes, "tinypy", 6U) == 0);
+
+    tinypy_value_t *complex_base = tinypy_complex_from_doubles(vm, 1.0, 2.0);
+    tinypy_value_t *complex_exponent = tinypy_complex_from_doubles(vm, 3.0, 0.0);
+    tinypy_value_t *complex_result = tinypy_power(complex_base, complex_exponent, &error);
+    double complex_real;
+    double complex_imaginary;
+    TEST_CHECK(error == NULL);
+    tinypy_complex_as_doubles(complex_result, &complex_real, &complex_imaginary);
+    TEST_CHECK(fabs(complex_real + 11.0) < 1e-12);
+    TEST_CHECK(fabs(complex_imaginary + 2.0) < 1e-12);
+
+    tinypy_value_t *complex_zero = tinypy_complex_from_doubles(vm, 0.0, 0.0);
+    tinypy_value_t *complex_zero_power = tinypy_power(complex_zero, complex_zero, &error);
+    TEST_CHECK(error == NULL);
+    tinypy_complex_as_doubles(complex_zero_power, &complex_real, &complex_imaginary);
+    TEST_CHECK(complex_real == 1.0);
+    TEST_CHECK(complex_imaginary == 0.0);
+
+    tinypy_release(complex_zero_power);
+    tinypy_release(complex_zero);
+    tinypy_release(complex_result);
+    tinypy_release(complex_exponent);
+    tinypy_release(complex_base);
 
     tinypy_release(joined_text);
     tinypy_release(right_text);
