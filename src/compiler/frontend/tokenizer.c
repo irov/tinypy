@@ -8,7 +8,6 @@
 #include "tokenizer.h"
 #include "parser_error.h"
 
-
 /* Don't ever change this -- it would break the portability of Python code */
 #define TINYPY_TOKENIZER_TAB_SIZE 8
 
@@ -74,17 +73,16 @@ const char *const __tinypy_parser_token_names[] = {
     /* This table must match the #defines in token.h! */
     "TINYPY_TOKEN_OPERATOR",
     "<TINYPY_TOKEN_ERROR>",
-    "<TINYPY_TOKEN_COUNT>"
-};
+    "<TINYPY_TOKEN_COUNT>"};
 
 /* Create and initialize a new tinypy_tokenizer_t structure */
 
-static tinypy_tokenizer_t *
-__tok_new(tinypy_compile_ctx_t *ctx)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_tokenizer_t *__tok_new(tinypy_compile_ctx_t *ctx) {
     tinypy_tokenizer_t *tok = (tinypy_tokenizer_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(tinypy_tokenizer_t));
-    if (tok == NULL)
+    if (tok == NULL) {
         return NULL;
+    }
     tok->buf = tok->cur = tok->end = tok->inp = tok->start = NULL;
     tok->ctx = ctx;
     tok->done = TINYPY_PARSER_OK;
@@ -103,10 +101,9 @@ __tok_new(tinypy_compile_ctx_t *ctx)
     return tok;
 }
 
-static char *
-__new_string(tinypy_compile_ctx_t *ctx, const char *s, tinypy_compiler_size_t len)
-{
-    char* result = (char *)tinypy_internal_compiler_arena_allocate(ctx, (size_t)len + 1U);
+//////////////////////////////////////////////////////////////////////////
+static char *__new_string(tinypy_compile_ctx_t *ctx, const char *s, tinypy_compiler_size_t len) {
+    char *result = (char *)tinypy_internal_compiler_arena_allocate(ctx, (size_t)len + 1U);
     if (result != NULL) {
         memcpy(result, s, len);
         result[len] = '\0';
@@ -114,25 +111,21 @@ __new_string(tinypy_compile_ctx_t *ctx, const char *s, tinypy_compiler_size_t le
     return result;
 }
 
-
-
-static char *
-__decode_str(const char *str, size_t source_size, int exec_input, tinypy_tokenizer_t *tok)
-{
+//////////////////////////////////////////////////////////////////////////
+static char *__decode_str(const char *str, size_t source_size, int exec_input, tinypy_tokenizer_t *tok) {
     (void)exec_input;
     assert(source_size <= (size_t)PTRDIFF_MAX);
     return __new_string(tok->ctx, str, (tinypy_compiler_size_t)source_size);
 }
 
-
 /* Set up tokenizer for string */
 
-tinypy_tokenizer_t *
-tinypy_internal_tokenizer_from_string(tinypy_compile_ctx_t *ctx, const char *str, size_t source_size, int exec_input)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_tokenizer_t *tinypy_internal_tokenizer_from_string(tinypy_compile_ctx_t *ctx, const char *str, size_t source_size, int exec_input) {
     tinypy_tokenizer_t *tok = __tok_new(ctx);
-    if (tok == NULL)
+    if (tok == NULL) {
         return NULL;
+    }
     str = (char *)__decode_str(str, source_size, exec_input, tok);
     if (str == NULL) {
         tinypy_internal_tokenizer_release(tok);
@@ -140,178 +133,212 @@ tinypy_internal_tokenizer_from_string(tinypy_compile_ctx_t *ctx, const char *str
     }
 
     /* XXX: constify members. */
-    tok->buf = tok->cur = tok->end = tok->inp = (char*)str;
+    tok->buf = tok->cur = tok->end = tok->inp = (char *)str;
     return tok;
 }
 
-
 /* Set up tokenizer for file */
-
-
 
 /* Free a tinypy_tokenizer_t structure */
 
-void
-tinypy_internal_tokenizer_release(tinypy_tokenizer_t *tok)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_tokenizer_release(tinypy_tokenizer_t *tok) {
     (void)tok;
 }
 
-
 /* Get next char, updating state; error code goes into tok->done */
 
-static int
-__tok_nextc(register tinypy_tokenizer_t *tok)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tok_nextc(register tinypy_tokenizer_t *tok) {
     char *end;
 
-    if (tok->cur != tok->inp)
+    if (tok->cur != tok->inp) {
         return TINYPY_COMPILER_CHARMASK(*tok->cur++);
-    if (tok->done != TINYPY_PARSER_OK)
+    }
+    if (tok->done != TINYPY_PARSER_OK) {
         return TINYPY_TOKENIZER_END_OF_INPUT;
+    }
     end = strchr(tok->inp, '\n');
     if (end != NULL) {
         end += 1;
-    } else {
+    }
+    else {
         end = strchr(tok->inp, '\0');
         if (end == tok->inp) {
             tok->done = TINYPY_PARSER_EOF;
             return TINYPY_TOKENIZER_END_OF_INPUT;
         }
     }
-    if (tok->start == NULL)
+    if (tok->start == NULL) {
         tok->buf = tok->cur;
+    }
     tok->line_start = tok->cur;
     tok->line_number += 1;
     tok->inp = end;
     return TINYPY_COMPILER_CHARMASK(*tok->cur++);
 }
 
-
 /* Back-up one character */
 
-static void
-__tok_backup(register tinypy_tokenizer_t *tok, register int c)
-{
+//////////////////////////////////////////////////////////////////////////
+static void __tok_backup(register tinypy_tokenizer_t *tok, register int c) {
     if (c != TINYPY_TOKENIZER_END_OF_INPUT) {
         assert(--tok->cur >= tok->buf);
-        if (*tok->cur != c)
+        if (*tok->cur != c) {
             *tok->cur = c;
+        }
     }
 }
-
 
 /* Return the token corresponding to a single character */
 
-int
-__tinypy_token_one_character(int c)
-{
+//////////////////////////////////////////////////////////////////////////
+int __tinypy_token_one_character(int c) {
     switch (c) {
-    case '(':           return TINYPY_TOKEN_LEFT_PARENTHESIS;
-    case ')':           return TINYPY_TOKEN_RIGHT_PARENTHESIS;
-    case '[':           return TINYPY_TOKEN_LEFT_BRACKET;
-    case ']':           return TINYPY_TOKEN_RIGHT_BRACKET;
-    case ':':           return TINYPY_TOKEN_COLON;
-    case ',':           return TINYPY_TOKEN_COMMA;
-    case ';':           return TINYPY_TOKEN_SEMICOLON;
-    case '+':           return TINYPY_TOKEN_PLUS;
-    case '-':           return TINYPY_TOKEN_MINUS;
-    case '*':           return TINYPY_TOKEN_STAR;
-    case '/':           return TINYPY_TOKEN_SLASH;
-    case '|':           return TINYPY_TOKEN_VERTICAL_BAR;
-    case '&':           return TINYPY_TOKEN_AMPERSAND;
-    case '<':           return TINYPY_TOKEN_LESS;
-    case '>':           return TINYPY_TOKEN_GREATER;
-    case '=':           return TINYPY_TOKEN_EQUAL;
-    case '.':           return TINYPY_TOKEN_DOT;
-    case '%':           return TINYPY_TOKEN_PERCENT;
-    case '`':           return TINYPY_TOKEN_BACKQUOTE;
-    case '{':           return TINYPY_TOKEN_LEFT_BRACE;
-    case '}':           return TINYPY_TOKEN_RIGHT_BRACE;
-    case '^':           return TINYPY_TOKEN_CIRCUMFLEX;
-    case '~':           return TINYPY_TOKEN_TILDE;
-    case '@':       return TINYPY_TOKEN_AT;
-    default:            return TINYPY_TOKEN_OPERATOR;
+    case '(':
+        return TINYPY_TOKEN_LEFT_PARENTHESIS;
+    case ')':
+        return TINYPY_TOKEN_RIGHT_PARENTHESIS;
+    case '[':
+        return TINYPY_TOKEN_LEFT_BRACKET;
+    case ']':
+        return TINYPY_TOKEN_RIGHT_BRACKET;
+    case ':':
+        return TINYPY_TOKEN_COLON;
+    case ',':
+        return TINYPY_TOKEN_COMMA;
+    case ';':
+        return TINYPY_TOKEN_SEMICOLON;
+    case '+':
+        return TINYPY_TOKEN_PLUS;
+    case '-':
+        return TINYPY_TOKEN_MINUS;
+    case '*':
+        return TINYPY_TOKEN_STAR;
+    case '/':
+        return TINYPY_TOKEN_SLASH;
+    case '|':
+        return TINYPY_TOKEN_VERTICAL_BAR;
+    case '&':
+        return TINYPY_TOKEN_AMPERSAND;
+    case '<':
+        return TINYPY_TOKEN_LESS;
+    case '>':
+        return TINYPY_TOKEN_GREATER;
+    case '=':
+        return TINYPY_TOKEN_EQUAL;
+    case '.':
+        return TINYPY_TOKEN_DOT;
+    case '%':
+        return TINYPY_TOKEN_PERCENT;
+    case '`':
+        return TINYPY_TOKEN_BACKQUOTE;
+    case '{':
+        return TINYPY_TOKEN_LEFT_BRACE;
+    case '}':
+        return TINYPY_TOKEN_RIGHT_BRACE;
+    case '^':
+        return TINYPY_TOKEN_CIRCUMFLEX;
+    case '~':
+        return TINYPY_TOKEN_TILDE;
+    case '@':
+        return TINYPY_TOKEN_AT;
+    default:
+        return TINYPY_TOKEN_OPERATOR;
     }
 }
 
-
-int
-__tinypy_token_two_characters(int c1, int c2)
-{
+//////////////////////////////////////////////////////////////////////////
+int __tinypy_token_two_characters(int c1, int c2) {
     switch (c1) {
     case '=':
         switch (c2) {
-        case '=':               return TINYPY_TOKEN_EQUAL_EQUAL;
+        case '=':
+            return TINYPY_TOKEN_EQUAL_EQUAL;
         }
         break;
     case '!':
         switch (c2) {
-        case '=':               return TINYPY_TOKEN_NOT_EQUAL;
+        case '=':
+            return TINYPY_TOKEN_NOT_EQUAL;
         }
         break;
     case '<':
         switch (c2) {
-        case '>':               return TINYPY_TOKEN_NOT_EQUAL;
-        case '=':               return TINYPY_TOKEN_LESS_EQUAL;
-        case '<':               return TINYPY_TOKEN_LEFT_SHIFT;
+        case '>':
+            return TINYPY_TOKEN_NOT_EQUAL;
+        case '=':
+            return TINYPY_TOKEN_LESS_EQUAL;
+        case '<':
+            return TINYPY_TOKEN_LEFT_SHIFT;
         }
         break;
     case '>':
         switch (c2) {
-        case '=':               return TINYPY_TOKEN_GREATER_EQUAL;
-        case '>':               return TINYPY_TOKEN_RIGHT_SHIFT;
+        case '=':
+            return TINYPY_TOKEN_GREATER_EQUAL;
+        case '>':
+            return TINYPY_TOKEN_RIGHT_SHIFT;
         }
         break;
     case '+':
         switch (c2) {
-        case '=':               return TINYPY_TOKEN_PLUS_EQUAL;
+        case '=':
+            return TINYPY_TOKEN_PLUS_EQUAL;
         }
         break;
     case '-':
         switch (c2) {
-        case '=':               return TINYPY_TOKEN_MINUS_EQUAL;
+        case '=':
+            return TINYPY_TOKEN_MINUS_EQUAL;
         }
         break;
     case '*':
         switch (c2) {
-        case '*':               return TINYPY_TOKEN_DOUBLE_STAR;
-        case '=':               return TINYPY_TOKEN_STAR_EQUAL;
+        case '*':
+            return TINYPY_TOKEN_DOUBLE_STAR;
+        case '=':
+            return TINYPY_TOKEN_STAR_EQUAL;
         }
         break;
     case '/':
         switch (c2) {
-        case '/':               return TINYPY_TOKEN_DOUBLE_SLASH;
-        case '=':               return TINYPY_TOKEN_SLASH_EQUAL;
+        case '/':
+            return TINYPY_TOKEN_DOUBLE_SLASH;
+        case '=':
+            return TINYPY_TOKEN_SLASH_EQUAL;
         }
         break;
     case '|':
         switch (c2) {
-        case '=':               return TINYPY_TOKEN_VERTICAL_BAR_EQUAL;
+        case '=':
+            return TINYPY_TOKEN_VERTICAL_BAR_EQUAL;
         }
         break;
     case '%':
         switch (c2) {
-        case '=':               return TINYPY_TOKEN_PERCENT_EQUAL;
+        case '=':
+            return TINYPY_TOKEN_PERCENT_EQUAL;
         }
         break;
     case '&':
         switch (c2) {
-        case '=':               return TINYPY_TOKEN_AMPERSAND_EQUAL;
+        case '=':
+            return TINYPY_TOKEN_AMPERSAND_EQUAL;
         }
         break;
     case '^':
         switch (c2) {
-        case '=':               return TINYPY_TOKEN_CIRCUMFLEX_EQUAL;
+        case '=':
+            return TINYPY_TOKEN_CIRCUMFLEX_EQUAL;
         }
         break;
     }
     return TINYPY_TOKEN_OPERATOR;
 }
 
-int
-__tinypy_token_three_characters(int c1, int c2, int c3)
-{
+//////////////////////////////////////////////////////////////////////////
+int __tinypy_token_three_characters(int c1, int c2, int c3) {
     switch (c1) {
     case '<':
         switch (c2) {
@@ -357,9 +384,8 @@ __tinypy_token_three_characters(int c1, int c2, int c3)
     return TINYPY_TOKEN_OPERATOR;
 }
 
-static int
-__indenterror(tinypy_tokenizer_t *tok)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __indenterror(tinypy_tokenizer_t *tok) {
     if (tok->alterror) {
         tok->done = TINYPY_PARSER_TAB_SPACE_ERROR;
         tok->cur = tok->inp;
@@ -370,14 +396,13 @@ __indenterror(tinypy_tokenizer_t *tok)
 
 /* Get next token, after space stripping etc. */
 
-static int
-__tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end) {
     register int c;
     int blankline;
 
     *p_start = *p_end = NULL;
-  nextline:
+nextline:
     tok->start = NULL;
     blankline = 0;
 
@@ -388,17 +413,19 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
         tok->atbol = 0;
         for (;;) {
             c = __tok_nextc(tok);
-            if (c == ' ')
+            if (c == ' ') {
                 col++, altcol++;
-            else if (c == '\t') {
-                col = (col/tok->tabsize + 1) * tok->tabsize;
-                altcol = (altcol/tok->alttabsize + 1)
-                    * tok->alttabsize;
             }
-            else if (c == '\014') /* Control-L (formfeed) */
-                col = altcol = 0; /* For Emacs users */
-            else
+            else if (c == '\t') {
+                col = (col / tok->tabsize + 1) * tok->tabsize;
+                altcol = (altcol / tok->alttabsize + 1) * tok->alttabsize;
+            }
+            else if (c == '\014') /* Control-L (formfeed) */ {
+                col = altcol = 0;
+            } /* For Emacs users */
+            else {
                 break;
+            }
         }
         __tok_backup(tok, c);
         if (c == '#' || c == '\n') {
@@ -415,20 +442,22 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
             if (col == tok->indstack[tok->indent]) {
                 /* No change */
                 if (altcol != tok->altindstack[tok->indent]) {
-                    if (__indenterror(tok))
+                    if (__indenterror(tok)) {
                         return TINYPY_TOKEN_ERROR;
+                    }
                 }
             }
             else if (col > tok->indstack[tok->indent]) {
                 /* Indent -- always one */
-                if (tok->indent+1 >= TINYPY_TOKENIZER_MAX_INDENT) {
+                if (tok->indent + 1 >= TINYPY_TOKENIZER_MAX_INDENT) {
                     tok->done = TINYPY_PARSER_TOO_DEEP;
                     tok->cur = tok->inp;
                     return TINYPY_TOKEN_ERROR;
                 }
                 if (altcol <= tok->altindstack[tok->indent]) {
-                    if (__indenterror(tok))
+                    if (__indenterror(tok)) {
                         return TINYPY_TOKEN_ERROR;
+                    }
                 }
                 tok->pendin++;
                 tok->indstack[++tok->indent] = col;
@@ -436,8 +465,7 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
             }
             else /* col < tok->indstack[tok->indent] */ {
                 /* Dedent -- any number, must be consistent */
-                while (tok->indent > 0 &&
-                    col < tok->indstack[tok->indent]) {
+                while (tok->indent > 0 && col < tok->indstack[tok->indent]) {
                     tok->pendin--;
                     tok->indent--;
                 }
@@ -447,8 +475,9 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                     return TINYPY_TOKEN_ERROR;
                 }
                 if (altcol != tok->altindstack[tok->indent]) {
-                    if (__indenterror(tok))
+                    if (__indenterror(tok)) {
                         return TINYPY_TOKEN_ERROR;
+                    }
                 }
             }
         }
@@ -468,7 +497,7 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
         }
     }
 
- again:
+again:
     tok->start = NULL;
     /* Skip spaces */
     do {
@@ -481,11 +510,11 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
     /* Skip comment, while looking for tab-setting magic */
     if (c == '#') {
         static const char *const tabforms[] = {
-            "tab-width:",                       /* Emacs */
-            ":tabstop=",                        /* vim, full form */
-            ":ts=",                             /* vim, abbreviated form */
-            "set tabsize=",                     /* will vi never die? */
-        /* more templates can be added here to support other editors */
+            "tab-width:",   /* Emacs */
+            ":tabstop=",    /* vim, full form */
+            ":ts=",         /* vim, abbreviated form */
+            "set tabsize=", /* will vi never die? */
+            /* more templates can be added here to support other editors */
         };
         char cbuf[80];
         char *tp;
@@ -493,11 +522,10 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
         tp = cbuf;
         do {
             *tp++ = c = __tok_nextc(tok);
-        } while (c != TINYPY_TOKENIZER_END_OF_INPUT && c != '\n' &&
-                 (size_t)(tp - cbuf + 1) < sizeof(cbuf));
+        } while (c != TINYPY_TOKENIZER_END_OF_INPUT && c != '\n' && (size_t)(tp - cbuf + 1) < sizeof(cbuf));
         *tp = '\0';
         for (cp = tabforms;
-             cp < tabforms + sizeof(tabforms)/sizeof(tabforms[0]);
+             cp < tabforms + sizeof(tabforms) / sizeof(tabforms[0]);
              cp++) {
             if ((tp = strstr(cbuf, *cp))) {
                 int newsize = atoi(tp + strlen(*cp));
@@ -507,8 +535,9 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                 }
             }
         }
-        while (c != TINYPY_TOKENIZER_END_OF_INPUT && c != '\n')
+        while (c != TINYPY_TOKENIZER_END_OF_INPUT && c != '\n') {
             c = __tok_nextc(tok);
+        }
     }
 
     /* Check for end-of-input and errors now. */
@@ -523,24 +552,29 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
         case 'b':
         case 'B':
             c = __tok_nextc(tok);
-            if (c == 'r' || c == 'R')
+            if (c == 'r' || c == 'R') {
                 c = __tok_nextc(tok);
-            if (c == '"' || c == '\'')
+            }
+            if (c == '"' || c == '\'') {
                 goto letter_quote;
+            }
             break;
         case 'r':
         case 'R':
             c = __tok_nextc(tok);
-            if (c == '"' || c == '\'')
+            if (c == '"' || c == '\'') {
                 goto letter_quote;
+            }
             break;
         case 'u':
         case 'U':
             c = __tok_nextc(tok);
-            if (c == 'r' || c == 'R')
+            if (c == 'r' || c == 'R') {
                 c = __tok_nextc(tok);
-            if (c == '"' || c == '\'')
+            }
+            if (c == '"' || c == '\'') {
                 goto letter_quote;
+            }
             break;
         }
         while (c != TINYPY_TOKENIZER_END_OF_INPUT && (TINYPY_COMPILER_ISALNUM(c) || c == '_')) {
@@ -555,8 +589,9 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
     /* Newline */
     if (c == '\n') {
         tok->atbol = 1;
-        if (blankline || tok->level > 0)
+        if (blankline || tok->level > 0) {
             goto nextline;
+        }
         *p_start = tok->start;
         *p_end = tok->cur - 1; /* Leave '\n' out of the string */
         tok->cont_line = 0;
@@ -582,11 +617,13 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
         if (c == '0') {
             /* Hex, octal or binary -- maybe. */
             c = __tok_nextc(tok);
-            if (c == '.')
+            if (c == '.') {
                 goto fraction;
+            }
 #ifndef WITHOUT_COMPLEX
-            if (c == 'j' || c == 'J')
+            if (c == 'j' || c == 'J') {
                 goto imaginary;
+            }
 #endif
             if (c == 'x' || c == 'X') {
 
@@ -638,13 +675,16 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                         c = __tok_nextc(tok);
                     } while (isdigit(c));
                 }
-                if (c == '.')
+                if (c == '.') {
                     goto fraction;
-                else if (c == 'e' || c == 'E')
+                }
+                else if (c == 'e' || c == 'E') {
                     goto exponent;
+                }
 #ifndef WITHOUT_COMPLEX
-                else if (c == 'j' || c == 'J')
+                else if (c == 'j' || c == 'J') {
                     goto imaginary;
+                }
 #endif
                 else if (found_decimal) {
                     tok->done = TINYPY_PARSER_BAD_TOKEN;
@@ -652,20 +692,22 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                     return TINYPY_TOKEN_ERROR;
                 }
             }
-            if (c == 'l' || c == 'L')
+            if (c == 'l' || c == 'L') {
                 c = __tok_nextc(tok);
+            }
         }
         else {
             /* Decimal */
             do {
                 c = __tok_nextc(tok);
             } while (isdigit(c));
-            if (c == 'l' || c == 'L')
+            if (c == 'l' || c == 'L') {
                 c = __tok_nextc(tok);
+            }
             else {
                 /* Accept floating point numbers. */
                 if (c == '.') {
-        fraction:
+                fraction:
                     /* Fraction */
                     do {
                         c = __tok_nextc(tok);
@@ -673,7 +715,7 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                 }
                 if (c == 'e' || c == 'E') {
                     int e;
-                  exponent:
+                exponent:
                     e = c;
                     /* Exponent part */
                     c = __tok_nextc(tok);
@@ -684,7 +726,8 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                             __tok_backup(tok, c);
                             return TINYPY_TOKEN_ERROR;
                         }
-                    } else if (!isdigit(c)) {
+                    }
+                    else if (!isdigit(c)) {
                         __tok_backup(tok, c);
                         __tok_backup(tok, e);
                         *p_start = tok->start;
@@ -696,10 +739,11 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                     } while (isdigit(c));
                 }
 #ifndef WITHOUT_COMPLEX
-                if (c == 'j' || c == 'J')
+                if (c == 'j' || c == 'J') {
                     /* Imaginary part */
-        imaginary:
+                imaginary:
                     c = __tok_nextc(tok);
+                }
 #endif
             }
         }
@@ -709,7 +753,7 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
         return TINYPY_TOKEN_NUMBER;
     }
 
-  letter_quote:
+letter_quote:
     /* String */
     if (c == '\'' || c == '"') {
         tinypy_compiler_size_t quote2 = tok->cur - tok->start + 1;
@@ -728,10 +772,12 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                 tok->cont_line = 1; /* multiline string. */
             }
             else if (c == TINYPY_TOKENIZER_END_OF_INPUT) {
-                if (triple)
+                if (triple) {
                     tok->done = TINYPY_PARSER_EOF_TRIPLE_STRING;
-                else
+                }
+                else {
                     tok->done = TINYPY_PARSER_EOL_STRING;
+                }
                 tok->cur = tok->inp;
                 return TINYPY_TOKEN_ERROR;
             }
@@ -746,8 +792,9 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                     }
                     __tok_backup(tok, c);
                 }
-                if (!triple || tripcount == 3)
+                if (!triple || tripcount == 3) {
                     break;
+                }
             }
             else if (c == '\\') {
                 tripcount = 0;
@@ -758,8 +805,9 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
                     return TINYPY_TOKEN_ERROR;
                 }
             }
-            else
+            else {
                 tripcount = 0;
+            }
         }
         *p_start = tok->start;
         *p_end = tok->cur;
@@ -787,7 +835,8 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
             int token3 = __tinypy_token_three_characters(c, c2, c3);
             if (token3 != TINYPY_TOKEN_OPERATOR) {
                 token = token3;
-            } else {
+            }
+            else {
                 __tok_backup(tok, c3);
             }
             *p_start = tok->start;
@@ -817,8 +866,7 @@ __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end)
     return __tinypy_token_one_character(c);
 }
 
-int
-tinypy_internal_tokenizer_get(tinypy_tokenizer_t *tok, char **p_start, char **p_end)
-{
+//////////////////////////////////////////////////////////////////////////
+int tinypy_internal_tokenizer_get(tinypy_tokenizer_t *tok, char **p_start, char **p_end) {
     return __tok_get(tok, p_start, p_end);
 }

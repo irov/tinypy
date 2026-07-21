@@ -9,8 +9,8 @@ typedef struct fuzz_allocator_state_t {
     size_t bytes;
 } fuzz_allocator_state_t;
 
-static void *__fuzz_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag)
-{
+//////////////////////////////////////////////////////////////////////////
+static void *__fuzz_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
     fuzz_allocator_state_t *state = (fuzz_allocator_state_t *)user_data;
     void *memory;
 
@@ -23,8 +23,8 @@ static void *__fuzz_allocate(void *user_data, size_t size, size_t alignment, uin
     return memory;
 }
 
-static void *__fuzz_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag)
-{
+//////////////////////////////////////////////////////////////////////////
+static void *__fuzz_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
     fuzz_allocator_state_t *state = (fuzz_allocator_state_t *)user_data;
     void *resized;
 
@@ -38,8 +38,8 @@ static void *__fuzz_reallocate(void *user_data, void *memory, size_t old_size, s
     return resized;
 }
 
-static void __fuzz_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag)
-{
+//////////////////////////////////////////////////////////////////////////
+static void __fuzz_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
     fuzz_allocator_state_t *state = (fuzz_allocator_state_t *)user_data;
 
     (void)alignment;
@@ -52,8 +52,8 @@ static void __fuzz_deallocate(void *user_data, void *memory, size_t size, size_t
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
-int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
-{
+//////////////////////////////////////////////////////////////////////////
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     fuzz_allocator_state_t allocator_state = {0U, 0U};
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -99,7 +99,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     limits.max_generated_ast_nodes = 4096U;
     limits.max_generated_source_bytes = 64U * 1024U;
     limits.max_source_map_entries = 256U;
-    if (size != 0U) mode = (tinypy_compile_mode_e)(TINYPY_COMPILE_EXEC + selector % 3U);
+    if (size != 0U) {
+        mode = (tinypy_compile_mode_e)(TINYPY_COMPILE_EXEC + selector % 3U);
+    }
     tinypy_compile_options_init(&options, mode);
     options.limits = &limits;
     options.feature_flags = (uint32_t)((selector / 3U) % 4U);
@@ -109,21 +111,29 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     }
     if ((selector & UINT8_C(0x80)) != 0U) {
         preprocessed = tinypy_preprocess_source(vm, size != 0U ? data + 1U : data, size != 0U ? size - 1U : 0U, "fuzz.py", 7U, &options, &error);
-        if (preprocessed != NULL) tinypy_preprocess_result_destroy(preprocessed);
-    } else {
-        code = tinypy_compile_source(vm, size != 0U ? data + 1U : data, size != 0U ? size - 1U : 0U, "fuzz.py", 7U, &options, &error);
-        if (code != NULL) tinypy_release(code);
+        if (preprocessed != NULL) {
+            tinypy_preprocess_result_destroy(preprocessed);
+        }
     }
-    if (error != NULL) tinypy_error_release(error);
-    if (profile != NULL) tinypy_build_profile_destroy(profile);
+    else {
+        code = tinypy_compile_source(vm, size != 0U ? data + 1U : data, size != 0U ? size - 1U : 0U, "fuzz.py", 7U, &options, &error);
+        if (code != NULL) {
+            tinypy_release(code);
+        }
+    }
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    if (profile != NULL) {
+        tinypy_build_profile_destroy(profile);
+    }
     tinypy_vm_destroy(vm);
     assert(allocator_state.allocations == 0U && allocator_state.bytes == 0U);
     return 0;
 }
 
 #if defined(TINYPY_FUZZ_STANDALONE)
-static uint64_t __fuzz_random(uint64_t *state)
-{
+static uint64_t __fuzz_random(uint64_t *state) {
     uint64_t value = *state;
 
     value ^= value << 13U;
@@ -133,29 +143,27 @@ static uint64_t __fuzz_random(uint64_t *state)
     return value;
 }
 
-int main(void)
-{
-    static const unsigned char seeds[][48] = {
-        {0U},
-        {0U, 'p', 'a', 's', 's', '\n'},
-        {1U, '1', '+', '2'},
-        {2U, 'i', 'f', ' ', 'T', 'r', 'u', 'e', ':', '\n'},
-        {0U, '#', ' ', 'c', 'o', 'd', 'i', 'n', 'g', ':', ' ', 'u', 't', 'f', '-', '8', '\n'},
-        {0U, 0xefU, 0xbbU, 0xbfU, 'v', 'a', 'l', 'u', 'e', '=', '1', '\n'},
-        {0U, 'u', '\'', '\\', 'N', '{', 'L', 'A', 'T', 'I', 'N', ' ', 'S', 'M', 'A', 'L', 'L', ' ', 'L', 'E', 'T', 'T', 'E', 'R', ' ', 'A', '}', '\'', '\n'},
-        {0U, 'd', 'e', 'f', ' ', 'f', '(', 'x', ')', ':', '\n', ' ', ' ', ' ', ' ', 'r', 'e', 't', 'u', 'r', 'n', ' ', 'x', '+', '1', '\n'}
-    };
+int main(void) {
+    static const unsigned char seeds[][48] = { {0U},
+        {0U, 'p', 'a', 's', 's', '\n'}, {1U, '1', '+', '2'},
+        {2U, 'i', 'f', ' ', 'T', 'r', 'u', 'e', ':', '\n'}, {0U, '#', ' ', 'c', 'o', 'd', 'i', 'n', 'g', ':', ' ', 'u', 't', 'f', '-', '8', '\n'},
+        {0U, 0xefU, 0xbbU, 0xbfU, 'v', 'a', 'l', 'u', 'e', '=', '1', '\n'}, {0U, 'u', '\'', '\\', 'N', '{', 'L', 'A', 'T', 'I', 'N', ' ', 'S', 'M', 'A', 'L', 'L', ' ', 'L', 'E', 'T', 'T', 'E', 'R', ' ', 'A', '}', '\'', '\n'},
+        {0U, 'd', 'e', 'f', ' ', 'f', '(', 'x', ')', ':', '\n', ' ', ' ', ' ', ' ', 'r', 'e', 't', 'u', 'r', 'n', ' ', 'x', '+', '1', '\n'}};
     static const size_t seed_sizes[] = {1U, 6U, 4U, 10U, 18U, 12U, 29U, 26U};
     unsigned char buffer[513];
     uint64_t random_state = UINT64_C(0x6a09e667f3bcc909);
     size_t index;
 
-    for (index = 0U; index < sizeof(seeds) / sizeof(seeds[0]); index += 1U) (void)LLVMFuzzerTestOneInput(seeds[index], seed_sizes[index]);
+    for (index = 0U; index < sizeof(seeds) / sizeof(seeds[0]); index += 1U) {
+        (void)LLVMFuzzerTestOneInput(seeds[index], seed_sizes[index]);
+    }
     for (index = 0U; index < 512U; index += 1U) {
         size_t size = (size_t)(__fuzz_random(&random_state) % sizeof(buffer));
         size_t byte_index;
 
-        for (byte_index = 0U; byte_index < size; byte_index += 1U) buffer[byte_index] = (unsigned char)__fuzz_random(&random_state);
+        for (byte_index = 0U; byte_index < size; byte_index += 1U) {
+            buffer[byte_index] = (unsigned char)__fuzz_random(&random_state);
+        }
         (void)LLVMFuzzerTestOneInput(buffer, size);
     }
     return EXIT_SUCCESS;

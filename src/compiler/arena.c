@@ -4,8 +4,8 @@
 
 #define TINYPY_COMPILER_ARENA_BLOCK_SIZE ((size_t)4096U)
 
-void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t size)
-{
+//////////////////////////////////////////////////////////////////////////
+void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t size) {
     tinypy_compiler_arena_block_t *block;
     size_t aligned_size;
     size_t header_size;
@@ -44,8 +44,8 @@ void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t 
     return memory;
 }
 
-void *tinypy_internal_compiler_ast_allocate(tinypy_compile_ctx_t *ctx, size_t size)
-{
+//////////////////////////////////////////////////////////////////////////
+void *tinypy_internal_compiler_ast_allocate(tinypy_compile_ctx_t *ctx, size_t size) {
     if (ctx->limits.max_ast_nodes != 0U && ctx->ast_node_count >= ctx->limits.max_ast_nodes) {
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "AST tinypy_cst_node_t limit exceeded", 0, 0, ctx->out_error);
         return NULL;
@@ -54,8 +54,8 @@ void *tinypy_internal_compiler_ast_allocate(tinypy_compile_ctx_t *ctx, size_t si
     return tinypy_internal_compiler_arena_allocate(ctx, size);
 }
 
-void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx) {
     tinypy_compiler_arena_block_t *block;
     tinypy_compiler_value_ref_t *value_ref;
 
@@ -77,15 +77,17 @@ void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx)
     ctx->arena_bytes = 0U;
 }
 
-int32_t tinypy_internal_compiler_arena_add_value(tinypy_compile_ctx_t *ctx, tinypy_value_t *value)
-{
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_internal_compiler_arena_add_value(tinypy_compile_ctx_t *ctx, tinypy_value_t *value) {
     tinypy_compiler_value_ref_t *value_ref;
 
     assert(ctx != NULL);
     assert(value != NULL);
     assert(tinypy_internal_value_belongs_to(ctx->vm, value));
     value_ref = (tinypy_compiler_value_ref_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(*value_ref));
-    if (value_ref == NULL) return -1;
+    if (value_ref == NULL) {
+        return -1;
+    }
     value_ref->next = ctx->arena_values;
     value_ref->value = value;
     ctx->arena_values = value_ref;

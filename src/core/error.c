@@ -4,8 +4,8 @@
 
 #include <string.h>
 
-static size_t __tinypy_internal_string_length(const char *text)
-{
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_internal_string_length(const char *text) {
     size_t length = 0U;
 
     assert(text != NULL);
@@ -17,8 +17,8 @@ static size_t __tinypy_internal_string_length(const char *text)
     return length;
 }
 
-static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allocator, tinypy_error_kind_e error_kind, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size, tinypy_error_t **out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allocator, tinypy_error_kind_e error_kind, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size, tinypy_error_t **out_error) {
     size_t message_size;
     size_t allocation_size;
     char *cursor;
@@ -74,8 +74,8 @@ static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allo
     *out_error = error;
 }
 
-static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size)
-{
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size) {
     tinypy_value_t *exception = vm->raised_value;
     tinypy_value_t *message_value;
     tinypy_value_t *filename_value;
@@ -87,8 +87,11 @@ static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, con
     tinypy_value_t *args_items[2];
     tinypy_value_t *args;
 
-    if (exception == NULL) return;
-    message_value = tinypy_string_from_bytes(vm, message, __tinypy_internal_string_length(message));
+    if (exception == NULL) {
+        return;
+    }
+    size_t string_length = __tinypy_internal_string_length(message);
+    message_value = tinypy_string_from_bytes(vm, message, string_length);
     filename_value = logical_filename != NULL ? tinypy_string_from_bytes(vm, logical_filename, filename_size) : tinypy_none_get(vm);
     line_value = tinypy_integer_from_i64(vm, line_number);
     offset_value = tinypy_integer_from_i64(vm, column_offset);
@@ -115,46 +118,40 @@ static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, con
     tinypy_release(message_value);
 }
 
-void tinypy_internal_clear_error(tinypy_error_t **out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_clear_error(tinypy_error_t **out_error) {
     if (out_error != NULL) {
         *out_error = NULL;
     }
 }
 
-void tinypy_internal_make_error(
-    const tinypy_allocator_t *allocator,
-    tinypy_error_kind_e error_kind,
-    const char *message,
-    tinypy_error_t **out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_make_error(const tinypy_allocator_t *allocator, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error) {
     __tinypy_internal_make_error_location(allocator, error_kind, message, NULL, 0U, 0, 0, NULL, 0U, out_error);
 }
 
-void tinypy_internal_make_vm_error_location(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size, tinypy_error_t **out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_make_vm_error_location(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size, tinypy_error_t **out_error) {
     tinypy_internal_exception_raise_kind(vm, error_kind, message);
-    if (error_kind == TINYPY_ERROR_SYNTAX || error_kind == TINYPY_ERROR_INDENTATION || error_kind == TINYPY_ERROR_TAB || error_kind == TINYPY_ERROR_SOURCE_DECODING) __tinypy_internal_set_syntax_exception_location(vm, message, logical_filename, filename_size, line_number, column_offset, source_line, source_line_size);
+    if (error_kind == TINYPY_ERROR_SYNTAX || error_kind == TINYPY_ERROR_INDENTATION || error_kind == TINYPY_ERROR_TAB || error_kind == TINYPY_ERROR_SOURCE_DECODING) {
+        __tinypy_internal_set_syntax_exception_location(vm, message, logical_filename, filename_size, line_number, column_offset, source_line, source_line_size);
+    }
     __tinypy_internal_make_error_location(&vm->allocator, error_kind, message, logical_filename, filename_size, line_number, column_offset, source_line, source_line_size, out_error);
 }
 
-void tinypy_internal_make_vm_error(
-    tinypy_vm_t *vm,
-    tinypy_error_kind_e error_kind,
-    const char *message,
-    tinypy_error_t **out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_make_vm_error(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error) {
     tinypy_internal_exception_raise_kind(vm, error_kind, message);
     tinypy_internal_make_error(&vm->allocator, error_kind, message, out_error);
 }
 
-uint32_t tinypy_abi_version(void)
-{
+//////////////////////////////////////////////////////////////////////////
+uint32_t tinypy_abi_version(void) {
     return TINYPY_ABI_VERSION;
 }
 
-const char *tinypy_error_kind_name(tinypy_error_kind_e error_kind)
-{
+//////////////////////////////////////////////////////////////////////////
+const char *tinypy_error_kind_name(tinypy_error_kind_e error_kind) {
     switch (error_kind) {
     case TINYPY_ERROR_TYPE:
         return "type error";
@@ -201,15 +198,15 @@ const char *tinypy_error_kind_name(tinypy_error_kind_e error_kind)
     }
 }
 
-tinypy_error_kind_e tinypy_error_kind(const tinypy_error_t *error)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_error_kind_e tinypy_error_kind(const tinypy_error_t *error) {
     assert(error != NULL);
 
     return error->kind;
 }
 
-const char *tinypy_error_message(const tinypy_error_t *error, size_t *out_size)
-{
+//////////////////////////////////////////////////////////////////////////
+const char *tinypy_error_message(const tinypy_error_t *error, size_t *out_size) {
     assert(error != NULL);
 
     if (out_size != NULL) {
@@ -219,8 +216,8 @@ const char *tinypy_error_message(const tinypy_error_t *error, size_t *out_size)
     return error->data;
 }
 
-const char *tinypy_error_logical_filename(const tinypy_error_t *error, size_t *out_size)
-{
+//////////////////////////////////////////////////////////////////////////
+const char *tinypy_error_logical_filename(const tinypy_error_t *error, size_t *out_size) {
     assert(error != NULL);
     if (out_size != NULL) {
         *out_size = error->filename_size;
@@ -228,8 +225,8 @@ const char *tinypy_error_logical_filename(const tinypy_error_t *error, size_t *o
     return error->filename_size != 0U ? error->data + error->message_size + 1U : NULL;
 }
 
-const char *tinypy_error_source_line(const tinypy_error_t *error, size_t *out_size)
-{
+//////////////////////////////////////////////////////////////////////////
+const char *tinypy_error_source_line(const tinypy_error_t *error, size_t *out_size) {
     assert(error != NULL);
     if (out_size != NULL) {
         *out_size = error->source_line_size;
@@ -237,20 +234,20 @@ const char *tinypy_error_source_line(const tinypy_error_t *error, size_t *out_si
     return error->source_line_size != 0U ? error->data + error->message_size + 1U + error->filename_size + 1U : NULL;
 }
 
-int32_t tinypy_error_line_number(const tinypy_error_t *error)
-{
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_error_line_number(const tinypy_error_t *error) {
     assert(error != NULL);
     return error->line_number;
 }
 
-int32_t tinypy_error_column_offset(const tinypy_error_t *error)
-{
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_error_column_offset(const tinypy_error_t *error) {
     assert(error != NULL);
     return error->column_offset;
 }
 
-void tinypy_error_release(tinypy_error_t *error)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_error_release(tinypy_error_t *error) {
     tinypy_allocator_t allocator;
     size_t allocation_size;
 

@@ -1,4 +1,4 @@
-/* Immutable grammar symbol table used by the TinyPy parser. */
+/* Immutable grammar symbol table used by the tinypy parser. */
 
 #ifndef TINYPY_COMPILER_GRAMMAR_SYMBOLS_H
 #define TINYPY_COMPILER_GRAMMAR_SYMBOLS_H

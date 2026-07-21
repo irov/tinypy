@@ -4,16 +4,16 @@
 
 #include <assert.h>
 
-static tinypy_function_object_t *__tinypy_internal_function_validate(const tinypy_value_t *value)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_function_object_t *__tinypy_internal_function_validate(const tinypy_value_t *value) {
     assert(value != NULL);
     assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
     assert(tinypy_internal_value_kind(value) == TINYPY_VALUE_FUNCTION);
     return TINYPY_FUNCTION_OBJECT((tinypy_value_t *)value);
 }
 
-tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *defaults, tinypy_value_t *closure)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *defaults, tinypy_value_t *closure) {
     tinypy_vm_t *vm;
     tinypy_function_object_t *function;
     tinypy_value_t *consts;
@@ -47,10 +47,21 @@ tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *global
     function->closure = closure;
     function->name = tinypy_code_name(code);
     consts = tinypy_code_consts(code);
-    if (tinypy_tuple_size(consts) != 0U && (tinypy_internal_value_kind(tinypy_tuple_get(consts, 0U)) == TINYPY_VALUE_STRING || tinypy_internal_value_kind(tinypy_tuple_get(consts, 0U)) == TINYPY_VALUE_UNICODE)) {
+    int condition = tinypy_tuple_size(consts) != 0U;
+    if (condition != 0) {
+        tinypy_value_t *item = tinypy_tuple_get(consts, 0U);
+        int condition_2 = tinypy_internal_value_kind(item) == TINYPY_VALUE_STRING;
+        if (condition_2 == 0) {
+            tinypy_value_t *item_2 = tinypy_tuple_get(consts, 0U);
+            condition_2 = tinypy_internal_value_kind(item_2) == TINYPY_VALUE_UNICODE;
+        }
+        condition = (condition_2);
+    }
+    if (condition) {
         function->doc = tinypy_tuple_get(consts, 0U);
         tinypy_retain(function->doc);
-    } else {
+    }
+    else {
         doc = tinypy_none_get(vm);
         function->doc = doc;
     }
@@ -73,8 +84,8 @@ tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *global
     return &function->base;
 }
 
-void tinypy_internal_function_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_function_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_function_object_t *function = TINYPY_FUNCTION_OBJECT(value);
 
     visit(function->code, user_data);
@@ -95,13 +106,13 @@ void tinypy_internal_function_release_references(tinypy_value_t *value, tinypy_r
     }
 }
 
-tinypy_value_t *tinypy_internal_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     return tinypy_internal_eval_function(callable, args, kwargs, out_error);
 }
 
-tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm;
 
     assert(callable != NULL);
@@ -118,7 +129,9 @@ tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tiny
             tinypy_value_t *method = tinypy_object_get_attr(callable, "__call__", 8U, out_error);
             tinypy_value_t *result;
 
-            if (method == NULL) return NULL;
+            if (method == NULL) {
+                return NULL;
+            }
             result = tinypy_call(method, args, kwargs, out_error);
             tinypy_release(method);
             return result;
@@ -129,9 +142,27 @@ tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tiny
     return callable->type->call(callable, args, kwargs, out_error);
 }
 
-tinypy_value_t *tinypy_function_code(const tinypy_value_t *function) { return __tinypy_internal_function_validate(function)->code; }
-tinypy_value_t *tinypy_function_globals(const tinypy_value_t *function) { return __tinypy_internal_function_validate(function)->globals; }
-tinypy_value_t *tinypy_function_defaults(const tinypy_value_t *function) { return __tinypy_internal_function_validate(function)->defaults; }
-tinypy_value_t *tinypy_function_closure(const tinypy_value_t *function) { return __tinypy_internal_function_validate(function)->closure; }
-tinypy_value_t *tinypy_function_name(const tinypy_value_t *function) { return __tinypy_internal_function_validate(function)->name; }
-tinypy_value_t *tinypy_function_doc(const tinypy_value_t *function) { return __tinypy_internal_function_validate(function)->doc; }
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_function_code(const tinypy_value_t *function) {
+    return __tinypy_internal_function_validate(function)->code;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_function_globals(const tinypy_value_t *function) {
+    return __tinypy_internal_function_validate(function)->globals;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_function_defaults(const tinypy_value_t *function) {
+    return __tinypy_internal_function_validate(function)->defaults;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_function_closure(const tinypy_value_t *function) {
+    return __tinypy_internal_function_validate(function)->closure;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_function_name(const tinypy_value_t *function) {
+    return __tinypy_internal_function_validate(function)->name;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_function_doc(const tinypy_value_t *function) {
+    return __tinypy_internal_function_validate(function)->doc;
+}

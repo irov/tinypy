@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject forbidden host/runtime dependencies in the TinyPy C core.
+"""Reject forbidden host/runtime dependencies in the tinypy C core.
 
 The runtime is deliberately memory-only.  This check operates on the linked
 static archive (or object files) so indirect uses introduced by later source
@@ -202,7 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if rejected:
-        print("forbidden TinyPy core symbols:", file=sys.stderr)
+        print("forbidden tinypy core symbols:", file=sys.stderr)
         for symbol in rejected:
             print("  {}".format(symbol), file=sys.stderr)
         return 1

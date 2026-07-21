@@ -4,17 +4,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TEST_CHECK(condition) \
+#define TEST_CHECK(condition)                \
     do { \
         if (!(condition)) { \
-            (void)fprintf( \
-                stderr, \
+            (void)fprintf(                   \
+                stderr,                      \
                 "%s:%d: check failed: %s\n", \
-                __FILE__, \
-                __LINE__, \
-                #condition); \
-            return 0; \
-        } \
+                __FILE__,                    \
+                __LINE__,                    \
+                #condition);                 \
+            return 0;                        \
+        }                                    \
     } while (0)
 
 typedef struct test_allocator_state_t {
@@ -30,12 +30,7 @@ typedef struct test_writer_t {
     int failed;
 } test_writer_t;
 
-static void *__test_allocate(
-    void *user_data,
-    size_t size,
-    size_t alignment,
-    uint32_t tag)
-{
+static void *__test_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     void *memory;
     (void)alignment;
@@ -50,14 +45,7 @@ static void *__test_allocate(
     return memory;
 }
 
-static void *__test_reallocate(
-    void *user_data,
-    void *memory,
-    size_t old_size,
-    size_t new_size,
-    size_t alignment,
-    uint32_t tag)
-{
+static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
     (void)user_data;
     (void)old_size;
     (void)alignment;
@@ -65,13 +53,7 @@ static void *__test_reallocate(
     return realloc(memory, new_size);
 }
 
-static void __test_deallocate(
-    void *user_data,
-    void *memory,
-    size_t size,
-    size_t alignment,
-    uint32_t tag)
-{
+static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     (void)size;
     (void)alignment;
@@ -83,8 +65,7 @@ static void __test_deallocate(
     }
 }
 
-static tinypy_allocator_t __test_allocator(test_allocator_state_t *state)
-{
+static tinypy_allocator_t __test_allocator(test_allocator_state_t *state) {
     tinypy_allocator_t allocator;
     (void)memset(&allocator, 0, sizeof(allocator));
     allocator.abi_version = TINYPY_ABI_VERSION;
@@ -96,13 +77,11 @@ static tinypy_allocator_t __test_allocator(test_allocator_state_t *state)
     return allocator;
 }
 
-static void __test_state_init(test_allocator_state_t *state)
-{
+static void __test_state_init(test_allocator_state_t *state) {
     (void)memset(state, 0, sizeof(*state));
 }
 
-static void __writer_byte(test_writer_t *writer, uint8_t value)
-{
+static void __writer_byte(test_writer_t *writer, uint8_t value) {
     if (writer->size == sizeof(writer->bytes)) {
         writer->failed = 1;
         return;
@@ -111,20 +90,18 @@ static void __writer_byte(test_writer_t *writer, uint8_t value)
     writer->size += 1U;
 }
 
-static void __writer_u16(test_writer_t *writer, uint16_t value)
-{
+static void __writer_u16(test_writer_t *writer, uint16_t value) {
     __writer_byte(writer, (uint8_t)(value & UINT16_C(0xff)));
     __writer_byte(writer, (uint8_t)((value >> 8U) & UINT16_C(0xff)));
 }
 
-static void __writer_i32(test_writer_t *writer, int32_t value)
-{
+static void __writer_i32(test_writer_t *writer, int32_t value) {
     uint32_t bits;
     if (value >= 0) {
         bits = (uint32_t)value;
-    } else {
-        bits = UINT32_C(0x80000000) +
-            (uint32_t)((int64_t)value - (int64_t)INT32_MIN);
+    }
+    else {
+        bits = UINT32_C(0x80000000) + (uint32_t)((int64_t)value - (int64_t)INT32_MIN);
     }
     __writer_byte(writer, (uint8_t)(bits & UINT32_C(0xff)));
     __writer_byte(writer, (uint8_t)((bits >> 8U) & UINT32_C(0xff)));
@@ -132,16 +109,14 @@ static void __writer_i32(test_writer_t *writer, int32_t value)
     __writer_byte(writer, (uint8_t)((bits >> 24U) & UINT32_C(0xff)));
 }
 
-static void __writer_u64(test_writer_t *writer, uint64_t value)
-{
+static void __writer_u64(test_writer_t *writer, uint64_t value) {
     size_t index;
     for (index = 0U; index != 8U; ++index) {
         __writer_byte(writer, (uint8_t)((value >> (index * 8U)) & UINT64_C(0xff)));
     }
 }
 
-static void __writer_data(test_writer_t *writer, const void *data, size_t size)
-{
+static void __writer_data(test_writer_t *writer, const void *data, size_t size) {
     const unsigned char *bytes = (const unsigned char *)data;
     size_t index;
     for (index = 0U; index != size; ++index) {
@@ -149,33 +124,25 @@ static void __writer_data(test_writer_t *writer, const void *data, size_t size)
     }
 }
 
-static void __writer_bytes(test_writer_t *writer, const void *data, size_t size)
-{
+static void __writer_bytes(test_writer_t *writer, const void *data, size_t size) {
     __writer_byte(writer, (uint8_t)'s');
     __writer_i32(writer, (int32_t)size);
     __writer_data(writer, data, size);
 }
 
-static void __writer_text_float(test_writer_t *writer, uint8_t type, const char *text)
-{
+static void __writer_text_float(test_writer_t *writer, uint8_t type, const char *text) {
     size_t size = strlen(text);
     __writer_byte(writer, type);
     __writer_byte(writer, (uint8_t)size);
     __writer_data(writer, text, size);
 }
 
-static void __writer_empty_tuple(test_writer_t *writer)
-{
+static void __writer_empty_tuple(test_writer_t *writer) {
     __writer_byte(writer, (uint8_t)'(');
     __writer_i32(writer, 0);
 }
 
-static void __writer_code(
-    test_writer_t *writer,
-    int include_nested,
-    int include_intern_references,
-    int invalid_bytecode_type)
-{
+static void __writer_code(test_writer_t *writer, int include_nested, int include_intern_references, int invalid_bytecode_type) {
     static const unsigned char bytecode[] = {(unsigned char)'d', 0U};
 
     __writer_byte(writer, (uint8_t)'c');
@@ -186,7 +153,8 @@ static void __writer_code(
 
     if (invalid_bytecode_type) {
         __writer_byte(writer, (uint8_t)'N');
-    } else {
+    }
+    else {
         __writer_bytes(writer, bytecode, sizeof(bytecode));
     }
 
@@ -220,13 +188,7 @@ static void __writer_code(
     __writer_bytes(writer, "\0\1", 2U);
 }
 
-static tinypy_marshal_result_e __read_writer(
-    test_writer_t *writer,
-    test_allocator_state_t *state,
-    const tinypy_marshal_limits_t *limits,
-    tinypy_marshal_document_t **out_document,
-    tinypy_marshal_error_t *out_error)
-{
+static tinypy_marshal_result_e __read_writer(test_writer_t *writer, test_allocator_state_t *state, const tinypy_marshal_limits_t *limits, tinypy_marshal_document_t **out_document, tinypy_marshal_error_t *out_error) {
     tinypy_allocator_t allocator = __test_allocator(state);
     return tinypy_marshal_read_v2(
         writer->bytes,
@@ -237,12 +199,7 @@ static tinypy_marshal_result_e __read_writer(
         out_error);
 }
 
-static int __test_exact_dump(
-    const tinypy_marshal_document_t *document,
-    const unsigned char *expected,
-    size_t expected_size,
-    test_allocator_state_t *state)
-{
+static int __test_exact_dump(const tinypy_marshal_document_t *document, const unsigned char *expected, size_t expected_size, test_allocator_state_t *state) {
     unsigned char output[16384];
     unsigned char short_output[16384];
     size_t required_size = 0U;
@@ -307,8 +264,7 @@ static int __test_exact_dump(
     return 1;
 }
 
-static int __test_nested_code_and_interns(void)
-{
+static int __test_nested_code_and_interns(void) {
     test_writer_t writer;
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
@@ -381,8 +337,7 @@ static int __test_nested_code_and_interns(void)
     return 1;
 }
 
-static int __test_all_wire_types(void)
-{
+static int __test_all_wire_types(void) {
     test_writer_t writer;
     unsigned char golden[16384];
     size_t golden_size;
@@ -413,31 +368,47 @@ static int __test_all_wire_types(void)
     __writer_byte(&writer, (uint8_t)'T');
     __writer_byte(&writer, (uint8_t)'S');
     __writer_byte(&writer, (uint8_t)'.');
-    __writer_byte(&writer, (uint8_t)'i'); __writer_i32(&writer, -123);
-    __writer_byte(&writer, (uint8_t)'I'); __writer_u64(&writer, UINT64_C(0x100000001));
-    __writer_byte(&writer, (uint8_t)'l'); __writer_i32(&writer, -2);
-    __writer_u16(&writer, 1U); __writer_u16(&writer, 2U);
+    __writer_byte(&writer, (uint8_t)'i');
+    __writer_i32(&writer, -123);
+    __writer_byte(&writer, (uint8_t)'I');
+    __writer_u64(&writer, UINT64_C(0x100000001));
+    __writer_byte(&writer, (uint8_t)'l');
+    __writer_i32(&writer, -2);
+    __writer_u16(&writer, 1U);
+    __writer_u16(&writer, 2U);
     __writer_text_float(&writer, (uint8_t)'f', "-1.25e2");
-    __writer_byte(&writer, (uint8_t)'g'); __writer_u64(&writer, UINT64_C(0x3ff8000000000000));
+    __writer_byte(&writer, (uint8_t)'g');
+    __writer_u64(&writer, UINT64_C(0x3ff8000000000000));
     __writer_byte(&writer, (uint8_t)'x');
-    __writer_byte(&writer, 3U); __writer_data(&writer, "2.5", 3U);
-    __writer_byte(&writer, 4U); __writer_data(&writer, "-3.5", 4U);
+    __writer_byte(&writer, 3U);
+    __writer_data(&writer, "2.5", 3U);
+    __writer_byte(&writer, 4U);
+    __writer_data(&writer, "-3.5", 4U);
     __writer_byte(&writer, (uint8_t)'y');
     __writer_u64(&writer, UINT64_C(0x4000000000000000));
     __writer_u64(&writer, UINT64_C(0xc008000000000000));
     __writer_bytes(&writer, "a\0b", 3U);
-    __writer_byte(&writer, (uint8_t)'t'); __writer_i32(&writer, 3); __writer_data(&writer, "key", 3U);
-    __writer_byte(&writer, (uint8_t)'R'); __writer_i32(&writer, 0);
-    __writer_byte(&writer, (uint8_t)'u'); __writer_i32(&writer, 2);
-    __writer_byte(&writer, UINT8_C(0xc3)); __writer_byte(&writer, UINT8_C(0xa9));
+    __writer_byte(&writer, (uint8_t)'t');
+    __writer_i32(&writer, 3);
+    __writer_data(&writer, "key", 3U);
+    __writer_byte(&writer, (uint8_t)'R');
+    __writer_i32(&writer, 0);
+    __writer_byte(&writer, (uint8_t)'u');
+    __writer_i32(&writer, 2);
+    __writer_byte(&writer, UINT8_C(0xc3));
+    __writer_byte(&writer, UINT8_C(0xa9));
     __writer_empty_tuple(&writer);
-    __writer_byte(&writer, (uint8_t)'['); __writer_i32(&writer, 0);
+    __writer_byte(&writer, (uint8_t)'[');
+    __writer_i32(&writer, 0);
     __writer_byte(&writer, (uint8_t)'{');
     __writer_bytes(&writer, "k", 1U);
-    __writer_byte(&writer, (uint8_t)'i'); __writer_i32(&writer, 42);
+    __writer_byte(&writer, (uint8_t)'i');
+    __writer_i32(&writer, 42);
     __writer_byte(&writer, (uint8_t)'0');
-    __writer_byte(&writer, (uint8_t)'<'); __writer_i32(&writer, 0);
-    __writer_byte(&writer, (uint8_t)'>'); __writer_i32(&writer, 0);
+    __writer_byte(&writer, (uint8_t)'<');
+    __writer_i32(&writer, 0);
+    __writer_byte(&writer, (uint8_t)'>');
+    __writer_i32(&writer, 0);
     __writer_code(&writer, 0, 0, 0);
 
     golden_size = writer.size;
@@ -501,11 +472,7 @@ static int __test_all_wire_types(void)
     return 1;
 }
 
-static int __expect_error(
-    test_writer_t *writer,
-    tinypy_marshal_limits_t *limits,
-    tinypy_marshal_result_e expected)
-{
+static int __expect_error(test_writer_t *writer, tinypy_marshal_limits_t *limits, tinypy_marshal_result_e expected) {
     test_allocator_state_t state;
     tinypy_marshal_document_t *document = NULL;
     tinypy_marshal_error_t error;
@@ -521,8 +488,7 @@ static int __expect_error(
     return 1;
 }
 
-static int __test_truncation_and_offsets(void)
-{
+static int __test_truncation_and_offsets(void) {
     test_writer_t writer;
     size_t full_size;
     size_t prefix;
@@ -550,33 +516,42 @@ static int __test_truncation_and_offsets(void)
     return 1;
 }
 
-static int __test_malformed_values(void)
-{
+static int __test_malformed_values(void) {
     test_writer_t writer;
 
     (void)memset(&writer, 0, sizeof(writer));
-    __writer_byte(&writer, (uint8_t)'s'); __writer_i32(&writer, -1);
+    __writer_byte(&writer, (uint8_t)'s');
+    __writer_i32(&writer, -1);
     TEST_CHECK(__expect_error(&writer, NULL, TINYPY_MARSHAL_INVALID_SIZE));
 
     (void)memset(&writer, 0, sizeof(writer));
-    __writer_byte(&writer, (uint8_t)'l'); __writer_i32(&writer, 1); __writer_u16(&writer, UINT16_C(32768));
+    __writer_byte(&writer, (uint8_t)'l');
+    __writer_i32(&writer, 1);
+    __writer_u16(&writer, UINT16_C(32768));
     TEST_CHECK(__expect_error(&writer, NULL, TINYPY_MARSHAL_INVALID_LONG));
 
     (void)memset(&writer, 0, sizeof(writer));
-    __writer_byte(&writer, (uint8_t)'l'); __writer_i32(&writer, 1); __writer_u16(&writer, 0U);
+    __writer_byte(&writer, (uint8_t)'l');
+    __writer_i32(&writer, 1);
+    __writer_u16(&writer, 0U);
     TEST_CHECK(__expect_error(&writer, NULL, TINYPY_MARSHAL_INVALID_LONG));
 
     (void)memset(&writer, 0, sizeof(writer));
-    __writer_byte(&writer, (uint8_t)'R'); __writer_i32(&writer, 0);
+    __writer_byte(&writer, (uint8_t)'R');
+    __writer_i32(&writer, 0);
     TEST_CHECK(__expect_error(&writer, NULL, TINYPY_MARSHAL_INVALID_STRING_REF));
 
     (void)memset(&writer, 0, sizeof(writer));
-    __writer_byte(&writer, (uint8_t)'u'); __writer_i32(&writer, 2);
-    __writer_byte(&writer, UINT8_C(0xc0)); __writer_byte(&writer, UINT8_C(0x80));
+    __writer_byte(&writer, (uint8_t)'u');
+    __writer_i32(&writer, 2);
+    __writer_byte(&writer, UINT8_C(0xc0));
+    __writer_byte(&writer, UINT8_C(0x80));
     TEST_CHECK(__expect_error(&writer, NULL, TINYPY_MARSHAL_INVALID_UTF8));
 
     (void)memset(&writer, 0, sizeof(writer));
-    __writer_byte(&writer, (uint8_t)'('); __writer_i32(&writer, 1); __writer_byte(&writer, (uint8_t)'0');
+    __writer_byte(&writer, (uint8_t)'(');
+    __writer_i32(&writer, 1);
+    __writer_byte(&writer, (uint8_t)'0');
     TEST_CHECK(__expect_error(&writer, NULL, TINYPY_MARSHAL_NULL_OUTSIDE_DICT));
 
     (void)memset(&writer, 0, sizeof(writer));
@@ -603,8 +578,7 @@ static int __test_malformed_values(void)
     return 1;
 }
 
-static int __test_argument_and_abi_errors(void)
-{
+static int __test_argument_and_abi_errors(void) {
     static const unsigned char none_object[] = {(unsigned char)'N'};
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
@@ -628,15 +602,17 @@ static int __test_argument_and_abi_errors(void)
     return 1;
 }
 
-static int __test_limits(void)
-{
+static int __test_limits(void) {
     test_writer_t writer;
     tinypy_marshal_limits_t limits;
 
     (void)memset(&writer, 0, sizeof(writer));
-    __writer_byte(&writer, (uint8_t)'('); __writer_i32(&writer, 1);
-    __writer_byte(&writer, (uint8_t)'('); __writer_i32(&writer, 1);
-    __writer_byte(&writer, (uint8_t)'('); __writer_i32(&writer, 1);
+    __writer_byte(&writer, (uint8_t)'(');
+    __writer_i32(&writer, 1);
+    __writer_byte(&writer, (uint8_t)'(');
+    __writer_i32(&writer, 1);
+    __writer_byte(&writer, (uint8_t)'(');
+    __writer_i32(&writer, 1);
     __writer_byte(&writer, (uint8_t)'N');
 
     tinypy_marshal_limits_init(&limits);
@@ -648,8 +624,7 @@ static int __test_limits(void)
     TEST_CHECK(__expect_error(&writer, &limits, TINYPY_MARSHAL_OBJECT_LIMIT));
 
     tinypy_marshal_limits_init(&limits);
-    limits.max_container_items = 0U;
-    {
+    limits.max_container_items = 0U; {
         test_allocator_state_t state;
         tinypy_marshal_document_t *document = NULL;
         tinypy_marshal_error_t error;
@@ -659,8 +634,10 @@ static int __test_limits(void)
     }
 
     (void)memset(&writer, 0, sizeof(writer));
-    __writer_byte(&writer, (uint8_t)'('); __writer_i32(&writer, 2);
-    __writer_byte(&writer, (uint8_t)'N'); __writer_byte(&writer, (uint8_t)'N');
+    __writer_byte(&writer, (uint8_t)'(');
+    __writer_i32(&writer, 2);
+    __writer_byte(&writer, (uint8_t)'N');
+    __writer_byte(&writer, (uint8_t)'N');
     tinypy_marshal_limits_init(&limits);
     limits.max_container_items = 0x1U;
     TEST_CHECK(__expect_error(&writer, &limits, TINYPY_MARSHAL_CONTAINER_LIMIT));
@@ -681,8 +658,7 @@ static int __test_limits(void)
     return 1;
 }
 
-static int __test_writer_limits_and_structured_errors(void)
-{
+static int __test_writer_limits_and_structured_errors(void) {
     test_writer_t writer;
     test_allocator_state_t state;
     tinypy_marshal_document_t *document = NULL;
@@ -760,16 +736,11 @@ typedef struct test_case_t {
     test_function_t function;
 } test_case_t;
 
-int main(void)
-{
-    static const test_case_t tests[] = {
-        {"nested_code_and_interns", __test_nested_code_and_interns},
-        {"all_wire_types", __test_all_wire_types},
-        {"truncation_and_offsets", __test_truncation_and_offsets},
-        {"malformed_values", __test_malformed_values},
-        {"argument_and_abi_errors", __test_argument_and_abi_errors},
-        {"limits", __test_limits},
-        {"writer_limits_and_structured_errors", __test_writer_limits_and_structured_errors},
+int main(void) {
+    static const test_case_t tests[] = { {"nested_code_and_interns", __test_nested_code_and_interns},
+        {"all_wire_types", __test_all_wire_types}, {"truncation_and_offsets", __test_truncation_and_offsets},
+        {"malformed_values", __test_malformed_values}, {"argument_and_abi_errors", __test_argument_and_abi_errors},
+        {"limits", __test_limits}, {"writer_limits_and_structured_errors", __test_writer_limits_and_structured_errors},
     };
     size_t index;
 

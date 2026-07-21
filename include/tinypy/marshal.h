@@ -5,7 +5,7 @@
 
 #define TINYPY_MARSHAL_ABI_VERSION UINT32_C(1)
 
-/* Required pointers and typed/indexed accessors follow the TinyPy C API
+/* Required pointers and typed/indexed accessors follow the tinypy C API
  * precondition policy from tinypy.h. Malformed wire data, ABI mismatches,
  * and configured resource limits remain recoverable result codes. */
 

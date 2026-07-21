@@ -143,10 +143,6 @@ typedef enum tinypy_opcode_category_e {
 typedef struct tinypy_opcode_info_t {
     const char *name;
     uint32_t categories;
-    uint8_t opcode;
-    uint8_t defined;
-    uint8_t has_argument;
-    uint8_t reserved;
 } tinypy_opcode_info_t;
 
 typedef enum tinypy_opcode_decode_status_e {
@@ -171,6 +167,7 @@ typedef struct tinypy_decoded_instruction_t {
 } tinypy_decoded_instruction_t;
 
 const tinypy_opcode_info_t *tinypy_opcode_get_info(uint8_t opcode);
+/* Returns NULL for an unassigned opcode value. */
 const char *tinypy_opcode_name(uint8_t opcode);
 int tinypy_opcode_is_defined(uint8_t opcode);
 int tinypy_opcode_has_argument(uint8_t opcode);

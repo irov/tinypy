@@ -1,7 +1,11 @@
 #ifndef TINYPY_COMPILER_SYMBOL_TABLE_H
 #define TINYPY_COMPILER_SYMBOL_TABLE_H
 
-typedef enum tinypy_symbol_block_e { TINYPY_SYMBOL_BLOCK_FUNCTION, TINYPY_SYMBOL_BLOCK_CLASS, TINYPY_SYMBOL_BLOCK_MODULE } tinypy_symbol_block_e;
+typedef enum tinypy_symbol_block_e {
+    TINYPY_SYMBOL_BLOCK_FUNCTION,
+    TINYPY_SYMBOL_BLOCK_CLASS,
+    TINYPY_SYMBOL_BLOCK_MODULE
+} tinypy_symbol_block_e;
 
 typedef struct tinypy_symbol_table_t tinypy_symbol_table_t;
 

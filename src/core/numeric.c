@@ -4,8 +4,8 @@
 
 #include <math.h>
 
-tinypy_value_t *tinypy_float_from_double(tinypy_vm_t *vm, double value)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_float_from_double(tinypy_vm_t *vm, double value) {
     tinypy_value_t *result;
 
     assert(tinypy_internal_vm_valid(vm));
@@ -22,8 +22,8 @@ tinypy_value_t *tinypy_float_from_double(tinypy_vm_t *vm, double value)
     return result;
 }
 
-double tinypy_float_as_double(const tinypy_value_t *value)
-{
+//////////////////////////////////////////////////////////////////////////
+double tinypy_float_as_double(const tinypy_value_t *value) {
     assert(value != NULL);
     assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
     assert(tinypy_internal_value_kind(value) == TINYPY_VALUE_FLOAT);
@@ -31,11 +31,8 @@ double tinypy_float_as_double(const tinypy_value_t *value)
     return TINYPY_FLOAT_OBJECT(value)->value;
 }
 
-tinypy_value_t *tinypy_complex_from_doubles(
-    tinypy_vm_t *vm,
-    double real_value,
-    double imaginary_value)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_complex_from_doubles(tinypy_vm_t *vm, double real_value, double imaginary_value) {
     tinypy_value_t *result;
 
     assert(tinypy_internal_vm_valid(vm));
@@ -48,11 +45,8 @@ tinypy_value_t *tinypy_complex_from_doubles(
     return result;
 }
 
-void tinypy_complex_as_doubles(
-    const tinypy_value_t *value,
-    double *out_real_value,
-    double *out_imaginary_value)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_complex_as_doubles(const tinypy_value_t *value, double *out_real_value, double *out_imaginary_value) {
     assert(value != NULL);
     assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
     assert(out_real_value != NULL);

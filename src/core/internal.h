@@ -39,25 +39,25 @@
 #include "tinypy/vm.h"
 
 #include <assert.h>
-
+//////////////////////////////////////////////////////////////////////////
 typedef union tinypy_internal_max_align_t {
     void *pointer_value;
     void (*function_value)(void);
     int64_t integer_value;
     long double floating_value;
 } tinypy_internal_max_align_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_internal_alignment_probe_t {
     char prefix;
     tinypy_internal_max_align_t value;
 } tinypy_internal_alignment_probe_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_internal_exception_state_t {
     tinypy_value_t *type;
     tinypy_value_t *value;
     tinypy_value_t *traceback;
 } tinypy_internal_exception_state_t;
-
+//////////////////////////////////////////////////////////////////////////
 #define TINYPY_INTERNAL_ALIGNMENT \
     ((size_t)offsetof(tinypy_internal_alignment_probe_t, value))
 
@@ -72,7 +72,7 @@ typedef struct tinypy_internal_exception_state_t {
 #define TINYPY_INTEGER_CONSTANT_MIN (-INT64_C(1023))
 #define TINYPY_INTEGER_CONSTANT_MAX INT64_C(1024)
 #define TINYPY_INTEGER_CONSTANT_COUNT 2048U
-
+//////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_exception_type_index_e {
     TINYPY_EXCEPTION_BASE = 0,
     TINYPY_EXCEPTION_EXCEPTION,
@@ -124,29 +124,25 @@ typedef enum tinypy_exception_type_index_e {
     TINYPY_EXCEPTION_GENERATOR_EXIT,
     TINYPY_EXCEPTION_TYPE_COUNT
 } tinypy_exception_type_index_e;
-
-typedef ptrdiff_t tinypy_ref_t;
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_compile_environment_t tinypy_compile_environment_t;
-
-/* Complete universal TinyPy object header. */
+//////////////////////////////////////////////////////////////////////////
+/* Complete universal tinypy object header. */
 struct tinypy_value_t {
     tinypy_ref_t ref;
     tinypy_type_t *type;
 };
-
-typedef char tinypy_object_ref_must_be_first_t[
-    offsetof(tinypy_value_t, ref) == 0U ? 1 : -1];
-typedef char tinypy_object_type_must_follow_refcount_t[
-    offsetof(tinypy_value_t, type) == sizeof(tinypy_ref_t) ? 1 : -1];
-typedef char tinypy_object_header_has_only_two_fields_t[
-    sizeof(tinypy_value_t) == sizeof(tinypy_ref_t) + sizeof(tinypy_type_t *) ? 1 : -1];
-
-/* Header for TinyPy layouts with an inline variable-size tail. */
+//////////////////////////////////////////////////////////////////////////
+typedef char tinypy_object_ref_must_be_first_t[offsetof(tinypy_value_t, ref) == 0U ? 1 : -1];
+typedef char tinypy_object_type_must_follow_refcount_t[offsetof(tinypy_value_t, type) == sizeof(tinypy_ref_t) ? 1 : -1];
+typedef char tinypy_object_header_has_only_two_fields_t[sizeof(tinypy_value_t) == sizeof(tinypy_ref_t) + sizeof(tinypy_type_t *) ? 1 : -1];
+//////////////////////////////////////////////////////////////////////////
+/* Header for tinypy layouts with an inline variable-size tail. */
 typedef struct tinypy_var_object_t {
     tinypy_value_t base;
     ptrdiff_t size;
 } tinypy_var_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef void (*tinypy_release_callback_t)(tinypy_value_t *value, void *user_data);
 typedef void (*tinypy_release_references_slot_t)(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 typedef void (*tinypy_destroy_slot_t)(tinypy_vm_t *vm, tinypy_value_t *value);
@@ -169,7 +165,7 @@ typedef tinypy_value_t *(*tinypy_descriptor_get_slot_t)(tinypy_value_t *descript
 typedef int32_t (*tinypy_descriptor_set_slot_t)(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *value, tinypy_error_t **out_error);
 typedef int32_t (*tinypy_init_slot_t)(tinypy_value_t *instance, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 typedef tinypy_value_t *(*tinypy_new_slot_t)(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_number_slots_t {
     tinypy_binary_slot_t add;
     tinypy_binary_slot_t subtract;
@@ -191,7 +187,7 @@ typedef struct tinypy_number_slots_t {
     tinypy_binary_slot_t true_divide;
     tinypy_unary_slot_t index;
 } tinypy_number_slots_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_sequence_slots_t {
     tinypy_length_slot_t length;
     tinypy_binary_slot_t concat;
@@ -199,29 +195,29 @@ typedef struct tinypy_sequence_slots_t {
     tinypy_set_item_slot_t set_item;
     tinypy_contains_slot_t contains;
 } tinypy_sequence_slots_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_mapping_slots_t {
     tinypy_length_slot_t length;
     tinypy_get_item_slot_t get_item;
     tinypy_set_item_slot_t set_item;
 } tinypy_mapping_slots_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_dict_entry_state_e {
     TINYPY_DICT_ENTRY_EMPTY = 0,
     TINYPY_DICT_ENTRY_ACTIVE = 1,
     TINYPY_DICT_ENTRY_DUMMY = 2
 } tinypy_dict_entry_state_e;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_dict_entry_t {
     tinypy_hash_t hash;
     tinypy_value_t *key;
     tinypy_value_t *value;
     tinypy_dict_entry_state_e state;
 } tinypy_dict_entry_t;
-
+//////////////////////////////////////////////////////////////////////////
 #define TINYPY_DICT_MIN_SIZE 8U
-
-/* TinyPy type object. Builtin and heap types share this prefix; heap
+//////////////////////////////////////////////////////////////////////////
+/* tinypy type object. Builtin and heap types share this prefix; heap
  * types later append their protocol tables and slot/member storage. */
 struct tinypy_type_t {
     tinypy_var_object_t base;
@@ -264,14 +260,28 @@ struct tinypy_type_t {
     uint64_t version_tag;
     tinypy_value_t *weakrefs;
     tinypy_value_t *subclasses;
+    size_t native_payload_offset;
+    size_t native_payload_size;
+    size_t native_payload_alignment;
+    tinypy_native_type_spec_t native_spec;
+    tinypy_number_slots_t native_number_slots;
+    tinypy_sequence_slots_t native_sequence_slots;
+    tinypy_mapping_slots_t native_mapping_slots;
 };
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_instance_object_t {
     tinypy_value_t base;
     tinypy_value_t *dict;
     tinypy_value_t *slots[];
 } tinypy_instance_object_t;
-
+//////////////////////////////////////////////////////////////////////////
+typedef struct tinypy_native_instance_object_t {
+    tinypy_value_t base;
+    tinypy_value_t *dict;
+    tinypy_value_t *weakrefs;
+    tinypy_internal_max_align_t payload;
+} tinypy_native_instance_object_t;
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_class_object_t {
     tinypy_value_t base;
     tinypy_value_t *name;
@@ -279,69 +289,69 @@ typedef struct tinypy_class_object_t {
     tinypy_value_t *dict;
     tinypy_value_t *weakrefs;
 } tinypy_class_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_old_instance_object_t {
     tinypy_value_t base;
     tinypy_value_t *class_object;
     tinypy_value_t *dict;
     tinypy_value_t *weakrefs;
 } tinypy_old_instance_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_none_object_t {
     tinypy_value_t base;
 } tinypy_none_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_integer_object_t {
     tinypy_value_t base;
     int64_t integer_value;
 } tinypy_integer_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_string_object_t {
     tinypy_var_object_t base;
     int32_t interned;
     unsigned char bytes[1];
 } tinypy_string_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_unicode_object_t {
     tinypy_var_object_t base;
     size_t byte_size;
     unsigned char utf8[];
 } tinypy_unicode_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_long_object_t {
     tinypy_var_object_t base;
     uint16_t digits[];
 } tinypy_long_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_float_object_t {
     tinypy_value_t base;
     double value;
 } tinypy_float_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_complex_object_t {
     tinypy_value_t base;
     double real;
     double imaginary;
 } tinypy_complex_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_tuple_object_t {
     tinypy_var_object_t base;
     tinypy_value_t *items[1];
 } tinypy_tuple_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_tuple_subclass_object_t {
     tinypy_var_object_t base;
     tinypy_value_t **items;
     tinypy_value_t *dict;
 } tinypy_tuple_subclass_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_list_object_t {
     tinypy_var_object_t base;
     tinypy_value_t **items;
     size_t allocated;
     uint64_t mutation_version;
 } tinypy_list_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_dict_object_t {
     tinypy_value_t base;
     size_t fill;
@@ -351,33 +361,33 @@ typedef struct tinypy_dict_object_t {
     uint64_t mutation_version;
     tinypy_dict_entry_t small_table[TINYPY_DICT_MIN_SIZE];
 } tinypy_dict_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_set_object_t {
     tinypy_value_t base;
     tinypy_value_t *dict;
     tinypy_hash_t hash;
     int32_t hash_computed;
 } tinypy_set_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_output_stream_object_t {
     tinypy_value_t base;
     tinypy_output_channel_e channel;
     int32_t soft_space;
 } tinypy_output_stream_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_buffer_object_t {
     tinypy_value_t base;
     tinypy_value_t *owner;
     size_t offset;
     size_t size;
 } tinypy_buffer_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_bytearray_object_t {
     tinypy_var_object_t base;
     size_t capacity;
     unsigned char *bytes;
 } tinypy_bytearray_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_weakref_object_t {
     tinypy_value_t base;
     tinypy_value_t *object;
@@ -389,7 +399,7 @@ typedef struct tinypy_weakref_object_t {
     tinypy_value_t *dict;
     tinypy_value_t *slots[];
 } tinypy_weakref_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_partial_object_t {
     tinypy_value_t base;
     tinypy_value_t *callable;
@@ -398,7 +408,7 @@ typedef struct tinypy_partial_object_t {
     tinypy_value_t *dict;
     tinypy_value_t *weakrefs;
 } tinypy_partial_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_sre_pattern_object_t {
     tinypy_value_t base;
     tinypy_value_t *pattern;
@@ -410,7 +420,7 @@ typedef struct tinypy_sre_pattern_object_t {
     int64_t flags;
     tinypy_value_t *weakrefs;
 } tinypy_sre_pattern_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_sre_match_object_t {
     tinypy_value_t base;
     tinypy_value_t *pattern;
@@ -423,19 +433,19 @@ typedef struct tinypy_sre_match_object_t {
     size_t mark_count;
     ptrdiff_t lastindex;
 } tinypy_sre_match_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_dict_view_object_t {
     tinypy_value_t base;
     tinypy_value_t *dict;
     tinypy_dict_view_kind_e kind;
 } tinypy_dict_view_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_file_object_t {
     tinypy_value_t base;
     void *host_handle;
 } tinypy_file_object_t;
-
-/* TinyPy code object. The runtime omits the reference implementation's frame cache and
+//////////////////////////////////////////////////////////////////////////
+/* tinypy code object. The runtime omits the reference implementation's frame cache and
  * weakref list because neither changes Python code semantics. */
 typedef struct tinypy_code_object_t {
     tinypy_value_t base;
@@ -455,14 +465,14 @@ typedef struct tinypy_code_object_t {
     tinypy_value_t *lnotab;
     tinypy_compile_environment_t *compile_environment;
 } tinypy_code_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_frame_block_t {
     int32_t type;
     size_t handler;
     size_t stack_level;
 } tinypy_frame_block_t;
-
-/* TinyPy frame object. Trace and exception-state fields are added when
+//////////////////////////////////////////////////////////////////////////
+/* tinypy frame object. Trace and exception-state fields are added when
  * their Python-visible objects are introduced; the execution layout already
  * matches CPython's inline f_localsplus storage. */
 typedef struct tinypy_frame_object_t {
@@ -483,7 +493,7 @@ typedef struct tinypy_frame_object_t {
     tinypy_frame_block_t blocks[TINYPY_FRAME_MAX_BLOCKS];
     tinypy_value_t *locals_plus[];
 } tinypy_frame_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_function_object_t {
     tinypy_value_t base;
     tinypy_value_t *code;
@@ -495,7 +505,7 @@ typedef struct tinypy_function_object_t {
     tinypy_value_t *dict;
     tinypy_value_t *module;
 } tinypy_function_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_iterator_object_t {
     tinypy_value_t base;
     tinypy_value_t *iterable;
@@ -507,51 +517,51 @@ typedef struct tinypy_iterator_object_t {
     int64_t step;
     size_t remaining;
 } tinypy_iterator_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_xrange_object_t {
     tinypy_value_t base;
     int64_t start;
     int64_t step;
     size_t length;
 } tinypy_xrange_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_enumerate_object_t {
     tinypy_value_t base;
     tinypy_value_t *iterator;
     int64_t index;
 } tinypy_enumerate_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_reversed_object_t {
     tinypy_value_t base;
     tinypy_value_t *sequence;
     size_t index;
 } tinypy_reversed_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_method_object_t {
     tinypy_value_t base;
     tinypy_value_t *function;
     tinypy_value_t *self;
     tinypy_value_t *owner;
 } tinypy_method_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_cell_object_t {
     tinypy_value_t base;
     tinypy_value_t *content;
 } tinypy_cell_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_slice_object_t {
     tinypy_value_t base;
     tinypy_value_t *start;
     tinypy_value_t *stop;
     tinypy_value_t *step;
 } tinypy_slice_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_module_object_t {
     tinypy_value_t base;
     tinypy_value_t *dict;
     tinypy_value_t *name;
 } tinypy_module_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_native_function_object_t {
     tinypy_value_t base;
     tinypy_value_t *name;
@@ -559,12 +569,12 @@ typedef struct tinypy_native_function_object_t {
     void *user_data;
     tinypy_native_function_finalize_t finalize;
 } tinypy_native_function_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_callable_descriptor_object_t {
     tinypy_value_t base;
     tinypy_value_t *callable;
 } tinypy_callable_descriptor_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_property_object_t {
     tinypy_value_t base;
     tinypy_value_t *getter;
@@ -572,7 +582,7 @@ typedef struct tinypy_property_object_t {
     tinypy_value_t *deleter;
     tinypy_value_t *doc;
 } tinypy_property_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_c_descriptor_object_t {
     tinypy_value_t base;
     tinypy_type_t *owner;
@@ -582,14 +592,14 @@ typedef struct tinypy_c_descriptor_object_t {
     int32_t writable;
     int32_t owner_retained;
 } tinypy_c_descriptor_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_super_object_t {
     tinypy_value_t base;
     tinypy_type_t *type;
     tinypy_value_t *object;
     tinypy_type_t *object_type;
 } tinypy_super_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_traceback_object_t {
     tinypy_value_t base;
     tinypy_value_t *next;
@@ -597,7 +607,7 @@ typedef struct tinypy_traceback_object_t {
     int32_t last_instruction;
     int32_t line_number;
 } tinypy_traceback_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_generator_object_t {
     tinypy_value_t base;
     tinypy_value_t *frame;
@@ -609,10 +619,11 @@ typedef struct tinypy_generator_object_t {
     tinypy_value_t *handled_value;
     tinypy_value_t *handled_traceback;
 } tinypy_generator_object_t;
-
+//////////////////////////////////////////////////////////////////////////
 #define TINYPY_INTEGER_VALUE(value) \
     (((tinypy_integer_object_t *)(value))->integer_value)
 #define TINYPY_INSTANCE_OBJECT(value) ((tinypy_instance_object_t *)(value))
+#define TINYPY_NATIVE_INSTANCE_OBJECT(value) ((tinypy_native_instance_object_t *)(value))
 #define TINYPY_CLASS_OBJECT(value) ((tinypy_class_object_t *)(value))
 #define TINYPY_OLD_INSTANCE_OBJECT(value) ((tinypy_old_instance_object_t *)(value))
 #define TINYPY_STRING_OBJECT(value) ((tinypy_string_object_t *)(value))
@@ -657,15 +668,11 @@ typedef struct tinypy_generator_object_t {
 #define TINYPY_LONG_SIGN(value) \
     (TINYPY_SIZE(value) < 0 ? -1 : (TINYPY_SIZE(value) > 0 ? 1 : 0))
 
-typedef char tinypy_integer_body_must_follow_header_t[
-    offsetof(tinypy_integer_object_t, integer_value) == sizeof(tinypy_value_t) ? 1 : -1];
-typedef char tinypy_float_body_must_follow_header_t[
-    offsetof(tinypy_float_object_t, value) == sizeof(tinypy_value_t) ? 1 : -1];
-typedef char tinypy_complex_body_must_follow_header_t[
-    offsetof(tinypy_complex_object_t, real) == sizeof(tinypy_value_t) ? 1 : -1];
-typedef char tinypy_dict_body_must_follow_header_t[
-    offsetof(tinypy_dict_object_t, fill) == sizeof(tinypy_value_t) ? 1 : -1];
-
+typedef char tinypy_integer_body_must_follow_header_t[offsetof(tinypy_integer_object_t, integer_value) == sizeof(tinypy_value_t) ? 1 : -1];
+typedef char tinypy_float_body_must_follow_header_t[offsetof(tinypy_float_object_t, value) == sizeof(tinypy_value_t) ? 1 : -1];
+typedef char tinypy_complex_body_must_follow_header_t[offsetof(tinypy_complex_object_t, real) == sizeof(tinypy_value_t) ? 1 : -1];
+typedef char tinypy_dict_body_must_follow_header_t[offsetof(tinypy_dict_object_t, fill) == sizeof(tinypy_value_t) ? 1 : -1];
+//////////////////////////////////////////////////////////////////////////
 struct tinypy_vm_t {
     uint32_t state;
     tinypy_allocator_t allocator;
@@ -749,6 +756,7 @@ struct tinypy_vm_t {
     size_t evaluation_depth;
     tinypy_value_t *builtins;
     tinypy_value_t *modules;
+    tinypy_value_t *module_finder;
 
     /* Builtin type dictionaries are real dict objects, but their empty object
      * bodies are VM-owned just like the builtin types and singletons. This
@@ -766,7 +774,7 @@ struct tinypy_vm_t {
     tinypy_string_object_t empty_string_object;
     tinypy_tuple_object_t empty_tuple_object;
 };
-
+//////////////////////////////////////////////////////////////////////////
 struct tinypy_error_t {
     tinypy_allocator_t allocator;
     tinypy_error_kind_e kind;
@@ -778,7 +786,7 @@ struct tinypy_error_t {
     int32_t column_offset;
     char data[];
 };
-
+//////////////////////////////////////////////////////////////////////////
 int tinypy_internal_host_valid(const tinypy_host_t *host);
 int tinypy_internal_vm_valid(const tinypy_vm_t *vm);
 
@@ -918,6 +926,8 @@ int32_t tinypy_internal_import_star(tinypy_value_t *module, tinypy_value_t *loca
 void tinypy_internal_native_function_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_native_function_destroy(tinypy_vm_t *vm, tinypy_value_t *value);
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+void tinypy_internal_native_instance_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
+void tinypy_internal_native_instance_destroy(tinypy_vm_t *vm, tinypy_value_t *value);
 void tinypy_internal_callable_descriptor_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_static_method_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_class_method_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
@@ -996,5 +1006,5 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value);
 int32_t tinypy_internal_equal_value(const tinypy_value_t *left, const tinypy_value_t *right, int identity_implies_equal);
 int tinypy_internal_numeric_order(const tinypy_value_t *left, const tinypy_value_t *right, int32_t *out_order);
 int32_t tinypy_internal_text_order(const tinypy_value_t *left, const tinypy_value_t *right);
-
+//////////////////////////////////////////////////////////////////////////
 #endif

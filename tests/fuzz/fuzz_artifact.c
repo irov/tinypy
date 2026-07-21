@@ -1,10 +1,8 @@
 #include "tinypy/artifact.h"
 
-
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
-int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
-{
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     tinypy_artifact_view_t view;
     tinypy_artifact_status_e status = tinypy_artifact_decode(data, size, 0U, &view);
 

@@ -159,8 +159,8 @@ typedef struct tinypy_marshal_writer_t {
 
 #define TINYPY_MARSHAL_DOCUMENT_LIVE UINT32_C(0x4d415253)
 
-static size_t __tinypy_marshal_cstring_size(const char *text)
-{
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_marshal_cstring_size(const char *text) {
     size_t size = 0U;
 
     while (text[size] != '\0') {
@@ -170,13 +170,8 @@ static size_t __tinypy_marshal_cstring_size(const char *text)
     return size;
 }
 
-static void __tinypy_marshal_set_error_direct(
-    tinypy_marshal_error_t *error,
-    tinypy_marshal_result_e code,
-    size_t offset,
-    uint8_t wire_type,
-    const char *message)
-{
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_marshal_set_error_direct(tinypy_marshal_error_t *error, tinypy_marshal_result_e code, size_t offset, uint8_t wire_type, const char *message) {
     if (error == NULL) {
         return;
     }
@@ -193,12 +188,8 @@ static void __tinypy_marshal_set_error_direct(
     error->message_size = __tinypy_marshal_cstring_size(message);
 }
 
-static void __tinypy_marshal_parser_fail(
-    tinypy_marshal_parser_t *parser,
-    tinypy_marshal_result_e code,
-    size_t offset,
-    const char *message)
-{
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_marshal_parser_fail(tinypy_marshal_parser_t *parser, tinypy_marshal_result_e code, size_t offset, const char *message) {
     if (parser->result != TINYPY_MARSHAL_OK) {
         return;
     }
@@ -215,21 +206,14 @@ static void __tinypy_marshal_parser_fail(
     }
 }
 
-static int __tinypy_marshal_limits_valid(const tinypy_marshal_limits_t *limits)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_limits_valid(const tinypy_marshal_limits_t *limits) {
     assert(limits != NULL);
-    return limits->abi_version == TINYPY_MARSHAL_ABI_VERSION &&
-        limits->struct_size >= (uint32_t)sizeof(*limits) &&
-        limits->max_input_bytes != 0U &&
-        limits->max_allocated_bytes != 0U &&
-        limits->max_depth != 0U &&
-        limits->max_objects != 0U &&
-        limits->max_string_bytes != 0U &&
-        limits->max_container_items != 0U;
+    return limits->abi_version == TINYPY_MARSHAL_ABI_VERSION && limits->struct_size >= (uint32_t)sizeof(*limits) && limits->max_input_bytes != 0U && limits->max_allocated_bytes != 0U && limits->max_depth != 0U && limits->max_objects != 0U && limits->max_string_bytes != 0U && limits->max_container_items != 0U;
 }
 
-void tinypy_marshal_limits_init(tinypy_marshal_limits_t *limits)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_marshal_limits_init(tinypy_marshal_limits_t *limits) {
     assert(limits != NULL);
 
     (void)memset(limits, 0, sizeof(*limits));
@@ -243,8 +227,8 @@ void tinypy_marshal_limits_init(tinypy_marshal_limits_t *limits)
     limits->max_container_items = TINYPY_MARSHAL_DEFAULT_CONTAINER_ITEMS;
 }
 
-void tinypy_marshal_write_options_init(tinypy_marshal_write_options_t *options)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_marshal_write_options_init(tinypy_marshal_write_options_t *options) {
     assert(options != NULL);
 
     (void)memset(options, 0, sizeof(*options));
@@ -254,8 +238,8 @@ void tinypy_marshal_write_options_init(tinypy_marshal_write_options_t *options)
     options->max_depth = TINYPY_MARSHAL_DEFAULT_DEPTH;
 }
 
-static int __tinypy_marshal_multiply_size(size_t left, size_t right, size_t *out)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_multiply_size(size_t left, size_t right, size_t *out) {
     if (left != 0U && right > SIZE_MAX / left) {
         return 0;
     }
@@ -263,10 +247,8 @@ static int __tinypy_marshal_multiply_size(size_t left, size_t right, size_t *out
     return 1;
 }
 
-static void *__tinypy_marshal_graph_allocate(
-    tinypy_marshal_parser_t *parser,
-    size_t payload_size)
-{
+//////////////////////////////////////////////////////////////////////////
+static void *__tinypy_marshal_graph_allocate(tinypy_marshal_parser_t *parser, size_t payload_size) {
     tinypy_marshal_document_t *document = parser->document;
     tinypy_marshal_allocation_t *allocation;
     size_t total_size;
@@ -304,11 +286,8 @@ static void *__tinypy_marshal_graph_allocate(
     return (void *)(allocation + 1);
 }
 
-static tinypy_marshal_object_t *__tinypy_marshal_object_allocate(
-    tinypy_marshal_parser_t *parser,
-    tinypy_marshal_type_e type,
-    uint8_t wire_type)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_marshal_object_t *__tinypy_marshal_object_allocate(tinypy_marshal_parser_t *parser, tinypy_marshal_type_e type, uint8_t wire_type) {
     tinypy_marshal_object_t *object =
         (tinypy_marshal_object_t *)__tinypy_marshal_graph_allocate(parser, sizeof(*object));
 
@@ -319,11 +298,8 @@ static tinypy_marshal_object_t *__tinypy_marshal_object_allocate(
     return object;
 }
 
-static unsigned char *__tinypy_marshal_graph_copy(
-    tinypy_marshal_parser_t *parser,
-    const unsigned char *source,
-    size_t size)
-{
+//////////////////////////////////////////////////////////////////////////
+static unsigned char *__tinypy_marshal_graph_copy(tinypy_marshal_parser_t *parser, const unsigned char *source, size_t size) {
     unsigned char *copy;
 
     if (size == 0U) {
@@ -336,11 +312,8 @@ static unsigned char *__tinypy_marshal_graph_copy(
     return copy;
 }
 
-static int __tinypy_marshal_take(
-    tinypy_marshal_parser_t *parser,
-    size_t count,
-    const unsigned char **out_bytes)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_take(tinypy_marshal_parser_t *parser, size_t count, const unsigned char **out_bytes) {
     if (count > parser->size - parser->offset) {
         __tinypy_marshal_parser_fail(
             parser,
@@ -355,8 +328,8 @@ static int __tinypy_marshal_take(
     return 1;
 }
 
-static int __tinypy_marshal_read_u8(tinypy_marshal_parser_t *parser, uint8_t *out_value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_read_u8(tinypy_marshal_parser_t *parser, uint8_t *out_value) {
     const unsigned char *bytes;
     if (!__tinypy_marshal_take(parser, 1U, &bytes)) {
         return 0;
@@ -365,8 +338,8 @@ static int __tinypy_marshal_read_u8(tinypy_marshal_parser_t *parser, uint8_t *ou
     return 1;
 }
 
-static int __tinypy_marshal_read_u16(tinypy_marshal_parser_t *parser, uint16_t *out_value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_read_u16(tinypy_marshal_parser_t *parser, uint16_t *out_value) {
     const unsigned char *bytes;
     if (!__tinypy_marshal_take(parser, 2U, &bytes)) {
         return 0;
@@ -375,30 +348,27 @@ static int __tinypy_marshal_read_u16(tinypy_marshal_parser_t *parser, uint16_t *
     return 1;
 }
 
-static int __tinypy_marshal_read_u32(tinypy_marshal_parser_t *parser, uint32_t *out_value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_read_u32(tinypy_marshal_parser_t *parser, uint32_t *out_value) {
     const unsigned char *bytes;
     if (!__tinypy_marshal_take(parser, 4U, &bytes)) {
         return 0;
     }
     *out_value =
-        (uint32_t)bytes[0] |
-        ((uint32_t)bytes[1] << 8U) |
-        ((uint32_t)bytes[2] << 16U) |
-        ((uint32_t)bytes[3] << 24U);
+        (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8U) | ((uint32_t)bytes[2] << 16U) | ((uint32_t)bytes[3] << 24U);
     return 1;
 }
 
-static int32_t __tinypy_marshal_u32_as_i32(uint32_t value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_marshal_u32_as_i32(uint32_t value) {
     if (value <= (uint32_t)INT32_MAX) {
         return (int32_t)value;
     }
     return INT32_MIN + (int32_t)(value - UINT32_C(0x80000000));
 }
 
-static int __tinypy_marshal_read_i32(tinypy_marshal_parser_t *parser, int32_t *out_value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_read_i32(tinypy_marshal_parser_t *parser, int32_t *out_value) {
     uint32_t value;
     if (!__tinypy_marshal_read_u32(parser, &value)) {
         return 0;
@@ -407,31 +377,27 @@ static int __tinypy_marshal_read_i32(tinypy_marshal_parser_t *parser, int32_t *o
     return 1;
 }
 
-static int __tinypy_marshal_read_i64(tinypy_marshal_parser_t *parser, int64_t *out_value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_read_i64(tinypy_marshal_parser_t *parser, int64_t *out_value) {
     uint32_t low;
     uint32_t high;
     uint64_t value;
 
-    if (!__tinypy_marshal_read_u32(parser, &low) ||
-        !__tinypy_marshal_read_u32(parser, &high)) {
+    if (!__tinypy_marshal_read_u32(parser, &low) || !__tinypy_marshal_read_u32(parser, &high)) {
         return 0;
     }
     value = (uint64_t)low | ((uint64_t)high << 32U);
     if (value <= (uint64_t)INT64_MAX) {
         *out_value = (int64_t)value;
-    } else {
-        *out_value = INT64_MIN +
-            (int64_t)(value - (UINT64_C(1) << 63U));
+    }
+    else {
+        *out_value = INT64_MIN + (int64_t)(value - (UINT64_C(1) << 63U));
     }
     return 1;
 }
 
-static int __tinypy_marshal_read_size32(
-    tinypy_marshal_parser_t *parser,
-    size_t *out_size,
-    const char *description)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_read_size32(tinypy_marshal_parser_t *parser, size_t *out_size, const char *description) {
     int32_t value;
     size_t size_offset = parser->offset;
 
@@ -450,11 +416,8 @@ static int __tinypy_marshal_read_size32(
     return 1;
 }
 
-static int __tinypy_marshal_utf8_validate(
-    const unsigned char *bytes,
-    size_t size,
-    size_t *out_code_points)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_utf8_validate(const unsigned char *bytes, size_t size, size_t *out_code_points) {
     size_t index = 0U;
     size_t count = 0U;
 
@@ -466,16 +429,20 @@ static int __tinypy_marshal_utf8_validate(
         if (first <= 0x7fU) {
             code_point = first;
             continuation_count = 0U;
-        } else if (first >= 0xc2U && first <= 0xdfU) {
+        }
+        else if (first >= 0xc2U && first <= 0xdfU) {
             code_point = (uint32_t)(first & 0x1fU);
             continuation_count = 1U;
-        } else if (first >= 0xe0U && first <= 0xefU) {
+        }
+        else if (first >= 0xe0U && first <= 0xefU) {
             code_point = (uint32_t)(first & 0x0fU);
             continuation_count = 2U;
-        } else if (first >= 0xf0U && first <= 0xf4U) {
+        }
+        else if (first >= 0xf0U && first <= 0xf4U) {
             code_point = (uint32_t)(first & 0x07U);
             continuation_count = 3U;
-        } else {
+        }
+        else {
             return 0;
         }
 
@@ -489,15 +456,11 @@ static int __tinypy_marshal_utf8_validate(
                 if ((continuation & 0xc0U) != 0x80U) {
                     return 0;
                 }
-                code_point = (code_point << 6U) |
-                    (uint32_t)(continuation & 0x3fU);
+                code_point = (code_point << 6U) | (uint32_t)(continuation & 0x3fU);
             }
         }
 
-        if ((continuation_count == 2U && code_point < UINT32_C(0x800)) ||
-            (continuation_count == 3U && code_point < UINT32_C(0x10000)) ||
-            (code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdfff)) ||
-            code_point > UINT32_C(0x10ffff)) {
+        if ((continuation_count == 2U && code_point < UINT32_C(0x800)) || (continuation_count == 3U && code_point < UINT32_C(0x10000)) || (code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdfff)) || code_point > UINT32_C(0x10ffff)) {
             return 0;
         }
 
@@ -509,17 +472,15 @@ static int __tinypy_marshal_utf8_validate(
     return 1;
 }
 
-static double __tinypy_marshal_double_from_bits(uint64_t bits)
-{
+//////////////////////////////////////////////////////////////////////////
+static double __tinypy_marshal_double_from_bits(uint64_t bits) {
     double result = 0.0;
     (void)memcpy(&result, &bits, sizeof(result));
     return result;
 }
 
-static int __tinypy_marshal_binary_double(
-    const unsigned char *bytes,
-    double *out_value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_binary_double(const unsigned char *bytes, double *out_value) {
     uint64_t bits = 0U;
     size_t index;
 
@@ -533,11 +494,8 @@ static int __tinypy_marshal_binary_double(
     return 1;
 }
 
-static int __tinypy_marshal_ascii_equal(
-    const unsigned char *bytes,
-    size_t size,
-    const char *text)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_ascii_equal(const unsigned char *bytes, size_t size, const char *text) {
     size_t index;
     size_t text_size = __tinypy_marshal_cstring_size(text);
     if (size != text_size) {
@@ -556,11 +514,8 @@ static int __tinypy_marshal_ascii_equal(
     return 1;
 }
 
-static int __tinypy_marshal_text_double(
-    const unsigned char *bytes,
-    size_t size,
-    double *out_value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_text_double(const unsigned char *bytes, size_t size, double *out_value) {
     size_t index = 0U;
     int negative = 0;
     int saw_digit = 0;
@@ -581,8 +536,7 @@ static int __tinypy_marshal_text_double(
         }
     }
 
-    if (__tinypy_marshal_ascii_equal(bytes + index, size - index, "inf") ||
-        __tinypy_marshal_ascii_equal(bytes + index, size - index, "infinity")) {
+    if (__tinypy_marshal_ascii_equal(bytes + index, size - index, "inf") || __tinypy_marshal_ascii_equal(bytes + index, size - index, "infinity")) {
         uint64_t bits = UINT64_C(0x7ff0000000000000);
         if (negative) {
             bits |= UINT64_C(0x8000000000000000);
@@ -607,7 +561,8 @@ static int __tinypy_marshal_text_double(
             if (in_fraction) {
                 value += (long double)digit * fraction;
                 fraction *= 0.1L;
-            } else {
+            }
+            else {
                 value = value * 10.0L + (long double)digit;
             }
             index += 1U;
@@ -624,17 +579,14 @@ static int __tinypy_marshal_text_double(
         return 0;
     }
 
-    if (index != size &&
-        (bytes[index] == (unsigned char)'e' || bytes[index] == (unsigned char)'E')) {
+    if (index != size && (bytes[index] == (unsigned char)'e' || bytes[index] == (unsigned char)'E')) {
         int saw_exponent_digit = 0;
         index += 1U;
-        if (index != size &&
-            (bytes[index] == (unsigned char)'+' || bytes[index] == (unsigned char)'-')) {
+        if (index != size && (bytes[index] == (unsigned char)'+' || bytes[index] == (unsigned char)'-')) {
             exponent_negative = bytes[index] == (unsigned char)'-';
             index += 1U;
         }
-        while (index != size &&
-            bytes[index] >= (unsigned char)'0' && bytes[index] <= (unsigned char)'9') {
+        while (index != size && bytes[index] >= (unsigned char)'0' && bytes[index] <= (unsigned char)'9') {
             int digit = (int)(bytes[index] - (unsigned char)'0');
             saw_exponent_digit = 1;
             if (exponent_value < 10000) {
@@ -652,7 +604,8 @@ static int __tinypy_marshal_text_double(
 
     if (exponent_value > 4096) {
         value = exponent_negative ? 0.0L : (long double)DBL_MAX * 2.0L;
-    } else {
+    }
+    else {
         while (exponent_value != 0) {
             value = exponent_negative ? value * 0.1L : value * 10.0L;
             exponent_value -= 1;
@@ -662,10 +615,8 @@ static int __tinypy_marshal_text_double(
     return 1;
 }
 
-static int __tinypy_marshal_intern_append(
-    tinypy_marshal_parser_t *parser,
-    tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_intern_append(tinypy_marshal_parser_t *parser, tinypy_marshal_object_t *object) {
     tinypy_marshal_document_t *document = parser->document;
     tinypy_marshal_intern_chunk_t *chunk = document->intern_last;
 
@@ -679,7 +630,8 @@ static int __tinypy_marshal_intern_append(
         }
         if (chunk == NULL) {
             document->intern_first = new_chunk;
-        } else {
+        }
+        else {
             chunk->next = new_chunk;
         }
         document->intern_last = new_chunk;
@@ -692,10 +644,8 @@ static int __tinypy_marshal_intern_append(
     return 1;
 }
 
-static tinypy_marshal_object_t *__tinypy_marshal_intern_get(
-    const tinypy_marshal_document_t *document,
-    size_t index)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_marshal_object_t *__tinypy_marshal_intern_get(const tinypy_marshal_document_t *document, size_t index) {
     const tinypy_marshal_intern_chunk_t *chunk = document->intern_first;
 
     while (chunk != NULL) {
@@ -708,15 +658,10 @@ static tinypy_marshal_object_t *__tinypy_marshal_intern_get(
     return NULL;
 }
 
-static tinypy_marshal_object_t *__tinypy_marshal_parse_object(
-    tinypy_marshal_parser_t *parser,
-    int *out_is_null);
+static tinypy_marshal_object_t *__tinypy_marshal_parse_object(tinypy_marshal_parser_t *parser, int *out_is_null);
 
-static tinypy_marshal_object_t *__tinypy_marshal_parse_string(
-    tinypy_marshal_parser_t *parser,
-    uint8_t wire_type,
-    int unicode_value)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_marshal_object_t *__tinypy_marshal_parse_string(tinypy_marshal_parser_t *parser, uint8_t wire_type, int unicode_value) {
     size_t size;
     size_t size_offset = parser->offset;
     const unsigned char *source;
@@ -784,10 +729,8 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_string(
     return object;
 }
 
-static tinypy_marshal_object_t *__tinypy_marshal_parse_long(
-    tinypy_marshal_parser_t *parser,
-    uint8_t wire_type)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_marshal_object_t *__tinypy_marshal_parse_long(tinypy_marshal_parser_t *parser, uint8_t wire_type) {
     int32_t signed_count;
     size_t count;
     size_t bytes_size;
@@ -862,11 +805,8 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_long(
     return object;
 }
 
-static tinypy_marshal_object_t *__tinypy_marshal_parse_sequence(
-    tinypy_marshal_parser_t *parser,
-    uint8_t wire_type,
-    tinypy_marshal_type_e type)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_marshal_object_t *__tinypy_marshal_parse_sequence(tinypy_marshal_parser_t *parser, uint8_t wire_type, tinypy_marshal_type_e type) {
     size_t count;
     size_t bytes_size;
     size_t size_offset = parser->offset;
@@ -925,10 +865,8 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_sequence(
     return object;
 }
 
-static tinypy_marshal_object_t *__tinypy_marshal_parse_dict(
-    tinypy_marshal_parser_t *parser,
-    uint8_t wire_type)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_marshal_object_t *__tinypy_marshal_parse_dict(tinypy_marshal_parser_t *parser, uint8_t wire_type) {
     tinypy_marshal_object_t *object =
         __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_DICT, wire_type);
 
@@ -980,7 +918,8 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_dict(
         entry->value = value;
         if (object->as.dict_value.last == NULL) {
             object->as.dict_value.first = entry;
-        } else {
+        }
+        else {
             object->as.dict_value.last->next = entry;
         }
         object->as.dict_value.last = entry;
@@ -988,8 +927,8 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_dict(
     }
 }
 
-static int __tinypy_marshal_tuple_of_bytes(const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_tuple_of_bytes(const tinypy_marshal_object_t *object) {
     size_t index;
     if (object == NULL || object->type != TINYPY_MARSHAL_TYPE_TUPLE) {
         return 0;
@@ -1003,33 +942,13 @@ static int __tinypy_marshal_tuple_of_bytes(const tinypy_marshal_object_t *object
     return 1;
 }
 
-static int __tinypy_marshal_code_fields_valid(const tinypy_marshal_code_t *code)
-{
-    return code->argcount >= 0 &&
-        code->nlocals >= 0 &&
-        code->stacksize >= 0 &&
-        code->firstlineno >= 0 &&
-        code->bytecode != NULL &&
-        code->bytecode->type == TINYPY_MARSHAL_TYPE_BYTES &&
-        code->consts != NULL &&
-        code->consts->type == TINYPY_MARSHAL_TYPE_TUPLE &&
-        __tinypy_marshal_tuple_of_bytes(code->names) &&
-        __tinypy_marshal_tuple_of_bytes(code->varnames) &&
-        __tinypy_marshal_tuple_of_bytes(code->freevars) &&
-        __tinypy_marshal_tuple_of_bytes(code->cellvars) &&
-        code->filename != NULL &&
-        code->filename->type == TINYPY_MARSHAL_TYPE_BYTES &&
-        code->name != NULL &&
-        code->name->type == TINYPY_MARSHAL_TYPE_BYTES &&
-        code->lnotab != NULL &&
-        code->lnotab->type == TINYPY_MARSHAL_TYPE_BYTES;
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_code_fields_valid(const tinypy_marshal_code_t *code) {
+    return code->argcount >= 0 && code->nlocals >= 0 && code->stacksize >= 0 && code->firstlineno >= 0 && code->bytecode != NULL && code->bytecode->type == TINYPY_MARSHAL_TYPE_BYTES && code->consts != NULL && code->consts->type == TINYPY_MARSHAL_TYPE_TUPLE && __tinypy_marshal_tuple_of_bytes(code->names) && __tinypy_marshal_tuple_of_bytes(code->varnames) && __tinypy_marshal_tuple_of_bytes(code->freevars) && __tinypy_marshal_tuple_of_bytes(code->cellvars) && code->filename != NULL && code->filename->type == TINYPY_MARSHAL_TYPE_BYTES && code->name != NULL && code->name->type == TINYPY_MARSHAL_TYPE_BYTES && code->lnotab != NULL && code->lnotab->type == TINYPY_MARSHAL_TYPE_BYTES;
 }
 
-static tinypy_marshal_object_t *__tinypy_marshal_parse_code(
-    tinypy_marshal_parser_t *parser,
-    uint8_t wire_type,
-    size_t code_offset)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_marshal_object_t *__tinypy_marshal_parse_code(tinypy_marshal_parser_t *parser, uint8_t wire_type, size_t code_offset) {
     tinypy_marshal_object_t *object =
         __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_CODE, wire_type);
     tinypy_marshal_code_t *code;
@@ -1042,27 +961,24 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_code(
     code->abi_version = TINYPY_MARSHAL_ABI_VERSION;
     code->struct_size = (uint32_t)sizeof(*code);
 
-    if (!__tinypy_marshal_read_i32(parser, &code->argcount) ||
-        !__tinypy_marshal_read_i32(parser, &code->nlocals) ||
-        !__tinypy_marshal_read_i32(parser, &code->stacksize) ||
-        !__tinypy_marshal_read_i32(parser, &code->flags)) {
+    if (!__tinypy_marshal_read_i32(parser, &code->argcount) || !__tinypy_marshal_read_i32(parser, &code->nlocals) || !__tinypy_marshal_read_i32(parser, &code->stacksize) || !__tinypy_marshal_read_i32(parser, &code->flags)) {
         return NULL;
     }
 
-#define TINYPY_MARSHAL_PARSE_CODE_OBJECT(field) \
+#define TINYPY_MARSHAL_PARSE_CODE_OBJECT(field)                        \
     do { \
         code->field = __tinypy_marshal_parse_object(parser, &is_null); \
         if (parser->result != TINYPY_MARSHAL_OK) { \
-            return NULL; \
-        } \
+            return NULL;                                               \
+        }                                                              \
         if (is_null) { \
-            __tinypy_marshal_parser_fail( \
-                parser, \
-                TINYPY_MARSHAL_NULL_OUTSIDE_DICT, \
-                parser->offset - 1U, \
-                "TYPE_NULL is invalid in a code object"); \
-            return NULL; \
-        } \
+            __tinypy_marshal_parser_fail(                              \
+                parser,                                                \
+                TINYPY_MARSHAL_NULL_OUTSIDE_DICT,                      \
+                parser->offset - 1U,                                   \
+                "TYPE_NULL is invalid in a code object");              \
+            return NULL;                                               \
+        }                                                              \
     } while (0)
 
     TINYPY_MARSHAL_PARSE_CODE_OBJECT(bytecode);
@@ -1092,10 +1008,8 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_code(
     return object;
 }
 
-static tinypy_marshal_object_t *__tinypy_marshal_parse_object(
-    tinypy_marshal_parser_t *parser,
-    int *out_is_null)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_marshal_object_t *__tinypy_marshal_parse_object(tinypy_marshal_parser_t *parser, int *out_is_null) {
     size_t object_offset = parser->offset;
     uint8_t wire_type;
     tinypy_marshal_object_t *object = NULL;
@@ -1150,115 +1064,120 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_object(
     case TYPE_ELLIPSIS:
         object = __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_ELLIPSIS, wire_type);
         break;
-    case TYPE_INTEGER:
-        {
-            int32_t value;
-            if (__tinypy_marshal_read_i32(parser, &value)) {
-                object = __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_INTEGER, wire_type);
-                if (object != NULL) {
-                    object->as.integer_value = (int64_t)value;
-                }
+    case TYPE_INTEGER: {
+        int32_t value;
+        if (__tinypy_marshal_read_i32(parser, &value)) {
+            object = __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_INTEGER, wire_type);
+            if (object != NULL) {
+                object->as.integer_value = (int64_t)value;
             }
         }
-        break;
-    case TYPE_INTEGER64:
-        {
-            int64_t value;
-            if (__tinypy_marshal_read_i64(parser, &value)) {
-                object = __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_INTEGER, wire_type);
-                if (object != NULL) {
-                    object->as.integer_value = value;
-                }
+    }
+    break;
+    case TYPE_INTEGER64: {
+        int64_t value;
+        if (__tinypy_marshal_read_i64(parser, &value)) {
+            object = __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_INTEGER, wire_type);
+            if (object != NULL) {
+                object->as.integer_value = value;
             }
         }
-        break;
+    }
+    break;
     case TYPE_LONG:
         object = __tinypy_marshal_parse_long(parser, wire_type);
         break;
     case TYPE_FLOAT:
-    case TYPE_COMPLEX:
-        {
-            uint8_t text_size;
-            const unsigned char *text;
-            const unsigned char *real_text;
-            const unsigned char *imaginary_text = NULL;
-            size_t real_text_size;
-            size_t imaginary_text_size = 0U;
-            double real;
-            double imaginary = 0.0;
-            if (!__tinypy_marshal_read_u8(parser, &text_size) ||
-                !__tinypy_marshal_take(parser, (size_t)text_size, &text) ||
-                !__tinypy_marshal_text_double(text, (size_t)text_size, &real)) {
+    case TYPE_COMPLEX: {
+        uint8_t text_size;
+        const unsigned char *text;
+        const unsigned char *real_text;
+        const unsigned char *imaginary_text = NULL;
+        size_t real_text_size;
+        size_t imaginary_text_size = 0U;
+        double real;
+        double imaginary = 0.0;
+        if (!__tinypy_marshal_read_u8(parser, &text_size) || !__tinypy_marshal_take(parser, (size_t)text_size, &text) || !__tinypy_marshal_text_double(text, (size_t)text_size, &real)) {
+            if (parser->result == TINYPY_MARSHAL_OK) {
+                __tinypy_marshal_parser_fail(
+                    parser,
+                    TINYPY_MARSHAL_INVALID_FLOAT,
+                    object_offset,
+                    "invalid textual marshal float");
+            }
+            break;
+        }
+        real_text = text;
+        real_text_size = (size_t)text_size;
+        if (wire_type == TYPE_COMPLEX) {
+            if (!__tinypy_marshal_read_u8(parser, &text_size) || !__tinypy_marshal_take(parser, (size_t)text_size, &text) || !__tinypy_marshal_text_double(text, (size_t)text_size, &imaginary)) {
                 if (parser->result == TINYPY_MARSHAL_OK) {
                     __tinypy_marshal_parser_fail(
                         parser,
                         TINYPY_MARSHAL_INVALID_FLOAT,
                         object_offset,
-                        "invalid textual marshal float");
+                        "invalid textual marshal complex value");
                 }
                 break;
             }
-            real_text = text;
-            real_text_size = (size_t)text_size;
-            if (wire_type == TYPE_COMPLEX) {
-                if (!__tinypy_marshal_read_u8(parser, &text_size) ||
-                    !__tinypy_marshal_take(parser, (size_t)text_size, &text) ||
-                    !__tinypy_marshal_text_double(text, (size_t)text_size, &imaginary)) {
-                    if (parser->result == TINYPY_MARSHAL_OK) {
-                        __tinypy_marshal_parser_fail(
-                            parser,
-                            TINYPY_MARSHAL_INVALID_FLOAT,
-                            object_offset,
-                            "invalid textual marshal complex value");
-                    }
-                    break;
-                }
-                imaginary_text = text;
-                imaginary_text_size = (size_t)text_size;
+            imaginary_text = text;
+            imaginary_text_size = (size_t)text_size;
+        }
+        object = __tinypy_marshal_object_allocate(
+            parser,
+            wire_type == TYPE_FLOAT ? TINYPY_MARSHAL_TYPE_FLOAT : TINYPY_MARSHAL_TYPE_COMPLEX,
+            wire_type);
+        if (object != NULL) {
+            if (wire_type == TYPE_FLOAT) {
+                object->as.float_value.value = real;
+                object->as.float_value.text = __tinypy_marshal_graph_copy(
+                    parser,
+                    real_text,
+                    real_text_size);
+                object->as.float_value.text_size = real_text_size;
             }
-            object = __tinypy_marshal_object_allocate(
-                parser,
-                wire_type == TYPE_FLOAT ? TINYPY_MARSHAL_TYPE_FLOAT : TINYPY_MARSHAL_TYPE_COMPLEX,
-                wire_type);
-            if (object != NULL) {
-                if (wire_type == TYPE_FLOAT) {
-                    object->as.float_value.value = real;
-                    object->as.float_value.text = __tinypy_marshal_graph_copy(
-                        parser,
-                        real_text,
-                        real_text_size);
-                    object->as.float_value.text_size = real_text_size;
-                } else {
-                    object->as.complex_value.real = real;
-                    object->as.complex_value.imaginary = imaginary;
-                    object->as.complex_value.real_text = __tinypy_marshal_graph_copy(
-                        parser,
-                        real_text,
-                        real_text_size);
-                    object->as.complex_value.real_text_size = real_text_size;
-                    if (parser->result == TINYPY_MARSHAL_OK) {
-                        object->as.complex_value.imaginary_text =
-                            __tinypy_marshal_graph_copy(
-                                parser,
-                                imaginary_text,
-                                imaginary_text_size);
-                        object->as.complex_value.imaginary_text_size =
-                            imaginary_text_size;
-                    }
+            else {
+                object->as.complex_value.real = real;
+                object->as.complex_value.imaginary = imaginary;
+                object->as.complex_value.real_text = __tinypy_marshal_graph_copy(
+                    parser,
+                    real_text,
+                    real_text_size);
+                object->as.complex_value.real_text_size = real_text_size;
+                if (parser->result == TINYPY_MARSHAL_OK) {
+                    object->as.complex_value.imaginary_text =
+                        __tinypy_marshal_graph_copy(
+                            parser,
+                            imaginary_text,
+                            imaginary_text_size);
+                    object->as.complex_value.imaginary_text_size =
+                        imaginary_text_size;
                 }
             }
         }
-        break;
+    }
+    break;
     case TYPE_BINARY_FLOAT:
-    case TYPE_BINARY_COMPLEX:
-        {
-            const unsigned char *binary;
-            double real;
-            double imaginary = 0.0;
+    case TYPE_BINARY_COMPLEX: {
+        const unsigned char *binary;
+        double real;
+        double imaginary = 0.0;
+        if (!__tinypy_marshal_take(parser, 8U, &binary)) {
+            break;
+        }
+        if (!__tinypy_marshal_binary_double(binary, &real)) {
+            __tinypy_marshal_parser_fail(
+                parser,
+                TINYPY_MARSHAL_INVALID_FLOAT,
+                object_offset,
+                "host does not support IEEE-754 binary64 marshal values");
+            break;
+        }
+        if (wire_type == TYPE_BINARY_COMPLEX) {
             if (!__tinypy_marshal_take(parser, 8U, &binary)) {
                 break;
             }
-            if (!__tinypy_marshal_binary_double(binary, &real)) {
+            if (!__tinypy_marshal_binary_double(binary, &imaginary)) {
                 __tinypy_marshal_parser_fail(
                     parser,
                     TINYPY_MARSHAL_INVALID_FLOAT,
@@ -1266,33 +1185,22 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_object(
                     "host does not support IEEE-754 binary64 marshal values");
                 break;
             }
-            if (wire_type == TYPE_BINARY_COMPLEX) {
-                if (!__tinypy_marshal_take(parser, 8U, &binary)) {
-                    break;
-                }
-                if (!__tinypy_marshal_binary_double(binary, &imaginary)) {
-                    __tinypy_marshal_parser_fail(
-                        parser,
-                        TINYPY_MARSHAL_INVALID_FLOAT,
-                        object_offset,
-                        "host does not support IEEE-754 binary64 marshal values");
-                    break;
-                }
+        }
+        object = __tinypy_marshal_object_allocate(
+            parser,
+            wire_type == TYPE_BINARY_FLOAT ? TINYPY_MARSHAL_TYPE_FLOAT : TINYPY_MARSHAL_TYPE_COMPLEX,
+            wire_type);
+        if (object != NULL) {
+            if (wire_type == TYPE_BINARY_FLOAT) {
+                object->as.float_value.value = real;
             }
-            object = __tinypy_marshal_object_allocate(
-                parser,
-                wire_type == TYPE_BINARY_FLOAT ? TINYPY_MARSHAL_TYPE_FLOAT : TINYPY_MARSHAL_TYPE_COMPLEX,
-                wire_type);
-            if (object != NULL) {
-                if (wire_type == TYPE_BINARY_FLOAT) {
-                    object->as.float_value.value = real;
-                } else {
-                    object->as.complex_value.real = real;
-                    object->as.complex_value.imaginary = imaginary;
-                }
+            else {
+                object->as.complex_value.real = real;
+                object->as.complex_value.imaginary = imaginary;
             }
         }
-        break;
+    }
+    break;
     case TYPE_STRING:
     case TYPE_INTERNED:
         object = __tinypy_marshal_parse_string(parser, wire_type, 0);
@@ -1300,24 +1208,23 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_object(
     case TYPE_UNICODE:
         object = __tinypy_marshal_parse_string(parser, wire_type, 1);
         break;
-    case TYPE_STRINGREF:
-        {
-            int32_t index;
-            size_t ref_offset = parser->offset;
-            if (!__tinypy_marshal_read_i32(parser, &index)) {
-                break;
-            }
-            if (index < 0 || (size_t)index >= parser->document->intern_count) {
-                __tinypy_marshal_parser_fail(
-                    parser,
-                    TINYPY_MARSHAL_INVALID_STRING_REF,
-                    ref_offset,
-                    "marshal interned-string reference is out of range");
-                break;
-            }
-            object = __tinypy_marshal_intern_get(parser->document, (size_t)index);
+    case TYPE_STRINGREF: {
+        int32_t index;
+        size_t ref_offset = parser->offset;
+        if (!__tinypy_marshal_read_i32(parser, &index)) {
+            break;
         }
-        break;
+        if (index < 0 || (size_t)index >= parser->document->intern_count) {
+            __tinypy_marshal_parser_fail(
+                parser,
+                TINYPY_MARSHAL_INVALID_STRING_REF,
+                ref_offset,
+                "marshal interned-string reference is out of range");
+            break;
+        }
+        object = __tinypy_marshal_intern_get(parser->document, (size_t)index);
+    }
+    break;
     case TYPE_TUPLE:
         object = __tinypy_marshal_parse_sequence(parser, wire_type, TINYPY_MARSHAL_TYPE_TUPLE);
         break;
@@ -1349,14 +1256,8 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_object(
     return object;
 }
 
-tinypy_marshal_result_e tinypy_marshal_read_v2(
-    const void *bytes,
-    size_t size,
-    const tinypy_allocator_t *allocator,
-    const tinypy_marshal_limits_t *limits,
-    tinypy_marshal_document_t **out_document,
-    tinypy_marshal_error_t *out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_marshal_result_e tinypy_marshal_read_v2(const void *bytes, size_t size, const tinypy_allocator_t *allocator, const tinypy_marshal_limits_t *limits, tinypy_marshal_document_t **out_document, tinypy_marshal_error_t *out_error) {
     tinypy_marshal_limits_t effective_limits;
     tinypy_marshal_document_t *document;
     tinypy_marshal_parser_t parser;
@@ -1372,8 +1273,7 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(
         0U,
         "ok");
     *out_document = NULL;
-    if (allocator->abi_version != TINYPY_ABI_VERSION ||
-         (size_t)allocator->struct_size <
+    if (allocator->abi_version != TINYPY_ABI_VERSION || (size_t)allocator->struct_size <
             offsetof(tinypy_allocator_t, deallocate) + sizeof(allocator->deallocate)) {
         __tinypy_marshal_set_error_direct(
             out_error,
@@ -1388,7 +1288,8 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(
 
     if (limits == NULL) {
         tinypy_marshal_limits_init(&effective_limits);
-    } else {
+    }
+    else {
         if (!__tinypy_marshal_limits_valid(limits)) {
             __tinypy_marshal_set_error_direct(
                 out_error,
@@ -1399,8 +1300,8 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(
                 0U,
                 "invalid marshal limits ABI or zero limit");
             return limits->abi_version == TINYPY_MARSHAL_ABI_VERSION
-                ? TINYPY_MARSHAL_INVALID_ARGUMENT
-                : TINYPY_MARSHAL_ABI_MISMATCH;
+                       ? TINYPY_MARSHAL_INVALID_ARGUMENT
+                       : TINYPY_MARSHAL_ABI_MISMATCH;
         }
         effective_limits = *limits;
     }
@@ -1469,11 +1370,8 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(
     return TINYPY_MARSHAL_OK;
 }
 
-static void __tinypy_marshal_writer_fail(
-    tinypy_marshal_writer_t *writer,
-    tinypy_marshal_result_e result,
-    const char *message)
-{
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_marshal_writer_fail(tinypy_marshal_writer_t *writer, tinypy_marshal_result_e result, const char *message) {
     if (writer->result != TINYPY_MARSHAL_OK) {
         return;
     }
@@ -1490,11 +1388,8 @@ static void __tinypy_marshal_writer_fail(
     }
 }
 
-static int __tinypy_marshal_writer_put(
-    tinypy_marshal_writer_t *writer,
-    const unsigned char *bytes,
-    size_t size)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_writer_put(tinypy_marshal_writer_t *writer, const unsigned char *bytes, size_t size) {
     if (size > writer->max_output_bytes - writer->offset) {
         __tinypy_marshal_writer_fail(
             writer,
@@ -1518,29 +1413,29 @@ static int __tinypy_marshal_writer_put(
     return 1;
 }
 
-static int __tinypy_marshal_writer_byte(tinypy_marshal_writer_t *writer, uint8_t value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_writer_byte(tinypy_marshal_writer_t *writer, uint8_t value) {
     return __tinypy_marshal_writer_put(writer, &value, 1U);
 }
 
-static int __tinypy_marshal_writer_u16(tinypy_marshal_writer_t *writer, uint16_t value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_writer_u16(tinypy_marshal_writer_t *writer, uint16_t value) {
     unsigned char bytes[2];
     bytes[0] = (unsigned char)(value & UINT16_C(0xff));
     bytes[1] = (unsigned char)((value >> 8U) & UINT16_C(0xff));
     return __tinypy_marshal_writer_put(writer, bytes, sizeof(bytes));
 }
 
-static uint32_t __tinypy_marshal_i32_as_u32(int32_t value)
-{
+//////////////////////////////////////////////////////////////////////////
+static uint32_t __tinypy_marshal_i32_as_u32(int32_t value) {
     if (value >= 0) {
         return (uint32_t)value;
     }
     return UINT32_MAX - (uint32_t)(-(int64_t)(value + 1));
 }
 
-static int __tinypy_marshal_writer_i32(tinypy_marshal_writer_t *writer, int32_t value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_writer_i32(tinypy_marshal_writer_t *writer, int32_t value) {
     uint32_t bits = __tinypy_marshal_i32_as_u32(value);
     unsigned char bytes[4];
     bytes[0] = (unsigned char)(bits & UINT32_C(0xff));
@@ -1550,16 +1445,16 @@ static int __tinypy_marshal_writer_i32(tinypy_marshal_writer_t *writer, int32_t 
     return __tinypy_marshal_writer_put(writer, bytes, sizeof(bytes));
 }
 
-static uint64_t __tinypy_marshal_i64_as_u64(int64_t value)
-{
+//////////////////////////////////////////////////////////////////////////
+static uint64_t __tinypy_marshal_i64_as_u64(int64_t value) {
     if (value >= 0) {
         return (uint64_t)value;
     }
     return UINT64_MAX - (uint64_t)(-(value + 1));
 }
 
-static int __tinypy_marshal_writer_i64(tinypy_marshal_writer_t *writer, int64_t value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_writer_i64(tinypy_marshal_writer_t *writer, int64_t value) {
     uint64_t bits = __tinypy_marshal_i64_as_u64(value);
     unsigned char bytes[8];
     size_t index;
@@ -1569,10 +1464,8 @@ static int __tinypy_marshal_writer_i64(tinypy_marshal_writer_t *writer, int64_t 
     return __tinypy_marshal_writer_put(writer, bytes, sizeof(bytes));
 }
 
-static int __tinypy_marshal_writer_size32(
-    tinypy_marshal_writer_t *writer,
-    size_t size)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_writer_size32(tinypy_marshal_writer_t *writer, size_t size) {
     if (size > (size_t)INT32_MAX) {
         __tinypy_marshal_writer_fail(
             writer,
@@ -1583,10 +1476,8 @@ static int __tinypy_marshal_writer_size32(
     return __tinypy_marshal_writer_i32(writer, (int32_t)size);
 }
 
-static int __tinypy_marshal_writer_binary_double(
-    tinypy_marshal_writer_t *writer,
-    double value)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_writer_binary_double(tinypy_marshal_writer_t *writer, double value) {
     uint64_t bits;
     unsigned char bytes[8];
     size_t index;
@@ -1605,11 +1496,8 @@ static int __tinypy_marshal_writer_binary_double(
     return __tinypy_marshal_writer_put(writer, bytes, sizeof(bytes));
 }
 
-static int __tinypy_marshal_intern_index(
-    const tinypy_marshal_document_t *document,
-    const tinypy_marshal_object_t *object,
-    size_t *out_index)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_intern_index(const tinypy_marshal_document_t *document, const tinypy_marshal_object_t *object, size_t *out_index) {
     const tinypy_marshal_intern_chunk_t *chunk = document->intern_first;
     size_t base = 0U;
 
@@ -1627,21 +1515,16 @@ static int __tinypy_marshal_intern_index(
     return 0;
 }
 
-static int __tinypy_marshal_write_object(
-    tinypy_marshal_writer_t *writer,
-    const tinypy_marshal_object_t *object);
+static int __tinypy_marshal_write_object(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object);
 
-static int __tinypy_marshal_write_bytes_object(
-    tinypy_marshal_writer_t *writer,
-    const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_write_bytes_object(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object) {
     const unsigned char *bytes = object->as.string_value.bytes;
     size_t size = object->as.string_value.size;
 
     if (object->as.string_value.interned) {
         size_t index;
-        if (!__tinypy_marshal_intern_index(writer->document, object, &index) ||
-            index > (size_t)INT32_MAX) {
+        if (!__tinypy_marshal_intern_index(writer->document, object, &index) || index > (size_t)INT32_MAX) {
             __tinypy_marshal_writer_fail(
                 writer,
                 TINYPY_MARSHAL_INVALID_GRAPH,
@@ -1649,8 +1532,7 @@ static int __tinypy_marshal_write_bytes_object(
             return 0;
         }
         if (index < writer->emitted_intern_count) {
-            return __tinypy_marshal_writer_byte(writer, TYPE_STRINGREF) &&
-                __tinypy_marshal_writer_i32(writer, (int32_t)index);
+            return __tinypy_marshal_writer_byte(writer, TYPE_STRINGREF) && __tinypy_marshal_writer_i32(writer, (int32_t)index);
         }
         if (index != writer->emitted_intern_count) {
             __tinypy_marshal_writer_fail(
@@ -1663,22 +1545,18 @@ static int __tinypy_marshal_write_bytes_object(
         if (!__tinypy_marshal_writer_byte(writer, TYPE_INTERNED)) {
             return 0;
         }
-    } else if (!__tinypy_marshal_writer_byte(writer, TYPE_STRING)) {
+    }
+    else if (!__tinypy_marshal_writer_byte(writer, TYPE_STRING)) {
         return 0;
     }
 
-    return __tinypy_marshal_writer_size32(writer, size) &&
-        __tinypy_marshal_writer_put(writer, bytes, size);
+    return __tinypy_marshal_writer_size32(writer, size) && __tinypy_marshal_writer_put(writer, bytes, size);
 }
 
-static int __tinypy_marshal_write_sequence(
-    tinypy_marshal_writer_t *writer,
-    const tinypy_marshal_object_t *object,
-    uint8_t wire_type)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_write_sequence(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object, uint8_t wire_type) {
     size_t index;
-    if (!__tinypy_marshal_writer_byte(writer, wire_type) ||
-        !__tinypy_marshal_writer_size32(writer, object->as.sequence_value.count)) {
+    if (!__tinypy_marshal_writer_byte(writer, wire_type) || !__tinypy_marshal_writer_size32(writer, object->as.sequence_value.count)) {
         return 0;
     }
     for (index = 0U; index != object->as.sequence_value.count; ++index) {
@@ -1691,10 +1569,8 @@ static int __tinypy_marshal_write_sequence(
     return 1;
 }
 
-static int __tinypy_marshal_write_dict(
-    tinypy_marshal_writer_t *writer,
-    const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_write_dict(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object) {
     const tinypy_marshal_dict_entry_t *entry = object->as.dict_value.first;
     size_t count = 0U;
 
@@ -1702,8 +1578,7 @@ static int __tinypy_marshal_write_dict(
         return 0;
     }
     while (entry != NULL) {
-        if (!__tinypy_marshal_write_object(writer, entry->key) ||
-            !__tinypy_marshal_write_object(writer, entry->value)) {
+        if (!__tinypy_marshal_write_object(writer, entry->key) || !__tinypy_marshal_write_object(writer, entry->value)) {
             return 0;
         }
         count += 1U;
@@ -1719,10 +1594,8 @@ static int __tinypy_marshal_write_dict(
     return __tinypy_marshal_writer_byte(writer, TYPE_NULL);
 }
 
-static int __tinypy_marshal_write_code(
-    tinypy_marshal_writer_t *writer,
-    const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_write_code(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object) {
     const tinypy_marshal_code_t *code = &object->as.code_value;
 
     if (!__tinypy_marshal_code_fields_valid(code)) {
@@ -1732,27 +1605,11 @@ static int __tinypy_marshal_write_code(
             "marshal code object graph has invalid field types or counts");
         return 0;
     }
-    return __tinypy_marshal_writer_byte(writer, TYPE_CODE) &&
-        __tinypy_marshal_writer_i32(writer, code->argcount) &&
-        __tinypy_marshal_writer_i32(writer, code->nlocals) &&
-        __tinypy_marshal_writer_i32(writer, code->stacksize) &&
-        __tinypy_marshal_writer_i32(writer, code->flags) &&
-        __tinypy_marshal_write_object(writer, code->bytecode) &&
-        __tinypy_marshal_write_object(writer, code->consts) &&
-        __tinypy_marshal_write_object(writer, code->names) &&
-        __tinypy_marshal_write_object(writer, code->varnames) &&
-        __tinypy_marshal_write_object(writer, code->freevars) &&
-        __tinypy_marshal_write_object(writer, code->cellvars) &&
-        __tinypy_marshal_write_object(writer, code->filename) &&
-        __tinypy_marshal_write_object(writer, code->name) &&
-        __tinypy_marshal_writer_i32(writer, code->firstlineno) &&
-        __tinypy_marshal_write_object(writer, code->lnotab);
+    return __tinypy_marshal_writer_byte(writer, TYPE_CODE) && __tinypy_marshal_writer_i32(writer, code->argcount) && __tinypy_marshal_writer_i32(writer, code->nlocals) && __tinypy_marshal_writer_i32(writer, code->stacksize) && __tinypy_marshal_writer_i32(writer, code->flags) && __tinypy_marshal_write_object(writer, code->bytecode) && __tinypy_marshal_write_object(writer, code->consts) && __tinypy_marshal_write_object(writer, code->names) && __tinypy_marshal_write_object(writer, code->varnames) && __tinypy_marshal_write_object(writer, code->freevars) && __tinypy_marshal_write_object(writer, code->cellvars) && __tinypy_marshal_write_object(writer, code->filename) && __tinypy_marshal_write_object(writer, code->name) && __tinypy_marshal_writer_i32(writer, code->firstlineno) && __tinypy_marshal_write_object(writer, code->lnotab);
 }
 
-static int __tinypy_marshal_write_object(
-    tinypy_marshal_writer_t *writer,
-    const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_write_object(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object) {
     size_t object_index = writer->object_count;
     int result = 0;
 
@@ -1795,94 +1652,82 @@ static int __tinypy_marshal_write_object(
         break;
     case TINYPY_MARSHAL_TYPE_INTEGER:
         if (object->wire_type == TYPE_INTEGER) {
-            if (object->as.integer_value < (int64_t)INT32_MIN ||
-                object->as.integer_value > (int64_t)INT32_MAX) {
+            if (object->as.integer_value < (int64_t)INT32_MIN || object->as.integer_value > (int64_t)INT32_MAX) {
                 __tinypy_marshal_writer_fail(
                     writer,
                     TINYPY_MARSHAL_INVALID_GRAPH,
                     "TYPE_INTEGER graph value is outside signed 32-bit range");
                 break;
             }
-            result = __tinypy_marshal_writer_byte(writer, TYPE_INTEGER) &&
-                __tinypy_marshal_writer_i32(
-                    writer,
-                    (int32_t)object->as.integer_value);
-        } else if (object->wire_type == TYPE_INTEGER64) {
-            result = __tinypy_marshal_writer_byte(writer, TYPE_INTEGER64) &&
-                __tinypy_marshal_writer_i64(writer, object->as.integer_value);
-        } else {
+            result = __tinypy_marshal_writer_byte(writer, TYPE_INTEGER) && __tinypy_marshal_writer_i32(
+                         writer,
+                         (int32_t)object->as.integer_value);
+        }
+        else if (object->wire_type == TYPE_INTEGER64) {
+            result = __tinypy_marshal_writer_byte(writer, TYPE_INTEGER64) && __tinypy_marshal_writer_i64(writer, object->as.integer_value);
+        }
+        else {
             __tinypy_marshal_writer_fail(
                 writer,
                 TINYPY_MARSHAL_INVALID_GRAPH,
                 "marshal integer has an invalid wire type");
         }
         break;
-    case TINYPY_MARSHAL_TYPE_LONG:
-        {
-            size_t index;
-            size_t count = object->as.long_value.count;
-            int64_t signed_count;
-            if (count > (size_t)INT32_MAX ||
-                (count != 0U && object->as.long_value.digits == NULL) ||
-                object->as.long_value.sign < -1 ||
-                object->as.long_value.sign > 1 ||
-                (count == 0U && object->as.long_value.sign != 0) ||
-                (count != 0U && object->as.long_value.sign == 0)) {
+    case TINYPY_MARSHAL_TYPE_LONG: {
+        size_t index;
+        size_t count = object->as.long_value.count;
+        int64_t signed_count;
+        if (count > (size_t)INT32_MAX || (count != 0U && object->as.long_value.digits == NULL) || object->as.long_value.sign < -1 || object->as.long_value.sign > 1 || (count == 0U && object->as.long_value.sign != 0) || (count != 0U && object->as.long_value.sign == 0)) {
+            __tinypy_marshal_writer_fail(
+                writer,
+                TINYPY_MARSHAL_INVALID_GRAPH,
+                "marshal long graph is not canonical");
+            break;
+        }
+        signed_count = (int64_t)count * (int64_t)object->as.long_value.sign;
+        if (!__tinypy_marshal_writer_byte(writer, TYPE_LONG) || !__tinypy_marshal_writer_i32(writer, (int32_t)signed_count)) {
+            break;
+        }
+        result = 1;
+        for (index = 0U; index != count; ++index) {
+            uint16_t digit = object->as.long_value.digits[index];
+            if (digit >= UINT16_C(32768) || (index + 1U == count && digit == 0U)) {
                 __tinypy_marshal_writer_fail(
                     writer,
                     TINYPY_MARSHAL_INVALID_GRAPH,
-                    "marshal long graph is not canonical");
+                    "marshal long graph contains a non-canonical digit");
+                result = 0;
                 break;
             }
-            signed_count = (int64_t)count *
-                (int64_t)object->as.long_value.sign;
-            if (!__tinypy_marshal_writer_byte(writer, TYPE_LONG) ||
-                !__tinypy_marshal_writer_i32(writer, (int32_t)signed_count)) {
+            if (!__tinypy_marshal_writer_u16(writer, digit)) {
+                result = 0;
                 break;
-            }
-            result = 1;
-            for (index = 0U; index != count; ++index) {
-                uint16_t digit = object->as.long_value.digits[index];
-                if (digit >= UINT16_C(32768) ||
-                    (index + 1U == count && digit == 0U)) {
-                    __tinypy_marshal_writer_fail(
-                        writer,
-                        TINYPY_MARSHAL_INVALID_GRAPH,
-                        "marshal long graph contains a non-canonical digit");
-                    result = 0;
-                    break;
-                }
-                if (!__tinypy_marshal_writer_u16(writer, digit)) {
-                    result = 0;
-                    break;
-                }
             }
         }
-        break;
+    }
+    break;
     case TINYPY_MARSHAL_TYPE_FLOAT:
         if (object->wire_type == TYPE_FLOAT) {
-            if (object->as.float_value.text == NULL ||
-                object->as.float_value.text_size > UINT8_MAX) {
+            if (object->as.float_value.text == NULL || object->as.float_value.text_size > UINT8_MAX) {
                 __tinypy_marshal_writer_fail(
                     writer,
                     TINYPY_MARSHAL_INVALID_GRAPH,
                     "text marshal float has no canonical source spelling");
                 break;
             }
-            result = __tinypy_marshal_writer_byte(writer, TYPE_FLOAT) &&
-                __tinypy_marshal_writer_byte(
-                    writer,
-                    (uint8_t)object->as.float_value.text_size) &&
-                __tinypy_marshal_writer_put(
-                    writer,
-                    object->as.float_value.text,
-                    object->as.float_value.text_size);
-        } else if (object->wire_type == TYPE_BINARY_FLOAT) {
-            result = __tinypy_marshal_writer_byte(writer, TYPE_BINARY_FLOAT) &&
-                __tinypy_marshal_writer_binary_double(
-                    writer,
-                    object->as.float_value.value);
-        } else {
+            result = __tinypy_marshal_writer_byte(writer, TYPE_FLOAT) && __tinypy_marshal_writer_byte(
+                         writer,
+                         (uint8_t)object->as.float_value.text_size) && __tinypy_marshal_writer_put(
+                         writer,
+                         object->as.float_value.text,
+                         object->as.float_value.text_size);
+        }
+        else if (object->wire_type == TYPE_BINARY_FLOAT) {
+            result = __tinypy_marshal_writer_byte(writer, TYPE_BINARY_FLOAT) && __tinypy_marshal_writer_binary_double(
+                         writer,
+                         object->as.float_value.value);
+        }
+        else {
             __tinypy_marshal_writer_fail(
                 writer,
                 TINYPY_MARSHAL_INVALID_GRAPH,
@@ -1891,40 +1736,33 @@ static int __tinypy_marshal_write_object(
         break;
     case TINYPY_MARSHAL_TYPE_COMPLEX:
         if (object->wire_type == TYPE_COMPLEX) {
-            if (object->as.complex_value.real_text == NULL ||
-                object->as.complex_value.imaginary_text == NULL ||
-                object->as.complex_value.real_text_size > UINT8_MAX ||
-                object->as.complex_value.imaginary_text_size > UINT8_MAX) {
+            if (object->as.complex_value.real_text == NULL || object->as.complex_value.imaginary_text == NULL || object->as.complex_value.real_text_size > UINT8_MAX || object->as.complex_value.imaginary_text_size > UINT8_MAX) {
                 __tinypy_marshal_writer_fail(
                     writer,
                     TINYPY_MARSHAL_INVALID_GRAPH,
                     "text marshal complex has no canonical source spelling");
                 break;
             }
-            result = __tinypy_marshal_writer_byte(writer, TYPE_COMPLEX) &&
-                __tinypy_marshal_writer_byte(
-                    writer,
-                    (uint8_t)object->as.complex_value.real_text_size) &&
-                __tinypy_marshal_writer_put(
-                    writer,
-                    object->as.complex_value.real_text,
-                    object->as.complex_value.real_text_size) &&
-                __tinypy_marshal_writer_byte(
-                    writer,
-                    (uint8_t)object->as.complex_value.imaginary_text_size) &&
-                __tinypy_marshal_writer_put(
-                    writer,
-                    object->as.complex_value.imaginary_text,
-                    object->as.complex_value.imaginary_text_size);
-        } else if (object->wire_type == TYPE_BINARY_COMPLEX) {
-            result = __tinypy_marshal_writer_byte(writer, TYPE_BINARY_COMPLEX) &&
-                __tinypy_marshal_writer_binary_double(
-                    writer,
-                    object->as.complex_value.real) &&
-                __tinypy_marshal_writer_binary_double(
-                    writer,
-                    object->as.complex_value.imaginary);
-        } else {
+            result = __tinypy_marshal_writer_byte(writer, TYPE_COMPLEX) && __tinypy_marshal_writer_byte(
+                         writer,
+                         (uint8_t)object->as.complex_value.real_text_size) && __tinypy_marshal_writer_put(
+                         writer,
+                         object->as.complex_value.real_text,
+                         object->as.complex_value.real_text_size) && __tinypy_marshal_writer_byte(
+                         writer,
+                         (uint8_t)object->as.complex_value.imaginary_text_size) && __tinypy_marshal_writer_put(
+                         writer,
+                         object->as.complex_value.imaginary_text,
+                         object->as.complex_value.imaginary_text_size);
+        }
+        else if (object->wire_type == TYPE_BINARY_COMPLEX) {
+            result = __tinypy_marshal_writer_byte(writer, TYPE_BINARY_COMPLEX) && __tinypy_marshal_writer_binary_double(
+                         writer,
+                         object->as.complex_value.real) && __tinypy_marshal_writer_binary_double(
+                         writer,
+                         object->as.complex_value.imaginary);
+        }
+        else {
             __tinypy_marshal_writer_fail(
                 writer,
                 TINYPY_MARSHAL_INVALID_GRAPH,
@@ -1935,12 +1773,10 @@ static int __tinypy_marshal_write_object(
         result = __tinypy_marshal_write_bytes_object(writer, object);
         break;
     case TINYPY_MARSHAL_TYPE_UNICODE:
-        result = __tinypy_marshal_writer_byte(writer, TYPE_UNICODE) &&
-            __tinypy_marshal_writer_size32(writer, object->as.string_value.size) &&
-            __tinypy_marshal_writer_put(
-                writer,
-                object->as.string_value.bytes,
-                object->as.string_value.size);
+        result = __tinypy_marshal_writer_byte(writer, TYPE_UNICODE) && __tinypy_marshal_writer_size32(writer, object->as.string_value.size) && __tinypy_marshal_writer_put(
+                     writer,
+                     object->as.string_value.bytes,
+                     object->as.string_value.size);
         break;
     case TINYPY_MARSHAL_TYPE_TUPLE:
         result = __tinypy_marshal_write_sequence(writer, object, TYPE_TUPLE);
@@ -1972,14 +1808,8 @@ static int __tinypy_marshal_write_object(
     return result && writer->result == TINYPY_MARSHAL_OK;
 }
 
-static tinypy_marshal_result_e __tinypy_marshal_writer_run(
-    const tinypy_marshal_document_t *document,
-    unsigned char *buffer,
-    size_t capacity,
-    const tinypy_marshal_write_options_t *options,
-    size_t *out_size,
-    tinypy_marshal_error_t *out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_marshal_result_e __tinypy_marshal_writer_run(const tinypy_marshal_document_t *document, unsigned char *buffer, size_t capacity, const tinypy_marshal_write_options_t *options, size_t *out_size, tinypy_marshal_error_t *out_error) {
     tinypy_marshal_writer_t writer;
 
     (void)memset(&writer, 0, sizeof(writer));
@@ -2005,14 +1835,8 @@ static tinypy_marshal_result_e __tinypy_marshal_writer_run(
     return TINYPY_MARSHAL_OK;
 }
 
-tinypy_marshal_result_e tinypy_marshal_write_v2(
-    const tinypy_marshal_document_t *document,
-    void *buffer,
-    size_t capacity,
-    size_t *out_size,
-    const tinypy_marshal_write_options_t *options,
-    tinypy_marshal_error_t *out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_marshal_result_e tinypy_marshal_write_v2(const tinypy_marshal_document_t *document, void *buffer, size_t capacity, size_t *out_size, const tinypy_marshal_write_options_t *options, tinypy_marshal_error_t *out_error) {
     tinypy_marshal_write_options_t effective_options;
     size_t required_size = 0U;
     tinypy_marshal_result_e result;
@@ -2025,9 +1849,9 @@ tinypy_marshal_result_e tinypy_marshal_write_v2(
     *out_size = 0U;
     if (options == NULL) {
         tinypy_marshal_write_options_init(&effective_options);
-    } else {
-        if (options->abi_version != TINYPY_MARSHAL_ABI_VERSION ||
-            options->struct_size < (uint32_t)sizeof(*options)) {
+    }
+    else {
+        if (options->abi_version != TINYPY_MARSHAL_ABI_VERSION || options->struct_size < (uint32_t)sizeof(*options)) {
             __tinypy_marshal_set_error_direct(
                 out_error,
                 TINYPY_MARSHAL_ABI_MISMATCH,
@@ -2081,8 +1905,8 @@ tinypy_marshal_result_e tinypy_marshal_write_v2(
         out_error);
 }
 
-void tinypy_marshal_document_destroy(tinypy_marshal_document_t *document)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_marshal_document_destroy(tinypy_marshal_document_t *document) {
     tinypy_allocator_t allocator;
     tinypy_marshal_allocation_t *allocation;
 
@@ -2109,67 +1933,62 @@ void tinypy_marshal_document_destroy(tinypy_marshal_document_t *document)
         (uint32_t)TINYPY_MARSHAL_ALLOC_TAG_DOCUMENT);
 }
 
-const tinypy_marshal_object_t *tinypy_marshal_document_root(
-    const tinypy_marshal_document_t *document)
-{
+//////////////////////////////////////////////////////////////////////////
+const tinypy_marshal_object_t *tinypy_marshal_document_root(const tinypy_marshal_document_t *document) {
     assert(document != NULL);
     assert(document->state == TINYPY_MARSHAL_DOCUMENT_LIVE);
     return document->root;
 }
 
-size_t tinypy_marshal_document_input_size(const tinypy_marshal_document_t *document)
-{
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_marshal_document_input_size(const tinypy_marshal_document_t *document) {
     assert(document != NULL);
     assert(document->state == TINYPY_MARSHAL_DOCUMENT_LIVE);
     return document->input_size;
 }
 
-size_t tinypy_marshal_document_object_count(const tinypy_marshal_document_t *document)
-{
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_marshal_document_object_count(const tinypy_marshal_document_t *document) {
     assert(document != NULL);
     assert(document->state == TINYPY_MARSHAL_DOCUMENT_LIVE);
     return document->object_count;
 }
 
-size_t tinypy_marshal_document_allocated_bytes(const tinypy_marshal_document_t *document)
-{
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_marshal_document_allocated_bytes(const tinypy_marshal_document_t *document) {
     assert(document != NULL);
     assert(document->state == TINYPY_MARSHAL_DOCUMENT_LIVE);
     return document->allocated_bytes;
 }
 
-tinypy_marshal_type_e tinypy_marshal_object_type(const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_marshal_type_e tinypy_marshal_object_type(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     return object->type;
 }
 
-uint8_t tinypy_marshal_object_wire_type(const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+uint8_t tinypy_marshal_object_wire_type(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     return object->wire_type;
 }
 
-int tinypy_marshal_bool_value(const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+int tinypy_marshal_bool_value(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_BOOL);
     return object->as.boolean_value;
 }
 
-int64_t tinypy_marshal_integer_value(const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+int64_t tinypy_marshal_integer_value(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_INTEGER);
     return object->as.integer_value;
 }
 
-void tinypy_marshal_long_view(
-    const tinypy_marshal_object_t *object,
-    int *out_sign,
-    const uint16_t **out_digits,
-    size_t *out_digit_count)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_marshal_long_view(const tinypy_marshal_object_t *object, int *out_sign, const uint16_t **out_digits, size_t *out_digit_count) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_LONG);
     assert(out_sign != NULL);
@@ -2180,18 +1999,15 @@ void tinypy_marshal_long_view(
     *out_digit_count = object->as.long_value.count;
 }
 
-double tinypy_marshal_float_value(const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+double tinypy_marshal_float_value(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_FLOAT);
     return object->as.float_value.value;
 }
 
-void tinypy_marshal_complex_value(
-    const tinypy_marshal_object_t *object,
-    double *out_real,
-    double *out_imaginary)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_marshal_complex_value(const tinypy_marshal_object_t *object, double *out_real, double *out_imaginary) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_COMPLEX);
     assert(out_real != NULL);
@@ -2200,12 +2016,8 @@ void tinypy_marshal_complex_value(
     *out_imaginary = object->as.complex_value.imaginary;
 }
 
-void tinypy_marshal_bytes_view(
-    const tinypy_marshal_object_t *object,
-    const void **out_bytes,
-    size_t *out_size,
-    int *out_interned)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_marshal_bytes_view(const tinypy_marshal_object_t *object, const void **out_bytes, size_t *out_size, int *out_interned) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_BYTES);
     assert(out_bytes != NULL);
@@ -2216,12 +2028,8 @@ void tinypy_marshal_bytes_view(
     *out_interned = object->as.string_value.interned;
 }
 
-void tinypy_marshal_unicode_view(
-    const tinypy_marshal_object_t *object,
-    const char **out_utf8,
-    size_t *out_size,
-    size_t *out_code_point_count)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_marshal_unicode_view(const tinypy_marshal_object_t *object, const char **out_utf8, size_t *out_size, size_t *out_code_point_count) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_UNICODE);
     assert(out_utf8 != NULL);
@@ -2233,42 +2041,35 @@ void tinypy_marshal_unicode_view(
 }
 
 #ifndef NDEBUG
-static int __tinypy_marshal_is_sequence(const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_marshal_is_sequence(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
-    return object->type == TINYPY_MARSHAL_TYPE_TUPLE ||
-         object->type == TINYPY_MARSHAL_TYPE_LIST ||
-         object->type == TINYPY_MARSHAL_TYPE_SET ||
-         object->type == TINYPY_MARSHAL_TYPE_FROZENSET;
+    return object->type == TINYPY_MARSHAL_TYPE_TUPLE || object->type == TINYPY_MARSHAL_TYPE_LIST || object->type == TINYPY_MARSHAL_TYPE_SET || object->type == TINYPY_MARSHAL_TYPE_FROZENSET;
 }
 #endif
 
-size_t tinypy_marshal_sequence_size(const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_marshal_sequence_size(const tinypy_marshal_object_t *object) {
     assert(__tinypy_marshal_is_sequence(object));
     return object->as.sequence_value.count;
 }
 
-const tinypy_marshal_object_t *tinypy_marshal_sequence_item(
-    const tinypy_marshal_object_t *object,
-    size_t index)
-{
+//////////////////////////////////////////////////////////////////////////
+const tinypy_marshal_object_t *tinypy_marshal_sequence_item(const tinypy_marshal_object_t *object, size_t index) {
     assert(__tinypy_marshal_is_sequence(object));
     assert(index < object->as.sequence_value.count);
     return object->as.sequence_value.items[index];
 }
 
-size_t tinypy_marshal_dict_size(const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_marshal_dict_size(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_DICT);
     return object->as.dict_value.count;
 }
 
-static const tinypy_marshal_dict_entry_t *__tinypy_marshal_dict_entry_at(
-    const tinypy_marshal_object_t *object,
-    size_t index)
-{
+//////////////////////////////////////////////////////////////////////////
+static const tinypy_marshal_dict_entry_t *__tinypy_marshal_dict_entry_at(const tinypy_marshal_object_t *object, size_t index) {
     const tinypy_marshal_dict_entry_t *entry;
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_DICT);
@@ -2281,56 +2082,75 @@ static const tinypy_marshal_dict_entry_t *__tinypy_marshal_dict_entry_at(
     return entry;
 }
 
-const tinypy_marshal_object_t *tinypy_marshal_dict_key(
-    const tinypy_marshal_object_t *object,
-    size_t index)
-{
+//////////////////////////////////////////////////////////////////////////
+const tinypy_marshal_object_t *tinypy_marshal_dict_key(const tinypy_marshal_object_t *object, size_t index) {
     const tinypy_marshal_dict_entry_t *entry = __tinypy_marshal_dict_entry_at(object, index);
     return entry->key;
 }
 
-const tinypy_marshal_object_t *tinypy_marshal_dict_value(
-    const tinypy_marshal_object_t *object,
-    size_t index)
-{
+//////////////////////////////////////////////////////////////////////////
+const tinypy_marshal_object_t *tinypy_marshal_dict_value(const tinypy_marshal_object_t *object, size_t index) {
     const tinypy_marshal_dict_entry_t *entry = __tinypy_marshal_dict_entry_at(object, index);
     return entry->value;
 }
 
-const tinypy_marshal_code_t *tinypy_marshal_code_view(
-    const tinypy_marshal_object_t *object)
-{
+//////////////////////////////////////////////////////////////////////////
+const tinypy_marshal_code_t *tinypy_marshal_code_view(const tinypy_marshal_object_t *object) {
     assert(object != NULL);
     assert(object->type == TINYPY_MARSHAL_TYPE_CODE);
     return &object->as.code_value;
 }
 
-const char *tinypy_marshal_result_name(tinypy_marshal_result_e result)
-{
+//////////////////////////////////////////////////////////////////////////
+const char *tinypy_marshal_result_name(tinypy_marshal_result_e result) {
     switch (result) {
-    case TINYPY_MARSHAL_OK: return "ok";
-    case TINYPY_MARSHAL_INVALID_ARGUMENT: return "invalid argument";
-    case TINYPY_MARSHAL_ABI_MISMATCH: return "ABI mismatch";
-    case TINYPY_MARSHAL_TRUNCATED: return "truncated input";
-    case TINYPY_MARSHAL_UNKNOWN_TYPE: return "unknown type code";
-    case TINYPY_MARSHAL_NULL_OUTSIDE_DICT: return "NULL outside dictionary terminator";
-    case TINYPY_MARSHAL_INVALID_SIZE: return "invalid size";
-    case TINYPY_MARSHAL_INVALID_LONG: return "invalid long";
-    case TINYPY_MARSHAL_INVALID_STRING_REF: return "invalid string reference";
-    case TINYPY_MARSHAL_INVALID_UTF8: return "invalid UTF-8";
-    case TINYPY_MARSHAL_INVALID_FLOAT: return "invalid float";
-    case TINYPY_MARSHAL_INVALID_CODE: return "invalid code object";
-    case TINYPY_MARSHAL_DEPTH_LIMIT: return "depth limit";
-    case TINYPY_MARSHAL_OBJECT_LIMIT: return "object limit";
-    case TINYPY_MARSHAL_STRING_LIMIT: return "string limit";
-    case TINYPY_MARSHAL_CONTAINER_LIMIT: return "container limit";
-    case TINYPY_MARSHAL_BYTE_LIMIT: return "byte limit";
-    case TINYPY_MARSHAL_TRAILING_DATA: return "trailing data";
-    case TINYPY_MARSHAL_OUTPUT_LIMIT: return "output limit";
-    case TINYPY_MARSHAL_BUFFER_TOO_SMALL: return "buffer too small";
-    case TINYPY_MARSHAL_INVALID_GRAPH: return "invalid graph";
-    case TINYPY_MARSHAL_UNSUPPORTED_RUNTIME_TYPE: return "unsupported runtime type";
-    case TINYPY_MARSHAL_ROOT_NOT_CODE: return "root is not code";
-    default: return "unknown marshal result";
+    case TINYPY_MARSHAL_OK:
+        return "ok";
+    case TINYPY_MARSHAL_INVALID_ARGUMENT:
+        return "invalid argument";
+    case TINYPY_MARSHAL_ABI_MISMATCH:
+        return "ABI mismatch";
+    case TINYPY_MARSHAL_TRUNCATED:
+        return "truncated input";
+    case TINYPY_MARSHAL_UNKNOWN_TYPE:
+        return "unknown type code";
+    case TINYPY_MARSHAL_NULL_OUTSIDE_DICT:
+        return "NULL outside dictionary terminator";
+    case TINYPY_MARSHAL_INVALID_SIZE:
+        return "invalid size";
+    case TINYPY_MARSHAL_INVALID_LONG:
+        return "invalid long";
+    case TINYPY_MARSHAL_INVALID_STRING_REF:
+        return "invalid string reference";
+    case TINYPY_MARSHAL_INVALID_UTF8:
+        return "invalid UTF-8";
+    case TINYPY_MARSHAL_INVALID_FLOAT:
+        return "invalid float";
+    case TINYPY_MARSHAL_INVALID_CODE:
+        return "invalid code object";
+    case TINYPY_MARSHAL_DEPTH_LIMIT:
+        return "depth limit";
+    case TINYPY_MARSHAL_OBJECT_LIMIT:
+        return "object limit";
+    case TINYPY_MARSHAL_STRING_LIMIT:
+        return "string limit";
+    case TINYPY_MARSHAL_CONTAINER_LIMIT:
+        return "container limit";
+    case TINYPY_MARSHAL_BYTE_LIMIT:
+        return "byte limit";
+    case TINYPY_MARSHAL_TRAILING_DATA:
+        return "trailing data";
+    case TINYPY_MARSHAL_OUTPUT_LIMIT:
+        return "output limit";
+    case TINYPY_MARSHAL_BUFFER_TOO_SMALL:
+        return "buffer too small";
+    case TINYPY_MARSHAL_INVALID_GRAPH:
+        return "invalid graph";
+    case TINYPY_MARSHAL_UNSUPPORTED_RUNTIME_TYPE:
+        return "unsupported runtime type";
+    case TINYPY_MARSHAL_ROOT_NOT_CODE:
+        return "root is not code";
+    default:
+        return "unknown marshal result";
     }
 }

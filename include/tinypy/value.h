@@ -2,7 +2,7 @@
 #define TINYPY_VALUE_H
 
 #include "tinypy/types.h"
-
+//////////////////////////////////////////////////////////////////////////
 /* All returned values belong to vm and carry one owned reference. None,
  * bool, int values in [-1023, 1024], positive float 0.0, empty byte str and
  * empty tuple are VM-local constants whose base reference is owned by vm.
@@ -11,6 +11,7 @@
  * including reference-count saturation, is asserted in debug builds and is
  * undefined behavior when NDEBUG is set. */
 tinypy_value_t *tinypy_none_get(tinypy_vm_t *vm);
+tinypy_value_t *tinypy_not_implemented_get(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_ellipsis_get(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_bool_from_i32(tinypy_vm_t *vm, int32_t value);
 tinypy_value_t *tinypy_integer_from_i64(tinypy_vm_t *vm, int64_t value);
@@ -34,6 +35,9 @@ tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size
 const char *tinypy_unicode_utf8_view(const tinypy_value_t *value, size_t *out_size, size_t *out_code_point_count);
 
 tinypy_value_type_e tinypy_typeof(const tinypy_value_t *value);
+tinypy_vm_t *tinypy_value_vm(const tinypy_value_t *value);
+tinypy_ref_t tinypy_refcount(const tinypy_value_t *value);
+int32_t tinypy_is_callable(const tinypy_value_t *value);
 
 /* Passing a value of the wrong documented kind is a C contract violation. */
 int32_t tinypy_bool_as_i32(const tinypy_value_t *value);
@@ -47,5 +51,5 @@ int64_t tinypy_integer_as_i64(const tinypy_value_t *value);
  * in release. */
 void tinypy_retain(tinypy_value_t *value);
 void tinypy_release(tinypy_value_t *value);
-
+//////////////////////////////////////////////////////////////////////////
 #endif

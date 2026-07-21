@@ -5,36 +5,31 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TEST_CHECK(condition) \
+#define TEST_CHECK(condition)                \
     do { \
         if (!(condition)) { \
-            (void)fprintf( \
-                stderr, \
+            (void)fprintf(                   \
+                stderr,                      \
                 "%s:%d: check failed: %s\n", \
-                __FILE__, \
-                __LINE__, \
-                #condition); \
-            return 1; \
-        } \
+                __FILE__,                    \
+                __LINE__,                    \
+                #condition);                 \
+            return 1;                        \
+        }                                    \
     } while (0)
 
-static int __digest_matches_hex(
-    const uint8_t digest[32],
-    const char *expected)
-{
+static int __digest_matches_hex(const uint8_t digest[32], const char *expected) {
     static const char digits[] = "0123456789abcdef";
     size_t index;
     for (index = 0U; index != 32U; ++index) {
-        if (expected[index * 2U] != digits[digest[index] >> 4U] ||
-            expected[index * 2U + 1U] != digits[digest[index] & 15U]) {
+        if (expected[index * 2U] != digits[digest[index] >> 4U] || expected[index * 2U + 1U] != digits[digest[index] & 15U]) {
             return 0;
         }
     }
     return expected[64] == '\0';
 }
 
-static int __test_sha256_vectors(void)
-{
+static int __test_sha256_vectors(void) {
     uint8_t digest[32];
     tinypy_sha256_context_t context;
     size_t index;
@@ -63,16 +58,14 @@ static int __test_sha256_vectors(void)
     return 0;
 }
 
-static void __fill_digest(uint8_t digest[32], uint8_t seed)
-{
+static void __fill_digest(uint8_t digest[32], uint8_t seed) {
     size_t index;
     for (index = 0U; index != 32U; ++index) {
         digest[index] = (uint8_t)(seed + (uint8_t)index);
     }
 }
 
-static tinypy_artifact_metadata_t __valid_metadata(void)
-{
+static tinypy_artifact_metadata_t __valid_metadata(void) {
     tinypy_artifact_metadata_t metadata;
     (void)memset(&metadata, 0, sizeof(metadata));
     metadata.abi_version = TINYPY_ARTIFACT_ABI_VERSION;
@@ -84,8 +77,7 @@ static tinypy_artifact_metadata_t __valid_metadata(void)
     metadata.preprocessor_abi = 11U;
     metadata.future_flags = UINT32_C(0x00022000);
     metadata.feature_flags =
-        (uint32_t)TINYPY_ARTIFACT_FEATURE_PREPROCESSOR |
-        (uint32_t)TINYPY_ARTIFACT_FEATURE_META;
+        (uint32_t)TINYPY_ARTIFACT_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_ARTIFACT_FEATURE_META;
     metadata.optimize_level = 2U;
     metadata.payload_kind = (uint8_t)TINYPY_ARTIFACT_PAYLOAD_MARSHAL_V2;
     __fill_digest(metadata.constant_profile_digest, 1U);
@@ -93,12 +85,7 @@ static tinypy_artifact_metadata_t __valid_metadata(void)
     return metadata;
 }
 
-static int __encode_sample(
-    uint8_t *artifact,
-    size_t capacity,
-    size_t *out_size,
-    tinypy_artifact_metadata_t *out_metadata)
-{
+static int __encode_sample(uint8_t *artifact, size_t capacity, size_t *out_size, tinypy_artifact_metadata_t *out_metadata) {
     static const uint8_t payload[] = {'c', 0U, 1U, 2U, 255U};
     tinypy_artifact_metadata_t metadata = __valid_metadata();
     tinypy_artifact_status_e status = tinypy_artifact_encode(
@@ -114,8 +101,7 @@ static int __encode_sample(
     return status == TINYPY_ARTIFACT_OK ? 0 : 1;
 }
 
-static int __test_encode_decode_round_trip(void)
-{
+static int __test_encode_decode_round_trip(void) {
     static const uint8_t payload[] = {'c', 0U, 1U, 2U, 255U};
     uint8_t artifact[256];
     tinypy_artifact_metadata_t metadata = __valid_metadata();
@@ -166,18 +152,17 @@ static int __test_encode_decode_round_trip(void)
     TEST_CHECK(view.metadata.feature_flags == metadata.feature_flags);
     TEST_CHECK(view.metadata.optimize_level == metadata.optimize_level);
     TEST_CHECK(memcmp(view.metadata.constant_profile_digest,
-        metadata.constant_profile_digest, 32U) == 0);
+                      metadata.constant_profile_digest, 32U) == 0);
     TEST_CHECK(memcmp(
-        view.metadata.source_hash, metadata.source_hash, 32U) == 0);
+                   view.metadata.source_hash, metadata.source_hash, 32U) == 0);
     TEST_CHECK(memcmp(
-        artifact + TINYPY_ARTIFACT_HEADER_SIZE,
-        payload,
-        sizeof(payload)) == 0);
+                   artifact + TINYPY_ARTIFACT_HEADER_SIZE,
+                   payload,
+                   sizeof(payload)) == 0);
     return 0;
 }
 
-static int __test_corruption_and_bounds(void)
-{
+static int __test_corruption_and_bounds(void) {
     uint8_t artifact[256];
     uint8_t changed[257];
     size_t artifact_size = 0U;
@@ -185,7 +170,7 @@ static int __test_corruption_and_bounds(void)
     tinypy_artifact_status_e status;
 
     TEST_CHECK(__encode_sample(
-        artifact, sizeof(artifact), &artifact_size, NULL) == 0);
+                   artifact, sizeof(artifact), &artifact_size, NULL) == 0);
 
     status = tinypy_artifact_decode(
         artifact, TINYPY_ARTIFACT_HEADER_SIZE - 1U, 0U, &view);
@@ -198,42 +183,41 @@ static int __test_corruption_and_bounds(void)
     (void)memcpy(changed, artifact, artifact_size);
     changed[0] ^= 1U;
     TEST_CHECK(tinypy_artifact_decode(changed, artifact_size, 0U, &view) ==
-        TINYPY_ARTIFACT_BAD_MAGIC);
+               TINYPY_ARTIFACT_BAD_MAGIC);
 
     (void)memcpy(changed, artifact, artifact_size);
     changed[8] = 2U;
     TEST_CHECK(tinypy_artifact_decode(changed, artifact_size, 0U, &view) ==
-        TINYPY_ARTIFACT_UNSUPPORTED_FORMAT);
+               TINYPY_ARTIFACT_UNSUPPORTED_FORMAT);
 
     (void)memcpy(changed, artifact, artifact_size);
     changed[12] = 3U;
     TEST_CHECK(tinypy_artifact_decode(changed, artifact_size, 0U, &view) ==
-        TINYPY_ARTIFACT_UNSUPPORTED_LANGUAGE);
+               TINYPY_ARTIFACT_UNSUPPORTED_LANGUAGE);
 
     (void)memcpy(changed, artifact, artifact_size);
     changed[45] = 9U;
     TEST_CHECK(tinypy_artifact_decode(changed, artifact_size, 0U, &view) ==
-        TINYPY_ARTIFACT_UNSUPPORTED_PAYLOAD);
+               TINYPY_ARTIFACT_UNSUPPORTED_PAYLOAD);
 
     (void)memcpy(changed, artifact, artifact_size);
     changed[80] ^= 1U;
     TEST_CHECK(tinypy_artifact_decode(changed, artifact_size, 0U, &view) ==
-        TINYPY_ARTIFACT_CORRUPT_HEADER);
+               TINYPY_ARTIFACT_CORRUPT_HEADER);
 
     (void)memcpy(changed, artifact, artifact_size);
     changed[TINYPY_ARTIFACT_HEADER_SIZE] ^= 1U;
     TEST_CHECK(tinypy_artifact_decode(changed, artifact_size, 0U, &view) ==
-        TINYPY_ARTIFACT_CORRUPT_PAYLOAD);
+               TINYPY_ARTIFACT_CORRUPT_PAYLOAD);
 
     (void)memcpy(changed, artifact, artifact_size);
     changed[artifact_size] = 0U;
     TEST_CHECK(tinypy_artifact_decode(changed, artifact_size + 1U, 0U, &view) ==
-        TINYPY_ARTIFACT_TRAILING_DATA);
+               TINYPY_ARTIFACT_TRAILING_DATA);
     return 0;
 }
 
-static int __test_exhaustive_truncation_and_single_byte_damage(void)
-{
+static int __test_exhaustive_truncation_and_single_byte_damage(void) {
     uint8_t artifact[256];
     uint8_t changed[256];
     size_t artifact_size = 0U;
@@ -241,10 +225,10 @@ static int __test_exhaustive_truncation_and_single_byte_damage(void)
     tinypy_artifact_view_t view;
 
     TEST_CHECK(__encode_sample(
-        artifact, sizeof(artifact), &artifact_size, NULL) == 0);
+                   artifact, sizeof(artifact), &artifact_size, NULL) == 0);
     for (index = 0U; index != artifact_size; ++index) {
         TEST_CHECK(tinypy_artifact_decode(artifact, index, 0U, &view) !=
-            TINYPY_ARTIFACT_OK);
+                   TINYPY_ARTIFACT_OK);
         TEST_CHECK(view.abi_version == TINYPY_ARTIFACT_ABI_VERSION);
         TEST_CHECK(view.payload == NULL);
     }
@@ -253,13 +237,12 @@ static int __test_exhaustive_truncation_and_single_byte_damage(void)
         (void)memcpy(changed, artifact, artifact_size);
         changed[index] ^= UINT8_C(0x80);
         TEST_CHECK(tinypy_artifact_decode(
-            changed, artifact_size, 0U, &view) != TINYPY_ARTIFACT_OK);
+                       changed, artifact_size, 0U, &view) != TINYPY_ARTIFACT_OK);
     }
     return 0;
 }
 
-static int __test_metadata_validation(void)
-{
+static int __test_metadata_validation(void) {
     static const uint8_t payload[] = {0U};
     uint8_t artifact[256];
     tinypy_artifact_metadata_t metadata = __valid_metadata();
@@ -267,62 +250,50 @@ static int __test_metadata_validation(void)
 
     metadata.bytecode_magic += 1U;
     TEST_CHECK(tinypy_artifact_encode(&metadata, payload, sizeof(payload),
-        artifact, sizeof(artifact), &output_size) ==
-        TINYPY_ARTIFACT_INVALID_ARGUMENT);
+                                      artifact, sizeof(artifact), &output_size) ==
+               TINYPY_ARTIFACT_INVALID_ARGUMENT);
 
     metadata = __valid_metadata();
     metadata.feature_flags |= (uint32_t)TINYPY_ARTIFACT_FEATURE_SOURCE_MAP;
     TEST_CHECK(tinypy_artifact_encode(&metadata, payload, sizeof(payload),
-        artifact, sizeof(artifact), &output_size) ==
-        TINYPY_ARTIFACT_INVALID_ARGUMENT);
+                                      artifact, sizeof(artifact), &output_size) ==
+               TINYPY_ARTIFACT_INVALID_ARGUMENT);
     __fill_digest(metadata.source_map_hash, 91U);
     TEST_CHECK(tinypy_artifact_encode(&metadata, payload, sizeof(payload),
-        artifact, sizeof(artifact), &output_size) == TINYPY_ARTIFACT_OK);
+                                      artifact, sizeof(artifact), &output_size) == TINYPY_ARTIFACT_OK);
 
     metadata = __valid_metadata();
     __fill_digest(metadata.source_map_hash, 91U);
     TEST_CHECK(tinypy_artifact_encode(&metadata, payload, sizeof(payload),
-        artifact, sizeof(artifact), &output_size) ==
-        TINYPY_ARTIFACT_INVALID_ARGUMENT);
+                                      artifact, sizeof(artifact), &output_size) ==
+               TINYPY_ARTIFACT_INVALID_ARGUMENT);
 
     metadata = __valid_metadata();
     metadata.abi_version += 1U;
     TEST_CHECK(tinypy_artifact_encode(&metadata, payload, sizeof(payload),
-        artifact, sizeof(artifact), &output_size) ==
-        TINYPY_ARTIFACT_ABI_MISMATCH);
+                                      artifact, sizeof(artifact), &output_size) ==
+               TINYPY_ARTIFACT_ABI_MISMATCH);
 
     metadata = __valid_metadata();
     TEST_CHECK(tinypy_artifact_encode(
-        &metadata, payload, SIZE_MAX, artifact, sizeof(artifact),
-        &output_size) == TINYPY_ARTIFACT_SIZE_OVERFLOW);
+                   &metadata, payload, SIZE_MAX, artifact, sizeof(artifact),
+                   &output_size) == TINYPY_ARTIFACT_SIZE_OVERFLOW);
     return 0;
 }
 
-static int __test_profile_check(void)
-{
+static int __test_profile_check(void) {
     uint8_t artifact[256];
     size_t artifact_size = 0U;
     tinypy_artifact_metadata_t metadata;
     tinypy_artifact_view_t view;
     tinypy_artifact_expectation_t expectation;
     uint32_t all_checks =
-        (uint32_t)TINYPY_ARTIFACT_CHECK_BYTECODE_MAGIC |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_RUNTIME_ABI |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_COMPILER_ABI |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_META_ABI |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_PREPROCESSOR_ABI |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_OPTIMIZE_LEVEL |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_FEATURE_FLAGS |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_FUTURE_FLAGS |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_CONSTANT_PROFILE |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_SOURCE_HASH |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_SOURCE_MAP_HASH |
-        (uint32_t)TINYPY_ARTIFACT_CHECK_PAYLOAD_KIND;
+        (uint32_t)TINYPY_ARTIFACT_CHECK_BYTECODE_MAGIC | (uint32_t)TINYPY_ARTIFACT_CHECK_RUNTIME_ABI | (uint32_t)TINYPY_ARTIFACT_CHECK_COMPILER_ABI | (uint32_t)TINYPY_ARTIFACT_CHECK_META_ABI | (uint32_t)TINYPY_ARTIFACT_CHECK_PREPROCESSOR_ABI | (uint32_t)TINYPY_ARTIFACT_CHECK_OPTIMIZE_LEVEL | (uint32_t)TINYPY_ARTIFACT_CHECK_FEATURE_FLAGS | (uint32_t)TINYPY_ARTIFACT_CHECK_FUTURE_FLAGS | (uint32_t)TINYPY_ARTIFACT_CHECK_CONSTANT_PROFILE | (uint32_t)TINYPY_ARTIFACT_CHECK_SOURCE_HASH | (uint32_t)TINYPY_ARTIFACT_CHECK_SOURCE_MAP_HASH | (uint32_t)TINYPY_ARTIFACT_CHECK_PAYLOAD_KIND;
 
     TEST_CHECK(__encode_sample(
-        artifact, sizeof(artifact), &artifact_size, &metadata) == 0);
+                   artifact, sizeof(artifact), &artifact_size, &metadata) == 0);
     TEST_CHECK(tinypy_artifact_decode(artifact, artifact_size, 0U, &view) ==
-        TINYPY_ARTIFACT_OK);
+               TINYPY_ARTIFACT_OK);
 
     (void)memset(&expectation, 0, sizeof(expectation));
     expectation.abi_version = TINYPY_ARTIFACT_ABI_VERSION;
@@ -330,28 +301,27 @@ static int __test_profile_check(void)
     expectation.check_flags = all_checks;
     expectation.expected = view.metadata;
     TEST_CHECK(tinypy_artifact_check_profile(&view, &expectation) ==
-        TINYPY_ARTIFACT_OK);
+               TINYPY_ARTIFACT_OK);
 
     expectation.expected.optimize_level = 1U;
     TEST_CHECK(tinypy_artifact_check_profile(&view, &expectation) ==
-        TINYPY_ARTIFACT_PROFILE_MISMATCH);
+               TINYPY_ARTIFACT_PROFILE_MISMATCH);
     expectation.expected.optimize_level = view.metadata.optimize_level;
     expectation.expected.constant_profile_digest[17] ^= 1U;
     TEST_CHECK(tinypy_artifact_check_profile(&view, &expectation) ==
-        TINYPY_ARTIFACT_PROFILE_MISMATCH);
+               TINYPY_ARTIFACT_PROFILE_MISMATCH);
 
     expectation.check_flags = UINT32_C(0x80000000);
     TEST_CHECK(tinypy_artifact_check_profile(&view, &expectation) ==
-        TINYPY_ARTIFACT_INVALID_ARGUMENT);
+               TINYPY_ARTIFACT_INVALID_ARGUMENT);
     expectation.check_flags = 0U;
     expectation.abi_version += 1U;
     TEST_CHECK(tinypy_artifact_check_profile(&view, &expectation) ==
-        TINYPY_ARTIFACT_ABI_MISMATCH);
+               TINYPY_ARTIFACT_ABI_MISMATCH);
     return 0;
 }
 
-static int __test_status_names(void)
-{
+static int __test_status_names(void) {
     int status;
     for (status = (int)TINYPY_ARTIFACT_OK;
          status <= (int)TINYPY_ARTIFACT_PROFILE_MISMATCH;
@@ -362,20 +332,13 @@ static int __test_status_names(void)
         TEST_CHECK(strcmp(name, "unknown artifact status") != 0);
     }
     TEST_CHECK(strcmp(
-        tinypy_artifact_status_name((tinypy_artifact_status_e)999),
-        "unknown artifact status") == 0);
+                   tinypy_artifact_status_name((tinypy_artifact_status_e)999),
+                   "unknown artifact status") == 0);
     return 0;
 }
 
-int main(void)
-{
-    if (__test_sha256_vectors() != 0 ||
-        __test_encode_decode_round_trip() != 0 ||
-        __test_corruption_and_bounds() != 0 ||
-        __test_exhaustive_truncation_and_single_byte_damage() != 0 ||
-        __test_metadata_validation() != 0 ||
-        __test_profile_check() != 0 ||
-        __test_status_names() != 0) {
+int main(void) {
+    if (__test_sha256_vectors() != 0 || __test_encode_decode_round_trip() != 0 || __test_corruption_and_bounds() != 0 || __test_exhaustive_truncation_and_single_byte_damage() != 0 || __test_metadata_validation() != 0 || __test_profile_check() != 0 || __test_status_names() != 0) {
         return 1;
     }
     return 0;

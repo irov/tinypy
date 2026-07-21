@@ -1,6 +1,6 @@
-# TinyPy
+# tinypy
 
-TinyPy is a host-embedded Python 2.7 runtime and compiler written in C99.
+tinypy is a host-embedded Python 2.7 runtime and compiler written in C99.
 It executes source or bytecode entirely from memory and exposes a versioned C
 ABI with the `tinypy_` prefix.
 
@@ -30,7 +30,7 @@ The current implementation provides:
 - a memory-only CPython 2.7 marshal-v2 reader and writer;
 - an artifact container with ABI/profile metadata and SHA-256 integrity.
 
-TinyPy deliberately has no cyclic collector. Embedders must release owned
+tinypy deliberately has no cyclic collector. Embedders must release owned
 values and break owning cycles before destroying a VM.
 
 ## Compiler
@@ -63,7 +63,7 @@ map through `tinypy_preprocess_source`.
 The generated code objects and marshal-v2 payloads follow Python 2.7 semantics.
 The compiler never opens the logical filename supplied for diagnostics.
 
-The frontend is implemented directly on TinyPy values, compiler arenas and
+The frontend is implemented directly on tinypy values, compiler arenas and
 diagnostics under `src/compiler/`. It has no CPython compatibility headers,
 runtime objects or linked dependency. The Python 2.7.18 algorithms from which
 parts of the frontend were adapted remain covered by the PSF license; exact
@@ -105,7 +105,7 @@ python3 tools/audit_core_symbols.py build/default/libtinypy.a
 ```
 
 The symbol audit rejects direct allocator, I/O, environment, process, locale
-and thread dependencies as well as symbols outside the TinyPy namespace.
+and thread dependencies as well as symbols outside the tinypy namespace.
 
 Exact compiler parity can be checked against an external Python 2.7.18
 executable without adding it to the repository:
@@ -122,7 +122,7 @@ python3 tests/compiler/run_differential.py \
 The harness compiles every source at optimize levels 0, 1 and 2, requires
 byte-identical marshal-v2 output, and reports the first differing field of a
 nested code object when bytes diverge. Source roots and the expected count are
-caller-owned inputs; no external corpus or interpreter is stored in TinyPy.
+caller-owned inputs; no external corpus or interpreter is stored in tinypy.
 
 ## Repository layout
 

@@ -4,16 +4,16 @@
 
 #include <assert.h>
 
-static tinypy_method_object_t *__tinypy_internal_method_validate(const tinypy_value_t *value)
-{
+//////////////////////////////////////////////////////////////////////////
+static tinypy_method_object_t *__tinypy_internal_method_validate(const tinypy_value_t *value) {
     assert(value != NULL);
     assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
     assert(tinypy_internal_value_kind(value) == TINYPY_VALUE_METHOD);
     return TINYPY_METHOD_OBJECT((tinypy_value_t *)value);
 }
 
-tinypy_value_t *tinypy_method_new(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *owner)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_method_new(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *owner) {
     tinypy_vm_t *vm;
     tinypy_method_object_t *method;
 
@@ -37,8 +37,8 @@ tinypy_value_t *tinypy_method_new(tinypy_value_t *function, tinypy_value_t *self
     return &method->base;
 }
 
-void tinypy_internal_method_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_method_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(value);
 
     visit(method->function, user_data);
@@ -48,14 +48,14 @@ void tinypy_internal_method_release_references(tinypy_value_t *value, tinypy_rel
     visit(method->owner, user_data);
 }
 
-tinypy_value_t *tinypy_internal_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
     tinypy_internal_clear_error(out_error);
     return tinypy_method_new(descriptor, instance, &owner->base.base);
 }
 
-tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(callable);
     tinypy_vm_t *vm = tinypy_internal_value_vm(callable);
     tinypy_value_t *bound_self = method->self;
@@ -73,10 +73,25 @@ tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_val
         if (first != NULL && tinypy_internal_value_kind(method->owner) == TINYPY_VALUE_TYPE) {
             tinypy_type_t *owner_type = (tinypy_type_t *)method->owner;
 
-            valid_owner = (tinypy_internal_value_kind(first) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)first, owner_type) != 0) || (tinypy_internal_value_kind(first) != TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)tinypy_object_type(first), owner_type) != 0);
-        } else if (first != NULL && tinypy_internal_value_kind(method->owner) == TINYPY_VALUE_CLASS) {
-            if (tinypy_internal_value_kind(first) == TINYPY_VALUE_CLASS) valid_owner = tinypy_class_is_subclass(first, method->owner);
-            else if (tinypy_internal_value_kind(first) == TINYPY_VALUE_OLD_INSTANCE) valid_owner = tinypy_class_is_subclass(tinypy_old_instance_class(first), method->owner);
+            int condition = (tinypy_internal_value_kind(first) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)first, owner_type) != 0);
+            if (condition == 0) {
+                int condition_2 = tinypy_internal_value_kind(first) != TINYPY_VALUE_TYPE;
+                if (condition_2 != 0) {
+                    const tinypy_type_t *type = tinypy_object_type(first);
+                    condition_2 = tinypy_type_is_subtype((tinypy_type_t *)type, owner_type) != 0;
+                }
+                condition = (condition_2);
+            }
+            valid_owner = condition;
+        }
+        else if (first != NULL && tinypy_internal_value_kind(method->owner) == TINYPY_VALUE_CLASS) {
+            if (tinypy_internal_value_kind(first) == TINYPY_VALUE_CLASS) {
+                valid_owner = tinypy_class_is_subclass(first, method->owner);
+            }
+            else if (tinypy_internal_value_kind(first) == TINYPY_VALUE_OLD_INSTANCE) {
+                tinypy_value_t *old_instance_class = tinypy_old_instance_class(first);
+                valid_owner = tinypy_class_is_subclass(old_instance_class, method->owner);
+            }
         }
 
         if (valid_owner == 0) {
@@ -100,6 +115,15 @@ tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_val
     return result;
 }
 
-tinypy_value_t *tinypy_method_function(const tinypy_value_t *method) { return __tinypy_internal_method_validate(method)->function; }
-tinypy_value_t *tinypy_method_self(const tinypy_value_t *method) { return __tinypy_internal_method_validate(method)->self; }
-tinypy_value_t *tinypy_method_owner(const tinypy_value_t *method) { return __tinypy_internal_method_validate(method)->owner; }
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_method_function(const tinypy_value_t *method) {
+    return __tinypy_internal_method_validate(method)->function;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_method_self(const tinypy_value_t *method) {
+    return __tinypy_internal_method_validate(method)->self;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_method_owner(const tinypy_value_t *method) {
+    return __tinypy_internal_method_validate(method)->owner;
+}

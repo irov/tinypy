@@ -8,7 +8,7 @@
 #define TINYPY_META_ABI_VERSION UINT32_C(1)
 #define TINYPY_BUILD_PROFILE_DIGEST_SIZE ((size_t)32U)
 
-/* Required pointers and typed/indexed accessors follow the TinyPy C API
+/* Required pointers and typed/indexed accessors follow the tinypy C API
  * precondition policy from tinypy.h. Invalid profile descriptors, ABI
  * versions, limits and constant values remain recoverable result codes. */
 

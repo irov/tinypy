@@ -21,29 +21,23 @@ static const uint32_t tinypy_sha256_round_constants[64] = {
     UINT32_C(0x19a4c116), UINT32_C(0x1e376c08), UINT32_C(0x2748774c), UINT32_C(0x34b0bcb5),
     UINT32_C(0x391c0cb3), UINT32_C(0x4ed8aa4a), UINT32_C(0x5b9cca4f), UINT32_C(0x682e6ff3),
     UINT32_C(0x748f82ee), UINT32_C(0x78a5636f), UINT32_C(0x84c87814), UINT32_C(0x8cc70208),
-    UINT32_C(0x90befffa), UINT32_C(0xa4506ceb), UINT32_C(0xbef9a3f7), UINT32_C(0xc67178f2)
-};
+    UINT32_C(0x90befffa), UINT32_C(0xa4506ceb), UINT32_C(0xbef9a3f7), UINT32_C(0xc67178f2)};
 
-static uint32_t __tinypy_sha256_read_u32_be(const uint8_t *data)
-{
-    return ((uint32_t)data[0] << 24U) |
-        ((uint32_t)data[1] << 16U) |
-        ((uint32_t)data[2] << 8U) |
-        (uint32_t)data[3];
+//////////////////////////////////////////////////////////////////////////
+static uint32_t __tinypy_sha256_read_u32_be(const uint8_t *data) {
+    return ((uint32_t)data[0] << 24U) | ((uint32_t)data[1] << 16U) | ((uint32_t)data[2] << 8U) | (uint32_t)data[3];
 }
 
-static void __tinypy_sha256_write_u32_be(uint8_t *data, uint32_t value)
-{
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_sha256_write_u32_be(uint8_t *data, uint32_t value) {
     data[0] = (uint8_t)(value >> 24U);
     data[1] = (uint8_t)(value >> 16U);
     data[2] = (uint8_t)(value >> 8U);
     data[3] = (uint8_t)value;
 }
 
-static void __tinypy_sha256_transform(
-    tinypy_sha256_context_t *context,
-    const uint8_t block[64])
-{
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_sha256_transform(tinypy_sha256_context_t *context, const uint8_t block[64]) {
     uint32_t words[64];
     uint32_t a;
     uint32_t b;
@@ -62,12 +56,9 @@ static void __tinypy_sha256_transform(
     for (index = 16U; index != 64U; ++index) {
         uint32_t x = words[index - 15U];
         uint32_t y = words[index - 2U];
-        uint32_t sigma0 = TINYPY_SHA256_ROTATE_RIGHT(x, 7U) ^
-            TINYPY_SHA256_ROTATE_RIGHT(x, 18U) ^ (x >> 3U);
-        uint32_t sigma1 = TINYPY_SHA256_ROTATE_RIGHT(y, 17U) ^
-            TINYPY_SHA256_ROTATE_RIGHT(y, 19U) ^ (y >> 10U);
-        words[index] = words[index - 16U] + sigma0 +
-            words[index - 7U] + sigma1;
+        uint32_t sigma0 = TINYPY_SHA256_ROTATE_RIGHT(x, 7U) ^ TINYPY_SHA256_ROTATE_RIGHT(x, 18U) ^ (x >> 3U);
+        uint32_t sigma1 = TINYPY_SHA256_ROTATE_RIGHT(y, 17U) ^ TINYPY_SHA256_ROTATE_RIGHT(y, 19U) ^ (y >> 10U);
+        words[index] = words[index - 16U] + sigma0 + words[index - 7U] + sigma1;
     }
 
     a = context->state[0];
@@ -80,15 +71,10 @@ static void __tinypy_sha256_transform(
     h = context->state[7];
 
     for (index = 0U; index != 64U; ++index) {
-        uint32_t sum1 = TINYPY_SHA256_ROTATE_RIGHT(e, 6U) ^
-            TINYPY_SHA256_ROTATE_RIGHT(e, 11U) ^
-            TINYPY_SHA256_ROTATE_RIGHT(e, 25U);
+        uint32_t sum1 = TINYPY_SHA256_ROTATE_RIGHT(e, 6U) ^ TINYPY_SHA256_ROTATE_RIGHT(e, 11U) ^ TINYPY_SHA256_ROTATE_RIGHT(e, 25U);
         uint32_t choice = (e & f) ^ ((~e) & g);
-        uint32_t temporary1 = h + sum1 + choice +
-            tinypy_sha256_round_constants[index] + words[index];
-        uint32_t sum0 = TINYPY_SHA256_ROTATE_RIGHT(a, 2U) ^
-            TINYPY_SHA256_ROTATE_RIGHT(a, 13U) ^
-            TINYPY_SHA256_ROTATE_RIGHT(a, 22U);
+        uint32_t temporary1 = h + sum1 + choice + tinypy_sha256_round_constants[index] + words[index];
+        uint32_t sum0 = TINYPY_SHA256_ROTATE_RIGHT(a, 2U) ^ TINYPY_SHA256_ROTATE_RIGHT(a, 13U) ^ TINYPY_SHA256_ROTATE_RIGHT(a, 22U);
         uint32_t majority = (a & b) ^ (a & c) ^ (b & c);
         uint32_t temporary2 = sum0 + majority;
 
@@ -112,8 +98,8 @@ static void __tinypy_sha256_transform(
     context->state[7] += h;
 }
 
-void tinypy_sha256_initialize(tinypy_sha256_context_t *context)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_sha256_initialize(tinypy_sha256_context_t *context) {
     context->state[0] = UINT32_C(0x6a09e667);
     context->state[1] = UINT32_C(0xbb67ae85);
     context->state[2] = UINT32_C(0x3c6ef372);
@@ -126,11 +112,8 @@ void tinypy_sha256_initialize(tinypy_sha256_context_t *context)
     context->block_size = 0U;
 }
 
-void tinypy_sha256_update(
-    tinypy_sha256_context_t *context,
-    const void *data,
-    size_t size)
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_sha256_update(tinypy_sha256_context_t *context, const void *data, size_t size) {
     const uint8_t *bytes = (const uint8_t *)data;
 
     if (size == 0U) {
@@ -165,10 +148,8 @@ void tinypy_sha256_update(
     }
 }
 
-void tinypy_sha256_finalize(
-    tinypy_sha256_context_t *context,
-    uint8_t digest[32])
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_sha256_finalize(tinypy_sha256_context_t *context, uint8_t digest[32]) {
     uint64_t bit_size = context->total_size * UINT64_C(8);
     size_t index;
 
@@ -198,8 +179,8 @@ void tinypy_sha256_finalize(
     (void)memset(context, 0, sizeof(*context));
 }
 
-void tinypy_sha256_digest(const void *data, size_t size, uint8_t digest[32])
-{
+//////////////////////////////////////////////////////////////////////////
+void tinypy_sha256_digest(const void *data, size_t size, uint8_t digest[32]) {
     tinypy_sha256_context_t context;
     tinypy_sha256_initialize(&context);
     tinypy_sha256_update(&context, data, size);

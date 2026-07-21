@@ -28,11 +28,12 @@ tinypy_ast_integer_sequence_t *tinypy_internal_compiler_ast_integer_sequence_new
 #define TINYPY_AST_SEQUENCE_GET(sequence, index) (sequence)->elements[(index)]
 #define TINYPY_AST_SEQUENCE_LENGTH(sequence) ((sequence) == NULL ? 0 : (sequence)->size)
 #ifdef TINYPY_COMPILER_DEBUG
-#define TINYPY_AST_SEQUENCE_SET(sequence, index, value) { \
-        int __tinypy_ast_index = (index); \
+#define TINYPY_AST_SEQUENCE_SET(sequence, index, value)                      \
+    {                                                                        \
+        int __tinypy_ast_index = (index);                                    \
         assert((sequence) != NULL && __tinypy_ast_index < (sequence)->size); \
-        (sequence)->elements[__tinypy_ast_index] = (value); \
-}
+        (sequence)->elements[__tinypy_ast_index] = (value);                  \
+    }
 #else
 #define TINYPY_AST_SEQUENCE_SET(sequence, index, value) (sequence)->elements[(index)] = (value)
 #endif

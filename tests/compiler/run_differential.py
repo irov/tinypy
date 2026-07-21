@@ -120,7 +120,7 @@ def compare_case(
         ]
     )
     if actual_result.returncode != 0:
-        return "mode=%s optimize=%d %s: TinyPy compile failed: %s" % (
+        return "mode=%s optimize=%d %s: tinypy compile failed: %s" % (
             mode,
             optimize,
             logical,
@@ -144,7 +144,7 @@ def compare_case(
 
 def execute(arguments: argparse.Namespace, work_dir: Path) -> int:
     if not arguments.compiler.is_file():
-        raise RuntimeError("TinyPy compiler does not exist: %s" % arguments.compiler)
+        raise RuntimeError("tinypy compiler does not exist: %s" % arguments.compiler)
     if not arguments.reference_script.is_file():
         raise RuntimeError(
             "reference compiler script does not exist: %s"
@@ -203,7 +203,7 @@ def execute(arguments: argparse.Namespace, work_dir: Path) -> int:
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare TinyPy marshal-v2 output with Python 2.7.18"
+        description="Compare tinypy marshal-v2 output with Python 2.7.18"
     )
     parser.add_argument("--compiler", type=Path, required=True)
     parser.add_argument("--reference", type=Path, required=True)

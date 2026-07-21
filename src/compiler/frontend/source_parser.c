@@ -1,4 +1,4 @@
-/* TinyPy memory-only source-to-CST parser driver. */
+/* tinypy memory-only source-to-CST parser driver. */
 
 #include "value_ops.h"
 #include "tokenizer.h"
@@ -9,8 +9,8 @@
 #include "parser_error.h"
 #include "grammar_symbols.h"
 
-static void __tinypy_frontend_init_error(tinypy_parser_error_detail_t *error, const char *filename)
-{
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_frontend_init_error(tinypy_parser_error_detail_t *error, const char *filename) {
     error->result = TINYPY_PARSER_OK;
     error->filename = filename;
     error->line_number = 0;
@@ -20,23 +20,25 @@ static void __tinypy_frontend_init_error(tinypy_parser_error_detail_t *error, co
     error->expected = -1;
 }
 
-static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char *begin, const char *end)
-{
+//////////////////////////////////////////////////////////////////////////
+static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char *begin, const char *end) {
     size_t size = begin != NULL && end != NULL ? (size_t)(end - begin) : 0U;
     char *copy;
 
     assert(begin == NULL || end >= begin);
     copy = (char *)tinypy_internal_compiler_arena_allocate(ctx, size + 1U);
-    if (copy == NULL)
+    if (copy == NULL) {
         return NULL;
-    if (size != 0U)
+    }
+    if (size != 0U) {
         (void)memcpy(copy, begin, size);
+    }
     copy[size] = '\0';
     return copy;
 }
 
-tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const char *source, size_t source_size, const char *filename, const tinypy_parser_grammar_t *g, int start, tinypy_parser_error_detail_t *error, int *flags)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const char *source, size_t source_size, const char *filename, const tinypy_parser_grammar_t *g, int start, tinypy_parser_error_detail_t *error, int *flags) {
     tinypy_tokenizer_t *tok;
     tinypy_parser_t *parser;
     tinypy_cst_node_t *result = NULL;
@@ -61,10 +63,12 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
         error->result = TINYPY_PARSER_OUT_OF_MEMORY;
         return NULL;
     }
-    if ((*flags & TINYPY_PARSER_FLAG_PRINT_IS_FUNCTION) != 0)
+    if ((*flags & TINYPY_PARSER_FLAG_PRINT_IS_FUNCTION) != 0) {
         parser->flags |= TINYPY_CODE_FUTURE_PRINT_FUNCTION;
-    if ((*flags & TINYPY_PARSER_FLAG_UNICODE_LITERALS) != 0)
+    }
+    if ((*flags & TINYPY_PARSER_FLAG_UNICODE_LITERALS) != 0) {
         parser->flags |= TINYPY_CODE_FUTURE_UNICODE_LITERALS;
+    }
 
     for (;;) {
         char *begin;
@@ -90,7 +94,8 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
                 tok->pendin = -tok->indent;
                 tok->indent = 0;
             }
-        } else {
+        }
+        else {
             started = 1;
         }
         token_text = __tinypy_frontend_token_copy(ctx, begin, end);
@@ -101,8 +106,9 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
         column = begin != NULL && begin >= tok->line_start ? (int)(begin - tok->line_start) : -1;
         error->result = tinypy_internal_parser_add_token(parser, token_type, token_text, tok->line_number, column, &error->expected);
         if (error->result != TINYPY_PARSER_OK) {
-            if (error->result != TINYPY_PARSER_DONE)
+            if (error->result != TINYPY_PARSER_DONE) {
                 error->token = token_type;
+            }
             break;
         }
     }
@@ -113,8 +119,9 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
     }
     *flags = (int)parser->flags;
     if (result == NULL) {
-        if (tok->line_number <= 1 && tok->done == TINYPY_PARSER_EOF)
+        if (tok->line_number <= 1 && tok->done == TINYPY_PARSER_EOF) {
             error->result = TINYPY_PARSER_EOF;
+        }
         error->line_number = tok->line_number;
         error->offset = tok->cur != NULL && tok->line_start != NULL && tok->cur >= tok->line_start ? (int)(tok->cur - tok->line_start) : 0;
     }

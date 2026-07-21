@@ -2,19 +2,19 @@
 #define TINYPY_MODULE_H
 
 #include "tinypy/types.h"
-
+//////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_module_content_kind_e {
     TINYPY_MODULE_CONTENT_SOURCE = 1,
     TINYPY_MODULE_CONTENT_MARSHAL_V2 = 2,
     TINYPY_MODULE_CONTENT_NATIVE = 3
 } tinypy_module_content_kind_e;
-
+//////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_module_artifact_flag_e {
     TINYPY_MODULE_ARTIFACT_PACKAGE = 1 << 0
 } tinypy_module_artifact_flag_e;
-
+//////////////////////////////////////////////////////////////////////////
 typedef int32_t (*tinypy_native_module_initialize_t)(tinypy_value_t *module, void *user_data, tinypy_error_t **out_error);
-
+//////////////////////////////////////////////////////////////////////////
 struct tinypy_module_request_t {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -23,7 +23,7 @@ struct tinypy_module_request_t {
     const char *importer_name;
     size_t importer_name_size;
 };
-
+//////////////////////////////////////////////////////////////////////////
 struct tinypy_module_artifact_t {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -43,13 +43,15 @@ struct tinypy_module_artifact_t {
     int32_t compile_optimize_level;
     const tinypy_build_profile_t *build_profile;
 };
-
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_module_new(tinypy_vm_t *vm, const char *name, size_t name_size);
 tinypy_value_t *tinypy_module_dict(const tinypy_value_t *module);
 tinypy_value_t *tinypy_module_name(const tinypy_value_t *module);
 void tinypy_module_add_value(tinypy_value_t *module, const char *name, size_t name_size, tinypy_value_t *value);
 tinypy_value_t *tinypy_module_get_value(tinypy_value_t *module, const char *name, size_t name_size);
 tinypy_value_t *tinypy_vm_modules(const tinypy_vm_t *vm);
+void tinypy_vm_set_module_finder(tinypy_vm_t *vm, tinypy_value_t *finder);
+tinypy_value_t *tinypy_vm_module_finder(const tinypy_vm_t *vm);
 tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *globals, tinypy_value_t *fromlist, int32_t level, tinypy_error_t **out_error);
-
+//////////////////////////////////////////////////////////////////////////
 #endif

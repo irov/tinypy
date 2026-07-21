@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
+//////////////////////////////////////////////////////////////////////////
 #define TINYPY_ABI_VERSION UINT32_C(1)
 
 /* Hashes deliberately emulate the 64-bit CPython 2.7 `long` policy on every
@@ -21,7 +21,10 @@ typedef struct tinypy_module_artifact_t tinypy_module_artifact_t;
 typedef struct tinypy_build_profile_t tinypy_build_profile_t;
 typedef struct tinypy_preprocess_result_t tinypy_preprocess_result_t;
 typedef struct tinypy_compile_options_t tinypy_compile_options_t;
+typedef struct tinypy_native_type_spec_t tinypy_native_type_spec_t;
 
+typedef ptrdiff_t tinypy_ref_t;
+//////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_error_kind_e {
     TINYPY_ERROR_TYPE = 1,
     TINYPY_ERROR_RUNTIME = 2,
@@ -44,7 +47,7 @@ typedef enum tinypy_error_kind_e {
     TINYPY_ERROR_PREPROCESSOR = 19,
     TINYPY_ERROR_META = 20
 } tinypy_error_kind_e;
-
+//////////////////////////////////////////////////////////////////////////
 /* Unless a parameter is explicitly documented as optional, pointer validity
  * and object ownership are C API preconditions. Direct typed/indexed accessors
  * additionally require the documented kind and bounds. These contracts are
@@ -106,9 +109,10 @@ typedef enum tinypy_value_type_e {
     TINYPY_VALUE_DICT_ITEMS = 47,
     TINYPY_VALUE_PARTIAL = 48,
     TINYPY_VALUE_SRE_PATTERN = 49,
-    TINYPY_VALUE_SRE_MATCH = 50
+    TINYPY_VALUE_SRE_MATCH = 50,
+    TINYPY_VALUE_NATIVE_INSTANCE = 51
 } tinypy_value_type_e;
-
+//////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_allocation_tag_e {
     TINYPY_ALLOC_TAG_VM = 1,
     TINYPY_ALLOC_TAG_VALUE = 2,
@@ -126,11 +130,11 @@ typedef enum tinypy_allocation_tag_e {
     TINYPY_ALLOC_TAG_MARSHAL_WRITE = 14,
     TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT = 15
 } tinypy_allocation_tag_e;
-
+//////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_output_channel_e {
     TINYPY_OUTPUT_STDOUT = 1,
     TINYPY_OUTPUT_STDERR = 2,
     TINYPY_OUTPUT_UNRAISABLE = 3
 } tinypy_output_channel_e;
-
+//////////////////////////////////////////////////////////////////////////
 #endif

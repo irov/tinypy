@@ -42,11 +42,31 @@ typedef struct tinypy_compiler_complex_t {
 #define TINYPY_COMPILER_ARENA_MALLOC(arena, size) tinypy_internal_compiler_arena_allocate((arena), (size))
 #define TINYPY_COMPILER_ARENA_ADD_VALUE(arena, value) tinypy_internal_compiler_arena_add_value((arena), (value))
 #define TINYPY_COMPILER_INCREF(value) tinypy_retain((tinypy_value_t *)(value))
-#define TINYPY_COMPILER_XINCREF(value) do { if ((value) != NULL) tinypy_retain((tinypy_value_t *)(value)); } while (0)
+#define TINYPY_COMPILER_XINCREF(value)                \
+    do { \
+        if ((value) != NULL)                          \
+            tinypy_retain((tinypy_value_t *)(value)); \
+    } while (0)
 #define TINYPY_COMPILER_DECREF(value) tinypy_release((tinypy_value_t *)(value))
-#define TINYPY_COMPILER_XDECREF(value) do { if ((value) != NULL) tinypy_release((tinypy_value_t *)(value)); } while (0)
-#define TINYPY_COMPILER_CLEAR(value) do { if ((value) != NULL) { tinypy_value_t *__tinypy_clear_value = (tinypy_value_t *)(value); (value) = NULL; tinypy_release(__tinypy_clear_value); } } while (0)
-#define TINYPY_COMPILER_XSETREF(destination, value) do { tinypy_value_t *__tinypy_old_value = (destination); (destination) = (value); TINYPY_COMPILER_XDECREF(__tinypy_old_value); } while (0)
+#define TINYPY_COMPILER_XDECREF(value)                 \
+    do { \
+        if ((value) != NULL)                           \
+            tinypy_release((tinypy_value_t *)(value)); \
+    } while (0)
+#define TINYPY_COMPILER_CLEAR(value)                                          \
+    do { \
+        if ((value) != NULL) { \
+            tinypy_value_t *__tinypy_clear_value = (tinypy_value_t *)(value); \
+            (value) = NULL;                                                   \
+            tinypy_release(__tinypy_clear_value);                             \
+        }                                                                     \
+    } while (0)
+#define TINYPY_COMPILER_XSETREF(destination, value)         \
+    do { \
+        tinypy_value_t *__tinypy_old_value = (destination); \
+        (destination) = (value);                            \
+        TINYPY_COMPILER_XDECREF(__tinypy_old_value);        \
+    } while (0)
 #define TINYPY_COMPILER_OBJECT_IS_TRUE(value) ((int)tinypy_truth((value), NULL))
 #define TINYPY_COMPILER_STRING_CHECK(value) (tinypy_typeof((value)) == TINYPY_VALUE_STRING)
 #define TINYPY_COMPILER_UNICODE_CHECK(value) (tinypy_typeof((value)) == TINYPY_VALUE_UNICODE)
@@ -106,20 +126,17 @@ void *__tinypy_frontend_pointer_from_handle(tinypy_value_t *handle);
 #define TINYPY_COMPILER_SEQUENCE_LIST(sequence) __tinypy_frontend_sequence_list((sequence))
 #define TINYPY_COMPILER_STRING_RESIZE(string, size) __tinypy_frontend_string_resize((string), (size))
 
-static inline int __tinypy_frontend_is_digit(int character)
-{
+static inline int __tinypy_frontend_is_digit(int character) {
     return (unsigned int)(unsigned char)character - (unsigned int)'0' < 10U;
 }
 
-static inline int __tinypy_frontend_is_hex_digit(int character)
-{
+static inline int __tinypy_frontend_is_hex_digit(int character) {
     unsigned int byte = (unsigned int)(unsigned char)character;
 
     return byte - (unsigned int)'0' < 10U || (byte | 0x20U) - (unsigned int)'a' < 6U;
 }
 
-static inline int __tinypy_frontend_ascii_to_integer(const char *text)
-{
+static inline int __tinypy_frontend_ascii_to_integer(const char *text) {
     int value = 0;
 
     while (*text >= '0' && *text <= '9') {

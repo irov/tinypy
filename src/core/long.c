@@ -6,25 +6,21 @@
 
 #define TINYPY_LONG_BASE15_MASK UINT16_C(0x7fff)
 
-static size_t __tinypy_internal_long_allocation_size(size_t digit_count)
-{
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_internal_long_allocation_size(size_t digit_count) {
     size_t payload_size;
 
     assert(digit_count <= (size_t)PTRDIFF_MAX);
     assert(digit_count <=
-        (SIZE_MAX - offsetof(tinypy_long_object_t, digits)) /
-            sizeof(uint16_t));
+           (SIZE_MAX - offsetof(tinypy_long_object_t, digits)) /
+               sizeof(uint16_t));
 
     payload_size = digit_count * sizeof(uint16_t);
     return offsetof(tinypy_long_object_t, digits) + payload_size;
 }
 
-tinypy_value_t *tinypy_long_from_base15_digits(
-    tinypy_vm_t *vm,
-    int sign,
-    const uint16_t *digits,
-    size_t digit_count)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int sign, const uint16_t *digits, size_t digit_count) {
     size_t allocation_size;
     size_t index;
     tinypy_value_t *result;
@@ -54,8 +50,8 @@ tinypy_value_t *tinypy_long_from_base15_digits(
     return result;
 }
 
-tinypy_value_t *tinypy_long_from_i64(tinypy_vm_t *vm, int64_t value)
-{
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_long_from_i64(tinypy_vm_t *vm, int64_t value) {
     uint16_t digits[5];
     uint64_t magnitude;
     size_t digit_count = 0U;
@@ -69,14 +65,14 @@ tinypy_value_t *tinypy_long_from_i64(tinypy_vm_t *vm, int64_t value)
         sign = -1;
         magnitude = (uint64_t)(-(value + INT64_C(1)));
         magnitude += UINT64_C(1);
-    } else {
+    }
+    else {
         sign = 1;
         magnitude = (uint64_t)value;
     }
 
     while (magnitude != UINT64_C(0)) {
-        digits[digit_count] = (uint16_t)(
-            magnitude & (uint64_t)TINYPY_LONG_BASE15_MASK);
+        digits[digit_count] = (uint16_t)(magnitude & (uint64_t)TINYPY_LONG_BASE15_MASK);
         digit_count += 1U;
         magnitude >>= 15U;
     }
@@ -88,11 +84,8 @@ tinypy_value_t *tinypy_long_from_i64(tinypy_vm_t *vm, int64_t value)
         digit_count);
 }
 
-const uint16_t *tinypy_long_base15_view(
-    const tinypy_value_t *value,
-    int *out_sign,
-    size_t *out_digit_count)
-{
+//////////////////////////////////////////////////////////////////////////
+const uint16_t *tinypy_long_base15_view(const tinypy_value_t *value, int *out_sign, size_t *out_digit_count) {
     assert(value != NULL);
     assert(tinypy_internal_vm_valid(tinypy_internal_value_vm(value)));
     assert(out_sign != NULL);
@@ -102,12 +95,12 @@ const uint16_t *tinypy_long_base15_view(
     *out_sign = TINYPY_LONG_SIGN(value);
     *out_digit_count = TINYPY_LONG_DIGIT_COUNT(value);
     return TINYPY_LONG_DIGIT_COUNT(value) != 0U
-        ? TINYPY_LONG_OBJECT(value)->digits
-        : NULL;
+               ? TINYPY_LONG_OBJECT(value)->digits
+               : NULL;
 }
 
-int64_t tinypy_long_as_i64(const tinypy_value_t *value)
-{
+//////////////////////////////////////////////////////////////////////////
+int64_t tinypy_long_as_i64(const tinypy_value_t *value) {
     const uint16_t *digits;
     uint64_t magnitude = UINT64_C(0);
     size_t index;

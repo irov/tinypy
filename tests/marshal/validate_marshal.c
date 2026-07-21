@@ -4,26 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void *__validator_allocate(
-    void *user_data,
-    size_t size,
-    size_t alignment,
-    uint32_t tag)
-{
+static void *__validator_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
     (void)user_data;
     (void)alignment;
     (void)tag;
     return malloc(size);
 }
 
-static void *__validator_reallocate(
-    void *user_data,
-    void *memory,
-    size_t old_size,
-    size_t new_size,
-    size_t alignment,
-    uint32_t tag)
-{
+static void *__validator_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
     (void)user_data;
     (void)old_size;
     (void)alignment;
@@ -31,13 +19,7 @@ static void *__validator_reallocate(
     return realloc(memory, new_size);
 }
 
-static void __validator_deallocate(
-    void *user_data,
-    void *memory,
-    size_t size,
-    size_t alignment,
-    uint32_t tag)
-{
+static void __validator_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
     (void)user_data;
     (void)size;
     (void)alignment;
@@ -45,8 +27,7 @@ static void __validator_deallocate(
     free(memory);
 }
 
-static tinypy_allocator_t __validator_allocator(void)
-{
+static tinypy_allocator_t __validator_allocator(void) {
     tinypy_allocator_t allocator;
     allocator.abi_version = TINYPY_ABI_VERSION;
     allocator.struct_size = (uint32_t)sizeof(allocator);
@@ -57,8 +38,7 @@ static tinypy_allocator_t __validator_allocator(void)
     return allocator;
 }
 
-static int __validate_file(const char *filename, const tinypy_allocator_t *allocator)
-{
+static int __validate_file(const char *filename, const tinypy_allocator_t *allocator) {
     FILE *stream;
     long file_size;
     unsigned char *bytes;
@@ -213,8 +193,7 @@ static int __validate_file(const char *filename, const tinypy_allocator_t *alloc
         NULL,
         &roundtrip_document,
         &error);
-    if (result != TINYPY_MARSHAL_OK ||
-        tinypy_marshal_object_type(tinypy_marshal_document_root(roundtrip_document)) !=
+    if (result != TINYPY_MARSHAL_OK || tinypy_marshal_object_type(tinypy_marshal_document_root(roundtrip_document)) !=
             TINYPY_MARSHAL_TYPE_CODE) {
         (void)fprintf(stderr, "%s: dumped bytes failed semantic re-read\n", filename);
         tinypy_marshal_document_destroy(roundtrip_document);
@@ -230,8 +209,7 @@ static int __validate_file(const char *filename, const tinypy_allocator_t *alloc
     return 1;
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     tinypy_allocator_t allocator = __validator_allocator();
     size_t validated = 0U;
     int index;

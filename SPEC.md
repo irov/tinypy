@@ -1,8 +1,8 @@
-# TinyPy: спецификация runtime и compiler
+# tinypy: спецификация runtime и compiler
 
 ## 1. Назначение
 
-TinyPy — встраиваемая реализация Python 2.7 для выполнения доверенного и
+tinypy — встраиваемая реализация Python 2.7 для выполнения доверенного и
 ограниченного кода из memory buffers. Runtime, compiler и форматы данных
 реализованы на C99 и не требуют установленного Python.
 
@@ -178,7 +178,7 @@ source decoding
 ```
 
 Frontend реализован внутри `src/compiler` на объектах, arena allocator и
-diagnostics TinyPy. Алгоритмы совместимости Python 2.7.18 и их происхождение
+diagnostics tinypy. Алгоритмы совместимости Python 2.7.18 и их происхождение
 зафиксированы в `LICENSES/README.md`; текст PSF license находится в
 `LICENSES/PSF-2.0.txt`. В дереве нет копии исходников CPython, его compatibility
 headers или зависимости от CPython runtime.
