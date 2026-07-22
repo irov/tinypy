@@ -419,6 +419,9 @@ tinypy_value_t *tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, 
     if (container->type->mapping_slots != NULL && container->type->mapping_slots->get_item != NULL) {
         return container->type->mapping_slots->get_item(container, key, out_error);
     }
+    if (container->type->sequence_slots != NULL && container->type->sequence_slots->get_item != NULL) {
+        return container->type->sequence_slots->get_item(container, key, out_error);
+    }
     kind = TINYPY_VALUE_KIND(container);
     if (kind == TINYPY_VALUE_DICT) {
         item = tinypy_internal_dict_get_optional(vm, container, key);
@@ -530,6 +533,9 @@ int32_t tinypy_set_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_v
     TINYPY_CLEAR_ERROR(out_error);
     if (container->type->mapping_slots != NULL && container->type->mapping_slots->set_item != NULL) {
         return container->type->mapping_slots->set_item(container, key, value, out_error);
+    }
+    if (container->type->sequence_slots != NULL && container->type->sequence_slots->set_item != NULL) {
+        return container->type->sequence_slots->set_item(container, key, value, out_error);
     }
     kind = TINYPY_VALUE_KIND(container);
     if (kind == TINYPY_VALUE_DICT) {

@@ -196,6 +196,14 @@ typedef struct tinypy_number_slots_t {
     tinypy_binary_slot_t floor_divide;
     tinypy_binary_slot_t true_divide;
     tinypy_unary_slot_t index;
+    tinypy_binary_slot_t inplace_add;
+    tinypy_binary_slot_t inplace_subtract;
+    tinypy_binary_slot_t inplace_multiply;
+    tinypy_binary_slot_t inplace_divide;
+    tinypy_binary_slot_t reflected_add;
+    tinypy_binary_slot_t reflected_subtract;
+    tinypy_binary_slot_t reflected_multiply;
+    tinypy_binary_slot_t reflected_divide;
 } tinypy_number_slots_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_sequence_slots_t {

@@ -285,6 +285,9 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value) {
 tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value) {
     double real;
 
+    if (value->type->hash != NULL) {
+        return value->type->hash((tinypy_value_t *)value, NULL);
+    }
     switch (TINYPY_VALUE_KIND(value)) {
     case TINYPY_VALUE_NONE:
         return __tinypy_internal_hash_fix(

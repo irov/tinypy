@@ -898,50 +898,6 @@ static inline int __tinypy_eval_binary(tinypy_vm_t *vm, tinypy_frame_object_t *f
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static inline int __tinypy_eval_inplace_binary(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_binary_slot_t fallback_operation, tinypy_eval_integer_binary_e integer_operation, const char *special_name, size_t special_name_size, tinypy_error_t **out_error) {
-    tinypy_value_t *right = __tinypy_eval_pop_owned(frame);
-    tinypy_value_t *left = __tinypy_eval_pop_owned(frame);
-    int handled = 0;
-    int reused = 0;
-    tinypy_value_t *result = NULL;
-
-    if (tinypy_internal_object_has_special(left, special_name, special_name_size) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(left, special_name, special_name_size, out_error);
-
-        handled = 1;
-        if (method != NULL) {
-            tinypy_value_t *args = tinypy_tuple_from_items(vm, &right, 1U);
-
-            result = tinypy_call(method, args, NULL, out_error);
-            TINYPY_DECREF(args);
-            TINYPY_DECREF(method);
-            if (result == &vm->not_implemented_object.base) {
-                TINYPY_DECREF(result);
-                result = NULL;
-                handled = 0;
-            }
-        }
-    }
-    if (handled == 0 && integer_operation != TINYPY_EVAL_INTEGER_BINARY_NONE) {
-        result = __tinypy_eval_exact_integer_binary(vm, left, right, integer_operation, &handled, &reused);
-    }
-    if (handled == 0) {
-        result = fallback_operation(left, right, out_error);
-    }
-
-    if (reused == 0 || result != right) {
-        TINYPY_DECREF(right);
-    }
-    if (reused == 0 || result != left) {
-        TINYPY_DECREF(left);
-    }
-    if (result == NULL) {
-        return 0;
-    }
-    __tinypy_eval_push_owned(frame, result);
-    return 1;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_pop_slice_key(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t variant) {
     tinypy_value_t *stop = (variant & 2U) != 0U ? __tinypy_eval_pop_owned(frame) : NULL;
     tinypy_value_t *start = (variant & 1U) != 0U ? __tinypy_eval_pop_owned(frame) : NULL;
@@ -1806,7 +1762,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             }
             break;
         case TINYPY_OP_INPLACE_ADD:
-            if (__tinypy_eval_inplace_binary(vm, frame, tinypy_add, TINYPY_EVAL_INTEGER_BINARY_ADD, "__iadd__", 8U, out_error) == 0) {
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_add, TINYPY_EVAL_INTEGER_BINARY_ADD, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
@@ -1816,13 +1772,17 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             }
             break;
         case TINYPY_OP_INPLACE_SUBTRACT:
-            if (__tinypy_eval_inplace_binary(vm, frame, tinypy_subtract, TINYPY_EVAL_INTEGER_BINARY_SUBTRACT, "__isub__", 8U, out_error) == 0) {
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_subtract, TINYPY_EVAL_INTEGER_BINARY_SUBTRACT, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
         case TINYPY_OP_BINARY_MULTIPLY:
-        case TINYPY_OP_INPLACE_MULTIPLY:
             if (__tinypy_eval_binary(vm, frame, tinypy_multiply, TINYPY_EVAL_INTEGER_BINARY_MULTIPLY, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
+        case TINYPY_OP_INPLACE_MULTIPLY:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_multiply, TINYPY_EVAL_INTEGER_BINARY_MULTIPLY, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
@@ -1833,8 +1793,12 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             }
             break;
         case TINYPY_OP_BINARY_DIVIDE:
-        case TINYPY_OP_INPLACE_DIVIDE:
             if (__tinypy_eval_binary(vm, frame, tinypy_divide, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
+        case TINYPY_OP_INPLACE_DIVIDE:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_divide, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;

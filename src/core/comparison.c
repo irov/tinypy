@@ -475,6 +475,42 @@ static int32_t __tinypy_comparison_special_result(tinypy_vm_t *vm, tinypy_value_
     return INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_compare_operation_e __tinypy_comparison_reverse_operation(tinypy_compare_operation_e operation) {
+    static const tinypy_compare_operation_e reversed[] = {
+        TINYPY_COMPARE_GREATER,
+        TINYPY_COMPARE_GREATER_EQUAL,
+        TINYPY_COMPARE_EQUAL,
+        TINYPY_COMPARE_NOT_EQUAL,
+        TINYPY_COMPARE_LESS,
+        TINYPY_COMPARE_LESS_EQUAL};
+
+    assert(operation <= TINYPY_COMPARE_GREATER_EQUAL);
+    return reversed[(size_t)operation];
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_comparison_try_rich_slot(tinypy_value_t *receiver, tinypy_value_t *argument, tinypy_compare_operation_e operation, int32_t *out_handled, int32_t *out_value, tinypy_error_t **out_error) {
+    tinypy_value_t *result;
+    int32_t not_implemented;
+
+    *out_handled = INT32_C(0);
+    if (receiver->type->rich_compare == NULL) {
+        return INT32_C(1);
+    }
+    result = receiver->type->rich_compare(receiver, argument, (int)operation, out_error);
+    if (result == NULL) {
+        *out_handled = INT32_C(1);
+        return INT32_C(0);
+    }
+    if (__tinypy_comparison_special_result(TINYPY_VALUE_VM(receiver), result, out_value, &not_implemented, out_error) == 0) {
+        *out_handled = INT32_C(1);
+        return INT32_C(0);
+    }
+    if (not_implemented == 0) {
+        *out_handled = INT32_C(1);
+    }
+    return INT32_C(1);
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, int32_t *out_handled, int32_t *out_value, tinypy_error_t **out_error) {
     static const char *left_names[] = {"__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__"};
     static const char *right_names[] = {"__gt__", "__ge__", "__eq__", "__ne__", "__lt__", "__le__"};
@@ -485,6 +521,32 @@ static int32_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_valu
     *out_handled = INT32_C(0);
     if (operation > TINYPY_COMPARE_GREATER_EQUAL) {
         return INT32_C(1);
+    }
+    if (right->type != left->type && tinypy_type_is_subtype(right->type, left->type) != 0) {
+        tinypy_compare_operation_e reversed_operation = __tinypy_comparison_reverse_operation(operation);
+
+        if (__tinypy_comparison_try_rich_slot(right, left, reversed_operation, out_handled, out_value, out_error) == 0) {
+            return INT32_C(0);
+        }
+        if (*out_handled != 0) {
+            return INT32_C(1);
+        }
+    }
+    if (__tinypy_comparison_try_rich_slot(left, right, operation, out_handled, out_value, out_error) == 0) {
+        return INT32_C(0);
+    }
+    if (*out_handled != 0) {
+        return INT32_C(1);
+    }
+    {
+        tinypy_compare_operation_e reversed_operation = __tinypy_comparison_reverse_operation(operation);
+
+        if (__tinypy_comparison_try_rich_slot(right, left, reversed_operation, out_handled, out_value, out_error) == 0) {
+            return INT32_C(0);
+        }
+        if (*out_handled != 0) {
+            return INT32_C(1);
+        }
     }
     if (tinypy_internal_object_has_special(left, left_names[index], name_sizes[index]) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_binary(left, left_names[index], name_sizes[index], right, out_error);

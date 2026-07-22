@@ -1839,9 +1839,17 @@ typedef struct test_native_payload_t {
 //////////////////////////////////////////////////////////////////////////
 typedef struct test_native_state_t {
     tinypy_vm_t *vm;
+    tinypy_type_t *base_type;
+    tinypy_type_t *subtype;
     int32_t constructed;
     int32_t finalized;
     int32_t attribute_calls;
+    int32_t compare_calls;
+    int32_t compare_order[8];
+    size_t compare_order_count;
+    int32_t binary_calls;
+    int32_t reflected_calls;
+    int32_t inplace_calls;
 } test_native_state_t;
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_native_construct(tinypy_value_t *instance, void *payload, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1864,9 +1872,8 @@ static void __test_native_finalize(tinypy_value_t *instance, void *payload, void
     test_native_state_t *state = (test_native_state_t *)user_data;
 
     (void)instance;
-    if (native_payload->value == 73) {
-        state->finalized += 1;
-    }
+    (void)native_payload;
+    state->finalized += 1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_native_repr(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
@@ -1880,6 +1887,184 @@ static tinypy_value_t *__test_native_repr(tinypy_value_t *instance, void *payloa
     tinypy_vm_t *value_vm = tinypy_value_vm(instance);
     return tinypy_string_from_bytes(value_vm, "native-73", 9U);
 }
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_compare(tinypy_value_t *instance, void *payload, tinypy_value_t *other, tinypy_compare_operation_e operation, void *user_data, tinypy_error_t **out_error) {
+    test_native_payload_t *native_payload = (test_native_payload_t *)payload;
+    test_native_state_t *state = (test_native_state_t *)user_data;
+    int32_t equal;
+
+    (void)out_error;
+    state->compare_calls += 1;
+    if (state->compare_order_count < sizeof(state->compare_order) / sizeof(state->compare_order[0])) {
+        const tinypy_type_t *type = tinypy_object_type(instance);
+
+        state->compare_order[state->compare_order_count] = type == state->subtype ? 2 : (type == state->base_type ? 1 : 0);
+        state->compare_order_count += 1U;
+    }
+    if (tinypy_typeof(other) != TINYPY_VALUE_INTEGER) {
+        return tinypy_not_implemented_get(state->vm);
+    }
+    equal = native_payload->value == tinypy_integer_as_i64(other) ? INT32_C(1) : INT32_C(0);
+    if (operation == TINYPY_COMPARE_EQUAL) {
+        return tinypy_bool_from_i32(state->vm, equal);
+    }
+    if (operation == TINYPY_COMPARE_NOT_EQUAL) {
+        return tinypy_bool_from_i32(state->vm, equal == 0 ? INT32_C(1) : INT32_C(0));
+    }
+    return tinypy_not_implemented_get(state->vm);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_hash_t __test_native_hash(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    test_native_payload_t *native_payload = (test_native_payload_t *)payload;
+
+    (void)instance;
+    (void)user_data;
+    (void)out_error;
+    return (tinypy_hash_t)native_payload->value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_call(tinypy_value_t *instance, void *payload, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    test_native_payload_t *native_payload = (test_native_payload_t *)payload;
+    test_native_state_t *state = (test_native_state_t *)user_data;
+
+    (void)instance;
+    (void)kwargs;
+    (void)out_error;
+    if (tinypy_tuple_size(args) != 1U || tinypy_typeof(tinypy_tuple_get(args, 0U)) != TINYPY_VALUE_INTEGER) {
+        return NULL;
+    }
+    return tinypy_integer_from_i64(state->vm, native_payload->value + tinypy_integer_as_i64(tinypy_tuple_get(args, 0U)));
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_negative(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    test_native_payload_t *native_payload = (test_native_payload_t *)payload;
+    test_native_state_t *state = (test_native_state_t *)user_data;
+
+    (void)instance;
+    (void)out_error;
+    return tinypy_integer_from_i64(state->vm, -(int64_t)native_payload->value);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_absolute(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    test_native_payload_t *native_payload = (test_native_payload_t *)payload;
+    test_native_state_t *state = (test_native_state_t *)user_data;
+    int64_t result = native_payload->value < 0 ? -(int64_t)native_payload->value : (int64_t)native_payload->value;
+
+    (void)instance;
+    (void)out_error;
+    return tinypy_integer_from_i64(state->vm, result);
+}
+//////////////////////////////////////////////////////////////////////////
+typedef enum test_native_binary_operation_e {
+    TEST_NATIVE_BINARY_ADD,
+    TEST_NATIVE_BINARY_SUBTRACT,
+    TEST_NATIVE_BINARY_MULTIPLY,
+    TEST_NATIVE_BINARY_DIVIDE
+} test_native_binary_operation_e;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_binary_result(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error, test_native_binary_operation_e operation, int32_t reflected) {
+    test_native_payload_t *native_payload = (test_native_payload_t *)payload;
+    test_native_state_t *state = (test_native_state_t *)user_data;
+    int64_t first;
+    int64_t second;
+    int64_t result;
+
+    (void)instance;
+    if (tinypy_typeof(other) != TINYPY_VALUE_INTEGER) {
+        return tinypy_not_implemented_get(state->vm);
+    }
+    first = reflected != 0 ? tinypy_integer_as_i64(other) : native_payload->value;
+    second = reflected != 0 ? native_payload->value : tinypy_integer_as_i64(other);
+    if (reflected != 0) {
+        state->reflected_calls += 1;
+    }
+    else {
+        state->binary_calls += 1;
+    }
+    switch (operation) {
+    case TEST_NATIVE_BINARY_ADD:
+        result = first + second;
+        break;
+    case TEST_NATIVE_BINARY_SUBTRACT:
+        result = first - second;
+        break;
+    case TEST_NATIVE_BINARY_MULTIPLY:
+        result = first * second;
+        break;
+    case TEST_NATIVE_BINARY_DIVIDE:
+        if (second == 0) {
+            tinypy_vm_raise_error(state->vm, TINYPY_ERROR_ZERO_DIVISION, "native division by zero");
+            (void)out_error;
+            return NULL;
+        }
+        result = first / second;
+        break;
+    default:
+        return NULL;
+    }
+    return tinypy_integer_from_i64(state->vm, result);
+}
+//////////////////////////////////////////////////////////////////////////
+#define TEST_NATIVE_BINARY_CALLBACK(name, operation, reflected) \
+    static tinypy_value_t *name(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) { \
+        return __test_native_binary_result(instance, payload, other, user_data, out_error, operation, reflected); \
+    }
+
+TEST_NATIVE_BINARY_CALLBACK(__test_native_add, TEST_NATIVE_BINARY_ADD, INT32_C(0))
+TEST_NATIVE_BINARY_CALLBACK(__test_native_subtract, TEST_NATIVE_BINARY_SUBTRACT, INT32_C(0))
+TEST_NATIVE_BINARY_CALLBACK(__test_native_multiply, TEST_NATIVE_BINARY_MULTIPLY, INT32_C(0))
+TEST_NATIVE_BINARY_CALLBACK(__test_native_divide, TEST_NATIVE_BINARY_DIVIDE, INT32_C(0))
+TEST_NATIVE_BINARY_CALLBACK(__test_native_reflected_add, TEST_NATIVE_BINARY_ADD, INT32_C(1))
+TEST_NATIVE_BINARY_CALLBACK(__test_native_reflected_subtract, TEST_NATIVE_BINARY_SUBTRACT, INT32_C(1))
+TEST_NATIVE_BINARY_CALLBACK(__test_native_reflected_multiply, TEST_NATIVE_BINARY_MULTIPLY, INT32_C(1))
+TEST_NATIVE_BINARY_CALLBACK(__test_native_reflected_divide, TEST_NATIVE_BINARY_DIVIDE, INT32_C(1))
+
+#undef TEST_NATIVE_BINARY_CALLBACK
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_inplace_result(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error, test_native_binary_operation_e operation) {
+    test_native_payload_t *native_payload = (test_native_payload_t *)payload;
+    test_native_state_t *state = (test_native_state_t *)user_data;
+    int64_t value;
+
+    if (tinypy_typeof(other) != TINYPY_VALUE_INTEGER) {
+        return tinypy_not_implemented_get(state->vm);
+    }
+    value = tinypy_integer_as_i64(other);
+    switch (operation) {
+    case TEST_NATIVE_BINARY_ADD:
+        native_payload->value += (int32_t)value;
+        break;
+    case TEST_NATIVE_BINARY_SUBTRACT:
+        native_payload->value -= (int32_t)value;
+        break;
+    case TEST_NATIVE_BINARY_MULTIPLY:
+        native_payload->value *= (int32_t)value;
+        break;
+    case TEST_NATIVE_BINARY_DIVIDE:
+        if (value == 0) {
+            tinypy_vm_raise_error(state->vm, TINYPY_ERROR_ZERO_DIVISION, "native inplace division by zero");
+            (void)out_error;
+            return NULL;
+        }
+        native_payload->value /= (int32_t)value;
+        break;
+    }
+    state->inplace_calls += 1;
+    tinypy_retain(instance);
+    return instance;
+}
+//////////////////////////////////////////////////////////////////////////
+#define TEST_NATIVE_INPLACE_CALLBACK(name, operation) \
+    static tinypy_value_t *name(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) { \
+        return __test_native_inplace_result(instance, payload, other, user_data, out_error, operation); \
+    }
+
+TEST_NATIVE_INPLACE_CALLBACK(__test_native_inplace_add, TEST_NATIVE_BINARY_ADD)
+TEST_NATIVE_INPLACE_CALLBACK(__test_native_inplace_subtract, TEST_NATIVE_BINARY_SUBTRACT)
+TEST_NATIVE_INPLACE_CALLBACK(__test_native_inplace_multiply, TEST_NATIVE_BINARY_MULTIPLY)
+TEST_NATIVE_INPLACE_CALLBACK(__test_native_inplace_divide, TEST_NATIVE_BINARY_DIVIDE)
+
+#undef TEST_NATIVE_INPLACE_CALLBACK
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_native_attribute_name_equal(tinypy_value_t *name, const char *expected, size_t expected_size) {
     const void *bytes;
@@ -1934,6 +2119,7 @@ static int __test_native_embedding(void) {
     tinypy_vm_t *vm;
     tinypy_native_type_spec_t spec;
     tinypy_native_type_spec_t incompatible_spec;
+    const tinypy_native_type_spec_t *active_spec;
     tinypy_type_t *native_type;
     tinypy_type_t *python_base;
     tinypy_type_t *incompatible_type;
@@ -1942,7 +2128,10 @@ static int __test_native_embedding(void) {
     const tinypy_type_t *subtype_bases[2];
     const tinypy_type_t *invalid_bases[2];
     tinypy_value_t *instance;
+    tinypy_value_t *base_instance;
+    tinypy_value_t *other_instance;
     tinypy_value_t *args;
+    tinypy_value_t *call_args;
     tinypy_value_t *representation;
     tinypy_value_t *value;
     tinypy_value_t *native_function;
@@ -1966,11 +2155,41 @@ static int __test_native_embedding(void) {
     spec.user_data = &native_state;
     spec.construct = __test_native_construct;
     spec.finalize = __test_native_finalize;
-    spec.repr = __test_native_repr;
-    spec.get_attribute = __test_native_get_attribute;
     native_type = tinypy_native_type_new(vm, "Native", 6U, NULL, 0U, NULL, &spec, &error);
     TEST_CHECK(native_type != NULL);
     TEST_CHECK(error == NULL);
+    native_state.base_type = native_type;
+
+    spec.call = __test_native_call;
+    spec.repr = __test_native_repr;
+    spec.hash = __test_native_hash;
+    spec.compare = __test_native_compare;
+    spec.get_attribute = __test_native_get_attribute;
+    spec.negative = __test_native_negative;
+    spec.absolute = __test_native_absolute;
+    spec.add = __test_native_add;
+    spec.subtract = __test_native_subtract;
+    spec.multiply = __test_native_multiply;
+    spec.divide = __test_native_divide;
+    spec.inplace_add = __test_native_inplace_add;
+    spec.inplace_subtract = __test_native_inplace_subtract;
+    spec.inplace_multiply = __test_native_inplace_multiply;
+    spec.inplace_divide = __test_native_inplace_divide;
+    spec.reflected_add = __test_native_reflected_add;
+    spec.reflected_subtract = __test_native_reflected_subtract;
+    spec.reflected_multiply = __test_native_reflected_multiply;
+    spec.reflected_divide = __test_native_reflected_divide;
+    TEST_CHECK(tinypy_native_type_update_spec(native_type, &spec, &error) != 0);
+    TEST_CHECK(error == NULL);
+    active_spec = tinypy_native_type_spec(native_type);
+    TEST_CHECK(active_spec->call == __test_native_call);
+    TEST_CHECK(active_spec->repr == __test_native_repr);
+    TEST_CHECK(active_spec->hash == __test_native_hash);
+    TEST_CHECK(active_spec->compare == __test_native_compare);
+    TEST_CHECK(active_spec->absolute == __test_native_absolute);
+    TEST_CHECK(active_spec->add == __test_native_add);
+    TEST_CHECK(active_spec->inplace_divide == __test_native_inplace_divide);
+    TEST_CHECK(active_spec->reflected_subtract == __test_native_reflected_subtract);
 
     python_base = tinypy_type_new(vm, "PythonBase", 10U, NULL, 0U, NULL, NULL, &error);
     TEST_CHECK(python_base != NULL);
@@ -1979,6 +2198,7 @@ static int __test_native_embedding(void) {
     subtype = tinypy_type_new(vm, "Derived", 7U, subtype_bases, 2U, NULL, NULL, &error);
     TEST_CHECK(subtype != NULL);
     TEST_CHECK(error == NULL);
+    native_state.subtype = subtype;
     TEST_CHECK(tinypy_typeof(tinypy_type_as_value(subtype)) == TINYPY_VALUE_TYPE);
     instance = tinypy_native_instance_new(subtype);
     TEST_CHECK(tinypy_typeof(instance) == TINYPY_VALUE_NATIVE_INSTANCE);
@@ -1996,6 +2216,95 @@ static int __test_native_embedding(void) {
     TEST_CHECK(tinypy_object_has_attr(instance, "failure", 7U) == 0);
     TEST_CHECK(tinypy_vm_has_error(vm) == 0);
     TEST_CHECK(native_state.attribute_calls == 3);
+    TEST_CHECK(tinypy_hash(instance) == 73);
+
+    value = tinypy_negative(instance, &error);
+    TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == -73);
+    TEST_CHECK(error == NULL);
+    tinypy_release(value);
+    value = tinypy_integer_from_i64(vm, 5);
+    call_args = tinypy_tuple_from_items(vm, &value, 1U);
+    tinypy_release(value);
+    value = tinypy_call(instance, call_args, NULL, &error);
+    TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == 78);
+    TEST_CHECK(error == NULL);
+    tinypy_release(value);
+    tinypy_release(call_args);
+
+    value = tinypy_integer_from_i64(vm, 73);
+    TEST_CHECK(tinypy_compare_bool(instance, value, TINYPY_COMPARE_EQUAL, &error) == 1);
+    TEST_CHECK(tinypy_compare_bool(value, instance, TINYPY_COMPARE_EQUAL, &error) == 1);
+    TEST_CHECK(tinypy_compare_bool(instance, value, TINYPY_COMPARE_NOT_EQUAL, &error) == 0);
+    TEST_CHECK(tinypy_compare_bool(value, instance, TINYPY_COMPARE_NOT_EQUAL, &error) == 0);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(native_state.compare_calls == 4);
+    tinypy_release(value);
+
+    base_instance = tinypy_native_instance_new(native_type);
+    other_instance = tinypy_native_instance_new(subtype);
+    TEST_CHECK(tinypy_native_instance_construct(base_instance, args, NULL, &error) != 0);
+    TEST_CHECK(tinypy_native_instance_construct(other_instance, args, NULL, &error) != 0);
+    TEST_CHECK(error == NULL);
+    native_state.compare_order_count = 0U;
+    TEST_CHECK(tinypy_compare_bool(base_instance, instance, TINYPY_COMPARE_EQUAL, &error) == 0);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(native_state.compare_order_count == 3U);
+    TEST_CHECK(native_state.compare_order[0] == 2 && native_state.compare_order[1] == 1 && native_state.compare_order[2] == 2);
+    native_state.compare_order_count = 0U;
+    TEST_CHECK(tinypy_compare_bool(instance, other_instance, TINYPY_COMPARE_EQUAL, &error) == 0);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(native_state.compare_order_count == 2U);
+    TEST_CHECK(native_state.compare_order[0] == 2 && native_state.compare_order[1] == 2);
+
+    value = tinypy_integer_from_i64(vm, 7);
+    native_result = tinypy_add(instance, value, &error);
+    TEST_CHECK(native_result != NULL && tinypy_integer_as_i64(native_result) == 80);
+    tinypy_release(native_result);
+    native_result = tinypy_subtract(instance, value, &error);
+    TEST_CHECK(native_result != NULL && tinypy_integer_as_i64(native_result) == 66);
+    tinypy_release(native_result);
+    native_result = tinypy_multiply(instance, value, &error);
+    TEST_CHECK(native_result != NULL && tinypy_integer_as_i64(native_result) == 511);
+    tinypy_release(native_result);
+    native_result = tinypy_divide(instance, value, &error);
+    TEST_CHECK(native_result != NULL && tinypy_integer_as_i64(native_result) == 10);
+    tinypy_release(native_result);
+    native_result = tinypy_add(value, instance, &error);
+    TEST_CHECK(native_result != NULL && tinypy_integer_as_i64(native_result) == 80);
+    tinypy_release(native_result);
+    native_result = tinypy_subtract(value, instance, &error);
+    TEST_CHECK(native_result != NULL && tinypy_integer_as_i64(native_result) == -66);
+    tinypy_release(native_result);
+    native_result = tinypy_multiply(value, instance, &error);
+    TEST_CHECK(native_result != NULL && tinypy_integer_as_i64(native_result) == 511);
+    tinypy_release(native_result);
+    tinypy_release(value);
+    value = tinypy_integer_from_i64(vm, 146);
+    native_result = tinypy_divide(value, instance, &error);
+    TEST_CHECK(native_result != NULL && tinypy_integer_as_i64(native_result) == 2);
+    tinypy_release(native_result);
+    tinypy_release(value);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(native_state.binary_calls == 4);
+    TEST_CHECK(native_state.reflected_calls == 4);
+
+    value = tinypy_integer_from_i64(vm, 3);
+    native_result = tinypy_inplace_add(instance, value, &error);
+    TEST_CHECK(native_result == instance);
+    tinypy_release(native_result);
+    native_result = tinypy_inplace_subtract(instance, value, &error);
+    TEST_CHECK(native_result == instance);
+    tinypy_release(native_result);
+    native_result = tinypy_inplace_multiply(instance, value, &error);
+    TEST_CHECK(native_result == instance);
+    tinypy_release(native_result);
+    native_result = tinypy_inplace_divide(instance, value, &error);
+    TEST_CHECK(native_result == instance);
+    tinypy_release(native_result);
+    tinypy_release(value);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(((test_native_payload_t *)tinypy_native_instance_payload(instance))->value == 73);
+    TEST_CHECK(native_state.inplace_calls == 4);
 
     native_function = tinypy_native_function_new(vm, "raise_error", 11U, __test_native_raise_error, vm, NULL);
     native_result = tinypy_call(native_function, args, NULL, &error);
@@ -2031,9 +2340,11 @@ static int __test_native_embedding(void) {
     tinypy_release(type_value);
     tinypy_release(representation);
     tinypy_release(args);
+    tinypy_release(other_instance);
+    tinypy_release(base_instance);
     tinypy_release(instance);
-    TEST_CHECK(native_state.constructed == 1);
-    TEST_CHECK(native_state.finalized == 1);
+    TEST_CHECK(native_state.constructed == 3);
+    TEST_CHECK(native_state.finalized == 3);
     tinypy_value_t *type_value_2 = tinypy_type_as_value(subtype);
     tinypy_release(type_value_2);
     tinypy_value_t *type_value_3 = tinypy_type_as_value(native_type);

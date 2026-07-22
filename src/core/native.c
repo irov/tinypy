@@ -218,6 +218,14 @@ TINYPY_NATIVE_BINARY_WRAPPER(add, add)
 TINYPY_NATIVE_BINARY_WRAPPER(subtract, subtract)
 TINYPY_NATIVE_BINARY_WRAPPER(multiply, multiply)
 TINYPY_NATIVE_BINARY_WRAPPER(divide, divide)
+TINYPY_NATIVE_BINARY_WRAPPER(inplace_add, inplace_add)
+TINYPY_NATIVE_BINARY_WRAPPER(inplace_subtract, inplace_subtract)
+TINYPY_NATIVE_BINARY_WRAPPER(inplace_multiply, inplace_multiply)
+TINYPY_NATIVE_BINARY_WRAPPER(inplace_divide, inplace_divide)
+TINYPY_NATIVE_BINARY_WRAPPER(reflected_add, reflected_add)
+TINYPY_NATIVE_BINARY_WRAPPER(reflected_subtract, reflected_subtract)
+TINYPY_NATIVE_BINARY_WRAPPER(reflected_multiply, reflected_multiply)
+TINYPY_NATIVE_BINARY_WRAPPER(reflected_divide, reflected_divide)
 
 #undef TINYPY_NATIVE_BINARY_WRAPPER
 //////////////////////////////////////////////////////////////////////////
@@ -272,15 +280,35 @@ static void __tinypy_internal_native_configure_slots(tinypy_type_t *type) {
         type->native_sequence_slots.contains = spec->contains != NULL ? __tinypy_internal_native_contains : NULL;
         type->sequence_slots = &type->native_sequence_slots;
     }
-    if (spec->negative != NULL || spec->absolute != NULL || spec->add != NULL || spec->subtract != NULL || spec->multiply != NULL || spec->divide != NULL) {
+    if (spec->negative != NULL || spec->absolute != NULL || spec->add != NULL || spec->subtract != NULL || spec->multiply != NULL || spec->divide != NULL || spec->inplace_add != NULL || spec->inplace_subtract != NULL || spec->inplace_multiply != NULL || spec->inplace_divide != NULL || spec->reflected_add != NULL || spec->reflected_subtract != NULL || spec->reflected_multiply != NULL || spec->reflected_divide != NULL) {
         type->native_number_slots.negative = spec->negative != NULL ? __tinypy_internal_native_negative : NULL;
         type->native_number_slots.absolute = spec->absolute != NULL ? __tinypy_internal_native_absolute : NULL;
         type->native_number_slots.add = spec->add != NULL ? __tinypy_internal_native_add : NULL;
         type->native_number_slots.subtract = spec->subtract != NULL ? __tinypy_internal_native_subtract : NULL;
         type->native_number_slots.multiply = spec->multiply != NULL ? __tinypy_internal_native_multiply : NULL;
         type->native_number_slots.divide = spec->divide != NULL ? __tinypy_internal_native_divide : NULL;
+        type->native_number_slots.inplace_add = spec->inplace_add != NULL ? __tinypy_internal_native_inplace_add : NULL;
+        type->native_number_slots.inplace_subtract = spec->inplace_subtract != NULL ? __tinypy_internal_native_inplace_subtract : NULL;
+        type->native_number_slots.inplace_multiply = spec->inplace_multiply != NULL ? __tinypy_internal_native_inplace_multiply : NULL;
+        type->native_number_slots.inplace_divide = spec->inplace_divide != NULL ? __tinypy_internal_native_inplace_divide : NULL;
+        type->native_number_slots.reflected_add = spec->reflected_add != NULL ? __tinypy_internal_native_reflected_add : NULL;
+        type->native_number_slots.reflected_subtract = spec->reflected_subtract != NULL ? __tinypy_internal_native_reflected_subtract : NULL;
+        type->native_number_slots.reflected_multiply = spec->reflected_multiply != NULL ? __tinypy_internal_native_reflected_multiply : NULL;
+        type->native_number_slots.reflected_divide = spec->reflected_divide != NULL ? __tinypy_internal_native_reflected_divide : NULL;
         type->number_slots = &type->native_number_slots;
     }
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_internal_native_validate_spec(tinypy_vm_t *vm, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
+    if (spec->abi_version != TINYPY_NATIVE_TYPE_ABI_VERSION || spec->struct_size < offsetof(tinypy_native_type_spec_t, user_data) + sizeof(spec->user_data)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "native type spec ABI mismatch", out_error);
+        return INT32_C(0);
+    }
+    if (spec->payload_alignment == 0U || (spec->payload_alignment & (spec->payload_alignment - 1U)) != 0U || spec->payload_alignment > TINYPY_INTERNAL_ALIGNMENT) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "native payload alignment is unsupported", out_error);
+        return INT32_C(0);
+    }
+    return INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
@@ -290,12 +318,7 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
     assert(tinypy_internal_vm_valid(vm));
     assert(spec != NULL);
     TINYPY_CLEAR_ERROR(out_error);
-    if (spec->abi_version != TINYPY_NATIVE_TYPE_ABI_VERSION || spec->struct_size < offsetof(tinypy_native_type_spec_t, user_data) + sizeof(spec->user_data)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "native type spec ABI mismatch", out_error);
-        return NULL;
-    }
-    if (spec->payload_alignment == 0U || (spec->payload_alignment & (spec->payload_alignment - 1U)) != 0U || spec->payload_alignment > TINYPY_INTERNAL_ALIGNMENT) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "native payload alignment is unsupported", out_error);
+    if (__tinypy_internal_native_validate_spec(vm, spec, out_error) == 0) {
         return NULL;
     }
     tinypy_type_t *type = tinypy_type_new(vm, name, name_size, bases, base_count, NULL, namespace_dict, out_error);
@@ -335,6 +358,35 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
     type->destroy = tinypy_internal_native_instance_destroy;
     __tinypy_internal_native_configure_slots(type);
     return type;
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
+    size_t copied_size;
+
+    assert(type != NULL);
+    assert(tinypy_internal_vm_valid(type->vm));
+    assert(spec != NULL);
+    TINYPY_CLEAR_ERROR(out_error);
+    if (type->layout_kind != TINYPY_VALUE_NATIVE_INSTANCE) {
+        tinypy_internal_make_vm_error(type->vm, TINYPY_ERROR_TYPE, "type does not have a native layout", out_error);
+        return INT32_C(0);
+    }
+    if (__tinypy_internal_native_validate_spec(type->vm, spec, out_error) == 0) {
+        return INT32_C(0);
+    }
+    if (type->native_payload_size != spec->payload_size || type->native_payload_alignment != spec->payload_alignment || type->native_spec.construct != spec->construct || type->native_spec.finalize != spec->finalize || type->native_spec.user_data != spec->user_data) {
+        tinypy_internal_make_vm_error(type->vm, TINYPY_ERROR_TYPE, "native type layout and lifetime callbacks are immutable", out_error);
+        return INT32_C(0);
+    }
+    copied_size = spec->struct_size < sizeof(type->native_spec) ? spec->struct_size : sizeof(type->native_spec);
+    (void)memcpy(&type->native_spec, spec, copied_size);
+    if (copied_size < sizeof(type->native_spec)) {
+        (void)memset((unsigned char *)&type->native_spec + copied_size, 0, sizeof(type->native_spec) - copied_size);
+    }
+    type->native_spec.abi_version = TINYPY_NATIVE_TYPE_ABI_VERSION;
+    type->native_spec.struct_size = (uint32_t)sizeof(type->native_spec);
+    __tinypy_internal_native_configure_slots(type);
+    return INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_instance_new(tinypy_type_t *type) {
