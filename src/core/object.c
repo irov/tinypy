@@ -585,6 +585,11 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
             result = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
         }
     }
+    if (result == NULL && kind == TINYPY_VALUE_METHOD) {
+        tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(value);
+
+        return __tinypy_object_get_attr_key(method->function, key, suppress_missing, out_missing, out_error);
+    }
     return __tinypy_object_getattr_fallback(value, key, result, suppress_missing, out_missing, out_error);
 }
 //////////////////////////////////////////////////////////////////////////

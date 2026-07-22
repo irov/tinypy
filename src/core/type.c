@@ -595,7 +595,29 @@ static const tinypy_type_t *__tinypy_internal_select_layout_base(tinypy_vm_t *vm
             return NULL;
         }
     }
-    return native_base != NULL ? native_base : layout_base;
+    if (native_base != NULL) {
+        return native_base;
+    }
+    for (index = 0U; index < base_count; ++index) {
+        const tinypy_type_t *candidate = bases[index];
+
+        if (candidate->slot_count == 0U || candidate == layout_base) {
+            continue;
+        }
+        if (layout_base->slot_count == 0U) {
+            layout_base = candidate;
+            continue;
+        }
+        if (tinypy_type_is_subtype(candidate, layout_base) != 0) {
+            layout_base = candidate;
+            continue;
+        }
+        if (tinypy_type_is_subtype(layout_base, candidate) == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have incompatible instance layouts", out_error);
+            return NULL;
+        }
+    }
+    return layout_base;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
@@ -1123,7 +1145,7 @@ tinypy_value_t *tinypy_internal_type_call(tinypy_value_t *callable, tinypy_value
         }
         return instance;
     }
-    initializer = tinypy_object_get_attr(instance, "__init__", 8U, out_error);
+    initializer = tinypy_internal_descriptor_get_value(vm, initializer_attribute, instance, type, out_error);
     if (initializer == NULL) {
         TINYPY_DECREF(instance);
         return NULL;

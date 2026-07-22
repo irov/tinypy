@@ -352,6 +352,13 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value) {
         }
         return weakref->hash;
     }
+    case TINYPY_VALUE_METHOD: {
+        tinypy_method_object_t *method = TINYPY_METHOD_OBJECT((tinypy_value_t *)value);
+        uint64_t function_hash = (uint64_t)((uintptr_t)method->function >> 4U);
+        uint64_t self_hash = method->self != NULL ? (uint64_t)((uintptr_t)method->self >> 4U) : UINT64_C(0);
+
+        return __tinypy_internal_hash_fix(function_hash ^ (self_hash * UINT64_C(1000003)));
+    }
     case TINYPY_VALUE_LIST:
     case TINYPY_VALUE_DICT:
     case TINYPY_VALUE_SET:
@@ -735,6 +742,12 @@ int32_t tinypy_internal_equal_value(const tinypy_value_t *left, const tinypy_val
             return left == right ? INT32_C(1) : INT32_C(0);
         }
         return tinypy_internal_equal_value(left_object, right_object, 1);
+    }
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_METHOD && TINYPY_VALUE_KIND(right) == TINYPY_VALUE_METHOD) {
+        tinypy_method_object_t *left_method = TINYPY_METHOD_OBJECT((tinypy_value_t *)left);
+        tinypy_method_object_t *right_method = TINYPY_METHOD_OBJECT((tinypy_value_t *)right);
+
+        return left_method->function == right_method->function && left_method->self == right_method->self ? INT32_C(1) : INT32_C(0);
     }
     return left == right ? 1 : 0;
 }

@@ -763,6 +763,17 @@ static tinypy_value_t *__tinypy_container_getitem_method(tinypy_value_t *functio
     return tinypy_get_item(item, item_2, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_container_iter_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 1U, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
+    return tinypy_iter(item, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_container_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
     tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
 
@@ -780,6 +791,7 @@ void tinypy_internal_initialize_container_types(tinypy_vm_t *vm) {
     __tinypy_container_add_method(&vm->list_type, "index", 5U, __tinypy_list_index_method, NULL);
     __tinypy_container_add_method(&vm->list_type, "reverse", 7U, __tinypy_list_reverse_method, NULL);
     __tinypy_container_add_method(&vm->list_type, "sort", 4U, __tinypy_list_sort_method, NULL);
+    __tinypy_container_add_method(&vm->list_type, "__iter__", 8U, __tinypy_container_iter_method, NULL);
     __tinypy_container_add_method(&vm->dict_type, "get", 3U, __tinypy_dict_get_method, NULL);
     __tinypy_container_add_method(&vm->dict_type, "has_key", 7U, __tinypy_dict_has_key_method, NULL);
     __tinypy_container_add_method(&vm->dict_type, "keys", 4U, __tinypy_dict_list_method, (void *)(intptr_t)0);

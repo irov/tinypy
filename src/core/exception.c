@@ -58,6 +58,27 @@ static int __tinypy_exception_is_instance(tinypy_vm_t *vm, tinypy_value_t *value
     return tinypy_type_is_subtype(value->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_exception_string(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *message = tinypy_instance_get_attr(value, "message", 7U);
+
+    if (message == NULL) {
+        return tinypy_string_from_bytes(TINYPY_VALUE_VM(value), NULL, 0U);
+    }
+    return tinypy_object_str(message, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_exception_init(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)args;
+    (void)user_data;
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exception constructor does not accept keyword arguments", out_error);
+        return NULL;
+    }
+    return tinypy_none_get(vm);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_exception_type_index_e __tinypy_exception_index_from_error(tinypy_error_kind_e kind) {
     switch (kind) {
     case TINYPY_ERROR_TYPE:
@@ -157,6 +178,15 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
         tinypy_type_t *type = tinypy_type_new(vm, definition->name, definition->name_size, &base, 1U, NULL, NULL, NULL);
 
         assert(type != NULL);
+        if (index == (size_t)TINYPY_EXCEPTION_BASE) {
+            tinypy_value_t *initializer = tinypy_native_function_new(vm, "__init__", 8U, __tinypy_exception_init, NULL, NULL);
+            tinypy_value_t *initializer_key = tinypy_string_from_bytes(vm, "__init__", 8U);
+
+            tinypy_dict_set(type->dict, initializer_key, initializer);
+            TINYPY_DECREF(initializer_key);
+            TINYPY_DECREF(initializer);
+            type->string = &__tinypy_exception_string;
+        }
         vm->exception_types[index] = type;
         __tinypy_exception_builtin_set(vm, definition->name, definition->name_size, &type->base.base);
         TINYPY_DECREF(&type->base.base);
@@ -195,7 +225,7 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
 
     initializer_attribute = tinypy_type_get_attr(type, "__init__", 8U);
     if (initializer_attribute != NULL) {
-        tinypy_value_t *initializer = tinypy_object_get_attr(instance, "__init__", 8U, out_error);
+        tinypy_value_t *initializer = tinypy_internal_descriptor_get_value(vm, initializer_attribute, instance, type, out_error);
         tinypy_value_t *result;
 
         if (initializer == NULL) {

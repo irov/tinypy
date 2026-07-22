@@ -854,6 +854,16 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
                : tinypy_instance_new(class_type);
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_argument_count(vm, args, 1U, 1U, out_error) == 0) {
+        return NULL;
+    }
+    return tinypy_none_get(vm);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_tuple_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *result;
@@ -933,5 +943,6 @@ void tinypy_internal_initialize_constructor_types(tinypy_vm_t *vm) {
     __tinypy_constructor_add_method(&vm->type_type, "mro", 3U, __tinypy_constructor_type_mro_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->type_type, "__subclasses__", 14U, __tinypy_constructor_type_subclasses_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->object_type, "__new__", 7U, __tinypy_constructor_object_new_method, INT32_C(1));
+    __tinypy_constructor_add_method(&vm->object_type, "__init__", 8U, __tinypy_constructor_object_init_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->tuple_type, "__new__", 7U, __tinypy_constructor_tuple_new_method, INT32_C(1));
 }

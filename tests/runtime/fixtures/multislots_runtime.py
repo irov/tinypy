@@ -43,3 +43,20 @@ assert value.final_value == 20
 assert not hasattr(value, "__dict__")
 assert Final.__multislots__ == ("final_value",)
 assert Base.__multislots__ == ("base_value",)
+
+
+class EmptyMixin(object):
+    __slots__ = ()
+
+
+class LaterSlottedBase(object):
+    __slots__ = ("later_value",)
+
+
+class EmptyMixinFirst(EmptyMixin, LaterSlottedBase):
+    __slots__ = ()
+
+
+combined = EmptyMixinFirst()
+combined.later_value = 42
+assert combined.later_value == 42

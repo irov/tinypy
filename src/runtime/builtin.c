@@ -1381,6 +1381,13 @@ static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_val
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_import(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    static const char *const parameter_names[] = {"name", "globals", "locals", "fromlist", "level"};
+    static const size_t parameter_name_sizes[] = {4U, 7U, 6U, 8U, 5U};
+    tinypy_value_t *arguments[5] = {NULL, NULL, NULL, NULL, NULL};
+    size_t positional_count = TINYPY_TUPLE_SIZE(args);
+    size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
+    size_t recognized_keyword_count = 0U;
+    size_t index;
     const char *name_bytes;
     size_t name_size;
     tinypy_value_t *globals = vm->current_frame != NULL ? vm->current_frame->globals : NULL;
@@ -1388,31 +1395,63 @@ static tinypy_value_t *__tinypy_builtin_import(tinypy_value_t *function, tinypy_
     int64_t level = -1;
 
     (void)user_data;
-    if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 5U, out_error) == 0) {
+    if (positional_count > 5U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__import__ received too many positional arguments", out_error);
         return NULL;
     }
-    tinypy_value_t *name = TINYPY_TUPLE_GET(args, 0U);
+    for (index = 0U; index < positional_count; index += 1U) {
+        arguments[index] = TINYPY_TUPLE_GET(args, index);
+    }
+    for (index = 0U; index < 5U; index += 1U) {
+        tinypy_value_t *key;
+        tinypy_value_t *keyword_value;
+
+        if (kwargs == NULL || keyword_count == 0U) {
+            break;
+        }
+        key = tinypy_string_from_bytes(vm, parameter_names[index], parameter_name_sizes[index]);
+        keyword_value = tinypy_dict_get_optional(kwargs, key);
+        TINYPY_DECREF(key);
+        if (keyword_value == NULL) {
+            continue;
+        }
+        recognized_keyword_count += 1U;
+        if (arguments[index] != NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__import__ received multiple values for one argument", out_error);
+            return NULL;
+        }
+        arguments[index] = keyword_value;
+    }
+    if (recognized_keyword_count != keyword_count) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__import__ received an unexpected keyword argument", out_error);
+        return NULL;
+    }
+    if (arguments[0] == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__import__ missing required argument 'name'", out_error);
+        return NULL;
+    }
+    tinypy_value_t *name = arguments[0];
     if (__tinypy_builtin_text_view(vm, name, &name_bytes, &name_size, out_error) == 0) {
         return NULL;
     }
-    int condition_7 = TINYPY_TUPLE_SIZE(args) >= 2U;
+    int condition_7 = arguments[1] != NULL;
     if (condition_7 != 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
+        tinypy_value_t *item = arguments[1];
         condition_7 = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE;
     }
     if (condition_7) {
-        globals = TINYPY_TUPLE_GET(args, 1U);
+        globals = arguments[1];
         if (TINYPY_VALUE_KIND(globals) != TINYPY_VALUE_DICT) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__import__ globals must be a dictionary", out_error);
             return NULL;
         }
     }
-    if (TINYPY_TUPLE_SIZE(args) >= 4U) {
-        fromlist = TINYPY_TUPLE_GET(args, 3U);
+    if (arguments[3] != NULL) {
+        fromlist = arguments[3];
     }
-    int condition_8 = TINYPY_TUPLE_SIZE(args) == 5U;
+    int condition_8 = arguments[4] != NULL;
     if (condition_8 != 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 4U);
+        tinypy_value_t *item = arguments[4];
         condition_8 = __tinypy_builtin_integer_as_i64(vm, item, &level, out_error) == 0;
     }
     if (condition_8) {

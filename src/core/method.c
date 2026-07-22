@@ -78,6 +78,18 @@ tinypy_value_t *tinypy_internal_function_descriptor_get(tinypy_value_t *descript
     return tinypy_method_new(descriptor, instance, &owner->base.base);
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_method_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+    tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(descriptor);
+
+    assert(owner != NULL);
+    TINYPY_CLEAR_ERROR(out_error);
+    if (method->self != NULL || TINYPY_VALUE_KIND(method->owner) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype(owner, (tinypy_type_t *)method->owner) == 0) {
+        TINYPY_INCREF(descriptor);
+        return descriptor;
+    }
+    return tinypy_method_new(method->function, instance, &owner->base.base);
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(callable);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);

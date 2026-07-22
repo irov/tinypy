@@ -156,6 +156,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         0U, &vm->object_type,
         tinypy_internal_method_release_references, NULL);
     vm->method_type.call = tinypy_internal_method_call;
+    vm->method_type.descriptor_get = tinypy_internal_method_descriptor_get;
     __tinypy_internal_initialize_type(
         vm, &vm->cell_type, &vm->type_type, "cell", 4U,
         sizeof(tinypy_cell_object_t), 0U,

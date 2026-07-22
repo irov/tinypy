@@ -136,14 +136,36 @@ class DescriptorChild(DescriptorBase):
         return super(DescriptorChild, self).inherited_value() + 1
 
 
+class ObjectInitializerChild(object):
+    def __init__(self):
+        super(ObjectInitializerChild, self).__init__()
+        self.initialized = True
+
+
 descriptor_object = DescriptorChild(40)
+object_initializer = ObjectInitializerChild()
 staticmethod_result = DescriptorChild.increment(41)
 classmethod_result = DescriptorChild.is_descriptor_child()
 property_read_result = descriptor_object.descriptor_value
 descriptor_object.descriptor_value = 50
 property_write_result = descriptor_object.descriptor_value
 super_result = descriptor_object.inherited_value()
+object_initializer_result = object_initializer.initialized
 property_fields_result = DescriptorBase.descriptor_value.fget is not None and DescriptorBase.descriptor_value.fset is not None
+
+
+class CopiedMethodBase(object):
+    def copied_method(self, value):
+        return value
+
+
+class CopiedMethodChild(CopiedMethodBase):
+    pass
+
+
+CopiedMethodChild.copied_method = CopiedMethodBase.copied_method
+copied_method_result = CopiedMethodChild().copied_method(42)
+assert copied_method_result == 42
 
 
 def catch_builtin_exception(value):

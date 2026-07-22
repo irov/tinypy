@@ -12,6 +12,8 @@ values.reverse()
 assert values == [2, 1, 3]
 values.sort()
 assert values == [1, 2, 3]
+values_iterator = values.__iter__()
+assert next(values_iterator) == 1
 
 keyed = [(2, "b"), (1, "c"), (1, "a")]
 keyed.sort(key=lambda pair: pair[0])
@@ -110,6 +112,8 @@ assert Introspection.method.im_func.func_defaults == (3,)
 assert Introspection.method.im_func.func_code.co_name == "method"
 assert instance.method.im_self is instance
 assert instance.method.im_class is Introspection
+assert instance.method.func_code.co_name == "method"
+assert instance.method.func_defaults == (3,)
 
 
 class DynamicAttribute(object):

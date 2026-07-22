@@ -506,8 +506,58 @@ static int __test_exec_eval_and_dynamic_compile(void) {
         "except SyntaxError:\n"
         "    unicode_exec_cookie_rejected = True\n"
         "closure_result = (lambda x: (lambda y: x + y))(40)(2)\n"
+        "exception_message = str(RuntimeError('runtime failure'))\n"
         "payload = 'dynamic = 6 * 7'\n"
-        "exec payload\n";
+        "exec payload\n"
+        "class InPlaceValue(object):\n"
+        "    def __init__(self, value):\n"
+        "        self.value = value\n"
+        "    def __add__(self, other):\n"
+        "        raise AssertionError('__add__ used instead of __iadd__')\n"
+        "    def __sub__(self, other):\n"
+        "        raise AssertionError('__sub__ used instead of __isub__')\n"
+        "    def __iadd__(self, other):\n"
+        "        self.value += other\n"
+        "        return self\n"
+        "    def __isub__(self, other):\n"
+        "        self.value -= other\n"
+        "        return self\n"
+        "inplace_value = InPlaceValue(40)\n"
+        "inplace_identity = inplace_value\n"
+        "inplace_value += 5\n"
+        "inplace_value -= 3\n"
+        "inplace_is_same = inplace_value is inplace_identity\n"
+        "inplace_result = inplace_value.value\n"
+        "class InPlaceFallback(object):\n"
+        "    def __init__(self, value):\n"
+        "        self.value = value\n"
+        "    def __iadd__(self, other):\n"
+        "        return NotImplemented\n"
+        "    def __add__(self, other):\n"
+        "        return self.value + other\n"
+        "inplace_fallback = InPlaceFallback(40)\n"
+        "inplace_fallback += 2\n"
+        "class EmptyLayoutMixin(object):\n"
+        "    __slots__ = ()\n"
+        "class LaterSlottedBase(object):\n"
+        "    __slots__ = ('later_value',)\n"
+        "class EmptyLayoutMixinFirst(EmptyLayoutMixin, LaterSlottedBase):\n"
+        "    __slots__ = ()\n"
+        "combined_layout = EmptyLayoutMixinFirst()\n"
+        "combined_layout.later_value = 42\n"
+        "combined_layout_result = combined_layout.later_value\n"
+        "class MethodOwner(object):\n"
+        "    def callback(self):\n"
+        "        return 42\n"
+        "method_owner = MethodOwner()\n"
+        "saved_bound_method = method_owner.callback\n"
+        "bound_methods_equal = saved_bound_method == method_owner.callback\n"
+        "bound_method_list = [saved_bound_method]\n"
+        "bound_method_contained = method_owner.callback in bound_method_list\n"
+        "bound_method_list.remove(method_owner.callback)\n"
+        "bound_method_removed = len(bound_method_list) == 0\n"
+        "bound_method_dict = {saved_bound_method: 42}\n"
+        "bound_method_dict_result = bound_method_dict[method_owner.callback]\n";
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
     tinypy_compile_options_t options;
@@ -528,7 +578,22 @@ static int __test_exec_eval_and_dynamic_compile(void) {
     assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "unicode_cookie_rejected", 23U)) != 0);
     assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "unicode_exec_cookie_rejected", 28U)) != 0);
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "closure_result", 14U)) == 42);
+    {
+        size_t exception_message_size;
+        const char *exception_message = tinypy_string_view(__test_dict_get(vm, globals, "exception_message", 17U), &exception_message_size);
+
+        assert(exception_message_size == 15U);
+        assert(memcmp(exception_message, "runtime failure", 15U) == 0);
+    }
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic", 7U)) == 42);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "inplace_is_same", 15U)) != 0);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "inplace_result", 14U)) == 42);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "inplace_fallback", 16U)) == 42);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "combined_layout_result", 22U)) == 42);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "bound_methods_equal", 19U)) != 0);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "bound_method_contained", 22U)) != 0);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "bound_method_removed", 20U)) != 0);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "bound_method_dict_result", 24U)) == 42);
     tinypy_release(globals);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
@@ -1185,8 +1250,9 @@ static int __test_source_package_and_circular_imports(void) {
     static const char cycle_b_source[] = "import cycle_a\nvalue = 41\n";
     static const char package_source[] = "from . import child\nvalue = child.value\n";
     static const char child_source[] = "value = 42\n";
+    static const char keyword_import_source[] = "module = __import__('source_pkg.child', fromlist=['source_pkg'])\nvalue = module.value\n";
     test_allocator_state_t state = {0U, 0U};
-    tinypy_module_artifact_t artifacts[4];
+    tinypy_module_artifact_t artifacts[5];
     test_source_multi_host_t host;
     tinypy_vm_t *vm;
     tinypy_value_t *module;
@@ -1222,6 +1288,13 @@ static int __test_source_package_and_circular_imports(void) {
     artifacts[3].canonical_name_size = 16U;
     artifacts[3].logical_filename = "source_pkg/child.py";
     artifacts[3].logical_filename_size = 19U;
+    artifacts[4] = artifacts[0];
+    artifacts[4].data = keyword_import_source;
+    artifacts[4].data_size = sizeof(keyword_import_source) - 1U;
+    artifacts[4].canonical_name = "keyword_import";
+    artifacts[4].canonical_name_size = 14U;
+    artifacts[4].logical_filename = "keyword_import.py";
+    artifacts[4].logical_filename_size = 17U;
     (void)memset(&host, 0, sizeof(host));
     host.artifacts = artifacts;
     host.artifact_count = sizeof(artifacts) / sizeof(artifacts[0]);
@@ -1235,7 +1308,11 @@ static int __test_source_package_and_circular_imports(void) {
     assert(module != NULL && error == NULL);
     assert(tinypy_integer_as_i64(__test_dict_get(vm, tinypy_module_dict(module), "value", 5U)) == 42);
     tinypy_release(module);
-    assert(host.resolve_count == 4U && host.release_count == 4U);
+    module = tinypy_import_module(vm, "keyword_import", 14U, NULL, NULL, 0, &error);
+    assert(module != NULL && error == NULL);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, tinypy_module_dict(module), "value", 5U)) == 42);
+    tinypy_release(module);
+    assert(host.resolve_count == 5U && host.release_count == 5U);
 
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);

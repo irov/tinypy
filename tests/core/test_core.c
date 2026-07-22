@@ -923,6 +923,11 @@ static int __test_hash_and_equality(void) {
     tinypy_value_t *list_b = NULL;
     tinypy_value_t *popped = NULL;
     tinypy_value_t *nan_value = NULL;
+    tinypy_value_t *iter_method = NULL;
+    tinypy_value_t *iter_args = NULL;
+    tinypy_value_t *iterator = NULL;
+    tinypy_value_t *iterated = NULL;
+    tinypy_error_t *error = NULL;
     const tinypy_type_t *integer_type;
     const tinypy_type_t *boolean_type;
     const tinypy_type_t *string_type;
@@ -1017,6 +1022,17 @@ static int __test_hash_and_equality(void) {
     TEST_CHECK(tinypy_list_get(list_a, 0U) == integer);
     TEST_CHECK(tinypy_list_get(list_a, 1U) == string);
     TEST_CHECK(tinypy_list_version(list_a) == UINT64_C(0));
+    iter_method = tinypy_object_get_attr(list_a, "__iter__", 8U, &error);
+    TEST_CHECK(iter_method != NULL && error == NULL);
+    iter_args = tinypy_tuple_from_items(vm, NULL, 0U);
+    iterator = tinypy_call(iter_method, iter_args, NULL, &error);
+    TEST_CHECK(iterator != NULL && error == NULL);
+    iterated = tinypy_next(iterator, &error);
+    TEST_CHECK(iterated == integer && error == NULL);
+    tinypy_release(iterated);
+    tinypy_release(iterator);
+    tinypy_release(iter_args);
+    tinypy_release(iter_method);
     TEST_CHECK(tinypy_equal(list_a, list_b) == 1);
     TEST_CHECK(tinypy_equal(tuple, list_a) == 0);
     tinypy_list_append(list_a, fraction);
@@ -1532,13 +1548,20 @@ static int __test_function_call_runtime(void) {
     tinypy_value_t *result;
     tinypy_value_t *function_value;
     tinypy_type_t *class_type;
+    tinypy_type_t *copied_method_type;
     const tinypy_type_t *object_type;
     const tinypy_type_t *class_bases[1];
     tinypy_value_t *class_value;
     tinypy_value_t *instance;
     tinypy_value_t *method;
+    tinypy_value_t *method_code;
     tinypy_value_t *method_args;
     tinypy_value_t *method_result;
+    tinypy_value_t *unbound_method;
+    tinypy_value_t *copied_method_type_value;
+    tinypy_value_t *copied_method_instance;
+    tinypy_value_t *copied_method;
+    tinypy_value_t *copied_method_result;
     tinypy_value_t *method_arg_items[1];
     tinypy_value_t *varname_items[2];
     tinypy_value_t *const_items[3];
@@ -1604,6 +1627,9 @@ static int __test_function_call_runtime(void) {
     TEST_CHECK(tinypy_typeof(method) == TINYPY_VALUE_METHOD);
     TEST_CHECK(tinypy_method_self(method) == instance);
     TEST_CHECK(tinypy_method_function(method) == function_value);
+    method_code = tinypy_object_get_attr(method, "func_code", 9U, &error);
+    TEST_CHECK(method_code == function_code);
+    TEST_CHECK(error == NULL);
     method_arg_items[0] = argument_value;
     method_args = tinypy_tuple_from_items(vm, method_arg_items, 1U);
     method_result = tinypy_call(method, method_args, NULL, &error);
@@ -1613,8 +1639,40 @@ static int __test_function_call_runtime(void) {
     TEST_CHECK(tinypy_tuple_get(method_result, 0U) == instance);
     TEST_CHECK(tinypy_integer_as_i64(tinypy_tuple_get(method_result, 1U)) == 10);
 
+    unbound_method = tinypy_object_get_attr(class_value, "pair", 4U, &error);
+    TEST_CHECK(unbound_method != NULL);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(tinypy_typeof(unbound_method) == TINYPY_VALUE_METHOD);
+    TEST_CHECK(tinypy_method_self(unbound_method) == NULL);
+    class_bases[0] = class_type;
+    copied_method_type = tinypy_type_new(vm, "CopiedMethodOwner", 17U, class_bases, 1U, NULL, NULL, &error);
+    TEST_CHECK(copied_method_type != NULL);
+    TEST_CHECK(error == NULL);
+    tinypy_type_set_attr(copied_method_type, "pair", 4U, unbound_method);
+    copied_method_type_value = tinypy_type_as_value(copied_method_type);
+    copied_method_instance = tinypy_call(copied_method_type_value, empty, NULL, &error);
+    TEST_CHECK(copied_method_instance != NULL);
+    TEST_CHECK(error == NULL);
+    copied_method = tinypy_object_get_attr(copied_method_instance, "pair", 4U, &error);
+    TEST_CHECK(copied_method != NULL);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(tinypy_typeof(copied_method) == TINYPY_VALUE_METHOD);
+    TEST_CHECK(tinypy_method_self(copied_method) == copied_method_instance);
+    copied_method_result = tinypy_call(copied_method, method_args, NULL, &error);
+    TEST_CHECK(copied_method_result != NULL);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(tinypy_tuple_size(copied_method_result) == 2U);
+    TEST_CHECK(tinypy_tuple_get(copied_method_result, 0U) == copied_method_instance);
+    TEST_CHECK(tinypy_integer_as_i64(tinypy_tuple_get(copied_method_result, 1U)) == 10);
+
+    tinypy_release(copied_method_result);
+    tinypy_release(copied_method);
+    tinypy_release(copied_method_instance);
+    tinypy_release(copied_method_type_value);
+    tinypy_release(unbound_method);
     tinypy_release(method_result);
     tinypy_release(method_args);
+    tinypy_release(method_code);
     tinypy_release(method);
     tinypy_release(instance);
     tinypy_release(class_value);
@@ -1857,6 +1915,17 @@ static tinypy_value_t *__test_native_get_attribute(tinypy_value_t *instance, voi
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_raise_error(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
+
+    (void)function;
+    (void)args;
+    (void)kwargs;
+    (void)out_error;
+    tinypy_vm_raise_error(vm, TINYPY_ERROR_VALUE, "native callback failure");
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 static int __test_native_embedding(void) {
     test_allocator_state_t allocator_state;
     test_native_state_t native_state;
@@ -1876,6 +1945,8 @@ static int __test_native_embedding(void) {
     tinypy_value_t *args;
     tinypy_value_t *representation;
     tinypy_value_t *value;
+    tinypy_value_t *native_function;
+    tinypy_value_t *native_result;
     tinypy_value_t *iter_key;
     tinypy_value_t *iter_value;
     tinypy_error_t *error = NULL;
@@ -1925,6 +1996,18 @@ static int __test_native_embedding(void) {
     TEST_CHECK(tinypy_object_has_attr(instance, "failure", 7U) == 0);
     TEST_CHECK(tinypy_vm_has_error(vm) == 0);
     TEST_CHECK(native_state.attribute_calls == 3);
+
+    native_function = tinypy_native_function_new(vm, "raise_error", 11U, __test_native_raise_error, vm, NULL);
+    native_result = tinypy_call(native_function, args, NULL, &error);
+    TEST_CHECK(native_result == NULL);
+    TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_VALUE);
+    bytes = tinypy_error_message(error, &byte_size);
+    TEST_CHECK(byte_size == 23U && memcmp(bytes, "native callback failure", 23U) == 0);
+    TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    tinypy_release(native_function);
 
     value = tinypy_integer_from_i64(vm, 11);
     TEST_CHECK(tinypy_object_set_attr(instance, "answer", 6U, value, &error) != 0);

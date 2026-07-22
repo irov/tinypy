@@ -40,7 +40,13 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
 
     if (result == NULL && (out_error == NULL || *out_error == NULL)) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "native function failed without an error", out_error);
+
+        if (tinypy_vm_has_error(vm) != 0) {
+            tinypy_internal_exception_make_diagnostic(vm, out_error);
+        }
+        else {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "native function failed without an error", out_error);
+        }
     }
     assert(result == NULL || tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(callable), result));
     return result;
