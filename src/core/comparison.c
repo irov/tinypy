@@ -284,6 +284,14 @@ static int __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *right
         *out_unordered = 1;
         return 1;
     }
+    if (left_kind == TINYPY_VALUE_NONE || right_kind == TINYPY_VALUE_NONE) {
+        *out_order = left_kind == TINYPY_VALUE_NONE ? -1 : 1;
+        return 1;
+    }
+    if (__tinypy_comparison_is_numeric(left_kind) != __tinypy_comparison_is_numeric(right_kind)) {
+        *out_order = __tinypy_comparison_is_numeric(left_kind) != 0 ? -1 : 1;
+        return 1;
+    }
     if (left->type != right->type) {
         *out_order = __tinypy_comparison_type_name_order(left->type, right->type);
         return 1;

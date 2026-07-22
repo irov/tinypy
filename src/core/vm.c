@@ -180,7 +180,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         tinypy_internal_native_function_release_references,
         tinypy_internal_native_function_destroy);
     vm->native_function_type.call = tinypy_internal_native_function_call;
-    vm->native_function_type.descriptor_get = tinypy_internal_function_descriptor_get;
+    vm->native_function_type.descriptor_get = tinypy_internal_native_function_descriptor_get;
     __tinypy_internal_initialize_type(
         vm, &vm->static_method_type, &vm->type_type, "staticmethod", 12U,
         sizeof(tinypy_callable_descriptor_object_t), 0U,

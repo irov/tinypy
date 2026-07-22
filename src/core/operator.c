@@ -435,6 +435,21 @@ static tinypy_value_t *__tinypy_operator_numeric_add(tinypy_vm_t *vm, tinypy_val
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
+#ifndef NDEBUG
+static int32_t __tinypy_operator_text_is_ascii(tinypy_value_t *value) {
+    const unsigned char *bytes = TINYPY_TEXT_BYTES(value);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(value);
+    size_t index;
+
+    for (index = 0U; index < size; ++index) {
+        if (bytes[index] >= 0x80U) {
+            return INT32_C(0);
+        }
+    }
+    return INT32_C(1);
+}
+#endif
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_concat_text(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right, int unicode) {
     const void *left_bytes;
     const void *right_bytes;
@@ -443,11 +458,10 @@ static tinypy_value_t *__tinypy_operator_concat_text(tinypy_vm_t *vm, tinypy_val
     unsigned char *buffer;
 
     if (unicode != 0) {
-        size_t left_code_points;
-        size_t right_code_points;
-
-        left_bytes = tinypy_unicode_utf8_view(left, &left_size, &left_code_points);
-        right_bytes = tinypy_unicode_utf8_view(right, &right_size, &right_code_points);
+        left_bytes = TINYPY_TEXT_BYTES(left);
+        left_size = TINYPY_TEXT_BYTE_SIZE(left);
+        right_bytes = TINYPY_TEXT_BYTES(right);
+        right_size = TINYPY_TEXT_BYTE_SIZE(right);
     }
     else {
         left_bytes = tinypy_string_view(left, &left_size);
@@ -1068,11 +1082,16 @@ tinypy_value_t *tinypy_add(tinypy_value_t *left, tinypy_value_t *right, tinypy_e
     }
     left_kind = TINYPY_VALUE_KIND(left);
     right_kind = TINYPY_VALUE_KIND(right);
-    if (left_kind == TINYPY_VALUE_STRING && right_kind == TINYPY_VALUE_STRING) {
-        return __tinypy_operator_concat_text(vm, left, right, 0);
-    }
-    if (left_kind == TINYPY_VALUE_UNICODE && right_kind == TINYPY_VALUE_UNICODE) {
-        return __tinypy_operator_concat_text(vm, left, right, 1);
+    if ((left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE) && (right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE)) {
+        int32_t unicode = left_kind == TINYPY_VALUE_UNICODE || right_kind == TINYPY_VALUE_UNICODE;
+
+#ifndef NDEBUG
+        if (unicode != 0 && ((left_kind == TINYPY_VALUE_STRING && __tinypy_operator_text_is_ascii(left) == 0) || (right_kind == TINYPY_VALUE_STRING && __tinypy_operator_text_is_ascii(right) == 0))) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "ascii decode error", out_error);
+            return NULL;
+        }
+#endif
+        return __tinypy_operator_concat_text(vm, left, right, unicode);
     }
     if ((left_kind == TINYPY_VALUE_TUPLE || left_kind == TINYPY_VALUE_LIST) && left_kind == right_kind) {
         return __tinypy_operator_concat_sequence(vm, left, right);

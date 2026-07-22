@@ -633,6 +633,8 @@ typedef struct tinypy_module_object_t {
 typedef struct tinypy_native_function_object_t {
     tinypy_value_t base;
     tinypy_value_t *name;
+    tinypy_value_t *function;
+    tinypy_value_t *self;
     tinypy_native_function_callback_t callback;
     void *user_data;
     tinypy_native_function_finalize_t finalize;
@@ -1089,6 +1091,7 @@ tinypy_value_t *tinypy_internal_iterator_iter(tinypy_value_t *value, tinypy_erro
 tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_dict_iterator_new(tinypy_value_t *dict, int32_t mode);
 tinypy_value_t *tinypy_internal_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_method_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
 void tinypy_internal_method_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_method_free_list_push(tinypy_vm_t *vm, tinypy_value_t *value);

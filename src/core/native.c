@@ -11,6 +11,8 @@ tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, si
     assert(callback != NULL);
     tinypy_native_function_object_t *function = (tinypy_native_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_NATIVE_FUNCTION, sizeof(*function));
     function->name = tinypy_string_from_bytes(vm, name, name_size);
+    function->function = NULL;
+    function->self = NULL;
     function->callback = callback;
     function->user_data = user_data;
     function->finalize = finalize;
@@ -18,7 +20,15 @@ tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, si
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_native_function_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
-    visit(TINYPY_NATIVE_FUNCTION_OBJECT(value)->name, user_data);
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(value);
+
+    visit(function->name, user_data);
+    if (function->function != NULL) {
+        visit(function->function, user_data);
+    }
+    if (function->self != NULL) {
+        visit(function->self, user_data);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_native_function_destroy(tinypy_value_t *value) {
@@ -36,7 +46,32 @@ void tinypy_internal_native_function_destroy(tinypy_value_t *value) {
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
-    tinypy_value_t *result = function->callback(callable, args, kwargs, function->user_data, out_error);
+    tinypy_value_t *call_args = args;
+
+    if (function->self != NULL) {
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+        size_t argument_count = TINYPY_TUPLE_SIZE(args);
+        size_t output_count;
+        tinypy_value_t **items;
+        size_t index;
+
+        assert(argument_count < SIZE_MAX);
+        output_count = argument_count + 1U;
+        assert(output_count <= SIZE_MAX / sizeof(*items));
+        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+        items[0] = function->self;
+        for (index = 0U; index < argument_count; ++index) {
+            items[index + 1U] = TINYPY_TUPLE_GET(args, index);
+        }
+        call_args = tinypy_tuple_from_items(vm, items, output_count);
+        tinypy_internal_vm_deallocate(vm, items, output_count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+
+    tinypy_value_t *result = function->callback(callable, call_args, kwargs, function->user_data, out_error);
+
+    if (call_args != args) {
+        TINYPY_DECREF(call_args);
+    }
 
     if (result == NULL && (out_error == NULL || *out_error == NULL)) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
@@ -50,6 +85,31 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
     }
     assert(result == NULL || tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(callable), result));
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(descriptor);
+
+    (void)owner;
+    TINYPY_CLEAR_ERROR(out_error);
+    if (instance == NULL || function->self != NULL) {
+        TINYPY_INCREF(descriptor);
+        return descriptor;
+    }
+
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+    tinypy_native_function_object_t *method = (tinypy_native_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_NATIVE_FUNCTION, sizeof(*method));
+
+    method->name = function->name;
+    method->function = descriptor;
+    method->self = instance;
+    method->callback = function->callback;
+    method->user_data = function->user_data;
+    method->finalize = NULL;
+    TINYPY_INCREF(method->name);
+    TINYPY_INCREF(method->function);
+    TINYPY_INCREF(method->self);
+    return &method->base;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_function_name(const tinypy_value_t *function) {

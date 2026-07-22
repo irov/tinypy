@@ -864,6 +864,210 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
     return tinypy_none_get(vm);
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_call_with_items(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
+    tinypy_value_t *call_args = tinypy_tuple_from_items(vm, items, item_count);
+    tinypy_value_t *result = tinypy_call(callable, call_args, NULL, out_error);
+
+    TINYPY_DECREF(call_args);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_copy_reg_function(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_error_t **out_error) {
+    tinypy_value_t *module = tinypy_import_module(vm, "copy_reg", 8U, NULL, NULL, INT32_C(0), out_error);
+
+    if (module == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *function = tinypy_object_get_attr(module, name, name_size, out_error);
+    TINYPY_DECREF(module);
+    return function;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t *self, tinypy_value_t *protocol_value, int64_t protocol, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
+
+    if (protocol < 2) {
+        tinypy_value_t *reducer = __tinypy_constructor_copy_reg_function(vm, "_reduce_ex", 10U, out_error);
+
+        if (reducer == NULL) {
+            return NULL;
+        }
+        tinypy_value_t *items[] = {self, protocol_value};
+        tinypy_value_t *result = __tinypy_constructor_call_with_items(vm, reducer, items, 2U, out_error);
+        TINYPY_DECREF(reducer);
+        return result;
+    }
+
+    tinypy_value_t *newobj = __tinypy_constructor_copy_reg_function(vm, "__newobj__", 10U, out_error);
+    tinypy_value_t *new_arguments = NULL;
+    tinypy_value_t *constructor_arguments = NULL;
+    tinypy_value_t *state = NULL;
+    tinypy_value_t *list_items = NULL;
+    tinypy_value_t *dict_items = NULL;
+    tinypy_value_t *result = NULL;
+
+    if (newobj == NULL) {
+        return NULL;
+    }
+    if (tinypy_object_has_attr(self, "__getnewargs__", 14U) != 0) {
+        tinypy_value_t *getnewargs = tinypy_object_get_attr(self, "__getnewargs__", 14U, out_error);
+
+        if (getnewargs == NULL) {
+            goto cleanup;
+        }
+        new_arguments = __tinypy_constructor_call_with_items(vm, getnewargs, NULL, 0U, out_error);
+        TINYPY_DECREF(getnewargs);
+        if (new_arguments == NULL) {
+            goto cleanup;
+        }
+        if (TINYPY_VALUE_KIND(new_arguments) != TINYPY_VALUE_TUPLE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__getnewargs__ should return a tuple", out_error);
+            goto cleanup;
+        }
+    }
+    else {
+        new_arguments = tinypy_tuple_from_items(vm, NULL, 0U);
+    } {
+        size_t argument_count = TINYPY_TUPLE_SIZE(new_arguments);
+        size_t output_count;
+        tinypy_value_t **items;
+        size_t index;
+
+        assert(argument_count < SIZE_MAX);
+        output_count = argument_count + 1U;
+        assert(output_count <= SIZE_MAX / sizeof(*items));
+        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+        items[0] = &self->type->base.base;
+        for (index = 0U; index < argument_count; ++index) {
+            items[index + 1U] = TINYPY_TUPLE_GET(new_arguments, index);
+        }
+        constructor_arguments = tinypy_tuple_from_items(vm, items, output_count);
+        tinypy_internal_vm_deallocate(vm, items, output_count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+    if (tinypy_object_has_attr(self, "__getstate__", 12U) != 0) {
+        tinypy_value_t *getstate = tinypy_object_get_attr(self, "__getstate__", 12U, out_error);
+
+        if (getstate == NULL) {
+            goto cleanup;
+        }
+        state = __tinypy_constructor_call_with_items(vm, getstate, NULL, 0U, out_error);
+        TINYPY_DECREF(getstate);
+        if (state == NULL) {
+            goto cleanup;
+        }
+    }
+    else {
+        tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(self);
+
+        if (dict_slot != NULL && *dict_slot != NULL) {
+            state = *dict_slot;
+            TINYPY_INCREF(state);
+        }
+        else {
+            state = tinypy_none_get(vm);
+        }
+    }
+    if (TINYPY_VALUE_KIND(self) == TINYPY_VALUE_LIST) {
+        list_items = tinypy_iter(self, out_error);
+        if (list_items == NULL) {
+            goto cleanup;
+        }
+    }
+    else {
+        list_items = tinypy_none_get(vm);
+    }
+    if (TINYPY_VALUE_KIND(self) == TINYPY_VALUE_DICT) {
+        tinypy_value_t *iteritems = tinypy_object_get_attr(self, "iteritems", 9U, out_error);
+
+        if (iteritems == NULL) {
+            goto cleanup;
+        }
+        dict_items = __tinypy_constructor_call_with_items(vm, iteritems, NULL, 0U, out_error);
+        TINYPY_DECREF(iteritems);
+        if (dict_items == NULL) {
+            goto cleanup;
+        }
+    }
+    else {
+        dict_items = tinypy_none_get(vm);
+    } {
+        tinypy_value_t *items[] = {newobj, constructor_arguments, state, list_items, dict_items};
+
+        result = tinypy_tuple_from_items(vm, items, 5U);
+    }
+
+cleanup:
+    if (dict_items != NULL) {
+        TINYPY_DECREF(dict_items);
+    }
+    if (list_items != NULL) {
+        TINYPY_DECREF(list_items);
+    }
+    if (state != NULL) {
+        TINYPY_DECREF(state);
+    }
+    if (constructor_arguments != NULL) {
+        TINYPY_DECREF(constructor_arguments);
+    }
+    if (new_arguments != NULL) {
+        TINYPY_DECREF(new_arguments);
+    }
+    TINYPY_DECREF(newobj);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_object_reduce_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *protocol_value;
+    int64_t protocol;
+
+    (void)user_data;
+    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_argument_count(vm, args, 1U, 2U, out_error) == 0) {
+        return NULL;
+    }
+    if (TINYPY_TUPLE_SIZE(args) == 2U) {
+        protocol_value = TINYPY_TUPLE_GET(args, 1U);
+        if (TINYPY_VALUE_KIND(protocol_value) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(protocol_value) != TINYPY_VALUE_INTEGER) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "pickle protocol must be an integer", out_error);
+            return NULL;
+        }
+        protocol = TINYPY_INTEGER_VALUE(protocol_value);
+    }
+    else {
+        protocol_value = tinypy_integer_from_i64(vm, INT64_C(0));
+        protocol = 0;
+    }
+    tinypy_value_t *result = __tinypy_constructor_object_common_reduce(TINYPY_TUPLE_GET(args, 0U), protocol_value, protocol, out_error);
+    if (TINYPY_TUPLE_SIZE(args) == 1U) {
+        TINYPY_DECREF(protocol_value);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_object_reduce_ex_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_argument_count(vm, args, 1U, 2U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *class_reduce = tinypy_type_get_attr(self->type, "__reduce__", 10U);
+    tinypy_value_t *object_reduce = tinypy_type_get_attr(&vm->object_type, "__reduce__", 10U);
+
+    if (class_reduce != NULL && class_reduce != object_reduce) {
+        tinypy_value_t *reduce = tinypy_object_get_attr(self, "__reduce__", 10U, out_error);
+
+        if (reduce == NULL) {
+            return NULL;
+        }
+        tinypy_value_t *result = __tinypy_constructor_call_with_items(vm, reduce, NULL, 0U, out_error);
+        TINYPY_DECREF(reduce);
+        return result;
+    }
+    return __tinypy_constructor_object_reduce_method(function, args, kwargs, user_data, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_tuple_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *result;
@@ -944,5 +1148,7 @@ void tinypy_internal_initialize_constructor_types(tinypy_vm_t *vm) {
     __tinypy_constructor_add_method(&vm->type_type, "__subclasses__", 14U, __tinypy_constructor_type_subclasses_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->object_type, "__new__", 7U, __tinypy_constructor_object_new_method, INT32_C(1));
     __tinypy_constructor_add_method(&vm->object_type, "__init__", 8U, __tinypy_constructor_object_init_method, INT32_C(0));
+    __tinypy_constructor_add_method(&vm->object_type, "__reduce__", 10U, __tinypy_constructor_object_reduce_method, INT32_C(0));
+    __tinypy_constructor_add_method(&vm->object_type, "__reduce_ex__", 13U, __tinypy_constructor_object_reduce_ex_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->tuple_type, "__new__", 7U, __tinypy_constructor_tuple_new_method, INT32_C(1));
 }

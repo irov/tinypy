@@ -1732,6 +1732,12 @@ static int __test_operator_numeric_runtime(void) {
     tinypy_value_t *left_text;
     tinypy_value_t *right_text;
     tinypy_value_t *joined_text;
+    tinypy_value_t *left_unicode;
+    tinypy_value_t *right_unicode;
+    tinypy_value_t *joined_unicode;
+    tinypy_value_t *dictionary;
+    tinypy_value_t *zero;
+    tinypy_value_t *none;
     const uint16_t *digits;
     const void *bytes;
     size_t digit_count;
@@ -1783,6 +1789,28 @@ static int __test_operator_numeric_runtime(void) {
     bytes = tinypy_string_view(joined_text, &byte_size);
     TEST_CHECK(byte_size == 6U);
     TEST_CHECK(memcmp(bytes, "tinypy", 6U) == 0);
+    left_unicode = tinypy_unicode_from_utf8(vm, "Contract", 8U);
+    right_unicode = tinypy_unicode_from_utf8(vm, "_Cooldown", 9U);
+    joined_unicode = tinypy_add(left_unicode, right_text, &error);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(tinypy_typeof(joined_unicode) == TINYPY_VALUE_UNICODE);
+    bytes = tinypy_unicode_utf8_view(joined_unicode, &byte_size, &digit_count);
+    TEST_CHECK(byte_size == 10U);
+    TEST_CHECK(memcmp(bytes, "Contractpy", 10U) == 0);
+    tinypy_release(joined_unicode);
+    joined_unicode = tinypy_add(left_text, right_unicode, &error);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(tinypy_typeof(joined_unicode) == TINYPY_VALUE_UNICODE);
+    bytes = tinypy_unicode_utf8_view(joined_unicode, &byte_size, &digit_count);
+    TEST_CHECK(byte_size == 13U);
+    TEST_CHECK(memcmp(bytes, "tiny_Cooldown", 13U) == 0);
+    dictionary = tinypy_dict_new(vm);
+    zero = tinypy_integer_from_i64(vm, 0);
+    none = tinypy_none_get(vm);
+    TEST_CHECK(tinypy_compare_bool(none, zero, TINYPY_COMPARE_LESS, &error) == 1);
+    TEST_CHECK(tinypy_compare_bool(zero, dictionary, TINYPY_COMPARE_LESS, &error) == 1);
+    TEST_CHECK(tinypy_compare_bool(dictionary, zero, TINYPY_COMPARE_LESS, &error) == 0);
+    TEST_CHECK(error == NULL);
 
     tinypy_value_t *complex_base = tinypy_complex_from_doubles(vm, 1.0, 2.0);
     tinypy_value_t *complex_exponent = tinypy_complex_from_doubles(vm, 3.0, 0.0);
@@ -1807,6 +1835,12 @@ static int __test_operator_numeric_runtime(void) {
     tinypy_release(complex_exponent);
     tinypy_release(complex_base);
 
+    tinypy_release(none);
+    tinypy_release(zero);
+    tinypy_release(dictionary);
+    tinypy_release(joined_unicode);
+    tinypy_release(right_unicode);
+    tinypy_release(left_unicode);
     tinypy_release(joined_text);
     tinypy_release(right_text);
     tinypy_release(left_text);
@@ -2111,6 +2145,15 @@ static tinypy_value_t *__test_native_raise_error(tinypy_value_t *function, tinyp
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_return_args(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    (void)function;
+    (void)kwargs;
+    (void)user_data;
+    (void)out_error;
+    tinypy_retain(args);
+    return args;
+}
+//////////////////////////////////////////////////////////////////////////
 static int __test_native_embedding(void) {
     test_allocator_state_t allocator_state;
     test_native_state_t native_state;
@@ -2135,6 +2178,8 @@ static int __test_native_embedding(void) {
     tinypy_value_t *representation;
     tinypy_value_t *value;
     tinypy_value_t *native_function;
+    tinypy_value_t *native_method_instance;
+    tinypy_value_t *native_method;
     tinypy_value_t *native_result;
     tinypy_value_t *iter_key;
     tinypy_value_t *iter_value;
@@ -2287,6 +2332,26 @@ static int __test_native_embedding(void) {
     TEST_CHECK(error == NULL);
     TEST_CHECK(native_state.binary_calls == 4);
     TEST_CHECK(native_state.reflected_calls == 4);
+
+    native_function = tinypy_native_function_new(vm, "collect", 7U, __test_native_return_args, NULL, NULL);
+    tinypy_type_set_attr(python_base, "collect", 7U, native_function);
+    value = tinypy_type_as_value(python_base);
+    native_method_instance = tinypy_call(value, args, NULL, &error);
+    TEST_CHECK(native_method_instance != NULL);
+    TEST_CHECK(error == NULL);
+    native_method = tinypy_object_get_attr(native_method_instance, "collect", 7U, &error);
+    TEST_CHECK(native_method != NULL);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(tinypy_typeof(native_method) == TINYPY_VALUE_NATIVE_FUNCTION);
+    native_result = tinypy_call(native_method, args, NULL, &error);
+    TEST_CHECK(native_result != NULL);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(tinypy_tuple_size(native_result) == 1U);
+    TEST_CHECK(tinypy_tuple_get(native_result, 0U) == native_method_instance);
+    tinypy_release(native_result);
+    tinypy_release(native_method);
+    tinypy_release(native_method_instance);
+    tinypy_release(native_function);
 
     value = tinypy_integer_from_i64(vm, 3);
     native_result = tinypy_inplace_add(instance, value, &error);

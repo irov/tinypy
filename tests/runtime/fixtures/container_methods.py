@@ -1,4 +1,7 @@
 values = [3, 1]
+append = values.append
+assert type(append) is type(len)
+assert not hasattr(append, "func_code")
 assert values.append(2) is None
 values.extend((5, 4))
 values.insert(-100, 0)
@@ -46,6 +49,15 @@ copy.clear()
 assert copy == {}
 
 assert list(iter(u"a\u20ac")) == [u"a", u"\u20ac"]
+assert type(u"Contract" + "_Cooldown") is unicode
+assert u"Contract" + "_Cooldown" == u"Contract_Cooldown"
+assert "Contract" + u"_Cooldown" == u"Contract_Cooldown"
+
+# Python 2 orders None before every other value and numbers before
+# non-numeric values when the types do not otherwise define an ordering.
+assert None < 0
+assert 0 < {}
+assert not ({} < 0)
 
 assert all([True, 1]) is True
 assert all([True, 0]) is False
@@ -114,6 +126,7 @@ assert instance.method.im_self is instance
 assert instance.method.im_class is Introspection
 assert instance.method.func_code.co_name == "method"
 assert instance.method.func_defaults == (3,)
+assert not isinstance(append, type(instance.method))
 
 
 class DynamicAttribute(object):

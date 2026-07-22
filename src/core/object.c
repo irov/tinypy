@@ -10,30 +10,39 @@ static int32_t __tinypy_object_name_equal(const char *name, size_t name_size, co
     return name_size == expected_size && (name_size == 0U || memcmp(name, expected, name_size) == 0) ? INT32_C(1) : INT32_C(0);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_object_make_attribute_error(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_error_t **out_error) {
-    static const char prefix[] = "object has no attribute '";
+static void __tinypy_object_make_attribute_error(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
+    static const char separator[] = "' object has no attribute '";
     static const char suffix[] = "'";
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    const char *type_name = value->type->name;
+    size_t type_name_size = value->type->name_size;
     size_t message_size;
     char *message;
 
     assert(name != NULL || name_size == 0U);
-    assert(name_size <= SIZE_MAX - (sizeof(prefix) - 1U) - (sizeof(suffix) - 1U) - 1U);
-    message_size = (sizeof(prefix) - 1U) + name_size + (sizeof(suffix) - 1U);
+    assert(type_name != NULL || type_name_size == 0U);
+    assert(type_name_size <= SIZE_MAX - 1U - (sizeof(separator) - 1U) - (sizeof(suffix) - 1U) - 1U);
+    assert(name_size <= SIZE_MAX - 1U - type_name_size - (sizeof(separator) - 1U) - (sizeof(suffix) - 1U) - 1U);
+    message_size = 1U + type_name_size + (sizeof(separator) - 1U) + name_size + (sizeof(suffix) - 1U);
     message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
-    (void)memcpy(message, prefix, sizeof(prefix) - 1U);
-    if (name_size != 0U) {
-        (void)memcpy(message + sizeof(prefix) - 1U, name, name_size);
+    message[0] = '\'';
+    if (type_name_size != 0U) {
+        (void)memcpy(message + 1U, type_name, type_name_size);
     }
-    (void)memcpy(message + sizeof(prefix) - 1U + name_size, suffix, sizeof(suffix));
+    (void)memcpy(message + 1U + type_name_size, separator, sizeof(separator) - 1U);
+    if (name_size != 0U) {
+        (void)memcpy(message + 1U + type_name_size + sizeof(separator) - 1U, name, name_size);
+    }
+    (void)memcpy(message + 1U + type_name_size + sizeof(separator) - 1U + name_size, suffix, sizeof(suffix));
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, message, out_error);
     tinypy_internal_vm_deallocate(vm, message, message_size + 1U, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_object_make_attribute_error_key(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error) {
+static void __tinypy_object_make_attribute_error_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
     const char *name = (const char *)TINYPY_TEXT_BYTES(key);
     size_t name_size = TINYPY_TEXT_BYTE_SIZE(key);
 
-    __tinypy_object_make_attribute_error(vm, name, name_size, out_error);
+    __tinypy_object_make_attribute_error(value, name, name_size, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_owned(tinypy_value_t *value) {
@@ -532,7 +541,7 @@ static tinypy_value_t *__tinypy_object_getattr_fallback(tinypy_value_t *value, t
         return NULL;
     }
     if (vm->raised_type == NULL && (out_error == NULL || *out_error == NULL)) {
-        __tinypy_object_make_attribute_error(vm, name, name_size, out_error);
+        __tinypy_object_make_attribute_error(value, name, name_size, out_error);
     }
     return NULL;
 }
@@ -753,11 +762,11 @@ int32_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tinypy_val
         dict = TINYPY_FUNCTION_OBJECT(value)->dict;
     }
     if (dict == NULL) {
-        __tinypy_object_make_attribute_error_key(vm, key, out_error);
+        __tinypy_object_make_attribute_error_key(value, key, out_error);
         return INT32_C(0);
     }
     if (tinypy_internal_dict_delete_optional(vm, dict, key) == 0) {
-        __tinypy_object_make_attribute_error_key(vm, key, out_error);
+        __tinypy_object_make_attribute_error_key(value, key, out_error);
         return INT32_C(0);
     }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE) {
