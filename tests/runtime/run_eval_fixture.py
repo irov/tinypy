@@ -102,6 +102,10 @@ def main() -> int:
     artifact = arguments.build_dir / "struct_runtime.marshal"
     subprocess.run([str(arguments.compiler), str(source), str(artifact), "tests/runtime/fixtures/struct_runtime.py", "exec", "0"], check=True)
     subprocess.run([str(arguments.runner), "--eval-any", str(artifact)], check=True)
+    source = root / "tests/runtime/fixtures/sys_runtime.py"
+    artifact = arguments.build_dir / "sys_runtime.marshal"
+    subprocess.run([str(arguments.compiler), str(source), str(artifact), "tests/runtime/fixtures/sys_runtime.py", "exec", "0"], check=True)
+    subprocess.run([str(arguments.runner), "--eval-any", str(artifact)], check=True)
     return 0
 
 

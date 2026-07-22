@@ -623,6 +623,44 @@ static tinypy_value_t *__tinypy_internal_sys_getframe(tinypy_value_t *function, 
     return &frame->base.base;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_sys_getrecursionlimit(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_internal_sys_arguments(vm, args, kwargs, 0U, 0U, out_error) == 0) {
+        return NULL;
+    }
+    assert(vm->recursion_limit <= (size_t)INT64_MAX);
+    return tinypy_integer_from_i64(vm, (int64_t)vm->recursion_limit);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_sys_setrecursionlimit(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *value;
+    int64_t limit;
+
+    (void)user_data;
+    if (__tinypy_internal_sys_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+        return NULL;
+    }
+    value = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_INTEGER) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "recursion limit must be an integer", out_error);
+        return NULL;
+    }
+    limit = TINYPY_INTEGER_VALUE(value);
+    if (limit <= 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "recursion limit must be positive", out_error);
+        return NULL;
+    }
+    if (limit > INT32_MAX) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "recursion limit is too large", out_error);
+        return NULL;
+    }
+    vm->recursion_limit = (size_t)limit;
+    return tinypy_none_get(vm);
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_sys_add_function(tinypy_vm_t *vm, tinypy_value_t *module, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
     tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
 
@@ -670,6 +708,8 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     __tinypy_internal_sys_add_function(vm, sys_module, "exc_info", 8U, __tinypy_internal_sys_exc_info);
     __tinypy_internal_sys_add_function(vm, sys_module, "exc_clear", 9U, __tinypy_internal_sys_exc_clear);
     __tinypy_internal_sys_add_function(vm, sys_module, "_getframe", 9U, __tinypy_internal_sys_getframe);
+    __tinypy_internal_sys_add_function(vm, sys_module, "getrecursionlimit", 17U, __tinypy_internal_sys_getrecursionlimit);
+    __tinypy_internal_sys_add_function(vm, sys_module, "setrecursionlimit", 17U, __tinypy_internal_sys_setrecursionlimit);
     tinypy_internal_register_module(vm, "sys", 3U, sys_module);
     future_module = tinypy_module_new(vm, "__future__", 10U);
     name = tinypy_string_from_bytes(vm, "__future__", 10U);
@@ -788,6 +828,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     vm->max_heap_bytes = config->max_heap_bytes;
     vm->allocated_bytes = sizeof(*vm);
     vm->type_lookup_cache_epoch = UINT64_C(1);
+    vm->recursion_limit = 1000U;
     vm->optimize_level = config->struct_size >= (uint32_t)sizeof(*config) ? config->optimize_level : 0;
     assert(vm->optimize_level >= 0 && vm->optimize_level <= 2);
     tinypy_internal_pool_initialize(vm);

@@ -881,6 +881,7 @@ struct tinypy_vm_t {
 
     tinypy_frame_object_t *current_frame;
     size_t evaluation_depth;
+    size_t recursion_limit;
     tinypy_value_t *builtins;
     tinypy_value_t *builtins_key;
     tinypy_value_t *special_getattribute_key;
