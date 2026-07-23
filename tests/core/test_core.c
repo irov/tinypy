@@ -1878,6 +1878,7 @@ typedef struct test_native_state_t {
     int32_t constructed;
     int32_t finalized;
     int32_t attribute_calls;
+    int32_t hash_error;
     int32_t compare_calls;
     int32_t compare_order[8];
     size_t compare_order_count;
@@ -1950,10 +1951,14 @@ static tinypy_value_t *__test_native_compare(tinypy_value_t *instance, void *pay
 //////////////////////////////////////////////////////////////////////////
 static tinypy_hash_t __test_native_hash(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
     test_native_payload_t *native_payload = (test_native_payload_t *)payload;
+    test_native_state_t *state = (test_native_state_t *)user_data;
 
     (void)instance;
-    (void)user_data;
     (void)out_error;
+    if (state->hash_error != 0) {
+        tinypy_vm_raise_error(state->vm, TINYPY_ERROR_RUNTIME, "native hash failure");
+        return (tinypy_hash_t)0;
+    }
     return (tinypy_hash_t)native_payload->value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2262,6 +2267,21 @@ static int __test_native_embedding(void) {
     TEST_CHECK(tinypy_vm_has_error(vm) == 0);
     TEST_CHECK(native_state.attribute_calls == 3);
     TEST_CHECK(tinypy_hash(instance) == 73);
+    value = tinypy_string_from_bytes(vm, "hash", 4U);
+    native_function = tinypy_dict_get(tinypy_vm_builtins(vm), value);
+    tinypy_release(value);
+    call_args = tinypy_tuple_from_items(vm, &instance, 1U);
+    native_state.hash_error = 1;
+    native_result = tinypy_call(native_function, call_args, NULL, &error);
+    TEST_CHECK(native_result == NULL);
+    TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_RUNTIME);
+    bytes = tinypy_error_message(error, &byte_size);
+    TEST_CHECK(byte_size == 19U && memcmp(bytes, "native hash failure", 19U) == 0);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    native_state.hash_error = 0;
+    tinypy_release(call_args);
 
     value = tinypy_negative(instance, &error);
     TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == -73);
@@ -2298,8 +2318,8 @@ static int __test_native_embedding(void) {
     native_state.compare_order_count = 0U;
     TEST_CHECK(tinypy_compare_bool(instance, other_instance, TINYPY_COMPARE_EQUAL, &error) == 0);
     TEST_CHECK(error == NULL);
-    TEST_CHECK(native_state.compare_order_count == 2U);
-    TEST_CHECK(native_state.compare_order[0] == 2 && native_state.compare_order[1] == 2);
+    TEST_CHECK(native_state.compare_order_count == 1U);
+    TEST_CHECK(native_state.compare_order[0] == 2);
 
     value = tinypy_integer_from_i64(vm, 7);
     native_result = tinypy_add(instance, value, &error);

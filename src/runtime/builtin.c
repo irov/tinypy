@@ -1211,7 +1211,10 @@ static tinypy_value_t *__tinypy_builtin_hash(tinypy_value_t *function, tinypy_va
         TINYPY_DECREF(result);
         return tinypy_integer_from_i64(vm, (int64_t)hash);
     }
-    tinypy_hash_t hash_2 = tinypy_hash(value);
+    tinypy_hash_t hash_2 = tinypy_internal_hash_value(value, out_error);
+    if (tinypy_vm_has_error(vm) != 0) {
+        return NULL;
+    }
     return tinypy_integer_from_i64(vm, (int64_t)hash_2);
 }
 //////////////////////////////////////////////////////////////////////////

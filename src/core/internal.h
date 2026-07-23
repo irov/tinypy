@@ -1187,7 +1187,7 @@ ptrdiff_t tinypy_internal_buffer_length(tinypy_value_t *value, tinypy_error_t **
 tinypy_value_t *tinypy_internal_buffer_repr(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_buffer_string(tinypy_value_t *value, tinypy_error_t **out_error);
 
-tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value);
+tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_error_t **out_error);
 int32_t tinypy_internal_equal_value(const tinypy_value_t *left, const tinypy_value_t *right, int identity_implies_equal);
 int tinypy_internal_numeric_order(const tinypy_value_t *left, const tinypy_value_t *right, int32_t *out_order);
 int32_t tinypy_internal_text_order(const tinypy_value_t *left, const tinypy_value_t *right);

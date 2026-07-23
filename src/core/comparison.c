@@ -546,7 +546,7 @@ static int32_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_valu
     if (*out_handled != 0) {
         return INT32_C(1);
     }
-    {
+    if (right->type != left->type) {
         tinypy_compare_operation_e reversed_operation = __tinypy_comparison_reverse_operation(operation);
 
         if (__tinypy_comparison_try_rich_slot(right, left, reversed_operation, out_handled, out_value, out_error) == 0) {

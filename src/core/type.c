@@ -886,7 +886,7 @@ tinypy_value_t *tinypy_internal_type_lookup_key(tinypy_vm_t *vm, const tinypy_ty
     size_t index;
 
     if (__tinypy_internal_type_lookup_cacheable(vm, key) != 0) {
-        hash = tinypy_internal_hash_value(key);
+        hash = tinypy_internal_hash_value(key, NULL);
         entry = &vm->type_lookup_cache[__tinypy_internal_type_lookup_cache_index(type, hash)];
         if (entry->epoch == vm->type_lookup_cache_epoch && entry->type == type && entry->hash == hash && (entry->key == key || tinypy_internal_equal_value(entry->key, key, 1) != 0)) {
             return entry->value;

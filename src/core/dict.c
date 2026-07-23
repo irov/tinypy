@@ -32,7 +32,7 @@ static inline tinypy_hash_t __tinypy_internal_dict_hash_key(const tinypy_vm_t *v
     if (key->type == &vm->unicode_type && TINYPY_UNICODE_OBJECT(key)->hash_computed != 0) {
         return TINYPY_UNICODE_OBJECT(key)->hash;
     }
-    return tinypy_internal_hash_value(key);
+    return tinypy_internal_hash_value(key, NULL);
 }
 //////////////////////////////////////////////////////////////////////////
 static inline int32_t __tinypy_internal_dict_keys_equal(const tinypy_vm_t *vm, const tinypy_value_t *left, const tinypy_value_t *right) {

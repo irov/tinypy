@@ -298,7 +298,7 @@ class PublicApiNamingTests(unittest.TestCase):
             public_header,
         )
         self.assertIn(
-            "tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value);",
+            "tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_error_t **out_error);",
             internal_header,
         )
         self.assertIn(

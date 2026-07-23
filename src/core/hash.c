@@ -253,7 +253,7 @@ static tinypy_hash_t __tinypy_internal_hash_unicode(const tinypy_vm_t *vm, const
     return __tinypy_internal_hash_fix(hash);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value) {
+static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_t *const *items = tinypy_internal_tuple_items(value);
     size_t remaining = TINYPY_SIZED_SIZE(value);
     size_t index = 0U;
@@ -268,7 +268,14 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value) {
     vm->hash_depth += 1U;
 #endif
     while (remaining != 0U) {
-        tinypy_hash_t item_hash = tinypy_internal_hash_value(items[index]);
+        tinypy_hash_t item_hash = tinypy_internal_hash_value(items[index], out_error);
+
+        if (tinypy_vm_has_error(TINYPY_VALUE_VM(value)) != 0) {
+#ifndef NDEBUG
+            vm->hash_depth -= 1U;
+#endif
+            return (tinypy_hash_t)0;
+        }
 
         remaining -= 1U;
         hash = (hash ^ (uint64_t)item_hash) * multiplier;
@@ -282,11 +289,11 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value) {
     return __tinypy_internal_hash_fix(hash);
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value) {
+tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_error_t **out_error) {
     double real;
 
     if (value->type->hash != NULL) {
-        return value->type->hash((tinypy_value_t *)value, NULL);
+        return value->type->hash((tinypy_value_t *)value, out_error);
     }
     switch (TINYPY_VALUE_KIND(value)) {
     case TINYPY_VALUE_NONE:
@@ -340,7 +347,7 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value) {
         return __tinypy_internal_hash_bytes(bytes, size, vm->hash_secret_prefix, vm->hash_secret_suffix);
     }
     case TINYPY_VALUE_TUPLE:
-        return __tinypy_internal_hash_tuple(value);
+        return __tinypy_internal_hash_tuple(value, out_error);
     case TINYPY_VALUE_FROZENSET:
         return tinypy_internal_frozenset_hash(value);
     case TINYPY_VALUE_WEAKREF: {
@@ -350,7 +357,10 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value) {
             if (weakref->object == NULL) {
                 return __tinypy_internal_hash_fix((uint64_t)((uintptr_t)value >> 4U));
             }
-            weakref->hash = tinypy_internal_hash_value(weakref->object);
+            weakref->hash = tinypy_internal_hash_value(weakref->object, out_error);
+            if (tinypy_vm_has_error(TINYPY_VALUE_VM(value)) != 0) {
+                return (tinypy_hash_t)0;
+            }
             weakref->hash_computed = INT32_C(1);
         }
         return weakref->hash;
@@ -759,7 +769,7 @@ tinypy_hash_t tinypy_hash(const tinypy_value_t *value) {
     assert(value != NULL);
     assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
 
-    return tinypy_internal_hash_value(value);
+    return tinypy_internal_hash_value(value, NULL);
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
