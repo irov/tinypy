@@ -2186,6 +2186,8 @@ static int __test_native_embedding(void) {
     tinypy_value_t *native_method_instance;
     tinypy_value_t *native_method;
     tinypy_value_t *native_result;
+    tinypy_value_t *native_dict;
+    tinypy_value_t *dict_value;
     tinypy_value_t *iter_key;
     tinypy_value_t *iter_value;
     tinypy_error_t *error = NULL;
@@ -2303,6 +2305,19 @@ static int __test_native_embedding(void) {
     TEST_CHECK(tinypy_compare_bool(value, instance, TINYPY_COMPARE_NOT_EQUAL, &error) == 0);
     TEST_CHECK(error == NULL);
     TEST_CHECK(native_state.compare_calls == 4);
+
+    native_dict = tinypy_dict_new(vm);
+    dict_value = tinypy_integer_from_i64(vm, 91);
+    tinypy_dict_set(native_dict, value, dict_value);
+    TEST_CHECK(tinypy_dict_contains(native_dict, instance) != 0);
+    TEST_CHECK(tinypy_dict_get_optional(native_dict, instance) == dict_value);
+    tinypy_dict_clear(native_dict);
+    tinypy_dict_set(native_dict, instance, dict_value);
+    TEST_CHECK(tinypy_dict_contains(native_dict, value) != 0);
+    TEST_CHECK(tinypy_dict_get_optional(native_dict, value) == dict_value);
+    tinypy_release(dict_value);
+    tinypy_release(native_dict);
+
     tinypy_release(value);
 
     base_instance = tinypy_native_instance_new(native_type);

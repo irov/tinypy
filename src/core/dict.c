@@ -54,7 +54,12 @@ static inline int32_t __tinypy_internal_dict_keys_equal(const tinypy_vm_t *vm, c
             return size == TINYPY_UNICODE_OBJECT(right)->byte_size && (size == 0U || memcmp(TINYPY_UNICODE_OBJECT(left)->utf8, TINYPY_UNICODE_OBJECT(right)->utf8, size) == 0) ? INT32_C(1) : INT32_C(0);
         }
     }
-    return tinypy_internal_equal_value(left, right, 1);
+    int32_t comparison = tinypy_compare_bool(
+        (tinypy_value_t *)left,
+        (tinypy_value_t *)right,
+        TINYPY_COMPARE_EQUAL,
+        NULL);
+    return comparison > 0 ? INT32_C(1) : INT32_C(0);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_dict_lookup(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_hash_t hash, tinypy_dict_lookup_t *out_lookup) {
