@@ -579,7 +579,7 @@ typedef struct tinypy_iterator_object_t {
     tinypy_value_t *iterable;
     size_t index;
     size_t table_position;
-    uint64_t expected_version;
+    uint64_t expected_state;
     int32_t mode;
     int64_t current;
     int64_t step;

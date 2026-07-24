@@ -88,7 +88,7 @@ static tinypy_value_t *__tinypy_eval_next(tinypy_vm_t *vm, tinypy_value_t *value
         }
         item = TINYPY_TUPLE_GET(iterable, iterator->index);
     }
-    else if (iterable->type == &vm->list_type && TINYPY_LIST_OBJECT(iterable)->mutation_version == iterator->expected_version) {
+    else if (iterable->type == &vm->list_type && TINYPY_LIST_OBJECT(iterable)->mutation_version == iterator->expected_state) {
         size = TINYPY_LIST_SIZE(iterable);
         if (iterator->index == size) {
             return NULL;

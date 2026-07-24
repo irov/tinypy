@@ -11,10 +11,10 @@ static tinypy_value_t *__tinypy_internal_iterator_new(tinypy_value_t *iterable) 
 
     iterator->iterable = iterable;
     if (TINYPY_VALUE_KIND(iterable) == TINYPY_VALUE_LIST) {
-        iterator->expected_version = TINYPY_LIST_OBJECT(iterable)->mutation_version;
+        iterator->expected_state = TINYPY_LIST_OBJECT(iterable)->mutation_version;
     }
     else if (TINYPY_VALUE_KIND(iterable) == TINYPY_VALUE_DICT) {
-        iterator->expected_version = TINYPY_DICT_OBJECT(iterable)->mutation_version;
+        iterator->expected_state = (uint64_t)TINYPY_DICT_OBJECT(iterable)->used;
     }
     TINYPY_INCREF(iterable);
     return &iterator->base;
@@ -109,7 +109,7 @@ static tinypy_value_t *__tinypy_internal_iterator_next_bytearray(tinypy_iterator
 static tinypy_value_t *__tinypy_internal_iterator_next_dict(tinypy_iterator_object_t *iterator, tinypy_error_t **out_error) {
     tinypy_dict_object_t *dict = TINYPY_DICT_OBJECT(iterator->iterable);
 
-    if (dict->mutation_version != iterator->expected_version) {
+    if ((uint64_t)dict->used != iterator->expected_state) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator->iterable);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "dictionary changed size during iteration", out_error);
         return NULL;
@@ -185,7 +185,7 @@ tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_erro
         }
         return NULL;
     }
-    if (kind == TINYPY_VALUE_LIST && TINYPY_LIST_OBJECT(iterator->iterable)->mutation_version != iterator->expected_version) {
+    if (kind == TINYPY_VALUE_LIST && TINYPY_LIST_OBJECT(iterator->iterable)->mutation_version != iterator->expected_state) {
         tinypy_vm_t *vm_2 = TINYPY_VALUE_VM(value);
         tinypy_internal_make_vm_error(vm_2, TINYPY_ERROR_RUNTIME, "list changed size during iteration", out_error);
         return NULL;

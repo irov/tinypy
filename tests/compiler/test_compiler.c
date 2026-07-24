@@ -748,6 +748,38 @@ static int __test_runtime_cache_invalidation(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static int __test_dictionary_iteration_semantics(void) {
+    static const char source[] =
+        "mapping = {'a': 1, 'b': 2, 'c': 3}\n"
+        "for key in mapping:\n"
+        "    mapping[key] = 0\n"
+        "value_update_succeeded = mapping == {'a': 0, 'b': 0, 'c': 0}\n"
+        "size_change_detected = False\n"
+        "try:\n"
+        "    for key in mapping:\n"
+        "        mapping['d'] = 4\n"
+        "except RuntimeError as error:\n"
+        "    size_change_detected = str(error) == 'dictionary changed size during iteration'\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *result;
+    tinypy_error_t *error = NULL;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "dict_iteration.py", 17U, globals, NULL, &options, &error);
+    assert(result != NULL);
+    assert(error == NULL);
+    tinypy_release(result);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "value_update_succeeded", 22U)) != 0);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "size_change_detected", 20U)) != 0);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int __test_runtime_interrupt_polling(void) {
     static const char source[] = "while True:\n    pass\n";
     test_allocator_state_t state = {0U, 0U};
@@ -1731,6 +1763,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_runtime_cache_invalidation() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_dictionary_iteration_semantics() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_runtime_interrupt_polling() != 0) {
