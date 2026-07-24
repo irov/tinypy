@@ -60,19 +60,22 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
     size_t mro_size;
     size_t index;
     int found_type = 0;
+    tinypy_value_type_e name_kind = TINYPY_VALUE_KIND(name);
 
-    assert(TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING);
-    name_bytes = (const char *)tinypy_string_view(name, &name_size);
-    if (name_size == 13U && memcmp(name_bytes, "__thisclass__", 13U) == 0) {
-        TINYPY_INCREF(&super_value->type->base.base);
-        return &super_value->type->base.base;
-    }
-    if (name_size == 8U && memcmp(name_bytes, "__self__", 8U) == 0) {
-        if (super_value->object != NULL) {
-            TINYPY_INCREF(super_value->object);
-            return super_value->object;
+    if (name_kind == TINYPY_VALUE_STRING || name_kind == TINYPY_VALUE_UNICODE) {
+        name_bytes = (const char *)TINYPY_TEXT_BYTES(name);
+        name_size = TINYPY_TEXT_BYTE_SIZE(name);
+        if (name_size == 13U && memcmp(name_bytes, "__thisclass__", 13U) == 0) {
+            TINYPY_INCREF(&super_value->type->base.base);
+            return &super_value->type->base.base;
         }
-        return tinypy_none_get(vm);
+        if (name_size == 8U && memcmp(name_bytes, "__self__", 8U) == 0) {
+            if (super_value->object != NULL) {
+                TINYPY_INCREF(super_value->object);
+                return super_value->object;
+            }
+            return tinypy_none_get(vm);
+        }
     }
     if (super_value->object_type == NULL) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "unbound super has no requested attribute", out_error);

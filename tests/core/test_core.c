@@ -2188,6 +2188,8 @@ static int __test_native_embedding(void) {
     tinypy_value_t *native_result;
     tinypy_value_t *native_dict;
     tinypy_value_t *dict_value;
+    tinypy_value_t *attribute_owner;
+    tinypy_value_t *attribute_result;
     tinypy_value_t *iter_key;
     tinypy_value_t *iter_value;
     tinypy_error_t *error = NULL;
@@ -2305,6 +2307,17 @@ static int __test_native_embedding(void) {
     TEST_CHECK(tinypy_compare_bool(value, instance, TINYPY_COMPARE_NOT_EQUAL, &error) == 0);
     TEST_CHECK(error == NULL);
     TEST_CHECK(native_state.compare_calls == 4);
+
+    attribute_owner = tinypy_type_as_value(python_base);
+    dict_value = tinypy_integer_from_i64(vm, 91);
+    TEST_CHECK(tinypy_object_set_attr_value(attribute_owner, value, dict_value, &error) != 0);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(tinypy_object_has_attr_value(attribute_owner, instance) != 0);
+    attribute_result = tinypy_object_get_attr_value(attribute_owner, instance, &error);
+    TEST_CHECK(attribute_result != NULL && tinypy_integer_as_i64(attribute_result) == 91);
+    TEST_CHECK(error == NULL);
+    tinypy_release(attribute_result);
+    tinypy_release(dict_value);
 
     native_dict = tinypy_dict_new(vm);
     dict_value = tinypy_integer_from_i64(vm, 91);

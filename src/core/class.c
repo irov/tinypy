@@ -8,7 +8,14 @@
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_class_name_equal(tinypy_value_t *name, const char *expected, size_t expected_size) {
     size_t name_size;
-    const unsigned char *bytes = (const unsigned char *)tinypy_string_view(name, &name_size);
+    const unsigned char *bytes;
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(name);
+
+    if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
+        return INT32_C(0);
+    }
+    bytes = TINYPY_TEXT_BYTES(name);
+    name_size = TINYPY_TEXT_BYTE_SIZE(name);
 
     return name_size == expected_size && (name_size == 0U || memcmp(bytes, expected, name_size) == 0) ? INT32_C(1) : INT32_C(0);
 }
