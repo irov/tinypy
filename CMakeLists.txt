@@ -123,7 +123,7 @@ add_library(tinypy::tinypy ALIAS tinypy)
 target_compile_features(tinypy PUBLIC c_std_99)
 target_compile_definitions(tinypy
     PUBLIC
-        $<$<CONFIG:Debug>:TINYPY_CYCLE_DIAGNOSTICS=1>
+        $<$<CONFIG:Debug>:TINYPY_CYCLE_DIAGNOSTICS>
 )
 set_target_properties(tinypy PROPERTIES
     C_EXTENSIONS OFF
