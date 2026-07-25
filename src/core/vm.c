@@ -1932,13 +1932,14 @@ static int __tinypy_debug_text_precision(size_t size) {
     return size <= (size_t)INT_MAX ? (int)size : INT_MAX;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_debug_emit(
-    const tinypy_debug_cycle_graph_t *graph,
+static void __tinypy_debug_emit_diagnostic(
+    tinypy_diagnostic_callback_t callback,
+    void *user_data,
     const char *message,
     size_t message_size) {
     tinypy_diagnostic_t diagnostic;
 
-    if (message_size == 0U || graph->callback == NULL) {
+    if (message_size == 0U || callback == NULL) {
         return;
     }
     (void)memset(&diagnostic, 0, sizeof(diagnostic));
@@ -1947,7 +1948,18 @@ static void __tinypy_debug_emit(
     diagnostic.error_kind = TINYPY_ERROR_RUNTIME;
     diagnostic.message = message;
     diagnostic.message_size = message_size;
-    graph->callback(graph->user_data, &diagnostic);
+    callback(user_data, &diagnostic);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_debug_emit(
+    const tinypy_debug_cycle_graph_t *graph,
+    const char *message,
+    size_t message_size) {
+    __tinypy_debug_emit_diagnostic(
+        graph->callback,
+        graph->user_data,
+        message,
+        message_size);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_debug_emit_location(
@@ -2486,11 +2498,23 @@ size_t tinypy_vm_report_cycles(
     tinypy_vm_t *vm,
     tinypy_diagnostic_callback_t callback,
     void *user_data) {
+    static const char success_message[] =
+        "[tinypy cycle] diagnostics OK: no unreachable owning cycles found";
+    size_t cycle_count;
+
     assert(tinypy_internal_vm_valid(vm));
     if (vm->cycle_diagnostics == NULL || callback == NULL) {
         return 0U;
     }
-    return __tinypy_debug_report_cycles(vm, callback, user_data);
+    cycle_count = __tinypy_debug_report_cycles(vm, callback, user_data);
+    if (cycle_count == 0U) {
+        __tinypy_debug_emit_diagnostic(
+            callback,
+            user_data,
+            success_message,
+            sizeof(success_message) - 1U);
+    }
+    return cycle_count;
 }
 #endif
 //////////////////////////////////////////////////////////////////////////
