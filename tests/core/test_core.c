@@ -235,10 +235,8 @@ static int __test_cycle_diagnostics(void) {
     TEST_CHECK(vm != NULL);
     TEST_CHECK(vm->cycle_diagnostics != NULL);
     TEST_CHECK(tinypy_vm_report_cycles(vm, __test_cycle_diagnostic, &diagnostic_state) == 0U);
-    TEST_CHECK(diagnostic_state.message_count == 1U);
-    TEST_CHECK(strstr(diagnostic_state.text, "[tinypy cycle] diagnostics OK: no unreachable owning cycles found") != NULL);
+    TEST_CHECK(diagnostic_state.message_count == 0U);
 
-    (void)memset(&diagnostic_state, 0, sizeof(diagnostic_state));
     list = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_list_append(list, list);
     TEST_CHECK(tinypy_vm_report_cycles(vm, NULL, NULL) == 0U);
