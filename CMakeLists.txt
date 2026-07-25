@@ -121,6 +121,10 @@ add_library(tinypy STATIC
 add_library(tinypy::tinypy ALIAS tinypy)
 
 target_compile_features(tinypy PUBLIC c_std_99)
+target_compile_definitions(tinypy
+    PUBLIC
+        $<$<CONFIG:Debug>:TINYPY_CYCLE_DIAGNOSTICS=1>
+)
 set_target_properties(tinypy PROPERTIES
     C_EXTENSIONS OFF
     C_STANDARD 99
@@ -227,6 +231,7 @@ if(BUILD_TESTING)
     add_test(NAME runtime_operator_numeric COMMAND tinypy_core_tests operator_numeric)
     add_test(NAME core_native_embedding COMMAND tinypy_core_tests native_embedding)
     add_test(NAME runtime_module_finder COMMAND tinypy_core_tests module_finder)
+    add_test(NAME core_cycle_diagnostics COMMAND tinypy_core_tests cycle_diagnostics)
     add_test(NAME runtime_marshal_code_materialization COMMAND tinypy_load_code_tests)
     add_test(NAME compiler_memory_api COMMAND tinypy_compiler_tests)
     add_test(NAME compiler_bounded_fuzz COMMAND tinypy_compiler_fuzz_standalone)

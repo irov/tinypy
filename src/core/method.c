@@ -24,6 +24,9 @@ tinypy_value_t *tinypy_method_new(tinypy_value_t *function, tinypy_value_t *self
         assert(method->base.ref == 0);
         assert(method->base.type == &vm->method_type);
         method->base.ref = 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        tinypy_internal_debug_value_reuse(vm, &method->base);
+#endif
     }
     else {
         method = (tinypy_method_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_METHOD, sizeof(*method));
@@ -69,6 +72,9 @@ void tinypy_internal_method_free_list_finalize(tinypy_vm_t *vm) {
         vm->method_free_count -= 1U;
         assert(vm->method_type.base.base.ref > 1);
         vm->method_type.base.base.ref -= 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        tinypy_internal_debug_value_unregister(vm, &method->base);
+#endif
         tinypy_internal_vm_deallocate(vm, method, sizeof(*method), (uint32_t)TINYPY_ALLOC_TAG_VALUE);
     }
 }

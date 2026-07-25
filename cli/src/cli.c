@@ -337,6 +337,20 @@ static void __tinypy_cli_emit_output(void *user_data, tinypy_output_channel_e ch
     (void)fflush(stream);
 }
 //////////////////////////////////////////////////////////////////////////
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+static void __tinypy_cli_diagnostic(void *user_data, const tinypy_diagnostic_t *diagnostic) {
+    (void)user_data;
+    if (diagnostic == NULL) {
+        return;
+    }
+    if (diagnostic->message_size != 0U) {
+        (void)fwrite(diagnostic->message, 1U, diagnostic->message_size, stderr);
+    }
+    (void)fputc('\n', stderr);
+    (void)fflush(stderr);
+}
+#endif
+//////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_cli_message_contains(const char *message, size_t message_size, const char *needle) {
     size_t needle_size = strlen(needle);
     size_t index;
@@ -943,6 +957,9 @@ int tinypy_cli_run(int argc, char **argv) {
     host.resolve_module = &__tinypy_cli_resolve_module;
     host.release_module_artifact = &__tinypy_cli_release_module;
     host.emit_output = &__tinypy_cli_emit_output;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    host.diagnostic = &__tinypy_cli_diagnostic;
+#endif
     (void)memset(&config, 0, sizeof(config));
     config.abi_version = TINYPY_ABI_VERSION;
     config.struct_size = (uint32_t)sizeof(config);

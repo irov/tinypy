@@ -1,4 +1,7 @@
 #include "tinypy/tinypy.h"
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+#include "../../src/core/internal.h"
+#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -144,6 +147,74 @@ static tinypy_vm_config_t __test_make_config(const tinypy_allocator_t *allocator
     config.allocator = allocator;
     return config;
 }
+//////////////////////////////////////////////////////////////////////////
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+typedef struct test_cycle_diagnostic_state_t {
+    char text[4096];
+    size_t size;
+    size_t message_count;
+} test_cycle_diagnostic_state_t;
+//////////////////////////////////////////////////////////////////////////
+static void __test_cycle_diagnostic(void *user_data, const tinypy_diagnostic_t *diagnostic) {
+    test_cycle_diagnostic_state_t *state = (test_cycle_diagnostic_state_t *)user_data;
+    size_t available;
+    size_t copy_size;
+
+    if (diagnostic == NULL) {
+        return;
+    }
+    state->message_count += 1U;
+    available = sizeof(state->text) - state->size - 1U;
+    copy_size = diagnostic->message_size < available ? diagnostic->message_size : available;
+    if (copy_size != 0U) {
+        (void)memcpy(state->text + state->size, diagnostic->message, copy_size);
+        state->size += copy_size;
+    }
+    if (state->size + 1U < sizeof(state->text)) {
+        state->text[state->size] = '\n';
+        state->size += 1U;
+    }
+    state->text[state->size] = '\0';
+}
+//////////////////////////////////////////////////////////////////////////
+static int __test_cycle_diagnostics(void) {
+    test_allocator_state_t allocator_state;
+    test_cycle_diagnostic_state_t diagnostic_state;
+    tinypy_allocator_t allocator;
+    tinypy_host_t host;
+    tinypy_vm_config_t config;
+    tinypy_vm_t *vm;
+    tinypy_value_t *list;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    (void)memset(&diagnostic_state, 0, sizeof(diagnostic_state));
+    allocator = __test_make_allocator(&allocator_state);
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &diagnostic_state;
+    host.diagnostic = __test_cycle_diagnostic;
+    config = __test_make_config(&allocator);
+    config.host = &host;
+    vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+
+    list = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_list_append(list, list);
+    TEST_CHECK(tinypy_internal_debug_report_cycles(vm) == 1U);
+    TEST_CHECK(diagnostic_state.message_count >= 4U);
+    TEST_CHECK(strstr(diagnostic_state.text, "[tinypy cycle] cycle 1") != NULL);
+    TEST_CHECK(strstr(diagnostic_state.text, "candidate break site") != NULL);
+    TEST_CHECK(strstr(diagnostic_state.text, "owning edge: object #") != NULL);
+
+    tinypy_list_clear(list);
+    tinypy_release(list);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+#endif
 //////////////////////////////////////////////////////////////////////////
 static double __test_double_from_bits(uint64_t bits) {
     double value;
@@ -2674,6 +2745,13 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "module_finder") == 0) {
         return __test_module_finder();
+    }
+    if (strcmp(argv[1], "cycle_diagnostics") == 0) {
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        return __test_cycle_diagnostics();
+#else
+        return 0;
+#endif
     }
 
     (void)fprintf(stderr, "unknown test: %s\n", argv[1]);

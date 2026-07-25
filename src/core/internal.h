@@ -1,6 +1,10 @@
 #ifndef TINYPY_CORE_INTERNAL_H
 #define TINYPY_CORE_INTERNAL_H
 
+#if defined(TINYPY_CYCLE_DIAGNOSTICS) && defined(NDEBUG)
+#error "TINYPY_CYCLE_DIAGNOSTICS is Debug-only"
+#endif
+
 #include "tinypy/dict.h"
 #include "tinypy/dict_view.h"
 #include "tinypy/buffer.h"
@@ -134,16 +138,27 @@ typedef enum tinypy_exception_type_index_e {
 } tinypy_exception_type_index_e;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_compile_environment_t tinypy_compile_environment_t;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+typedef struct tinypy_debug_location_t tinypy_debug_location_t;
+#endif
 //////////////////////////////////////////////////////////////////////////
 /* Complete universal tinypy object header. */
 struct tinypy_value_t {
     tinypy_ref_t ref;
     tinypy_type_t *type;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_value_t *debug_previous;
+    tinypy_value_t *debug_next;
+    const tinypy_debug_location_t *debug_created_at;
+    const tinypy_debug_location_t *debug_last_reference_change_at;
+#endif
 };
 //////////////////////////////////////////////////////////////////////////
 typedef char tinypy_object_ref_must_be_first_t[offsetof(tinypy_value_t, ref) == 0U ? 1 : -1];
 typedef char tinypy_object_type_must_follow_refcount_t[offsetof(tinypy_value_t, type) == sizeof(tinypy_ref_t) ? 1 : -1];
+#if !defined(TINYPY_CYCLE_DIAGNOSTICS)
 typedef char tinypy_object_header_has_only_two_fields_t[sizeof(tinypy_value_t) == sizeof(tinypy_ref_t) + sizeof(tinypy_type_t *) ? 1 : -1];
+#endif
 //////////////////////////////////////////////////////////////////////////
 /* Header for tinypy objects with a non-negative logical size. */
 typedef struct tinypy_sized_object_t {
@@ -892,6 +907,11 @@ struct tinypy_vm_t {
     tinypy_frame_object_t *current_frame;
     size_t evaluation_depth;
     size_t recursion_limit;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_value_t *debug_value_head;
+    tinypy_debug_location_t *debug_location_head;
+    size_t debug_value_count;
+#endif
     tinypy_value_t *builtins;
     tinypy_value_t *builtins_key;
     tinypy_value_t *special_getattribute_key;
@@ -967,6 +987,13 @@ tinypy_value_type_e tinypy_internal_value_kind(const tinypy_value_t *value);
 tinypy_type_t *tinypy_internal_type_for_kind(tinypy_vm_t *vm, tinypy_value_type_e kind);
 tinypy_value_t *tinypy_internal_value_allocate(tinypy_vm_t *vm, tinypy_value_type_e type, size_t allocation_size);
 tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *object_type, size_t allocation_size);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+void tinypy_internal_debug_value_register(tinypy_vm_t *vm, tinypy_value_t *value);
+void tinypy_internal_debug_value_reuse(tinypy_vm_t *vm, tinypy_value_t *value);
+void tinypy_internal_debug_value_touch(tinypy_value_t *value);
+void tinypy_internal_debug_value_unregister(tinypy_vm_t *vm, tinypy_value_t *value);
+size_t tinypy_internal_debug_report_cycles(tinypy_vm_t *vm);
+#endif
 size_t tinypy_internal_value_allocation_size(const tinypy_value_t *value);
 void tinypy_internal_value_destroy(tinypy_value_t *value);
 void tinypy_internal_value_release_zero(tinypy_value_t *value);
@@ -1228,6 +1255,9 @@ static inline tinypy_value_t *__tinypy_internal_integer_from_i64_fast(tinypy_vm_
         assert(result->ref == 0);
         assert(result->type == &vm->integer_type);
         result->ref = 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        tinypy_internal_debug_value_reuse(vm, result);
+#endif
         TINYPY_INTEGER_VALUE(result) = value;
         return result;
     }

@@ -42,6 +42,9 @@ void tinypy_cell_set(tinypy_value_t *cell_value, tinypy_value_t *content) {
         TINYPY_INCREF(content);
     }
     cell->content = content;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_debug_value_touch(cell_value);
+#endif
     if (previous != NULL) {
         TINYPY_DECREF(previous);
     }

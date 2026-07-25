@@ -350,6 +350,9 @@ void tinypy_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *
         tinypy_value_t *previous = entry->value;
         entry->value = value;
         TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        tinypy_internal_debug_value_touch(dict);
+#endif
         TINYPY_DECREF(previous);
         return;
     }
@@ -373,6 +376,9 @@ void tinypy_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *
     entry->state = TINYPY_DICT_ENTRY_ACTIVE;
     TINYPY_DICT_OBJECT(dict)->used += 1U;
     TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_debug_value_touch(dict);
+#endif
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_dict_delete_optional(tinypy_vm_t *vm, tinypy_value_t *dict, const tinypy_value_t *key) {

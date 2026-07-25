@@ -160,6 +160,9 @@ void tinypy_list_extend(tinypy_value_t *list, tinypy_value_t *const *items, size
         item_count * sizeof(*items));
     TINYPY_SIZED_SIZE(list) = new_size;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_debug_value_touch(list);
+#endif
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_list_append(tinypy_value_t *list, tinypy_value_t *item) {
@@ -196,6 +199,9 @@ void tinypy_list_insert(tinypy_value_t *list, size_t index, tinypy_value_t *item
     TINYPY_LIST_OBJECT(list)->items[index] = item;
     TINYPY_LIST_OBJECT(list)->base.size += 1U;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_debug_value_touch(list);
+#endif
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_list_set(tinypy_value_t *list, size_t index, tinypy_value_t *item) {
@@ -211,6 +217,9 @@ void tinypy_list_set(tinypy_value_t *list, size_t index, tinypy_value_t *item) {
     tinypy_value_t *previous = TINYPY_LIST_OBJECT(list)->items[index];
     TINYPY_LIST_OBJECT(list)->items[index] = item;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_debug_value_touch(list);
+#endif
     TINYPY_DECREF(previous);
 }
 //////////////////////////////////////////////////////////////////////////

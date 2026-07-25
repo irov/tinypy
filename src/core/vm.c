@@ -3,6 +3,10 @@
 #include "internal.h"
 
 #include <string.h>
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+#include <limits.h>
+#include <stdio.h>
+#endif
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_initialize_type(tinypy_vm_t *vm, tinypy_type_t *type, tinypy_type_t *metaclass, const char *name, size_t name_size, size_t basic_size, size_t item_size, uint64_t flags, tinypy_type_t *base_type, tinypy_release_references_slot_t release_references, tinypy_destroy_slot_t destroy) {
     (void)memset(type, 0, sizeof(*type));
@@ -798,6 +802,149 @@ void tinypy_internal_vm_deallocate(tinypy_vm_t *vm, void *memory, size_t size, u
     tinypy_internal_pool_deallocate(vm, memory, size, tag);
 }
 //////////////////////////////////////////////////////////////////////////
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+struct tinypy_debug_location_t {
+    tinypy_debug_location_t *next;
+    size_t allocation_size;
+    size_t filename_size;
+    size_t function_size;
+    int32_t line_number;
+    char text[];
+};
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_debug_text_view(const tinypy_value_t *value, const char **out_text, size_t *out_size) {
+    if (value != NULL && (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE)) {
+        *out_text = (const char *)TINYPY_TEXT_BYTES(value);
+        *out_size = TINYPY_TEXT_BYTE_SIZE(value);
+        return;
+    }
+    *out_text = "<unknown>";
+    *out_size = sizeof("<unknown>") - 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_debug_location_t *__tinypy_debug_location_current(tinypy_vm_t *vm) {
+    const char *filename = "<native>";
+    const char *function = "<native>";
+    size_t filename_size = sizeof("<native>") - 1U;
+    size_t function_size = sizeof("<native>") - 1U;
+    int32_t line_number = INT32_C(0);
+    tinypy_debug_location_t *location;
+    size_t text_size;
+    size_t allocation_size;
+
+    if (vm->current_frame != NULL && vm->current_frame->code != NULL) {
+        tinypy_value_t *code = vm->current_frame->code;
+
+        __tinypy_debug_text_view(TINYPY_CODE_FILENAME(code), &filename, &filename_size);
+        __tinypy_debug_text_view(TINYPY_CODE_NAME(code), &function, &function_size);
+        line_number = tinypy_frame_line_number(&vm->current_frame->base.base);
+    }
+    for (location = vm->debug_location_head; location != NULL; location = location->next) {
+        const char *stored_filename = location->text;
+        const char *stored_function = stored_filename + location->filename_size + 1U;
+
+        if (location->line_number == line_number &&
+            location->filename_size == filename_size &&
+            location->function_size == function_size &&
+            (filename_size == 0U || memcmp(stored_filename, filename, filename_size) == 0) &&
+            (function_size == 0U || memcmp(stored_function, function, function_size) == 0)) {
+            return location;
+        }
+    }
+    assert(function_size <= SIZE_MAX - 2U);
+    assert(filename_size <= SIZE_MAX - function_size - 2U);
+    text_size = filename_size + 1U + function_size + 1U;
+    assert(text_size <= SIZE_MAX - offsetof(tinypy_debug_location_t, text));
+    allocation_size = offsetof(tinypy_debug_location_t, text) + text_size;
+    location = (tinypy_debug_location_t *)tinypy_internal_vm_allocate(
+        vm,
+        allocation_size,
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    location->next = vm->debug_location_head;
+    location->allocation_size = allocation_size;
+    location->filename_size = filename_size;
+    location->function_size = function_size;
+    location->line_number = line_number;
+    if (filename_size != 0U) {
+        (void)memcpy(location->text, filename, filename_size);
+    }
+    location->text[filename_size] = '\0';
+    if (function_size != 0U) {
+        (void)memcpy(location->text + filename_size + 1U, function, function_size);
+    }
+    location->text[filename_size + 1U + function_size] = '\0';
+    vm->debug_location_head = location;
+    return location;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_debug_value_register(tinypy_vm_t *vm, tinypy_value_t *value) {
+    assert(vm != NULL);
+    assert(value != NULL);
+    assert(value->type != NULL);
+    assert(vm->debug_value_count != SIZE_MAX);
+
+    value->debug_previous = NULL;
+    value->debug_next = vm->debug_value_head;
+    if (vm->debug_value_head != NULL) {
+        vm->debug_value_head->debug_previous = value;
+    }
+    vm->debug_value_head = value;
+    vm->debug_value_count += 1U;
+    value->debug_created_at = __tinypy_debug_location_current(vm);
+    value->debug_last_reference_change_at = NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_debug_value_reuse(tinypy_vm_t *vm, tinypy_value_t *value) {
+    assert(vm != NULL);
+    assert(value != NULL);
+    assert(value->debug_previous != NULL || value->debug_next != NULL || vm->debug_value_head == value);
+
+    value->debug_created_at = __tinypy_debug_location_current(vm);
+    value->debug_last_reference_change_at = NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_debug_value_touch(tinypy_value_t *value) {
+    assert(value != NULL);
+    value->debug_last_reference_change_at = __tinypy_debug_location_current(TINYPY_VALUE_VM(value));
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_debug_value_unregister(tinypy_vm_t *vm, tinypy_value_t *value) {
+    assert(vm != NULL);
+    assert(value != NULL);
+    assert(vm->debug_value_count != 0U);
+    assert(value->debug_previous != NULL || value->debug_next != NULL || vm->debug_value_head == value);
+
+    if (value->debug_previous != NULL) {
+        value->debug_previous->debug_next = value->debug_next;
+    }
+    else {
+        assert(vm->debug_value_head == value);
+        vm->debug_value_head = value->debug_next;
+    }
+    if (value->debug_next != NULL) {
+        value->debug_next->debug_previous = value->debug_previous;
+    }
+    value->debug_previous = NULL;
+    value->debug_next = NULL;
+    value->debug_created_at = NULL;
+    value->debug_last_reference_change_at = NULL;
+    vm->debug_value_count -= 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_debug_locations_finalize(tinypy_vm_t *vm) {
+    while (vm->debug_location_head != NULL) {
+        tinypy_debug_location_t *location = vm->debug_location_head;
+
+        vm->debug_location_head = location->next;
+        tinypy_internal_vm_deallocate(
+            vm,
+            location,
+            location->allocation_size,
+            (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+}
+#endif
+//////////////////////////////////////////////////////////////////////////
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     assert(config != NULL);
     assert(config->abi_version == TINYPY_ABI_VERSION);
@@ -1120,6 +1267,9 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph) {
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_shutdown_destroy_entry(tinypy_shutdown_graph_t *graph, tinypy_shutdown_entry_t *entry) {
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_debug_value_unregister(graph->vm, entry->value);
+#endif
     if (entry->destroy != NULL) {
         entry->destroy(entry->value);
     }
@@ -1161,6 +1311,529 @@ static void __tinypy_shutdown_graph_destroy(tinypy_shutdown_graph_t *graph) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+typedef struct tinypy_debug_cycle_node_t {
+    tinypy_value_t *value;
+    size_t edge_count;
+    size_t component;
+    int visited;
+} tinypy_debug_cycle_node_t;
+typedef struct tinypy_debug_cycle_graph_t {
+    tinypy_vm_t *vm;
+    tinypy_debug_cycle_node_t *nodes;
+    size_t node_count;
+    size_t *slots;
+    size_t slot_capacity;
+    size_t *offsets;
+    size_t *edges;
+    size_t edge_count;
+} tinypy_debug_cycle_graph_t;
+typedef struct tinypy_debug_cycle_edge_context_t {
+    tinypy_debug_cycle_graph_t *graph;
+    size_t cursor;
+    int fill;
+} tinypy_debug_cycle_edge_context_t;
+typedef struct tinypy_debug_cycle_dfs_frame_t {
+    size_t node;
+    size_t next_edge;
+} tinypy_debug_cycle_dfs_frame_t;
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_debug_cycle_find(const tinypy_debug_cycle_graph_t *graph, const tinypy_value_t *value) {
+    size_t slot;
+
+    if (value == NULL || graph->slot_capacity == 0U) {
+        return SIZE_MAX;
+    }
+    slot = __tinypy_shutdown_pointer_hash(value) & (graph->slot_capacity - 1U);
+    while (graph->slots[slot] != 0U) {
+        size_t index = graph->slots[slot] - 1U;
+
+        if (graph->nodes[index].value == value) {
+            return index;
+        }
+        slot = (slot + 1U) & (graph->slot_capacity - 1U);
+    }
+    return SIZE_MAX;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_debug_cycle_edge_visit(tinypy_value_t *value, void *user_data) {
+    tinypy_debug_cycle_edge_context_t *context = (tinypy_debug_cycle_edge_context_t *)user_data;
+    size_t target = __tinypy_debug_cycle_find(context->graph, value);
+
+    if (target == SIZE_MAX) {
+        return;
+    }
+    if (context->fill != 0) {
+        assert(context->cursor < context->graph->edge_count);
+        context->graph->edges[context->cursor] = target;
+    }
+    assert(context->cursor != SIZE_MAX);
+    context->cursor += 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_debug_cycle_visit_owning_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_type_t *type = value->type;
+
+    visit(&type->base.base, user_data);
+    if (type->release_references != NULL) {
+        type->release_references(value, visit, user_data);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_debug_message_size(int written, size_t capacity) {
+    if (written <= 0) {
+        return 0U;
+    }
+    return (size_t)written < capacity ? (size_t)written : capacity - 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+static int __tinypy_debug_text_precision(size_t size) {
+    return size <= (size_t)INT_MAX ? (int)size : INT_MAX;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_debug_emit(tinypy_vm_t *vm, const char *message, size_t message_size) {
+    tinypy_diagnostic_t diagnostic;
+
+    if (message_size == 0U || vm->has_host == 0 || vm->host.diagnostic == NULL) {
+        return;
+    }
+    (void)memset(&diagnostic, 0, sizeof(diagnostic));
+    diagnostic.abi_version = TINYPY_ABI_VERSION;
+    diagnostic.struct_size = (uint32_t)sizeof(diagnostic);
+    diagnostic.error_kind = TINYPY_ERROR_RUNTIME;
+    diagnostic.message = message;
+    diagnostic.message_size = message_size;
+    vm->host.diagnostic(vm->host.user_data, &diagnostic);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_debug_emit_location(tinypy_vm_t *vm, const char *prefix, const tinypy_debug_location_t *location) {
+    const char *filename;
+    const char *function;
+    char message[1024];
+    int written;
+
+    if (location == NULL) {
+        return;
+    }
+    filename = location->text;
+    function = filename + location->filename_size + 1U;
+    written = snprintf(
+        message,
+        sizeof(message),
+        "%s%.*s:%d in %.*s",
+        prefix,
+        __tinypy_debug_text_precision(location->filename_size),
+        filename,
+        (int)location->line_number,
+        __tinypy_debug_text_precision(location->function_size),
+        function);
+    __tinypy_debug_emit(vm, message, __tinypy_debug_message_size(written, sizeof(message)));
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_debug_emit_cycle(
+    tinypy_debug_cycle_graph_t *graph,
+    size_t component,
+    size_t component_size,
+    size_t cycle_number) {
+    tinypy_vm_t *vm = graph->vm;
+    char message[1024];
+    int written;
+    size_t index;
+
+    written = snprintf(
+        message,
+        sizeof(message),
+        "[tinypy cycle] cycle %zu contains %zu unreachable object%s; break one owning edge listed below",
+        cycle_number,
+        component_size,
+        component_size == 1U ? "" : "s");
+    __tinypy_debug_emit(vm, message, __tinypy_debug_message_size(written, sizeof(message)));
+
+    for (index = 0U; index < graph->node_count; ++index) {
+        tinypy_debug_cycle_node_t *node = &graph->nodes[index];
+        tinypy_value_t *value;
+        tinypy_type_t *type;
+
+        if (node->component != component) {
+            continue;
+        }
+        value = node->value;
+        type = value->type;
+        written = snprintf(
+            message,
+            sizeof(message),
+            "  object #%zu: %.*s, refcount=%td",
+            index + 1U,
+            __tinypy_debug_text_precision(type->name_size),
+            type->name,
+            value->ref);
+        __tinypy_debug_emit(vm, message, __tinypy_debug_message_size(written, sizeof(message)));
+        __tinypy_debug_emit_location(vm, "    created at ", value->debug_created_at);
+        if (value->debug_last_reference_change_at != NULL) {
+            __tinypy_debug_emit_location(
+                vm,
+                "    candidate break site (last owning-reference change) at ",
+                value->debug_last_reference_change_at);
+        }
+    }
+    for (index = 0U; index < graph->node_count; ++index) {
+        tinypy_debug_cycle_node_t *node = &graph->nodes[index];
+        size_t edge;
+
+        if (node->component != component) {
+            continue;
+        }
+        for (edge = graph->offsets[index]; edge < graph->offsets[index + 1U]; ++edge) {
+            size_t target = graph->edges[edge];
+
+            if (graph->nodes[target].component != component) {
+                continue;
+            }
+            written = snprintf(
+                message,
+                sizeof(message),
+                "    owning edge: object #%zu -> object #%zu",
+                index + 1U,
+                target + 1U);
+            __tinypy_debug_emit(vm, message, __tinypy_debug_message_size(written, sizeof(message)));
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_debug_cycle_graph_destroy(tinypy_debug_cycle_graph_t *graph) {
+    if (graph->edges != NULL) {
+        tinypy_internal_vm_deallocate(
+            graph->vm,
+            graph->edges,
+            graph->edge_count * sizeof(*graph->edges),
+            (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+    if (graph->offsets != NULL) {
+        tinypy_internal_vm_deallocate(
+            graph->vm,
+            graph->offsets,
+            (graph->node_count + 1U) * sizeof(*graph->offsets),
+            (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+    if (graph->slots != NULL) {
+        tinypy_internal_vm_deallocate(
+            graph->vm,
+            graph->slots,
+            graph->slot_capacity * sizeof(*graph->slots),
+            (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+    if (graph->nodes != NULL) {
+        tinypy_internal_vm_deallocate(
+            graph->vm,
+            graph->nodes,
+            graph->node_count * sizeof(*graph->nodes),
+            (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_debug_report_unreachable_cycles(tinypy_vm_t *vm, const tinypy_shutdown_graph_t *reachable) {
+    tinypy_debug_cycle_graph_t graph;
+    tinypy_value_t *value;
+    size_t index;
+    size_t slot;
+    size_t *reverse_offsets = NULL;
+    size_t *reverse_edges = NULL;
+    size_t *order = NULL;
+    size_t *stack = NULL;
+    size_t *component_sizes = NULL;
+    tinypy_debug_cycle_dfs_frame_t *dfs = NULL;
+    size_t order_count = 0U;
+    size_t component_count = 0U;
+    size_t cycle_count = 0U;
+
+    if (vm->has_host == 0 || vm->host.diagnostic == NULL) {
+        return 0U;
+    }
+    (void)memset(&graph, 0, sizeof(graph));
+    graph.vm = vm;
+    for (value = vm->debug_value_head; value != NULL; value = value->debug_next) {
+        if (__tinypy_shutdown_find(reachable, value) == SIZE_MAX) {
+            graph.node_count += 1U;
+        }
+    }
+    if (graph.node_count == 0U) {
+        return 0U;
+    }
+    assert(graph.node_count <= SIZE_MAX / sizeof(*graph.nodes));
+    graph.nodes = (tinypy_debug_cycle_node_t *)tinypy_internal_vm_allocate(
+        vm,
+        graph.node_count * sizeof(*graph.nodes),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    (void)memset(graph.nodes, 0, graph.node_count * sizeof(*graph.nodes));
+
+    assert(graph.node_count <= SIZE_MAX / 2U);
+    graph.slot_capacity = 256U;
+    while (graph.slot_capacity < graph.node_count * 2U) {
+        assert(graph.slot_capacity <= SIZE_MAX / 2U);
+        graph.slot_capacity *= 2U;
+    }
+    assert(graph.slot_capacity <= SIZE_MAX / sizeof(*graph.slots));
+    graph.slots = (size_t *)tinypy_internal_vm_allocate(
+        vm,
+        graph.slot_capacity * sizeof(*graph.slots),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    (void)memset(graph.slots, 0, graph.slot_capacity * sizeof(*graph.slots));
+
+    index = 0U;
+    for (value = vm->debug_value_head; value != NULL; value = value->debug_next) {
+        if (__tinypy_shutdown_find(reachable, value) != SIZE_MAX) {
+            continue;
+        }
+        graph.nodes[index].value = value;
+        graph.nodes[index].component = SIZE_MAX;
+        slot = __tinypy_shutdown_pointer_hash(value) & (graph.slot_capacity - 1U);
+        while (graph.slots[slot] != 0U) {
+            slot = (slot + 1U) & (graph.slot_capacity - 1U);
+        }
+        graph.slots[slot] = index + 1U;
+        index += 1U;
+    }
+    assert(index == graph.node_count);
+
+    assert(graph.node_count < SIZE_MAX);
+    graph.offsets = (size_t *)tinypy_internal_vm_allocate(
+        vm,
+        (graph.node_count + 1U) * sizeof(*graph.offsets),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    graph.offsets[0] = 0U;
+    for (index = 0U; index < graph.node_count; ++index) {
+        tinypy_debug_cycle_edge_context_t context;
+
+        context.graph = &graph;
+        context.cursor = 0U;
+        context.fill = 0;
+        __tinypy_debug_cycle_visit_owning_references(
+            graph.nodes[index].value,
+            __tinypy_debug_cycle_edge_visit,
+            &context);
+        graph.nodes[index].edge_count = context.cursor;
+        assert(graph.offsets[index] <= SIZE_MAX - context.cursor);
+        graph.offsets[index + 1U] = graph.offsets[index] + context.cursor;
+    }
+    graph.edge_count = graph.offsets[graph.node_count];
+    if (graph.edge_count != 0U) {
+        assert(graph.edge_count <= SIZE_MAX / sizeof(*graph.edges));
+        graph.edges = (size_t *)tinypy_internal_vm_allocate(
+            vm,
+            graph.edge_count * sizeof(*graph.edges),
+            (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+    for (index = 0U; index < graph.node_count; ++index) {
+        tinypy_debug_cycle_edge_context_t context;
+
+        context.graph = &graph;
+        context.cursor = graph.offsets[index];
+        context.fill = 1;
+        __tinypy_debug_cycle_visit_owning_references(
+            graph.nodes[index].value,
+            __tinypy_debug_cycle_edge_visit,
+            &context);
+        assert(context.cursor == graph.offsets[index + 1U]);
+    }
+
+    reverse_offsets = (size_t *)tinypy_internal_vm_allocate(
+        vm,
+        (graph.node_count + 1U) * sizeof(*reverse_offsets),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    (void)memset(reverse_offsets, 0, (graph.node_count + 1U) * sizeof(*reverse_offsets));
+    for (index = 0U; index < graph.edge_count; ++index) {
+        size_t target = graph.edges[index];
+
+        assert(reverse_offsets[target + 1U] != SIZE_MAX);
+        reverse_offsets[target + 1U] += 1U;
+    }
+    for (index = 0U; index < graph.node_count; ++index) {
+        assert(reverse_offsets[index] <= SIZE_MAX - reverse_offsets[index + 1U]);
+        reverse_offsets[index + 1U] += reverse_offsets[index];
+        graph.nodes[index].edge_count = reverse_offsets[index];
+    }
+    if (graph.edge_count != 0U) {
+        reverse_edges = (size_t *)tinypy_internal_vm_allocate(
+            vm,
+            graph.edge_count * sizeof(*reverse_edges),
+            (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+    for (index = 0U; index < graph.node_count; ++index) {
+        size_t edge;
+
+        for (edge = graph.offsets[index]; edge < graph.offsets[index + 1U]; ++edge) {
+            size_t target = graph.edges[edge];
+            size_t cursor = graph.nodes[target].edge_count;
+
+            assert(cursor < reverse_offsets[target + 1U]);
+            reverse_edges[cursor] = index;
+            graph.nodes[target].edge_count += 1U;
+        }
+    }
+
+    order = (size_t *)tinypy_internal_vm_allocate(
+        vm,
+        graph.node_count * sizeof(*order),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    stack = (size_t *)tinypy_internal_vm_allocate(
+        vm,
+        graph.node_count * sizeof(*stack),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    component_sizes = (size_t *)tinypy_internal_vm_allocate(
+        vm,
+        graph.node_count * sizeof(*component_sizes),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    (void)memset(component_sizes, 0, graph.node_count * sizeof(*component_sizes));
+    dfs = (tinypy_debug_cycle_dfs_frame_t *)tinypy_internal_vm_allocate(
+        vm,
+        graph.node_count * sizeof(*dfs),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+
+    for (index = 0U; index < graph.node_count; ++index) {
+        size_t dfs_count;
+
+        if (graph.nodes[index].visited != 0) {
+            continue;
+        }
+        dfs_count = 1U;
+        dfs[0].node = index;
+        dfs[0].next_edge = graph.offsets[index];
+        graph.nodes[index].visited = 1;
+        while (dfs_count != 0U) {
+            tinypy_debug_cycle_dfs_frame_t *frame = &dfs[dfs_count - 1U];
+            size_t edge_end = graph.offsets[frame->node + 1U];
+
+            if (frame->next_edge < edge_end) {
+                size_t target = graph.edges[frame->next_edge];
+
+                frame->next_edge += 1U;
+                if (graph.nodes[target].visited == 0) {
+                    assert(dfs_count < graph.node_count);
+                    graph.nodes[target].visited = 1;
+                    dfs[dfs_count].node = target;
+                    dfs[dfs_count].next_edge = graph.offsets[target];
+                    dfs_count += 1U;
+                }
+                continue;
+            }
+            assert(order_count < graph.node_count);
+            order[order_count] = frame->node;
+            order_count += 1U;
+            dfs_count -= 1U;
+        }
+    }
+    assert(order_count == graph.node_count);
+
+    for (index = graph.node_count; index != 0U; --index) {
+        size_t root = order[index - 1U];
+        size_t stack_count;
+
+        if (graph.nodes[root].component != SIZE_MAX) {
+            continue;
+        }
+        stack_count = 1U;
+        stack[0] = root;
+        graph.nodes[root].component = component_count;
+        while (stack_count != 0U) {
+            size_t node = stack[stack_count - 1U];
+            size_t edge;
+
+            stack_count -= 1U;
+            component_sizes[component_count] += 1U;
+            for (edge = reverse_offsets[node]; edge < reverse_offsets[node + 1U]; ++edge) {
+                size_t source = reverse_edges[edge];
+
+                if (graph.nodes[source].component == SIZE_MAX) {
+                    assert(stack_count < graph.node_count);
+                    graph.nodes[source].component = component_count;
+                    stack[stack_count] = source;
+                    stack_count += 1U;
+                }
+            }
+        }
+        component_count += 1U;
+    }
+
+    for (index = 0U; index < component_count; ++index) {
+        int cyclic = component_sizes[index] > 1U ? 1 : 0;
+        size_t node;
+
+        if (cyclic == 0) {
+            for (node = 0U; node < graph.node_count; ++node) {
+                size_t edge;
+
+                if (graph.nodes[node].component != index) {
+                    continue;
+                }
+                for (edge = graph.offsets[node]; edge < graph.offsets[node + 1U]; ++edge) {
+                    if (graph.edges[edge] == node) {
+                        cyclic = 1;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        if (cyclic != 0) {
+            cycle_count += 1U;
+            __tinypy_debug_emit_cycle(
+                &graph,
+                index,
+                component_sizes[index],
+                cycle_count);
+        }
+    }
+
+    tinypy_internal_vm_deallocate(
+        vm,
+        dfs,
+        graph.node_count * sizeof(*dfs),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(
+        vm,
+        component_sizes,
+        graph.node_count * sizeof(*component_sizes),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(
+        vm,
+        stack,
+        graph.node_count * sizeof(*stack),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(
+        vm,
+        order,
+        graph.node_count * sizeof(*order),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    if (reverse_edges != NULL) {
+        tinypy_internal_vm_deallocate(
+            vm,
+            reverse_edges,
+            graph.edge_count * sizeof(*reverse_edges),
+            (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    }
+    tinypy_internal_vm_deallocate(
+        vm,
+        reverse_offsets,
+        (graph.node_count + 1U) * sizeof(*reverse_offsets),
+        (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    __tinypy_debug_cycle_graph_destroy(&graph);
+    return cycle_count;
+}
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_internal_debug_report_cycles(tinypy_vm_t *vm) {
+    tinypy_shutdown_graph_t reachable;
+    size_t cycle_count;
+
+    assert(tinypy_internal_vm_valid(vm));
+    (void)memset(&reachable, 0, sizeof(reachable));
+    reachable.vm = vm;
+    __tinypy_shutdown_collect(&reachable);
+    cycle_count = __tinypy_debug_report_unreachable_cycles(vm, &reachable);
+    __tinypy_shutdown_graph_destroy(&reachable);
+    return cycle_count;
+}
+#endif
+//////////////////////////////////////////////////////////////////////////
 void tinypy_vm_destroy(tinypy_vm_t *vm) {
     tinypy_allocator_t allocator;
     tinypy_shutdown_graph_t graph;
@@ -1175,6 +1848,9 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     (void)memset(&graph, 0, sizeof(graph));
     graph.vm = vm;
     __tinypy_shutdown_collect(&graph);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    (void)__tinypy_debug_report_unreachable_cycles(vm, &graph);
+#endif
     __tinypy_shutdown_destroy_graph(&graph);
     vm->state = TINYPY_VM_STATE_DESTROYING;
     for (type_index = 0U;
@@ -1183,6 +1859,9 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
         tinypy_internal_dict_destroy(&vm->builtin_type_dicts[type_index].base);
     }
     __tinypy_shutdown_graph_destroy(&graph);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    __tinypy_debug_locations_finalize(vm);
+#endif
     tinypy_internal_pool_finalize(vm);
     assert(vm->allocated_bytes == sizeof(*vm));
 

@@ -138,6 +138,9 @@ tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *
     value->type = object_type;
 
     TINYPY_INCREF(&object_type->base.base);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_debug_value_register(vm, value);
+#endif
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -167,6 +170,9 @@ void tinypy_internal_value_destroy(tinypy_value_t *value) {
     assert(value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     size_t allocation_size = tinypy_internal_value_allocation_size(value);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_debug_value_unregister(vm, value);
+#endif
     if (value->type != NULL && value->type->destroy != NULL) {
         value->type->destroy(value);
     }
@@ -192,6 +198,9 @@ void tinypy_internal_integer_free_list_finalize(tinypy_vm_t *vm) {
         vm->integer_free_count -= 1U;
         assert(vm->integer_type.base.base.ref > 1);
         vm->integer_type.base.base.ref -= 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        tinypy_internal_debug_value_unregister(vm, &value->base);
+#endif
         tinypy_internal_vm_deallocate(vm, value, sizeof(*value), (uint32_t)TINYPY_ALLOC_TAG_VALUE);
     }
 }
