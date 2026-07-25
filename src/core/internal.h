@@ -991,7 +991,6 @@ void tinypy_internal_cycle_diagnostics_dict_set_enabled(tinypy_vm_t *vm, tinypy_
 void tinypy_internal_cycle_diagnostics_dict_delete_enabled(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key);
 void tinypy_internal_cycle_diagnostics_dict_clear_enabled(tinypy_vm_t *vm, tinypy_value_t *dict);
 void tinypy_internal_cycle_diagnostics_cell_set_enabled(tinypy_vm_t *vm, tinypy_value_t *cell, tinypy_value_t *content);
-size_t tinypy_internal_debug_report_cycles(tinypy_vm_t *vm);
 
 static inline void tinypy_internal_cycle_diagnostics_value_register(tinypy_vm_t *vm, tinypy_value_t *value) {
     if (vm->cycle_diagnostics != NULL) {

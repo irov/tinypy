@@ -23,6 +23,8 @@ typedef struct tinypy_diagnostic_t {
     size_t message_size;
 } tinypy_diagnostic_t;
 
+typedef void (*tinypy_diagnostic_callback_t)(void *user_data, const tinypy_diagnostic_t *diagnostic);
+
 typedef struct tinypy_host_t {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -34,7 +36,7 @@ typedef struct tinypy_host_t {
 
     void (*emit_output)(void *user_data, tinypy_output_channel_e channel, const void *bytes, size_t size);
 
-    void (*diagnostic)(void *user_data, const tinypy_diagnostic_t *diagnostic);
+    tinypy_diagnostic_callback_t diagnostic;
 
     int (*poll_interrupt)(void *user_data);
 } tinypy_host_t;
@@ -56,6 +58,16 @@ typedef struct tinypy_vm_config_t {
 
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config);
 tinypy_value_t *tinypy_vm_builtins(const tinypy_vm_t *vm);
+
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+/* Reports currently unreachable owning cycles through callback. Cycle
+ * tracking must have been enabled in tinypy_vm_config_t. Returns the number
+ * of reported strongly connected components. */
+size_t tinypy_vm_report_cycles(
+    tinypy_vm_t *vm,
+    tinypy_diagnostic_callback_t callback,
+    void *user_data);
+#endif
 
 /* The runtime has no allocation registry or cyclic collector. The embedder
  * must release every owned dynamic value and explicitly break owning cycles

@@ -1794,6 +1794,8 @@ typedef struct tinypy_debug_cycle_edge_t {
 } tinypy_debug_cycle_edge_t;
 typedef struct tinypy_debug_cycle_graph_t {
     tinypy_vm_t *vm;
+    tinypy_diagnostic_callback_t callback;
+    void *user_data;
     tinypy_debug_cycle_node_t *nodes;
     size_t node_count;
     size_t *slots;
@@ -1930,10 +1932,13 @@ static int __tinypy_debug_text_precision(size_t size) {
     return size <= (size_t)INT_MAX ? (int)size : INT_MAX;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_debug_emit(tinypy_vm_t *vm, const char *message, size_t message_size) {
+static void __tinypy_debug_emit(
+    const tinypy_debug_cycle_graph_t *graph,
+    const char *message,
+    size_t message_size) {
     tinypy_diagnostic_t diagnostic;
 
-    if (message_size == 0U || vm->has_host == 0 || vm->host.diagnostic == NULL) {
+    if (message_size == 0U || graph->callback == NULL) {
         return;
     }
     (void)memset(&diagnostic, 0, sizeof(diagnostic));
@@ -1942,10 +1947,13 @@ static void __tinypy_debug_emit(tinypy_vm_t *vm, const char *message, size_t mes
     diagnostic.error_kind = TINYPY_ERROR_RUNTIME;
     diagnostic.message = message;
     diagnostic.message_size = message_size;
-    vm->host.diagnostic(vm->host.user_data, &diagnostic);
+    graph->callback(graph->user_data, &diagnostic);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_debug_emit_location(tinypy_vm_t *vm, const char *prefix, const tinypy_debug_location_t *location) {
+static void __tinypy_debug_emit_location(
+    const tinypy_debug_cycle_graph_t *graph,
+    const char *prefix,
+    const tinypy_debug_location_t *location) {
     const char *filename;
     const char *function;
     char message[1024];
@@ -1966,7 +1974,7 @@ static void __tinypy_debug_emit_location(tinypy_vm_t *vm, const char *prefix, co
         (int)location->line_number,
         __tinypy_debug_text_precision(location->function_size),
         function);
-    __tinypy_debug_emit(vm, message, __tinypy_debug_message_size(written, sizeof(message)));
+    __tinypy_debug_emit(graph, message, __tinypy_debug_message_size(written, sizeof(message)));
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_debug_emit_cycle_edge(
@@ -2048,10 +2056,10 @@ static void __tinypy_debug_emit_cycle_edge(
                 edge->target + 1U);
         }
     }
-    __tinypy_debug_emit(vm, message, __tinypy_debug_message_size(written, sizeof(message)));
+    __tinypy_debug_emit(graph, message, __tinypy_debug_message_size(written, sizeof(message)));
     if (diagnostics != NULL) {
         __tinypy_debug_emit_location(
-            vm,
+            graph,
             "      candidate break site at ",
             diagnostics->assigned_at);
     }
@@ -2062,7 +2070,6 @@ static void __tinypy_debug_emit_cycle(
     size_t component,
     size_t component_size,
     size_t cycle_number) {
-    tinypy_vm_t *vm = graph->vm;
     char message[1024];
     int written;
     size_t index;
@@ -2074,7 +2081,7 @@ static void __tinypy_debug_emit_cycle(
         cycle_number,
         component_size,
         component_size == 1U ? "" : "s");
-    __tinypy_debug_emit(vm, message, __tinypy_debug_message_size(written, sizeof(message)));
+    __tinypy_debug_emit(graph, message, __tinypy_debug_message_size(written, sizeof(message)));
 
     for (index = 0U; index < graph->node_count; ++index) {
         tinypy_debug_cycle_node_t *node = &graph->nodes[index];
@@ -2094,8 +2101,8 @@ static void __tinypy_debug_emit_cycle(
             __tinypy_debug_text_precision(type->name_size),
             type->name,
             value->ref);
-        __tinypy_debug_emit(vm, message, __tinypy_debug_message_size(written, sizeof(message)));
-        __tinypy_debug_emit_location(vm, "    created at ", node->diagnostics->created_at);
+        __tinypy_debug_emit(graph, message, __tinypy_debug_message_size(written, sizeof(message)));
+        __tinypy_debug_emit_location(graph, "    created at ", node->diagnostics->created_at);
     }
     for (index = 0U; index < graph->node_count; ++index) {
         tinypy_debug_cycle_node_t *node = &graph->nodes[index];
@@ -2146,7 +2153,11 @@ static void __tinypy_debug_cycle_graph_destroy(tinypy_debug_cycle_graph_t *graph
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_debug_report_unreachable_cycles(tinypy_vm_t *vm, const tinypy_shutdown_graph_t *reachable) {
+static size_t __tinypy_debug_report_unreachable_cycles(
+    tinypy_vm_t *vm,
+    const tinypy_shutdown_graph_t *reachable,
+    tinypy_diagnostic_callback_t callback,
+    void *user_data) {
     tinypy_debug_cycle_graph_t graph;
     tinypy_cycle_diagnostics_state_t *state = vm->cycle_diagnostics;
     tinypy_cycle_diagnostics_value_t *record;
@@ -2162,11 +2173,13 @@ static size_t __tinypy_debug_report_unreachable_cycles(tinypy_vm_t *vm, const ti
     size_t component_count = 0U;
     size_t cycle_count = 0U;
 
-    if (state == NULL || vm->has_host == 0 || vm->host.diagnostic == NULL) {
+    if (state == NULL || callback == NULL) {
         return 0U;
     }
     (void)memset(&graph, 0, sizeof(graph));
     graph.vm = vm;
+    graph.callback = callback;
+    graph.user_data = user_data;
     for (record = state->values; record != NULL; record = record->next) {
         if (record->value->ref != 0 &&
             __tinypy_shutdown_find(reachable, record->value) == SIZE_MAX) {
@@ -2446,7 +2459,10 @@ static size_t __tinypy_debug_report_unreachable_cycles(tinypy_vm_t *vm, const ti
     return cycle_count;
 }
 //////////////////////////////////////////////////////////////////////////
-size_t tinypy_internal_debug_report_cycles(tinypy_vm_t *vm) {
+static size_t __tinypy_debug_report_cycles(
+    tinypy_vm_t *vm,
+    tinypy_diagnostic_callback_t callback,
+    void *user_data) {
     tinypy_shutdown_graph_t reachable;
     size_t cycle_count;
 
@@ -2457,9 +2473,24 @@ size_t tinypy_internal_debug_report_cycles(tinypy_vm_t *vm) {
     (void)memset(&reachable, 0, sizeof(reachable));
     reachable.vm = vm;
     __tinypy_shutdown_collect(&reachable);
-    cycle_count = __tinypy_debug_report_unreachable_cycles(vm, &reachable);
+    cycle_count = __tinypy_debug_report_unreachable_cycles(
+        vm,
+        &reachable,
+        callback,
+        user_data);
     __tinypy_shutdown_graph_destroy(&reachable);
     return cycle_count;
+}
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_vm_report_cycles(
+    tinypy_vm_t *vm,
+    tinypy_diagnostic_callback_t callback,
+    void *user_data) {
+    assert(tinypy_internal_vm_valid(vm));
+    if (vm->cycle_diagnostics == NULL || callback == NULL) {
+        return 0U;
+    }
+    return __tinypy_debug_report_cycles(vm, callback, user_data);
 }
 #endif
 //////////////////////////////////////////////////////////////////////////
@@ -2477,9 +2508,6 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     (void)memset(&graph, 0, sizeof(graph));
     graph.vm = vm;
     __tinypy_shutdown_collect(&graph);
-#if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    (void)__tinypy_debug_report_unreachable_cycles(vm, &graph);
-#endif
     __tinypy_shutdown_destroy_graph(&graph);
     vm->state = TINYPY_VM_STATE_DESTROYING;
     for (type_index = 0U;

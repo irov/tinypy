@@ -193,7 +193,6 @@ static int __test_cycle_diagnostics(void) {
     test_allocator_state_t allocator_state;
     test_cycle_diagnostic_state_t diagnostic_state;
     tinypy_allocator_t allocator;
-    tinypy_host_t host;
     tinypy_vm_config_t config;
     tinypy_vm_t *vm;
     tinypy_compile_options_t options;
@@ -213,19 +212,13 @@ static int __test_cycle_diagnostics(void) {
     (void)memset(&allocator_state, 0, sizeof(allocator_state));
     (void)memset(&diagnostic_state, 0, sizeof(diagnostic_state));
     allocator = __test_make_allocator(&allocator_state);
-    (void)memset(&host, 0, sizeof(host));
-    host.abi_version = TINYPY_ABI_VERSION;
-    host.struct_size = (uint32_t)sizeof(host);
-    host.user_data = &diagnostic_state;
-    host.diagnostic = __test_cycle_diagnostic;
     config = __test_make_config(&allocator);
-    config.host = &host;
     vm = tinypy_vm_create(&config);
     TEST_CHECK(vm != NULL);
     TEST_CHECK(vm->cycle_diagnostics == NULL);
     list = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_list_append(list, list);
-    TEST_CHECK(tinypy_internal_debug_report_cycles(vm) == 0U);
+    TEST_CHECK(tinypy_vm_report_cycles(vm, __test_cycle_diagnostic, &diagnostic_state) == 0U);
     TEST_CHECK(diagnostic_state.message_count == 0U);
     tinypy_list_clear(list);
     tinypy_release(list);
@@ -237,7 +230,6 @@ static int __test_cycle_diagnostics(void) {
     (void)memset(&diagnostic_state, 0, sizeof(diagnostic_state));
     allocator = __test_make_allocator(&allocator_state);
     config = __test_make_config(&allocator);
-    config.host = &host;
     config.cycle_diagnostics = 1;
     vm = tinypy_vm_create(&config);
     TEST_CHECK(vm != NULL);
@@ -245,7 +237,8 @@ static int __test_cycle_diagnostics(void) {
 
     list = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_list_append(list, list);
-    TEST_CHECK(tinypy_internal_debug_report_cycles(vm) == 1U);
+    TEST_CHECK(tinypy_vm_report_cycles(vm, NULL, NULL) == 0U);
+    TEST_CHECK(tinypy_vm_report_cycles(vm, __test_cycle_diagnostic, &diagnostic_state) == 1U);
     TEST_CHECK(diagnostic_state.message_count >= 4U);
     TEST_CHECK(strstr(diagnostic_state.text, "[tinypy cycle] cycle 1") != NULL);
     TEST_CHECK(strstr(diagnostic_state.text, "candidate break site") != NULL);
@@ -287,7 +280,7 @@ static int __test_cycle_diagnostics(void) {
     TEST_CHECK(tinypy_typeof(cell) == TINYPY_VALUE_CELL);
     tinypy_dict_clear(globals);
 
-    TEST_CHECK(tinypy_internal_debug_report_cycles(vm) >= 3U);
+    TEST_CHECK(tinypy_vm_report_cycles(vm, __test_cycle_diagnostic, &diagnostic_state) >= 3U);
     TEST_CHECK(strstr(diagnostic_state.text, "[0] -> object #") != NULL);
     TEST_CHECK(strstr(diagnostic_state.text, "['self'] -> object #") != NULL);
     TEST_CHECK(strstr(diagnostic_state.text, ".cell_contents -> object #") != NULL);
