@@ -351,7 +351,7 @@ void tinypy_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *
         entry->value = value;
         TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        tinypy_internal_debug_value_touch(dict);
+        tinypy_internal_cycle_diagnostics_dict_set(vm, dict, entry->key, value, 0);
 #endif
         TINYPY_DECREF(previous);
         return;
@@ -377,7 +377,7 @@ void tinypy_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *
     TINYPY_DICT_OBJECT(dict)->used += 1U;
     TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_debug_value_touch(dict);
+    tinypy_internal_cycle_diagnostics_dict_set(vm, dict, entry->key, value, 1);
 #endif
 }
 //////////////////////////////////////////////////////////////////////////
@@ -398,6 +398,9 @@ int32_t tinypy_internal_dict_delete_optional(tinypy_vm_t *vm, tinypy_value_t *di
     tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
     tinypy_value_t *owned_key = entry->key;
     owned_value = entry->value;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_cycle_diagnostics_dict_delete(vm, dict, entry->key);
+#endif
     entry->key = NULL;
     entry->value = NULL;
     entry->state = TINYPY_DICT_ENTRY_DUMMY;
@@ -439,6 +442,9 @@ void tinypy_dict_clear(tinypy_value_t *dict) {
 
     tinypy_dict_entry_t *entries = TINYPY_DICT_OBJECT(dict)->table;
     capacity = TINYPY_DICT_CAPACITY(dict);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_cycle_diagnostics_dict_clear(vm, dict);
+#endif
     TINYPY_DICT_OBJECT(dict)->used = 0U;
     TINYPY_DICT_OBJECT(dict)->fill = 0U;
     TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);

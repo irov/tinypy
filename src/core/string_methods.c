@@ -938,6 +938,9 @@ static void __tinypy_string_list_reverse(tinypy_value_t *list) {
         TINYPY_LIST_OBJECT(list)->items[right] = value;
         left += 1U;
     }
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_cycle_diagnostics_list_reindex(TINYPY_VALUE_VM(list), list);
+#endif
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_split_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

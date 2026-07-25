@@ -81,7 +81,7 @@ static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_vm_t *vm, 
             frame->base.base.ref = 1;
             assert(frame->base.base.type == &vm->frame_type);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-            tinypy_internal_debug_value_reuse(vm, &frame->base.base);
+            tinypy_internal_cycle_diagnostics_value_reuse(vm, &frame->base.base);
 #endif
             (void)memset(frame->global_cache, 0, sizeof(frame->global_cache));
             if (local_slot_count != 0U) {
@@ -99,7 +99,7 @@ static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_vm_t *vm, 
     frame->base.base.type = &vm->frame_type;
     TINYPY_INCREF(&vm->frame_type.base.base);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_debug_value_register(vm, &frame->base.base);
+    tinypy_internal_cycle_diagnostics_value_register(vm, &frame->base.base);
 #endif
     (void)memset(frame->global_cache, 0, sizeof(frame->global_cache));
     if (local_slot_count != 0U) {
@@ -130,7 +130,7 @@ void tinypy_internal_frame_free_list_finalize(tinypy_vm_t *vm) {
         assert(vm->frame_type.base.base.ref > 1);
         vm->frame_type.base.base.ref -= 1;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        tinypy_internal_debug_value_unregister(vm, &frame->base.base);
+        tinypy_internal_cycle_diagnostics_value_unregister(vm, &frame->base.base);
 #endif
         tinypy_internal_vm_deallocate(vm, frame, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_VALUE);
     }

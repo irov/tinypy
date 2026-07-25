@@ -447,6 +447,11 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
             if (__tinypy_list_sort_compare(vm, key, keys[position - 1U], compare, reverse, &less, out_error) == 0) {
                 size_t release_index;
 
+                TINYPY_LIST_OBJECT(list)->items[position] = item;
+                keys[position] = key;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+                tinypy_internal_cycle_diagnostics_list_reindex(vm, list);
+#endif
                 if (key_function != NULL && TINYPY_VALUE_KIND(key_function) != TINYPY_VALUE_NONE) {
                     for (release_index = 0U; release_index < size; ++release_index) {
                         TINYPY_DECREF(keys[release_index]);
@@ -474,6 +479,9 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
         tinypy_internal_vm_deallocate(vm, keys, size * sizeof(*keys), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
         assert(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
         TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        tinypy_internal_cycle_diagnostics_list_reindex(vm, list);
+#endif
     }
     return tinypy_none_get(vm);
 }

@@ -150,7 +150,7 @@ static tinypy_vm_config_t __test_make_config(const tinypy_allocator_t *allocator
 //////////////////////////////////////////////////////////////////////////
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
 typedef struct test_cycle_diagnostic_state_t {
-    char text[4096];
+    char text[32768];
     size_t size;
     size_t message_count;
 } test_cycle_diagnostic_state_t;
@@ -178,13 +178,37 @@ static void __test_cycle_diagnostic(void *user_data, const tinypy_diagnostic_t *
 }
 //////////////////////////////////////////////////////////////////////////
 static int __test_cycle_diagnostics(void) {
+    static const char source[] =
+        "list_cycle = []\n"
+        "list_cycle.append(list_cycle)\n"
+        "dict_cycle = {}\n"
+        "dict_cycle['self'] = dict_cycle\n"
+        "def make_cycle():\n"
+        "    value = None\n"
+        "    def closure():\n"
+        "        return value\n"
+        "    value = closure\n"
+        "    return closure\n"
+        "cell_cycle = make_cycle()\n";
     test_allocator_state_t allocator_state;
     test_cycle_diagnostic_state_t diagnostic_state;
     tinypy_allocator_t allocator;
     tinypy_host_t host;
     tinypy_vm_config_t config;
     tinypy_vm_t *vm;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+    tinypy_value_t *globals;
+    tinypy_value_t *result;
     tinypy_value_t *list;
+    tinypy_value_t *dict;
+    tinypy_value_t *function;
+    tinypy_value_t *closure;
+    tinypy_value_t *cell;
+    tinypy_value_t *list_key;
+    tinypy_value_t *dict_key;
+    tinypy_value_t *function_key;
 
     (void)memset(&allocator_state, 0, sizeof(allocator_state));
     (void)memset(&diagnostic_state, 0, sizeof(diagnostic_state));
@@ -198,6 +222,26 @@ static int __test_cycle_diagnostics(void) {
     config.host = &host;
     vm = tinypy_vm_create(&config);
     TEST_CHECK(vm != NULL);
+    TEST_CHECK(vm->cycle_diagnostics == NULL);
+    list = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_list_append(list, list);
+    TEST_CHECK(tinypy_internal_debug_report_cycles(vm) == 0U);
+    TEST_CHECK(diagnostic_state.message_count == 0U);
+    tinypy_list_clear(list);
+    tinypy_release(list);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    (void)memset(&diagnostic_state, 0, sizeof(diagnostic_state));
+    allocator = __test_make_allocator(&allocator_state);
+    config = __test_make_config(&allocator);
+    config.host = &host;
+    config.cycle_diagnostics = 1;
+    vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    TEST_CHECK(vm->cycle_diagnostics != NULL);
 
     list = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_list_append(list, list);
@@ -205,10 +249,64 @@ static int __test_cycle_diagnostics(void) {
     TEST_CHECK(diagnostic_state.message_count >= 4U);
     TEST_CHECK(strstr(diagnostic_state.text, "[tinypy cycle] cycle 1") != NULL);
     TEST_CHECK(strstr(diagnostic_state.text, "candidate break site") != NULL);
-    TEST_CHECK(strstr(diagnostic_state.text, "owning edge: object #") != NULL);
+    TEST_CHECK(strstr(diagnostic_state.text, "[0] -> object #") != NULL);
 
     tinypy_list_clear(list);
     tinypy_release(list);
+
+    (void)memset(&diagnostic_state, 0, sizeof(diagnostic_state));
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(
+        vm,
+        source,
+        sizeof(source) - 1U,
+        "cycle.py",
+        sizeof("cycle.py") - 1U,
+        &options,
+        &error);
+    TEST_CHECK(code != NULL);
+    TEST_CHECK(error == NULL);
+    globals = tinypy_dict_new(vm);
+    result = tinypy_eval_code(code, globals, NULL, &error);
+    TEST_CHECK(result != NULL);
+    TEST_CHECK(error == NULL);
+
+    list_key = tinypy_string_from_bytes(vm, "list_cycle", sizeof("list_cycle") - 1U);
+    dict_key = tinypy_string_from_bytes(vm, "dict_cycle", sizeof("dict_cycle") - 1U);
+    function_key = tinypy_string_from_bytes(vm, "cell_cycle", sizeof("cell_cycle") - 1U);
+    list = tinypy_dict_get(globals, list_key);
+    dict = tinypy_dict_get(globals, dict_key);
+    function = tinypy_dict_get(globals, function_key);
+    tinypy_retain(list);
+    tinypy_retain(dict);
+    tinypy_retain(function);
+    closure = tinypy_function_closure(function);
+    TEST_CHECK(closure != NULL);
+    TEST_CHECK(tinypy_tuple_size(closure) == 1U);
+    cell = tinypy_tuple_get(closure, 0U);
+    TEST_CHECK(tinypy_typeof(cell) == TINYPY_VALUE_CELL);
+    tinypy_dict_clear(globals);
+
+    TEST_CHECK(tinypy_internal_debug_report_cycles(vm) >= 3U);
+    TEST_CHECK(strstr(diagnostic_state.text, "[0] -> object #") != NULL);
+    TEST_CHECK(strstr(diagnostic_state.text, "['self'] -> object #") != NULL);
+    TEST_CHECK(strstr(diagnostic_state.text, ".cell_contents -> object #") != NULL);
+    TEST_CHECK(strstr(diagnostic_state.text, "candidate break site at cycle.py:2 in <module>") != NULL);
+    TEST_CHECK(strstr(diagnostic_state.text, "candidate break site at cycle.py:4 in <module>") != NULL);
+    TEST_CHECK(strstr(diagnostic_state.text, "candidate break site at cycle.py:9 in make_cycle") != NULL);
+
+    tinypy_list_clear(list);
+    tinypy_dict_clear(dict);
+    tinypy_cell_set(cell, NULL);
+    tinypy_release(function);
+    tinypy_release(dict);
+    tinypy_release(list);
+    tinypy_release(function_key);
+    tinypy_release(dict_key);
+    tinypy_release(list_key);
+    tinypy_release(result);
+    tinypy_release(globals);
+    tinypy_release(code);
     tinypy_vm_destroy(vm);
     TEST_CHECK(allocator_state.outstanding_allocations == 0U);
     TEST_CHECK(allocator_state.outstanding_bytes == 0U);

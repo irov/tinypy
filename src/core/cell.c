@@ -13,6 +13,9 @@ tinypy_value_t *tinypy_cell_new(tinypy_vm_t *vm, tinypy_value_t *content) {
     if (content != NULL) {
         TINYPY_INCREF(content);
     }
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    tinypy_internal_cycle_diagnostics_cell_set(vm, &cell->base, content);
+#endif
     return &cell->base;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -43,7 +46,7 @@ void tinypy_cell_set(tinypy_value_t *cell_value, tinypy_value_t *content) {
     }
     cell->content = content;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_debug_value_touch(cell_value);
+    tinypy_internal_cycle_diagnostics_cell_set(TINYPY_VALUE_VM(cell_value), cell_value, content);
 #endif
     if (previous != NULL) {
         TINYPY_DECREF(previous);

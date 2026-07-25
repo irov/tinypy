@@ -51,6 +51,7 @@ typedef struct tinypy_vm_config_t {
     size_t max_heap_bytes;
     uint64_t feature_flags;
     int32_t optimize_level;
+    int32_t cycle_diagnostics;
 } tinypy_vm_config_t;
 
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config);

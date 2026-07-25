@@ -139,26 +139,18 @@ typedef enum tinypy_exception_type_index_e {
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_compile_environment_t tinypy_compile_environment_t;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-typedef struct tinypy_debug_location_t tinypy_debug_location_t;
+typedef struct tinypy_cycle_diagnostics_state_t tinypy_cycle_diagnostics_state_t;
 #endif
 //////////////////////////////////////////////////////////////////////////
 /* Complete universal tinypy object header. */
 struct tinypy_value_t {
     tinypy_ref_t ref;
     tinypy_type_t *type;
-#if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_value_t *debug_previous;
-    tinypy_value_t *debug_next;
-    const tinypy_debug_location_t *debug_created_at;
-    const tinypy_debug_location_t *debug_last_reference_change_at;
-#endif
 };
 //////////////////////////////////////////////////////////////////////////
 typedef char tinypy_object_ref_must_be_first_t[offsetof(tinypy_value_t, ref) == 0U ? 1 : -1];
 typedef char tinypy_object_type_must_follow_refcount_t[offsetof(tinypy_value_t, type) == sizeof(tinypy_ref_t) ? 1 : -1];
-#if !defined(TINYPY_CYCLE_DIAGNOSTICS)
 typedef char tinypy_object_header_has_only_two_fields_t[sizeof(tinypy_value_t) == sizeof(tinypy_ref_t) + sizeof(tinypy_type_t *) ? 1 : -1];
-#endif
 //////////////////////////////////////////////////////////////////////////
 /* Header for tinypy objects with a non-negative logical size. */
 typedef struct tinypy_sized_object_t {
@@ -908,9 +900,7 @@ struct tinypy_vm_t {
     size_t evaluation_depth;
     size_t recursion_limit;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_value_t *debug_value_head;
-    tinypy_debug_location_t *debug_location_head;
-    size_t debug_value_count;
+    tinypy_cycle_diagnostics_state_t *cycle_diagnostics;
 #endif
     tinypy_value_t *builtins;
     tinypy_value_t *builtins_key;
@@ -988,11 +978,86 @@ tinypy_type_t *tinypy_internal_type_for_kind(tinypy_vm_t *vm, tinypy_value_type_
 tinypy_value_t *tinypy_internal_value_allocate(tinypy_vm_t *vm, tinypy_value_type_e type, size_t allocation_size);
 tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *object_type, size_t allocation_size);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-void tinypy_internal_debug_value_register(tinypy_vm_t *vm, tinypy_value_t *value);
-void tinypy_internal_debug_value_reuse(tinypy_vm_t *vm, tinypy_value_t *value);
-void tinypy_internal_debug_value_touch(tinypy_value_t *value);
-void tinypy_internal_debug_value_unregister(tinypy_vm_t *vm, tinypy_value_t *value);
+void tinypy_internal_cycle_diagnostics_value_register_enabled(tinypy_vm_t *vm, tinypy_value_t *value);
+void tinypy_internal_cycle_diagnostics_value_reuse_enabled(tinypy_vm_t *vm, tinypy_value_t *value);
+void tinypy_internal_cycle_diagnostics_value_unregister_enabled(tinypy_vm_t *vm, tinypy_value_t *value);
+void tinypy_internal_cycle_diagnostics_list_extend_enabled(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *const *items, size_t item_count);
+void tinypy_internal_cycle_diagnostics_list_insert_enabled(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *item);
+void tinypy_internal_cycle_diagnostics_list_set_enabled(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *item);
+void tinypy_internal_cycle_diagnostics_list_remove_enabled(tinypy_vm_t *vm, tinypy_value_t *list, size_t index);
+void tinypy_internal_cycle_diagnostics_list_clear_enabled(tinypy_vm_t *vm, tinypy_value_t *list);
+void tinypy_internal_cycle_diagnostics_list_reindex_enabled(tinypy_vm_t *vm, tinypy_value_t *list);
+void tinypy_internal_cycle_diagnostics_dict_set_enabled(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, int32_t inserted);
+void tinypy_internal_cycle_diagnostics_dict_delete_enabled(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key);
+void tinypy_internal_cycle_diagnostics_dict_clear_enabled(tinypy_vm_t *vm, tinypy_value_t *dict);
+void tinypy_internal_cycle_diagnostics_cell_set_enabled(tinypy_vm_t *vm, tinypy_value_t *cell, tinypy_value_t *content);
 size_t tinypy_internal_debug_report_cycles(tinypy_vm_t *vm);
+
+static inline void tinypy_internal_cycle_diagnostics_value_register(tinypy_vm_t *vm, tinypy_value_t *value) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_value_register_enabled(vm, value);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_value_reuse(tinypy_vm_t *vm, tinypy_value_t *value) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_value_reuse_enabled(vm, value);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_value_unregister(tinypy_vm_t *vm, tinypy_value_t *value) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_value_unregister_enabled(vm, value);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_list_extend(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *const *items, size_t item_count) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_list_extend_enabled(vm, list, index, items, item_count);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_list_insert(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *item) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_list_insert_enabled(vm, list, index, item);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_list_set(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *item) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_list_set_enabled(vm, list, index, item);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_list_remove(tinypy_vm_t *vm, tinypy_value_t *list, size_t index) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_list_remove_enabled(vm, list, index);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_list_clear(tinypy_vm_t *vm, tinypy_value_t *list) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_list_clear_enabled(vm, list);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_list_reindex(tinypy_vm_t *vm, tinypy_value_t *list) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_list_reindex_enabled(vm, list);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_dict_set(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, int32_t inserted) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_dict_set_enabled(vm, dict, key, value, inserted);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_dict_delete(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_dict_delete_enabled(vm, dict, key);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_dict_clear(tinypy_vm_t *vm, tinypy_value_t *dict) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_dict_clear_enabled(vm, dict);
+    }
+}
+static inline void tinypy_internal_cycle_diagnostics_cell_set(tinypy_vm_t *vm, tinypy_value_t *cell, tinypy_value_t *content) {
+    if (vm->cycle_diagnostics != NULL) {
+        tinypy_internal_cycle_diagnostics_cell_set_enabled(vm, cell, content);
+    }
+}
 #endif
 size_t tinypy_internal_value_allocation_size(const tinypy_value_t *value);
 void tinypy_internal_value_destroy(tinypy_value_t *value);
@@ -1256,7 +1321,7 @@ static inline tinypy_value_t *__tinypy_internal_integer_from_i64_fast(tinypy_vm_
         assert(result->type == &vm->integer_type);
         result->ref = 1;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        tinypy_internal_debug_value_reuse(vm, result);
+        tinypy_internal_cycle_diagnostics_value_reuse(vm, result);
 #endif
         TINYPY_INTEGER_VALUE(result) = value;
         return result;
