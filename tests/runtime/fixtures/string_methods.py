@@ -1,3 +1,8 @@
+# Portable Python 2.7 behavior checks adapted from CPython 2.7.18
+# Lib/test/string_tests.py. Copyright (c) 2001-2020 Python Software
+# Foundation; All Rights Reserved. Distributed under PSF License Version 2;
+# see dependencies/python/LICENSE in the Mengine source tree.
+
 assert "{} {}".format("a", 2) == "a 2"
 assert "{name!r}".format(name="x") == "'x'"
 assert "{0:04x}".format(15) == "000f"
@@ -15,6 +20,35 @@ assert "prefix-value".startswith(("other", "prefix"))
 assert "prefix-value".endswith("value", 1)
 assert "  value\t".strip() == "value"
 assert "xyvalueyx".strip("xy") == "value"
+assert "  value  ".lstrip() == "value  "
+assert "  value  ".rstrip() == "  value"
+assert "xyvalueyx".lstrip("xy") == "valueyx"
+assert "xyvalueyx".rstrip("xy") == "xyvalue"
+
+# CPython 2.7.18 Lib/test/string_tests.py:
+# CommonTest.test_strip_whitespace and CommonTest.test_strip.
+assert "   hello   ".strip() == "hello"
+assert "   hello   ".lstrip() == "hello   "
+assert "   hello   ".rstrip() == "   hello"
+assert "hello".strip() == "hello"
+
+strip_whitespace = " \t\n\r\f\vabc \t\n\r\f\v"
+assert strip_whitespace.strip() == "abc"
+assert strip_whitespace.lstrip() == "abc \t\n\r\f\v"
+assert strip_whitespace.rstrip() == " \t\n\r\f\vabc"
+
+assert "   hello   ".strip(None) == "hello"
+assert "   hello   ".lstrip(None) == "hello   "
+assert "   hello   ".rstrip(None) == "   hello"
+assert "hello".strip(None) == "hello"
+
+assert "xyzzyhelloxyzzy".strip("xyz") == "hello"
+assert "xyzzyhelloxyzzy".lstrip("xyz") == "helloxyzzy"
+assert "xyzzyhelloxyzzy".rstrip("xyz") == "xyzzyhello"
+assert "hello".strip("xyz") == "hello"
+assert "mississippi".strip("mississippi") == ""
+assert "mississippi".strip("i") == "mississipp"
+
 assert "abcabc".replace("ab", "X", 1) == "Xcabc"
 assert "ab".replace("", "-", 2) == "-a-b"
 assert "a,b,,c".split(",") == ["a", "b", "", "c"]

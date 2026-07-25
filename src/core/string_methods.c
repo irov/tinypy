@@ -827,22 +827,16 @@ static tinypy_value_t *__tinypy_string_strip_method(tinypy_value_t *function, ti
     }
     end = TINYPY_TEXT_BYTE_SIZE(text);
     if (mode <= 0) {
-        int condition_2 = begin < end;
-        if (condition_2 != 0) {
-            const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
-            condition_2 = __tinypy_string_strip_contains(characters, bytes[begin]) != 0;
-        }
-        while (condition_2) {
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
+
+        while (begin < end && __tinypy_string_strip_contains(characters, bytes[begin]) != 0) {
             begin += 1U;
         }
     }
     if (mode >= 0) {
-        int condition_3 = end > begin;
-        if (condition_3 != 0) {
-            const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
-            condition_3 = __tinypy_string_strip_contains(characters, bytes[end - 1U]) != 0;
-        }
-        while (condition_3) {
+        const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
+
+        while (end > begin && __tinypy_string_strip_contains(characters, bytes[end - 1U]) != 0) {
             end -= 1U;
         }
     }

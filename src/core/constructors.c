@@ -22,6 +22,10 @@ static int32_t __tinypy_constructor_argument_count(tinypy_vm_t *vm, tinypy_value
     return INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_constructor_object_has_excess_arguments(tinypy_value_t *args, tinypy_value_t *kwargs) {
+    return TINYPY_TUPLE_SIZE(args) > 1U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U);
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_constructor_ascii_space(unsigned char character) {
     return character == (unsigned char)' ' || character == (unsigned char)'\t' || character == (unsigned char)'\n' || character == (unsigned char)'\r' || character == (unsigned char)'\v' || character == (unsigned char)'\f';
 }
@@ -848,7 +852,18 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ cannot create this type", out_error);
         return NULL;
     }
-    (void)kwargs;
+    if (__tinypy_constructor_object_has_excess_arguments(args, kwargs) != 0) {
+        tinypy_value_t *type_init = tinypy_type_get_attr(class_type, "__init__", 8U);
+        tinypy_value_t *object_init = tinypy_type_get_attr(&vm->object_type, "__init__", 8U);
+
+        /* CPython 2.7 accepts these arguments when __init__ is overridden.
+         * When both __new__ and __init__ are overridden it also emits a
+         * DeprecationWarning, which tinypy does not expose. */
+        if (type_init == object_init) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object() takes no parameters", out_error);
+            return NULL;
+        }
+    }
     return class_type->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE
                ? tinypy_native_instance_new(class_type)
                : tinypy_instance_new(class_type);
@@ -858,8 +873,22 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_argument_count(vm, args, 1U, 1U, out_error) == 0) {
+    if (TINYPY_TUPLE_SIZE(args) == 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__init__ requires an instance", out_error);
         return NULL;
+    }
+    if (__tinypy_constructor_object_has_excess_arguments(args, kwargs) != 0) {
+        tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+        tinypy_type_t *type = self->type;
+        tinypy_value_t *type_new = tinypy_type_get_attr(type, "__new__", 7U);
+        tinypy_value_t *object_new = tinypy_type_get_attr(&vm->object_type, "__new__", 7U);
+
+        /* Symmetrically, CPython 2.7 accepts these arguments when __new__ is
+         * overridden, with the same unexposed warning when both are custom. */
+        if (type_new == object_new) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__init__() takes no parameters", out_error);
+            return NULL;
+        }
     }
     return tinypy_none_get(vm);
 }
