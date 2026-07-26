@@ -66,8 +66,8 @@ typedef enum tinypy_token_type_e {
 #define TINYPY_TOKEN_IS_END(type) ((type) == TINYPY_TOKEN_END)
 
 extern const char *const __tinypy_parser_token_names[];
-int __tinypy_token_one_character(int first);
-int __tinypy_token_two_characters(int first, int second);
-int __tinypy_token_three_characters(int first, int second, int third);
+int32_t __tinypy_token_one_character(int32_t first);
+int32_t __tinypy_token_two_characters(int32_t first, int32_t second);
+int32_t __tinypy_token_three_characters(int32_t first, int32_t second, int32_t third);
 
 #endif

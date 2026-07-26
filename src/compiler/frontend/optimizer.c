@@ -10,7 +10,7 @@
 #include "symbol_table.h"
 #include "../../bytecode/opcode.h"
 
-#define TINYPY_OPTIMIZER_GET_ARGUMENT(arr, i) ((int)((arr[i + 2] << 8) + arr[i + 1]))
+#define TINYPY_OPTIMIZER_GET_ARGUMENT(arr, i) ((int32_t)((arr[i + 2] << 8) + arr[i + 1]))
 #define TINYPY_OPTIMIZER_IS_UNCONDITIONAL_JUMP(op) (op == TINYPY_OP_JUMP_ABSOLUTE || op == TINYPY_OP_JUMP_FORWARD)
 #define TINYPY_OPTIMIZER_IS_CONDITIONAL_JUMP(op) (op == TINYPY_OP_POP_JUMP_IF_FALSE || op == TINYPY_OP_POP_JUMP_IF_TRUE || op == TINYPY_OP_JUMP_IF_FALSE_OR_POP || op == TINYPY_OP_JUMP_IF_TRUE_OR_POP)
 #define TINYPY_OPTIMIZER_IS_ABSOLUTE_JUMP(op) (op == TINYPY_OP_JUMP_ABSOLUTE || op == TINYPY_OP_CONTINUE_LOOP || op == TINYPY_OP_POP_JUMP_IF_FALSE || op == TINYPY_OP_POP_JUMP_IF_TRUE || op == TINYPY_OP_JUMP_IF_FALSE_OR_POP || op == TINYPY_OP_JUMP_IF_TRUE_OR_POP)
@@ -23,8 +23,8 @@
 #define TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, start, bytes) \
     (blocks[start] == blocks[start + bytes - 1])
 //////////////////////////////////////////////////////////////////////////
-#ifndef NDEBUG
-static inline int __tinypy_optimizer_load_constants_valid(const unsigned char *codestr, tinypy_compiler_size_t count) {
+#if defined(TINYPY_ENABLE_ASSERTS)
+static inline int32_t __tinypy_optimizer_load_constants_valid(const uint8_t *codestr, tinypy_compiler_size_t count) {
     tinypy_compiler_size_t index;
 
     for (index = 0; index < count; ++index) {
@@ -45,15 +45,15 @@ static inline int __tinypy_optimizer_load_constants_valid(const unsigned char *c
    Also works for TINYPY_OP_BUILD_LIST when followed by an "in" or "not in" test.
 */
 //////////////////////////////////////////////////////////////////////////
-static int __tuple_of_constants(unsigned char *codestr, tinypy_compiler_size_t n, tinypy_value_t *consts) {
+static int32_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size_t n, tinypy_value_t *consts) {
     tinypy_value_t *newconst, *constant;
     tinypy_compiler_size_t i, arg, len_consts;
 
     /* Pre-conditions */
-    assert(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
-    assert(codestr[n * 3] == TINYPY_OP_BUILD_TUPLE || codestr[n * 3] == TINYPY_OP_BUILD_LIST);
-    assert(TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, (n * 3)) == n);
-    assert(__tinypy_optimizer_load_constants_valid(codestr, n));
+    TINYPY_ASSERT(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
+    TINYPY_ASSERT(codestr[n * 3] == TINYPY_OP_BUILD_TUPLE || codestr[n * 3] == TINYPY_OP_BUILD_LIST);
+    TINYPY_ASSERT(TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, (n * 3)) == n);
+    TINYPY_ASSERT(__tinypy_optimizer_load_constants_valid(codestr, n));
 
     /* Buildup new tuple of constants */
     newconst = __tinypy_frontend_tuple_new(consts, n);
@@ -63,7 +63,7 @@ static int __tuple_of_constants(unsigned char *codestr, tinypy_compiler_size_t n
     len_consts = TINYPY_COMPILER_LIST_GET_SIZE(consts);
     for (i = 0; i < n; i++) {
         arg = TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, (i * 3));
-        assert(arg < len_consts);
+        TINYPY_ASSERT(arg < len_consts);
         constant = TINYPY_COMPILER_LIST_GET_ITEM(consts, arg);
         TINYPY_COMPILER_INCREF(constant);
         TINYPY_COMPILER_TUPLE_SET_ITEM(newconst, i, constant);
@@ -94,15 +94,15 @@ static int __tuple_of_constants(unsigned char *codestr, tinypy_compiler_size_t n
    becoming large in the presence of code like:  (None,)*1000.
 */
 //////////////////////////////////////////////////////////////////////////
-static int __fold_binops_on_constants(unsigned char *codestr, tinypy_value_t *consts) {
+static int32_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t *consts) {
     tinypy_value_t *newconst, *v, *w;
     tinypy_compiler_size_t len_consts, size;
-    int opcode;
+    int32_t opcode;
 
     /* Pre-conditions */
-    assert(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
-    assert(codestr[0] == TINYPY_OP_LOAD_CONST);
-    assert(codestr[3] == TINYPY_OP_LOAD_CONST);
+    TINYPY_ASSERT(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
+    TINYPY_ASSERT(codestr[0] == TINYPY_OP_LOAD_CONST);
+    TINYPY_ASSERT(codestr[3] == TINYPY_OP_LOAD_CONST);
 
     /* Create new constant */
     v = TINYPY_COMPILER_LIST_GET_ITEM(consts, TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, 0));
@@ -196,14 +196,14 @@ static int __fold_binops_on_constants(unsigned char *codestr, tinypy_value_t *co
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __fold_unaryops_on_constants(unsigned char *codestr, tinypy_value_t *consts) {
+static int32_t __fold_unaryops_on_constants(uint8_t *codestr, tinypy_value_t *consts) {
     tinypy_value_t *newconst = NULL, *v;
     tinypy_compiler_size_t len_consts;
-    int opcode;
+    int32_t opcode;
 
     /* Pre-conditions */
-    assert(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
-    assert(codestr[0] == TINYPY_OP_LOAD_CONST);
+    TINYPY_ASSERT(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
+    TINYPY_ASSERT(codestr[0] == TINYPY_OP_LOAD_CONST);
 
     /* Create new constant */
     v = TINYPY_COMPILER_LIST_GET_ITEM(consts, TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, 0));
@@ -248,15 +248,15 @@ static int __fold_unaryops_on_constants(unsigned char *codestr, tinypy_value_t *
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static unsigned int *__markblocks(tinypy_compile_ctx_t *arena, unsigned char *code, tinypy_compiler_size_t len) {
-    unsigned int *blocks = (unsigned int *)TINYPY_COMPILER_ARENA_MALLOC(arena, (size_t)len * sizeof(unsigned int));
-    int i, j, opcode, blockcnt = 0;
+static uint32_t *__markblocks(tinypy_compile_ctx_t *arena, uint8_t *code, tinypy_compiler_size_t len) {
+    uint32_t *blocks = (uint32_t *)TINYPY_COMPILER_ARENA_MALLOC(arena, (size_t)len * sizeof(uint32_t));
+    int32_t i, j, opcode, blockcnt = 0;
 
     if (blocks == NULL) {
         TINYPY_COMPILER_ERR_NO_MEMORY();
         return NULL;
     }
-    memset(blocks, 0, len * sizeof(int));
+    memset(blocks, 0, len * sizeof(int32_t));
 
     /* Mark labels in the first pass */
     for (i = 0; i < len; i += TINYPY_OPTIMIZER_CODE_SIZE(opcode)) {
@@ -304,38 +304,38 @@ static unsigned int *__markblocks(tinypy_compile_ctx_t *arena, unsigned char *co
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_value_t *code, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *lineno_obj) {
     tinypy_compiler_size_t i, j, codelen;
-    int nops, h, adj;
-    int tgt, tgttgt, opcode;
-    unsigned char *codestr = NULL;
-    unsigned char *lineno;
-    int *addrmap = NULL;
-    int new_line, cum_orig_line, last_line;
+    int32_t nops, h, adj;
+    int32_t tgt, tgttgt, opcode;
+    uint8_t *codestr = NULL;
+    uint8_t *lineno;
+    int32_t *addrmap = NULL;
+    int32_t new_line, cum_orig_line, last_line;
     tinypy_compiler_size_t tabsiz;
-    int cumlc = 0, lastlc = 0; /* Count runs of consecutive LOAD_CONSTs */
-    unsigned int *blocks = NULL;
+    int32_t cumlc = 0, lastlc = 0; /* Count runs of consecutive LOAD_CONSTs */
+    uint32_t *blocks = NULL;
     char *name;
 
     /* Bypass optimization when the lineno table is too complex */
-    assert(TINYPY_COMPILER_STRING_CHECK(lineno_obj));
-    lineno = (unsigned char *)TINYPY_COMPILER_STRING_AS_STRING(lineno_obj);
+    TINYPY_ASSERT(TINYPY_COMPILER_STRING_CHECK(lineno_obj));
+    lineno = (uint8_t *)TINYPY_COMPILER_STRING_AS_STRING(lineno_obj);
     tabsiz = TINYPY_COMPILER_STRING_GET_SIZE(lineno_obj);
     if (memchr(lineno, 255, tabsiz) != NULL) {
         goto exitUnchanged;
     }
 
     /* Avoid situations where jump retargeting could overflow */
-    assert(TINYPY_COMPILER_STRING_CHECK(code));
+    TINYPY_ASSERT(TINYPY_COMPILER_STRING_CHECK(code));
     codelen = TINYPY_COMPILER_STRING_GET_SIZE(code);
     if (codelen > 32700) {
         goto exitUnchanged;
     }
 
     /* Make a modifiable copy of the code string */
-    codestr = (unsigned char *)TINYPY_COMPILER_ARENA_MALLOC(arena, (size_t)codelen);
+    codestr = (uint8_t *)TINYPY_COMPILER_ARENA_MALLOC(arena, (size_t)codelen);
     if (codestr == NULL) {
         goto exitError;
     }
-    codestr = (unsigned char *)memcpy(codestr,
+    codestr = (uint8_t *)memcpy(codestr,
                                       TINYPY_COMPILER_STRING_AS_STRING(code), codelen);
 
     /* Verify that TINYPY_OP_RETURN_VALUE terminates the codestring. This allows
@@ -348,7 +348,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
     }
 
     /* Mapping to new jump targets after NOPs are removed */
-    addrmap = (int *)TINYPY_COMPILER_ARENA_MALLOC(arena, (size_t)codelen * sizeof(int));
+    addrmap = (int32_t *)TINYPY_COMPILER_ARENA_MALLOC(arena, (size_t)codelen * sizeof(int32_t));
     if (addrmap == NULL) {
         TINYPY_COMPILER_ERR_NO_MEMORY();
         goto exitError;
@@ -358,7 +358,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
     if (blocks == NULL) {
         goto exitError;
     }
-    assert(TINYPY_COMPILER_LIST_CHECK(consts));
+    TINYPY_ASSERT(TINYPY_COMPILER_LIST_CHECK(consts));
 
     for (i = 0; i < codelen; i += TINYPY_OPTIMIZER_CODE_SIZE(codestr[i])) {
     reoptimize_current:
@@ -417,7 +417,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
                 }
                 TINYPY_COMPILER_DECREF(none);
             }
-            assert(tinypy_typeof(TINYPY_COMPILER_LIST_GET_ITEM(consts, j)) == TINYPY_VALUE_NONE);
+            TINYPY_ASSERT(tinypy_typeof(TINYPY_COMPILER_LIST_GET_ITEM(consts, j)) == TINYPY_VALUE_NONE);
             codestr[i] = TINYPY_OP_LOAD_CONST;
             TINYPY_OPTIMIZER_SET_ARGUMENT(codestr, i, j);
             cumlc = lastlc + 1;
@@ -444,9 +444,9 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
         case TINYPY_OP_BUILD_TUPLE:
         case TINYPY_OP_BUILD_LIST:
             j = TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, i);
-            h = (int)i - 3 * (int)j;
+            h = (int32_t)i - 3 * (int32_t)j;
             if (h >= 0 && j <= lastlc && ((opcode == TINYPY_OP_BUILD_TUPLE && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, h, 3 * (j + 1))) || (opcode == TINYPY_OP_BUILD_LIST && codestr[i + 3] == TINYPY_OP_COMPARE_OP && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, h, 3 * (j + 2)) && (TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, i + 3) == 6 || TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, i + 3) == 7))) && __tuple_of_constants(&codestr[h], j, consts)) {
-                assert(codestr[i] == TINYPY_OP_LOAD_CONST);
+                TINYPY_ASSERT(codestr[i] == TINYPY_OP_LOAD_CONST);
                 cumlc = 1;
                 break;
             }
@@ -484,7 +484,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
         case TINYPY_OP_BINARY_OR:
             if (lastlc >= 2 && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, i - 6, 7) && __fold_binops_on_constants(&codestr[i - 6], consts)) {
                 i -= 2;
-                assert(codestr[i] == TINYPY_OP_LOAD_CONST);
+                TINYPY_ASSERT(codestr[i] == TINYPY_OP_LOAD_CONST);
                 cumlc = 1;
             }
             break;
@@ -496,7 +496,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
         case TINYPY_OP_UNARY_INVERT:
             if (lastlc >= 1 && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, i - 3, 4) && __fold_unaryops_on_constants(&codestr[i - 3], consts)) {
                 i -= 2;
-                assert(codestr[i] == TINYPY_OP_LOAD_CONST);
+                TINYPY_ASSERT(codestr[i] == TINYPY_OP_LOAD_CONST);
                 cumlc = 1;
             }
             break;
@@ -517,7 +517,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
             */
         case TINYPY_OP_JUMP_IF_FALSE_OR_POP:
         case TINYPY_OP_JUMP_IF_TRUE_OR_POP:
-            tgt = (int)TINYPY_OPTIMIZER_JUMP_TARGET(codestr, i);
+            tgt = (int32_t)TINYPY_OPTIMIZER_JUMP_TARGET(codestr, i);
             j = codestr[tgt];
             if (TINYPY_OPTIMIZER_IS_CONDITIONAL_JUMP(j)) {
                 /* NOTE: all possible jumps here are absolute! */
@@ -559,7 +559,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
         case TINYPY_OP_SETUP_EXCEPT:
         case TINYPY_OP_SETUP_FINALLY:
         case TINYPY_OP_SETUP_WITH:
-            tgt = (int)TINYPY_OPTIMIZER_JUMP_TARGET(codestr, i);
+            tgt = (int32_t)TINYPY_OPTIMIZER_JUMP_TARGET(codestr, i);
             /* Replace JUMP_* to a RETURN into just a RETURN */
             if (TINYPY_OPTIMIZER_IS_UNCONDITIONAL_JUMP(opcode) && codestr[tgt] == TINYPY_OP_RETURN_VALUE) {
                 codestr[i] = TINYPY_OP_RETURN_VALUE;
@@ -604,7 +604,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
 
     /* Fixup linenotab */
     for (i = 0, nops = 0; i < codelen; i += TINYPY_OPTIMIZER_CODE_SIZE(codestr[i])) {
-        addrmap[i] = (int)i - nops;
+        addrmap[i] = (int32_t)i - nops;
         if (codestr[i] == TINYPY_OP_NOP) {
             nops++;
         }
@@ -614,8 +614,8 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
     for (i = 0; i < tabsiz; i += 2) {
         cum_orig_line += lineno[i];
         new_line = addrmap[cum_orig_line];
-        assert(new_line - last_line < 255);
-        lineno[i] = ((unsigned char)(new_line - last_line));
+        TINYPY_ASSERT(new_line - last_line < 255);
+        lineno[i] = ((uint8_t)(new_line - last_line));
         last_line = new_line;
     }
 
@@ -652,7 +652,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
             codestr[h++] = codestr[i++];
         }
     }
-    assert(h + nops == codelen);
+    TINYPY_ASSERT(h + nops == codelen);
 
     code = __tinypy_frontend_string_from_owner(code, (char *)codestr, (size_t)h);
     return code;

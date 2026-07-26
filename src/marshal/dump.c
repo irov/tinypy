@@ -2,7 +2,7 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <limits.h>
 #include <string.h>
 
@@ -18,7 +18,7 @@ typedef enum tinypy_marshal_dump_string_context_e {
 
 typedef struct tinypy_marshal_dump_writer_t {
     tinypy_vm_t *vm;
-    unsigned char *buffer;
+    uint8_t *buffer;
     size_t capacity;
     size_t offset;
     size_t max_output_bytes;
@@ -59,8 +59,8 @@ static int32_t __tinypy_marshal_dump_put(tinypy_marshal_dump_writer_t *writer, c
         return INT32_C(0);
     }
     if (writer->buffer != NULL) {
-        assert(writer->offset <= writer->capacity);
-        assert(size <= writer->capacity - writer->offset);
+        TINYPY_ASSERT(writer->offset <= writer->capacity);
+        TINYPY_ASSERT(size <= writer->capacity - writer->offset);
         if (size != 0U) {
             (void)memcpy(writer->buffer + writer->offset, bytes, size);
         }
@@ -74,31 +74,31 @@ static int32_t __tinypy_marshal_dump_u8(tinypy_marshal_dump_writer_t *writer, ui
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_marshal_dump_u16(tinypy_marshal_dump_writer_t *writer, uint16_t value) {
-    unsigned char bytes[2];
+    uint8_t bytes[2];
 
-    bytes[0] = (unsigned char)(value & UINT16_C(0xff));
-    bytes[1] = (unsigned char)(value >> 8U);
+    bytes[0] = (uint8_t)(value & UINT16_C(0xff));
+    bytes[1] = (uint8_t)(value >> 8U);
     return __tinypy_marshal_dump_put(writer, bytes, sizeof(bytes));
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_marshal_dump_i32(tinypy_marshal_dump_writer_t *writer, int32_t value) {
     uint32_t bits = (uint32_t)value;
-    unsigned char bytes[4];
+    uint8_t bytes[4];
 
-    bytes[0] = (unsigned char)(bits & UINT32_C(0xff));
-    bytes[1] = (unsigned char)((bits >> 8U) & UINT32_C(0xff));
-    bytes[2] = (unsigned char)((bits >> 16U) & UINT32_C(0xff));
-    bytes[3] = (unsigned char)(bits >> 24U);
+    bytes[0] = (uint8_t)(bits & UINT32_C(0xff));
+    bytes[1] = (uint8_t)((bits >> 8U) & UINT32_C(0xff));
+    bytes[2] = (uint8_t)((bits >> 16U) & UINT32_C(0xff));
+    bytes[3] = (uint8_t)(bits >> 24U);
     return __tinypy_marshal_dump_put(writer, bytes, sizeof(bytes));
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_marshal_dump_i64(tinypy_marshal_dump_writer_t *writer, int64_t value) {
     uint64_t bits = (uint64_t)value;
-    unsigned char bytes[8];
+    uint8_t bytes[8];
     size_t index;
 
     for (index = 0U; index < sizeof(bytes); ++index) {
-        bytes[index] = (unsigned char)(bits >> (index * 8U));
+        bytes[index] = (uint8_t)(bits >> (index * 8U));
     }
     return __tinypy_marshal_dump_put(writer, bytes, sizeof(bytes));
 }
@@ -118,12 +118,12 @@ static int32_t __tinypy_marshal_dump_double(tinypy_marshal_dump_writer_t *writer
     return __tinypy_marshal_dump_i64(writer, (int64_t)bits);
 }
 //////////////////////////////////////////////////////////////////////////
-static ptrdiff_t __tinypy_marshal_dump_find_intern(const tinypy_marshal_dump_writer_t *writer, const unsigned char *bytes, size_t size) {
+static ptrdiff_t __tinypy_marshal_dump_find_intern(const tinypy_marshal_dump_writer_t *writer, const uint8_t *bytes, size_t size) {
     size_t index;
 
     for (index = 0U; index < writer->intern_count; ++index) {
         size_t candidate_size;
-        const unsigned char *candidate = (const unsigned char *)tinypy_string_view(writer->interns[index], &candidate_size);
+        const uint8_t *candidate = (const uint8_t *)tinypy_string_view(writer->interns[index], &candidate_size);
 
         if (candidate_size == size && (size == 0U || memcmp(candidate, bytes, size) == 0)) {
             return (ptrdiff_t)index;
@@ -138,8 +138,8 @@ static void __tinypy_marshal_dump_add_intern(tinypy_marshal_dump_writer_t *write
         size_t new_capacity = writer->intern_capacity == 0U ? 32U : writer->intern_capacity * 2U;
         size_t new_size;
 
-        assert(new_capacity > writer->intern_capacity);
-        assert(new_capacity <= SIZE_MAX / sizeof(*writer->interns));
+        TINYPY_ASSERT(new_capacity > writer->intern_capacity);
+        TINYPY_ASSERT(new_capacity <= SIZE_MAX / sizeof(*writer->interns));
         new_size = new_capacity * sizeof(*writer->interns);
         if (writer->interns == NULL) {
             writer->interns = (const tinypy_value_t **)tinypy_internal_vm_allocate(writer->vm, new_size, (uint32_t)TINYPY_ALLOC_TAG_MARSHAL_WRITE);
@@ -157,7 +157,7 @@ static int32_t __tinypy_marshal_dump_value(tinypy_marshal_dump_writer_t *writer,
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_marshal_dump_string(tinypy_marshal_dump_writer_t *writer, const tinypy_value_t *value, tinypy_marshal_dump_string_context_e context) {
     size_t size;
-    const unsigned char *bytes = (const unsigned char *)tinypy_string_view(value, &size);
+    const uint8_t *bytes = (const uint8_t *)tinypy_string_view(value, &size);
     int32_t interned = tinypy_internal_string_is_interned(value);
 
     (void)context;
@@ -209,7 +209,7 @@ static int32_t __tinypy_marshal_dump_set(tinypy_marshal_dump_writer_t *writer, c
 
     tinypy_value_type_e type = tinypy_typeof(value);
     uint8_t marker = type == TINYPY_VALUE_FROZENSET ? (uint8_t)'>' : (uint8_t)'<';
-    int condition = __tinypy_marshal_dump_u8(writer, marker) == 0;
+    int32_t condition = __tinypy_marshal_dump_u8(writer, marker) == 0;
     if (condition == 0) {
         condition = __tinypy_marshal_dump_size32(writer, TINYPY_DICT_SIZE(dict)) == 0;
     }
@@ -253,7 +253,7 @@ static int32_t __tinypy_marshal_dump_value(tinypy_marshal_dump_writer_t *writer,
     case TINYPY_VALUE_LONG: {
         const uint16_t *digits;
         size_t count;
-        int sign;
+        int32_t sign;
         size_t index;
 
         digits = tinypy_long_base15_view(value, &sign, &count);
@@ -316,7 +316,7 @@ static tinypy_marshal_result_e __tinypy_marshal_dump_run(const tinypy_value_t *c
 
     (void)memset(&writer, 0, sizeof(writer));
     writer.vm = TINYPY_VALUE_VM(code);
-    writer.buffer = (unsigned char *)buffer;
+    writer.buffer = (uint8_t *)buffer;
     writer.capacity = capacity;
     writer.max_output_bytes = options->max_output_bytes;
     writer.max_depth = options->max_depth;
@@ -333,10 +333,10 @@ tinypy_marshal_result_e tinypy_marshal_dump_code_v2(const tinypy_value_t *code, 
     size_t required_size = 0U;
     tinypy_marshal_result_e result;
 
-    assert(code != NULL);
-    assert(tinypy_typeof(code) == TINYPY_VALUE_CODE);
-    assert(buffer != NULL || capacity == 0U);
-    assert(out_size != NULL);
+    TINYPY_ASSERT(code != NULL);
+    TINYPY_ASSERT(tinypy_typeof(code) == TINYPY_VALUE_CODE);
+    TINYPY_ASSERT(buffer != NULL || capacity == 0U);
+    TINYPY_ASSERT(out_size != NULL);
     if (options == NULL) {
         (void)memset(&defaults, 0, sizeof(defaults));
         defaults.abi_version = TINYPY_MARSHAL_ABI_VERSION;
@@ -345,10 +345,10 @@ tinypy_marshal_result_e tinypy_marshal_dump_code_v2(const tinypy_value_t *code, 
         defaults.max_depth = TINYPY_MARSHAL_DUMP_DEFAULT_DEPTH;
         options = &defaults;
     }
-    assert(options->abi_version == TINYPY_MARSHAL_ABI_VERSION);
-    assert(options->struct_size >= (uint32_t)sizeof(*options));
-    assert(options->max_output_bytes != 0U);
-    assert(options->max_depth != 0U);
+    TINYPY_ASSERT(options->abi_version == TINYPY_MARSHAL_ABI_VERSION);
+    TINYPY_ASSERT(options->struct_size >= (uint32_t)sizeof(*options));
+    TINYPY_ASSERT(options->max_output_bytes != 0U);
+    TINYPY_ASSERT(options->max_depth != 0U);
     if (out_error != NULL) {
         (void)memset(out_error, 0, sizeof(*out_error));
     }

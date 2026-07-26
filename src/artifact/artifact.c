@@ -2,7 +2,7 @@
 
 #include "sha256.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <string.h>
 
 #define TINYPY_ARTIFACT_OFFSET_FORMAT_VERSION 8U
@@ -92,7 +92,7 @@ static uint32_t __tinypy_artifact_crc32(const uint8_t *data, size_t size) {
     size_t index;
     for (index = 0U; index != size; ++index) {
         uint32_t value = crc ^ (uint32_t)data[index];
-        unsigned int bit;
+        uint32_t bit;
         for (bit = 0U; bit != 8U; ++bit) {
             uint32_t mask = UINT32_C(0) - (value & UINT32_C(1));
             value = (value >> 1U) ^ (UINT32_C(0xedb88320) & mask);
@@ -102,12 +102,12 @@ static uint32_t __tinypy_artifact_crc32(const uint8_t *data, size_t size) {
     return ~crc;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_artifact_metadata_valid(const tinypy_artifact_metadata_t *metadata) {
+static int32_t __tinypy_artifact_metadata_valid(const tinypy_artifact_metadata_t *metadata) {
     static const uint8_t zero_digest[32] = {0};
-    int has_source_map;
-    int source_map_is_zero;
+    int32_t has_source_map;
+    int32_t source_map_is_zero;
 
-    assert(metadata != NULL);
+    TINYPY_ASSERT(metadata != NULL);
     has_source_map = (metadata->feature_flags & (uint32_t)TINYPY_ARTIFACT_FEATURE_SOURCE_MAP) != 0U;
     source_map_is_zero = memcmp(
                              metadata->source_map_hash,
@@ -122,10 +122,10 @@ tinypy_artifact_status_e tinypy_artifact_encode(const tinypy_artifact_metadata_t
     uint8_t payload_hash[32];
     size_t required_size;
 
-    assert(metadata != NULL);
-    assert(out_size != NULL);
-    assert(payload != NULL || payload_size == 0U);
-    assert(output != NULL || output_capacity == 0U);
+    TINYPY_ASSERT(metadata != NULL);
+    TINYPY_ASSERT(out_size != NULL);
+    TINYPY_ASSERT(payload != NULL || payload_size == 0U);
+    TINYPY_ASSERT(output != NULL || output_capacity == 0U);
     *out_size = 0U;
 
     if (!__tinypy_artifact_metadata_valid(metadata)) {
@@ -217,8 +217,8 @@ tinypy_artifact_status_e tinypy_artifact_decode(const void *artifact, size_t art
     size_t payload_size;
     uint8_t actual_hash[32];
 
-    assert(out_view != NULL);
-    assert(artifact != NULL || artifact_size == 0U);
+    TINYPY_ASSERT(out_view != NULL);
+    TINYPY_ASSERT(artifact != NULL || artifact_size == 0U);
     (void)memset(out_view, 0, sizeof(*out_view));
     out_view->abi_version = TINYPY_ARTIFACT_ABI_VERSION;
     out_view->struct_size = (uint32_t)sizeof(*out_view);
@@ -323,15 +323,15 @@ tinypy_artifact_status_e tinypy_artifact_decode(const void *artifact, size_t art
     return TINYPY_ARTIFACT_OK;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_artifact_field_equal(uint32_t flags, uint32_t flag, uint32_t actual, uint32_t expected) {
+static int32_t __tinypy_artifact_field_equal(uint32_t flags, uint32_t flag, uint32_t actual, uint32_t expected) {
     return (flags & flag) == 0U || actual == expected;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_artifact_status_e tinypy_artifact_check_profile(const tinypy_artifact_view_t *view, const tinypy_artifact_expectation_t *expectation) {
     uint32_t flags;
 
-    assert(view != NULL);
-    assert(expectation != NULL);
+    TINYPY_ASSERT(view != NULL);
+    TINYPY_ASSERT(expectation != NULL);
     if (view->abi_version != TINYPY_ARTIFACT_ABI_VERSION || view->struct_size < sizeof(tinypy_artifact_view_t) || view->metadata.abi_version != TINYPY_ARTIFACT_ABI_VERSION || view->metadata.struct_size < sizeof(tinypy_artifact_metadata_t) || expectation->abi_version != TINYPY_ARTIFACT_ABI_VERSION || expectation->struct_size < sizeof(tinypy_artifact_expectation_t) || expectation->expected.abi_version !=
             TINYPY_ARTIFACT_ABI_VERSION || expectation->expected.struct_size <
             sizeof(tinypy_artifact_metadata_t)) {

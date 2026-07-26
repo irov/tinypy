@@ -2,11 +2,11 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 typedef struct tinypy_exception_definition_t {
     const char *name;
     size_t name_size;
-    int parent;
+    int32_t parent;
 } tinypy_exception_definition_t;
 static const tinypy_exception_definition_t __tinypy_exception_definitions[TINYPY_EXCEPTION_TYPE_COUNT] = { {"BaseException", 13U, -1},
     {"Exception", 9U, TINYPY_EXCEPTION_BASE}, {"StandardError", 13U, TINYPY_EXCEPTION_EXCEPTION},
@@ -50,11 +50,11 @@ static void __tinypy_exception_builtin_set(tinypy_vm_t *vm, const char *name, si
     TINYPY_DECREF(key);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_exception_is_class(tinypy_vm_t *vm, tinypy_value_t *value) {
+static int32_t __tinypy_exception_is_class(tinypy_vm_t *vm, tinypy_value_t *value) {
     return TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)value, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_exception_is_instance(tinypy_vm_t *vm, tinypy_value_t *value) {
+static int32_t __tinypy_exception_is_instance(tinypy_vm_t *vm, tinypy_value_t *value) {
     return tinypy_type_is_subtype(value->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -177,7 +177,7 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
         const tinypy_type_t *base = definition->parent < 0 ? &vm->object_type : vm->exception_types[(size_t)definition->parent];
         tinypy_type_t *type = tinypy_type_new(vm, definition->name, definition->name_size, &base, 1U, NULL, NULL, NULL);
 
-        assert(type != NULL);
+        TINYPY_ASSERT(type != NULL);
         if (index == (size_t)TINYPY_EXCEPTION_BASE) {
             tinypy_value_t *initializer = tinypy_native_function_new(vm, "__init__", 8U, __tinypy_exception_init, NULL, NULL);
             tinypy_value_t *initializer_key = tinypy_string_from_bytes(vm, "__init__", 8U);
@@ -213,8 +213,8 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
     tinypy_vm_t *vm = type->vm;
     tinypy_value_t *initializer_attribute;
 
-    assert(tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0);
-    assert(TINYPY_VALUE_KIND(args) == TINYPY_VALUE_TUPLE);
+    TINYPY_ASSERT(tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(args) == TINYPY_VALUE_TUPLE);
     tinypy_value_t *instance = tinypy_internal_object_allocate(vm, type, type->basic_size);
     tinypy_instance_set_attr(instance, "args", 4U, args);
     tinypy_value_t *message = TINYPY_TUPLE_SIZE(args) != 0U ? TINYPY_TUPLE_GET(args, 0U) : tinypy_string_from_bytes(vm, NULL, 0U);
@@ -255,11 +255,11 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_exception_new(tinypy_type_t *type, tinypy_value_t *args, tinypy_error_t **out_error) {
-    assert(type != NULL);
-    assert(tinypy_internal_vm_valid(type->vm));
-    assert(args != NULL);
-    assert(tinypy_internal_value_belongs_to(type->vm, args));
-    assert(TINYPY_VALUE_KIND(args) == TINYPY_VALUE_TUPLE);
+    TINYPY_ASSERT(type != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(type->vm));
+    TINYPY_ASSERT(args != NULL);
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(type->vm, args));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(args) == TINYPY_VALUE_TUPLE);
     TINYPY_CLEAR_ERROR(out_error);
     if (tinypy_type_is_subtype(type, type->vm->exception_types[TINYPY_EXCEPTION_BASE]) == 0) {
         tinypy_internal_make_vm_error(type->vm, TINYPY_ERROR_TYPE, "exception type must derive from BaseException", out_error);
@@ -318,9 +318,9 @@ void tinypy_internal_exception_preserve_end(tinypy_vm_t *vm, tinypy_internal_exc
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_set_raised(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *traceback) {
-    assert(value != NULL);
-    assert(__tinypy_exception_is_instance(vm, value) != 0);
-    assert(traceback == NULL || TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(__tinypy_exception_is_instance(vm, value) != 0);
+    TINYPY_ASSERT(traceback == NULL || TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
     TINYPY_INCREF(&value->type->base.base);
     TINYPY_INCREF(value);
     if (traceback != NULL) {
@@ -333,7 +333,7 @@ void tinypy_internal_exception_set_raised(tinypy_vm_t *vm, tinypy_value_t *value
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm) {
-    assert(vm->raised_type != NULL && vm->raised_value != NULL);
+    TINYPY_ASSERT(vm->raised_type != NULL && vm->raised_value != NULL);
     tinypy_internal_exception_clear_handled(vm);
     vm->handled_type = vm->raised_type;
     vm->handled_value = vm->raised_value;
@@ -344,7 +344,7 @@ void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_restore_raised_from_handled(tinypy_vm_t *vm) {
-    assert(vm->handled_type != NULL && vm->handled_value != NULL);
+    TINYPY_ASSERT(vm->handled_type != NULL && vm->handled_value != NULL);
     tinypy_internal_exception_set_raised(vm, vm->handled_value, vm->handled_traceback);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -361,7 +361,7 @@ void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e k
     value = tinypy_internal_exception_instantiate(vm->exception_types[exception_index_from_error], args, NULL, NULL);
     TINYPY_DECREF(args);
     TINYPY_DECREF(text);
-    assert(value != NULL);
+    TINYPY_ASSERT(value != NULL);
     tinypy_internal_exception_set_raised(vm, value, NULL);
     TINYPY_DECREF(value);
 }
@@ -411,10 +411,10 @@ int32_t tinypy_internal_exception_consume_stop_iteration(tinypy_vm_t *vm, tinypy
 int32_t tinypy_exception_matches(tinypy_value_t *exception, tinypy_value_t *candidate, tinypy_error_t **out_error) {
     tinypy_type_t *exception_type;
 
-    assert(exception != NULL && candidate != NULL);
+    TINYPY_ASSERT(exception != NULL && candidate != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(exception);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(tinypy_internal_value_belongs_to(vm, candidate));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, candidate));
     TINYPY_CLEAR_ERROR(out_error);
     if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_TUPLE) {
         tinypy_value_t *const *iterator = TINYPY_TUPLE_ITERATOR_BEGIN(candidate);
@@ -450,10 +450,10 @@ int32_t tinypy_exception_matches(tinypy_value_t *exception, tinypy_value_t *cand
 int32_t tinypy_exception_raise(tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {
     tinypy_value_t *value = exception;
 
-    assert(exception != NULL);
+    TINYPY_ASSERT(exception != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(exception);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(traceback == NULL || tinypy_internal_value_belongs_to(vm, traceback));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(traceback == NULL || tinypy_internal_value_belongs_to(vm, traceback));
     TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_exception_is_class(vm, exception) != 0) {
         tinypy_value_t *args = tinypy_tuple_from_items(vm, NULL, 0U);
@@ -488,37 +488,37 @@ int32_t tinypy_exception_raise(tinypy_value_t *exception, tinypy_value_t *traceb
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_vm_raised_exception(const tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     return vm->raised_value;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_vm_raised_exception_type(const tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     return vm->raised_type;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_vm_raised_traceback(const tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     return vm->raised_traceback;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_vm_handled_exception(const tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     return vm->handled_value;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_vm_has_error(const tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     return vm->raised_value != NULL ? INT32_C(1) : INT32_C(0);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_vm_clear_error(tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     tinypy_internal_exception_clear_raised(vm);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_vm_raise_error(tinypy_vm_t *vm, tinypy_error_kind_e kind, const char *message) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(message != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(message != NULL);
     tinypy_internal_exception_raise_kind(vm, kind, message);
 }

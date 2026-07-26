@@ -51,7 +51,8 @@ typedef enum tinypy_error_kind_e {
 /* Unless a parameter is explicitly documented as optional, pointer validity
  * and object ownership are C API preconditions. Direct typed/indexed accessors
  * additionally require the documented kind and bounds. These contracts are
- * asserted in debug builds and are undefined behavior when NDEBUG is defined.
+ * asserted when TINYPY_ENABLE_ASSERTS is defined and are otherwise undefined
+ * behavior.
  * Direct typed accessors never convert a wrong kind, index or scalar range
  * into a status. Pointer-returning operations use NULL for semantic failure
  * and may provide an explicit tinypy_error_t. A host allocator must return

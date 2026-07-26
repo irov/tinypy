@@ -21,7 +21,7 @@
 typedef struct tinypy_render_chunk_t {
     struct tinypy_render_chunk_t *next;
     size_t size;
-    unsigned char bytes[TINYPY_RENDER_CHUNK_SIZE];
+    uint8_t bytes[TINYPY_RENDER_CHUNK_SIZE];
 } tinypy_render_chunk_t;
 
 typedef struct tinypy_render_builder_t {
@@ -41,10 +41,10 @@ struct tinypy_preprocess_result_t {
     size_t source_map_size;
     size_t entry_count;
     char *source;
-    unsigned char *source_map;
+    uint8_t *source_map;
     tinypy_source_map_entry_t *entries;
     uint8_t source_map_digest[TINYPY_SOURCE_MAP_DIGEST_SIZE];
-    unsigned char storage[];
+    uint8_t storage[];
 };
 
 static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression);
@@ -63,7 +63,7 @@ static int32_t __tinypy_render_limit(tinypy_render_builder_t *builder, const cha
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_append(tinypy_render_builder_t *builder, const void *data, size_t size) {
-    const unsigned char *bytes = (const unsigned char *)data;
+    const uint8_t *bytes = (const uint8_t *)data;
 
     if (size == 0U) {
         return 1;
@@ -94,7 +94,7 @@ static int32_t __tinypy_render_append(tinypy_render_builder_t *builder, const vo
         copied = size < available ? size : available;
         (void)memcpy(builder->tail->bytes + builder->tail->size, bytes, copied);
         for (index = 0U; index < copied; ++index) {
-            if (bytes[index] == (unsigned char)'\n') {
+            if (bytes[index] == (uint8_t)'\n') {
                 builder->line += 1;
                 builder->column = 0;
             }
@@ -170,7 +170,7 @@ static int32_t __tinypy_render_hex(tinypy_render_builder_t *builder, uint32_t va
     char output[8];
     size_t index;
 
-    assert(width <= sizeof(output));
+    TINYPY_ASSERT(width <= sizeof(output));
     for (index = 0U; index < width; ++index) {
         output[width - index - 1U] = digits[(value >> (index * 4U)) & UINT32_C(0xf)];
     }
@@ -204,20 +204,20 @@ static int32_t __tinypy_render_escaped_code_point(tinypy_render_builder_t *build
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
     int32_t unicode = tinypy_typeof(value) == TINYPY_VALUE_UNICODE ? INT32_C(1) : INT32_C(0);
-    const unsigned char *bytes;
+    const uint8_t *bytes;
     size_t size;
     size_t index = 0U;
 
     if (unicode != 0) {
         size_t code_points;
 
-        bytes = (const unsigned char *)tinypy_unicode_utf8_view(value, &size, &code_points);
+        bytes = (const uint8_t *)tinypy_unicode_utf8_view(value, &size, &code_points);
         if (__tinypy_render_character(builder, 'u') == 0) {
             return 0;
         }
     }
     else {
-        bytes = (const unsigned char *)tinypy_string_view(value, &size);
+        bytes = (const uint8_t *)tinypy_string_view(value, &size);
     }
     if (__tinypy_render_character(builder, '\'') == 0) {
         return 0;
@@ -241,7 +241,7 @@ static int32_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, ti
                 code_point &= UINT32_C(0x07);
                 continuation_count = 3U;
             }
-            assert(continuation_count <= size - index);
+            TINYPY_ASSERT(continuation_count <= size - index);
             for (continuation = 0U; continuation < continuation_count; ++continuation) {
                 code_point = (code_point << 6U) | (uint32_t)(bytes[index++] & UINT8_C(0x3f));
             }
@@ -348,7 +348,7 @@ static const char *__tinypy_render_binary_operator(tinypy_ast_binary_operator_e 
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static const char *__tinypy_render_compare_operator(int operation) {
+static const char *__tinypy_render_compare_operator(int32_t operation) {
     switch (operation) {
     case TINYPY_AST_COMPARE_EQUAL:
         return "==";
@@ -376,7 +376,7 @@ static const char *__tinypy_render_compare_operator(int operation) {
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_expression_sequence(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *sequence, const char *separator) {
-    int index;
+    int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(sequence); ++index) {
         if (index != 0 && __tinypy_render_text(builder, separator) == 0) {
@@ -390,7 +390,7 @@ static int32_t __tinypy_render_expression_sequence(tinypy_render_builder_t *buil
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_slice(tinypy_render_builder_t *builder, tinypy_ast_slice_t slice) {
-    int index;
+    int32_t index;
 
     switch (slice->kind) {
     case TINYPY_AST_KIND_ELLIPSIS:
@@ -429,11 +429,11 @@ static int32_t __tinypy_render_slice(tinypy_render_builder_t *builder, tinypy_as
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_comprehensions(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *generators) {
-    int index;
+    int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(generators); ++index) {
         tinypy_ast_comprehension_t generator = (tinypy_ast_comprehension_t)TINYPY_AST_SEQUENCE_GET(generators, index);
-        int if_index;
+        int32_t if_index;
 
         if (__tinypy_render_text(builder, " for ") == 0 || __tinypy_render_expression(builder, generator->target) == 0 || __tinypy_render_text(builder, " in ") == 0 || __tinypy_render_expression(builder, generator->iter) == 0) {
             return 0;
@@ -448,8 +448,8 @@ static int32_t __tinypy_render_comprehensions(tinypy_render_builder_t *builder, 
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_call(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
-    int emitted = 0;
-    int index;
+    int32_t emitted = 0;
+    int32_t index;
 
     if (__tinypy_render_expression(builder, expression->v.Call.func) == 0 || __tinypy_render_character(builder, '(') == 0) {
         return 0;
@@ -494,7 +494,7 @@ static int32_t __tinypy_render_call(tinypy_render_builder_t *builder, tinypy_ast
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
-    int index;
+    int32_t index;
 
     if (expression == NULL) {
         return 1;
@@ -576,11 +576,11 @@ static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tiny
         }
         for (index = 0; index < expression->v.Compare.ops->size; ++index) {
             const char *operator_text = __tinypy_render_compare_operator(expression->v.Compare.ops->elements[index]);
-            int condition_2 = __tinypy_render_character(builder, ' ') == 0 || __tinypy_render_text(builder, operator_text) == 0;
+            int32_t condition_2 = __tinypy_render_character(builder, ' ') == 0 || __tinypy_render_text(builder, operator_text) == 0;
             if (condition_2 == 0) {
                 condition_2 = __tinypy_render_character(builder, ' ') == 0;
             }
-            int condition = condition_2;
+            int32_t condition = condition_2;
             if (condition == 0) {
                 condition = __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Compare.comparators, index)) == 0;
             }
@@ -609,10 +609,10 @@ static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_arguments(tinypy_render_builder_t *builder, tinypy_ast_arguments_t arguments) {
-    int parameter_count = TINYPY_AST_SEQUENCE_LENGTH(arguments->args);
-    int default_count = TINYPY_AST_SEQUENCE_LENGTH(arguments->defaults);
-    int emitted = 0;
-    int index;
+    int32_t parameter_count = TINYPY_AST_SEQUENCE_LENGTH(arguments->args);
+    int32_t default_count = TINYPY_AST_SEQUENCE_LENGTH(arguments->defaults);
+    int32_t emitted = 0;
+    int32_t index;
 
     for (index = 0; index < parameter_count; ++index) {
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
@@ -661,7 +661,7 @@ static tinypy_source_map_record_t *__tinypy_render_source_map_record(tinypy_rend
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_statement_sequence(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *sequence, size_t indentation) {
-    int index;
+    int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(sequence); ++index) {
         if (__tinypy_render_statement(builder, (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(sequence, index), indentation) == 0) {
@@ -672,7 +672,7 @@ static int32_t __tinypy_render_statement_sequence(tinypy_render_builder_t *build
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_decorators(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *decorators, size_t indentation) {
-    int index;
+    int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(decorators); ++index) {
         if (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_character(builder, '@') == 0 || __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(decorators, index)) == 0 || __tinypy_render_character(builder, '\n') == 0) {
@@ -683,7 +683,7 @@ static int32_t __tinypy_render_decorators(tinypy_render_builder_t *builder, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_aliases(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *aliases) {
-    int index;
+    int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(aliases); ++index) {
         tinypy_ast_alias_t alias = (tinypy_ast_alias_t)TINYPY_AST_SEQUENCE_GET(aliases, index);
@@ -702,7 +702,7 @@ static int32_t __tinypy_render_aliases(tinypy_render_builder_t *builder, tinypy_
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement, size_t indentation) {
     tinypy_source_map_record_t *record = __tinypy_render_source_map_record(builder, statement);
-    int index;
+    int32_t index;
 
     if (record != NULL) {
         record->generated_line = builder->line;
@@ -904,7 +904,7 @@ static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinyp
     return __tinypy_render_character(builder, '\n');
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_render_flatten(const tinypy_render_builder_t *builder, unsigned char *output) {
+static void __tinypy_render_flatten(const tinypy_render_builder_t *builder, uint8_t *output) {
     tinypy_render_chunk_t *chunk = builder->head;
     size_t offset = 0U;
 
@@ -915,7 +915,7 @@ static void __tinypy_render_flatten(const tinypy_render_builder_t *builder, unsi
         offset += chunk->size;
         chunk = chunk->next;
     }
-    assert(offset == builder->size);
+    TINYPY_ASSERT(offset == builder->size);
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_decimal(tinypy_render_builder_t *builder, int32_t value) {
@@ -938,7 +938,7 @@ static int32_t __tinypy_render_decimal(tinypy_render_builder_t *builder, int32_t
     return __tinypy_render_append(builder, output, index);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_render_record_compare(const tinypy_source_map_record_t *left, const tinypy_source_map_record_t *right) {
+static int32_t __tinypy_render_record_compare(const tinypy_source_map_record_t *left, const tinypy_source_map_record_t *right) {
     if (left->generated_line != right->generated_line) {
         return left->generated_line < right->generated_line ? -1 : 1;
     }
@@ -963,7 +963,7 @@ static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compil
     for (record = ctx->source_map_records; record != NULL; record = record->next) {
         records[count++] = record;
     }
-    assert(count == ctx->source_map_entries);
+    TINYPY_ASSERT(count == ctx->source_map_entries);
     for (index = 1U; index < count; ++index) {
         tinypy_source_map_record_t *item = records[index];
         size_t position = index;
@@ -982,7 +982,7 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
     size_t symbol_bytes = 0U;
     size_t allocation_size;
     size_t index;
-    unsigned char *cursor;
+    uint8_t *cursor;
 
     (void)memset(&source_builder, 0, sizeof(source_builder));
     source_builder.compile = ctx;
@@ -1027,16 +1027,16 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
         if (__tinypy_render_decimal(&map_builder, records[index]->generated_line) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->generated_column) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->template_line) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->template_column) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->expansion_line) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->expansion_column) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_append(&map_builder, symbol, symbol_size) == 0 || __tinypy_render_character(&map_builder, '\n') == 0) {
             return NULL;
         }
-        assert(symbol_size <= SIZE_MAX - symbol_bytes);
+        TINYPY_ASSERT(symbol_size <= SIZE_MAX - symbol_bytes);
         symbol_bytes += symbol_size;
     }
-    assert(ctx->source_map_entries <= (SIZE_MAX - sizeof(tinypy_preprocess_result_t)) / sizeof(tinypy_source_map_entry_t));
+    TINYPY_ASSERT(ctx->source_map_entries <= (SIZE_MAX - sizeof(tinypy_preprocess_result_t)) / sizeof(tinypy_source_map_entry_t));
     allocation_size = sizeof(tinypy_preprocess_result_t) + ctx->source_map_entries * sizeof(tinypy_source_map_entry_t);
-    assert(source_builder.size + 1U <= SIZE_MAX - allocation_size);
+    TINYPY_ASSERT(source_builder.size + 1U <= SIZE_MAX - allocation_size);
     allocation_size += source_builder.size + 1U;
-    assert(map_builder.size + 1U <= SIZE_MAX - allocation_size);
+    TINYPY_ASSERT(map_builder.size + 1U <= SIZE_MAX - allocation_size);
     allocation_size += map_builder.size + 1U;
-    assert(symbol_bytes <= SIZE_MAX - allocation_size);
+    TINYPY_ASSERT(symbol_bytes <= SIZE_MAX - allocation_size);
     allocation_size += symbol_bytes;
     tinypy_preprocess_result_t *result = (tinypy_preprocess_result_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_COMPILER_DATA);
     (void)memset(result, 0, sizeof(*result));
@@ -1077,7 +1077,7 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
         }
         cursor += symbol_size;
     }
-    assert((size_t)(cursor - (unsigned char *)result) == allocation_size);
+    TINYPY_ASSERT((size_t)(cursor - (uint8_t *)result) == allocation_size);
     tinypy_sha256_digest(result->source_map, result->source_map_size, result->source_map_digest);
     return result;
 }
@@ -1085,7 +1085,7 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
 void tinypy_preprocess_result_destroy(tinypy_preprocess_result_t *result) {
     size_t allocation_size;
 
-    assert(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
+    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     tinypy_vm_t *vm = result->vm;
     allocation_size = result->allocation_size;
     result->state = 0U;
@@ -1093,7 +1093,7 @@ void tinypy_preprocess_result_destroy(tinypy_preprocess_result_t *result) {
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_preprocess_result_expanded_source(const tinypy_preprocess_result_t *result, size_t *out_size) {
-    assert(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
+    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     if (out_size != NULL) {
         *out_size = result->source_size;
     }
@@ -1101,7 +1101,7 @@ const char *tinypy_preprocess_result_expanded_source(const tinypy_preprocess_res
 }
 //////////////////////////////////////////////////////////////////////////
 const void *tinypy_preprocess_result_source_map(const tinypy_preprocess_result_t *result, size_t *out_size) {
-    assert(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
+    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     if (out_size != NULL) {
         *out_size = result->source_map_size;
     }
@@ -1109,18 +1109,18 @@ const void *tinypy_preprocess_result_source_map(const tinypy_preprocess_result_t
 }
 //////////////////////////////////////////////////////////////////////////
 const uint8_t *tinypy_preprocess_result_source_map_digest(const tinypy_preprocess_result_t *result) {
-    assert(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
+    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     return result->source_map_digest;
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_preprocess_result_source_map_count(const tinypy_preprocess_result_t *result) {
-    assert(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
+    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     return result->entry_count;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_preprocess_result_source_map_at(const tinypy_preprocess_result_t *result, size_t index, tinypy_source_map_entry_t *out_entry) {
-    assert(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
-    assert(index < result->entry_count);
-    assert(out_entry != NULL);
+    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
+    TINYPY_ASSERT(index < result->entry_count);
+    TINYPY_ASSERT(out_entry != NULL);
     *out_entry = result->entries[index];
 }

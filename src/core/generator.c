@@ -2,13 +2,13 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_generator_from_frame(tinypy_value_t *frame) {
-    assert(frame != NULL);
+    TINYPY_ASSERT(frame != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(frame);
-    assert(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
     tinypy_generator_object_t *generator = (tinypy_generator_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_GENERATOR, sizeof(*generator));
     generator->frame = frame;
     TINYPY_INCREF(frame);
@@ -39,15 +39,15 @@ tinypy_value_t *tinypy_internal_generator_iter(tinypy_value_t *value, tinypy_err
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_generator_send(tinypy_value_t *generator_value, tinypy_value_t *value, tinypy_error_t **out_error) {
-    int yielded = 0;
+    int32_t yielded = 0;
 
-    assert(generator_value != NULL);
+    TINYPY_ASSERT(generator_value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(generator_value);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(TINYPY_VALUE_KIND(generator_value) == TINYPY_VALUE_GENERATOR);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(generator_value) == TINYPY_VALUE_GENERATOR);
     tinypy_generator_object_t *generator = TINYPY_GENERATOR_OBJECT(generator_value);
-    assert(value != NULL);
-    assert(tinypy_internal_value_belongs_to(vm, value));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, value));
     TINYPY_CLEAR_ERROR(out_error);
     if (generator->running != 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "generator already executing", out_error);
@@ -86,19 +86,19 @@ tinypy_value_t *tinypy_generator_send(tinypy_value_t *generator_value, tinypy_va
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_generator_throw(tinypy_value_t *generator_value, tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {
     tinypy_value_t *result;
-    int yielded = 0;
+    int32_t yielded = 0;
 
-    assert(generator_value != NULL);
+    TINYPY_ASSERT(generator_value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(generator_value);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(TINYPY_VALUE_KIND(generator_value) == TINYPY_VALUE_GENERATOR);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(generator_value) == TINYPY_VALUE_GENERATOR);
     tinypy_generator_object_t *generator = TINYPY_GENERATOR_OBJECT(generator_value);
-    assert(exception != NULL);
-    assert(tinypy_internal_value_belongs_to(vm, exception));
-    assert(vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL);
-    assert(tinypy_type_is_subtype(exception->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0);
-    assert(traceback == NULL || tinypy_internal_value_belongs_to(vm, traceback));
-    assert(traceback == NULL || TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
+    TINYPY_ASSERT(exception != NULL);
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, exception));
+    TINYPY_ASSERT(vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL);
+    TINYPY_ASSERT(tinypy_type_is_subtype(exception->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0);
+    TINYPY_ASSERT(traceback == NULL || tinypy_internal_value_belongs_to(vm, traceback));
+    TINYPY_ASSERT(traceback == NULL || TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
     TINYPY_CLEAR_ERROR(out_error);
     if (generator->running != 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "generator already executing", out_error);
@@ -140,10 +140,10 @@ int32_t tinypy_generator_close(tinypy_value_t *generator_value, tinypy_error_t *
     tinypy_value_t *exception;
     tinypy_value_t *result;
 
-    assert(generator_value != NULL);
+    TINYPY_ASSERT(generator_value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(generator_value);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(TINYPY_VALUE_KIND(generator_value) == TINYPY_VALUE_GENERATOR);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(generator_value) == TINYPY_VALUE_GENERATOR);
     tinypy_generator_object_t *generator = TINYPY_GENERATOR_OBJECT(generator_value);
     TINYPY_CLEAR_ERROR(out_error);
     if (generator->finished != 0) {
@@ -181,7 +181,7 @@ tinypy_value_t *tinypy_internal_generator_next(tinypy_value_t *value, tinypy_err
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_generator_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
+static int32_t __tinypy_generator_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
     if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != count) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "generator method received invalid arguments", out_error);
         return 0;
@@ -247,7 +247,7 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
     }
     tinypy_value_t *generator = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *exception_argument = TINYPY_TUPLE_GET(args, 1U);
-    int condition = count == 4U;
+    int32_t condition = count == 4U;
     if (condition != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 3U);
         condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE;
@@ -260,7 +260,7 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
         }
     }
     if (TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)exception_argument, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0) {
-        int condition_2 = count >= 3U;
+        int32_t condition_2 = count >= 3U;
         if (condition_2 != 0) {
             tinypy_value_t *item = TINYPY_TUPLE_GET(args, 2U);
             condition_2 = tinypy_type_is_subtype(item->type, (tinypy_type_t *)exception_argument) != 0;
@@ -349,15 +349,15 @@ void tinypy_internal_initialize_generator_types(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_generator_frame(const tinypy_value_t *generator) {
-    assert(generator != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(generator)));
-    assert(TINYPY_VALUE_KIND(generator) == TINYPY_VALUE_GENERATOR);
+    TINYPY_ASSERT(generator != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(generator)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(generator) == TINYPY_VALUE_GENERATOR);
     return TINYPY_GENERATOR_OBJECT((tinypy_value_t *)generator)->frame;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_generator_finished(const tinypy_value_t *generator) {
-    assert(generator != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(generator)));
-    assert(TINYPY_VALUE_KIND(generator) == TINYPY_VALUE_GENERATOR);
+    TINYPY_ASSERT(generator != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(generator)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(generator) == TINYPY_VALUE_GENERATOR);
     return TINYPY_GENERATOR_OBJECT((tinypy_value_t *)generator)->finished != 0 ? 1 : 0;
 }

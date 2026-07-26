@@ -1,6 +1,6 @@
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_functools_no_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -74,8 +74,8 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
     tinypy_value_t *combined_args;
     size_t index;
 
-    assert(bound_count <= SIZE_MAX - call_count);
-    assert(bound_count + call_count <= SIZE_MAX / sizeof(*items));
+    TINYPY_ASSERT(bound_count <= SIZE_MAX - call_count);
+    TINYPY_ASSERT(bound_count + call_count <= SIZE_MAX / sizeof(*items));
     if (bound_count + call_count == 0U) {
         combined_args = tinypy_tuple_from_items(vm, NULL, 0U);
     }

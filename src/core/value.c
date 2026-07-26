@@ -2,7 +2,7 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <string.h>
 //////////////////////////////////////////////////////////////////////////
 tinypy_type_t *tinypy_internal_type_for_kind(tinypy_vm_t *vm, tinypy_value_type_e kind) {
@@ -104,7 +104,7 @@ tinypy_type_t *tinypy_internal_type_for_kind(tinypy_vm_t *vm, tinypy_value_type_
     case TINYPY_VALUE_SRE_MATCH:
         return &vm->sre_match_type;
     default:
-        assert(!"invalid builtin value kind");
+        TINYPY_ASSERT(!"invalid builtin value kind");
         return NULL;
     }
 }
@@ -124,9 +124,9 @@ tinypy_value_t *tinypy_internal_value_allocate(tinypy_vm_t *vm, tinypy_value_typ
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *object_type, size_t allocation_size) {
-    assert(object_type != NULL);
-    assert(object_type->vm == vm);
-    assert(allocation_size >= object_type->basic_size);
+    TINYPY_ASSERT(object_type != NULL);
+    TINYPY_ASSERT(object_type->vm == vm);
+    TINYPY_ASSERT(allocation_size >= object_type->basic_size);
 
     tinypy_value_t *value = (tinypy_value_t *)tinypy_internal_vm_allocate(
         vm,
@@ -139,7 +139,7 @@ tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *
 
     TINYPY_INCREF(&object_type->base.base);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_cycle_diagnostics_value_register(vm, value);
+    __tinypy_internal_cycle_diagnostics_value_register(vm, value);
 #endif
     return value;
 }
@@ -167,11 +167,11 @@ size_t tinypy_internal_value_allocation_size(const tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_value_destroy(tinypy_value_t *value) {
-    assert(value != NULL);
+    TINYPY_ASSERT(value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     size_t allocation_size = tinypy_internal_value_allocation_size(value);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_cycle_diagnostics_value_unregister(vm, value);
+    __tinypy_internal_cycle_diagnostics_value_unregister(vm, value);
 #endif
     if (value->type != NULL && value->type->destroy != NULL) {
         value->type->destroy(value);
@@ -184,7 +184,7 @@ void tinypy_internal_value_destroy(tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_release_visit(tinypy_value_t *child, void *user_data) {
-    assert(child != NULL);
+    TINYPY_ASSERT(child != NULL);
     (void)user_data;
     TINYPY_DECREF(child);
 }
@@ -194,18 +194,18 @@ void tinypy_internal_integer_free_list_finalize(tinypy_vm_t *vm) {
         tinypy_integer_object_t *value = vm->integer_free_list;
 
         vm->integer_free_list = __tinypy_internal_integer_free_next(value);
-        assert(vm->integer_free_count != 0U);
+        TINYPY_ASSERT(vm->integer_free_count != 0U);
         vm->integer_free_count -= 1U;
-        assert(vm->integer_type.base.base.ref > 1);
+        TINYPY_ASSERT(vm->integer_type.base.base.ref > 1);
         vm->integer_type.base.base.ref -= 1;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        tinypy_internal_cycle_diagnostics_value_unregister(vm, &value->base);
+        __tinypy_internal_cycle_diagnostics_value_unregister(vm, &value->base);
 #endif
         tinypy_internal_vm_deallocate(vm, value, sizeof(*value), (uint32_t)TINYPY_ALLOC_TAG_VALUE);
     }
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_internal_value_is_vm_embedded(const tinypy_vm_t *vm, const tinypy_value_t *value) {
+int32_t tinypy_internal_value_is_vm_embedded(const tinypy_vm_t *vm, const tinypy_value_t *value) {
     const tinypy_type_t *types[TINYPY_BUILTIN_TYPE_COUNT] = {
         &vm->type_type,
         &vm->object_type,
@@ -308,7 +308,7 @@ static int32_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
         tinypy_error_release(error);
     }
     tinypy_internal_exception_preserve_end(vm, &exception_state);
-    assert(value->ref > 0);
+    TINYPY_ASSERT(value->ref > 0);
     value->ref -= 1U;
     return value->ref != 0U ? INT32_C(1) : INT32_C(0);
 }
@@ -317,7 +317,7 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = value->type;
 
-    assert(value->ref == 0);
+    TINYPY_ASSERT(value->ref == 0);
     if (type == &vm->integer_type && vm->state == TINYPY_VM_STATE_LIVE && vm->integer_free_count < TINYPY_INTEGER_FREE_LIST_MAX) {
         tinypy_integer_object_t *integer = TINYPY_INTEGER_OBJECT(value);
 
@@ -355,7 +355,7 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_release(tinypy_value_t *value) {
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     TINYPY_DECREF(value);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -364,13 +364,13 @@ static inline size_t __tinypy_internal_text_allocation_size(tinypy_value_type_e 
                              ? offsetof(tinypy_string_object_t, bytes)
                              : offsetof(tinypy_unicode_object_t, utf8);
 
-    assert(byte_size <= SIZE_MAX - object_size - 1U);
+    TINYPY_ASSERT(byte_size <= SIZE_MAX - object_size - 1U);
     return object_size + byte_size + 1U;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_text_from_bytes(tinypy_vm_t *vm, const unsigned char *bytes, size_t byte_size, size_t code_point_count, tinypy_value_type_e type) {
+static tinypy_value_t *__tinypy_internal_text_from_bytes(tinypy_vm_t *vm, const uint8_t *bytes, size_t byte_size, size_t code_point_count, tinypy_value_type_e type) {
     size_t allocation_size;
-    unsigned char *payload;
+    uint8_t *payload;
 
     allocation_size = __tinypy_internal_text_allocation_size(type, byte_size);
 
@@ -393,77 +393,77 @@ static tinypy_value_t *__tinypy_internal_text_from_bytes(tinypy_vm_t *vm, const 
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
-const unsigned char *tinypy_internal_text_bytes(const tinypy_value_t *value) {
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE);
+const uint8_t *tinypy_internal_text_bytes(const tinypy_value_t *value) {
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE);
     return TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING
                ? TINYPY_STRING_OBJECT(value)->bytes
                : TINYPY_UNICODE_OBJECT(value)->utf8;
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_internal_text_byte_size(const tinypy_value_t *value) {
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE);
     return TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING
                ? TINYPY_SIZED_SIZE(value)
                : TINYPY_UNICODE_OBJECT(value)->byte_size;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_string_is_interned(const tinypy_value_t *value) {
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING);
     return TINYPY_STRING_OBJECT(value)->interned;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_string_set_interned(tinypy_value_t *value, int32_t interned) {
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING);
     TINYPY_STRING_OBJECT(value)->interned = interned != 0 ? INT32_C(1) : INT32_C(0);
 }
 
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_internal_utf8_is_continuation(unsigned char byte) {
+static int32_t __tinypy_internal_utf8_is_continuation(uint8_t byte) {
     return byte >= 0x80U && byte <= 0xbfU;
 }
 #endif
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_internal_utf8_code_point_count(const unsigned char *bytes, size_t size) {
+static size_t __tinypy_internal_utf8_code_point_count(const uint8_t *bytes, size_t size) {
     size_t offset = 0U;
     size_t code_point_count = 0U;
 
     while (offset < size) {
-        unsigned char first = bytes[offset];
+        uint8_t first = bytes[offset];
         size_t width;
 
         if (first <= 0x7fU) {
             width = 1U;
         }
         else if (first < 0xe0U) {
-            assert(first >= 0xc2U);
-            assert(size - offset >= 2U);
-            assert(__tinypy_internal_utf8_is_continuation(bytes[offset + 1U]));
+            TINYPY_ASSERT(first >= 0xc2U);
+            TINYPY_ASSERT(size - offset >= 2U);
+            TINYPY_ASSERT(__tinypy_internal_utf8_is_continuation(bytes[offset + 1U]));
             width = 2U;
         }
         else if (first < 0xf0U) {
-            assert(size - offset >= 3U);
-            assert(__tinypy_internal_utf8_is_continuation(bytes[offset + 1U]));
-            assert(__tinypy_internal_utf8_is_continuation(bytes[offset + 2U]));
+            TINYPY_ASSERT(size - offset >= 3U);
+            TINYPY_ASSERT(__tinypy_internal_utf8_is_continuation(bytes[offset + 1U]));
+            TINYPY_ASSERT(__tinypy_internal_utf8_is_continuation(bytes[offset + 2U]));
             if (first == 0xe0U) {
-                assert(bytes[offset + 1U] >= 0xa0U);
+                TINYPY_ASSERT(bytes[offset + 1U] >= 0xa0U);
             }
             else if (first == 0xedU) {
-                assert(bytes[offset + 1U] <= 0x9fU);
+                TINYPY_ASSERT(bytes[offset + 1U] <= 0x9fU);
             }
             width = 3U;
         }
         else {
-            assert(first <= 0xf4U);
-            assert(size - offset >= 4U);
-            assert(__tinypy_internal_utf8_is_continuation(bytes[offset + 1U]));
-            assert(__tinypy_internal_utf8_is_continuation(bytes[offset + 2U]));
-            assert(__tinypy_internal_utf8_is_continuation(bytes[offset + 3U]));
+            TINYPY_ASSERT(first <= 0xf4U);
+            TINYPY_ASSERT(size - offset >= 4U);
+            TINYPY_ASSERT(__tinypy_internal_utf8_is_continuation(bytes[offset + 1U]));
+            TINYPY_ASSERT(__tinypy_internal_utf8_is_continuation(bytes[offset + 2U]));
+            TINYPY_ASSERT(__tinypy_internal_utf8_is_continuation(bytes[offset + 3U]));
             if (first == 0xf0U) {
-                assert(bytes[offset + 1U] >= 0x90U);
+                TINYPY_ASSERT(bytes[offset + 1U] >= 0x90U);
             }
             else if (first == 0xf4U) {
-                assert(bytes[offset + 1U] <= 0x8fU);
+                TINYPY_ASSERT(bytes[offset + 1U] <= 0x8fU);
             }
             width = 4U;
         }
@@ -475,12 +475,12 @@ static size_t __tinypy_internal_utf8_code_point_count(const unsigned char *bytes
     return code_point_count;
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_internal_value_belongs_to(const tinypy_vm_t *vm, const tinypy_value_t *value) {
+int32_t tinypy_internal_value_belongs_to(const tinypy_vm_t *vm, const tinypy_value_t *value) {
     return value != NULL && TINYPY_VALUE_VM(value) == vm;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_none_get(tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     tinypy_value_t *result = &vm->none_object.base;
     TINYPY_INCREF(result);
 
@@ -488,21 +488,21 @@ tinypy_value_t *tinypy_none_get(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_not_implemented_get(tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     tinypy_value_t *result = &vm->not_implemented_object.base;
     TINYPY_INCREF(result);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_ellipsis_get(tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     tinypy_value_t *result = &vm->ellipsis_object.base;
     TINYPY_INCREF(result);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_bool_from_i32(tinypy_vm_t *vm, int32_t value) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     tinypy_value_t *result = value != 0
                  ? &vm->true_object.base
                  : &vm->false_object.base;
@@ -512,13 +512,13 @@ tinypy_value_t *tinypy_bool_from_i32(tinypy_vm_t *vm, int32_t value) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_integer_from_i64(tinypy_vm_t *vm, int64_t value) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     return __tinypy_internal_integer_from_i64_fast(vm, value);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(bytes != NULL || size == 0U);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(bytes != NULL || size == 0U);
 
     if (size == 0U) {
         tinypy_value_t *result = &vm->empty_string_object.base.base;
@@ -529,17 +529,17 @@ tinypy_value_t *tinypy_string_from_bytes(tinypy_vm_t *vm, const void *bytes, siz
 
     return __tinypy_internal_text_from_bytes(
         vm,
-        (const unsigned char *)bytes,
+        (const uint8_t *)bytes,
         size,
         0U,
         TINYPY_VALUE_STRING);
 }
 //////////////////////////////////////////////////////////////////////////
 const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(out_size != NULL);
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(out_size != NULL);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING);
 
     *out_size = TINYPY_SIZED_SIZE(value);
     return TINYPY_STRING_OBJECT(value)->bytes;
@@ -548,26 +548,26 @@ const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size) {
 tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size_t size) {
     size_t code_point_count;
 
-    assert(tinypy_internal_vm_valid(vm));
-    assert(utf8 != NULL || size == 0U);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(utf8 != NULL || size == 0U);
     code_point_count = __tinypy_internal_utf8_code_point_count(
-        (const unsigned char *)utf8,
+        (const uint8_t *)utf8,
         size);
 
     return __tinypy_internal_text_from_bytes(
         vm,
-        (const unsigned char *)utf8,
+        (const uint8_t *)utf8,
         size,
         code_point_count,
         TINYPY_VALUE_UNICODE);
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_unicode_utf8_view(const tinypy_value_t *value, size_t *out_size, size_t *out_code_point_count) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(out_size != NULL);
-    assert(out_code_point_count != NULL);
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(out_size != NULL);
+    TINYPY_ASSERT(out_code_point_count != NULL);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE);
 
     *out_size = TINYPY_UNICODE_OBJECT(value)->byte_size;
     *out_code_point_count = TINYPY_SIZED_SIZE(value);
@@ -575,59 +575,59 @@ const char *tinypy_unicode_utf8_view(const tinypy_value_t *value, size_t *out_si
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_type_e tinypy_typeof(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
 
     return TINYPY_VALUE_KIND(value);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_vm_t *tinypy_value_vm(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     return TINYPY_VALUE_VM(value);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_ref_t tinypy_refcount(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     return value->ref;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_is_callable(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     return value->type->call != NULL || tinypy_internal_object_has_special((tinypy_value_t *)value, "__call__", 8U) != 0 ? INT32_C(1) : INT32_C(0);
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_object_type(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     return value->type;
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_type_name(const tinypy_type_t *type, size_t *out_size) {
-    assert(type != NULL);
-    assert(tinypy_internal_vm_valid(type->vm));
-    assert(out_size != NULL);
+    TINYPY_ASSERT(type != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(type->vm));
+    TINYPY_ASSERT(out_size != NULL);
     *out_size = type->name_size;
     return type->name;
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_type_metaclass(const tinypy_type_t *type) {
-    assert(type != NULL);
-    assert(tinypy_internal_vm_valid(type->vm));
+    TINYPY_ASSERT(type != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(type->vm));
     return type->base.base.type;
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_type_base(const tinypy_type_t *type) {
-    assert(type != NULL);
-    assert(tinypy_internal_vm_valid(type->vm));
+    TINYPY_ASSERT(type != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(type->vm));
     return type->base_type;
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_value_t *tinypy_type_dict(const tinypy_type_t *type) {
-    assert(type != NULL);
-    assert(tinypy_internal_vm_valid(type->vm));
+    TINYPY_ASSERT(type != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(type->vm));
     return type->dict;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -658,9 +658,9 @@ void tinypy_internal_type_destroy(tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_bool_as_i32(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BOOL);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BOOL);
 
     return (int32_t)TINYPY_INTEGER_VALUE(value);
 }
@@ -668,10 +668,10 @@ int32_t tinypy_bool_as_i32(const tinypy_value_t *value) {
 int64_t tinypy_integer_as_i64(const tinypy_value_t *value) {
     tinypy_value_type_e kind;
 
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     kind = TINYPY_VALUE_KIND(value);
-    assert(kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_BOOL);
+    TINYPY_ASSERT(kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_BOOL);
 
     if (kind == TINYPY_VALUE_BOOL) {
         return TINYPY_INTEGER_VALUE(value) != 0 ? INT64_C(1) : INT64_C(0);
@@ -681,6 +681,6 @@ int64_t tinypy_integer_as_i64(const tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_retain(tinypy_value_t *value) {
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
     TINYPY_INCREF(value);
 }

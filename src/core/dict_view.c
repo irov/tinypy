@@ -2,17 +2,17 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_dict_view_new(tinypy_value_t *dict, tinypy_dict_view_kind_e kind) {
     tinypy_value_type_e value_kind;
 
-    assert(dict != NULL);
+    TINYPY_ASSERT(dict != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
-    assert(kind >= TINYPY_DICT_VIEW_KEYS && kind <= TINYPY_DICT_VIEW_ITEMS);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
+    TINYPY_ASSERT(kind >= TINYPY_DICT_VIEW_KEYS && kind <= TINYPY_DICT_VIEW_ITEMS);
     value_kind = kind == TINYPY_DICT_VIEW_KEYS ? TINYPY_VALUE_DICT_KEYS : (kind == TINYPY_DICT_VIEW_VALUES ? TINYPY_VALUE_DICT_VALUES : TINYPY_VALUE_DICT_ITEMS);
     tinypy_dict_view_object_t *view = (tinypy_dict_view_object_t *)tinypy_internal_value_allocate(vm, value_kind, sizeof(*view));
     view->dict = dict;

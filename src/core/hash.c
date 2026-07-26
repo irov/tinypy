@@ -17,7 +17,7 @@ static inline tinypy_hash_t __tinypy_internal_hash_fix(uint64_t value) {
     return (tinypy_hash_t)value;
 }
 //////////////////////////////////////////////////////////////////////////
-static inline uint64_t __tinypy_internal_rotate_left(uint64_t value, unsigned int amount) {
+static inline uint64_t __tinypy_internal_rotate_left(uint64_t value, uint32_t amount) {
     amount &= 63U;
     if (amount == 0U) {
         return value;
@@ -47,19 +47,19 @@ static tinypy_hash_t __tinypy_internal_hash_long(const tinypy_value_t *value) {
     return __tinypy_internal_hash_fix(hash);
 }
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_internal_double_integer_digits(double value, int *out_sign, uint16_t digits[TINYPY_DOUBLE_LONG_DIGITS]) {
+static size_t __tinypy_internal_double_integer_digits(double value, int32_t *out_sign, uint16_t digits[TINYPY_DOUBLE_LONG_DIGITS]) {
     uint64_t bits;
     uint64_t significand;
-    unsigned int exponent_bits;
-    int exponent;
-    int shift;
+    uint32_t exponent_bits;
+    int32_t exponent;
+    int32_t shift;
     size_t digit_count;
-    unsigned int bit;
+    uint32_t bit;
 
     (void)memset(digits, 0, TINYPY_DOUBLE_LONG_DIGITS * sizeof(*digits));
     (void)memcpy(&bits, &value, sizeof(bits));
     *out_sign = (bits >> 63U) != 0U ? -1 : 1;
-    exponent_bits = (unsigned int)((bits >> 52U) & UINT64_C(0x7ff));
+    exponent_bits = (uint32_t)((bits >> 52U) & UINT64_C(0x7ff));
     significand = bits & UINT64_C(0x000fffffffffffff);
 
     if (exponent_bits == 0x7ffU) {
@@ -74,10 +74,10 @@ static size_t __tinypy_internal_double_integer_digits(double value, int *out_sig
     }
 
     significand |= UINT64_C(1) << 52U;
-    exponent = (int)exponent_bits - 1023;
+    exponent = (int32_t)exponent_bits - 1023;
     shift = exponent - 52;
     if (shift < 0) {
-        unsigned int right = (unsigned int)(-shift);
+        uint32_t right = (uint32_t)(-shift);
         uint64_t mask;
 
         if (right >= 64U) {
@@ -118,7 +118,7 @@ static tinypy_hash_t __tinypy_internal_hash_integral_double(double value) {
     size_t digit_count;
     size_t index;
     uint64_t hash = UINT64_C(0);
-    int sign;
+    int32_t sign;
 
     digit_count = __tinypy_internal_double_integer_digits(value, &sign, digits);
     if (digit_count == SIZE_MAX) {
@@ -149,7 +149,7 @@ static tinypy_hash_t __tinypy_internal_hash_double(double value) {
     int64_t high;
     int64_t low;
     uint64_t combined;
-    int exponent;
+    int32_t exponent;
 
     if (isinf(value)) {
         return value < 0.0 ? (tinypy_hash_t)-271828 : (tinypy_hash_t)314159;
@@ -174,7 +174,7 @@ static tinypy_hash_t __tinypy_internal_hash_double(double value) {
     return __tinypy_internal_hash_fix(combined);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_hash_t __tinypy_internal_hash_bytes(const unsigned char *bytes, size_t size, uint64_t prefix, uint64_t suffix) {
+static tinypy_hash_t __tinypy_internal_hash_bytes(const uint8_t *bytes, size_t size, uint64_t prefix, uint64_t suffix) {
     uint64_t hash;
     size_t index;
 
@@ -190,8 +190,8 @@ static tinypy_hash_t __tinypy_internal_hash_bytes(const unsigned char *bytes, si
     return __tinypy_internal_hash_fix(hash);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_internal_utf8_next(const unsigned char *bytes, size_t size, size_t *offset, uint32_t *out_code_point) {
-    unsigned char first;
+static int32_t __tinypy_internal_utf8_next(const uint8_t *bytes, size_t size, size_t *offset, uint32_t *out_code_point) {
+    uint8_t first;
     uint32_t code_point;
     size_t width;
     size_t index;
@@ -229,7 +229,7 @@ static int __tinypy_internal_utf8_next(const unsigned char *bytes, size_t size, 
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_hash_t __tinypy_internal_hash_unicode(const tinypy_vm_t *vm, const tinypy_value_t *value) {
-    const unsigned char *bytes = TINYPY_UNICODE_OBJECT(value)->utf8;
+    const uint8_t *bytes = TINYPY_UNICODE_OBJECT(value)->utf8;
     size_t byte_size = TINYPY_UNICODE_OBJECT(value)->byte_size;
     size_t point_count = TINYPY_SIZED_SIZE(value);
     size_t offset = 0U;
@@ -259,19 +259,19 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, t
     size_t index = 0U;
     uint64_t hash = UINT64_C(0x345678);
     uint64_t multiplier = UINT64_C(1000003);
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 #endif
 
-#ifndef NDEBUG
-    assert(vm->hash_depth < TINYPY_COMPARE_RECURSION_LIMIT);
+#if defined(TINYPY_ENABLE_ASSERTS)
+    TINYPY_ASSERT(vm->hash_depth < TINYPY_COMPARE_RECURSION_LIMIT);
     vm->hash_depth += 1U;
 #endif
     while (remaining != 0U) {
         tinypy_hash_t item_hash = tinypy_internal_hash_value(items[index], out_error);
 
         if (tinypy_vm_has_error(TINYPY_VALUE_VM(value)) != 0) {
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
             vm->hash_depth -= 1U;
 #endif
             return (tinypy_hash_t)0;
@@ -282,7 +282,7 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, t
         multiplier += UINT64_C(82520) + (uint64_t)remaining + (uint64_t)remaining;
         index += 1U;
     }
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
     vm->hash_depth -= 1U;
 #endif
     hash += UINT64_C(97531);
@@ -342,7 +342,7 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_err
     case TINYPY_VALUE_BUFFER: {
         const tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
         size_t size;
-        const unsigned char *bytes = (const unsigned char *)tinypy_buffer_view(value, &size);
+        const uint8_t *bytes = (const uint8_t *)tinypy_buffer_view(value, &size);
 
         return __tinypy_internal_hash_bytes(bytes, size, vm->hash_secret_prefix, vm->hash_secret_suffix);
     }
@@ -376,7 +376,7 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_err
     case TINYPY_VALUE_DICT:
     case TINYPY_VALUE_SET:
     case TINYPY_VALUE_BYTEARRAY:
-        assert(0 && "value is not hashable");
+        TINYPY_ASSERT(0 && "value is not hashable");
         return (tinypy_hash_t)0;
     default:
         return __tinypy_internal_hash_fix(
@@ -384,11 +384,11 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_err
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static inline int __tinypy_internal_value_is_numeric(const tinypy_value_t *value) {
+static inline int32_t __tinypy_internal_value_is_numeric(const tinypy_value_t *value) {
     return TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_FLOAT || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_COMPLEX;
 }
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_internal_integer_digits(const tinypy_value_t *value, int *out_sign, uint16_t local_digits[5], const uint16_t **out_digits) {
+static size_t __tinypy_internal_integer_digits(const tinypy_value_t *value, int32_t *out_sign, uint16_t local_digits[5], const uint16_t **out_digits) {
     uint64_t magnitude;
     size_t count = 0U;
     int64_t integer;
@@ -424,15 +424,15 @@ static size_t __tinypy_internal_integer_digits(const tinypy_value_t *value, int 
     return count;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_internal_integer_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
+static int32_t __tinypy_internal_integer_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
     uint16_t left_local[5];
     uint16_t right_local[5];
     const uint16_t *left_digits;
     const uint16_t *right_digits;
     size_t left_count;
     size_t right_count;
-    int left_sign;
-    int right_sign;
+    int32_t left_sign;
+    int32_t right_sign;
 
     left_count = __tinypy_internal_integer_digits(
         left, &left_sign, left_local, &left_digits);
@@ -465,8 +465,8 @@ static int32_t __tinypy_internal_integer_order(const tinypy_value_t *left, const
     const uint16_t *right_digits;
     size_t left_count;
     size_t right_count;
-    int left_sign;
-    int right_sign;
+    int32_t left_sign;
+    int32_t right_sign;
     int32_t magnitude_order;
 
     left_count = __tinypy_internal_integer_digits(left, &left_sign, left_local, &left_digits);
@@ -486,8 +486,8 @@ static int32_t __tinypy_internal_integer_double_order(const tinypy_value_t *inte
     double integral;
     size_t integer_count;
     size_t floating_count;
-    int integer_sign;
-    int floating_sign;
+    int32_t integer_sign;
+    int32_t floating_sign;
     int32_t magnitude_order;
 
     integer_count = __tinypy_internal_integer_digits(integer, &integer_sign, integer_local, &integer_digits);
@@ -504,7 +504,7 @@ static int32_t __tinypy_internal_integer_double_order(const tinypy_value_t *inte
     absolute = fabs(floating);
     integral = floor(absolute);
     floating_count = __tinypy_internal_double_integer_digits(integral, &floating_sign, floating_digits);
-    assert(floating_count != SIZE_MAX);
+    TINYPY_ASSERT(floating_count != SIZE_MAX);
     magnitude_order = __tinypy_internal_compare_digit_magnitudes(integer_digits, integer_count, floating_digits, floating_count);
     if (magnitude_order == 0 && absolute != integral) {
         magnitude_order = -1;
@@ -512,13 +512,13 @@ static int32_t __tinypy_internal_integer_double_order(const tinypy_value_t *inte
     return integer_sign < 0 ? -magnitude_order : magnitude_order;
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_internal_numeric_order(const tinypy_value_t *left, const tinypy_value_t *right, int32_t *out_order) {
+int32_t tinypy_internal_numeric_order(const tinypy_value_t *left, const tinypy_value_t *right, int32_t *out_order) {
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
-    int left_integer = left_kind == TINYPY_VALUE_BOOL || left_kind == TINYPY_VALUE_INTEGER || left_kind == TINYPY_VALUE_LONG;
-    int right_integer = right_kind == TINYPY_VALUE_BOOL || right_kind == TINYPY_VALUE_INTEGER || right_kind == TINYPY_VALUE_LONG;
+    int32_t left_integer = left_kind == TINYPY_VALUE_BOOL || left_kind == TINYPY_VALUE_INTEGER || left_kind == TINYPY_VALUE_LONG;
+    int32_t right_integer = right_kind == TINYPY_VALUE_BOOL || right_kind == TINYPY_VALUE_INTEGER || right_kind == TINYPY_VALUE_LONG;
 
-    assert(out_order != NULL);
+    TINYPY_ASSERT(out_order != NULL);
     if (left_kind == TINYPY_VALUE_COMPLEX || right_kind == TINYPY_VALUE_COMPLEX) {
         return 0;
     }
@@ -551,14 +551,14 @@ int tinypy_internal_numeric_order(const tinypy_value_t *left, const tinypy_value
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_internal_integer_equal_double(const tinypy_value_t *integer, double floating) {
+static int32_t __tinypy_internal_integer_equal_double(const tinypy_value_t *integer, double floating) {
     uint16_t local[5];
     uint16_t double_digits[TINYPY_DOUBLE_LONG_DIGITS];
     const uint16_t *integer_digits;
     size_t integer_count;
     size_t double_count;
-    int integer_sign;
-    int double_sign;
+    int32_t integer_sign;
+    int32_t double_sign;
 
     double_count = __tinypy_internal_double_integer_digits(
         floating, &double_sign, double_digits);
@@ -573,11 +573,11 @@ static int __tinypy_internal_integer_equal_double(const tinypy_value_t *integer,
                 integer_count * sizeof(*integer_digits)) == 0);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_internal_numeric_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
+static int32_t __tinypy_internal_numeric_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
-    int left_integer = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_LONG;
-    int right_integer = TINYPY_VALUE_KIND(right) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_LONG;
+    int32_t left_integer = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_LONG;
+    int32_t right_integer = TINYPY_VALUE_KIND(right) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_LONG;
     double left_real;
     double right_real;
 
@@ -594,7 +594,7 @@ static int __tinypy_internal_numeric_equal(const tinypy_value_t *left, const tin
             return __tinypy_internal_integer_equal_double(
                 right, TINYPY_COMPLEX_OBJECT(left)->real);
         }
-        assert(right_kind == TINYPY_VALUE_FLOAT);
+        TINYPY_ASSERT(right_kind == TINYPY_VALUE_FLOAT);
         return TINYPY_COMPLEX_OBJECT(left)->real ==
                TINYPY_FLOAT_OBJECT(right)->value;
     }
@@ -606,7 +606,7 @@ static int __tinypy_internal_numeric_equal(const tinypy_value_t *left, const tin
             return __tinypy_internal_integer_equal_double(
                 left, TINYPY_COMPLEX_OBJECT(right)->real);
         }
-        assert(left_kind == TINYPY_VALUE_FLOAT);
+        TINYPY_ASSERT(left_kind == TINYPY_VALUE_FLOAT);
         return TINYPY_FLOAT_OBJECT(left)->value ==
                TINYPY_COMPLEX_OBJECT(right)->real;
     }
@@ -623,23 +623,23 @@ static int __tinypy_internal_numeric_equal(const tinypy_value_t *left, const tin
         return __tinypy_internal_integer_equal_double(right, left_real);
     }
 
-    assert(TINYPY_VALUE_KIND(left) == TINYPY_VALUE_FLOAT);
-    assert(TINYPY_VALUE_KIND(right) == TINYPY_VALUE_FLOAT);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(left) == TINYPY_VALUE_FLOAT);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(right) == TINYPY_VALUE_FLOAT);
     left_real = TINYPY_FLOAT_OBJECT(left)->value;
     right_real = TINYPY_FLOAT_OBJECT(right)->value;
     return left_real == right_real;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_internal_text_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
-    const unsigned char *left_bytes = TINYPY_TEXT_BYTES(left);
-    const unsigned char *right_bytes = TINYPY_TEXT_BYTES(right);
+static int32_t __tinypy_internal_text_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
+    const uint8_t *left_bytes = TINYPY_TEXT_BYTES(left);
+    const uint8_t *right_bytes = TINYPY_TEXT_BYTES(right);
     size_t left_size = TINYPY_TEXT_BYTE_SIZE(left);
     size_t right_size = TINYPY_TEXT_BYTE_SIZE(right);
     size_t index;
 
     if (left->type != right->type) {
         const tinypy_value_t *string = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_STRING ? left : right;
-        const unsigned char *string_bytes = TINYPY_TEXT_BYTES(string);
+        const uint8_t *string_bytes = TINYPY_TEXT_BYTES(string);
 
         for (index = 0U;
              index < TINYPY_TEXT_BYTE_SIZE(string);
@@ -653,8 +653,8 @@ static int __tinypy_internal_text_equal(const tinypy_value_t *left, const tinypy
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_internal_bytes_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
-    const unsigned char *left_bytes;
-    const unsigned char *right_bytes;
+    const uint8_t *left_bytes;
+    const uint8_t *right_bytes;
     size_t left_size;
     size_t right_size;
 
@@ -665,12 +665,12 @@ static int32_t __tinypy_internal_bytes_equal(const tinypy_value_t *left, const t
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_text_order(const tinypy_value_t *left, const tinypy_value_t *right) {
-    const unsigned char *left_bytes = TINYPY_TEXT_BYTES(left);
-    const unsigned char *right_bytes = TINYPY_TEXT_BYTES(right);
+    const uint8_t *left_bytes = TINYPY_TEXT_BYTES(left);
+    const uint8_t *right_bytes = TINYPY_TEXT_BYTES(right);
     size_t left_size = TINYPY_TEXT_BYTE_SIZE(left);
     size_t right_size = TINYPY_TEXT_BYTE_SIZE(right);
     size_t common_size = left_size < right_size ? left_size : right_size;
-    int comparison = common_size != 0U ? memcmp(left_bytes, right_bytes, common_size) : 0;
+    int32_t comparison = common_size != 0U ? memcmp(left_bytes, right_bytes, common_size) : 0;
 
     if (comparison != 0) {
         return comparison < 0 ? -1 : 1;
@@ -684,7 +684,7 @@ static int32_t __tinypy_internal_sequence_equal(const tinypy_value_t *left, cons
     size_t left_size;
     size_t right_size;
     size_t index;
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
 #endif
 
     if (TINYPY_VALUE_KIND(left) != TINYPY_VALUE_KIND(right)) {
@@ -705,27 +705,27 @@ static int32_t __tinypy_internal_sequence_equal(const tinypy_value_t *left, cons
     if (left_size != right_size) {
         return 0;
     }
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    assert(vm->equality_depth < TINYPY_COMPARE_RECURSION_LIMIT);
+    TINYPY_ASSERT(vm->equality_depth < TINYPY_COMPARE_RECURSION_LIMIT);
     vm->equality_depth += 1U;
 #endif
     for (index = 0U; index < left_size; ++index) {
         if (tinypy_internal_equal_value(
                 left_items[index], right_items[index], 1) == 0) {
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
             vm->equality_depth -= 1U;
 #endif
             return 0;
         }
     }
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
     vm->equality_depth -= 1U;
 #endif
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_equal_value(const tinypy_value_t *left, const tinypy_value_t *right, int identity_implies_equal) {
+int32_t tinypy_internal_equal_value(const tinypy_value_t *left, const tinypy_value_t *right, int32_t identity_implies_equal) {
     if (left == right && identity_implies_equal) {
         return 1;
     }
@@ -766,17 +766,17 @@ int32_t tinypy_internal_equal_value(const tinypy_value_t *left, const tinypy_val
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_hash_t tinypy_hash(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
 
     return tinypy_internal_hash_value(value, NULL);
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
-    assert(left != NULL);
-    assert(right != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(left)));
-    assert(tinypy_internal_value_belongs_to(
+    TINYPY_ASSERT(left != NULL);
+    TINYPY_ASSERT(right != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(left)));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(
         TINYPY_VALUE_VM(left), right));
 
     return tinypy_internal_equal_value(left, right, 0);

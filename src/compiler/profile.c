@@ -4,7 +4,7 @@
 
 #include "../artifact/sha256.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <string.h>
 
 #define TINYPY_BUILD_PROFILE_STATE UINT32_C(0x54505950)
@@ -99,14 +99,14 @@ static tinypy_build_profile_result_e __tinypy_profile_fail(tinypy_build_profile_
     return code;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_profile_allocator_abi_valid(const tinypy_allocator_t *allocator) {
+static int32_t __tinypy_profile_allocator_abi_valid(const tinypy_allocator_t *allocator) {
     const size_t minimum_size =
         offsetof(tinypy_allocator_t, deallocate) + sizeof(allocator->deallocate);
     return allocator->abi_version == TINYPY_ABI_VERSION && (size_t)allocator->struct_size >= minimum_size;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_build_value_init(tinypy_build_value_t *value, tinypy_build_value_type_e type) {
-    assert(value != NULL);
+    TINYPY_ASSERT(value != NULL);
     (void)memset(value, 0, sizeof(*value));
     value->abi_version = TINYPY_COMPILER_ABI_VERSION;
     value->struct_size = (uint32_t)sizeof(*value);
@@ -114,7 +114,7 @@ void tinypy_build_value_init(tinypy_build_value_t *value, tinypy_build_value_typ
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_build_profile_limits_init(tinypy_build_profile_limits_t *limits) {
-    assert(limits != NULL);
+    TINYPY_ASSERT(limits != NULL);
     (void)memset(limits, 0, sizeof(*limits));
     limits->abi_version = TINYPY_COMPILER_ABI_VERSION;
     limits->struct_size = (uint32_t)sizeof(*limits);
@@ -126,13 +126,13 @@ void tinypy_build_profile_limits_init(tinypy_build_profile_limits_t *limits) {
     limits->max_tuple_items = TINYPY_PROFILE_DEFAULT_TUPLE_ITEMS;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_profile_limits_valid(const tinypy_build_profile_limits_t *limits) {
+static int32_t __tinypy_profile_limits_valid(const tinypy_build_profile_limits_t *limits) {
     return limits != NULL && limits->abi_version == TINYPY_COMPILER_ABI_VERSION && limits->struct_size >= (uint32_t)sizeof(*limits) && limits->max_allocated_bytes != 0U && limits->max_constants != 0U && limits->max_value_nodes != 0U && limits->max_depth != 0U && limits->max_string_bytes != 0U && limits->max_tuple_items != 0U;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_preprocessor_name_is_reserved(const char *name, size_t name_size) {
     size_t index;
-    assert(name != NULL || name_size == 0U);
+    TINYPY_ASSERT(name != NULL || name_size == 0U);
     if (name_size < 5U || name[0] != '_' || name[1] != '_' || name[name_size - 2U] != '_' || name[name_size - 1U] != '_' || name[2] < 'A' || name[2] > 'Z') {
         return 0;
     }
@@ -145,7 +145,7 @@ int32_t tinypy_preprocessor_name_is_reserved(const char *name, size_t name_size)
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_profile_add_size(size_t left, size_t right, size_t *out) {
+static int32_t __tinypy_profile_add_size(size_t left, size_t right, size_t *out) {
     if (right > SIZE_MAX - left) {
         return 0;
     }
@@ -153,7 +153,7 @@ static int __tinypy_profile_add_size(size_t left, size_t right, size_t *out) {
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_profile_multiply_size(size_t left, size_t right, size_t *out) {
+static int32_t __tinypy_profile_multiply_size(size_t left, size_t right, size_t *out) {
     if (left != 0U && right > SIZE_MAX / left) {
         return 0;
     }
@@ -190,7 +190,7 @@ static void *__tinypy_profile_allocate(tinypy_build_profile_t *profile, size_t p
         total_size,
         TINYPY_PROFILE_ALIGNMENT,
         (uint32_t)TINYPY_BUILD_PROFILE_ALLOC_TAG_DATA);
-    assert(allocation != NULL);
+    TINYPY_ASSERT(allocation != NULL);
     allocation->next = profile->allocations;
     allocation->total_size = total_size;
     profile->allocations = allocation;
@@ -200,10 +200,10 @@ static void *__tinypy_profile_allocate(tinypy_build_profile_t *profile, size_t p
     return (void *)(allocation + 1);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_profile_valid_utf8(const unsigned char *bytes, size_t size) {
+static int32_t __tinypy_profile_valid_utf8(const uint8_t *bytes, size_t size) {
     size_t index = 0U;
     while (index < size) {
-        unsigned char first = bytes[index++];
+        uint8_t first = bytes[index++];
         uint32_t code_point;
         size_t continuation_count;
         size_t continuation;
@@ -232,7 +232,7 @@ static int __tinypy_profile_valid_utf8(const unsigned char *bytes, size_t size) 
         for (continuation = 0U;
              continuation != continuation_count;
              ++continuation) {
-            unsigned char next = bytes[index++];
+            uint8_t next = bytes[index++];
             if ((next & 0xc0U) != 0x80U) {
                 return 0;
             }
@@ -245,15 +245,15 @@ static int __tinypy_profile_valid_utf8(const unsigned char *bytes, size_t size) 
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_profile_value_descriptor_valid(const tinypy_build_value_t *value) {
-    assert(value != NULL);
+static int32_t __tinypy_profile_value_descriptor_valid(const tinypy_build_value_t *value) {
+    TINYPY_ASSERT(value != NULL);
     return value->abi_version == TINYPY_COMPILER_ABI_VERSION && value->struct_size >= (uint32_t)sizeof(*value) && value->reserved == 0U && value->reserved2 == 0U;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_build_profile_result_e __tinypy_profile_copy_value(tinypy_build_profile_t *profile, const tinypy_build_value_t *source, tinypy_build_value_t *destination, size_t constant_index, size_t depth, tinypy_build_profile_error_t *error) {
     tinypy_build_profile_result_e result;
 
-    assert(source != NULL);
+    TINYPY_ASSERT(source != NULL);
     if (!__tinypy_profile_value_descriptor_valid(source)) {
         return __tinypy_profile_fail(
             error,
@@ -359,7 +359,7 @@ static tinypy_build_profile_result_e __tinypy_profile_copy_value(tinypy_build_pr
     case TINYPY_BUILD_VALUE_STRING:
     case TINYPY_BUILD_VALUE_UNICODE: {
         size_t allocation_size;
-        unsigned char *copy;
+        uint8_t *copy;
         if (source->data == NULL && source->data_size != 0U) {
             return __tinypy_profile_fail(
                 error,
@@ -378,7 +378,7 @@ static tinypy_build_profile_result_e __tinypy_profile_copy_value(tinypy_build_pr
                 "build string byte limit exceeded");
         }
         if (source->type == (uint32_t)TINYPY_BUILD_VALUE_UNICODE && !__tinypy_profile_valid_utf8(
-                (const unsigned char *)source->data,
+                (const uint8_t *)source->data,
                 source->data_size)) {
             return __tinypy_profile_fail(
                 error,
@@ -395,7 +395,7 @@ static tinypy_build_profile_result_e __tinypy_profile_copy_value(tinypy_build_pr
                 depth,
                 "build string allocation size overflow");
         }
-        copy = (unsigned char *)__tinypy_profile_allocate(
+        copy = (uint8_t *)__tinypy_profile_allocate(
             profile,
             allocation_size,
             constant_index,
@@ -486,9 +486,9 @@ static tinypy_build_profile_result_e __tinypy_profile_copy_value(tinypy_build_pr
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_profile_name_compare(const char *left, size_t left_size, const char *right, size_t right_size) {
+static int32_t __tinypy_profile_name_compare(const char *left, size_t left_size, const char *right, size_t right_size) {
     size_t common_size = left_size < right_size ? left_size : right_size;
-    int compared = memcmp(left, right, common_size);
+    int32_t compared = memcmp(left, right, common_size);
     if (compared != 0) {
         return compared;
     }
@@ -501,7 +501,7 @@ static int __tinypy_profile_name_compare(const char *left, size_t left_size, con
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_profile_name_is_ndebug(const char *name, size_t size) {
+static int32_t __tinypy_profile_name_is_ndebug(const char *name, size_t size) {
     static const char ndebug_name[] = "__NDEBUG__";
     return size == sizeof(ndebug_name) - 1U && memcmp(name, ndebug_name, sizeof(ndebug_name) - 1U) == 0;
 }
@@ -510,7 +510,7 @@ static tinypy_build_profile_result_e __tinypy_profile_copy_constant(tinypy_build
     size_t name_allocation_size;
     tinypy_build_profile_result_e result;
 
-    assert(source != NULL);
+    TINYPY_ASSERT(source != NULL);
     if (source->abi_version != TINYPY_COMPILER_ABI_VERSION || source->struct_size < (uint32_t)sizeof(*source)) {
         return __tinypy_profile_fail(
             error,
@@ -659,7 +659,7 @@ static void __tinypy_profile_compute_digest(tinypy_build_profile_t *profile) {
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_profile_destroy_partial(tinypy_build_profile_t *profile) {
     tinypy_allocator_t allocator;
-    assert(profile != NULL);
+    TINYPY_ASSERT(profile != NULL);
     allocator = profile->allocator;
     tinypy_profile_allocation_t *allocation = profile->allocations;
     while (allocation != NULL) {
@@ -688,9 +688,9 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
     size_t index;
     tinypy_build_profile_result_e result;
 
-    assert(allocator != NULL);
-    assert(out_profile != NULL);
-    assert(constants != NULL || constant_count == 0U);
+    TINYPY_ASSERT(allocator != NULL);
+    TINYPY_ASSERT(out_profile != NULL);
+    TINYPY_ASSERT(constants != NULL || constant_count == 0U);
     __tinypy_profile_error_clear(out_error);
     *out_profile = NULL;
     if (!__tinypy_profile_allocator_abi_valid(allocator)) {
@@ -701,8 +701,8 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
             0U,
             "invalid build profile allocator");
     }
-    assert(allocator->allocate != NULL);
-    assert(allocator->deallocate != NULL);
+    TINYPY_ASSERT(allocator->allocate != NULL);
+    TINYPY_ASSERT(allocator->deallocate != NULL);
     if (optimize_level < 0 || optimize_level > 2) {
         return __tinypy_profile_fail(
             out_error,
@@ -749,7 +749,7 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
         sizeof(*profile),
         TINYPY_PROFILE_ALIGNMENT,
         (uint32_t)TINYPY_BUILD_PROFILE_ALLOC_TAG_PROFILE);
-    assert(profile != NULL);
+    TINYPY_ASSERT(profile != NULL);
     (void)memset(profile, 0, sizeof(*profile));
     profile->state = TINYPY_BUILD_PROFILE_STATE;
     profile->optimize_level = optimize_level;
@@ -848,31 +848,31 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_build_profile_destroy(tinypy_build_profile_t *profile) {
-    assert(profile != NULL);
-    assert(profile->state == TINYPY_BUILD_PROFILE_STATE);
+    TINYPY_ASSERT(profile != NULL);
+    TINYPY_ASSERT(profile->state == TINYPY_BUILD_PROFILE_STATE);
     profile->state = 0U;
     __tinypy_profile_destroy_partial(profile);
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_build_profile_optimize_level(const tinypy_build_profile_t *profile) {
-    assert(profile != NULL);
-    assert(profile->state == TINYPY_BUILD_PROFILE_STATE);
+    TINYPY_ASSERT(profile != NULL);
+    TINYPY_ASSERT(profile->state == TINYPY_BUILD_PROFILE_STATE);
     return profile->optimize_level;
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_build_profile_constant_count(const tinypy_build_profile_t *profile) {
-    assert(profile != NULL);
-    assert(profile->state == TINYPY_BUILD_PROFILE_STATE);
+    TINYPY_ASSERT(profile != NULL);
+    TINYPY_ASSERT(profile->state == TINYPY_BUILD_PROFILE_STATE);
     return profile->constant_count;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_build_profile_constant_at(const tinypy_build_profile_t *profile, size_t index, const char **out_name, size_t *out_name_size, const tinypy_build_value_t **out_value) {
-    assert(profile != NULL);
-    assert(profile->state == TINYPY_BUILD_PROFILE_STATE);
-    assert(out_name != NULL);
-    assert(out_name_size != NULL);
-    assert(out_value != NULL);
-    assert(index < profile->constant_count);
+    TINYPY_ASSERT(profile != NULL);
+    TINYPY_ASSERT(profile->state == TINYPY_BUILD_PROFILE_STATE);
+    TINYPY_ASSERT(out_name != NULL);
+    TINYPY_ASSERT(out_name_size != NULL);
+    TINYPY_ASSERT(out_value != NULL);
+    TINYPY_ASSERT(index < profile->constant_count);
     const tinypy_profile_constant_t *constant = &profile->constants[index];
     *out_name = constant->name;
     *out_name_size = constant->name_size;
@@ -882,16 +882,16 @@ void tinypy_build_profile_constant_at(const tinypy_build_profile_t *profile, siz
 int32_t tinypy_build_profile_find(const tinypy_build_profile_t *profile, const char *name, size_t name_size, const tinypy_build_value_t **out_value) {
     size_t lower = 0U;
     size_t upper;
-    assert(profile != NULL);
-    assert(profile->state == TINYPY_BUILD_PROFILE_STATE);
-    assert(name != NULL || name_size == 0U);
-    assert(out_value != NULL);
+    TINYPY_ASSERT(profile != NULL);
+    TINYPY_ASSERT(profile->state == TINYPY_BUILD_PROFILE_STATE);
+    TINYPY_ASSERT(name != NULL || name_size == 0U);
+    TINYPY_ASSERT(out_value != NULL);
     *out_value = NULL;
     upper = profile->constant_count;
     while (lower < upper) {
         size_t middle = lower + (upper - lower) / 2U;
         const tinypy_profile_constant_t *constant = &profile->constants[middle];
-        int compared = __tinypy_profile_name_compare(
+        int32_t compared = __tinypy_profile_name_compare(
             name, name_size, constant->name, constant->name_size);
         if (compared == 0) {
             *out_value = &constant->value;
@@ -908,8 +908,8 @@ int32_t tinypy_build_profile_find(const tinypy_build_profile_t *profile, const c
 }
 //////////////////////////////////////////////////////////////////////////
 const uint8_t *tinypy_build_profile_digest(const tinypy_build_profile_t *profile) {
-    assert(profile != NULL);
-    assert(profile->state == TINYPY_BUILD_PROFILE_STATE);
+    TINYPY_ASSERT(profile != NULL);
+    TINYPY_ASSERT(profile->state == TINYPY_BUILD_PROFILE_STATE);
     return profile->digest;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -954,10 +954,10 @@ tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_
     tinypy_build_profile_t *profile_copy = NULL;
     tinypy_build_profile_result_e result;
 
-    assert(tinypy_internal_vm_valid(vm));
-    assert(optimize_level >= 0 && optimize_level <= 2);
-    assert(profile == NULL || profile->state == TINYPY_BUILD_PROFILE_STATE);
-    assert(profile == NULL || profile->optimize_level == optimize_level);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(optimize_level >= 0 && optimize_level <= 2);
+    TINYPY_ASSERT(profile == NULL || profile->state == TINYPY_BUILD_PROFILE_STATE);
+    TINYPY_ASSERT(profile == NULL || profile->optimize_level == optimize_level);
     source_count = profile != NULL ? tinypy_build_profile_constant_count(profile) : 0U;
     if (source_count != 0U) {
         constants = (tinypy_build_constant_t *)tinypy_internal_vm_allocate(vm, source_count * sizeof(*constants), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
@@ -983,7 +983,7 @@ tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_
     if (constants != NULL) {
         tinypy_internal_vm_deallocate(vm, constants, source_count * sizeof(*constants), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     }
-    assert(result == TINYPY_BUILD_PROFILE_OK);
+    TINYPY_ASSERT(result == TINYPY_BUILD_PROFILE_OK);
     (void)result;
     tinypy_compile_environment_t *environment = (tinypy_compile_environment_t *)tinypy_internal_vm_allocate(vm, sizeof(*environment), (uint32_t)TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT);
     environment->state = TINYPY_COMPILE_ENVIRONMENT_STATE;
@@ -996,14 +996,14 @@ tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compile_environment_retain(tinypy_compile_environment_t *environment) {
-    assert(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
-    assert(environment->ref > 0 && environment->ref < PTRDIFF_MAX);
+    TINYPY_ASSERT(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
+    TINYPY_ASSERT(environment->ref > 0 && environment->ref < PTRDIFF_MAX);
     environment->ref += 1;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compile_environment_release(tinypy_compile_environment_t *environment) {
-    assert(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
-    assert(environment->ref > 0);
+    TINYPY_ASSERT(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
+    TINYPY_ASSERT(environment->ref > 0);
     environment->ref -= 1;
     if (environment->ref != 0) {
         return;
@@ -1017,16 +1017,16 @@ void tinypy_internal_compile_environment_release(tinypy_compile_environment_t *e
 }
 //////////////////////////////////////////////////////////////////////////
 uint32_t tinypy_internal_compile_environment_feature_flags(const tinypy_compile_environment_t *environment) {
-    assert(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
+    TINYPY_ASSERT(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
     return environment->feature_flags;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_compile_environment_optimize_level(const tinypy_compile_environment_t *environment) {
-    assert(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
+    TINYPY_ASSERT(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
     return environment->optimize_level;
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_build_profile_t *tinypy_internal_compile_environment_build_profile(const tinypy_compile_environment_t *environment) {
-    assert(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
+    TINYPY_ASSERT(environment != NULL && environment->state == TINYPY_COMPILE_ENVIRONMENT_STATE);
     return environment->profile;
 }

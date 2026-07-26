@@ -64,7 +64,7 @@ tinypy_ast_module_t __tinypy_ast_suite(tinypy_ast_sequence_t *body, tinypy_compi
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_function_def(tinypy_ast_identifier_t name, tinypy_ast_arguments_t args, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *decorator_list, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_function_def(tinypy_ast_identifier_t name, tinypy_ast_arguments_t args, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *decorator_list, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!name) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -90,7 +90,7 @@ tinypy_ast_statement_t __tinypy_ast_function_def(tinypy_ast_identifier_t name, t
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_class_def(tinypy_ast_identifier_t name, tinypy_ast_sequence_t *bases, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *decorator_list, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_class_def(tinypy_ast_identifier_t name, tinypy_ast_sequence_t *bases, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *decorator_list, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!name) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -111,7 +111,7 @@ tinypy_ast_statement_t __tinypy_ast_class_def(tinypy_ast_identifier_t name, tiny
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_return(tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_return(tinypy_ast_expression_t value, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -124,7 +124,7 @@ tinypy_ast_statement_t __tinypy_ast_return(tinypy_ast_expression_t value, int li
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_delete(tinypy_ast_sequence_t *targets, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_delete(tinypy_ast_sequence_t *targets, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -137,7 +137,7 @@ tinypy_ast_statement_t __tinypy_ast_delete(tinypy_ast_sequence_t *targets, int l
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_assign(tinypy_ast_sequence_t *targets, tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_assign(tinypy_ast_sequence_t *targets, tinypy_ast_expression_t value, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!value) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -156,7 +156,7 @@ tinypy_ast_statement_t __tinypy_ast_assign(tinypy_ast_sequence_t *targets, tinyp
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_aug_assign(tinypy_ast_expression_t target, tinypy_ast_binary_operator_e op, tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_aug_assign(tinypy_ast_expression_t target, tinypy_ast_binary_operator_e op, tinypy_ast_expression_t value, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!target) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -186,7 +186,7 @@ tinypy_ast_statement_t __tinypy_ast_aug_assign(tinypy_ast_expression_t target, t
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_print(tinypy_ast_expression_t dest, tinypy_ast_sequence_t *values, tinypy_compiler_boolean_e nl, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_print(tinypy_ast_expression_t dest, tinypy_ast_sequence_t *values, tinypy_compiler_boolean_e nl, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -201,7 +201,7 @@ tinypy_ast_statement_t __tinypy_ast_print(tinypy_ast_expression_t dest, tinypy_a
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_for(tinypy_ast_expression_t target, tinypy_ast_expression_t iter, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_for(tinypy_ast_expression_t target, tinypy_ast_expression_t iter, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *orelse, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!target) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -227,7 +227,7 @@ tinypy_ast_statement_t __tinypy_ast_for(tinypy_ast_expression_t target, tinypy_a
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_while(tinypy_ast_expression_t test, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_while(tinypy_ast_expression_t test, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *orelse, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!test) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -247,7 +247,7 @@ tinypy_ast_statement_t __tinypy_ast_while(tinypy_ast_expression_t test, tinypy_a
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_if(tinypy_ast_expression_t test, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_if(tinypy_ast_expression_t test, tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *orelse, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!test) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -267,7 +267,7 @@ tinypy_ast_statement_t __tinypy_ast_if(tinypy_ast_expression_t test, tinypy_ast_
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_with(tinypy_ast_expression_t context_expr, tinypy_ast_expression_t optional_vars, tinypy_ast_sequence_t *body, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_with(tinypy_ast_expression_t context_expr, tinypy_ast_expression_t optional_vars, tinypy_ast_sequence_t *body, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!context_expr) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -287,7 +287,7 @@ tinypy_ast_statement_t __tinypy_ast_with(tinypy_ast_expression_t context_expr, t
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_raise(tinypy_ast_expression_t type, tinypy_ast_expression_t inst, tinypy_ast_expression_t tback, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_raise(tinypy_ast_expression_t type, tinypy_ast_expression_t inst, tinypy_ast_expression_t tback, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -302,7 +302,7 @@ tinypy_ast_statement_t __tinypy_ast_raise(tinypy_ast_expression_t type, tinypy_a
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_try_except(tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *handlers, tinypy_ast_sequence_t *orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_try_except(tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *handlers, tinypy_ast_sequence_t *orelse, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -317,7 +317,7 @@ tinypy_ast_statement_t __tinypy_ast_try_except(tinypy_ast_sequence_t *body, tiny
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_try_finally(tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *finalbody, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_try_finally(tinypy_ast_sequence_t *body, tinypy_ast_sequence_t *finalbody, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -331,7 +331,7 @@ tinypy_ast_statement_t __tinypy_ast_try_finally(tinypy_ast_sequence_t *body, tin
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_assert(tinypy_ast_expression_t test, tinypy_ast_expression_t msg, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_assert(tinypy_ast_expression_t test, tinypy_ast_expression_t msg, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!test) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -350,7 +350,7 @@ tinypy_ast_statement_t __tinypy_ast_assert(tinypy_ast_expression_t test, tinypy_
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_import(tinypy_ast_sequence_t *names, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_import(tinypy_ast_sequence_t *names, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -363,7 +363,7 @@ tinypy_ast_statement_t __tinypy_ast_import(tinypy_ast_sequence_t *names, int lin
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_import_from(tinypy_ast_identifier_t module, tinypy_ast_sequence_t *names, int level, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_import_from(tinypy_ast_identifier_t module, tinypy_ast_sequence_t *names, int32_t level, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -378,7 +378,7 @@ tinypy_ast_statement_t __tinypy_ast_import_from(tinypy_ast_identifier_t module, 
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_exec(tinypy_ast_expression_t body, tinypy_ast_expression_t globals, tinypy_ast_expression_t locals, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_exec(tinypy_ast_expression_t body, tinypy_ast_expression_t globals, tinypy_ast_expression_t locals, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!body) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -398,7 +398,7 @@ tinypy_ast_statement_t __tinypy_ast_exec(tinypy_ast_expression_t body, tinypy_as
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_global(tinypy_ast_sequence_t *names, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_global(tinypy_ast_sequence_t *names, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -411,7 +411,7 @@ tinypy_ast_statement_t __tinypy_ast_global(tinypy_ast_sequence_t *names, int lin
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_expr(tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_expr(tinypy_ast_expression_t value, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     if (!value) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -429,7 +429,7 @@ tinypy_ast_statement_t __tinypy_ast_expr(tinypy_ast_expression_t value, int line
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_pass(int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_pass(int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -441,7 +441,7 @@ tinypy_ast_statement_t __tinypy_ast_pass(int lineno, int col_offset, tinypy_comp
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_break(int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_break(int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -453,7 +453,7 @@ tinypy_ast_statement_t __tinypy_ast_break(int lineno, int col_offset, tinypy_com
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_statement_t __tinypy_ast_continue(int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_statement_t __tinypy_ast_continue(int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_statement_t p;
     p = (tinypy_ast_statement_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -465,7 +465,7 @@ tinypy_ast_statement_t __tinypy_ast_continue(int lineno, int col_offset, tinypy_
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_bool_op(tinypy_ast_boolean_operator_e op, tinypy_ast_sequence_t *values, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_bool_op(tinypy_ast_boolean_operator_e op, tinypy_ast_sequence_t *values, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!op) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -484,7 +484,7 @@ tinypy_ast_expression_t __tinypy_ast_bool_op(tinypy_ast_boolean_operator_e op, t
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_bin_op(tinypy_ast_expression_t left, tinypy_ast_binary_operator_e op, tinypy_ast_expression_t right, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_bin_op(tinypy_ast_expression_t left, tinypy_ast_binary_operator_e op, tinypy_ast_expression_t right, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!left) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -514,7 +514,7 @@ tinypy_ast_expression_t __tinypy_ast_bin_op(tinypy_ast_expression_t left, tinypy
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_unary_op(tinypy_ast_unary_operator_e op, tinypy_ast_expression_t operand, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_unary_op(tinypy_ast_unary_operator_e op, tinypy_ast_expression_t operand, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!op) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -538,7 +538,7 @@ tinypy_ast_expression_t __tinypy_ast_unary_op(tinypy_ast_unary_operator_e op, ti
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_lambda(tinypy_ast_arguments_t args, tinypy_ast_expression_t body, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_lambda(tinypy_ast_arguments_t args, tinypy_ast_expression_t body, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!args) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -562,7 +562,7 @@ tinypy_ast_expression_t __tinypy_ast_lambda(tinypy_ast_arguments_t args, tinypy_
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_if_exp(tinypy_ast_expression_t test, tinypy_ast_expression_t body, tinypy_ast_expression_t orelse, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_if_exp(tinypy_ast_expression_t test, tinypy_ast_expression_t body, tinypy_ast_expression_t orelse, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!test) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -592,7 +592,7 @@ tinypy_ast_expression_t __tinypy_ast_if_exp(tinypy_ast_expression_t test, tinypy
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_dict(tinypy_ast_sequence_t *keys, tinypy_ast_sequence_t *values, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_dict(tinypy_ast_sequence_t *keys, tinypy_ast_sequence_t *values, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     p = (tinypy_ast_expression_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -606,7 +606,7 @@ tinypy_ast_expression_t __tinypy_ast_dict(tinypy_ast_sequence_t *keys, tinypy_as
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_set(tinypy_ast_sequence_t *elts, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_set(tinypy_ast_sequence_t *elts, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     p = (tinypy_ast_expression_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -619,7 +619,7 @@ tinypy_ast_expression_t __tinypy_ast_set(tinypy_ast_sequence_t *elts, int lineno
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_list_comp(tinypy_ast_expression_t elt, tinypy_ast_sequence_t *generators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_list_comp(tinypy_ast_expression_t elt, tinypy_ast_sequence_t *generators, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!elt) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -638,7 +638,7 @@ tinypy_ast_expression_t __tinypy_ast_list_comp(tinypy_ast_expression_t elt, tiny
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_set_comp(tinypy_ast_expression_t elt, tinypy_ast_sequence_t *generators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_set_comp(tinypy_ast_expression_t elt, tinypy_ast_sequence_t *generators, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!elt) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -657,7 +657,7 @@ tinypy_ast_expression_t __tinypy_ast_set_comp(tinypy_ast_expression_t elt, tinyp
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_dict_comp(tinypy_ast_expression_t key, tinypy_ast_expression_t value, tinypy_ast_sequence_t *generators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_dict_comp(tinypy_ast_expression_t key, tinypy_ast_expression_t value, tinypy_ast_sequence_t *generators, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!key) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -682,7 +682,7 @@ tinypy_ast_expression_t __tinypy_ast_dict_comp(tinypy_ast_expression_t key, tiny
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_generator_exp(tinypy_ast_expression_t elt, tinypy_ast_sequence_t *generators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_generator_exp(tinypy_ast_expression_t elt, tinypy_ast_sequence_t *generators, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!elt) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -701,7 +701,7 @@ tinypy_ast_expression_t __tinypy_ast_generator_exp(tinypy_ast_expression_t elt, 
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_yield(tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_yield(tinypy_ast_expression_t value, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     p = (tinypy_ast_expression_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {
@@ -714,7 +714,7 @@ tinypy_ast_expression_t __tinypy_ast_yield(tinypy_ast_expression_t value, int li
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_compare(tinypy_ast_expression_t left, tinypy_ast_integer_sequence_t *ops, tinypy_ast_sequence_t *comparators, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_compare(tinypy_ast_expression_t left, tinypy_ast_integer_sequence_t *ops, tinypy_ast_sequence_t *comparators, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!left) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -734,7 +734,7 @@ tinypy_ast_expression_t __tinypy_ast_compare(tinypy_ast_expression_t left, tinyp
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_call(tinypy_ast_expression_t func, tinypy_ast_sequence_t *args, tinypy_ast_sequence_t *keywords, tinypy_ast_expression_t starargs, tinypy_ast_expression_t kwargs, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_call(tinypy_ast_expression_t func, tinypy_ast_sequence_t *args, tinypy_ast_sequence_t *keywords, tinypy_ast_expression_t starargs, tinypy_ast_expression_t kwargs, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!func) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -756,7 +756,7 @@ tinypy_ast_expression_t __tinypy_ast_call(tinypy_ast_expression_t func, tinypy_a
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_repr(tinypy_ast_expression_t value, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_repr(tinypy_ast_expression_t value, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!value) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -774,7 +774,7 @@ tinypy_ast_expression_t __tinypy_ast_repr(tinypy_ast_expression_t value, int lin
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_num(tinypy_ast_literal_t n, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_num(tinypy_ast_literal_t n, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!n) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -792,7 +792,7 @@ tinypy_ast_expression_t __tinypy_ast_num(tinypy_ast_literal_t n, int lineno, int
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_str(tinypy_ast_string_t s, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_str(tinypy_ast_string_t s, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!s) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -810,7 +810,7 @@ tinypy_ast_expression_t __tinypy_ast_str(tinypy_ast_string_t s, int lineno, int 
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_attribute(tinypy_ast_expression_t value, tinypy_ast_identifier_t attr, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_attribute(tinypy_ast_expression_t value, tinypy_ast_identifier_t attr, tinypy_ast_expression_context_e ctx, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!value) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -840,7 +840,7 @@ tinypy_ast_expression_t __tinypy_ast_attribute(tinypy_ast_expression_t value, ti
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_subscript(tinypy_ast_expression_t value, tinypy_ast_slice_t slice, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_subscript(tinypy_ast_expression_t value, tinypy_ast_slice_t slice, tinypy_ast_expression_context_e ctx, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!value) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -870,7 +870,7 @@ tinypy_ast_expression_t __tinypy_ast_subscript(tinypy_ast_expression_t value, ti
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_name(tinypy_ast_identifier_t id, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_name(tinypy_ast_identifier_t id, tinypy_ast_expression_context_e ctx, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!id) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -894,7 +894,7 @@ tinypy_ast_expression_t __tinypy_ast_name(tinypy_ast_identifier_t id, tinypy_ast
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_list(tinypy_ast_sequence_t *elts, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_list(tinypy_ast_sequence_t *elts, tinypy_ast_expression_context_e ctx, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!ctx) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -913,7 +913,7 @@ tinypy_ast_expression_t __tinypy_ast_list(tinypy_ast_sequence_t *elts, tinypy_as
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_expression_t __tinypy_ast_tuple(tinypy_ast_sequence_t *elts, tinypy_ast_expression_context_e ctx, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_expression_t __tinypy_ast_tuple(tinypy_ast_sequence_t *elts, tinypy_ast_expression_context_e ctx, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_expression_t p;
     if (!ctx) {
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_VALUE_ERROR,
@@ -1004,7 +1004,7 @@ tinypy_ast_comprehension_t __tinypy_ast_comprehension(tinypy_ast_expression_t ta
     return p;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_ast_exception_handler_t __tinypy_ast_except_handler(tinypy_ast_expression_t type, tinypy_ast_expression_t name, tinypy_ast_sequence_t *body, int lineno, int col_offset, tinypy_compile_ctx_t *arena) {
+tinypy_ast_exception_handler_t __tinypy_ast_except_handler(tinypy_ast_expression_t type, tinypy_ast_expression_t name, tinypy_ast_sequence_t *body, int32_t lineno, int32_t col_offset, tinypy_compile_ctx_t *arena) {
     tinypy_ast_exception_handler_t p;
     p = (tinypy_ast_exception_handler_t)TINYPY_COMPILER_ARENA_MALLOC(arena, sizeof(*p));
     if (!p) {

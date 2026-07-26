@@ -2,14 +2,14 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_traceback_new(tinypy_value_t *frame, tinypy_value_t *next) {
-    assert(frame != NULL);
+    TINYPY_ASSERT(frame != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(frame);
-    assert(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
-    assert(next == NULL || TINYPY_VALUE_KIND(next) == TINYPY_VALUE_TRACEBACK);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
+    TINYPY_ASSERT(next == NULL || TINYPY_VALUE_KIND(next) == TINYPY_VALUE_TRACEBACK);
     tinypy_traceback_object_t *traceback = (tinypy_traceback_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_TRACEBACK, sizeof(*traceback));
     traceback->next = next;
     traceback->frame = frame;
@@ -32,7 +32,7 @@ void tinypy_internal_traceback_release_references(tinypy_value_t *value, tinypy_
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_traceback_here(tinypy_vm_t *vm, tinypy_frame_object_t *frame) {
-    assert(vm->raised_value != NULL);
+    TINYPY_ASSERT(vm->raised_value != NULL);
     tinypy_value_t *traceback = tinypy_internal_traceback_new(&frame->base.base, vm->raised_traceback);
     if (vm->raised_traceback != NULL) {
         TINYPY_DECREF(vm->raised_traceback);
@@ -41,29 +41,29 @@ void tinypy_internal_traceback_here(tinypy_vm_t *vm, tinypy_frame_object_t *fram
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_traceback_next(const tinypy_value_t *traceback) {
-    assert(traceback != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(traceback)));
-    assert(TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
+    TINYPY_ASSERT(traceback != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(traceback)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
     return TINYPY_TRACEBACK_OBJECT((tinypy_value_t *)traceback)->next;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_traceback_frame(const tinypy_value_t *traceback) {
-    assert(traceback != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(traceback)));
-    assert(TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
+    TINYPY_ASSERT(traceback != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(traceback)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
     return TINYPY_TRACEBACK_OBJECT((tinypy_value_t *)traceback)->frame;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_traceback_last_instruction(const tinypy_value_t *traceback) {
-    assert(traceback != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(traceback)));
-    assert(TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
+    TINYPY_ASSERT(traceback != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(traceback)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
     return TINYPY_TRACEBACK_OBJECT((tinypy_value_t *)traceback)->last_instruction;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_traceback_line_number(const tinypy_value_t *traceback) {
-    assert(traceback != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(traceback)));
-    assert(TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
+    TINYPY_ASSERT(traceback != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(traceback)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK);
     return TINYPY_TRACEBACK_OBJECT((tinypy_value_t *)traceback)->line_number;
 }

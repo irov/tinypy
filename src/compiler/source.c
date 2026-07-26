@@ -3,7 +3,7 @@
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_is_utf8_cookie(const unsigned char *name, size_t size) {
+static int32_t __tinypy_compiler_is_utf8_cookie(const uint8_t *name, size_t size) {
     char normalized[16];
     size_t index;
     size_t output_size = 0U;
@@ -12,13 +12,13 @@ static int32_t __tinypy_compiler_is_utf8_cookie(const unsigned char *name, size_
         return 0;
     }
     for (index = 0U; index < size; ++index) {
-        unsigned char byte = name[index];
+        uint8_t byte = name[index];
 
         if (byte == '-' || byte == '_' || byte == ' ') {
             continue;
         }
         if (byte >= 'A' && byte <= 'Z') {
-            byte = (unsigned char)(byte + ('a' - 'A'));
+            byte = (uint8_t)(byte + ('a' - 'A'));
         }
         normalized[output_size] = (char)byte;
         output_size += 1U;
@@ -26,7 +26,7 @@ static int32_t __tinypy_compiler_is_utf8_cookie(const unsigned char *name, size_
     return output_size == 4U && memcmp(normalized, "utf8", 4U) == 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_is_ascii_cookie(const unsigned char *name, size_t size) {
+static int32_t __tinypy_compiler_is_ascii_cookie(const uint8_t *name, size_t size) {
     char normalized[16];
     size_t index;
     size_t output_size = 0U;
@@ -35,13 +35,13 @@ static int32_t __tinypy_compiler_is_ascii_cookie(const unsigned char *name, size
         return 0;
     }
     for (index = 0U; index < size; ++index) {
-        unsigned char byte = name[index];
+        uint8_t byte = name[index];
 
         if (byte == '-' || byte == '_' || byte == ' ') {
             continue;
         }
         if (byte >= 'A' && byte <= 'Z') {
-            byte = (unsigned char)(byte + ('a' - 'A'));
+            byte = (uint8_t)(byte + ('a' - 'A'));
         }
         normalized[output_size] = (char)byte;
         output_size += 1U;
@@ -49,7 +49,7 @@ static int32_t __tinypy_compiler_is_ascii_cookie(const unsigned char *name, size
     return (output_size == 5U && memcmp(normalized, "ascii", 5U) == 0) || (output_size == 7U && memcmp(normalized, "usascii", 7U) == 0);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_is_latin1_cookie(const unsigned char *name, size_t size) {
+static int32_t __tinypy_compiler_is_latin1_cookie(const uint8_t *name, size_t size) {
     static const char latin1[] = "latin1";
     static const char iso88591[] = "iso88591";
     char normalized[24];
@@ -60,13 +60,13 @@ static int32_t __tinypy_compiler_is_latin1_cookie(const unsigned char *name, siz
         return 0;
     }
     for (index = 0U; index < size; ++index) {
-        unsigned char byte = name[index];
+        uint8_t byte = name[index];
 
         if (byte == '-' || byte == '_' || byte == ' ') {
             continue;
         }
         if (byte >= 'A' && byte <= 'Z') {
-            byte = (unsigned char)(byte + ('a' - 'A'));
+            byte = (uint8_t)(byte + ('a' - 'A'));
         }
         normalized[output_size] = (char)byte;
         output_size += 1U;
@@ -74,7 +74,7 @@ static int32_t __tinypy_compiler_is_latin1_cookie(const unsigned char *name, siz
     return (output_size == sizeof(latin1) - 1U && memcmp(normalized, latin1, sizeof(latin1) - 1U) == 0) || (output_size == sizeof(iso88591) - 1U && memcmp(normalized, iso88591, sizeof(iso88591) - 1U) == 0) || (output_size == 9U && memcmp(normalized, "isolatin1", 9U) == 0);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_encoding_cookie(const unsigned char *source, size_t size, const unsigned char **out_name, size_t *out_size, int32_t *out_line) {
+static int32_t __tinypy_compiler_encoding_cookie(const uint8_t *source, size_t size, const uint8_t **out_name, size_t *out_size, int32_t *out_line) {
     size_t line = 0U;
     size_t position = 0U;
 
@@ -130,7 +130,7 @@ static int32_t __tinypy_compiler_encoding_cookie(const unsigned char *source, si
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_ascii_valid(const unsigned char *bytes, size_t size) {
+static int32_t __tinypy_compiler_ascii_valid(const uint8_t *bytes, size_t size) {
     size_t index;
 
     for (index = 0U; index < size; ++index) {
@@ -141,11 +141,11 @@ static int32_t __tinypy_compiler_ascii_valid(const unsigned char *bytes, size_t 
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_utf8_valid(const unsigned char *bytes, size_t size) {
+static int32_t __tinypy_compiler_utf8_valid(const uint8_t *bytes, size_t size) {
     size_t index = 0U;
 
     while (index < size) {
-        unsigned char first = bytes[index];
+        uint8_t first = bytes[index];
         size_t length;
         uint32_t code_point;
         size_t continuation;
@@ -173,7 +173,7 @@ static int32_t __tinypy_compiler_utf8_valid(const unsigned char *bytes, size_t s
             return 0;
         }
         for (continuation = 1U; continuation < length; ++continuation) {
-            unsigned char byte = bytes[index + continuation];
+            uint8_t byte = bytes[index + continuation];
 
             if ((byte & 0xc0U) != 0x80U) {
                 return 0;
@@ -192,7 +192,7 @@ void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind
     const char *line_bytes = NULL;
     size_t line_size = 0U;
 
-    assert(ctx != NULL);
+    TINYPY_ASSERT(ctx != NULL);
     if (ctx->failed != 0) {
         return;
     }
@@ -229,12 +229,12 @@ void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_erro
     char *message;
     size_t offset = 0U;
 
-    assert(ctx != NULL);
-    assert(parts != NULL || part_count == 0U);
-    assert(part_sizes != NULL || part_count == 0U);
+    TINYPY_ASSERT(ctx != NULL);
+    TINYPY_ASSERT(parts != NULL || part_count == 0U);
+    TINYPY_ASSERT(part_sizes != NULL || part_count == 0U);
     for (index = 0U; index < part_count; ++index) {
-        assert(parts[index] != NULL || part_sizes[index] == 0U);
-        assert(part_sizes[index] <= SIZE_MAX - message_size - 1U);
+        TINYPY_ASSERT(parts[index] != NULL || part_sizes[index] == 0U);
+        TINYPY_ASSERT(part_sizes[index] <= SIZE_MAX - message_size - 1U);
         message_size += part_sizes[index];
     }
     message = (char *)tinypy_internal_compiler_arena_allocate(ctx, message_size + 1U);
@@ -253,8 +253,8 @@ void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_erro
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const void *source, size_t source_size, tinypy_error_t **out_error) {
-    const unsigned char *input = (const unsigned char *)source;
-    const unsigned char *cookie = NULL;
+    const uint8_t *input = (const uint8_t *)source;
+    const uint8_t *cookie = NULL;
     size_t cookie_size = 0U;
     size_t input_offset = 0U;
     int32_t cookie_line = 0;
@@ -262,12 +262,12 @@ int32_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const
     int32_t ascii = 0;
     int32_t latin1 = 0;
     size_t output_capacity;
-    unsigned char *output;
+    uint8_t *output;
     size_t input_index;
     size_t output_size = 0U;
 
-    assert(ctx != NULL);
-    assert(source != NULL || source_size == 0U);
+    TINYPY_ASSERT(ctx != NULL);
+    TINYPY_ASSERT(source != NULL || source_size == 0U);
     ctx->source.bytes = input;
     ctx->source.size = source_size;
     if (ctx->limits.max_source_bytes != 0U && source_size > ctx->limits.max_source_bytes) {
@@ -310,15 +310,15 @@ int32_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source is not valid UTF-8", 1, 1, out_error);
         return 0;
     }
-    assert(source_size <= (SIZE_MAX - 2U) / 2U);
+    TINYPY_ASSERT(source_size <= (SIZE_MAX - 2U) / 2U);
     output_capacity = latin1 != 0 ? (source_size - input_offset) * 2U + 2U : source_size - input_offset + 2U;
-    output = (unsigned char *)tinypy_internal_compiler_arena_allocate(ctx, output_capacity);
+    output = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, output_capacity);
     if (output == NULL) {
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "source normalization exceeds compiler arena limit", 0, 0, out_error);
         return 0;
     }
     for (input_index = input_offset; input_index < source_size; ++input_index) {
-        unsigned char byte = input[input_index];
+        uint8_t byte = input[input_index];
 
         if (byte == '\r') {
             if (input_index + 1U < source_size && input[input_index + 1U] == '\n') {
@@ -328,8 +328,8 @@ int32_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const
             output_size += 1U;
         }
         else if (latin1 != 0 && byte >= 0x80U) {
-            output[output_size] = (unsigned char)(0xc0U | (byte >> 6U));
-            output[output_size + 1U] = (unsigned char)(0x80U | (byte & 0x3fU));
+            output[output_size] = (uint8_t)(0xc0U | (byte >> 6U));
+            output[output_size + 1U] = (uint8_t)(0x80U | (byte & 0x3fU));
             output_size += 2U;
         }
         else {

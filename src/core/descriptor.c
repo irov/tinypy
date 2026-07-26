@@ -2,7 +2,7 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 
 typedef enum tinypy_internal_c_descriptor_field_e {
     TINYPY_INTERNAL_C_DESCRIPTOR_FUNCTION_CODE = 1,
@@ -18,10 +18,10 @@ typedef enum tinypy_internal_c_descriptor_field_e {
 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_c_descriptor_new(tinypy_vm_t *vm, tinypy_value_type_e kind, tinypy_type_t *owner, const char *name, size_t name_size, tinypy_internal_c_descriptor_field_e field, int32_t writable) {
-    assert(kind == TINYPY_VALUE_GETSET_DESCRIPTOR || kind == TINYPY_VALUE_MEMBER_DESCRIPTOR);
-    assert(owner != NULL);
-    assert(owner->vm == vm);
-    assert(name != NULL || name_size == 0U);
+    TINYPY_ASSERT(kind == TINYPY_VALUE_GETSET_DESCRIPTOR || kind == TINYPY_VALUE_MEMBER_DESCRIPTOR);
+    TINYPY_ASSERT(owner != NULL);
+    TINYPY_ASSERT(owner->vm == vm);
+    TINYPY_ASSERT(name != NULL || name_size == 0U);
     tinypy_c_descriptor_object_t *descriptor = (tinypy_c_descriptor_object_t *)tinypy_internal_value_allocate(vm, kind, sizeof(*descriptor));
     descriptor->owner = owner;
     descriptor->name = tinypy_string_from_bytes(vm, name, name_size);
@@ -33,11 +33,11 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_new(tinypy_vm_t *vm, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_member_descriptor_new(tinypy_type_t *owner, tinypy_value_t *name, size_t index) {
-    assert(owner != NULL);
+    TINYPY_ASSERT(owner != NULL);
     tinypy_vm_t *vm = owner->vm;
-    assert(tinypy_internal_value_belongs_to(vm, name));
-    assert(TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING);
-    assert(index < owner->slot_count);
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, name));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING);
+    TINYPY_ASSERT(index < owner->slot_count);
     tinypy_c_descriptor_object_t *descriptor = (tinypy_c_descriptor_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_MEMBER_DESCRIPTOR, sizeof(*descriptor));
     descriptor->owner = owner;
     descriptor->name = name;
@@ -74,10 +74,10 @@ static void __tinypy_internal_c_descriptor_readonly(tinypy_vm_t *vm, tinypy_erro
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_callable_descriptor_new(tinypy_value_t *callable, tinypy_value_type_e kind) {
-    assert(callable != NULL);
+    TINYPY_ASSERT(callable != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(callable->type->call != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(callable->type->call != NULL);
     tinypy_callable_descriptor_object_t *descriptor = (tinypy_callable_descriptor_object_t *)tinypy_internal_value_allocate(vm, kind, sizeof(*descriptor));
     descriptor->callable = callable;
     TINYPY_INCREF(callable);
@@ -109,30 +109,30 @@ tinypy_value_t *tinypy_internal_static_method_get(tinypy_value_t *descriptor, ti
 tinypy_value_t *tinypy_internal_class_method_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
     (void)instance;
     TINYPY_CLEAR_ERROR(out_error);
-    assert(owner != NULL);
+    TINYPY_ASSERT(owner != NULL);
     return tinypy_method_new(TINYPY_CALLABLE_DESCRIPTOR_OBJECT(descriptor)->callable, &owner->base.base, &owner->base.base);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_static_method_callable(const tinypy_value_t *descriptor) {
-    assert(descriptor != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(descriptor)));
-    assert(TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_STATIC_METHOD);
+    TINYPY_ASSERT(descriptor != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(descriptor)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_STATIC_METHOD);
     return TINYPY_CALLABLE_DESCRIPTOR_OBJECT((tinypy_value_t *)descriptor)->callable;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_method_callable(const tinypy_value_t *descriptor) {
-    assert(descriptor != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(descriptor)));
-    assert(TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_CLASS_METHOD);
+    TINYPY_ASSERT(descriptor != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(descriptor)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_CLASS_METHOD);
     return TINYPY_CALLABLE_DESCRIPTOR_OBJECT((tinypy_value_t *)descriptor)->callable;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_property_new(tinypy_vm_t *vm, tinypy_value_t *getter, tinypy_value_t *setter, tinypy_value_t *deleter, tinypy_value_t *doc) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(getter == NULL || tinypy_internal_value_belongs_to(vm, getter));
-    assert(setter == NULL || tinypy_internal_value_belongs_to(vm, setter));
-    assert(deleter == NULL || tinypy_internal_value_belongs_to(vm, deleter));
-    assert(doc == NULL || tinypy_internal_value_belongs_to(vm, doc));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(getter == NULL || tinypy_internal_value_belongs_to(vm, getter));
+    TINYPY_ASSERT(setter == NULL || tinypy_internal_value_belongs_to(vm, setter));
+    TINYPY_ASSERT(deleter == NULL || tinypy_internal_value_belongs_to(vm, deleter));
+    TINYPY_ASSERT(doc == NULL || tinypy_internal_value_belongs_to(vm, doc));
     tinypy_property_object_t *property = (tinypy_property_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_PROPERTY, sizeof(*property));
     property->getter = getter;
     property->setter = setter;
@@ -226,7 +226,7 @@ int32_t tinypy_internal_property_set(tinypy_value_t *descriptor, tinypy_value_t 
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_descriptor_constructor(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error, int class_method) {
+static tinypy_value_t *__tinypy_internal_descriptor_constructor(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error, int32_t class_method) {
     tinypy_vm_t *vm = type->vm;
 
     if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U) {
@@ -277,7 +277,7 @@ tinypy_value_t *tinypy_internal_property_create(tinypy_type_t *type, tinypy_valu
     return tinypy_property_new(vm, values[0], values[1], values[2], values[3]);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_internal_property_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
+static int32_t __tinypy_internal_property_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
     if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != count) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "property method received invalid arguments", out_error);
         return 0;
@@ -290,7 +290,7 @@ static int __tinypy_internal_property_method_arguments(tinypy_vm_t *vm, tinypy_v
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_property_copy(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, int field, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_internal_property_copy(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, int32_t field, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     if (__tinypy_internal_property_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
@@ -326,7 +326,7 @@ static tinypy_value_t *__tinypy_internal_property_deleter_method(tinypy_value_t 
     return __tinypy_internal_property_copy(function, args, kwargs, 2, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_property_field(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, int field, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_internal_property_field(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, int32_t field, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     if (__tinypy_internal_property_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
@@ -399,8 +399,8 @@ static void __tinypy_internal_property_field_set(tinypy_vm_t *vm, const char *na
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_c_descriptor_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
-    assert(value != NULL);
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GETSET_DESCRIPTOR || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_MEMBER_DESCRIPTOR);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GETSET_DESCRIPTOR || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_MEMBER_DESCRIPTOR);
     tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(value);
     if (descriptor->owner_retained != 0) {
         visit(&descriptor->owner->base.base, user_data);
@@ -409,8 +409,8 @@ void tinypy_internal_c_descriptor_release_references(tinypy_value_t *value, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_value, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
-    assert(descriptor_value != NULL);
-    assert(TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR || TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_MEMBER_DESCRIPTOR);
+    TINYPY_ASSERT(descriptor_value != NULL);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR || TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_MEMBER_DESCRIPTOR);
     tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(descriptor_value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor_value);
     (void)owner;
@@ -466,14 +466,14 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
     case TINYPY_INTERNAL_C_DESCRIPTOR_FUNCTION_MODULE:
         return __tinypy_internal_c_descriptor_optional(vm, function->module);
     default:
-        assert(!"invalid C descriptor field");
+        TINYPY_ASSERT(!"invalid C descriptor field");
         return NULL;
     }
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value, tinypy_value_t *instance, tinypy_value_t *value, tinypy_error_t **out_error) {
-    assert(descriptor_value != NULL);
-    assert(TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR || TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_MEMBER_DESCRIPTOR);
+    TINYPY_ASSERT(descriptor_value != NULL);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR || TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_MEMBER_DESCRIPTOR);
     tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(descriptor_value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor_value);
     tinypy_internal_c_descriptor_field_e field = (tinypy_internal_c_descriptor_field_e)descriptor->field;
@@ -517,7 +517,7 @@ int32_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value, tinyp
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "func_code must be a code object", out_error);
             return INT32_C(0);
         }
-        int condition = function->closure != NULL;
+        int32_t condition = function->closure != NULL;
         if (condition != 0) {
             tinypy_value_t *freevars = TINYPY_CODE_FREEVARS(value);
             condition = TINYPY_TUPLE_SIZE(function->closure) != TINYPY_TUPLE_SIZE(freevars);
@@ -577,7 +577,7 @@ int32_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value, tinyp
         __tinypy_internal_c_descriptor_readonly(vm, out_error);
         return INT32_C(0);
     default:
-        assert(!"invalid C descriptor field");
+        TINYPY_ASSERT(!"invalid C descriptor field");
         return INT32_C(0);
     }
 }
@@ -615,29 +615,29 @@ void tinypy_internal_initialize_descriptor_types(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_property_getter(const tinypy_value_t *property) {
-    assert(property != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(property)));
-    assert(TINYPY_VALUE_KIND(property) == TINYPY_VALUE_PROPERTY);
+    TINYPY_ASSERT(property != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(property)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(property) == TINYPY_VALUE_PROPERTY);
     return TINYPY_PROPERTY_OBJECT((tinypy_value_t *)property)->getter;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_property_setter(const tinypy_value_t *property) {
-    assert(property != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(property)));
-    assert(TINYPY_VALUE_KIND(property) == TINYPY_VALUE_PROPERTY);
+    TINYPY_ASSERT(property != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(property)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(property) == TINYPY_VALUE_PROPERTY);
     return TINYPY_PROPERTY_OBJECT((tinypy_value_t *)property)->setter;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_property_deleter(const tinypy_value_t *property) {
-    assert(property != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(property)));
-    assert(TINYPY_VALUE_KIND(property) == TINYPY_VALUE_PROPERTY);
+    TINYPY_ASSERT(property != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(property)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(property) == TINYPY_VALUE_PROPERTY);
     return TINYPY_PROPERTY_OBJECT((tinypy_value_t *)property)->deleter;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_property_doc(const tinypy_value_t *property) {
-    assert(property != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(property)));
-    assert(TINYPY_VALUE_KIND(property) == TINYPY_VALUE_PROPERTY);
+    TINYPY_ASSERT(property != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(property)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(property) == TINYPY_VALUE_PROPERTY);
     return TINYPY_PROPERTY_OBJECT((tinypy_value_t *)property)->doc;
 }

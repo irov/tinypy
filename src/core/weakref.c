@@ -2,13 +2,13 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t **tinypy_internal_weakref_head_slot(tinypy_value_t *value) {
-    assert(value != NULL);
+    TINYPY_ASSERT(value != NULL);
     if (value->type->weakref_offset != 0U) {
-        return (tinypy_value_t **)((unsigned char *)value + value->type->weakref_offset);
+        return (tinypy_value_t **)((uint8_t *)value + value->type->weakref_offset);
     }
     return NULL;
 }
@@ -18,12 +18,12 @@ static void __tinypy_weakref_unlink(tinypy_weakref_object_t *weakref) {
         return;
     }
     tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(weakref->object);
-    assert(head_slot != NULL);
+    TINYPY_ASSERT(head_slot != NULL);
     if (weakref->previous != NULL) {
         TINYPY_WEAKREF_OBJECT(weakref->previous)->next = weakref->next;
     }
     else {
-        assert(*head_slot == &weakref->base);
+        TINYPY_ASSERT(*head_slot == &weakref->base);
         *head_slot = weakref->next;
     }
     if (weakref->next != NULL) {
@@ -61,18 +61,18 @@ static tinypy_value_t *__tinypy_weakref_new_with_type(tinypy_type_t *type, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_weakref_new(tinypy_value_t *object, tinypy_value_t *callback, tinypy_error_t **out_error) {
-    assert(object != NULL);
+    TINYPY_ASSERT(object != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(callback == NULL || tinypy_internal_value_belongs_to(vm, callback));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(callback == NULL || tinypy_internal_value_belongs_to(vm, callback));
     TINYPY_CLEAR_ERROR(out_error);
     return __tinypy_weakref_new_with_type(&vm->weakref_type, object, callback, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_weakref_get(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_WEAKREF);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_WEAKREF);
     return TINYPY_WEAKREF_OBJECT((tinypy_value_t *)value)->object;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -160,7 +160,7 @@ tinypy_value_t *tinypy_internal_weakref_create(tinypy_type_t *type, tinypy_value
     if (__tinypy_weakref_arguments(type->vm, args, kwargs, 1U, 2U, out_error) == 0) {
         return NULL;
     }
-    int condition = TINYPY_TUPLE_SIZE(args) == 2U;
+    int32_t condition = TINYPY_TUPLE_SIZE(args) == 2U;
     if (condition != 0) {
         tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
         condition = TINYPY_VALUE_KIND(item_2) != TINYPY_VALUE_NONE;
@@ -199,7 +199,7 @@ static tinypy_value_t *__tinypy_weakref_new_method(tinypy_value_t *function, tin
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref.__new__ requires a weakref subtype", out_error);
         return NULL;
     }
-    int condition_2 = TINYPY_TUPLE_SIZE(args) == 3U;
+    int32_t condition_2 = TINYPY_TUPLE_SIZE(args) == 3U;
     if (condition_2 != 0) {
         tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 2U);
         condition_2 = TINYPY_VALUE_KIND(item_2) != TINYPY_VALUE_NONE;
@@ -303,7 +303,7 @@ static tinypy_value_t *__tinypy_weakref_proxy_function(tinypy_value_t *function,
     if (__tinypy_weakref_arguments(vm, args, kwargs, 1U, 2U, out_error) == 0) {
         return NULL;
     }
-    int condition_3 = TINYPY_TUPLE_SIZE(args) == 2U;
+    int32_t condition_3 = TINYPY_TUPLE_SIZE(args) == 2U;
     if (condition_3 != 0) {
         tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
         condition_3 = TINYPY_VALUE_KIND(item_2) != TINYPY_VALUE_NONE;

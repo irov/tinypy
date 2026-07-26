@@ -18,7 +18,7 @@
         }                                    \
     } while (0)
 
-static int __digest_matches_hex(const uint8_t digest[32], const char *expected) {
+static int32_t __digest_matches_hex(const uint8_t digest[32], const char *expected) {
     static const char digits[] = "0123456789abcdef";
     size_t index;
     for (index = 0U; index != 32U; ++index) {
@@ -29,7 +29,7 @@ static int __digest_matches_hex(const uint8_t digest[32], const char *expected) 
     return expected[64] == '\0';
 }
 
-static int __test_sha256_vectors(void) {
+static int32_t __test_sha256_vectors(void) {
     uint8_t digest[32];
     tinypy_sha256_context_t context;
     size_t index;
@@ -85,7 +85,7 @@ static tinypy_artifact_metadata_t __valid_metadata(void) {
     return metadata;
 }
 
-static int __encode_sample(uint8_t *artifact, size_t capacity, size_t *out_size, tinypy_artifact_metadata_t *out_metadata) {
+static int32_t __encode_sample(uint8_t *artifact, size_t capacity, size_t *out_size, tinypy_artifact_metadata_t *out_metadata) {
     static const uint8_t payload[] = {'c', 0U, 1U, 2U, 255U};
     tinypy_artifact_metadata_t metadata = __valid_metadata();
     tinypy_artifact_status_e status = tinypy_artifact_encode(
@@ -101,7 +101,7 @@ static int __encode_sample(uint8_t *artifact, size_t capacity, size_t *out_size,
     return status == TINYPY_ARTIFACT_OK ? 0 : 1;
 }
 
-static int __test_encode_decode_round_trip(void) {
+static int32_t __test_encode_decode_round_trip(void) {
     static const uint8_t payload[] = {'c', 0U, 1U, 2U, 255U};
     uint8_t artifact[256];
     tinypy_artifact_metadata_t metadata = __valid_metadata();
@@ -162,7 +162,7 @@ static int __test_encode_decode_round_trip(void) {
     return 0;
 }
 
-static int __test_corruption_and_bounds(void) {
+static int32_t __test_corruption_and_bounds(void) {
     uint8_t artifact[256];
     uint8_t changed[257];
     size_t artifact_size = 0U;
@@ -217,7 +217,7 @@ static int __test_corruption_and_bounds(void) {
     return 0;
 }
 
-static int __test_exhaustive_truncation_and_single_byte_damage(void) {
+static int32_t __test_exhaustive_truncation_and_single_byte_damage(void) {
     uint8_t artifact[256];
     uint8_t changed[256];
     size_t artifact_size = 0U;
@@ -242,7 +242,7 @@ static int __test_exhaustive_truncation_and_single_byte_damage(void) {
     return 0;
 }
 
-static int __test_metadata_validation(void) {
+static int32_t __test_metadata_validation(void) {
     static const uint8_t payload[] = {0U};
     uint8_t artifact[256];
     tinypy_artifact_metadata_t metadata = __valid_metadata();
@@ -281,7 +281,7 @@ static int __test_metadata_validation(void) {
     return 0;
 }
 
-static int __test_profile_check(void) {
+static int32_t __test_profile_check(void) {
     uint8_t artifact[256];
     size_t artifact_size = 0U;
     tinypy_artifact_metadata_t metadata;
@@ -321,10 +321,10 @@ static int __test_profile_check(void) {
     return 0;
 }
 
-static int __test_status_names(void) {
-    int status;
-    for (status = (int)TINYPY_ARTIFACT_OK;
-         status <= (int)TINYPY_ARTIFACT_PROFILE_MISMATCH;
+static int32_t __test_status_names(void) {
+    int32_t status;
+    for (status = (int32_t)TINYPY_ARTIFACT_OK;
+         status <= (int32_t)TINYPY_ARTIFACT_PROFILE_MISMATCH;
          ++status) {
         const char *name = tinypy_artifact_status_name(
             (tinypy_artifact_status_e)status);

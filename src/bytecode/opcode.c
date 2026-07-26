@@ -1,6 +1,6 @@
 #include "opcode.h"
 
-#include <assert.h>
+#include "assertion.h"
 
 #define TINYPY_OPCODE_ALL_CATEGORIES            \
     ((uint32_t)TINYPY_OPCODE_CATEGORY_CONST |   \
@@ -146,7 +146,7 @@ static void __tinypy_opcode_clear_instruction(tinypy_decoded_instruction_t *inst
     instruction->reserved = 0U;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_opcode_name_equal(const char *candidate, const char *name, size_t name_size) {
+static int32_t __tinypy_opcode_name_equal(const char *candidate, const char *name, size_t name_size) {
     size_t index;
 
     for (index = 0U; index != name_size; ++index) {
@@ -168,11 +168,11 @@ const char *tinypy_opcode_name(uint8_t opcode) {
     return __tinypy_opcode_table[opcode].name;
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_opcode_is_defined(uint8_t opcode) {
+int32_t tinypy_opcode_is_defined(uint8_t opcode) {
     return __tinypy_opcode_table[opcode].name != NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_opcode_has_argument(uint8_t opcode) {
+int32_t tinypy_opcode_has_argument(uint8_t opcode) {
     return opcode >= (uint8_t)TINYPY_OPCODE_HAVE_ARGUMENT;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -180,20 +180,20 @@ uint32_t tinypy_opcode_categories(uint8_t opcode) {
     return __tinypy_opcode_table[opcode].categories;
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_opcode_has_category(uint8_t opcode, tinypy_opcode_category_e category) {
+int32_t tinypy_opcode_has_category(uint8_t opcode, tinypy_opcode_category_e category) {
     uint32_t requested = (uint32_t)category;
 
-    assert(requested != 0U);
-    assert((requested & ~TINYPY_OPCODE_ALL_CATEGORIES) == 0U);
+    TINYPY_ASSERT(requested != 0U);
+    TINYPY_ASSERT((requested & ~TINYPY_OPCODE_ALL_CATEGORIES) == 0U);
 
     return (__tinypy_opcode_table[opcode].categories & requested) == requested;
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_opcode_lookup(const char *name, size_t name_size, uint8_t *out_opcode) {
+int32_t tinypy_opcode_lookup(const char *name, size_t name_size, uint8_t *out_opcode) {
     size_t opcode;
 
-    assert(out_opcode != NULL);
-    assert(name != NULL || name_size == 0U);
+    TINYPY_ASSERT(out_opcode != NULL);
+    TINYPY_ASSERT(name != NULL || name_size == 0U);
     *out_opcode = 0U;
 
     if (name_size == 0U) {
@@ -217,8 +217,8 @@ tinypy_opcode_decode_status_e tinypy_opcode_decode(const uint8_t *bytecode, size
     size_t extended_arg_count = 0U;
     uint64_t argument = UINT64_C(0);
 
-    assert(out_instruction != NULL);
-    assert(bytecode != NULL || bytecode_size == 0U);
+    TINYPY_ASSERT(out_instruction != NULL);
+    TINYPY_ASSERT(bytecode != NULL || bytecode_size == 0U);
     __tinypy_opcode_clear_instruction(out_instruction);
 
     if (offset > bytecode_size) {

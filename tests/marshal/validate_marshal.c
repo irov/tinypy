@@ -38,17 +38,17 @@ static tinypy_allocator_t __validator_allocator(void) {
     return allocator;
 }
 
-static int __validate_file(const char *filename, const tinypy_allocator_t *allocator) {
+static int32_t __validate_file(const char *filename, const tinypy_allocator_t *allocator) {
     FILE *stream;
     long file_size;
-    unsigned char *bytes;
+    uint8_t *bytes;
     size_t size;
     tinypy_marshal_document_t *document = NULL;
     tinypy_marshal_error_t error;
     tinypy_marshal_result_e result;
     const tinypy_marshal_object_t *root;
     size_t output_size = 0U;
-    unsigned char *output = NULL;
+    uint8_t *output = NULL;
     tinypy_marshal_document_t *roundtrip_document = NULL;
 
     stream = fopen(filename, "rb");
@@ -73,7 +73,7 @@ static int __validate_file(const char *filename, const tinypy_allocator_t *alloc
         (void)fclose(stream);
         return 0;
     }
-    bytes = (unsigned char *)malloc(size == 0U ? 1U : size);
+    bytes = (uint8_t *)malloc(size == 0U ? 1U : size);
     if (bytes == NULL) {
         (void)fprintf(stderr, "%s: input allocation failed\n", filename);
         (void)fclose(stream);
@@ -105,8 +105,8 @@ static int __validate_file(const char *filename, const tinypy_allocator_t *alloc
             filename,
             error.offset,
             tinypy_marshal_result_name(result),
-            (unsigned int)error.wire_type,
-            (int)error.message_size,
+            (uint32_t)error.wire_type,
+            (int32_t)error.message_size,
             error.message);
         free(bytes);
         return 0;
@@ -134,13 +134,13 @@ static int __validate_file(const char *filename, const tinypy_allocator_t *alloc
             filename,
             error.offset,
             tinypy_marshal_result_name(result),
-            (int)error.message_size,
+            (int32_t)error.message_size,
             error.message);
         tinypy_marshal_document_destroy(document);
         free(bytes);
         return 0;
     }
-    output = (unsigned char *)malloc(output_size == 0U ? 1U : output_size);
+    output = (uint8_t *)malloc(output_size == 0U ? 1U : output_size);
     if (output == NULL) {
         (void)fprintf(stderr, "%s: output allocation failed\n", filename);
         tinypy_marshal_document_destroy(document);
@@ -161,7 +161,7 @@ static int __validate_file(const char *filename, const tinypy_allocator_t *alloc
             filename,
             error.offset,
             tinypy_marshal_result_name(result),
-            (int)error.message_size,
+            (int32_t)error.message_size,
             error.message);
         free(output);
         tinypy_marshal_document_destroy(document);
@@ -212,7 +212,7 @@ static int __validate_file(const char *filename, const tinypy_allocator_t *alloc
 int main(int argc, char **argv) {
     tinypy_allocator_t allocator = __validator_allocator();
     size_t validated = 0U;
-    int index;
+    int32_t index;
 
     if (argc < 2) {
         (void)fprintf(stderr, "usage: %s FILE.marshal [...]\n", argv[0]);

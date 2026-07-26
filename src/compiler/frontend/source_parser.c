@@ -24,7 +24,7 @@ static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char 
     size_t size = begin != NULL && end != NULL ? (size_t)(end - begin) : 0U;
     char *copy;
 
-    assert(begin == NULL || end >= begin);
+    TINYPY_ASSERT(begin == NULL || end >= begin);
     copy = (char *)tinypy_internal_compiler_arena_allocate(ctx, size + 1U);
     if (copy == NULL) {
         return NULL;
@@ -36,16 +36,16 @@ static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char 
     return copy;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const char *source, size_t source_size, const char *filename, const tinypy_parser_grammar_t *g, int start, tinypy_parser_error_detail_t *error, int *flags) {
+tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const char *source, size_t source_size, const char *filename, const tinypy_parser_grammar_t *g, int32_t start, tinypy_parser_error_detail_t *error, int32_t *flags) {
     tinypy_cst_node_t *result = NULL;
-    int started = 0;
+    int32_t started = 0;
 
-    assert(ctx != NULL);
-    assert(source != NULL);
-    assert(filename != NULL);
-    assert(g != NULL);
-    assert(error != NULL);
-    assert(flags != NULL);
+    TINYPY_ASSERT(ctx != NULL);
+    TINYPY_ASSERT(source != NULL);
+    TINYPY_ASSERT(filename != NULL);
+    TINYPY_ASSERT(g != NULL);
+    TINYPY_ASSERT(error != NULL);
+    TINYPY_ASSERT(flags != NULL);
     __tinypy_frontend_init_error(error, filename);
     tinypy_tokenizer_t *tok = tinypy_internal_tokenizer_from_string(ctx, source, source_size, start == TINYPY_GRAMMAR_FILE_INPUT);
     if (tok == NULL) {
@@ -70,8 +70,8 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
         char *begin;
         char *end;
         char *token_text;
-        int token_type;
-        int column;
+        int32_t token_type;
+        int32_t column;
 
         if (ctx->limits.max_tokens != 0U && ctx->token_count >= ctx->limits.max_tokens) {
             error->result = TINYPY_PARSER_OUT_OF_MEMORY;
@@ -99,7 +99,7 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
             error->result = TINYPY_PARSER_OUT_OF_MEMORY;
             break;
         }
-        column = begin != NULL && begin >= tok->line_start ? (int)(begin - tok->line_start) : -1;
+        column = begin != NULL && begin >= tok->line_start ? (int32_t)(begin - tok->line_start) : -1;
         error->result = tinypy_internal_parser_add_token(parser, token_type, token_text, tok->line_number, column, &error->expected);
         if (error->result != TINYPY_PARSER_OK) {
             if (error->result != TINYPY_PARSER_DONE) {
@@ -113,13 +113,13 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
         result = parser->tree;
         parser->tree = NULL;
     }
-    *flags = (int)parser->flags;
+    *flags = (int32_t)parser->flags;
     if (result == NULL) {
         if (tok->line_number <= 1 && tok->done == TINYPY_PARSER_EOF) {
             error->result = TINYPY_PARSER_EOF;
         }
         error->line_number = tok->line_number;
-        error->offset = tok->cur != NULL && tok->line_start != NULL && tok->cur >= tok->line_start ? (int)(tok->cur - tok->line_start) : 0;
+        error->offset = tok->cur != NULL && tok->line_start != NULL && tok->cur >= tok->line_start ? (int32_t)(tok->cur - tok->line_start) : 0;
     }
     tinypy_internal_parser_release(parser);
     tinypy_internal_tokenizer_release(tok);

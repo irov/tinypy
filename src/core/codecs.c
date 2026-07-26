@@ -1,6 +1,6 @@
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
@@ -31,14 +31,14 @@ static int32_t __tinypy_codecs_require_text(tinypy_vm_t *vm, tinypy_value_t *val
 static tinypy_value_t *__tinypy_codecs_module_value(tinypy_value_t *module, const char *name, size_t name_size) {
     tinypy_value_t *value = tinypy_module_get_value(module, name, name_size);
 
-    assert(value != NULL);
+    TINYPY_ASSERT(value != NULL);
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_codecs_normalize(tinypy_vm_t *vm, tinypy_value_t *name) {
-    const unsigned char *source = TINYPY_TEXT_BYTES(name);
+    const uint8_t *source = TINYPY_TEXT_BYTES(name);
     size_t source_size = TINYPY_TEXT_BYTE_SIZE(name);
-    unsigned char *normalized;
+    uint8_t *normalized;
     size_t source_index;
     size_t normalized_size = 0U;
     int32_t separator = INT32_C(0);
@@ -46,22 +46,22 @@ static tinypy_value_t *__tinypy_codecs_normalize(tinypy_vm_t *vm, tinypy_value_t
     if (source_size == 0U) {
         return tinypy_string_from_bytes(vm, NULL, 0U);
     }
-    normalized = (unsigned char *)tinypy_internal_vm_allocate(vm, source_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    normalized = (uint8_t *)tinypy_internal_vm_allocate(vm, source_size, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     for (source_index = 0U; source_index < source_size; ++source_index) {
-        unsigned char character = source[source_index];
+        uint8_t character = source[source_index];
 
-        if ((character >= (unsigned char)'a' && character <= (unsigned char)'z') || (character >= (unsigned char)'0' && character <= (unsigned char)'9') || character == (unsigned char)'.') {
+        if ((character >= (uint8_t)'a' && character <= (uint8_t)'z') || (character >= (uint8_t)'0' && character <= (uint8_t)'9') || character == (uint8_t)'.') {
             if (separator != 0 && normalized_size != 0U) {
-                normalized[normalized_size++] = (unsigned char)'_';
+                normalized[normalized_size++] = (uint8_t)'_';
             }
             normalized[normalized_size++] = character;
             separator = INT32_C(0);
         }
-        else if (character >= (unsigned char)'A' && character <= (unsigned char)'Z') {
+        else if (character >= (uint8_t)'A' && character <= (uint8_t)'Z') {
             if (separator != 0 && normalized_size != 0U) {
-                normalized[normalized_size++] = (unsigned char)'_';
+                normalized[normalized_size++] = (uint8_t)'_';
             }
-            normalized[normalized_size++] = (unsigned char)(character + ('a' - 'A'));
+            normalized[normalized_size++] = (uint8_t)(character + ('a' - 'A'));
             separator = INT32_C(0);
         }
         else {
@@ -210,9 +210,9 @@ static tinypy_value_t *__tinypy_codecs_transform(tinypy_value_t *function, tinyp
     tinypy_value_t *call_args;
     tinypy_value_t *result;
     tinypy_value_t *function_name = tinypy_native_function_name(function);
-    int condition = TINYPY_TEXT_BYTE_SIZE(function_name) == 6U;
+    int32_t condition = TINYPY_TEXT_BYTE_SIZE(function_name) == 6U;
     if (condition != 0) {
-        const unsigned char *bytes = TINYPY_TEXT_BYTES(function_name);
+        const uint8_t *bytes = TINYPY_TEXT_BYTES(function_name);
         condition = memcmp(bytes, "decode", 6U) == 0;
     }
     int32_t decode = condition;

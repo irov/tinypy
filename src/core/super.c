@@ -2,17 +2,17 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_super_new(tinypy_type_t *type, tinypy_value_t *object, tinypy_error_t **out_error) {
     tinypy_type_t *object_type = NULL;
 
-    assert(type != NULL);
+    TINYPY_ASSERT(type != NULL);
     tinypy_vm_t *vm = type->vm;
-    assert(tinypy_internal_vm_valid(vm));
-    assert(object == NULL || tinypy_internal_value_belongs_to(vm, object));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(object == NULL || tinypy_internal_value_belongs_to(vm, object));
     TINYPY_CLEAR_ERROR(out_error);
     if (object != NULL) {
         if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)object, type) != 0) {
@@ -59,7 +59,7 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
     size_t name_size;
     size_t mro_size;
     size_t index;
-    int found_type = 0;
+    int32_t found_type = 0;
     tinypy_value_type_e name_kind = TINYPY_VALUE_KIND(name);
 
     if (name_kind == TINYPY_VALUE_STRING || name_kind == TINYPY_VALUE_UNICODE) {
@@ -119,22 +119,22 @@ tinypy_value_t *tinypy_internal_super_create(tinypy_type_t *type, tinypy_value_t
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_super_type(const tinypy_value_t *super_value) {
-    assert(super_value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(super_value)));
-    assert(TINYPY_VALUE_KIND(super_value) == TINYPY_VALUE_SUPER);
+    TINYPY_ASSERT(super_value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(super_value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(super_value) == TINYPY_VALUE_SUPER);
     return TINYPY_SUPER_OBJECT((tinypy_value_t *)super_value)->type;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_super_object(const tinypy_value_t *super_value) {
-    assert(super_value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(super_value)));
-    assert(TINYPY_VALUE_KIND(super_value) == TINYPY_VALUE_SUPER);
+    TINYPY_ASSERT(super_value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(super_value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(super_value) == TINYPY_VALUE_SUPER);
     return TINYPY_SUPER_OBJECT((tinypy_value_t *)super_value)->object;
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_super_object_type(const tinypy_value_t *super_value) {
-    assert(super_value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(super_value)));
-    assert(TINYPY_VALUE_KIND(super_value) == TINYPY_VALUE_SUPER);
+    TINYPY_ASSERT(super_value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(super_value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(super_value) == TINYPY_VALUE_SUPER);
     return TINYPY_SUPER_OBJECT((tinypy_value_t *)super_value)->object_type;
 }

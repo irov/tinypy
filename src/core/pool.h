@@ -6,7 +6,7 @@
 #define TINYPY_INTERNAL_POOL_SMALL_REQUEST 512U
 #define TINYPY_INTERNAL_POOL_CLASS_COUNT (TINYPY_INTERNAL_POOL_SMALL_REQUEST / TINYPY_INTERNAL_ALIGNMENT)
 
-typedef unsigned char tinypy_pool_block_t;
+typedef uint8_t tinypy_pool_block_t;
 
 typedef struct tinypy_pool_t {
     uint32_t ref;

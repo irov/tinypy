@@ -2,7 +2,7 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <string.h>
 
 typedef struct tinypy_marshal_runtime_cache_entry_t {
@@ -46,7 +46,7 @@ static void __tinypy_marshal_load_set_error(tinypy_marshal_error_t *error, tinyp
 static void *__tinypy_marshal_vm_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
 
-    assert(alignment <= TINYPY_INTERNAL_ALIGNMENT);
+    TINYPY_ASSERT(alignment <= TINYPY_INTERNAL_ALIGNMENT);
     (void)alignment;
     return tinypy_internal_vm_allocate(vm, size, tag);
 }
@@ -54,7 +54,7 @@ static void *__tinypy_marshal_vm_allocate(void *user_data, size_t size, size_t a
 static void *__tinypy_marshal_vm_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
 
-    assert(alignment <= TINYPY_INTERNAL_ALIGNMENT);
+    TINYPY_ASSERT(alignment <= TINYPY_INTERNAL_ALIGNMENT);
     (void)alignment;
     return tinypy_internal_vm_reallocate(vm, memory, old_size, new_size, tag);
 }
@@ -62,7 +62,7 @@ static void *__tinypy_marshal_vm_reallocate(void *user_data, void *memory, size_
 static void __tinypy_marshal_vm_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
 
-    assert(alignment <= TINYPY_INTERNAL_ALIGNMENT);
+    TINYPY_ASSERT(alignment <= TINYPY_INTERNAL_ALIGNMENT);
     (void)alignment;
     tinypy_internal_vm_deallocate(vm, memory, size, tag);
 }
@@ -99,8 +99,8 @@ static void __tinypy_marshal_cache_append(tinypy_marshal_materializer_t *materia
     if (materializer->cache_size == materializer->cache_capacity) {
         old_size = materializer->cache_capacity * sizeof(*materializer->cache);
         new_capacity = materializer->cache_capacity == 0U ? 16U : materializer->cache_capacity * 2U;
-        assert(new_capacity > materializer->cache_capacity);
-        assert(new_capacity <= SIZE_MAX / sizeof(*materializer->cache));
+        TINYPY_ASSERT(new_capacity > materializer->cache_capacity);
+        TINYPY_ASSERT(new_capacity <= SIZE_MAX / sizeof(*materializer->cache));
         new_size = new_capacity * sizeof(*materializer->cache);
         if (materializer->cache == NULL) {
             materializer->cache = (tinypy_marshal_runtime_cache_entry_t *)tinypy_internal_vm_allocate(materializer->vm, new_size, (uint32_t)TINYPY_ALLOC_TAG_MARSHAL_CACHE);
@@ -131,14 +131,14 @@ static void __tinypy_marshal_cache_destroy(tinypy_marshal_materializer_t *materi
 static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t **out_value);
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_marshal_result_e __tinypy_marshal_materialize_sequence(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, int as_list, tinypy_value_t **out_value) {
+static tinypy_marshal_result_e __tinypy_marshal_materialize_sequence(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, int32_t as_list, tinypy_value_t **out_value) {
     tinypy_value_t **items = NULL;
     size_t count = tinypy_marshal_sequence_size(source);
     size_t index;
     tinypy_marshal_result_e result = TINYPY_MARSHAL_OK;
 
     if (count != 0U) {
-        assert(count <= SIZE_MAX / sizeof(*items));
+        TINYPY_ASSERT(count <= SIZE_MAX / sizeof(*items));
         items = (tinypy_value_t **)tinypy_internal_vm_allocate(materializer->vm, count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_MARSHAL_CACHE);
     }
     for (index = 0U; index < count; ++index) {
@@ -246,7 +246,7 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
     case TINYPY_MARSHAL_TYPE_LONG: {
         const uint16_t *digits;
         size_t digit_count;
-        int sign;
+        int32_t sign;
 
         tinypy_marshal_long_view(source, &sign, &digits, &digit_count);
         *out_value = tinypy_long_from_base15_digits(materializer->vm, sign, digits, digit_count);
@@ -268,7 +268,7 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
     case TINYPY_MARSHAL_TYPE_BYTES: {
         const void *bytes;
         size_t size;
-        int interned;
+        int32_t interned;
 
         tinypy_marshal_bytes_view(source, &bytes, &size, &interned);
         if (interned != 0) {
@@ -315,7 +315,7 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         return TINYPY_MARSHAL_UNSUPPORTED_RUNTIME_TYPE;
     }
     default:
-        assert(!"invalid marshal object type");
+        TINYPY_ASSERT(!"invalid marshal object type");
         return TINYPY_MARSHAL_INVALID_GRAPH;
     }
 }
@@ -326,9 +326,9 @@ tinypy_marshal_result_e tinypy_marshal_load_code_v2(tinypy_vm_t *vm, const void 
     tinypy_marshal_materializer_t materializer;
     tinypy_marshal_result_e result;
 
-    assert(tinypy_internal_vm_valid(vm));
-    assert(bytes != NULL || size == 0U);
-    assert(out_code != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(bytes != NULL || size == 0U);
+    TINYPY_ASSERT(out_code != NULL);
     *out_code = NULL;
     allocator = __tinypy_marshal_vm_allocator(vm);
     result = tinypy_marshal_read_v2(bytes, size, &allocator, limits, &document, out_error);

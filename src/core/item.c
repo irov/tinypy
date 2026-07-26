@@ -2,7 +2,7 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <string.h>
 
 typedef struct tinypy_item_slice_indices_t {
@@ -13,7 +13,7 @@ typedef struct tinypy_item_slice_indices_t {
 } tinypy_item_slice_indices_t;
 
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_item_index_value(const tinypy_value_t *key, int64_t *out_index) {
+static int32_t __tinypy_item_index_value(const tinypy_value_t *key, int64_t *out_index) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(key);
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
@@ -52,7 +52,7 @@ static int __tinypy_item_index_value(const tinypy_value_t *key, int64_t *out_ind
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_item_slice_index_value(tinypy_vm_t *vm, const tinypy_value_t *value, int64_t *out_index, tinypy_error_t **out_error) {
+static int32_t __tinypy_item_slice_index_value(tinypy_vm_t *vm, const tinypy_value_t *value, int64_t *out_index, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
@@ -88,13 +88,13 @@ static int __tinypy_item_slice_index_value(tinypy_vm_t *vm, const tinypy_value_t
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_item_slice_indices(tinypy_vm_t *vm, tinypy_value_t *slice_value, size_t size, tinypy_item_slice_indices_t *out_indices, tinypy_error_t **out_error) {
+static int32_t __tinypy_item_slice_indices(tinypy_vm_t *vm, tinypy_value_t *slice_value, size_t size, tinypy_item_slice_indices_t *out_indices, tinypy_error_t **out_error) {
     tinypy_slice_object_t *slice = TINYPY_SLICE_OBJECT(slice_value);
     int64_t sequence_size;
     int64_t lower;
     int64_t upper;
 
-    assert(size <= (size_t)INT64_MAX);
+    TINYPY_ASSERT(size <= (size_t)INT64_MAX);
     sequence_size = (int64_t)size;
     if (TINYPY_VALUE_KIND(slice->step) == TINYPY_VALUE_NONE) {
         out_indices->step = 1;
@@ -157,7 +157,7 @@ static int __tinypy_item_slice_indices(tinypy_vm_t *vm, tinypy_value_t *slice_va
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_item_normalize_index(tinypy_vm_t *vm, tinypy_value_t *key, size_t size, size_t *out_index, tinypy_error_t **out_error) {
+static int32_t __tinypy_item_normalize_index(tinypy_vm_t *vm, tinypy_value_t *key, size_t size, size_t *out_index, tinypy_error_t **out_error) {
     int64_t index;
 
     if (__tinypy_item_index_value(key, &index) == 0) {
@@ -204,13 +204,13 @@ static tinypy_value_t *__tinypy_item_unicode_get(tinypy_value_t *container, size
     size_t scalar_size;
 
     utf8 = tinypy_unicode_utf8_view(container, &byte_size, &code_point_count);
-    assert(scalar_index < code_point_count);
+    TINYPY_ASSERT(scalar_index < code_point_count);
     while (current < scalar_index) {
-        unsigned char lead = (unsigned char)utf8[byte_index];
+        uint8_t lead = (uint8_t)utf8[byte_index];
         byte_index += lead < 0x80U ? 1U : (lead < 0xe0U ? 2U : (lead < 0xf0U ? 3U : 4U));
         current += 1U;
     } {
-        unsigned char lead = (unsigned char)utf8[byte_index];
+        uint8_t lead = (uint8_t)utf8[byte_index];
         scalar_size = lead < 0x80U ? 1U : (lead < 0xe0U ? 2U : (lead < 0xf0U ? 3U : 4U));
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
@@ -224,7 +224,7 @@ static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, c
     int64_t source_index = indices->start;
 
     if (indices->length != 0U) {
-        assert(indices->length <= SIZE_MAX / sizeof(*items));
+        TINYPY_ASSERT(indices->length <= SIZE_MAX / sizeof(*items));
         items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, indices->length * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
         for (index = 0U; index < indices->length; ++index) {
             items[index] = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(container, (size_t)source_index) : TINYPY_LIST_GET(container, (size_t)source_index);
@@ -240,20 +240,20 @@ static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, c
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_item_string_slice(tinypy_value_t *container, const tinypy_item_slice_indices_t *indices) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    const unsigned char *bytes;
-    unsigned char *selected;
+    const uint8_t *bytes;
+    uint8_t *selected;
     size_t byte_size;
     size_t index;
     int64_t source_index = indices->start;
 
-    bytes = (const unsigned char *)tinypy_string_view(container, &byte_size);
+    bytes = (const uint8_t *)tinypy_string_view(container, &byte_size);
     if (indices->length == 0U) {
         return tinypy_string_from_bytes(vm, NULL, 0U);
     }
     if (indices->step == 1) {
         return tinypy_string_from_bytes(vm, bytes + (size_t)indices->start, indices->length);
     }
-    selected = (unsigned char *)tinypy_internal_vm_allocate(vm, indices->length, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+    selected = (uint8_t *)tinypy_internal_vm_allocate(vm, indices->length, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     for (index = 0U; index < indices->length; ++index) {
         selected[index] = bytes[(size_t)source_index];
         source_index += indices->step;
@@ -280,10 +280,10 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
     if (indices->length == 0U) {
         return tinypy_unicode_from_utf8(vm, NULL, 0U);
     }
-    assert(code_point_count < SIZE_MAX / sizeof(*offsets));
+    TINYPY_ASSERT(code_point_count < SIZE_MAX / sizeof(*offsets));
     offsets = (size_t *)tinypy_internal_vm_allocate(vm, (code_point_count + 1U) * sizeof(*offsets), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     for (scalar_index = 0U; scalar_index < code_point_count; ++scalar_index) {
-        unsigned char lead = (unsigned char)utf8[byte_index];
+        uint8_t lead = (uint8_t)utf8[byte_index];
 
         offsets[scalar_index] = byte_index;
         byte_index += lead < 0x80U ? 1U : (lead < 0xe0U ? 2U : (lead < 0xf0U ? 3U : 4U));
@@ -411,10 +411,10 @@ tinypy_value_t *tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, 
     size_t index;
     tinypy_value_t *item;
 
-    assert(container != NULL && key != NULL);
+    TINYPY_ASSERT(container != NULL && key != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(tinypy_internal_value_belongs_to(vm, key));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, key));
     TINYPY_CLEAR_ERROR(out_error);
     if (container->type->mapping_slots != NULL && container->type->mapping_slots->get_item != NULL) {
         return container->type->mapping_slots->get_item(container, key, out_error);
@@ -486,10 +486,10 @@ tinypy_value_t *tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, 
         return item;
     }
     if (kind == TINYPY_VALUE_STRING) {
-        const unsigned char *bytes;
+        const uint8_t *bytes;
         size_t size;
 
-        bytes = (const unsigned char *)tinypy_string_view(container, &size);
+        bytes = (const uint8_t *)tinypy_string_view(container, &size);
         if (__tinypy_item_normalize_index(vm, key, size, &index, out_error) == 0) {
             return NULL;
         }
@@ -511,7 +511,7 @@ tinypy_value_t *tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, 
         if (__tinypy_item_normalize_index(vm, key, range->length, &index, out_error) == 0) {
             return NULL;
         }
-        assert(index <= (size_t)INT64_MAX);
+        TINYPY_ASSERT(index <= (size_t)INT64_MAX);
         return tinypy_integer_from_i64(vm, range->start + (int64_t)index * range->step);
     }
     if (tinypy_internal_object_has_special(container, "__getitem__", 11U) != 0) {
@@ -525,11 +525,11 @@ int32_t tinypy_set_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_v
     tinypy_value_type_e kind;
     size_t index;
 
-    assert(container != NULL && key != NULL && value != NULL);
+    TINYPY_ASSERT(container != NULL && key != NULL && value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(tinypy_internal_value_belongs_to(vm, key));
-    assert(tinypy_internal_value_belongs_to(vm, value));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, key));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, value));
     TINYPY_CLEAR_ERROR(out_error);
     if (container->type->mapping_slots != NULL && container->type->mapping_slots->set_item != NULL) {
         return container->type->mapping_slots->set_item(container, key, value, out_error);
@@ -571,10 +571,10 @@ int32_t tinypy_delete_item(tinypy_value_t *container, tinypy_value_t *key, tinyp
     tinypy_value_type_e kind;
     size_t index;
 
-    assert(container != NULL && key != NULL);
+    TINYPY_ASSERT(container != NULL && key != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(tinypy_internal_value_belongs_to(vm, key));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, key));
     TINYPY_CLEAR_ERROR(out_error);
     if (container->type->mapping_slots != NULL && container->type->mapping_slots->set_item != NULL) {
         return container->type->mapping_slots->set_item(container, key, NULL, out_error);

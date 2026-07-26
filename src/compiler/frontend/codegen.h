@@ -4,8 +4,8 @@
 #include "bytecode_builder.h"
 
 typedef struct tinypy_future_features_t {
-    int features;
-    int line_number;
+    int32_t features;
+    int32_t line_number;
 } tinypy_future_features_t;
 
 struct tinypy_symbol_table_t;

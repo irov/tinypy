@@ -89,7 +89,7 @@ static void __test_patch_argument(uint8_t *code, size_t instruction_offset, uint
     code[instruction_offset + 2U] = (uint8_t)(argument >> 8U);
 }
 
-static int __test_simple_and_terminators(void) {
+static int32_t __test_simple_and_terminators(void) {
     static const uint8_t simple[] = {
         TINYPY_OP_LOAD_CONST, 0U, 0U,
         TINYPY_OP_RETURN_VALUE};
@@ -128,7 +128,7 @@ static int __test_simple_and_terminators(void) {
     return 0;
 }
 
-static int __test_valid_loop(void) {
+static int32_t __test_valid_loop(void) {
     static const uint8_t code[] = {
         TINYPY_OP_SETUP_LOOP, 14U, 0U,   /* 0 -> 17 */
         TINYPY_OP_LOAD_CONST, 0U, 0U,    /* 3 */
@@ -154,7 +154,7 @@ static int __test_valid_loop(void) {
     return 0;
 }
 
-static int __test_valid_try_except(void) {
+static int32_t __test_valid_try_except(void) {
     static const uint8_t code[] = {
         TINYPY_OP_SETUP_EXCEPT, 8U, 0U,       /* 0 -> 11 */
         TINYPY_OP_LOAD_CONST, 0U, 0U,         /* 3 */
@@ -187,7 +187,7 @@ static int __test_valid_try_except(void) {
     return 0;
 }
 
-static int __test_valid_try_finally_and_return(void) {
+static int32_t __test_valid_try_finally_and_return(void) {
     static const uint8_t normal_code[] = {
         TINYPY_OP_SETUP_FINALLY, 8U, 0U, /* 0 -> 11 */
         TINYPY_OP_LOAD_CONST, 0U, 0U,    /* 3 */
@@ -232,7 +232,7 @@ static int __test_valid_try_finally_and_return(void) {
     return 0;
 }
 
-static int __test_valid_with_and_generator(void) {
+static int32_t __test_valid_with_and_generator(void) {
     static const uint8_t with_code[] = {
         TINYPY_OP_LOAD_CONST, 0U, 0U, /* 0: context */
         TINYPY_OP_SETUP_WITH, 5U, 0U, /* 3 -> 11 */
@@ -272,7 +272,7 @@ static int __test_valid_with_and_generator(void) {
     return 0;
 }
 
-static int __test_nested_pending_reasons(void) {
+static int32_t __test_nested_pending_reasons(void) {
     /* Emitted by the local CPython 2.7.18 reference compiler. */
     static const uint8_t nested_finally[] = {
         TINYPY_OP_SETUP_FINALLY, 8U, 0U,
@@ -373,7 +373,7 @@ static int __test_nested_pending_reasons(void) {
     return 0;
 }
 
-static int __test_variable_stack_effects(void) {
+static int32_t __test_variable_stack_effects(void) {
     static const uint8_t unpack_build[] = {
         TINYPY_OP_LOAD_CONST, 0U, 0U,
         TINYPY_OP_UNPACK_SEQUENCE, 3U, 0U,
@@ -454,7 +454,7 @@ static int __test_variable_stack_effects(void) {
     return 0;
 }
 
-static int __test_all_defined_opcodes_reach_effect_model(void) {
+static int32_t __test_all_defined_opcodes_reach_effect_model(void) {
     uint8_t code[128];
     tinypy_bytecode_metadata_t metadata = __test_metadata(16U);
     tinypy_bytecode_verify_result_t result;
@@ -611,7 +611,7 @@ static int __test_all_defined_opcodes_reach_effect_model(void) {
     return 0;
 }
 
-static int __test_decode_and_opcode_errors(void) {
+static int32_t __test_decode_and_opcode_errors(void) {
     static const uint8_t unknown[] = {6U};
     static const uint8_t unknown_with_argument[] = {200U, 0U, 0U};
     static const uint8_t truncated[] = {TINYPY_OP_LOAD_CONST, 0U};
@@ -655,7 +655,7 @@ static int __test_decode_and_opcode_errors(void) {
     return 0;
 }
 
-static int __test_operand_bounds(void) {
+static int32_t __test_operand_bounds(void) {
     static const uint8_t const_code[] = {TINYPY_OP_LOAD_CONST, 1U, 0U, TINYPY_OP_RETURN_VALUE};
     static const uint8_t name_code[] = {TINYPY_OP_LOAD_NAME, 1U, 0U, TINYPY_OP_RETURN_VALUE};
     static const uint8_t local_code[] = {TINYPY_OP_LOAD_FAST, 1U, 0U, TINYPY_OP_RETURN_VALUE};
@@ -687,7 +687,7 @@ static int __test_operand_bounds(void) {
     return 0;
 }
 
-static int __test_invalid_special_operands(void) {
+static int32_t __test_invalid_special_operands(void) {
     static const uint8_t dup[] = {TINYPY_OP_DUP_TOPX, 1U, 0U};
     static const uint8_t raise[] = {TINYPY_OP_RAISE_VARARGS, 4U, 0U};
     static const uint8_t slice[] = {TINYPY_OP_BUILD_SLICE, 1U, 0U};
@@ -708,7 +708,7 @@ static int __test_invalid_special_operands(void) {
     return 0;
 }
 
-static int __test_jump_validation(void) {
+static int32_t __test_jump_validation(void) {
     static const uint8_t out_of_range[] = {
         TINYPY_OP_JUMP_ABSOLUTE, 10U, 0U};
     static const uint8_t into_argument[] = {
@@ -737,7 +737,7 @@ static int __test_jump_validation(void) {
     return 0;
 }
 
-static int __test_control_flow_errors(void) {
+static int32_t __test_control_flow_errors(void) {
     static const uint8_t fallthrough[] = {TINYPY_OP_NOP};
     static const uint8_t underflow[] = {TINYPY_OP_POP_TOP};
     static const uint8_t inconsistent_depth[] = {
@@ -785,7 +785,7 @@ static int __test_control_flow_errors(void) {
     return 0;
 }
 
-static int __test_declared_stack_limits_and_block_limits(void) {
+static int32_t __test_declared_stack_limits_and_block_limits(void) {
     static const uint8_t stack_two[] = {
         TINYPY_OP_LOAD_CONST, 0U, 0U,
         TINYPY_OP_LOAD_CONST, 1U, 0U,
@@ -823,7 +823,7 @@ static int __test_declared_stack_limits_and_block_limits(void) {
     return 0;
 }
 
-static int __test_scratch_contract(void) {
+static int32_t __test_scratch_contract(void) {
     static const uint8_t code[] = {
         TINYPY_OP_LOAD_CONST, 0U, 0U,
         TINYPY_OP_RETURN_VALUE};
@@ -853,14 +853,14 @@ static int __test_scratch_contract(void) {
     return 0;
 }
 
-static int __test_status_names(void) {
+static int32_t __test_status_names(void) {
     tinypy_bytecode_verify_status_e status;
 
     TEST_CHECK(strcmp(tinypy_bytecode_verify_status_name(TINYPY_BYTECODE_VERIFY_OK), "ok") == 0);
     TEST_CHECK(strcmp(tinypy_bytecode_verify_status_name(TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW), "value stack underflow") == 0);
     for (status = TINYPY_BYTECODE_VERIFY_OK;
          status <= TINYPY_BYTECODE_VERIFY_INTERNAL_ERROR;
-         status = (tinypy_bytecode_verify_status_e)((int)status + 1)) {
+         status = (tinypy_bytecode_verify_status_e)((int32_t)status + 1)) {
         TEST_CHECK(strcmp(
                        tinypy_bytecode_verify_status_name(status),
                        "unknown verification status") != 0);

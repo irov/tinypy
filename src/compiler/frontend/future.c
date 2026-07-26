@@ -7,10 +7,10 @@
     "from __future__ imports must occur at the beginning of the file"
 
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_statement_t s, const char *filename) {
-    int i;
+static int32_t __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_statement_t s, const char *filename) {
+    int32_t i;
 
-    assert(s->kind == TINYPY_AST_KIND_IMPORT_FROM);
+    TINYPY_ASSERT(s->kind == TINYPY_AST_KIND_IMPORT_FROM);
 
     tinypy_ast_sequence_t *names = s->v.ImportFrom.names;
     for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(names); i++) {
@@ -59,8 +59,8 @@ static int __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *arena, 
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_module_t mod, const char *filename) {
-    int i, found_docstring = 0, done = 0, prev_line = 0;
+static int32_t __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_module_t mod, const char *filename) {
+    int32_t i, found_docstring = 0, done = 0, prev_line = 0;
 
     if (!(mod->kind == TINYPY_AST_KIND_MODULE || mod->kind == TINYPY_AST_KIND_INTERACTIVE)) {
         return 1;
@@ -90,7 +90,7 @@ static int __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinypy_fu
 
         if (s->kind == TINYPY_AST_KIND_IMPORT_FROM) {
             tinypy_ast_identifier_t modname = s->v.ImportFrom.module;
-            int condition = modname && TINYPY_COMPILER_STRING_GET_SIZE(modname) == 10;
+            int32_t condition = modname && TINYPY_COMPILER_STRING_GET_SIZE(modname) == 10;
             if (condition != 0) {
                 condition = !strcmp(TINYPY_COMPILER_STRING_AS_STRING(modname), "__future__");
             }

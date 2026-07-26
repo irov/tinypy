@@ -3,13 +3,13 @@
 
 #include "../internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <limits.h>
 #include <string.h>
 
 typedef ptrdiff_t tinypy_compiler_size_t;
 typedef struct tinypy_compiler_flags_t {
-    int flags;
+    int32_t flags;
 } tinypy_compiler_flags_t;
 
 typedef struct tinypy_compiler_complex_t {
@@ -17,9 +17,9 @@ typedef struct tinypy_compiler_complex_t {
     double imag;
 } tinypy_compiler_complex_t;
 
-#define TINYPY_COMPILER_CHARMASK(character) ((unsigned char)(character))
-#define TINYPY_COMPILER_ISALPHA(character) ((((unsigned int)(unsigned char)(character) | 0x20U) - (unsigned int)'a') < 26U)
-#define TINYPY_COMPILER_ISALNUM(character) (TINYPY_COMPILER_ISALPHA(character) || ((unsigned int)(unsigned char)(character) - (unsigned int)'0') < 10U)
+#define TINYPY_COMPILER_CHARMASK(character) ((uint8_t)(character))
+#define TINYPY_COMPILER_ISALPHA(character) ((((uint32_t)(uint8_t)(character) | 0x20U) - (uint32_t)'a') < 26U)
+#define TINYPY_COMPILER_ISALNUM(character) (TINYPY_COMPILER_ISALPHA(character) || ((uint32_t)(uint8_t)(character) - (uint32_t)'0') < 10U)
 #define TINYPY_TOKENIZER_END_OF_INPUT (-1)
 #define TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8 0x0100
 #define TINYPY_COMPILER_FLAG_DONT_IMPLY_DEDENT 0x0200
@@ -67,7 +67,7 @@ typedef struct tinypy_compiler_complex_t {
         (destination) = (value);                            \
         TINYPY_COMPILER_XDECREF(__tinypy_old_value);        \
     } while (0)
-#define TINYPY_COMPILER_OBJECT_IS_TRUE(value) ((int)tinypy_truth((value), NULL))
+#define TINYPY_COMPILER_OBJECT_IS_TRUE(value) ((int32_t)tinypy_truth((value), NULL))
 #define TINYPY_COMPILER_STRING_CHECK(value) (TINYPY_VALUE_KIND((value)) == TINYPY_VALUE_STRING)
 #define TINYPY_COMPILER_UNICODE_CHECK(value) (TINYPY_VALUE_KIND((value)) == TINYPY_VALUE_UNICODE)
 #define TINYPY_COMPILER_STRING_AS_STRING(value) ((char *)__tinypy_frontend_string_data((value)))
@@ -96,26 +96,26 @@ typedef struct tinypy_compiler_complex_t {
 
 size_t __tinypy_frontend_string_size(const tinypy_value_t *value);
 const void *__tinypy_frontend_string_data(const tinypy_value_t *value);
-int __tinypy_frontend_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value);
+int32_t __tinypy_frontend_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value);
 tinypy_value_t *__tinypy_frontend_dict_get(tinypy_value_t *dict, tinypy_value_t *key);
-int __tinypy_frontend_dict_delete(tinypy_value_t *dict, tinypy_value_t *key);
-int __tinypy_frontend_dict_update(tinypy_value_t *dict, tinypy_value_t *source);
-int __tinypy_frontend_dict_next(tinypy_value_t *dict, tinypy_compiler_size_t *position, tinypy_value_t **key, tinypy_value_t **value);
-int __tinypy_frontend_list_append(tinypy_value_t *list, tinypy_value_t *value);
-int __tinypy_frontend_list_delete(tinypy_value_t *list, tinypy_compiler_size_t index);
+int32_t __tinypy_frontend_dict_delete(tinypy_value_t *dict, tinypy_value_t *key);
+int32_t __tinypy_frontend_dict_update(tinypy_value_t *dict, tinypy_value_t *source);
+int32_t __tinypy_frontend_dict_next(tinypy_value_t *dict, tinypy_compiler_size_t *position, tinypy_value_t **key, tinypy_value_t **value);
+int32_t __tinypy_frontend_list_append(tinypy_value_t *list, tinypy_value_t *value);
+int32_t __tinypy_frontend_list_delete(tinypy_value_t *list, tinypy_compiler_size_t index);
 tinypy_value_t *__tinypy_frontend_dict_new_from_owner(tinypy_value_t *owner);
 tinypy_value_t *__tinypy_frontend_integer_from_owner(tinypy_value_t *owner, int64_t value);
 tinypy_value_t *__tinypy_frontend_string_from_owner(tinypy_value_t *owner, const char *bytes, size_t size);
-int __tinypy_frontend_dict_set_none(tinypy_value_t *dict, tinypy_value_t *key);
-tinypy_value_t *__tinypy_frontend_format_identifier(tinypy_value_t *owner, const char *prefix, int value, const char *suffix);
+int32_t __tinypy_frontend_dict_set_none(tinypy_value_t *dict, tinypy_value_t *key);
+tinypy_value_t *__tinypy_frontend_format_identifier(tinypy_value_t *owner, const char *prefix, int32_t value, const char *suffix);
 tinypy_value_t *__tinypy_frontend_mangle(tinypy_compile_ctx_t *arena, tinypy_value_t *private_name, tinypy_value_t *identifier);
 tinypy_value_t *__tinypy_frontend_tuple_new(tinypy_value_t *owner, tinypy_compiler_size_t size);
 void __tinypy_frontend_tuple_set(tinypy_value_t *tuple, tinypy_compiler_size_t index, tinypy_value_t *value);
 tinypy_value_t *__tinypy_frontend_dict_keys(tinypy_value_t *dict);
-int __tinypy_frontend_list_sort(tinypy_value_t *list);
+int32_t __tinypy_frontend_list_sort(tinypy_value_t *list);
 tinypy_value_t *__tinypy_frontend_list_as_tuple(tinypy_value_t *list);
 tinypy_value_t *__tinypy_frontend_sequence_list(tinypy_value_t *sequence);
-int __tinypy_frontend_string_resize(tinypy_value_t **string, tinypy_compiler_size_t size);
+int32_t __tinypy_frontend_string_resize(tinypy_value_t **string, tinypy_compiler_size_t size);
 tinypy_value_t *__tinypy_frontend_string_uninitialized(tinypy_value_t *owner, size_t size);
 tinypy_value_t *__tinypy_frontend_pointer_handle(tinypy_value_t *owner, const void *pointer);
 void *__tinypy_frontend_pointer_from_handle(tinypy_value_t *handle);
@@ -126,18 +126,18 @@ void *__tinypy_frontend_pointer_from_handle(tinypy_value_t *handle);
 #define TINYPY_COMPILER_SEQUENCE_LIST(sequence) __tinypy_frontend_sequence_list((sequence))
 #define TINYPY_COMPILER_STRING_RESIZE(string, size) __tinypy_frontend_string_resize((string), (size))
 
-static inline int __tinypy_frontend_is_digit(int character) {
-    return (unsigned int)(unsigned char)character - (unsigned int)'0' < 10U;
+static inline int32_t __tinypy_frontend_is_digit(int32_t character) {
+    return (uint32_t)(uint8_t)character - (uint32_t)'0' < 10U;
 }
 
-static inline int __tinypy_frontend_is_hex_digit(int character) {
-    unsigned int byte = (unsigned int)(unsigned char)character;
+static inline int32_t __tinypy_frontend_is_hex_digit(int32_t character) {
+    uint32_t byte = (uint32_t)(uint8_t)character;
 
-    return byte - (unsigned int)'0' < 10U || (byte | 0x20U) - (unsigned int)'a' < 6U;
+    return byte - (uint32_t)'0' < 10U || (byte | 0x20U) - (uint32_t)'a' < 6U;
 }
 
-static inline int __tinypy_frontend_ascii_to_integer(const char *text) {
-    int value = 0;
+static inline int32_t __tinypy_frontend_ascii_to_integer(const char *text) {
+    int32_t value = 0;
 
     while (*text >= '0' && *text <= '9') {
         value = value * 10 + (*text - '0');

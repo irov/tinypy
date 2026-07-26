@@ -42,14 +42,14 @@ typedef struct tinypy_cli_context_t {
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_cli_artifact_t {
     tinypy_module_artifact_t artifact;
-    unsigned char *source;
+    uint8_t *source;
     char *canonical_name;
     char *logical_filename;
 } tinypy_cli_artifact_t;
 
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_cli_buffer_t {
-    unsigned char *data;
+    uint8_t *data;
     size_t size;
     size_t capacity;
 } tinypy_cli_buffer_t;
@@ -66,7 +66,7 @@ typedef enum tinypy_cli_execute_result_e {
 static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
     tinypy_cli_allocator_state_t *state = (tinypy_cli_allocator_state_t *)user_data;
     tinypy_cli_allocation_header_t *header;
-    unsigned char *base;
+    uint8_t *base;
     uintptr_t address;
     size_t allocation_size;
 
@@ -76,7 +76,7 @@ static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignmen
     assert((alignment & (alignment - 1U)) == 0U);
     assert(size <= SIZE_MAX - sizeof(*header) - alignment + 1U);
     allocation_size = sizeof(*header) + size + alignment - 1U;
-    base = (unsigned char *)malloc(allocation_size);
+    base = (uint8_t *)malloc(allocation_size);
     assert(base != NULL);
     address = ((uintptr_t)(base + sizeof(*header)) + (uintptr_t)alignment - 1U) & ~((uintptr_t)alignment - 1U);
     header = (tinypy_cli_allocation_header_t *)(address - sizeof(*header));
@@ -98,7 +98,7 @@ static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignmen
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
     tinypy_cli_allocator_state_t *state = (tinypy_cli_allocator_state_t *)user_data;
-    tinypy_cli_allocation_header_t *header = (tinypy_cli_allocation_header_t *)((unsigned char *)memory - sizeof(*header));
+    tinypy_cli_allocation_header_t *header = (tinypy_cli_allocation_header_t *)((uint8_t *)memory - sizeof(*header));
 
     if (alignment < sizeof(void *)) {
         alignment = sizeof(void *);
@@ -135,7 +135,7 @@ static char *__tinypy_cli_string_duplicate(const char *text, size_t size) {
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_cli_buffer_reserve(tinypy_cli_buffer_t *buffer, size_t required) {
     size_t capacity;
-    unsigned char *data;
+    uint8_t *data;
 
     if (required <= buffer->capacity) {
         return INT32_C(1);
@@ -148,7 +148,7 @@ static int32_t __tinypy_cli_buffer_reserve(tinypy_cli_buffer_t *buffer, size_t r
         }
         capacity *= 2U;
     }
-    data = (unsigned char *)realloc(buffer->data, capacity);
+    data = (uint8_t *)realloc(buffer->data, capacity);
     if (data == NULL) {
         return INT32_C(0);
     }
@@ -169,9 +169,9 @@ static int32_t __tinypy_cli_buffer_append(tinypy_cli_buffer_t *buffer, const voi
     return INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_read_stream(FILE *stream, unsigned char **out_data, size_t *out_size) {
+static int32_t __tinypy_cli_read_stream(FILE *stream, uint8_t **out_data, size_t *out_size) {
     tinypy_cli_buffer_t buffer = {NULL, 0U, 0U};
-    unsigned char chunk[16384];
+    uint8_t chunk[16384];
 
     for (;;) {
         size_t read_size = fread(chunk, 1U, sizeof(chunk), stream);
@@ -189,7 +189,7 @@ static int32_t __tinypy_cli_read_stream(FILE *stream, unsigned char **out_data, 
         }
     }
     if (buffer.data == NULL) {
-        buffer.data = (unsigned char *)malloc(1U);
+        buffer.data = (uint8_t *)malloc(1U);
         assert(buffer.data != NULL);
     }
     *out_data = buffer.data;
@@ -197,7 +197,7 @@ static int32_t __tinypy_cli_read_stream(FILE *stream, unsigned char **out_data, 
     return INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_read_file(const char *path, unsigned char **out_data, size_t *out_size) {
+static int32_t __tinypy_cli_read_file(const char *path, uint8_t **out_data, size_t *out_size) {
     FILE *stream = fopen(path, "rb");
     int32_t result;
 
@@ -272,7 +272,7 @@ static char *__tinypy_cli_module_path(const char *root, const char *name, size_t
 static const tinypy_module_artifact_t *__tinypy_cli_try_module(tinypy_cli_context_t *context, const tinypy_module_request_t *request, const char *root, int32_t package) {
     tinypy_cli_artifact_t *entry;
     char *path = __tinypy_cli_module_path(root, request->canonical_name, request->canonical_name_size, package);
-    unsigned char *source;
+    uint8_t *source;
     size_t source_size;
 
     if (path == NULL || __tinypy_cli_read_file(path, &source, &source_size) == 0) {
@@ -707,7 +707,7 @@ static tinypy_value_t *__tinypy_cli_create_main(tinypy_vm_t *vm, const char *fil
     return module;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_set_sys_values(tinypy_vm_t *vm, int argc, const char *const *argv, tinypy_cli_context_t *context) {
+static int32_t __tinypy_cli_set_sys_values(tinypy_vm_t *vm, int32_t argc, const char *const *argv, tinypy_cli_context_t *context) {
     tinypy_error_t *error = NULL;
     tinypy_value_t *sys_module = tinypy_import_module(vm, "sys", 3U, NULL, NULL, 0, &error);
     tinypy_value_t **items;
@@ -757,7 +757,7 @@ static int32_t __tinypy_cli_set_sys_values(tinypy_vm_t *vm, int argc, const char
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_cli_stdin_is_terminal(void) {
 #if defined(_WIN32)
-    int file_descriptor;
+    int32_t file_descriptor;
 
     file_descriptor = _fileno(stdin);
     return _isatty(file_descriptor) != 0 ? INT32_C(1) : INT32_C(0);
@@ -778,7 +778,7 @@ static int32_t __tinypy_cli_repl(tinypy_vm_t *vm, tinypy_value_t *globals, int32
 
         (void)fputs(source.size == 0U ? ">>> " : "... ", stdout);
         (void)fflush(stdout);
-        if (fgets(line, (int)sizeof(line), stdin) == NULL) {
+        if (fgets(line, (int32_t)sizeof(line), stdin) == NULL) {
             (void)fputc('\n', stdout);
             if (source.size != 0U && __tinypy_cli_execute(vm, globals, source.data, source.size, "<stdin>", TINYPY_COMPILE_SINGLE, optimize_level, INT32_C(0)) == TINYPY_CLI_EXECUTE_ERROR) {
                 result = INT32_C(0);
@@ -812,7 +812,7 @@ static void __tinypy_cli_usage(FILE *stream) {
     (void)fputs("       tinypy --version\n", stream);
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_cli_run(int argc, char **argv) {
+int32_t tinypy_cli_run(int32_t argc, char **argv) {
     tinypy_cli_context_t context;
     tinypy_allocator_t allocator;
     tinypy_host_t host;
@@ -820,15 +820,15 @@ int tinypy_cli_run(int argc, char **argv) {
     tinypy_vm_t *vm;
     tinypy_value_t *main_module;
     tinypy_value_t *globals;
-    unsigned char *owned_source = NULL;
+    uint8_t *owned_source = NULL;
     const void *source = NULL;
     size_t source_size = 0U;
     const char *filename = NULL;
     const char **python_argv;
-    int python_argc;
-    int argument = 1;
-    int command_argument = -1;
-    int script_argument = -1;
+    int32_t python_argc;
+    int32_t argument = 1;
+    int32_t command_argument = -1;
+    int32_t script_argument = -1;
     int32_t show_stats = INT32_C(0);
     int32_t interactive = INT32_C(0);
     int32_t success = INT32_C(1);

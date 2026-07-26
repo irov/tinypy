@@ -13,7 +13,9 @@ INCLUDE = ROOT / "include/tinypy"
 PUBLIC_HEADERS = tuple(sorted(INCLUDE.glob("*.h")))
 STATIC_FUNCTION_ROOTS = ("src", "tests", "tools", "include")
 STATIC_FUNCTION_SUFFIXES = {".c", ".h", ".cpp", ".hpp"}
+FIXED_WIDTH_TYPE_ROOTS = ("cli", "include", "src", "tests", "tools")
 INTERNAL_CORE_UNITS = {
+    "assertion",
     "codecs",
     "constructors",
     "container_methods",
@@ -58,6 +60,14 @@ class PublicApiNamingTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
                 self.assertNotIn("#include <stddef.h>", text, path)
                 self.assertNotIn("#include <stdint.h>", text, path)
+
+    def test_unsigned_char_is_not_used(self) -> None:
+        for root_name in FIXED_WIDTH_TYPE_ROOTS:
+            for path in (ROOT / root_name).rglob("*"):
+                if path.suffix not in STATIC_FUNCTION_SUFFIXES:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                self.assertNotRegex(text, r"\bunsigned\s+char\b", path)
 
     def test_header_function_declarations_are_single_line(self) -> None:
         multiline_prototype = re.compile(
@@ -225,6 +235,7 @@ class PublicApiNamingTests(unittest.TestCase):
                 "tinypy_vm_raised_exception",
                 "tinypy_vm_raised_exception_type",
                 "tinypy_vm_raised_traceback",
+                "tinypy_vm_report_cycles",
             },
         )
 
@@ -233,12 +244,28 @@ class PublicApiNamingTests(unittest.TestCase):
             text = header.read_text(encoding="utf-8")
             self.assertNotIn("OUT_OF_MEMORY", text, header.name)
 
-    def test_refcount_max_is_an_assertion_not_an_immortal_sentinel(self) -> None:
+    def test_refcount_max_is_not_an_immortal_sentinel(self) -> None:
         internal_header = (ROOT / "src/core/internal.h").read_text(encoding="utf-8")
         vm_source = (ROOT / "src/core/vm.c").read_text(encoding="utf-8")
 
         self.assertIn(
-            "assert(TINYPY_REFCNT(__tinypy_incref_value) < PTRDIFF_MAX);",
+            "TINYPY_REFCNT(__tinypy_incref_value) += 1;",
+            internal_header,
+        )
+        self.assertIn(
+            "TINYPY_ASSERT(__tinypy_incref_value != NULL);",
+            internal_header,
+        )
+        self.assertIn(
+            "TINYPY_ASSERT(__tinypy_decref_value != NULL);",
+            internal_header,
+        )
+        self.assertNotIn(
+            "TINYPY_ASSERT(TINYPY_REFCNT(__tinypy_incref_value)",
+            internal_header,
+        )
+        self.assertNotIn(
+            "TINYPY_ASSERT(TINYPY_REFCNT(__tinypy_decref_value)",
             internal_header,
         )
         self.assertNotIn(
@@ -260,12 +287,12 @@ class PublicApiNamingTests(unittest.TestCase):
         long_body = long_source.split("int64_t tinypy_long_as_i64(", 1)[1]
         long_body = long_body.split("\n}", 1)[0]
         self.assertIn(
-            "assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));",
+            "TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));",
             long_body,
         )
-        self.assertIn("assert(magnitude <= (UINT64_MAX >> 15U));", long_body)
-        self.assertIn("assert(magnitude <= (uint64_t)INT64_MAX);", long_body)
-        self.assertIn("assert(magnitude <= negative_limit);", long_body)
+        self.assertIn("TINYPY_ASSERT(magnitude <= (UINT64_MAX >> 15U));", long_body)
+        self.assertIn("TINYPY_ASSERT(magnitude <= (uint64_t)INT64_MAX);", long_body)
+        self.assertIn("TINYPY_ASSERT(magnitude <= negative_limit);", long_body)
         self.assertNotIn("out_error", long_body)
 
         release_body = value_source.split("void tinypy_release(tinypy_value_t *value)", 1)[1]
@@ -323,15 +350,15 @@ class PublicApiNamingTests(unittest.TestCase):
             internal_header,
         )
         self.assertIn(
-            "assert(vm->hash_depth < TINYPY_COMPARE_RECURSION_LIMIT);",
+            "TINYPY_ASSERT(vm->hash_depth < TINYPY_COMPARE_RECURSION_LIMIT);",
             hash_source,
         )
         self.assertIn(
-            "assert(vm->equality_depth < TINYPY_COMPARE_RECURSION_LIMIT);",
+            "TINYPY_ASSERT(vm->equality_depth < TINYPY_COMPARE_RECURSION_LIMIT);",
             hash_source,
         )
         self.assertIn(
-            "assert(vm->equality_depth < 1000U);",
+            "TINYPY_ASSERT(vm->equality_depth < 1000U);",
             dict_source,
         )
 

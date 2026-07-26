@@ -28,9 +28,9 @@ static const char *const __tinypy_unicode_name_hangul_syllables[TINYPY_UNICODE_N
     {NULL, NULL, "H"}};
 
 //////////////////////////////////////////////////////////////////////////
-static unsigned char __tinypy_unicode_name_upper(unsigned char byte) {
+static uint8_t __tinypy_unicode_name_upper(uint8_t byte) {
     if (byte >= 'a' && byte <= 'z') {
-        return (unsigned char)(byte - ('a' - 'A'));
+        return (uint8_t)(byte - ('a' - 'A'));
     }
     return byte;
 }
@@ -42,7 +42,7 @@ static uint32_t __tinypy_unicode_name_hash(const char *name, size_t name_size) {
     for (index = 0U; index < name_size; ++index) {
         uint32_t overflow;
 
-        hash = hash * (uint32_t)code_magic + (uint32_t)__tinypy_unicode_name_upper((unsigned char)name[index]);
+        hash = hash * (uint32_t)code_magic + (uint32_t)__tinypy_unicode_name_upper((uint8_t)name[index]);
         overflow = hash & UINT32_C(0xff000000);
         if (overflow != 0U) {
             hash = (hash ^ ((overflow >> 24U) & UINT32_C(0xff))) & UINT32_C(0x00ffffff);
@@ -116,7 +116,7 @@ static int32_t __tinypy_unicode_name_code_to_name(uint32_t code_point, char *buf
         }
         for (;;) {
             int32_t word = (int32_t)phrasebook[offset] - phrasebook_short;
-            const unsigned char *text;
+            const uint8_t *text;
 
             if (word >= 0) {
                 word = (word << 8) + (int32_t)phrasebook[offset + 1U];
@@ -160,7 +160,7 @@ static int32_t __tinypy_unicode_name_equal(uint32_t code_point, const char *name
         return INT32_C(0);
     }
     for (index = 0U; index < name_size; ++index) {
-        if (__tinypy_unicode_name_upper((unsigned char)name[index]) != (unsigned char)buffer[index]) {
+        if (__tinypy_unicode_name_upper((uint8_t)name[index]) != (uint8_t)buffer[index]) {
             return INT32_C(0);
         }
     }
@@ -197,8 +197,8 @@ int32_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size
     uint32_t code_point;
     uint32_t increment;
 
-    assert(name != NULL);
-    assert(out_code_point != NULL);
+    TINYPY_ASSERT(name != NULL);
+    TINYPY_ASSERT(out_code_point != NULL);
     if (name_size >= sizeof(hangul_prefix) - 1U && memcmp(name, hangul_prefix, sizeof(hangul_prefix) - 1U) == 0) {
         const char *position = name + sizeof(hangul_prefix) - 1U;
         size_t remaining = name_size - (sizeof(hangul_prefix) - 1U);
@@ -230,7 +230,7 @@ int32_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size
         }
         code_point = 0U;
         while (position < name_size) {
-            unsigned char byte = (unsigned char)name[position++];
+            uint8_t byte = (uint8_t)name[position++];
             uint32_t digit;
 
             if (byte >= '0' && byte <= '9') {

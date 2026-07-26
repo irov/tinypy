@@ -10,7 +10,8 @@
 #define TINYPY_CPYTHON_27_MAGIC UINT32_C(0x0A0DF303)
 
 /* Unless documented as optional, pointers are C API preconditions: debug
- * builds assert them and NDEBUG builds leave violations undefined. Statuses
+ * builds with TINYPY_ENABLE_ASSERTS assert them and other builds leave
+ * violations undefined. Statuses
  * describe artifact contents, capacity, compatibility and limits only. */
 
 typedef enum tinypy_artifact_status_e {

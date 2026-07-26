@@ -5,12 +5,12 @@
 #include "internal.h"
 #include "api_internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <math.h>
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_builtin_no_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+static int32_t __tinypy_builtin_no_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "builtin function does not accept keyword arguments", out_error);
         return 0;
@@ -18,7 +18,7 @@ static int __tinypy_builtin_no_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs,
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_builtin_argument_count(tinypy_vm_t *vm, tinypy_value_t *args, size_t minimum, size_t maximum, tinypy_error_t **out_error) {
+static int32_t __tinypy_builtin_argument_count(tinypy_vm_t *vm, tinypy_value_t *args, size_t minimum, size_t maximum, tinypy_error_t **out_error) {
     size_t count = TINYPY_TUPLE_SIZE(args);
 
     if (count < minimum || count > maximum) {
@@ -28,7 +28,7 @@ static int __tinypy_builtin_argument_count(tinypy_vm_t *vm, tinypy_value_t *args
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_builtin_text_view(tinypy_vm_t *vm, tinypy_value_t *value, const char **out_bytes, size_t *out_size, tinypy_error_t **out_error) {
+static int32_t __tinypy_builtin_text_view(tinypy_vm_t *vm, tinypy_value_t *value, const char **out_bytes, size_t *out_size, tinypy_error_t **out_error) {
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
         *out_bytes = (const char *)tinypy_string_view(value, out_size);
         return 1;
@@ -43,7 +43,7 @@ static int __tinypy_builtin_text_view(tinypy_vm_t *vm, tinypy_value_t *value, co
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_builtin_integer_as_i64(tinypy_vm_t *vm, tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
+static int32_t __tinypy_builtin_integer_as_i64(tinypy_vm_t *vm, tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
@@ -164,7 +164,7 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
         }
     }
     }
-    assert(size <= (size_t)INT64_MAX);
+    TINYPY_ASSERT(size <= (size_t)INT64_MAX);
     return tinypy_integer_from_i64(vm, (int64_t)size);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -193,7 +193,7 @@ static tinypy_value_t *__tinypy_builtin_id(tinypy_value_t *function, tinypy_valu
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_builtin_metaclass_check(tinypy_value_t *object, tinypy_value_t *classinfo, int subclass, int *out_result, tinypy_error_t **out_error) {
+static int32_t __tinypy_builtin_metaclass_check(tinypy_value_t *object, tinypy_value_t *classinfo, int32_t subclass, int32_t *out_result, tinypy_error_t **out_error) {
     const char *name = subclass != 0 ? "__subclasscheck__" : "__instancecheck__";
     size_t name_size = subclass != 0 ? 17U : 17U;
     tinypy_value_t *value;
@@ -223,10 +223,10 @@ static int __tinypy_builtin_metaclass_check(tinypy_value_t *object, tinypy_value
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_builtin_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, int subclass, tinypy_error_t **out_error) {
+static int32_t __tinypy_builtin_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, int32_t subclass, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
-    int metaclass_result;
-    int metaclass_handled;
+    int32_t metaclass_result;
+    int32_t metaclass_handled;
 
     if (TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_TUPLE) {
         tinypy_value_t *const *iterator = TINYPY_TUPLE_ITERATOR_BEGIN(classinfo);
@@ -234,7 +234,7 @@ static int __tinypy_builtin_instance_check(tinypy_value_t *object, tinypy_value_
 
         for (; iterator != iterator_end; ++iterator) {
             tinypy_value_t *item = *iterator;
-            int result = __tinypy_builtin_instance_check(object, item, subclass, out_error);
+            int32_t result = __tinypy_builtin_instance_check(object, item, subclass, out_error);
 
             if (result != 0) {
                 return result;
@@ -285,7 +285,7 @@ static int __tinypy_builtin_instance_check(tinypy_value_t *object, tinypy_value_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_isinstance(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    int result;
+    int32_t result;
 
     (void)user_data;
     if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 2U, 2U, out_error) == 0) {
@@ -299,7 +299,7 @@ static tinypy_value_t *__tinypy_builtin_isinstance(tinypy_value_t *function, tin
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_issubclass(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    int result;
+    int32_t result;
 
     (void)user_data;
     if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 2U, 2U, out_error) == 0) {
@@ -318,7 +318,7 @@ static tinypy_value_t *__tinypy_builtin_callable(tinypy_value_t *function, tinyp
     if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
-    int condition = TINYPY_TUPLE_GET(args, 0U)->type->call != NULL;
+    int32_t condition = TINYPY_TUPLE_GET(args, 0U)->type->call != NULL;
     if (condition == 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
         condition = tinypy_internal_object_has_special(item, "__call__", 8U) != 0;
@@ -479,7 +479,7 @@ static tinypy_value_t *__tinypy_builtin_range(tinypy_value_t *function, tinypy_v
     }
     else {
         tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-        int condition_2 = __tinypy_builtin_integer_as_i64(vm, item_2, &start, out_error) == 0;
+        int32_t condition_2 = __tinypy_builtin_integer_as_i64(vm, item_2, &start, out_error) == 0;
         if (condition_2 == 0) {
             tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 1U);
             condition_2 = __tinypy_builtin_integer_as_i64(vm, item_3, &stop, out_error) == 0;
@@ -541,7 +541,7 @@ static tinypy_value_t *__tinypy_builtin_xrange(tinypy_value_t *function, tinypy_
     }
     else {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        int condition_3 = __tinypy_builtin_integer_as_i64(vm, item, &start, out_error) == 0;
+        int32_t condition_3 = __tinypy_builtin_integer_as_i64(vm, item, &start, out_error) == 0;
         if (condition_3 == 0) {
             tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
             condition_3 = __tinypy_builtin_integer_as_i64(vm, item_2, &stop, out_error) == 0;
@@ -722,7 +722,7 @@ static tinypy_value_t *__tinypy_builtin_enumerate(tinypy_value_t *function, tiny
     if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 2U, out_error) == 0) {
         return NULL;
     }
-    int condition_4 = TINYPY_TUPLE_SIZE(args) == 2U;
+    int32_t condition_4 = TINYPY_TUPLE_SIZE(args) == 2U;
     if (condition_4 != 0) {
         tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
         condition_4 = __tinypy_builtin_integer_as_i64(vm, item_2, &counter, out_error) == 0;
@@ -790,7 +790,7 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
     }
     else if (TINYPY_VALUE_KIND(input) == TINYPY_VALUE_STRING) {
         size_t total = 0U;
-        unsigned char *buffer;
+        uint8_t *buffer;
         size_t output = 0U;
 
         iterator = TINYPY_LIST_ITERATOR_BEGIN(selected);
@@ -798,7 +798,7 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
         for (; iterator != iterator_end; ++iterator) {
             total += TINYPY_TEXT_BYTE_SIZE(*iterator);
         }
-        buffer = total != 0U ? (unsigned char *)tinypy_internal_vm_allocate(vm, total, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
+        buffer = total != 0U ? (uint8_t *)tinypy_internal_vm_allocate(vm, total, (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
         iterator = TINYPY_LIST_ITERATOR_BEGIN(selected);
         iterator_end = TINYPY_LIST_ITERATOR_END(selected);
         for (; iterator != iterator_end; ++iterator) {
@@ -1097,7 +1097,7 @@ static tinypy_value_t *__tinypy_builtin_chr_common(tinypy_value_t *function, tin
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     int64_t value;
 
-    int condition_5 = __tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 1U, out_error) == 0;
+    int32_t condition_5 = __tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 1U, out_error) == 0;
     if (condition_5 == 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
         condition_5 = __tinypy_builtin_integer_as_i64(vm, item, &value, out_error) == 0;
@@ -1106,13 +1106,13 @@ static tinypy_value_t *__tinypy_builtin_chr_common(tinypy_value_t *function, tin
         return NULL;
     }
     if (user_data == NULL) {
-        unsigned char byte;
+        uint8_t byte;
 
         if (value < 0 || value > 255) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "chr() argument not in range(256)", out_error);
             return NULL;
         }
-        byte = (unsigned char)value;
+        byte = (uint8_t)value;
         return tinypy_string_from_bytes(vm, &byte, 1U);
     }
     if (value < 0 || value > INT64_C(0x10ffff) || (value >= INT64_C(0xd800) && value <= INT64_C(0xdfff))) {
@@ -1264,7 +1264,7 @@ static tinypy_value_t *__tinypy_builtin_round(tinypy_value_t *function, tinypy_v
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "round() argument must be a number", out_error);
         return NULL;
     }
-    int condition_6 = TINYPY_TUPLE_SIZE(args) == 2U;
+    int32_t condition_6 = TINYPY_TUPLE_SIZE(args) == 2U;
     if (condition_6 != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
         condition_6 = __tinypy_builtin_integer_as_i64(vm, item, &digits, out_error) == 0;
@@ -1437,7 +1437,7 @@ static tinypy_value_t *__tinypy_builtin_import(tinypy_value_t *function, tinypy_
     if (__tinypy_builtin_text_view(vm, name, &name_bytes, &name_size, out_error) == 0) {
         return NULL;
     }
-    int condition_7 = arguments[1] != NULL;
+    int32_t condition_7 = arguments[1] != NULL;
     if (condition_7 != 0) {
         tinypy_value_t *item = arguments[1];
         condition_7 = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE;
@@ -1452,7 +1452,7 @@ static tinypy_value_t *__tinypy_builtin_import(tinypy_value_t *function, tinypy_
     if (arguments[3] != NULL) {
         fromlist = arguments[3];
     }
-    int condition_8 = arguments[4] != NULL;
+    int32_t condition_8 = arguments[4] != NULL;
     if (condition_8 != 0) {
         tinypy_value_t *item = arguments[4];
         condition_8 = __tinypy_builtin_integer_as_i64(vm, item, &level, out_error) == 0;
@@ -1525,7 +1525,7 @@ static tinypy_value_t *__tinypy_builtin_abs(tinypy_value_t *function, tinypy_val
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_ord(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    const unsigned char *bytes;
+    const uint8_t *bytes;
     size_t byte_size;
     uint32_t code_point;
 
@@ -1535,7 +1535,7 @@ static tinypy_value_t *__tinypy_builtin_ord(tinypy_value_t *function, tinypy_val
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
-        bytes = (const unsigned char *)tinypy_string_view(value, &byte_size);
+        bytes = (const uint8_t *)tinypy_string_view(value, &byte_size);
         if (byte_size != 1U) {
             goto wrong_length;
         }
@@ -1544,7 +1544,7 @@ static tinypy_value_t *__tinypy_builtin_ord(tinypy_value_t *function, tinypy_val
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE) {
         size_t code_points;
 
-        bytes = (const unsigned char *)tinypy_unicode_utf8_view(value, &byte_size, &code_points);
+        bytes = (const uint8_t *)tinypy_unicode_utf8_view(value, &byte_size, &code_points);
         if (code_points != 1U) {
             goto wrong_length;
         }
@@ -1649,7 +1649,7 @@ static tinypy_value_t *__tinypy_builtin_compile(tinypy_value_t *function, tinypy
     if (__tinypy_builtin_compile_mode(vm, item_4, &mode, out_error) == 0) {
         return NULL;
     }
-    int condition_9 = TINYPY_TUPLE_SIZE(args) >= 4U;
+    int32_t condition_9 = TINYPY_TUPLE_SIZE(args) >= 4U;
     if (condition_9 != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 3U);
         condition_9 = __tinypy_builtin_integer_as_i64(vm, item, &flags, out_error) == 0;
@@ -1657,7 +1657,7 @@ static tinypy_value_t *__tinypy_builtin_compile(tinypy_value_t *function, tinypy
     if (condition_9) {
         return NULL;
     }
-    int condition_10 = TINYPY_TUPLE_SIZE(args) >= 5U;
+    int32_t condition_10 = TINYPY_TUPLE_SIZE(args) >= 5U;
     if (condition_10 != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 4U);
         condition_10 = __tinypy_builtin_integer_as_i64(vm, item, &dont_inherit, out_error) == 0;
@@ -1695,7 +1695,7 @@ static tinypy_value_t *__tinypy_builtin_eval(tinypy_value_t *function, tinypy_va
     tinypy_value_t *source = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *globals = vm->current_frame != NULL ? vm->current_frame->globals : vm->builtins;
     locals = vm->current_frame != NULL ? tinypy_internal_frame_locals(vm->current_frame) : globals;
-    int condition_11 = TINYPY_TUPLE_SIZE(args) >= 2U;
+    int32_t condition_11 = TINYPY_TUPLE_SIZE(args) >= 2U;
     if (condition_11 != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
         condition_11 = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE;
@@ -1708,7 +1708,7 @@ static tinypy_value_t *__tinypy_builtin_eval(tinypy_value_t *function, tinypy_va
         }
         locals = globals;
     }
-    int condition_12 = TINYPY_TUPLE_SIZE(args) >= 3U;
+    int32_t condition_12 = TINYPY_TUPLE_SIZE(args) >= 3U;
     if (condition_12 != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 2U);
         condition_12 = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE;
@@ -1736,8 +1736,8 @@ static tinypy_value_t *__tinypy_builtin_eval(tinypy_value_t *function, tinypy_va
         if (__tinypy_builtin_source_view(vm, source, &source_bytes, &source_size, &source_is_unicode, out_error) == 0) {
             return NULL;
         }
-        while (source_size != 0U && (*(const unsigned char *)source_bytes == (unsigned char)' ' || *(const unsigned char *)source_bytes == (unsigned char)'\t')) {
-            source_bytes = (const unsigned char *)source_bytes + 1U;
+        while (source_size != 0U && (*(const uint8_t *)source_bytes == (uint8_t)' ' || *(const uint8_t *)source_bytes == (uint8_t)'\t')) {
+            source_bytes = (const uint8_t *)source_bytes + 1U;
             source_size -= 1U;
         }
         tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);

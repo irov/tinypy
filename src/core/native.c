@@ -2,13 +2,13 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <string.h>
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(name != NULL || name_size == 0U);
-    assert(callback != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(name != NULL || name_size == 0U);
+    TINYPY_ASSERT(callback != NULL);
     tinypy_native_function_object_t *function = (tinypy_native_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_NATIVE_FUNCTION, sizeof(*function));
     function->name = tinypy_string_from_bytes(vm, name, name_size);
     function->function = NULL;
@@ -55,9 +55,9 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
         tinypy_value_t **items;
         size_t index;
 
-        assert(argument_count < SIZE_MAX);
+        TINYPY_ASSERT(argument_count < SIZE_MAX);
         output_count = argument_count + 1U;
-        assert(output_count <= SIZE_MAX / sizeof(*items));
+        TINYPY_ASSERT(output_count <= SIZE_MAX / sizeof(*items));
         items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
         items[0] = function->self;
         for (index = 0U; index < argument_count; ++index) {
@@ -83,7 +83,7 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "native function failed without an error", out_error);
         }
     }
-    assert(result == NULL || tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(callable), result));
+    TINYPY_ASSERT(result == NULL || tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(callable), result));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -113,30 +113,30 @@ tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *d
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_function_name(const tinypy_value_t *function) {
-    assert(function != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
-    assert(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_NATIVE_FUNCTION);
+    TINYPY_ASSERT(function != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_NATIVE_FUNCTION);
     return TINYPY_NATIVE_FUNCTION_OBJECT((tinypy_value_t *)function)->name;
 }
 //////////////////////////////////////////////////////////////////////////
 void *tinypy_native_function_user_data(const tinypy_value_t *function) {
-    assert(function != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
-    assert(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_NATIVE_FUNCTION);
+    TINYPY_ASSERT(function != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_NATIVE_FUNCTION);
     return TINYPY_NATIVE_FUNCTION_OBJECT((tinypy_value_t *)function)->user_data;
 }
 //////////////////////////////////////////////////////////////////////////
 static void *__tinypy_internal_native_payload(tinypy_value_t *instance) {
-    assert(instance != NULL);
-    assert(TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_NATIVE_INSTANCE);
-    assert(instance->type->native_payload_offset != 0U);
-    return (unsigned char *)instance + instance->type->native_payload_offset;
+    TINYPY_ASSERT(instance != NULL);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_NATIVE_INSTANCE);
+    TINYPY_ASSERT(instance->type->native_payload_offset != 0U);
+    return (uint8_t *)instance + instance->type->native_payload_offset;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_native_call(tinypy_value_t *instance, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->call != NULL);
+    TINYPY_ASSERT(spec->call != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->call(instance, native_payload, args, kwargs, spec->user_data, out_error);
 }
@@ -144,7 +144,7 @@ static tinypy_value_t *__tinypy_internal_native_call(tinypy_value_t *instance, t
 static tinypy_value_t *__tinypy_internal_native_repr(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->repr != NULL);
+    TINYPY_ASSERT(spec->repr != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->repr(instance, native_payload, spec->user_data, out_error);
 }
@@ -152,15 +152,15 @@ static tinypy_value_t *__tinypy_internal_native_repr(tinypy_value_t *instance, t
 static tinypy_hash_t __tinypy_internal_native_hash(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->hash != NULL);
+    TINYPY_ASSERT(spec->hash != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->hash(instance, native_payload, spec->user_data, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_native_compare(tinypy_value_t *instance, tinypy_value_t *other, int operation, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_internal_native_compare(tinypy_value_t *instance, tinypy_value_t *other, int32_t operation, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->compare != NULL);
+    TINYPY_ASSERT(spec->compare != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->compare(instance, native_payload, other, (tinypy_compare_operation_e)operation, spec->user_data, out_error);
 }
@@ -168,7 +168,7 @@ static tinypy_value_t *__tinypy_internal_native_compare(tinypy_value_t *instance
 static tinypy_value_t *__tinypy_internal_native_get_attribute(tinypy_value_t *instance, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->get_attribute != NULL);
+    TINYPY_ASSERT(spec->get_attribute != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->get_attribute(instance, native_payload, name, spec->user_data, out_error);
 }
@@ -176,7 +176,7 @@ static tinypy_value_t *__tinypy_internal_native_get_attribute(tinypy_value_t *in
 static int32_t __tinypy_internal_native_set_attribute(tinypy_value_t *instance, tinypy_value_t *name, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->set_attribute != NULL);
+    TINYPY_ASSERT(spec->set_attribute != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->set_attribute(instance, native_payload, name, value, spec->user_data, out_error);
 }
@@ -184,7 +184,7 @@ static int32_t __tinypy_internal_native_set_attribute(tinypy_value_t *instance, 
 static tinypy_value_t *__tinypy_internal_native_mapping_get(tinypy_value_t *instance, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->mapping_get != NULL);
+    TINYPY_ASSERT(spec->mapping_get != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->mapping_get(instance, native_payload, key, spec->user_data, out_error);
 }
@@ -192,7 +192,7 @@ static tinypy_value_t *__tinypy_internal_native_mapping_get(tinypy_value_t *inst
 static int32_t __tinypy_internal_native_mapping_set(tinypy_value_t *instance, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->mapping_set != NULL);
+    TINYPY_ASSERT(spec->mapping_set != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->mapping_set(instance, native_payload, key, value, spec->user_data, out_error);
 }
@@ -200,7 +200,7 @@ static int32_t __tinypy_internal_native_mapping_set(tinypy_value_t *instance, ti
 static ptrdiff_t __tinypy_internal_native_mapping_length(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->mapping_length != NULL);
+    TINYPY_ASSERT(spec->mapping_length != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->mapping_length(instance, native_payload, spec->user_data, out_error);
 }
@@ -208,7 +208,7 @@ static ptrdiff_t __tinypy_internal_native_mapping_length(tinypy_value_t *instanc
 static tinypy_value_t *__tinypy_internal_native_sequence_get(tinypy_value_t *instance, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->sequence_get != NULL);
+    TINYPY_ASSERT(spec->sequence_get != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->sequence_get(instance, native_payload, key, spec->user_data, out_error);
 }
@@ -216,7 +216,7 @@ static tinypy_value_t *__tinypy_internal_native_sequence_get(tinypy_value_t *ins
 static int32_t __tinypy_internal_native_sequence_set(tinypy_value_t *instance, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->sequence_set != NULL);
+    TINYPY_ASSERT(spec->sequence_set != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->sequence_set(instance, native_payload, key, value, spec->user_data, out_error);
 }
@@ -224,7 +224,7 @@ static int32_t __tinypy_internal_native_sequence_set(tinypy_value_t *instance, t
 static ptrdiff_t __tinypy_internal_native_sequence_length(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->sequence_length != NULL);
+    TINYPY_ASSERT(spec->sequence_length != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->sequence_length(instance, native_payload, spec->user_data, out_error);
 }
@@ -232,7 +232,7 @@ static ptrdiff_t __tinypy_internal_native_sequence_length(tinypy_value_t *instan
 static int32_t __tinypy_internal_native_contains(tinypy_value_t *instance, tinypy_value_t *item, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->contains != NULL);
+    TINYPY_ASSERT(spec->contains != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->contains(instance, native_payload, item, spec->user_data, out_error);
 }
@@ -240,7 +240,7 @@ static int32_t __tinypy_internal_native_contains(tinypy_value_t *instance, tinyp
 static tinypy_value_t *__tinypy_internal_native_iter(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->iter != NULL);
+    TINYPY_ASSERT(spec->iter != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->iter(instance, native_payload, spec->user_data, out_error);
 }
@@ -248,7 +248,7 @@ static tinypy_value_t *__tinypy_internal_native_iter(tinypy_value_t *instance, t
 static tinypy_value_t *__tinypy_internal_native_next(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->next != NULL);
+    TINYPY_ASSERT(spec->next != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->next(instance, native_payload, spec->user_data, out_error);
 }
@@ -256,7 +256,7 @@ static tinypy_value_t *__tinypy_internal_native_next(tinypy_value_t *instance, t
 static tinypy_value_t *__tinypy_internal_native_negative(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->negative != NULL);
+    TINYPY_ASSERT(spec->negative != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->negative(instance, native_payload, spec->user_data, out_error);
 }
@@ -264,14 +264,14 @@ static tinypy_value_t *__tinypy_internal_native_negative(tinypy_value_t *instanc
 static tinypy_value_t *__tinypy_internal_native_absolute(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
-    assert(spec->absolute != NULL);
+    TINYPY_ASSERT(spec->absolute != NULL);
     void *native_payload = __tinypy_internal_native_payload(instance);
     return spec->absolute(instance, native_payload, spec->user_data, out_error);
 }
 #define TINYPY_NATIVE_BINARY_WRAPPER(name, field)                                                                                       \
     static tinypy_value_t *__tinypy_internal_native_##name(tinypy_value_t *instance, tinypy_value_t *other, tinypy_error_t **out_error) { \
         tinypy_native_type_spec_t *spec = &instance->type->native_spec;                                                                 \
-        assert(spec->field != NULL);                                                                                                    \
+        TINYPY_ASSERT(spec->field != NULL);                                                                                                    \
         return spec->field(instance, __tinypy_internal_native_payload(instance), other, spec->user_data, out_error);                    \
     }
 TINYPY_NATIVE_BINARY_WRAPPER(add, add)
@@ -290,7 +290,7 @@ TINYPY_NATIVE_BINARY_WRAPPER(reflected_divide, reflected_divide)
 #undef TINYPY_NATIVE_BINARY_WRAPPER
 //////////////////////////////////////////////////////////////////////////
 void tinypy_native_type_spec_init(tinypy_native_type_spec_t *spec) {
-    assert(spec != NULL);
+    TINYPY_ASSERT(spec != NULL);
     (void)memset(spec, 0, sizeof(*spec));
     spec->abi_version = TINYPY_NATIVE_TYPE_ABI_VERSION;
     spec->struct_size = (uint32_t)sizeof(*spec);
@@ -375,8 +375,8 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
     size_t copied_size;
     size_t basic_size;
 
-    assert(tinypy_internal_vm_valid(vm));
-    assert(spec != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(spec != NULL);
     TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_internal_native_validate_spec(vm, spec, out_error) == 0) {
         return NULL;
@@ -406,7 +406,7 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
     type->native_payload_offset = offsetof(tinypy_native_instance_object_t, payload);
     type->native_payload_size = spec->payload_size;
     type->native_payload_alignment = spec->payload_alignment;
-    assert(type->native_payload_offset <= SIZE_MAX - type->native_payload_size);
+    TINYPY_ASSERT(type->native_payload_offset <= SIZE_MAX - type->native_payload_size);
     basic_size = type->native_payload_offset + type->native_payload_size;
     basic_size = (basic_size + sizeof(void *) - 1U) & ~(sizeof(void *) - 1U);
     type->basic_size = basic_size;
@@ -423,9 +423,9 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
 int32_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
     size_t copied_size;
 
-    assert(type != NULL);
-    assert(tinypy_internal_vm_valid(type->vm));
-    assert(spec != NULL);
+    TINYPY_ASSERT(type != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(type->vm));
+    TINYPY_ASSERT(spec != NULL);
     TINYPY_CLEAR_ERROR(out_error);
     if (type->layout_kind != TINYPY_VALUE_NATIVE_INSTANCE) {
         tinypy_internal_make_vm_error(type->vm, TINYPY_ERROR_TYPE, "type does not have a native layout", out_error);
@@ -441,7 +441,7 @@ int32_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_native_
     copied_size = spec->struct_size < sizeof(type->native_spec) ? spec->struct_size : sizeof(type->native_spec);
     (void)memcpy(&type->native_spec, spec, copied_size);
     if (copied_size < sizeof(type->native_spec)) {
-        (void)memset((unsigned char *)&type->native_spec + copied_size, 0, sizeof(type->native_spec) - copied_size);
+        (void)memset((uint8_t *)&type->native_spec + copied_size, 0, sizeof(type->native_spec) - copied_size);
     }
     type->native_spec.abi_version = TINYPY_NATIVE_TYPE_ABI_VERSION;
     type->native_spec.struct_size = (uint32_t)sizeof(type->native_spec);
@@ -450,17 +450,17 @@ int32_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_native_
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_instance_new(tinypy_type_t *type) {
-    assert(type != NULL);
-    assert(tinypy_internal_vm_valid(type->vm));
-    assert(type->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE);
+    TINYPY_ASSERT(type != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(type->vm));
+    TINYPY_ASSERT(type->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE);
     return tinypy_internal_object_allocate(type->vm, type, type->basic_size);
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_native_instance_construct(tinypy_value_t *instance, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    assert(instance != NULL);
-    assert(TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_NATIVE_INSTANCE);
-    assert(args != NULL && TINYPY_VALUE_KIND(args) == TINYPY_VALUE_TUPLE);
-    assert(kwargs == NULL || TINYPY_VALUE_KIND(kwargs) == TINYPY_VALUE_DICT);
+    TINYPY_ASSERT(instance != NULL);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_NATIVE_INSTANCE);
+    TINYPY_ASSERT(args != NULL && TINYPY_VALUE_KIND(args) == TINYPY_VALUE_TUPLE);
+    TINYPY_ASSERT(kwargs == NULL || TINYPY_VALUE_KIND(kwargs) == TINYPY_VALUE_DICT);
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
     if (spec->construct == NULL) {
@@ -471,8 +471,8 @@ int32_t tinypy_native_instance_construct(tinypy_value_t *instance, tinypy_value_
 }
 //////////////////////////////////////////////////////////////////////////
 void *tinypy_native_instance_payload(tinypy_value_t *instance) {
-    assert(instance != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(instance)));
+    TINYPY_ASSERT(instance != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(instance)));
     return __tinypy_internal_native_payload(instance);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -481,9 +481,9 @@ const void *tinypy_native_instance_const_payload(const tinypy_value_t *instance)
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_native_type_spec_t *tinypy_native_type_spec(const tinypy_type_t *type) {
-    assert(type != NULL);
-    assert(tinypy_internal_vm_valid(type->vm));
-    assert(type->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE);
+    TINYPY_ASSERT(type != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(type->vm));
+    TINYPY_ASSERT(type->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE);
     return &type->native_spec;
 }
 //////////////////////////////////////////////////////////////////////////

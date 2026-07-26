@@ -9,7 +9,7 @@
  * Constructors retain a cached constant for the caller like any other
  * result. The accessors require a valid live vm. A contract violation,
  * including reference-count saturation, is asserted in debug builds and is
- * undefined behavior when NDEBUG is set. */
+ * undefined behavior when TINYPY_ENABLE_ASSERTS is not set. */
 tinypy_value_t *tinypy_none_get(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_not_implemented_get(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_ellipsis_get(tinypy_vm_t *vm);
@@ -27,7 +27,7 @@ const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size);
 
 /* Creates a Python 2 unicode value from one canonical UTF-8 byte sequence.
  * Invalid UTF-8 is a caller contract violation: it asserts in debug builds
- * and is undefined behavior when NDEBUG is set. */
+ * and is undefined behavior when TINYPY_ENABLE_ASSERTS is not set. */
 tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size_t size);
 
 /* Returns the canonical UTF-8 representation and both byte and Unicode scalar

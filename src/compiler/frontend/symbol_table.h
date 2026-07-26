@@ -17,17 +17,17 @@ typedef struct tinypy_symbol_entry_t {
     tinypy_value_t *variable_names;
     tinypy_value_t *children;
     tinypy_symbol_block_e block_type;
-    int unoptimized;
-    int nested;
+    int32_t unoptimized;
+    int32_t nested;
     unsigned has_free_variables : 1;
     unsigned child_has_free_variables : 1;
     unsigned generator : 1;
     unsigned variable_arguments : 1;
     unsigned variable_keywords : 1;
     unsigned returns_value : 1;
-    int line_number;
-    int optimization_line_number;
-    int temporary_name_index;
+    int32_t line_number;
+    int32_t optimization_line_number;
+    int32_t temporary_name_index;
     tinypy_symbol_table_t *table;
 } tinypy_symbol_entry_t;
 
@@ -39,7 +39,7 @@ struct tinypy_symbol_table_t {
     tinypy_value_t *symbols;
     tinypy_value_t *stack;
     tinypy_value_t *global_symbols;
-    int block_count;
+    int32_t block_count;
     tinypy_value_t *private_name;
     tinypy_future_features_t *future;
     tinypy_value_t *top_name;
@@ -71,7 +71,7 @@ struct tinypy_symbol_table_t {
 #define TINYPY_SYMBOL_GENERATOR 1
 #define TINYPY_SYMBOL_GENERATOR_EXPRESSION 2
 
-int __tinypy_symbol_table_scope(tinypy_symbol_entry_t *entry, tinypy_value_t *name);
+int32_t __tinypy_symbol_table_scope(tinypy_symbol_entry_t *entry, tinypy_value_t *name);
 tinypy_symbol_table_t *__tinypy_symbol_table_build(tinypy_compile_ctx_t *arena, tinypy_ast_module_t module, const char *filename, tinypy_future_features_t *future);
 tinypy_symbol_entry_t *__tinypy_symbol_table_lookup(tinypy_symbol_table_t *table, void *key);
 void __tinypy_symbol_table_free(tinypy_symbol_table_t *table);

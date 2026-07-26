@@ -2,14 +2,14 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_slice_new(tinypy_vm_t *vm, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *step) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(start == NULL || tinypy_internal_value_belongs_to(vm, start));
-    assert(stop == NULL || tinypy_internal_value_belongs_to(vm, stop));
-    assert(step == NULL || tinypy_internal_value_belongs_to(vm, step));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(start == NULL || tinypy_internal_value_belongs_to(vm, start));
+    TINYPY_ASSERT(stop == NULL || tinypy_internal_value_belongs_to(vm, stop));
+    TINYPY_ASSERT(step == NULL || tinypy_internal_value_belongs_to(vm, step));
     tinypy_slice_object_t *slice = (tinypy_slice_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_SLICE, sizeof(*slice));
     slice->start = start != NULL ? start : &vm->none_object.base;
     slice->stop = stop != NULL ? stop : &vm->none_object.base;
@@ -29,23 +29,23 @@ void tinypy_internal_slice_release_references(tinypy_value_t *value, tinypy_rele
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_slice_start(const tinypy_value_t *slice) {
-    assert(slice != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(slice)));
-    assert(TINYPY_VALUE_KIND(slice) == TINYPY_VALUE_SLICE);
+    TINYPY_ASSERT(slice != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(slice)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(slice) == TINYPY_VALUE_SLICE);
     return TINYPY_SLICE_OBJECT((tinypy_value_t *)slice)->start;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_slice_stop(const tinypy_value_t *slice) {
-    assert(slice != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(slice)));
-    assert(TINYPY_VALUE_KIND(slice) == TINYPY_VALUE_SLICE);
+    TINYPY_ASSERT(slice != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(slice)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(slice) == TINYPY_VALUE_SLICE);
     return TINYPY_SLICE_OBJECT((tinypy_value_t *)slice)->stop;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_slice_step(const tinypy_value_t *slice) {
-    assert(slice != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(slice)));
-    assert(TINYPY_VALUE_KIND(slice) == TINYPY_VALUE_SLICE);
+    TINYPY_ASSERT(slice != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(slice)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(slice) == TINYPY_VALUE_SLICE);
     return TINYPY_SLICE_OBJECT((tinypy_value_t *)slice)->step;
 }
 //////////////////////////////////////////////////////////////////////////

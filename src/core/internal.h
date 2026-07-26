@@ -42,7 +42,7 @@
 #include "tinypy/value.h"
 #include "tinypy/vm.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <string.h>
 //////////////////////////////////////////////////////////////////////////
 typedef union tinypy_internal_max_align_t {
@@ -175,7 +175,7 @@ typedef int32_t (*tinypy_set_attribute_slot_t)(tinypy_value_t *value, tinypy_val
 typedef tinypy_value_t *(*tinypy_get_item_slot_t)(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
 typedef int32_t (*tinypy_set_item_slot_t)(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *item, tinypy_error_t **out_error);
 typedef int32_t (*tinypy_contains_slot_t)(tinypy_value_t *value, tinypy_value_t *item, tinypy_error_t **out_error);
-typedef tinypy_value_t *(*tinypy_compare_slot_t)(tinypy_value_t *left, tinypy_value_t *right, int operation, tinypy_error_t **out_error);
+typedef tinypy_value_t *(*tinypy_compare_slot_t)(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error);
 typedef tinypy_value_t *(*tinypy_iter_slot_t)(tinypy_value_t *value, tinypy_error_t **out_error);
 typedef tinypy_value_t *(*tinypy_next_slot_t)(tinypy_value_t *iterator, tinypy_error_t **out_error);
 typedef tinypy_value_t *(*tinypy_descriptor_get_slot_t)(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
@@ -358,7 +358,7 @@ typedef struct tinypy_string_object_t {
     tinypy_hash_t hash;
     int32_t interned;
     int32_t hash_computed;
-    unsigned char bytes[1];
+    uint8_t bytes[1];
 } tinypy_string_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_unicode_object_t {
@@ -366,7 +366,7 @@ typedef struct tinypy_unicode_object_t {
     size_t byte_size;
     tinypy_hash_t hash;
     int32_t hash_computed;
-    unsigned char utf8[];
+    uint8_t utf8[];
 } tinypy_unicode_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_long_object_t {
@@ -442,7 +442,7 @@ typedef struct tinypy_buffer_object_t {
 typedef struct tinypy_bytearray_object_t {
     tinypy_sized_object_t base;
     size_t capacity;
-    unsigned char *bytes;
+    uint8_t *bytes;
 } tinypy_bytearray_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_weakref_object_t {
@@ -689,9 +689,9 @@ typedef struct tinypy_generator_object_t {
     tinypy_value_t base;
     tinypy_value_t *frame;
     size_t instruction_offset;
-    int running;
-    int started;
-    int finished;
+    int32_t running;
+    int32_t started;
+    int32_t finished;
     tinypy_value_t *handled_type;
     tinypy_value_t *handled_value;
     tinypy_value_t *handled_traceback;
@@ -754,18 +754,13 @@ typedef struct tinypy_generator_object_t {
 #define TINYPY_INCREF(value) \
     do { \
         tinypy_value_t *__tinypy_incref_value = (value); \
-        assert(__tinypy_incref_value != NULL); \
-        assert(TINYPY_REFCNT(__tinypy_incref_value) > 0); \
-        assert(TINYPY_REFCNT(__tinypy_incref_value) < PTRDIFF_MAX); \
+        TINYPY_ASSERT(__tinypy_incref_value != NULL); \
         TINYPY_REFCNT(__tinypy_incref_value) += 1; \
     } while (0)
 #define TINYPY_DECREF(value) \
     do { \
         tinypy_value_t *__tinypy_decref_value = (value); \
-        assert(__tinypy_decref_value != NULL); \
-        assert(TINYPY_REFCNT(__tinypy_decref_value) > 0); \
-        assert(TINYPY_REFCNT(__tinypy_decref_value) != PTRDIFF_MAX); \
-        assert(tinypy_internal_value_is_vm_embedded(TINYPY_VALUE_VM(__tinypy_decref_value), __tinypy_decref_value) == 0 || TINYPY_REFCNT(__tinypy_decref_value) > 1); \
+        TINYPY_ASSERT(__tinypy_decref_value != NULL); \
         TINYPY_REFCNT(__tinypy_decref_value) -= 1; \
         if (TINYPY_REFCNT(__tinypy_decref_value) == 0) { \
             __tinypy_internal_value_release_zero_fast(__tinypy_decref_value); \
@@ -812,7 +807,7 @@ struct tinypy_vm_t {
     uint32_t state;
     tinypy_allocator_t allocator;
     tinypy_host_t host;
-    int has_host;
+    int32_t has_host;
     size_t max_heap_bytes;
     size_t allocated_bytes;
     uint64_t hash_secret_prefix;
@@ -941,8 +936,8 @@ struct tinypy_error_t {
     char data[];
 };
 //////////////////////////////////////////////////////////////////////////
-int tinypy_internal_host_valid(const tinypy_host_t *host);
-int tinypy_internal_vm_valid(const tinypy_vm_t *vm);
+int32_t tinypy_internal_host_valid(const tinypy_host_t *host);
+int32_t tinypy_internal_vm_valid(const tinypy_vm_t *vm);
 
 void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size, uint32_t tag);
 void *tinypy_internal_vm_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, uint32_t tag);
@@ -952,9 +947,9 @@ void tinypy_internal_make_error(const tinypy_allocator_t *allocator, tinypy_erro
 void tinypy_internal_make_vm_error(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error);
 void tinypy_internal_make_vm_error_location(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size, tinypy_error_t **out_error);
 
-int tinypy_internal_value_belongs_to(const tinypy_vm_t *vm, const tinypy_value_t *value);
-#ifndef NDEBUG
-static inline int __tinypy_internal_values_belong_to(const tinypy_vm_t *vm, tinypy_value_t *const *values, size_t count) {
+int32_t tinypy_internal_value_belongs_to(const tinypy_vm_t *vm, const tinypy_value_t *value);
+#if defined(TINYPY_ENABLE_ASSERTS)
+static inline int32_t __tinypy_internal_values_belong_to(const tinypy_vm_t *vm, tinypy_value_t *const *values, size_t count) {
     for (size_t index = 0U; index != count; ++index) {
         if (tinypy_internal_value_belongs_to(vm, values[index]) == 0) {
             return 0;
@@ -962,7 +957,7 @@ static inline int __tinypy_internal_values_belong_to(const tinypy_vm_t *vm, tiny
     }
     return 1;
 }
-static inline int __tinypy_internal_values_have_kind(tinypy_value_t *const *values, size_t count, tinypy_value_type_e kind) {
+static inline int32_t __tinypy_internal_values_have_kind(tinypy_value_t *const *values, size_t count, tinypy_value_type_e kind) {
     for (size_t index = 0U; index != count; ++index) {
         if (TINYPY_VALUE_KIND(values[index]) != kind) {
             return 0;
@@ -971,7 +966,7 @@ static inline int __tinypy_internal_values_have_kind(tinypy_value_t *const *valu
     return 1;
 }
 #endif
-int tinypy_internal_value_is_vm_embedded(const tinypy_vm_t *vm, const tinypy_value_t *value);
+int32_t tinypy_internal_value_is_vm_embedded(const tinypy_vm_t *vm, const tinypy_value_t *value);
 tinypy_vm_t *tinypy_internal_value_vm(const tinypy_value_t *value);
 tinypy_value_type_e tinypy_internal_value_kind(const tinypy_value_t *value);
 tinypy_type_t *tinypy_internal_type_for_kind(tinypy_vm_t *vm, tinypy_value_type_e kind);
@@ -992,67 +987,67 @@ void tinypy_internal_cycle_diagnostics_dict_delete_enabled(tinypy_vm_t *vm, tiny
 void tinypy_internal_cycle_diagnostics_dict_clear_enabled(tinypy_vm_t *vm, tinypy_value_t *dict);
 void tinypy_internal_cycle_diagnostics_cell_set_enabled(tinypy_vm_t *vm, tinypy_value_t *cell, tinypy_value_t *content);
 
-static inline void tinypy_internal_cycle_diagnostics_value_register(tinypy_vm_t *vm, tinypy_value_t *value) {
+static inline void __tinypy_internal_cycle_diagnostics_value_register(tinypy_vm_t *vm, tinypy_value_t *value) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_value_register_enabled(vm, value);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_value_reuse(tinypy_vm_t *vm, tinypy_value_t *value) {
+static inline void __tinypy_internal_cycle_diagnostics_value_reuse(tinypy_vm_t *vm, tinypy_value_t *value) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_value_reuse_enabled(vm, value);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_value_unregister(tinypy_vm_t *vm, tinypy_value_t *value) {
+static inline void __tinypy_internal_cycle_diagnostics_value_unregister(tinypy_vm_t *vm, tinypy_value_t *value) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_value_unregister_enabled(vm, value);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_list_extend(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *const *items, size_t item_count) {
+static inline void __tinypy_internal_cycle_diagnostics_list_extend(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *const *items, size_t item_count) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_list_extend_enabled(vm, list, index, items, item_count);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_list_insert(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *item) {
+static inline void __tinypy_internal_cycle_diagnostics_list_insert(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *item) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_list_insert_enabled(vm, list, index, item);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_list_set(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *item) {
+static inline void __tinypy_internal_cycle_diagnostics_list_set(tinypy_vm_t *vm, tinypy_value_t *list, size_t index, tinypy_value_t *item) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_list_set_enabled(vm, list, index, item);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_list_remove(tinypy_vm_t *vm, tinypy_value_t *list, size_t index) {
+static inline void __tinypy_internal_cycle_diagnostics_list_remove(tinypy_vm_t *vm, tinypy_value_t *list, size_t index) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_list_remove_enabled(vm, list, index);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_list_clear(tinypy_vm_t *vm, tinypy_value_t *list) {
+static inline void __tinypy_internal_cycle_diagnostics_list_clear(tinypy_vm_t *vm, tinypy_value_t *list) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_list_clear_enabled(vm, list);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_list_reindex(tinypy_vm_t *vm, tinypy_value_t *list) {
+static inline void __tinypy_internal_cycle_diagnostics_list_reindex(tinypy_vm_t *vm, tinypy_value_t *list) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_list_reindex_enabled(vm, list);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_dict_set(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, int32_t inserted) {
+static inline void __tinypy_internal_cycle_diagnostics_dict_set(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, int32_t inserted) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_dict_set_enabled(vm, dict, key, value, inserted);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_dict_delete(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key) {
+static inline void __tinypy_internal_cycle_diagnostics_dict_delete(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_dict_delete_enabled(vm, dict, key);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_dict_clear(tinypy_vm_t *vm, tinypy_value_t *dict) {
+static inline void __tinypy_internal_cycle_diagnostics_dict_clear(tinypy_vm_t *vm, tinypy_value_t *dict) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_dict_clear_enabled(vm, dict);
     }
 }
-static inline void tinypy_internal_cycle_diagnostics_cell_set(tinypy_vm_t *vm, tinypy_value_t *cell, tinypy_value_t *content) {
+static inline void __tinypy_internal_cycle_diagnostics_cell_set(tinypy_vm_t *vm, tinypy_value_t *cell, tinypy_value_t *content) {
     if (vm->cycle_diagnostics != NULL) {
         tinypy_internal_cycle_diagnostics_cell_set_enabled(vm, cell, content);
     }
@@ -1062,7 +1057,7 @@ size_t tinypy_internal_value_allocation_size(const tinypy_value_t *value);
 void tinypy_internal_value_destroy(tinypy_value_t *value);
 void tinypy_internal_value_release_zero(tinypy_value_t *value);
 void tinypy_internal_integer_free_list_finalize(tinypy_vm_t *vm);
-const unsigned char *tinypy_internal_text_bytes(const tinypy_value_t *value);
+const uint8_t *tinypy_internal_text_bytes(const tinypy_value_t *value);
 size_t tinypy_internal_text_byte_size(const tinypy_value_t *value);
 int32_t tinypy_internal_string_is_interned(const tinypy_value_t *value);
 void tinypy_internal_string_set_interned(tinypy_value_t *value, int32_t interned);
@@ -1095,7 +1090,7 @@ int32_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_value_t
 tinypy_value_t *tinypy_internal_bytearray_repr(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_bytearray_string(tinypy_value_t *value, tinypy_error_t **out_error);
 void tinypy_internal_initialize_bytearray_methods(tinypy_vm_t *vm);
-int32_t tinypy_internal_bytes_view(const tinypy_value_t *value, const unsigned char **out_bytes, size_t *out_size);
+int32_t tinypy_internal_bytes_view(const tinypy_value_t *value, const uint8_t **out_bytes, size_t *out_size);
 tinypy_value_t **tinypy_internal_object_dict_slot(tinypy_value_t *value);
 tinypy_value_t **tinypy_internal_object_member_slot(tinypy_value_t *value, size_t index);
 tinypy_value_t **tinypy_internal_weakref_head_slot(tinypy_value_t *value);
@@ -1176,7 +1171,7 @@ void tinypy_internal_function_release_references(tinypy_value_t *value, tinypy_r
 tinypy_value_t *tinypy_internal_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_eval_function(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_eval_function_items(tinypy_value_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
-tinypy_value_t *tinypy_internal_eval_generator_resume(tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, int *out_yielded, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_eval_generator_resume(tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, int32_t *out_yielded, tinypy_error_t **out_error);
 void tinypy_internal_iterator_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_iterator_iter(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_error_t **out_error);
@@ -1279,22 +1274,22 @@ tinypy_value_t *tinypy_internal_buffer_repr(tinypy_value_t *value, tinypy_error_
 tinypy_value_t *tinypy_internal_buffer_string(tinypy_value_t *value, tinypy_error_t **out_error);
 
 tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_error_t **out_error);
-int32_t tinypy_internal_equal_value(const tinypy_value_t *left, const tinypy_value_t *right, int identity_implies_equal);
-int tinypy_internal_numeric_order(const tinypy_value_t *left, const tinypy_value_t *right, int32_t *out_order);
+int32_t tinypy_internal_equal_value(const tinypy_value_t *left, const tinypy_value_t *right, int32_t identity_implies_equal);
+int32_t tinypy_internal_numeric_order(const tinypy_value_t *left, const tinypy_value_t *right, int32_t *out_order);
 int32_t tinypy_internal_text_order(const tinypy_value_t *left, const tinypy_value_t *right);
 //////////////////////////////////////////////////////////////////////////
 static inline tinypy_integer_object_t *__tinypy_internal_integer_free_next(const tinypy_integer_object_t *value)
 {
     tinypy_integer_object_t *next;
 
-    assert(sizeof(next) <= sizeof(value->integer_value));
+    TINYPY_ASSERT(sizeof(next) <= sizeof(value->integer_value));
     (void)memcpy(&next, &value->integer_value, sizeof(next));
     return next;
 }
 //////////////////////////////////////////////////////////////////////////
 static inline void __tinypy_internal_integer_set_free_next(tinypy_integer_object_t *value, tinypy_integer_object_t *next)
 {
-    assert(sizeof(next) <= sizeof(value->integer_value));
+    TINYPY_ASSERT(sizeof(next) <= sizeof(value->integer_value));
     (void)memcpy(&value->integer_value, &next, sizeof(next));
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1313,14 +1308,14 @@ static inline tinypy_value_t *__tinypy_internal_integer_from_i64_fast(tinypy_vm_
         tinypy_integer_object_t *integer = vm->integer_free_list;
 
         vm->integer_free_list = __tinypy_internal_integer_free_next(integer);
-        assert(vm->integer_free_count != 0U);
+        TINYPY_ASSERT(vm->integer_free_count != 0U);
         vm->integer_free_count -= 1U;
         result = &integer->base;
-        assert(result->ref == 0);
-        assert(result->type == &vm->integer_type);
+        TINYPY_ASSERT(result->ref == 0);
+        TINYPY_ASSERT(result->type == &vm->integer_type);
         result->ref = 1;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        tinypy_internal_cycle_diagnostics_value_reuse(vm, result);
+        __tinypy_internal_cycle_diagnostics_value_reuse(vm, result);
 #endif
         TINYPY_INTEGER_VALUE(result) = value;
         return result;
@@ -1334,7 +1329,7 @@ static inline void __tinypy_internal_value_release_zero_fast(tinypy_value_t *val
 {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
-    assert(value->ref == 0);
+    TINYPY_ASSERT(value->ref == 0);
     if (value->type == &vm->integer_type && vm->state == TINYPY_VM_STATE_LIVE && vm->integer_free_count < TINYPY_INTEGER_FREE_LIST_MAX) {
         tinypy_integer_object_t *integer = TINYPY_INTEGER_OBJECT(value);
 

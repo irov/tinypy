@@ -25,9 +25,9 @@ typedef struct test_allocator_state_t {
 } test_allocator_state_t;
 
 typedef struct test_writer_t {
-    unsigned char bytes[16384];
+    uint8_t bytes[16384];
     size_t size;
-    int failed;
+    int32_t failed;
 } test_writer_t;
 
 static void *__test_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
@@ -117,7 +117,7 @@ static void __writer_u64(test_writer_t *writer, uint64_t value) {
 }
 
 static void __writer_data(test_writer_t *writer, const void *data, size_t size) {
-    const unsigned char *bytes = (const unsigned char *)data;
+    const uint8_t *bytes = (const uint8_t *)data;
     size_t index;
     for (index = 0U; index != size; ++index) {
         __writer_byte(writer, bytes[index]);
@@ -142,8 +142,8 @@ static void __writer_empty_tuple(test_writer_t *writer) {
     __writer_i32(writer, 0);
 }
 
-static void __writer_code(test_writer_t *writer, int include_nested, int include_intern_references, int invalid_bytecode_type) {
-    static const unsigned char bytecode[] = {(unsigned char)'d', 0U};
+static void __writer_code(test_writer_t *writer, int32_t include_nested, int32_t include_intern_references, int32_t invalid_bytecode_type) {
+    static const uint8_t bytecode[] = {(uint8_t)'d', 0U};
 
     __writer_byte(writer, (uint8_t)'c');
     __writer_i32(writer, include_nested ? 1 : 0);
@@ -199,9 +199,9 @@ static tinypy_marshal_result_e __read_writer(test_writer_t *writer, test_allocat
         out_error);
 }
 
-static int __test_exact_dump(const tinypy_marshal_document_t *document, const unsigned char *expected, size_t expected_size, test_allocator_state_t *state) {
-    unsigned char output[16384];
-    unsigned char short_output[16384];
+static int32_t __test_exact_dump(const tinypy_marshal_document_t *document, const uint8_t *expected, size_t expected_size, test_allocator_state_t *state) {
+    uint8_t output[16384];
+    uint8_t short_output[16384];
     size_t required_size = 0U;
     size_t index;
     size_t calls_before = state->calls;
@@ -264,7 +264,7 @@ static int __test_exact_dump(const tinypy_marshal_document_t *document, const un
     return 1;
 }
 
-static int __test_nested_code_and_interns(void) {
+static int32_t __test_nested_code_and_interns(void) {
     test_writer_t writer;
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
@@ -278,7 +278,7 @@ static int __test_nested_code_and_interns(void) {
     const tinypy_marshal_object_t *nested;
     const void *bytes;
     size_t size;
-    int interned;
+    int32_t interned;
 
     (void)memset(&writer, 0, sizeof(writer));
     __test_state_init(&state);
@@ -307,8 +307,8 @@ static int __test_nested_code_and_interns(void) {
     TEST_CHECK(code->argcount == 1);
     tinypy_marshal_bytes_view(code->bytecode, &bytes, &size, &interned);
     TEST_CHECK(size == 2U);
-    TEST_CHECK(((const unsigned char *)bytes)[0] == (unsigned char)'d');
-    TEST_CHECK(((const unsigned char *)bytes)[1] == 0U);
+    TEST_CHECK(((const uint8_t *)bytes)[0] == (uint8_t)'d');
+    TEST_CHECK(((const uint8_t *)bytes)[1] == 0U);
     TEST_CHECK(!interned);
 
     nested = tinypy_marshal_sequence_item(code->consts, 0U);
@@ -337,9 +337,9 @@ static int __test_nested_code_and_interns(void) {
     return 1;
 }
 
-static int __test_all_wire_types(void) {
+static int32_t __test_all_wire_types(void) {
     test_writer_t writer;
-    unsigned char golden[16384];
+    uint8_t golden[16384];
     size_t golden_size;
     test_allocator_state_t state;
     tinypy_marshal_document_t *document = NULL;
@@ -352,9 +352,9 @@ static int __test_all_wire_types(void) {
     size_t size;
     size_t points;
     size_t digit_count;
-    int interned;
-    int sign;
-    int bool_value;
+    int32_t interned;
+    int32_t sign;
+    int32_t bool_value;
     int64_t integer_value;
     double real;
     double imaginary;
@@ -443,11 +443,11 @@ static int __test_all_wire_types(void) {
     TEST_CHECK(real == 2.0 && imaginary == -3.0);
     tinypy_marshal_bytes_view(
         tinypy_marshal_sequence_item(root, 12U), &bytes, &size, &interned);
-    TEST_CHECK(size == 3U && ((const unsigned char *)bytes)[1] == 0U);
+    TEST_CHECK(size == 3U && ((const uint8_t *)bytes)[1] == 0U);
     TEST_CHECK(tinypy_marshal_sequence_item(root, 13U) == tinypy_marshal_sequence_item(root, 14U));
     tinypy_marshal_unicode_view(
         tinypy_marshal_sequence_item(root, 15U), &utf8, &size, &points);
-    TEST_CHECK(size == 2U && points == 1U && (unsigned char)utf8[0] == UINT8_C(0xc3));
+    TEST_CHECK(size == 2U && points == 1U && (uint8_t)utf8[0] == UINT8_C(0xc3));
     TEST_CHECK(tinypy_marshal_object_type(tinypy_marshal_sequence_item(root, 16U)) == TINYPY_MARSHAL_TYPE_TUPLE);
     TEST_CHECK(tinypy_marshal_object_type(tinypy_marshal_sequence_item(root, 17U)) == TINYPY_MARSHAL_TYPE_LIST);
     TEST_CHECK(tinypy_marshal_object_type(tinypy_marshal_sequence_item(root, 18U)) == TINYPY_MARSHAL_TYPE_DICT);
@@ -457,7 +457,7 @@ static int __test_all_wire_types(void) {
         &bytes,
         &size,
         &interned);
-    TEST_CHECK(size == 1U && ((const unsigned char *)bytes)[0] == (unsigned char)'k');
+    TEST_CHECK(size == 1U && ((const uint8_t *)bytes)[0] == (uint8_t)'k');
     integer_value = tinypy_marshal_integer_value(
         tinypy_marshal_dict_value(tinypy_marshal_sequence_item(root, 18U), 0U));
     TEST_CHECK(integer_value == 42);
@@ -472,7 +472,7 @@ static int __test_all_wire_types(void) {
     return 1;
 }
 
-static int __expect_error(test_writer_t *writer, tinypy_marshal_limits_t *limits, tinypy_marshal_result_e expected) {
+static int32_t __expect_error(test_writer_t *writer, tinypy_marshal_limits_t *limits, tinypy_marshal_result_e expected) {
     test_allocator_state_t state;
     tinypy_marshal_document_t *document = NULL;
     tinypy_marshal_error_t error;
@@ -488,7 +488,7 @@ static int __expect_error(test_writer_t *writer, tinypy_marshal_limits_t *limits
     return 1;
 }
 
-static int __test_truncation_and_offsets(void) {
+static int32_t __test_truncation_and_offsets(void) {
     test_writer_t writer;
     size_t full_size;
     size_t prefix;
@@ -516,7 +516,7 @@ static int __test_truncation_and_offsets(void) {
     return 1;
 }
 
-static int __test_malformed_values(void) {
+static int32_t __test_malformed_values(void) {
     test_writer_t writer;
 
     (void)memset(&writer, 0, sizeof(writer));
@@ -578,8 +578,8 @@ static int __test_malformed_values(void) {
     return 1;
 }
 
-static int __test_argument_and_abi_errors(void) {
-    static const unsigned char none_object[] = {(unsigned char)'N'};
+static int32_t __test_argument_and_abi_errors(void) {
+    static const uint8_t none_object[] = {(uint8_t)'N'};
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_marshal_document_t *document = NULL;
@@ -602,7 +602,7 @@ static int __test_argument_and_abi_errors(void) {
     return 1;
 }
 
-static int __test_limits(void) {
+static int32_t __test_limits(void) {
     test_writer_t writer;
     tinypy_marshal_limits_t limits;
 
@@ -658,7 +658,7 @@ static int __test_limits(void) {
     return 1;
 }
 
-static int __test_writer_limits_and_structured_errors(void) {
+static int32_t __test_writer_limits_and_structured_errors(void) {
     test_writer_t writer;
     test_allocator_state_t state;
     tinypy_marshal_document_t *document = NULL;
@@ -729,7 +729,7 @@ static int __test_writer_limits_and_structured_errors(void) {
     return 1;
 }
 
-typedef int (*test_function_t)(void);
+typedef int32_t (*test_function_t)(void);
 
 typedef struct test_case_t {
     const char *name;

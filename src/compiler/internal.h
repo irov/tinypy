@@ -12,11 +12,11 @@ typedef struct tinypy_compiler_arena_block_t {
     struct tinypy_compiler_arena_block_t *next;
     size_t allocation_size;
     size_t used;
-    unsigned char data[];
+    uint8_t data[];
 } tinypy_compiler_arena_block_t;
 
 typedef struct tinypy_source_view_t {
-    const unsigned char *bytes;
+    const uint8_t *bytes;
     size_t size;
 } tinypy_source_view_t;
 

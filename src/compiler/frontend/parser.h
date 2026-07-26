@@ -4,7 +4,7 @@
 #define TINYPY_PARSER_MAX_STACK 1500
 
 typedef struct tinypy_parser_stack_entry_t {
-    int state_index;
+    int32_t state_index;
     const tinypy_parser_dfa_t *rule;
     tinypy_cst_node_t *parent;
 } tinypy_parser_stack_entry_t;
@@ -22,8 +22,8 @@ typedef struct tinypy_parser_t {
     uint32_t flags;
 } tinypy_parser_t;
 
-tinypy_parser_t *tinypy_internal_parser_new(tinypy_compile_ctx_t *ctx, const tinypy_parser_grammar_t *grammar, int start_symbol);
+tinypy_parser_t *tinypy_internal_parser_new(tinypy_compile_ctx_t *ctx, const tinypy_parser_grammar_t *grammar, int32_t start_symbol);
 void tinypy_internal_parser_release(tinypy_parser_t *parser);
-int tinypy_internal_parser_add_token(tinypy_parser_t *parser, int type, char *text, int line_number, int column_offset, int *out_expected);
+int32_t tinypy_internal_parser_add_token(tinypy_parser_t *parser, int32_t type, char *text, int32_t line_number, int32_t column_offset, int32_t *out_expected);
 
 #endif

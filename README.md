@@ -89,8 +89,8 @@ use `TINYPY_`, and private implementation symbols use `__tinypy_` or
 `tinypy_internal_`.
 
 Invalid pointers, ownership violations and wrong direct-accessor types are
-debug contracts. Python semantic failures, malformed external data, configured
-limits and ABI mismatches remain recoverable.
+optional internal contracts. Python semantic failures, malformed external
+data, configured limits and ABI mismatches remain recoverable.
 
 The optional [CLI library](cli/README.md) is a separate target inside this
 project. It is disabled by default and is never linked into the embedding
@@ -107,6 +107,16 @@ python3 -m unittest discover -s tests/tools -p 'test_*.py' -v
 python3 tests/artifact/run_tests.py --sanitize
 python3 tests/marshal/run_tests.py --sanitize
 python3 tools/audit_core_symbols.py build/default/libtinypy.a
+```
+
+Internal `TINYPY_ASSERT` contracts and cycle diagnostics are independent,
+opt-in build features. Both are disabled by default, including Debug builds:
+
+```sh
+cmake -S . -B build/asserts -DTINYPY_ENABLE_ASSERTS=ON
+cmake -S . -B build/cycles \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DTINYPY_ENABLE_CYCLE_DIAGNOSTICS=ON
 ```
 
 The symbol audit rejects direct allocator, I/O, environment, process, locale

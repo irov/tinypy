@@ -169,13 +169,13 @@ typedef struct tinypy_decoded_instruction_t {
 const tinypy_opcode_info_t *tinypy_opcode_get_info(uint8_t opcode);
 /* Returns NULL for an unassigned opcode value. */
 const char *tinypy_opcode_name(uint8_t opcode);
-int tinypy_opcode_is_defined(uint8_t opcode);
-int tinypy_opcode_has_argument(uint8_t opcode);
+int32_t tinypy_opcode_is_defined(uint8_t opcode);
+int32_t tinypy_opcode_has_argument(uint8_t opcode);
 uint32_t tinypy_opcode_categories(uint8_t opcode);
-int tinypy_opcode_has_category(uint8_t opcode, tinypy_opcode_category_e category);
+int32_t tinypy_opcode_has_category(uint8_t opcode, tinypy_opcode_category_e category);
 
 /* Exact, case-sensitive lookup of a CPython opmap name. */
-int tinypy_opcode_lookup(const char *name, size_t name_size, uint8_t *out_opcode);
+int32_t tinypy_opcode_lookup(const char *name, size_t name_size, uint8_t *out_opcode);
 
 /*
  * Decode one logical instruction at offset.  One or more EXTENDED_ARG

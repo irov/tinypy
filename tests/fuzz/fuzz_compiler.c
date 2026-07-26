@@ -142,13 +142,13 @@ static uint64_t __fuzz_random(uint64_t *state) {
 }
 
 int main(void) {
-    static const unsigned char seeds[][48] = { {0U},
+    static const uint8_t seeds[][48] = { {0U},
         {0U, 'p', 'a', 's', 's', '\n'}, {1U, '1', '+', '2'},
         {2U, 'i', 'f', ' ', 'T', 'r', 'u', 'e', ':', '\n'}, {0U, '#', ' ', 'c', 'o', 'd', 'i', 'n', 'g', ':', ' ', 'u', 't', 'f', '-', '8', '\n'},
         {0U, 0xefU, 0xbbU, 0xbfU, 'v', 'a', 'l', 'u', 'e', '=', '1', '\n'}, {0U, 'u', '\'', '\\', 'N', '{', 'L', 'A', 'T', 'I', 'N', ' ', 'S', 'M', 'A', 'L', 'L', ' ', 'L', 'E', 'T', 'T', 'E', 'R', ' ', 'A', '}', '\'', '\n'},
         {0U, 'd', 'e', 'f', ' ', 'f', '(', 'x', ')', ':', '\n', ' ', ' ', ' ', ' ', 'r', 'e', 't', 'u', 'r', 'n', ' ', 'x', '+', '1', '\n'}};
     static const size_t seed_sizes[] = {1U, 6U, 4U, 10U, 18U, 12U, 29U, 26U};
-    unsigned char buffer[513];
+    uint8_t buffer[513];
     uint64_t random_state = UINT64_C(0x6a09e667f3bcc909);
     size_t index;
 
@@ -160,7 +160,7 @@ int main(void) {
         size_t byte_index;
 
         for (byte_index = 0U; byte_index < size; ++byte_index) {
-            buffer[byte_index] = (unsigned char)__fuzz_random(&random_state);
+            buffer[byte_index] = (uint8_t)__fuzz_random(&random_state);
         }
         (void)LLVMFuzzerTestOneInput(buffer, size);
     }

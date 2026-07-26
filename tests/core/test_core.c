@@ -177,7 +177,7 @@ static void __test_cycle_diagnostic(void *user_data, const tinypy_diagnostic_t *
     state->text[state->size] = '\0';
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_cycle_diagnostics(void) {
+static int32_t __test_cycle_diagnostics(void) {
     static const char source[] =
         "list_cycle = []\n"
         "list_cycle.append(list_cycle)\n"
@@ -323,7 +323,7 @@ static uint64_t __test_double_to_bits(double value) {
     return bits;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_allocator_accounting(void) {
+static int32_t __test_allocator_accounting(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -371,7 +371,7 @@ static int __test_allocator_accounting(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_pool_allocator(void) {
+static int32_t __test_pool_allocator(void) {
     const size_t value_count = 20000U;
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
@@ -410,7 +410,7 @@ static int __test_pool_allocator(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_independent_vms(void) {
+static int32_t __test_independent_vms(void) {
     test_allocator_state_t state_a;
     test_allocator_state_t state_b;
     tinypy_allocator_t allocator_a;
@@ -454,7 +454,7 @@ static int __test_independent_vms(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_value_lifetime(void) {
+static int32_t __test_value_lifetime(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -485,7 +485,7 @@ static int __test_value_lifetime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_constant_cache(void) {
+static int32_t __test_constant_cache(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -585,9 +585,9 @@ static int __test_constant_cache(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_byte_strings(void) {
+static int32_t __test_byte_strings(void) {
     //////////////////////////////////////////////////////////////////////////
-    unsigned char bytes[] = {
+    uint8_t bytes[] = {
         0x61U, 0x00U, 0x62U, 0xffU, 0x00U, 0x63U};
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
@@ -610,15 +610,15 @@ static int __test_byte_strings(void) {
     view = tinypy_string_view(value, &view_size);
     TEST_CHECK(view != NULL);
     TEST_CHECK(view_size == sizeof(bytes));
-    TEST_CHECK(((const unsigned char *)view)[0] == 0x61U);
-    TEST_CHECK(memcmp(((const unsigned char *)view) + 1, bytes + 1, sizeof(bytes) - 1U) == 0);
-    TEST_CHECK(((const unsigned char *)view)[view_size] == 0U);
+    TEST_CHECK(((const uint8_t *)view)[0] == 0x61U);
+    TEST_CHECK(memcmp(((const uint8_t *)view) + 1, bytes + 1, sizeof(bytes) - 1U) == 0);
+    TEST_CHECK(((const uint8_t *)view)[view_size] == 0U);
 
     empty = tinypy_string_from_bytes(vm, NULL, 0U);
     view = tinypy_string_view(empty, &view_size);
     TEST_CHECK(view != NULL);
     TEST_CHECK(view_size == 0U);
-    TEST_CHECK(((const unsigned char *)view)[0] == 0U);
+    TEST_CHECK(((const uint8_t *)view)[0] == 0U);
 
     tinypy_retain(value);
     tinypy_release(value);
@@ -630,9 +630,9 @@ static int __test_byte_strings(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_unicode_utf8(void) {
+static int32_t __test_unicode_utf8(void) {
     //////////////////////////////////////////////////////////////////////////
-    unsigned char utf8[] = {
+    uint8_t utf8[] = {
         0x41U,
         0xc2U, 0xa2U,
         0xe2U, 0x82U, 0xacU,
@@ -668,10 +668,10 @@ static int __test_unicode_utf8(void) {
                                     &code_point_count);
     TEST_CHECK(view_size == sizeof(utf8));
     TEST_CHECK(code_point_count == 8U);
-    TEST_CHECK(((const unsigned char *)view)[0] == 0x41U);
+    TEST_CHECK(((const uint8_t *)view)[0] == 0x41U);
     TEST_CHECK(
         memcmp(view + 1, utf8 + 1, sizeof(utf8) - 1U) == 0);
-    TEST_CHECK(((const unsigned char *)view)[view_size] == 0U);
+    TEST_CHECK(((const uint8_t *)view)[view_size] == 0U);
 
     empty = tinypy_unicode_from_utf8(vm, NULL, 0U);
     view = tinypy_unicode_utf8_view(empty,
@@ -690,8 +690,8 @@ static int __test_unicode_utf8(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_string_release_contract(void) {
-    unsigned char bytes[257];
+static int32_t __test_string_release_contract(void) {
+    uint8_t bytes[257];
     //////////////////////////////////////////////////////////////////////////
     static const char unicode_bytes[] = {
         (char)0x61, (char)0x00, (char)0xe2, (char)0x82, (char)0xac,
@@ -706,7 +706,7 @@ static int __test_string_release_contract(void) {
     size_t base_allocations;
 
     for (index = 0U; index < sizeof(bytes); index += 1U) {
-        bytes[index] = (unsigned char)(index & 0xffU);
+        bytes[index] = (uint8_t)(index & 0xffU);
     }
 
     (void)memset(&state, 0, sizeof(state));
@@ -735,7 +735,7 @@ static int __test_string_release_contract(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_float_complex_bits(void) {
+static int32_t __test_float_complex_bits(void) {
     //////////////////////////////////////////////////////////////////////////
     static const uint64_t patterns[] = {
         UINT64_C(0x0000000000000000),
@@ -798,7 +798,7 @@ static int __test_float_complex_bits(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_long_canonical(void) {
+static int32_t __test_long_canonical(void) {
     //////////////////////////////////////////////////////////////////////////
     static const int64_t values[] = {
         INT64_C(0),
@@ -842,7 +842,7 @@ static int __test_long_canonical(void) {
         size_t expected_count = 0U;
         const uint16_t *digits = NULL;
         size_t digit_count = 0U;
-        int sign = 0;
+        int32_t sign = 0;
         int64_t extracted = INT64_C(0);
         size_t digit_index;
 
@@ -906,7 +906,7 @@ static int __test_long_canonical(void) {
         arbitrary_digits,
         sizeof(arbitrary_digits) / sizeof(arbitrary_digits[0]));
     arbitrary_digits[0] = UINT16_C(99); {
-        int sign = 0;
+        int32_t sign = 0;
         const uint16_t *digits = NULL;
         size_t digit_count = 0U;
         digits = tinypy_long_base15_view(value,
@@ -924,8 +924,8 @@ static int __test_long_canonical(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_tuple_ownership(void) {
-    static const unsigned char child_bytes[] = {0x61U, 0x00U, 0x62U};
+static int32_t __test_tuple_ownership(void) {
+    static const uint8_t child_bytes[] = {0x61U, 0x00U, 0x62U};
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -1015,7 +1015,7 @@ static int __test_tuple_ownership(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_tuple_deep_release(void) {
+static int32_t __test_tuple_deep_release(void) {
     const size_t depth = 20000U;
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
@@ -1066,7 +1066,7 @@ static int __test_tuple_deep_release(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_hash_and_equality(void) {
+static int32_t __test_hash_and_equality(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -1244,7 +1244,7 @@ static int __test_hash_and_equality(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_dictionary_runtime(void) {
+static int32_t __test_dictionary_runtime(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -1258,7 +1258,7 @@ static int __test_dictionary_runtime(void) {
     tinypy_value_t *borrowed = NULL;
     size_t size;
     uint64_t version;
-    int contains;
+    int32_t contains;
     size_t index;
 
     (void)memset(&state, 0, sizeof(state));
@@ -1333,7 +1333,7 @@ static int __test_dictionary_runtime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_type_class_runtime(void) {
+static int32_t __test_type_class_runtime(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -1531,7 +1531,7 @@ static int __test_type_class_runtime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_code_object_runtime(void) {
+static int32_t __test_code_object_runtime(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -1601,9 +1601,9 @@ static int __test_code_object_runtime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_eval_frame_runtime(void) {
+static int32_t __test_eval_frame_runtime(void) {
     //////////////////////////////////////////////////////////////////////////
-    static const unsigned char instructions[] = {
+    static const uint8_t instructions[] = {
         100U, 0U, 0U,
         90U, 0U, 0U,
         101U, 0U, 0U,
@@ -1682,9 +1682,9 @@ static int __test_eval_frame_runtime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_function_call_runtime(void) {
-    static const unsigned char function_instructions[] = {124U, 0U, 0U, 124U, 1U, 0U, 102U, 2U, 0U, 83U};
-    static const unsigned char module_instructions[] = {100U, 0U, 0U, 100U, 1U, 0U, 132U, 1U, 0U, 90U, 0U, 0U, 101U, 0U, 0U, 100U, 2U, 0U, 131U, 1U, 0U, 83U};
+static int32_t __test_function_call_runtime(void) {
+    static const uint8_t function_instructions[] = {124U, 0U, 0U, 124U, 1U, 0U, 102U, 2U, 0U, 83U};
+    static const uint8_t module_instructions[] = {100U, 0U, 0U, 100U, 1U, 0U, 132U, 1U, 0U, 90U, 0U, 0U, 101U, 0U, 0U, 100U, 2U, 0U, 131U, 1U, 0U, 83U};
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -1870,7 +1870,7 @@ static int __test_function_call_runtime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_operator_numeric_runtime(void) {
+static int32_t __test_operator_numeric_runtime(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -1906,7 +1906,7 @@ static int __test_operator_numeric_runtime(void) {
     const void *bytes;
     size_t digit_count;
     size_t byte_size;
-    int sign;
+    int32_t sign;
     uint16_t large_digits[5] = {0U, 0U, 0U, 0U, 1024U};
 
     (void)memset(&state, 0, sizeof(state));
@@ -2208,8 +2208,8 @@ static tinypy_value_t *__test_native_binary_result(tinypy_value_t *instance, voi
     return tinypy_integer_from_i64(state->vm, result);
 }
 //////////////////////////////////////////////////////////////////////////
-#define TEST_NATIVE_BINARY_CALLBACK(name, operation, reflected) \
-    static tinypy_value_t *name(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) { \
+#define TEST_NATIVE_BINARY_CALLBACK(__name, operation, reflected) \
+    static tinypy_value_t *__name(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) { \
         return __test_native_binary_result(instance, payload, other, user_data, out_error, operation, reflected); \
     }
 
@@ -2257,8 +2257,8 @@ static tinypy_value_t *__test_native_inplace_result(tinypy_value_t *instance, vo
     return instance;
 }
 //////////////////////////////////////////////////////////////////////////
-#define TEST_NATIVE_INPLACE_CALLBACK(name, operation) \
-    static tinypy_value_t *name(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) { \
+#define TEST_NATIVE_INPLACE_CALLBACK(__name, operation) \
+    static tinypy_value_t *__name(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) { \
         return __test_native_inplace_result(instance, payload, other, user_data, out_error, operation); \
     }
 
@@ -2323,7 +2323,7 @@ static tinypy_value_t *__test_native_return_args(tinypy_value_t *function, tinyp
     return args;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_native_embedding(void) {
+static int32_t __test_native_embedding(void) {
     test_allocator_state_t allocator_state;
     test_native_state_t native_state;
     tinypy_allocator_t allocator;
@@ -2641,7 +2641,7 @@ typedef struct test_module_finder_state_t {
     size_t load_count;
 } test_module_finder_state_t;
 //////////////////////////////////////////////////////////////////////////
-static int __test_module_name_is(tinypy_value_t *value, const char *expected, size_t expected_size) {
+static int32_t __test_module_name_is(tinypy_value_t *value, const char *expected, size_t expected_size) {
     const void *bytes;
     size_t size;
 
@@ -2708,7 +2708,7 @@ static tinypy_value_t *__test_module_finder_load(tinypy_value_t *function, tinyp
     return module;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __test_module_finder(void) {
+static int32_t __test_module_finder(void) {
     test_allocator_state_t allocator_state;
     test_module_finder_state_t finder_state;
     tinypy_allocator_t allocator;

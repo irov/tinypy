@@ -47,10 +47,10 @@ static int32_t __tinypy_cli_mode(const char *text, tinypy_compile_mode_e *out_mo
     return INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
-static unsigned char *__tinypy_cli_read(const char *path, size_t *out_size) {
+static uint8_t *__tinypy_cli_read(const char *path, size_t *out_size) {
     FILE *stream = fopen(path, "rb");
     long length;
-    unsigned char *data;
+    uint8_t *data;
 
     if (stream == NULL) {
         return NULL;
@@ -68,7 +68,7 @@ static unsigned char *__tinypy_cli_read(const char *path, size_t *out_size) {
         return NULL;
     }
 
-    data = (unsigned char *)malloc((size_t)length == 0U ? 1U : (size_t)length);
+    data = (uint8_t *)malloc((size_t)length == 0U ? 1U : (size_t)length);
     assert(data != NULL);
 
     if ((size_t)length != 0U && fread(data, 1U, (size_t)length, stream) != (size_t)length) {
@@ -99,7 +99,7 @@ static int32_t __tinypy_cli_write(const char *path, const void *data, size_t siz
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_cli_compile_run(int argc, char **argv) {
+int32_t tinypy_cli_compile_run(int32_t argc, char **argv) {
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
     tinypy_compile_options_t options;
@@ -107,13 +107,13 @@ int tinypy_cli_compile_run(int argc, char **argv) {
     tinypy_vm_t *vm;
     tinypy_value_t *code;
     tinypy_error_t *error = NULL;
-    unsigned char *source;
-    unsigned char *marshal;
+    uint8_t *source;
+    uint8_t *marshal;
     size_t source_size;
     size_t marshal_size;
     size_t filename_size;
     int32_t optimize;
-    int result = EXIT_FAILURE;
+    int32_t result = EXIT_FAILURE;
 
     if (argc != 6 || __tinypy_cli_mode(argv[4], &mode) == 0) {
         return EXIT_FAILURE;
@@ -159,7 +159,7 @@ int tinypy_cli_compile_run(int argc, char **argv) {
             int32_t error_line_number = tinypy_error_line_number(error);
             int32_t error_column_offset = tinypy_error_column_offset(error);
 
-            (void)fprintf(stderr, "%s:%d:%d: %.*s\n", argv[3], error_line_number, error_column_offset, (int)message_size, message);
+            (void)fprintf(stderr, "%s:%d:%d: %.*s\n", argv[3], error_line_number, error_column_offset, (int32_t)message_size, message);
         }
 
         goto cleanup;
@@ -169,7 +169,7 @@ int tinypy_cli_compile_run(int argc, char **argv) {
         goto cleanup_code;
     }
 
-    marshal = (unsigned char *)malloc(marshal_size == 0U ? 1U : marshal_size);
+    marshal = (uint8_t *)malloc(marshal_size == 0U ? 1U : marshal_size);
     assert(marshal != NULL);
 
     if (tinypy_marshal_dump_code_v2(code, marshal, marshal_size, &marshal_size, NULL, NULL) == TINYPY_MARSHAL_OK && __tinypy_cli_write(argv[2], marshal, marshal_size) != 0) {

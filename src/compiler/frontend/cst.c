@@ -5,7 +5,7 @@
 #include "parser_error.h"
 
 //////////////////////////////////////////////////////////////////////////
-tinypy_cst_node_t *tinypy_internal_compiler_cst_new(tinypy_compile_ctx_t *ctx, int type) {
+tinypy_cst_node_t *tinypy_internal_compiler_cst_new(tinypy_compile_ctx_t *ctx, int32_t type) {
     tinypy_cst_node_t *n = (tinypy_cst_node_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(tinypy_cst_node_t));
     if (n == NULL) {
         return NULL;
@@ -25,10 +25,10 @@ tinypy_cst_node_t *tinypy_internal_compiler_cst_new(tinypy_compile_ctx_t *ctx, i
 
 /* See comments at XXXROUNDUP below.  Returns -1 on overflow. */
 //////////////////////////////////////////////////////////////////////////
-static int __fancy_roundup(int n) {
+static int32_t __fancy_roundup(int32_t n) {
     /* Round up to the closest power of 2 >= n. */
-    int result = 256;
-    assert(n > 128);
+    int32_t result = 256;
+    TINYPY_ASSERT(n > 128);
     while (result < n) {
         result <<= 1;
         if (result <= 0) {
@@ -70,10 +70,10 @@ static int __fancy_roundup(int n) {
                                                             : __fancy_roundup(n))
 
 //////////////////////////////////////////////////////////////////////////
-int tinypy_internal_compiler_cst_add_child(register tinypy_cst_node_t *n1, int type, char *str, int lineno, int col_offset) {
-    const int nch = n1->child_count;
-    int current_capacity;
-    int required_capacity;
+int32_t tinypy_internal_compiler_cst_add_child(register tinypy_cst_node_t *n1, int32_t type, char *str, int32_t lineno, int32_t col_offset) {
+    const int32_t nch = n1->child_count;
+    int32_t current_capacity;
+    int32_t required_capacity;
 
     if (n1->context->limits.max_cst_nodes != 0U && n1->context->cst_node_count >= n1->context->limits.max_cst_nodes) {
         return TINYPY_PARSER_OUT_OF_MEMORY;
@@ -133,7 +133,7 @@ tinypy_compiler_size_t tinypy_internal_compiler_cst_size(tinypy_cst_node_t *n) {
 //////////////////////////////////////////////////////////////////////////
 static tinypy_compiler_size_t __tinypy_frontend_size_of_children(tinypy_cst_node_t *n) {
     tinypy_compiler_size_t res = 0;
-    int i;
+    int32_t i;
     for (i = TINYPY_CST_CHILD_COUNT(n); --i >= 0;) {
         res += __tinypy_frontend_size_of_children(TINYPY_CST_CHILD(n, i));
     }

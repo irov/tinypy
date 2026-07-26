@@ -98,7 +98,7 @@ static const expected_opcode_t *__find_expected(uint8_t code) {
     return NULL;
 }
 
-static int __test_exact_metadata(void) {
+static int32_t __test_exact_metadata(void) {
     size_t code;
     size_t defined_count = 0U;
     size_t const_count = 0U;
@@ -176,7 +176,7 @@ static int __test_exact_metadata(void) {
     return 0;
 }
 
-static int __test_lookup_and_categories(void) {
+static int32_t __test_lookup_and_categories(void) {
     uint8_t opcode = 255U;
 
     TEST_CHECK(tinypy_opcode_lookup("LOAD_CONST", 10U, &opcode));
@@ -206,11 +206,11 @@ static int __test_lookup_and_categories(void) {
     return 0;
 }
 
-static int __instruction_is_clear(const tinypy_decoded_instruction_t *instruction) {
+static int32_t __instruction_is_clear(const tinypy_decoded_instruction_t *instruction) {
     return instruction->offset == 0U && instruction->next_offset == 0U && instruction->encoded_size == 0U && instruction->extended_arg_count == 0U && instruction->argument == UINT64_C(0) && instruction->opcode == 0U && instruction->defined == 0U && instruction->has_argument == 0U && instruction->reserved == 0U;
 }
 
-static int __test_decode_basic_and_sequential(void) {
+static int32_t __test_decode_basic_and_sequential(void) {
     static const uint8_t code[] = {
         TINYPY_OP_POP_TOP,
         TINYPY_OP_LOAD_CONST, 0x34U, 0x12U,
@@ -263,7 +263,7 @@ static int __test_decode_basic_and_sequential(void) {
     return 0;
 }
 
-static int __test_decode_extended_argument(void) {
+static int32_t __test_decode_extended_argument(void) {
     static const uint8_t one_prefix[] = {
         TINYPY_OP_EXTENDED_ARG, 0x34U, 0x12U,
         TINYPY_OP_LOAD_CONST, 0x78U, 0x56U};
@@ -297,7 +297,7 @@ static int __test_decode_extended_argument(void) {
     return 0;
 }
 
-static int __test_decode_unknown_opcodes(void) {
+static int32_t __test_decode_unknown_opcodes(void) {
     static const uint8_t no_argument[] = {6U};
     static const uint8_t with_argument[] = {148U, 0xAAU, 0x55U};
     tinypy_decoded_instruction_t instruction;
@@ -325,7 +325,7 @@ static int __test_decode_unknown_opcodes(void) {
     return 0;
 }
 
-static int __expect_decode_error(const uint8_t *code, size_t code_size, size_t offset, tinypy_opcode_decode_status_e expected) {
+static int32_t __expect_decode_error(const uint8_t *code, size_t code_size, size_t offset, tinypy_opcode_decode_status_e expected) {
     tinypy_decoded_instruction_t instruction;
     tinypy_opcode_decode_status_e actual;
 
@@ -336,7 +336,7 @@ static int __expect_decode_error(const uint8_t *code, size_t code_size, size_t o
     return 0;
 }
 
-static int __test_decode_errors(void) {
+static int32_t __test_decode_errors(void) {
     static const uint8_t truncated_zero[] = {TINYPY_OP_LOAD_CONST};
     static const uint8_t truncated_one[] = {TINYPY_OP_LOAD_CONST, 0x01U};
     static const uint8_t extended_zero[] = {TINYPY_OP_EXTENDED_ARG};
@@ -413,7 +413,7 @@ static int __test_decode_errors(void) {
     return 0;
 }
 
-static int __test_decode_status_names(void) {
+static int32_t __test_decode_status_names(void) {
     TEST_CHECK(strcmp(tinypy_opcode_decode_status_name(TINYPY_OPCODE_DECODE_OK), "ok") == 0);
     TEST_CHECK(strcmp(
                    tinypy_opcode_decode_status_name(TINYPY_OPCODE_DECODE_TRUNCATED),

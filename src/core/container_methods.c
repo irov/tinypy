@@ -257,7 +257,7 @@ static tinypy_value_t *__tinypy_list_index_method(tinypy_value_t *function, tiny
     tinypy_value_t *needle = TINYPY_TUPLE_GET(args, 1U);
     size = (int64_t)TINYPY_LIST_SIZE(list);
     stop = size;
-    int condition = TINYPY_TUPLE_SIZE(args) >= 3U;
+    int32_t condition = TINYPY_TUPLE_SIZE(args) >= 3U;
     if (condition != 0) {
         tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 2U);
         condition = __tinypy_container_integer_as_i64(vm, item_2, &start, out_error) == 0;
@@ -265,7 +265,7 @@ static tinypy_value_t *__tinypy_list_index_method(tinypy_value_t *function, tiny
     if (condition) {
         return NULL;
     }
-    int condition_2 = TINYPY_TUPLE_SIZE(args) == 4U;
+    int32_t condition_2 = TINYPY_TUPLE_SIZE(args) == 4U;
     if (condition_2 != 0) {
         tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 3U);
         condition_2 = __tinypy_container_integer_as_i64(vm, item_2, &stop, out_error) == 0;
@@ -384,7 +384,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
         tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(kwargs);
 
         for (; iterator != iterator_end; ++iterator) {
-            const unsigned char *name;
+            const uint8_t *name;
             size_t name_size;
 
             if (iterator->state != TINYPY_DICT_ENTRY_ACTIVE || TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING) {
@@ -450,7 +450,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
                 TINYPY_LIST_OBJECT(list)->items[position] = item;
                 keys[position] = key;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-                tinypy_internal_cycle_diagnostics_list_reindex(vm, list);
+                __tinypy_internal_cycle_diagnostics_list_reindex(vm, list);
 #endif
                 if (key_function != NULL && TINYPY_VALUE_KIND(key_function) != TINYPY_VALUE_NONE) {
                     for (release_index = 0U; release_index < size; ++release_index) {
@@ -477,10 +477,10 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
             }
         }
         tinypy_internal_vm_deallocate(vm, keys, size * sizeof(*keys), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
-        assert(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
+        TINYPY_ASSERT(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
         TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        tinypy_internal_cycle_diagnostics_list_reindex(vm, list);
+        __tinypy_internal_cycle_diagnostics_list_reindex(vm, list);
 #endif
     }
     return tinypy_none_get(vm);
@@ -668,7 +668,7 @@ static tinypy_value_t *__tinypy_dict_update_method(tinypy_value_t *function, tin
         return NULL;
     }
     tinypy_value_t *target = TINYPY_TUPLE_GET(args, 0U);
-    int condition_3 = TINYPY_TUPLE_SIZE(args) == 2U;
+    int32_t condition_3 = TINYPY_TUPLE_SIZE(args) == 2U;
     if (condition_3 != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
         condition_3 = __tinypy_dict_update_from(target, item, out_error) == 0;

@@ -56,7 +56,7 @@ static int32_t __tinypy_compiler_source_is_empty_suite(const tinypy_compile_ctx_
     size_t position = 0U;
 
     while (position < ctx->source.size) {
-        unsigned char byte = ctx->source.bytes[position];
+        uint8_t byte = ctx->source.bytes[position];
 
         if (byte == ' ' || byte == '\t' || byte == '\f' || byte == '\n') {
             position += 1U;
@@ -78,7 +78,7 @@ static int32_t __tinypy_compiler_source_is_empty_suite(const tinypy_compile_ctx_
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_compiler_empty_code(tinypy_compile_ctx_t *ctx) {
-    unsigned char instructions[4];
+    uint8_t instructions[4];
     tinypy_value_t *consts;
     tinypy_value_t *empty;
     tinypy_value_t *filename;
@@ -87,10 +87,10 @@ static tinypy_value_t *__tinypy_compiler_empty_code(tinypy_compile_ctx_t *ctx) {
     tinypy_value_t *code;
     uint32_t flags = __tinypy_compiler_inherited_flags(ctx) | (uint32_t)TINYPY_CODE_NO_FREE;
 
-    instructions[0] = (unsigned char)TINYPY_OP_LOAD_CONST;
+    instructions[0] = (uint8_t)TINYPY_OP_LOAD_CONST;
     instructions[1] = 0U;
     instructions[2] = 0U;
-    instructions[3] = (unsigned char)TINYPY_OP_RETURN_VALUE;
+    instructions[3] = (uint8_t)TINYPY_OP_RETURN_VALUE;
     tinypy_value_t *none = tinypy_none_get(ctx->vm);
     tinypy_value_t *bytecode = tinypy_string_from_bytes(ctx->vm, instructions, sizeof(instructions));
     consts = tinypy_tuple_from_items(ctx->vm, &none, 1U);
@@ -110,19 +110,19 @@ static tinypy_value_t *__tinypy_compiler_empty_code(tinypy_compile_ctx_t *ctx) {
     return code;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_compiler_parser_start(tinypy_compile_mode_e mode) {
+static int32_t __tinypy_compiler_parser_start(tinypy_compile_mode_e mode) {
     if (mode == TINYPY_COMPILE_EXEC) {
         return TINYPY_GRAMMAR_FILE_INPUT;
     }
     if (mode == TINYPY_COMPILE_EVAL) {
         return TINYPY_GRAMMAR_EVAL_INPUT;
     }
-    assert(mode == TINYPY_COMPILE_SINGLE);
+    TINYPY_ASSERT(mode == TINYPY_COMPILE_SINGLE);
     return TINYPY_GRAMMAR_SINGLE_INPUT;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_compiler_parser_flags(uint32_t compile_flags) {
-    int flags = 0;
+static int32_t __tinypy_compiler_parser_flags(uint32_t compile_flags) {
+    int32_t flags = 0;
 
     if ((compile_flags & (uint32_t)TINYPY_CODE_FUTURE_PRINT_FUNCTION) != 0U) {
         flags |= TINYPY_PARSER_FLAG_PRINT_IS_FUNCTION;
@@ -136,7 +136,7 @@ static int __tinypy_compiler_parser_flags(uint32_t compile_flags) {
     return flags;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_error_kind_e __tinypy_compiler_parser_error_kind(int error, int token, int expected) {
+static tinypy_error_kind_e __tinypy_compiler_parser_error_kind(int32_t error, int32_t token, int32_t expected) {
     if (error == TINYPY_PARSER_TAB_SPACE_ERROR) {
         return TINYPY_ERROR_TAB;
     }
@@ -155,7 +155,7 @@ static tinypy_error_kind_e __tinypy_compiler_parser_error_kind(int error, int to
     return TINYPY_ERROR_SYNTAX;
 }
 //////////////////////////////////////////////////////////////////////////
-static const char *__tinypy_compiler_parser_error_message(int error, int token, int expected) {
+static const char *__tinypy_compiler_parser_error_message(int32_t error, int32_t token, int32_t expected) {
     if (error == TINYPY_PARSER_EOF) {
         return "unexpected EOF while parsing";
     }
@@ -198,9 +198,9 @@ static const char *__tinypy_compiler_parser_error_message(int error, int token, 
 static tinypy_cst_node_t *__tinypy_compiler_parse(tinypy_compile_ctx_t *ctx, tinypy_error_t **out_error) {
     tinypy_parser_error_detail_t detail;
     uint32_t compiler_inherited_flags = __tinypy_compiler_inherited_flags(ctx);
-    int flags = __tinypy_compiler_parser_flags(compiler_inherited_flags);
+    int32_t flags = __tinypy_compiler_parser_flags(compiler_inherited_flags);
 
-    int compiler_parser_start = __tinypy_compiler_parser_start(ctx->options.mode);
+    int32_t compiler_parser_start = __tinypy_compiler_parser_start(ctx->options.mode);
     tinypy_cst_node_t *tree = tinypy_internal_parse_source(ctx, (const char *)ctx->source.bytes, ctx->source.size, ctx->logical_filename, &__tinypy_parser_grammar, compiler_parser_start, &detail, &flags);
     if (tree != NULL) {
         return tree;
@@ -212,7 +212,7 @@ static tinypy_cst_node_t *__tinypy_compiler_parse(tinypy_compile_ctx_t *ctx, tin
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_compile_limits_init(tinypy_compile_limits_t *limits) {
-    assert(limits != NULL);
+    TINYPY_ASSERT(limits != NULL);
     (void)memset(limits, 0, sizeof(*limits));
     limits->abi_version = TINYPY_COMPILER_ABI_VERSION;
     limits->struct_size = (uint32_t)sizeof(*limits);
@@ -238,8 +238,8 @@ void tinypy_compile_limits_init(tinypy_compile_limits_t *limits) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_compile_options_init(tinypy_compile_options_t *options, tinypy_compile_mode_e mode) {
-    assert(options != NULL);
-    assert(mode >= TINYPY_COMPILE_EXEC && mode <= TINYPY_COMPILE_SINGLE);
+    TINYPY_ASSERT(options != NULL);
+    TINYPY_ASSERT(mode >= TINYPY_COMPILE_EXEC && mode <= TINYPY_COMPILE_SINGLE);
     (void)memset(options, 0, sizeof(*options));
     options->abi_version = TINYPY_COMPILER_ABI_VERSION;
     options->struct_size = (uint32_t)sizeof(*options);
@@ -263,7 +263,7 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
     if (tree == NULL) {
         return NULL;
     }
-    flags.flags = (int)__tinypy_compiler_inherited_flags(ctx) | TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8;
+    flags.flags = (int32_t)__tinypy_compiler_inherited_flags(ctx) | TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8;
     module = __tinypy_ast_build(tree, &flags, ctx->logical_filename, ctx);
     if (module == NULL) {
         if (ctx->failed == 0) {
@@ -308,17 +308,17 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
     tinypy_compile_ctx_t ctx;
     tinypy_value_t *code = NULL;
 
-    assert(tinypy_internal_vm_valid(vm));
-    assert(source != NULL || source_size == 0U);
-    assert(logical_filename != NULL || filename_size == 0U);
-    assert(options != NULL);
-    assert(options->abi_version == TINYPY_COMPILER_ABI_VERSION);
-    assert(options->struct_size >= (uint32_t)sizeof(*options));
-    assert(options->mode >= TINYPY_COMPILE_EXEC && options->mode <= TINYPY_COMPILE_SINGLE);
-    assert(options->optimize_level >= 0 && options->optimize_level <= 2);
-    assert((options->feature_flags & ~((uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_COMPILE_FEATURE_META)) == 0U);
-    assert((options->feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) == 0U ? options->build_profile == NULL : options->build_profile != NULL);
-    assert(options->build_profile == NULL || tinypy_build_profile_optimize_level(options->build_profile) == options->optimize_level);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(source != NULL || source_size == 0U);
+    TINYPY_ASSERT(logical_filename != NULL || filename_size == 0U);
+    TINYPY_ASSERT(options != NULL);
+    TINYPY_ASSERT(options->abi_version == TINYPY_COMPILER_ABI_VERSION);
+    TINYPY_ASSERT(options->struct_size >= (uint32_t)sizeof(*options));
+    TINYPY_ASSERT(options->mode >= TINYPY_COMPILE_EXEC && options->mode <= TINYPY_COMPILE_SINGLE);
+    TINYPY_ASSERT(options->optimize_level >= 0 && options->optimize_level <= 2);
+    TINYPY_ASSERT((options->feature_flags & ~((uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_COMPILE_FEATURE_META)) == 0U);
+    TINYPY_ASSERT((options->feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) == 0U ? options->build_profile == NULL : options->build_profile != NULL);
+    TINYPY_ASSERT(options->build_profile == NULL || tinypy_build_profile_optimize_level(options->build_profile) == options->optimize_level);
     TINYPY_CLEAR_ERROR(out_error);
     (void)memset(&ctx, 0, sizeof(ctx));
     ctx.vm = vm;
@@ -328,8 +328,8 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
     ctx.source_is_unicode = source_is_unicode;
     ctx.out_error = out_error;
     if (options->limits != NULL) {
-        assert(options->limits->abi_version == TINYPY_COMPILER_ABI_VERSION);
-        assert(options->limits->struct_size >= (uint32_t)sizeof(*options->limits));
+        TINYPY_ASSERT(options->limits->abi_version == TINYPY_COMPILER_ABI_VERSION);
+        TINYPY_ASSERT(options->limits->struct_size >= (uint32_t)sizeof(*options->limits));
         ctx.limits = *options->limits;
     }
     else {
@@ -355,17 +355,17 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     tinypy_compiler_flags_t flags;
     tinypy_ast_module_t module;
 
-    assert(tinypy_internal_vm_valid(vm));
-    assert(source != NULL || source_size == 0U);
-    assert(logical_filename != NULL || filename_size == 0U);
-    assert(options != NULL);
-    assert(options->abi_version == TINYPY_COMPILER_ABI_VERSION);
-    assert(options->struct_size >= (uint32_t)sizeof(*options));
-    assert(options->mode >= TINYPY_COMPILE_EXEC && options->mode <= TINYPY_COMPILE_SINGLE);
-    assert(options->optimize_level >= 0 && options->optimize_level <= 2);
-    assert((options->feature_flags & ~((uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_COMPILE_FEATURE_META)) == 0U);
-    assert((options->feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) == 0U ? options->build_profile == NULL : options->build_profile != NULL);
-    assert(options->build_profile == NULL || tinypy_build_profile_optimize_level(options->build_profile) == options->optimize_level);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(source != NULL || source_size == 0U);
+    TINYPY_ASSERT(logical_filename != NULL || filename_size == 0U);
+    TINYPY_ASSERT(options != NULL);
+    TINYPY_ASSERT(options->abi_version == TINYPY_COMPILER_ABI_VERSION);
+    TINYPY_ASSERT(options->struct_size >= (uint32_t)sizeof(*options));
+    TINYPY_ASSERT(options->mode >= TINYPY_COMPILE_EXEC && options->mode <= TINYPY_COMPILE_SINGLE);
+    TINYPY_ASSERT(options->optimize_level >= 0 && options->optimize_level <= 2);
+    TINYPY_ASSERT((options->feature_flags & ~((uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_COMPILE_FEATURE_META)) == 0U);
+    TINYPY_ASSERT((options->feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) == 0U ? options->build_profile == NULL : options->build_profile != NULL);
+    TINYPY_ASSERT(options->build_profile == NULL || tinypy_build_profile_optimize_level(options->build_profile) == options->optimize_level);
     TINYPY_CLEAR_ERROR(out_error);
     (void)memset(&ctx, 0, sizeof(ctx));
     ctx.vm = vm;
@@ -374,8 +374,8 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     ctx.filename_size = filename_size;
     ctx.out_error = out_error;
     if (options->limits != NULL) {
-        assert(options->limits->abi_version == TINYPY_COMPILER_ABI_VERSION);
-        assert(options->limits->struct_size >= (uint32_t)sizeof(*options->limits));
+        TINYPY_ASSERT(options->limits->abi_version == TINYPY_COMPILER_ABI_VERSION);
+        TINYPY_ASSERT(options->limits->struct_size >= (uint32_t)sizeof(*options->limits));
         ctx.limits = *options->limits;
     }
     else {
@@ -388,7 +388,7 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     if (tree == NULL) {
         goto complete;
     }
-    flags.flags = (int)__tinypy_compiler_inherited_flags(&ctx) | TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8;
+    flags.flags = (int32_t)__tinypy_compiler_inherited_flags(&ctx) | TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8;
     module = __tinypy_ast_build(tree, &flags, ctx.logical_filename, &ctx);
     if (module == NULL) {
         if (ctx.failed == 0) {
@@ -443,19 +443,19 @@ static tinypy_value_t *__tinypy_compiler_run_source(tinypy_vm_t *vm, const void 
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_eval_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, tinypy_value_t *globals, tinypy_value_t *locals, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(globals != NULL);
-    assert(tinypy_internal_value_belongs_to(vm, globals));
-    assert(locals == NULL || tinypy_internal_value_belongs_to(vm, locals));
-    assert(options != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(globals != NULL);
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, globals));
+    TINYPY_ASSERT(locals == NULL || tinypy_internal_value_belongs_to(vm, locals));
+    TINYPY_ASSERT(options != NULL);
     return __tinypy_compiler_run_source(vm, source, source_size, logical_filename, filename_size, globals, locals, options, TINYPY_COMPILE_EVAL, 0, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_exec_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, tinypy_value_t *globals, tinypy_value_t *locals, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(globals != NULL);
-    assert(tinypy_internal_value_belongs_to(vm, globals));
-    assert(locals == NULL || tinypy_internal_value_belongs_to(vm, locals));
-    assert(options != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(globals != NULL);
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, globals));
+    TINYPY_ASSERT(locals == NULL || tinypy_internal_value_belongs_to(vm, locals));
+    TINYPY_ASSERT(options != NULL);
     return __tinypy_compiler_run_source(vm, source, source_size, logical_filename, filename_size, globals, locals, options, TINYPY_COMPILE_EXEC, 1, out_error);
 }

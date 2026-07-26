@@ -26,7 +26,7 @@ void tinypy_internal_list_destroy(tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 static inline size_t __tinypy_internal_list_storage_size(size_t capacity) {
-    assert(capacity <= SIZE_MAX / sizeof(tinypy_value_t *));
+    TINYPY_ASSERT(capacity <= SIZE_MAX / sizeof(tinypy_value_t *));
     return capacity * sizeof(tinypy_value_t *);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -79,10 +79,10 @@ tinypy_value_t *tinypy_list_from_items(tinypy_vm_t *vm, tinypy_value_t *const *i
     size_t storage_size;
     size_t index;
 
-    assert(tinypy_internal_vm_valid(vm));
-    assert(items != NULL || size == 0U);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(items != NULL || size == 0U);
     storage_size = __tinypy_internal_list_storage_size(size);
-    assert(__tinypy_internal_values_belong_to(vm, items, size));
+    TINYPY_ASSERT(__tinypy_internal_values_belong_to(vm, items, size));
 
     tinypy_value_t *result = tinypy_internal_value_allocate(
         vm,
@@ -104,32 +104,32 @@ tinypy_value_t *tinypy_list_from_items(tinypy_vm_t *vm, tinypy_value_t *const *i
 
     TINYPY_SIZED_SIZE(result) = size;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_cycle_diagnostics_list_extend(vm, result, 0U, items, size);
+    __tinypy_internal_cycle_diagnostics_list_extend(vm, result, 0U, items, size);
 #endif
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_list_size(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LIST);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LIST);
 
     return TINYPY_SIZED_SIZE(value);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_list_get(const tinypy_value_t *value, size_t index) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LIST);
-    assert(index < TINYPY_SIZED_SIZE(value));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LIST);
+    TINYPY_ASSERT(index < TINYPY_SIZED_SIZE(value));
 
     return TINYPY_LIST_OBJECT(value)->items[index];
 }
 //////////////////////////////////////////////////////////////////////////
 uint64_t tinypy_list_version(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LIST);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LIST);
 
     return TINYPY_LIST_OBJECT(value)->mutation_version;
 }
@@ -139,17 +139,17 @@ void tinypy_list_extend(tinypy_value_t *list, tinypy_value_t *const *items, size
     size_t new_size;
     size_t index;
 
-    assert(list != NULL);
+    TINYPY_ASSERT(list != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
-    assert(items != NULL || item_count == 0U);
-    assert(__tinypy_internal_values_belong_to(vm, items, item_count));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
+    TINYPY_ASSERT(items != NULL || item_count == 0U);
+    TINYPY_ASSERT(__tinypy_internal_values_belong_to(vm, items, item_count));
     if (item_count == 0U) {
         return;
     }
-    assert(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
-    assert(TINYPY_SIZED_SIZE(list) <= SIZE_MAX - item_count);
+    TINYPY_ASSERT(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
+    TINYPY_ASSERT(TINYPY_SIZED_SIZE(list) <= SIZE_MAX - item_count);
     old_size = TINYPY_SIZED_SIZE(list);
     new_size = old_size + item_count;
 
@@ -166,7 +166,7 @@ void tinypy_list_extend(tinypy_value_t *list, tinypy_value_t *const *items, size
     TINYPY_SIZED_SIZE(list) = new_size;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_cycle_diagnostics_list_extend(vm, list, old_size, items, item_count);
+    __tinypy_internal_cycle_diagnostics_list_extend(vm, list, old_size, items, item_count);
 #endif
 }
 //////////////////////////////////////////////////////////////////////////
@@ -180,15 +180,15 @@ void tinypy_list_append(tinypy_value_t *list, tinypy_value_t *item) {
 void tinypy_list_insert(tinypy_value_t *list, size_t index, tinypy_value_t *item) {
     size_t move_count;
 
-    assert(list != NULL);
+    TINYPY_ASSERT(list != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
-    assert(index <= TINYPY_SIZED_SIZE(list));
-    assert(tinypy_internal_value_belongs_to(
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
+    TINYPY_ASSERT(index <= TINYPY_SIZED_SIZE(list));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(
         vm, item));
-    assert(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
-    assert(TINYPY_SIZED_SIZE(list) != SIZE_MAX);
+    TINYPY_ASSERT(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
+    TINYPY_ASSERT(TINYPY_SIZED_SIZE(list) != SIZE_MAX);
 
     TINYPY_INCREF(item);
     __tinypy_internal_list_reserve(
@@ -205,25 +205,25 @@ void tinypy_list_insert(tinypy_value_t *list, size_t index, tinypy_value_t *item
     TINYPY_LIST_OBJECT(list)->base.size += 1U;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_cycle_diagnostics_list_insert(vm, list, index, item);
+    __tinypy_internal_cycle_diagnostics_list_insert(vm, list, index, item);
 #endif
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_list_set(tinypy_value_t *list, size_t index, tinypy_value_t *item) {
-    assert(list != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(list)));
-    assert(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
-    assert(index < TINYPY_SIZED_SIZE(list));
-    assert(tinypy_internal_value_belongs_to(
+    TINYPY_ASSERT(list != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(list)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
+    TINYPY_ASSERT(index < TINYPY_SIZED_SIZE(list));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(
         TINYPY_VALUE_VM(list), item));
-    assert(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
+    TINYPY_ASSERT(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
     TINYPY_INCREF(item);
 
     tinypy_value_t *previous = TINYPY_LIST_OBJECT(list)->items[index];
     TINYPY_LIST_OBJECT(list)->items[index] = item;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_cycle_diagnostics_list_set(TINYPY_VALUE_VM(list), list, index, item);
+    __tinypy_internal_cycle_diagnostics_list_set(TINYPY_VALUE_VM(list), list, index, item);
 #endif
     TINYPY_DECREF(previous);
 }
@@ -231,11 +231,11 @@ void tinypy_list_set(tinypy_value_t *list, size_t index, tinypy_value_t *item) {
 void tinypy_list_delete(tinypy_value_t *list, size_t index) {
     size_t move_count;
 
-    assert(list != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(list)));
-    assert(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
-    assert(index < TINYPY_SIZED_SIZE(list));
-    assert(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
+    TINYPY_ASSERT(list != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(list)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
+    TINYPY_ASSERT(index < TINYPY_SIZED_SIZE(list));
+    TINYPY_ASSERT(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
 
     tinypy_value_t *previous = TINYPY_LIST_OBJECT(list)->items[index];
     move_count = TINYPY_SIZED_SIZE(list) - index - 1U;
@@ -249,7 +249,7 @@ void tinypy_list_delete(tinypy_value_t *list, size_t index) {
     TINYPY_LIST_OBJECT(list)->items[TINYPY_SIZED_SIZE(list)] = NULL;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_cycle_diagnostics_list_remove(TINYPY_VALUE_VM(list), list, index);
+    __tinypy_internal_cycle_diagnostics_list_remove(TINYPY_VALUE_VM(list), list, index);
 #endif
     TINYPY_DECREF(previous);
 }
@@ -257,11 +257,11 @@ void tinypy_list_delete(tinypy_value_t *list, size_t index) {
 tinypy_value_t *tinypy_list_pop(tinypy_value_t *list, size_t index) {
     size_t move_count;
 
-    assert(list != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(list)));
-    assert(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
-    assert(index < TINYPY_SIZED_SIZE(list));
-    assert(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
+    TINYPY_ASSERT(list != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(list)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
+    TINYPY_ASSERT(index < TINYPY_SIZED_SIZE(list));
+    TINYPY_ASSERT(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
 
     tinypy_value_t *item = TINYPY_LIST_OBJECT(list)->items[index];
     move_count = TINYPY_SIZED_SIZE(list) - index - 1U;
@@ -275,7 +275,7 @@ tinypy_value_t *tinypy_list_pop(tinypy_value_t *list, size_t index) {
     TINYPY_LIST_OBJECT(list)->items[TINYPY_SIZED_SIZE(list)] = NULL;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_cycle_diagnostics_list_remove(TINYPY_VALUE_VM(list), list, index);
+    __tinypy_internal_cycle_diagnostics_list_remove(TINYPY_VALUE_VM(list), list, index);
 #endif
     return item;
 }
@@ -284,19 +284,19 @@ void tinypy_list_clear(tinypy_value_t *list) {
     size_t item_count;
     size_t index;
 
-    assert(list != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(list)));
-    assert(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
+    TINYPY_ASSERT(list != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(list)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(list) == TINYPY_VALUE_LIST);
     if (TINYPY_SIZED_SIZE(list) == 0) {
         return;
     }
-    assert(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
+    TINYPY_ASSERT(TINYPY_LIST_OBJECT(list)->mutation_version != UINT64_MAX);
 
     item_count = TINYPY_SIZED_SIZE(list);
     TINYPY_LIST_OBJECT(list)->base.size = 0U;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    tinypy_internal_cycle_diagnostics_list_clear(TINYPY_VALUE_VM(list), list);
+    __tinypy_internal_cycle_diagnostics_list_clear(TINYPY_VALUE_VM(list), list);
 #endif
     for (index = 0U; index < item_count; ++index) {
         tinypy_value_t *item = TINYPY_LIST_OBJECT(list)->items[index];

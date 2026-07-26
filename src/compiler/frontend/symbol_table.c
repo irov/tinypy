@@ -16,7 +16,7 @@
     "'return' with argument inside generator"
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_symbol_entry_t *__tinypy_symbol_entry_new(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_symbol_block_e block, void *key, int lineno) {
+static tinypy_symbol_entry_t *__tinypy_symbol_entry_new(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_symbol_block_e block, void *key, int32_t lineno) {
 
     tinypy_symbol_entry_t *ste = (tinypy_symbol_entry_t *)TINYPY_COMPILER_ARENA_MALLOC(st->arena, sizeof(*ste));
     if (ste == NULL) {
@@ -75,30 +75,30 @@ static tinypy_symbol_entry_t *__tinypy_symbol_entry_from_handle(tinypy_value_t *
     const void *bytes = tinypy_string_view(handle, &size);
     tinypy_symbol_entry_t *entry;
 
-    assert(size == sizeof(entry));
+    TINYPY_ASSERT(size == sizeof(entry));
     (void)memcpy(&entry, bytes, sizeof(entry));
     return entry;
 }
 
-static int __tinypy_symbol_analyze(tinypy_symbol_table_t *st);
-static int __tinypy_symbol_warn(tinypy_symbol_table_t *st, tinypy_value_t *warn, const char *msg, int lineno);
-static int __tinypy_symbol_enter_block(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_symbol_block_e block, void *ast, int lineno);
-static int __tinypy_symbol_exit_block(tinypy_symbol_table_t *st, void *ast);
-static int __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinypy_ast_statement_t s);
-static int __tinypy_symbol_visit_expr(tinypy_symbol_table_t *st, tinypy_ast_expression_t s);
-static int __tinypy_symbol_visit_listcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e);
-static int __tinypy_symbol_visit_genexp(tinypy_symbol_table_t *st, tinypy_ast_expression_t s);
-static int __tinypy_symbol_visit_setcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e);
-static int __tinypy_symbol_visit_dictcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e);
-static int __tinypy_symbol_visit_arguments(tinypy_symbol_table_t *st, tinypy_ast_arguments_t);
-static int __tinypy_symbol_visit_excepthandler(tinypy_symbol_table_t *st, tinypy_ast_exception_handler_t);
-static int __tinypy_symbol_visit_alias(tinypy_symbol_table_t *st, tinypy_ast_alias_t);
-static int __tinypy_symbol_visit_comprehension(tinypy_symbol_table_t *st, tinypy_ast_comprehension_t);
-static int __tinypy_symbol_visit_keyword(tinypy_symbol_table_t *st, tinypy_ast_keyword_t);
-static int __tinypy_symbol_visit_slice(tinypy_symbol_table_t *st, tinypy_ast_slice_t);
-static int __tinypy_symbol_visit_params(tinypy_symbol_table_t *st, tinypy_ast_sequence_t *args, int top);
-static int __tinypy_symbol_visit_params_nested(tinypy_symbol_table_t *st, tinypy_ast_sequence_t *args);
-static int __tinypy_symbol_implicit_arg(tinypy_symbol_table_t *st, int pos);
+static int32_t __tinypy_symbol_analyze(tinypy_symbol_table_t *st);
+static int32_t __tinypy_symbol_warn(tinypy_symbol_table_t *st, tinypy_value_t *warn, const char *msg, int32_t lineno);
+static int32_t __tinypy_symbol_enter_block(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_symbol_block_e block, void *ast, int32_t lineno);
+static int32_t __tinypy_symbol_exit_block(tinypy_symbol_table_t *st, void *ast);
+static int32_t __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinypy_ast_statement_t s);
+static int32_t __tinypy_symbol_visit_expr(tinypy_symbol_table_t *st, tinypy_ast_expression_t s);
+static int32_t __tinypy_symbol_visit_listcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e);
+static int32_t __tinypy_symbol_visit_genexp(tinypy_symbol_table_t *st, tinypy_ast_expression_t s);
+static int32_t __tinypy_symbol_visit_setcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e);
+static int32_t __tinypy_symbol_visit_dictcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e);
+static int32_t __tinypy_symbol_visit_arguments(tinypy_symbol_table_t *st, tinypy_ast_arguments_t);
+static int32_t __tinypy_symbol_visit_excepthandler(tinypy_symbol_table_t *st, tinypy_ast_exception_handler_t);
+static int32_t __tinypy_symbol_visit_alias(tinypy_symbol_table_t *st, tinypy_ast_alias_t);
+static int32_t __tinypy_symbol_visit_comprehension(tinypy_symbol_table_t *st, tinypy_ast_comprehension_t);
+static int32_t __tinypy_symbol_visit_keyword(tinypy_symbol_table_t *st, tinypy_ast_keyword_t);
+static int32_t __tinypy_symbol_visit_slice(tinypy_symbol_table_t *st, tinypy_ast_slice_t);
+static int32_t __tinypy_symbol_visit_params(tinypy_symbol_table_t *st, tinypy_ast_sequence_t *args, int32_t top);
+static int32_t __tinypy_symbol_visit_params_nested(tinypy_symbol_table_t *st, tinypy_ast_sequence_t *args);
+static int32_t __tinypy_symbol_implicit_arg(tinypy_symbol_table_t *st, int32_t pos);
 
 #define TINYPY_SYMBOL_DUPLICATE_ARGUMENT \
     "duplicate argument '%s' in function definition"
@@ -147,7 +147,7 @@ static tinypy_value_t *__tinypy_symbol_identifier(tinypy_symbol_table_t *st, tin
 tinypy_symbol_table_t *__tinypy_symbol_table_build(tinypy_compile_ctx_t *arena, tinypy_ast_module_t mod, const char *filename, tinypy_future_features_t *future) {
     tinypy_symbol_table_t *st = __tinypy_symbol_table_new(arena);
     tinypy_ast_sequence_t *seq;
-    int i;
+    int32_t i;
 
     if (st == NULL) {
         return st;
@@ -222,12 +222,12 @@ tinypy_symbol_entry_t *__tinypy_symbol_table_lookup(tinypy_symbol_table_t *st, v
     return __tinypy_symbol_entry_from_handle(v);
 }
 //////////////////////////////////////////////////////////////////////////
-int __tinypy_symbol_table_scope(tinypy_symbol_entry_t *ste, tinypy_value_t *name) {
+int32_t __tinypy_symbol_table_scope(tinypy_symbol_entry_t *ste, tinypy_value_t *name) {
     tinypy_value_t *v = TINYPY_COMPILER_DICT_GET_ITEM(ste->symbols, name);
     if (!v) {
         return 0;
     }
-    assert(TINYPY_COMPILER_INT_CHECK(v));
+    TINYPY_ASSERT(TINYPY_COMPILER_INT_CHECK(v));
     return (TINYPY_COMPILER_INT_AS_LONG(v) >> TINYPY_SYMBOL_SCOPE_OFFSET) & TINYPY_SYMBOL_SCOPE_MASK;
 }
 
@@ -288,7 +288,7 @@ int __tinypy_symbol_table_scope(tinypy_symbol_entry_t *ste, tinypy_value_t *name
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int __analyze_name(tinypy_symbol_entry_t *ste, tinypy_value_t *dict, tinypy_value_t *name, long flags, tinypy_value_t *bound, tinypy_value_t *local, tinypy_value_t *free, tinypy_value_t *global) {
+static int32_t __analyze_name(tinypy_symbol_entry_t *ste, tinypy_value_t *dict, tinypy_value_t *name, long flags, tinypy_value_t *bound, tinypy_value_t *local, tinypy_value_t *free, tinypy_value_t *global) {
     if (flags & TINYPY_SYMBOL_DEFINITION_GLOBAL) {
         if (flags & TINYPY_SYMBOL_DEFINITION_PARAMETER) {
             static const char prefix[] = "name '";
@@ -366,9 +366,9 @@ static int __analyze_name(tinypy_symbol_entry_t *ste, tinypy_value_t *dict, tiny
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int __analyze_cells(tinypy_value_t *scope, tinypy_value_t *free) {
+static int32_t __analyze_cells(tinypy_value_t *scope, tinypy_value_t *free) {
     tinypy_value_t *name, *v, *w;
-    int success = 0;
+    int32_t success = 0;
     tinypy_compiler_size_t pos = 0;
 
     w = __tinypy_frontend_integer_from_owner(scope, TINYPY_SYMBOL_SCOPE_CELL);
@@ -377,7 +377,7 @@ static int __analyze_cells(tinypy_value_t *scope, tinypy_value_t *free) {
     }
     while (TINYPY_COMPILER_DICT_NEXT(scope, &pos, &name, &v)) {
         long flags;
-        assert(TINYPY_COMPILER_INT_CHECK(v));
+        TINYPY_ASSERT(TINYPY_COMPILER_INT_CHECK(v));
         flags = TINYPY_COMPILER_INT_AS_LONG(v);
         if (flags != TINYPY_SYMBOL_SCOPE_LOCAL) {
             continue;
@@ -404,7 +404,7 @@ error:
 
 /* Check for illegal statements in unoptimized namespaces */
 //////////////////////////////////////////////////////////////////////////
-static int __check_unoptimized(const tinypy_symbol_entry_t *ste) {
+static int32_t __check_unoptimized(const tinypy_symbol_entry_t *ste) {
     const char *name;
     size_t name_size;
     const char *trailer;
@@ -464,16 +464,16 @@ static int __check_unoptimized(const tinypy_symbol_entry_t *ste) {
  * All arguments are dicts.  Modifies symbols, others are read-only.
  */
 //////////////////////////////////////////////////////////////////////////
-static int __update_symbols(tinypy_value_t *symbols, tinypy_value_t *scope, tinypy_value_t *bound, tinypy_value_t *free, int classflag) {
+static int32_t __update_symbols(tinypy_value_t *symbols, tinypy_value_t *scope, tinypy_value_t *bound, tinypy_value_t *free, int32_t classflag) {
     tinypy_value_t *name, *v, *u, *w, *free_value = NULL;
     tinypy_compiler_size_t pos = 0;
 
     while (TINYPY_COMPILER_DICT_NEXT(symbols, &pos, &name, &v)) {
         long i, flags;
-        assert(TINYPY_COMPILER_INT_CHECK(v));
+        TINYPY_ASSERT(TINYPY_COMPILER_INT_CHECK(v));
         flags = TINYPY_COMPILER_INT_AS_LONG(v);
         w = TINYPY_COMPILER_DICT_GET_ITEM(scope, name);
-        assert(w && TINYPY_COMPILER_INT_CHECK(w));
+        TINYPY_ASSERT(w && TINYPY_COMPILER_INT_CHECK(w));
         i = TINYPY_COMPILER_INT_AS_LONG(w);
         flags |= (i << TINYPY_SYMBOL_SCOPE_OFFSET);
         u = __tinypy_frontend_integer_from_owner(symbols, flags);
@@ -552,14 +552,14 @@ static int __update_symbols(tinypy_value_t *symbols, tinypy_value_t *scope, tiny
    propagate back to a parent block.
 */
 
-static int __analyze_child_block(tinypy_symbol_entry_t *entry, tinypy_value_t *bound, tinypy_value_t *free, tinypy_value_t *global, tinypy_value_t *child_free);
+static int32_t __analyze_child_block(tinypy_symbol_entry_t *entry, tinypy_value_t *bound, tinypy_value_t *free, tinypy_value_t *global, tinypy_value_t *child_free);
 
 //////////////////////////////////////////////////////////////////////////
-static int __analyze_block(tinypy_symbol_entry_t *ste, tinypy_value_t *bound, tinypy_value_t *free, tinypy_value_t *global) {
+static int32_t __analyze_block(tinypy_symbol_entry_t *ste, tinypy_value_t *bound, tinypy_value_t *free, tinypy_value_t *global) {
     tinypy_value_t *name, *v, *local = NULL, *scope = NULL;
     tinypy_value_t *newbound = NULL, *newglobal = NULL;
     tinypy_value_t *newfree = NULL, *allfree = NULL;
-    int i, success = 0;
+    int32_t i, success = 0;
     tinypy_compiler_size_t pos = 0;
 
     local = __tinypy_frontend_dict_new_from_owner(ste->symbols); /* collect new names bound in block */
@@ -642,7 +642,7 @@ static int __analyze_block(tinypy_symbol_entry_t *ste, tinypy_value_t *bound, ti
     }
     for (i = 0; i < TINYPY_COMPILER_LIST_GET_SIZE(ste->children); ++i) {
         tinypy_value_t *c = TINYPY_COMPILER_LIST_GET_ITEM(ste->children, i);
-        assert(c != NULL);
+        TINYPY_ASSERT(c != NULL);
         tinypy_symbol_entry_t *entry = __tinypy_symbol_entry_from_handle(c);
         if (!__analyze_child_block(entry, newbound, newfree, newglobal,
                                    allfree)) {
@@ -679,12 +679,12 @@ error:
     TINYPY_COMPILER_XDECREF(newfree);
     TINYPY_COMPILER_XDECREF(allfree);
     if (!success) {
-        assert(TINYPY_COMPILER_ERR_OCCURRED());
+        TINYPY_ASSERT(TINYPY_COMPILER_ERR_OCCURRED());
     }
     return success;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __analyze_child_block(tinypy_symbol_entry_t *entry, tinypy_value_t *bound, tinypy_value_t *free, tinypy_value_t *global, tinypy_value_t *child_free) {
+static int32_t __analyze_child_block(tinypy_symbol_entry_t *entry, tinypy_value_t *bound, tinypy_value_t *free, tinypy_value_t *global, tinypy_value_t *child_free) {
     tinypy_value_t *temp_bound = NULL, *temp_global = NULL, *temp_free = NULL;
 
     /* Copy the bound and global dictionaries.
@@ -733,9 +733,9 @@ error:
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_analyze(tinypy_symbol_table_t *st) {
+static int32_t __tinypy_symbol_analyze(tinypy_symbol_table_t *st) {
     tinypy_value_t *free, *global;
-    int r;
+    int32_t r;
 
     free = __tinypy_frontend_dict_new_from_owner(st->symbols);
     if (!free) {
@@ -752,7 +752,7 @@ static int __tinypy_symbol_analyze(tinypy_symbol_table_t *st) {
     return r;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_warn(tinypy_symbol_table_t *st, tinypy_value_t *warn, const char *msg, int lineno) {
+static int32_t __tinypy_symbol_warn(tinypy_symbol_table_t *st, tinypy_value_t *warn, const char *msg, int32_t lineno) {
     (void)st;
     (void)warn;
     (void)msg;
@@ -766,7 +766,7 @@ static int __tinypy_symbol_warn(tinypy_symbol_table_t *st, tinypy_value_t *warn,
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_exit_block(tinypy_symbol_table_t *st, void *ast) {
+static int32_t __tinypy_symbol_exit_block(tinypy_symbol_table_t *st, void *ast) {
     tinypy_compiler_size_t end;
     tinypy_value_t *handle;
 
@@ -786,7 +786,7 @@ static int __tinypy_symbol_exit_block(tinypy_symbol_table_t *st, void *ast) {
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_enter_block(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_symbol_block_e block, void *ast, int lineno) {
+static int32_t __tinypy_symbol_enter_block(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_symbol_block_e block, void *ast, int32_t lineno) {
     tinypy_symbol_entry_t *prev = NULL;
 
     if (st->current) {
@@ -823,7 +823,7 @@ static long __tinypy_symbol_lookup(tinypy_symbol_table_t *st, tinypy_value_t *na
     return TINYPY_COMPILER_INT_AS_LONG(o);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_add_def(tinypy_symbol_table_t *st, tinypy_value_t *name, int flag) {
+static int32_t __tinypy_symbol_add_def(tinypy_symbol_table_t *st, tinypy_value_t *name, int32_t flag) {
     long val;
     tinypy_value_t *mangled = __tinypy_frontend_mangle(st->arena, st->private_name, name);
 
@@ -909,7 +909,7 @@ error:
 
 #define TINYPY_SYMBOL_VISIT_SEQUENCE(ST, TYPE, SEQ)                                                                                          \
     {                                                                                                                                        \
-        int __tinypy_visit_index;                                                                                                            \
+        int32_t __tinypy_visit_index;                                                                                                            \
         tinypy_ast_sequence_t *__tinypy_visit_sequence = (SEQ);                                                                              \
         for (__tinypy_visit_index = 0; __tinypy_visit_index < TINYPY_AST_SEQUENCE_LENGTH(__tinypy_visit_sequence); __tinypy_visit_index++) { \
             TINYPY_AST_SEQUENCE_TYPE(TYPE)                                                                                                   \
@@ -921,7 +921,7 @@ error:
 
 #define TINYPY_SYMBOL_VISIT_SEQUENCE_IN_BLOCK(ST, TYPE, SEQ, S)                                                                              \
     {                                                                                                                                        \
-        int __tinypy_visit_index;                                                                                                            \
+        int32_t __tinypy_visit_index;                                                                                                            \
         tinypy_ast_sequence_t *__tinypy_visit_sequence = (SEQ);                                                                              \
         for (__tinypy_visit_index = 0; __tinypy_visit_index < TINYPY_AST_SEQUENCE_LENGTH(__tinypy_visit_sequence); __tinypy_visit_index++) { \
             TINYPY_AST_SEQUENCE_TYPE(TYPE)                                                                                                   \
@@ -935,7 +935,7 @@ error:
 
 #define TINYPY_SYMBOL_VISIT_SEQUENCE_TAIL(ST, TYPE, SEQ, START)                                                                                  \
     {                                                                                                                                            \
-        int __tinypy_visit_index;                                                                                                                \
+        int32_t __tinypy_visit_index;                                                                                                                \
         tinypy_ast_sequence_t *__tinypy_visit_sequence = (SEQ);                                                                                  \
         for (__tinypy_visit_index = (START); __tinypy_visit_index < TINYPY_AST_SEQUENCE_LENGTH(__tinypy_visit_sequence); __tinypy_visit_index++) { \
             TINYPY_AST_SEQUENCE_TYPE(TYPE)                                                                                                       \
@@ -947,7 +947,7 @@ error:
 
 #define TINYPY_SYMBOL_VISIT_SEQUENCE_TAIL_IN_BLOCK(ST, TYPE, SEQ, START, S)                                                                      \
     {                                                                                                                                            \
-        int __tinypy_visit_index;                                                                                                                \
+        int32_t __tinypy_visit_index;                                                                                                                \
         tinypy_ast_sequence_t *__tinypy_visit_sequence = (SEQ);                                                                                  \
         for (__tinypy_visit_index = (START); __tinypy_visit_index < TINYPY_AST_SEQUENCE_LENGTH(__tinypy_visit_sequence); __tinypy_visit_index++) { \
             TINYPY_AST_SEQUENCE_TYPE(TYPE)                                                                                                       \
@@ -959,7 +959,7 @@ error:
         }                                                                                                                                        \
     }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinypy_ast_statement_t s) {
+static int32_t __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinypy_ast_statement_t s) {
     switch (s->kind) {
     case TINYPY_AST_KIND_FUNCTION_DEF:
         if (!__tinypy_symbol_add_def(st, s->v.FunctionDef.name, TINYPY_SYMBOL_DEFINITION_LOCAL)) {
@@ -1112,7 +1112,7 @@ static int __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinypy_ast_stat
         }
         break;
     case TINYPY_AST_KIND_GLOBAL: {
-        int i;
+        int32_t i;
         tinypy_ast_sequence_t *seq = s->v.Global.names;
         for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(seq); i++) {
             tinypy_ast_identifier_t name = (tinypy_ast_identifier_t)TINYPY_AST_SEQUENCE_GET(seq, i);
@@ -1151,7 +1151,7 @@ static int __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinypy_ast_stat
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_expr(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
+static int32_t __tinypy_symbol_visit_expr(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
     switch (e->kind) {
     case TINYPY_AST_KIND_BOOL_OP:
         TINYPY_SYMBOL_VISIT_SEQUENCE(st, expr, e->v.BoolOp.values);
@@ -1270,7 +1270,7 @@ static int __tinypy_symbol_visit_expr(tinypy_symbol_table_t *st, tinypy_ast_expr
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_implicit_arg(tinypy_symbol_table_t *st, int pos) {
+static int32_t __tinypy_symbol_implicit_arg(tinypy_symbol_table_t *st, int32_t pos) {
     tinypy_value_t *id = __tinypy_frontend_format_identifier(st->symbols, ".", pos, "");
     if (id == NULL) {
         return 0;
@@ -1283,20 +1283,20 @@ static int __tinypy_symbol_implicit_arg(tinypy_symbol_table_t *st, int pos) {
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_params(tinypy_symbol_table_t *st, tinypy_ast_sequence_t *args, int toplevel) {
-    int i;
+static int32_t __tinypy_symbol_visit_params(tinypy_symbol_table_t *st, tinypy_ast_sequence_t *args, int32_t toplevel) {
+    int32_t i;
 
     /* go through all the toplevel arguments first */
     for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(args); i++) {
         tinypy_ast_expression_t arg = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(args, i);
         if (arg->kind == TINYPY_AST_KIND_NAME) {
-            assert(arg->v.Name.ctx == TINYPY_AST_CONTEXT_PARAMETER || (arg->v.Name.ctx == TINYPY_AST_CONTEXT_STORE && !toplevel));
+            TINYPY_ASSERT(arg->v.Name.ctx == TINYPY_AST_CONTEXT_PARAMETER || (arg->v.Name.ctx == TINYPY_AST_CONTEXT_STORE && !toplevel));
             if (!__tinypy_symbol_add_def(st, arg->v.Name.id, TINYPY_SYMBOL_DEFINITION_PARAMETER)) {
                 return 0;
             }
         }
         else if (arg->kind == TINYPY_AST_KIND_TUPLE) {
-            assert(arg->v.Tuple.ctx == TINYPY_AST_CONTEXT_STORE);
+            TINYPY_ASSERT(arg->v.Tuple.ctx == TINYPY_AST_CONTEXT_STORE);
             if (toplevel) {
                 if (!__tinypy_symbol_implicit_arg(st, i)) {
                     return 0;
@@ -1318,8 +1318,8 @@ static int __tinypy_symbol_visit_params(tinypy_symbol_table_t *st, tinypy_ast_se
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_params_nested(tinypy_symbol_table_t *st, tinypy_ast_sequence_t *args) {
-    int i;
+static int32_t __tinypy_symbol_visit_params_nested(tinypy_symbol_table_t *st, tinypy_ast_sequence_t *args) {
+    int32_t i;
     for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(args); i++) {
         tinypy_ast_expression_t arg = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(args, i);
         if (arg->kind == TINYPY_AST_KIND_TUPLE && !__tinypy_symbol_visit_params(st, arg->v.Tuple.elts, 0)) {
@@ -1330,7 +1330,7 @@ static int __tinypy_symbol_visit_params_nested(tinypy_symbol_table_t *st, tinypy
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_arguments(tinypy_symbol_table_t *st, tinypy_ast_arguments_t a) {
+static int32_t __tinypy_symbol_visit_arguments(tinypy_symbol_table_t *st, tinypy_ast_arguments_t a) {
     /* skip default arguments inside function block
        XXX should ast be different?
     */
@@ -1355,7 +1355,7 @@ static int __tinypy_symbol_visit_arguments(tinypy_symbol_table_t *st, tinypy_ast
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_excepthandler(tinypy_symbol_table_t *st, tinypy_ast_exception_handler_t eh) {
+static int32_t __tinypy_symbol_visit_excepthandler(tinypy_symbol_table_t *st, tinypy_ast_exception_handler_t eh) {
     if (eh->v.ExceptHandler.type) {
         TINYPY_SYMBOL_VISIT(st, expr, eh->v.ExceptHandler.type);
     }
@@ -1366,7 +1366,7 @@ static int __tinypy_symbol_visit_excepthandler(tinypy_symbol_table_t *st, tinypy
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_alias(tinypy_symbol_table_t *st, tinypy_ast_alias_t a) {
+static int32_t __tinypy_symbol_visit_alias(tinypy_symbol_table_t *st, tinypy_ast_alias_t a) {
     /* Compute store_name, the name actually bound by the import
        operation.  It is different than a->name when a->name is a
        dotted package name (e.g. spam.eggs)
@@ -1386,7 +1386,7 @@ static int __tinypy_symbol_visit_alias(tinypy_symbol_table_t *st, tinypy_ast_ali
         TINYPY_COMPILER_INCREF(store_name);
     }
     if (strcmp(TINYPY_COMPILER_STRING_AS_STRING(name), "*")) {
-        int r = __tinypy_symbol_add_def(st, store_name, TINYPY_SYMBOL_DEFINITION_IMPORT);
+        int32_t r = __tinypy_symbol_add_def(st, store_name, TINYPY_SYMBOL_DEFINITION_IMPORT);
         TINYPY_COMPILER_DECREF(store_name);
         return r;
     }
@@ -1401,19 +1401,19 @@ static int __tinypy_symbol_visit_alias(tinypy_symbol_table_t *st, tinypy_ast_ali
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_comprehension(tinypy_symbol_table_t *st, tinypy_ast_comprehension_t lc) {
+static int32_t __tinypy_symbol_visit_comprehension(tinypy_symbol_table_t *st, tinypy_ast_comprehension_t lc) {
     TINYPY_SYMBOL_VISIT(st, expr, lc->target);
     TINYPY_SYMBOL_VISIT(st, expr, lc->iter);
     TINYPY_SYMBOL_VISIT_SEQUENCE(st, expr, lc->ifs);
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_keyword(tinypy_symbol_table_t *st, tinypy_ast_keyword_t k) {
+static int32_t __tinypy_symbol_visit_keyword(tinypy_symbol_table_t *st, tinypy_ast_keyword_t k) {
     TINYPY_SYMBOL_VISIT(st, expr, k->value);
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_slice(tinypy_symbol_table_t *st, tinypy_ast_slice_t s) {
+static int32_t __tinypy_symbol_visit_slice(tinypy_symbol_table_t *st, tinypy_ast_slice_t s) {
     switch (s->kind) {
     case TINYPY_AST_KIND_SLICE:
         if (s->v.Slice.lower) {
@@ -1438,7 +1438,7 @@ static int __tinypy_symbol_visit_slice(tinypy_symbol_table_t *st, tinypy_ast_sli
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_new_tmpname(tinypy_symbol_table_t *st) {
+static int32_t __tinypy_symbol_new_tmpname(tinypy_symbol_table_t *st) {
     tinypy_ast_identifier_t tmp;
 
     tmp = __tinypy_frontend_format_identifier(st->symbols, "_[", ++st->current->temporary_name_index, "]");
@@ -1452,9 +1452,9 @@ static int __tinypy_symbol_new_tmpname(tinypy_symbol_table_t *st) {
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_handle_comprehension(tinypy_symbol_table_t *st, tinypy_ast_expression_t e, tinypy_ast_identifier_t scope_name, tinypy_ast_sequence_t *generators, tinypy_ast_expression_t elt, tinypy_ast_expression_t value) {
-    int is_generator = (e->kind == TINYPY_AST_KIND_GENERATOR_EXP);
-    int needs_tmp = !is_generator;
+static int32_t __tinypy_symbol_handle_comprehension(tinypy_symbol_table_t *st, tinypy_ast_expression_t e, tinypy_ast_identifier_t scope_name, tinypy_ast_sequence_t *generators, tinypy_ast_expression_t elt, tinypy_ast_expression_t value) {
+    int32_t is_generator = (e->kind == TINYPY_AST_KIND_GENERATOR_EXP);
+    int32_t needs_tmp = !is_generator;
     tinypy_ast_comprehension_t outermost = ((tinypy_ast_comprehension_t)
                                                 TINYPY_AST_SEQUENCE_GET(generators, 0));
     /* Outermost iterator is evaluated in current scope */
@@ -1489,9 +1489,9 @@ static int __tinypy_symbol_handle_comprehension(tinypy_symbol_table_t *st, tinyp
     return __tinypy_symbol_exit_block(st, (void *)e);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_listcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
+static int32_t __tinypy_symbol_visit_listcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
     tinypy_ast_sequence_t *generators = e->v.ListComp.generators;
-    int i, is_generator;
+    int32_t i, is_generator;
     /* To inspect yield expressions independently, clear
        the generator flag, and restore it at the end */
     is_generator = st->current->generator;
@@ -1516,21 +1516,21 @@ static int __tinypy_symbol_visit_listcomp(tinypy_symbol_table_t *st, tinypy_ast_
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_genexp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
+static int32_t __tinypy_symbol_visit_genexp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
     tinypy_value_t *symbol_identifier = __tinypy_symbol_identifier(st, &st->generator_expression_name, "genexpr");
     return __tinypy_symbol_handle_comprehension(st, e, symbol_identifier,
                                                 e->v.GeneratorExp.generators,
                                                 e->v.GeneratorExp.elt, NULL);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_setcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
+static int32_t __tinypy_symbol_visit_setcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
     tinypy_value_t *symbol_identifier = __tinypy_symbol_identifier(st, &st->set_comprehension_name, "setcomp");
     return __tinypy_symbol_handle_comprehension(st, e, symbol_identifier,
                                                 e->v.SetComp.generators,
                                                 e->v.SetComp.elt, NULL);
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_symbol_visit_dictcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
+static int32_t __tinypy_symbol_visit_dictcomp(tinypy_symbol_table_t *st, tinypy_ast_expression_t e) {
     tinypy_value_t *symbol_identifier = __tinypy_symbol_identifier(st, &st->dict_comprehension_name, "dictcomp");
     return __tinypy_symbol_handle_comprehension(st, e, symbol_identifier,
                                                 e->v.DictComp.generators,

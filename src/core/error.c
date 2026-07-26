@@ -8,7 +8,7 @@
 static size_t __tinypy_internal_string_length(const char *text) {
     size_t length = 0U;
 
-    assert(text != NULL);
+    TINYPY_ASSERT(text != NULL);
 
     while (text[length] != '\0') {
         length += 1U;
@@ -25,25 +25,25 @@ static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allo
     if (out_error == NULL) {
         return;
     }
-    assert(allocator != NULL);
-    assert(allocator->abi_version == TINYPY_ABI_VERSION);
-    assert(allocator->struct_size >= (uint32_t)sizeof(*allocator));
-    assert(allocator->allocate != NULL);
-    assert(allocator->deallocate != NULL);
-    assert(message != NULL);
-    assert(logical_filename != NULL || filename_size == 0U);
-    assert(source_line != NULL || source_line_size == 0U);
+    TINYPY_ASSERT(allocator != NULL);
+    TINYPY_ASSERT(allocator->abi_version == TINYPY_ABI_VERSION);
+    TINYPY_ASSERT(allocator->struct_size >= (uint32_t)sizeof(*allocator));
+    TINYPY_ASSERT(allocator->allocate != NULL);
+    TINYPY_ASSERT(allocator->deallocate != NULL);
+    TINYPY_ASSERT(message != NULL);
+    TINYPY_ASSERT(logical_filename != NULL || filename_size == 0U);
+    TINYPY_ASSERT(source_line != NULL || source_line_size == 0U);
 
     message_size = __tinypy_internal_string_length(message);
-    assert(message_size <= SIZE_MAX - sizeof(tinypy_error_t) - 1U);
+    TINYPY_ASSERT(message_size <= SIZE_MAX - sizeof(tinypy_error_t) - 1U);
     allocation_size = sizeof(tinypy_error_t) + message_size + 1U;
-    assert(filename_size <= SIZE_MAX - allocation_size - 1U);
+    TINYPY_ASSERT(filename_size <= SIZE_MAX - allocation_size - 1U);
     allocation_size += filename_size + 1U;
-    assert(source_line_size <= SIZE_MAX - allocation_size - 1U);
+    TINYPY_ASSERT(source_line_size <= SIZE_MAX - allocation_size - 1U);
     allocation_size += source_line_size + 1U;
 
     tinypy_error_t *error = (tinypy_error_t *)allocator->allocate(allocator->user_data, allocation_size, TINYPY_INTERNAL_ALIGNMENT, (uint32_t)TINYPY_ALLOC_TAG_ERROR);
-    assert(error != NULL);
+    TINYPY_ASSERT(error != NULL);
 
     error->allocator = *allocator;
     error->kind = error_kind;
@@ -182,13 +182,13 @@ const char *tinypy_error_kind_name(tinypy_error_kind_e error_kind) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_error_kind_e tinypy_error_kind(const tinypy_error_t *error) {
-    assert(error != NULL);
+    TINYPY_ASSERT(error != NULL);
 
     return error->kind;
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_error_message(const tinypy_error_t *error, size_t *out_size) {
-    assert(error != NULL);
+    TINYPY_ASSERT(error != NULL);
 
     if (out_size != NULL) {
         *out_size = error->message_size;
@@ -198,7 +198,7 @@ const char *tinypy_error_message(const tinypy_error_t *error, size_t *out_size) 
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_error_logical_filename(const tinypy_error_t *error, size_t *out_size) {
-    assert(error != NULL);
+    TINYPY_ASSERT(error != NULL);
     if (out_size != NULL) {
         *out_size = error->filename_size;
     }
@@ -206,7 +206,7 @@ const char *tinypy_error_logical_filename(const tinypy_error_t *error, size_t *o
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_error_source_line(const tinypy_error_t *error, size_t *out_size) {
-    assert(error != NULL);
+    TINYPY_ASSERT(error != NULL);
     if (out_size != NULL) {
         *out_size = error->source_line_size;
     }
@@ -214,12 +214,12 @@ const char *tinypy_error_source_line(const tinypy_error_t *error, size_t *out_si
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_error_line_number(const tinypy_error_t *error) {
-    assert(error != NULL);
+    TINYPY_ASSERT(error != NULL);
     return error->line_number;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_error_column_offset(const tinypy_error_t *error) {
-    assert(error != NULL);
+    TINYPY_ASSERT(error != NULL);
     return error->column_offset;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -227,7 +227,7 @@ void tinypy_error_release(tinypy_error_t *error) {
     tinypy_allocator_t allocator;
     size_t allocation_size;
 
-    assert(error != NULL);
+    TINYPY_ASSERT(error != NULL);
 
     allocator = error->allocator;
     allocation_size = error->allocation_size;

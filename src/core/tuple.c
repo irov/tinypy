@@ -16,7 +16,7 @@ void tinypy_internal_tuple_release_references(tinypy_value_t *value, tinypy_rele
 tinypy_value_t *const *tinypy_internal_tuple_items(const tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE);
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE);
     return value->type == &vm->tuple_type ? TINYPY_TUPLE_OBJECT(value)->items : TINYPY_TUPLE_SUBCLASS_OBJECT(value)->items;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -44,10 +44,10 @@ void tinypy_internal_tuple_subclass_destroy(tinypy_value_t *value) {
 tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, tinypy_value_t *const *items, size_t size) {
     tinypy_vm_t *vm = type->vm;
 
-    assert(type->layout_kind == TINYPY_VALUE_TUPLE);
-    assert(type != &vm->tuple_type);
-    assert(items != NULL || size == 0U);
-    assert(__tinypy_internal_values_belong_to(vm, items, size));
+    TINYPY_ASSERT(type->layout_kind == TINYPY_VALUE_TUPLE);
+    TINYPY_ASSERT(type != &vm->tuple_type);
+    TINYPY_ASSERT(items != NULL || size == 0U);
+    TINYPY_ASSERT(__tinypy_internal_values_belong_to(vm, items, size));
     tinypy_tuple_subclass_object_t *tuple = (tinypy_tuple_subclass_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
     tuple->base.size = size;
     if (size != 0U) {
@@ -63,7 +63,7 @@ tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, t
 static inline size_t __tinypy_internal_tuple_allocation_size(size_t item_count) {
     size_t payload_size;
 
-    assert(item_count <=
+    TINYPY_ASSERT(item_count <=
            (SIZE_MAX - offsetof(tinypy_tuple_object_t, items)) /
                sizeof(tinypy_value_t *));
 
@@ -72,13 +72,13 @@ static inline size_t __tinypy_internal_tuple_allocation_size(size_t item_count) 
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_tuple_from_borrowed_items(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size) {
-    assert(items != NULL || size == 0U);
+    TINYPY_ASSERT(items != NULL || size == 0U);
     if (size == 0U) {
         tinypy_value_t *result = &vm->empty_tuple_object.base.base;
         TINYPY_INCREF(result);
         return result;
     }
-    assert(__tinypy_internal_values_belong_to(vm, items, size));
+    TINYPY_ASSERT(__tinypy_internal_values_belong_to(vm, items, size));
     size_t allocation_size = __tinypy_internal_tuple_allocation_size(size);
     tinypy_value_t *result = tinypy_internal_value_allocate(
         vm, TINYPY_VALUE_TUPLE, allocation_size);
@@ -93,7 +93,7 @@ tinypy_value_t *tinypy_internal_tuple_from_borrowed_items(tinypy_vm_t *vm, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_tuple_new(tinypy_vm_t *vm, size_t size) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     if (size == 0U) {
         tinypy_value_t *result = &vm->empty_tuple_object.base.base;
         TINYPY_INCREF(result);
@@ -113,15 +113,15 @@ tinypy_value_t *tinypy_tuple_new(tinypy_vm_t *vm, size_t size) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_tuple_from_items(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(items != NULL || size == 0U);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(items != NULL || size == 0U);
     if (size == 0U) {
         tinypy_value_t *result = &vm->empty_tuple_object.base.base;
         TINYPY_INCREF(result);
         return result;
     }
     size_t allocation_size = __tinypy_internal_tuple_allocation_size(size);
-    assert(__tinypy_internal_values_belong_to(vm, items, size));
+    TINYPY_ASSERT(__tinypy_internal_values_belong_to(vm, items, size));
 
     tinypy_value_t *result = tinypy_internal_value_allocate(
         vm,
@@ -139,9 +139,9 @@ tinypy_value_t *tinypy_tuple_from_items(tinypy_vm_t *vm, tinypy_value_t *const *
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_tuple_size(const tinypy_value_t *value) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE);
 
     return TINYPY_SIZED_SIZE(value);
 }
@@ -149,22 +149,22 @@ size_t tinypy_tuple_size(const tinypy_value_t *value) {
 tinypy_value_t *tinypy_tuple_get(const tinypy_value_t *value, size_t index) {
     tinypy_value_t *const *items;
 
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE);
-    assert(index < TINYPY_SIZED_SIZE(value));
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE);
+    TINYPY_ASSERT(index < TINYPY_SIZED_SIZE(value));
 
     items = tinypy_internal_tuple_items(value);
     return items[index];
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_tuple_set(tinypy_value_t *value, size_t index, tinypy_value_t *item) {
-    assert(value != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
-    assert(value->type == &TINYPY_VALUE_VM(value)->tuple_type);
-    assert(index < TINYPY_SIZED_SIZE(value));
-    assert(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(value), item));
-    assert(value != item);
+    TINYPY_ASSERT(value != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(value)));
+    TINYPY_ASSERT(value->type == &TINYPY_VALUE_VM(value)->tuple_type);
+    TINYPY_ASSERT(index < TINYPY_SIZED_SIZE(value));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(value), item));
+    TINYPY_ASSERT(value != item);
 
     tinypy_value_t **items = TINYPY_TUPLE_OBJECT(value)->items;
     tinypy_value_t *previous = items[index];

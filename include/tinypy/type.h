@@ -10,7 +10,7 @@ const char *tinypy_type_name(const tinypy_type_t *type, size_t *out_size);
 const tinypy_type_t *tinypy_type_metaclass(const tinypy_type_t *type);
 const tinypy_type_t *tinypy_type_base(const tinypy_type_t *type);
 const tinypy_value_t *tinypy_type_dict(const tinypy_type_t *type);
-int tinypy_type_is_subtype(const tinypy_type_t *type, const tinypy_type_t *candidate_base);
+int32_t tinypy_type_is_subtype(const tinypy_type_t *type, const tinypy_type_t *candidate_base);
 
 /* A type object is also a regular tinypy_value_t. tinypy_type_new creates a Python 2
  * new-style heap type and returns one owned reference. With no bases, object

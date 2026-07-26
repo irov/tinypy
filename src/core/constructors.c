@@ -1,6 +1,6 @@
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <math.h>
 #include <string.h>
 //////////////////////////////////////////////////////////////////////////
@@ -26,19 +26,19 @@ static int32_t __tinypy_constructor_object_has_excess_arguments(tinypy_value_t *
     return TINYPY_TUPLE_SIZE(args) > 1U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_constructor_ascii_space(unsigned char character) {
-    return character == (unsigned char)' ' || character == (unsigned char)'\t' || character == (unsigned char)'\n' || character == (unsigned char)'\r' || character == (unsigned char)'\v' || character == (unsigned char)'\f';
+static int32_t __tinypy_constructor_ascii_space(uint8_t character) {
+    return character == (uint8_t)' ' || character == (uint8_t)'\t' || character == (uint8_t)'\n' || character == (uint8_t)'\r' || character == (uint8_t)'\v' || character == (uint8_t)'\f';
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_constructor_digit(unsigned char character) {
-    if (character >= (unsigned char)'0' && character <= (unsigned char)'9') {
-        return (int32_t)(character - (unsigned char)'0');
+static int32_t __tinypy_constructor_digit(uint8_t character) {
+    if (character >= (uint8_t)'0' && character <= (uint8_t)'9') {
+        return (int32_t)(character - (uint8_t)'0');
     }
-    if (character >= (unsigned char)'a' && character <= (unsigned char)'z') {
-        return (int32_t)(character - (unsigned char)'a') + INT32_C(10);
+    if (character >= (uint8_t)'a' && character <= (uint8_t)'z') {
+        return (int32_t)(character - (uint8_t)'a') + INT32_C(10);
     }
-    if (character >= (unsigned char)'A' && character <= (unsigned char)'Z') {
-        return (int32_t)(character - (unsigned char)'A') + INT32_C(10);
+    if (character >= (uint8_t)'A' && character <= (uint8_t)'Z') {
+        return (int32_t)(character - (uint8_t)'A') + INT32_C(10);
     }
     return INT32_C(-1);
 }
@@ -66,7 +66,7 @@ static int32_t __tinypy_constructor_base_value(tinypy_vm_t *vm, tinypy_value_t *
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_integer_text(tinypy_vm_t *vm, tinypy_value_t *text, int32_t base, int32_t force_long, tinypy_error_t **out_error) {
-    const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(text);
     size_t size = TINYPY_TEXT_BYTE_SIZE(text);
     size_t begin = 0U;
     size_t end = size;
@@ -81,33 +81,33 @@ static tinypy_value_t *__tinypy_constructor_integer_text(tinypy_vm_t *vm, tinypy
     while (end > begin && __tinypy_constructor_ascii_space(bytes[end - 1U]) != 0) {
         end -= 1U;
     }
-    if (begin < end && (bytes[begin] == (unsigned char)'+' || bytes[begin] == (unsigned char)'-')) {
-        if (bytes[begin] == (unsigned char)'-') {
+    if (begin < end && (bytes[begin] == (uint8_t)'+' || bytes[begin] == (uint8_t)'-')) {
+        if (bytes[begin] == (uint8_t)'-') {
             sign = INT32_C(-1);
         }
         begin += 1U;
     }
     if (actual_base == 0) {
-        if (end - begin >= 2U && bytes[begin] == (unsigned char)'0' && (bytes[begin + 1U] == (unsigned char)'x' || bytes[begin + 1U] == (unsigned char)'X')) {
+        if (end - begin >= 2U && bytes[begin] == (uint8_t)'0' && (bytes[begin + 1U] == (uint8_t)'x' || bytes[begin + 1U] == (uint8_t)'X')) {
             actual_base = 16;
             begin += 2U;
         }
-        else if (end - begin >= 2U && bytes[begin] == (unsigned char)'0' && (bytes[begin + 1U] == (unsigned char)'b' || bytes[begin + 1U] == (unsigned char)'B')) {
+        else if (end - begin >= 2U && bytes[begin] == (uint8_t)'0' && (bytes[begin + 1U] == (uint8_t)'b' || bytes[begin + 1U] == (uint8_t)'B')) {
             actual_base = 2;
             begin += 2U;
         }
-        else if (end - begin >= 2U && bytes[begin] == (unsigned char)'0' && (bytes[begin + 1U] == (unsigned char)'o' || bytes[begin + 1U] == (unsigned char)'O')) {
+        else if (end - begin >= 2U && bytes[begin] == (uint8_t)'0' && (bytes[begin + 1U] == (uint8_t)'o' || bytes[begin + 1U] == (uint8_t)'O')) {
             actual_base = 8;
             begin += 2U;
         }
         else {
-            actual_base = begin < end && bytes[begin] == (unsigned char)'0' ? 8 : 10;
+            actual_base = begin < end && bytes[begin] == (uint8_t)'0' ? 8 : 10;
         }
     }
-    else if (end - begin >= 2U && bytes[begin] == (unsigned char)'0') {
-        unsigned char prefix = bytes[begin + 1U];
+    else if (end - begin >= 2U && bytes[begin] == (uint8_t)'0') {
+        uint8_t prefix = bytes[begin + 1U];
 
-        if ((actual_base == 16 && (prefix == (unsigned char)'x' || prefix == (unsigned char)'X')) || (actual_base == 8 && (prefix == (unsigned char)'o' || prefix == (unsigned char)'O')) || (actual_base == 2 && (prefix == (unsigned char)'b' || prefix == (unsigned char)'B'))) {
+        if ((actual_base == 16 && (prefix == (uint8_t)'x' || prefix == (uint8_t)'X')) || (actual_base == 8 && (prefix == (uint8_t)'o' || prefix == (uint8_t)'O')) || (actual_base == 2 && (prefix == (uint8_t)'b' || prefix == (uint8_t)'B'))) {
             begin += 2U;
         }
     }
@@ -190,18 +190,18 @@ static int32_t __tinypy_constructor_number_as_double(tinypy_vm_t *vm, tinypy_val
     return INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_constructor_text_equal_ascii(const unsigned char *bytes, size_t size, const char *ascii) {
+static int32_t __tinypy_constructor_text_equal_ascii(const uint8_t *bytes, size_t size, const char *ascii) {
     size_t index;
 
     for (index = 0U; index < size; ++index) {
-        unsigned char left = bytes[index];
-        unsigned char right = (unsigned char)ascii[index];
+        uint8_t left = bytes[index];
+        uint8_t right = (uint8_t)ascii[index];
 
         if (right == 0U) {
             return INT32_C(0);
         }
-        if (left >= (unsigned char)'A' && left <= (unsigned char)'Z') {
-            left = (unsigned char)(left + ((unsigned char)'a' - (unsigned char)'A'));
+        if (left >= (uint8_t)'A' && left <= (uint8_t)'Z') {
+            left = (uint8_t)(left + ((uint8_t)'a' - (uint8_t)'A'));
         }
         if (left != right) {
             return INT32_C(0);
@@ -211,7 +211,7 @@ static int32_t __tinypy_constructor_text_equal_ascii(const unsigned char *bytes,
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_constructor_float_text(tinypy_vm_t *vm, tinypy_value_t *text, double *out_value, tinypy_error_t **out_error) {
-    const unsigned char *bytes = TINYPY_TEXT_BYTES(text);
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(text);
     size_t size = TINYPY_TEXT_BYTE_SIZE(text);
     size_t begin = 0U;
     size_t end = size;
@@ -229,8 +229,8 @@ static int32_t __tinypy_constructor_float_text(tinypy_vm_t *vm, tinypy_value_t *
     while (end > begin && __tinypy_constructor_ascii_space(bytes[end - 1U]) != 0) {
         end -= 1U;
     }
-    if (begin < end && (bytes[begin] == (unsigned char)'+' || bytes[begin] == (unsigned char)'-')) {
-        if (bytes[begin] == (unsigned char)'-') {
+    if (begin < end && (bytes[begin] == (uint8_t)'+' || bytes[begin] == (uint8_t)'-')) {
+        if (bytes[begin] == (uint8_t)'-') {
             sign = INT32_C(-1);
         }
         begin += 1U;
@@ -244,33 +244,33 @@ static int32_t __tinypy_constructor_float_text(tinypy_vm_t *vm, tinypy_value_t *
         return INT32_C(1);
     }
     index = begin;
-    while (index < end && bytes[index] >= (unsigned char)'0' && bytes[index] <= (unsigned char)'9') {
-        mantissa = mantissa * 10.0 + (double)(bytes[index] - (unsigned char)'0');
+    while (index < end && bytes[index] >= (uint8_t)'0' && bytes[index] <= (uint8_t)'9') {
+        mantissa = mantissa * 10.0 + (double)(bytes[index] - (uint8_t)'0');
         digits += 1U;
         index += 1U;
     }
-    if (index < end && bytes[index] == (unsigned char)'.') {
+    if (index < end && bytes[index] == (uint8_t)'.') {
         index += 1U;
-        while (index < end && bytes[index] >= (unsigned char)'0' && bytes[index] <= (unsigned char)'9') {
-            mantissa = mantissa * 10.0 + (double)(bytes[index] - (unsigned char)'0');
+        while (index < end && bytes[index] >= (uint8_t)'0' && bytes[index] <= (uint8_t)'9') {
+            mantissa = mantissa * 10.0 + (double)(bytes[index] - (uint8_t)'0');
             fractional_digits += 1;
             digits += 1U;
             index += 1U;
         }
     }
-    if (index < end && (bytes[index] == (unsigned char)'e' || bytes[index] == (unsigned char)'E')) {
+    if (index < end && (bytes[index] == (uint8_t)'e' || bytes[index] == (uint8_t)'E')) {
         size_t exponent_digits = 0U;
 
         index += 1U;
-        if (index < end && (bytes[index] == (unsigned char)'+' || bytes[index] == (unsigned char)'-')) {
-            if (bytes[index] == (unsigned char)'-') {
+        if (index < end && (bytes[index] == (uint8_t)'+' || bytes[index] == (uint8_t)'-')) {
+            if (bytes[index] == (uint8_t)'-') {
                 exponent_sign = INT32_C(-1);
             }
             index += 1U;
         }
-        while (index < end && bytes[index] >= (unsigned char)'0' && bytes[index] <= (unsigned char)'9') {
+        while (index < end && bytes[index] >= (uint8_t)'0' && bytes[index] <= (uint8_t)'9') {
             if (exponent < 100000) {
-                exponent = exponent * 10 + (int32_t)(bytes[index] - (unsigned char)'0');
+                exponent = exponent * 10 + (int32_t)(bytes[index] - (uint8_t)'0');
             }
             exponent_digits += 1U;
             index += 1U;
@@ -403,7 +403,7 @@ static tinypy_value_t *__tinypy_constructor_integer_common(tinypy_type_t *type, 
         tinypy_value_t *key = tinypy_string_from_bytes(vm, "base", 4U);
         tinypy_value_t *base_value = TINYPY_DICT_SIZE(kwargs) == 1U ? tinypy_dict_get_optional(kwargs, key) : NULL;
 
-        int condition = base_value == NULL;
+        int32_t condition = base_value == NULL;
         if (condition == 0) {
             condition = __tinypy_constructor_base_value(vm, base_value, &base, out_error) == 0;
         }
@@ -601,7 +601,7 @@ tinypy_value_t *tinypy_internal_unicode_create(tinypy_type_t *type, tinypy_value
         if (text == NULL) {
             return NULL;
         }
-        const unsigned char *bytes_2 = TINYPY_TEXT_BYTES(text);
+        const uint8_t *bytes_2 = TINYPY_TEXT_BYTES(text);
         size_t byte_size = TINYPY_TEXT_BYTE_SIZE(text);
         result = tinypy_unicode_from_utf8(vm, (const char *)bytes_2, byte_size);
         TINYPY_DECREF(text);
@@ -758,7 +758,7 @@ tinypy_value_t *tinypy_internal_dict_create(tinypy_type_t *type, tinypy_value_t 
         return NULL;
     }
     tinypy_value_t *result = tinypy_dict_new(vm);
-    int condition_2 = TINYPY_TUPLE_SIZE(args) == 1U;
+    int32_t condition_2 = TINYPY_TUPLE_SIZE(args) == 1U;
     if (condition_2 != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
         condition_2 = __tinypy_constructor_dict_update(result, item, out_error) == 0;
@@ -803,7 +803,7 @@ static tinypy_value_t *__tinypy_constructor_type_new_method(tinypy_value_t *func
     }
     base_count = TINYPY_TUPLE_SIZE(bases);
     if (base_count != 0U) {
-        assert(base_count <= SIZE_MAX / sizeof(*base_types));
+        TINYPY_ASSERT(base_count <= SIZE_MAX / sizeof(*base_types));
         base_types = (tinypy_type_t **)tinypy_internal_vm_allocate(vm, base_count * sizeof(*base_types), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
     }
     for (index = 0U; index < base_count; ++index) {
@@ -962,9 +962,9 @@ static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t 
         tinypy_value_t **items;
         size_t index;
 
-        assert(argument_count < SIZE_MAX);
+        TINYPY_ASSERT(argument_count < SIZE_MAX);
         output_count = argument_count + 1U;
-        assert(output_count <= SIZE_MAX / sizeof(*items));
+        TINYPY_ASSERT(output_count <= SIZE_MAX / sizeof(*items));
         items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
         items[0] = &self->type->base.base;
         for (index = 0U; index < argument_count; ++index) {

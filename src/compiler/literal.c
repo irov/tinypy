@@ -3,7 +3,7 @@
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_hex_value(unsigned char byte) {
+static int32_t __tinypy_compiler_hex_value(uint8_t byte) {
     if (byte >= '0' && byte <= '9') {
         return (int32_t)(byte - '0');
     }
@@ -16,7 +16,7 @@ static int32_t __tinypy_compiler_hex_value(unsigned char byte) {
     return -1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_integer_digit(unsigned char byte, uint32_t base) {
+static int32_t __tinypy_compiler_integer_digit(uint8_t byte, uint32_t base) {
     int32_t digit = __tinypy_compiler_hex_value(byte);
 
     return digit >= 0 && (uint32_t)digit < base ? digit : -1;
@@ -55,14 +55,14 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
         position += 1U;
     }
     capacity = size + 2U;
-    assert(capacity <= SIZE_MAX / sizeof(*digits));
+    TINYPY_ASSERT(capacity <= SIZE_MAX / sizeof(*digits));
     digits = (uint16_t *)tinypy_internal_compiler_arena_allocate(ctx, capacity * sizeof(*digits));
     if (digits == NULL) {
         __tinypy_compiler_literal_error(ctx, "integer literal exceeds compiler arena limit", line_number, column_offset);
         return NULL;
     }
     while (position < size) {
-        int32_t digit = __tinypy_compiler_integer_digit((unsigned char)text[position], base);
+        int32_t digit = __tinypy_compiler_integer_digit((uint8_t)text[position], base);
         uint32_t carry;
         size_t index;
 
@@ -78,7 +78,7 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
             carry = product >> 15U;
         }
         while (carry != 0U) {
-            assert(digit_count < capacity);
+            TINYPY_ASSERT(digit_count < capacity);
             digits[digit_count] = (uint16_t)(carry & 0x7fffU);
             digit_count += 1U;
             carry >>= 15U;
@@ -123,10 +123,10 @@ tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx,
     int32_t prefixed_integer = 0;
     size_t index;
 
-    assert(ctx != NULL);
-    assert(text != NULL);
+    TINYPY_ASSERT(ctx != NULL);
+    TINYPY_ASSERT(text != NULL);
     size = strlen(text);
-    assert(size != 0U);
+    TINYPY_ASSERT(size != 0U);
     if (text[size - 1U] == 'j' || text[size - 1U] == 'J') {
         imaginary = 1;
         size -= 1U;
@@ -173,7 +173,7 @@ tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx,
     return __tinypy_compiler_parse_integer(ctx, text, size, force_long, line_number, column_offset);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_utf8_append(unsigned char *output, size_t capacity, size_t *size, uint32_t code_point) {
+static int32_t __tinypy_compiler_utf8_append(uint8_t *output, size_t capacity, size_t *size, uint32_t code_point) {
     size_t needed;
 
     if (code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdfff)) {
@@ -198,27 +198,27 @@ static int32_t __tinypy_compiler_utf8_append(unsigned char *output, size_t capac
         return 0;
     }
     if (needed == 1U) {
-        output[(*size)++] = (unsigned char)code_point;
+        output[(*size)++] = (uint8_t)code_point;
     }
     else if (needed == 2U) {
-        output[(*size)++] = (unsigned char)(0xc0U | (code_point >> 6U));
-        output[(*size)++] = (unsigned char)(0x80U | (code_point & 0x3fU));
+        output[(*size)++] = (uint8_t)(0xc0U | (code_point >> 6U));
+        output[(*size)++] = (uint8_t)(0x80U | (code_point & 0x3fU));
     }
     else if (needed == 3U) {
-        output[(*size)++] = (unsigned char)(0xe0U | (code_point >> 12U));
-        output[(*size)++] = (unsigned char)(0x80U | ((code_point >> 6U) & 0x3fU));
-        output[(*size)++] = (unsigned char)(0x80U | (code_point & 0x3fU));
+        output[(*size)++] = (uint8_t)(0xe0U | (code_point >> 12U));
+        output[(*size)++] = (uint8_t)(0x80U | ((code_point >> 6U) & 0x3fU));
+        output[(*size)++] = (uint8_t)(0x80U | (code_point & 0x3fU));
     }
     else {
-        output[(*size)++] = (unsigned char)(0xf0U | (code_point >> 18U));
-        output[(*size)++] = (unsigned char)(0x80U | ((code_point >> 12U) & 0x3fU));
-        output[(*size)++] = (unsigned char)(0x80U | ((code_point >> 6U) & 0x3fU));
-        output[(*size)++] = (unsigned char)(0x80U | (code_point & 0x3fU));
+        output[(*size)++] = (uint8_t)(0xf0U | (code_point >> 18U));
+        output[(*size)++] = (uint8_t)(0x80U | ((code_point >> 12U) & 0x3fU));
+        output[(*size)++] = (uint8_t)(0x80U | ((code_point >> 6U) & 0x3fU));
+        output[(*size)++] = (uint8_t)(0x80U | (code_point & 0x3fU));
     }
     return 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_escape_value(unsigned char byte) {
+static int32_t __tinypy_compiler_escape_value(uint8_t byte) {
     if (byte == 'a') {
         return 7;
     }
@@ -247,21 +247,21 @@ static int32_t __tinypy_compiler_escape_value(unsigned char byte) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx, const char *text, int32_t future_unicode, int32_t line_number, int32_t column_offset) {
-    const unsigned char *source = (const unsigned char *)text;
+    const uint8_t *source = (const uint8_t *)text;
     size_t size = strlen(text);
     size_t position = 0U;
     int32_t raw = 0;
     int32_t unicode = future_unicode;
     int32_t decoded_escape = 0;
-    unsigned char quote;
+    uint8_t quote;
     size_t quote_size = 1U;
     size_t content_end;
     size_t capacity;
-    unsigned char *output;
+    uint8_t *output;
     size_t output_size = 0U;
 
     while (position < size && source[position] != '\'' && source[position] != '"') {
-        unsigned char prefix = source[position];
+        uint8_t prefix = source[position];
 
         if (prefix == 'r' || prefix == 'R') {
             raw = 1;
@@ -293,13 +293,13 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
     }
     content_end = size - quote_size;
     capacity = (content_end - position) * 4U + 1U;
-    output = (unsigned char *)tinypy_internal_compiler_arena_allocate(ctx, capacity);
+    output = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, capacity);
     if (output == NULL) {
         __tinypy_compiler_literal_error(ctx, "string literal exceeds compiler arena limit", line_number, column_offset);
         return NULL;
     }
     while (position < content_end) {
-        unsigned char byte = source[position++];
+        uint8_t byte = source[position++];
 
         if (byte != '\\') {
             output[output_size++] = byte;
@@ -322,7 +322,7 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
             int32_t escaped = __tinypy_compiler_escape_value(byte);
 
             if (escaped >= 0) {
-                output[output_size++] = (unsigned char)escaped;
+                output[output_size++] = (uint8_t)escaped;
                 continue;
             }
         }
@@ -339,7 +339,7 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
                 (void)__tinypy_compiler_utf8_append(output, capacity, &output_size, value);
             }
             else {
-                output[output_size++] = (unsigned char)(value & 0xffU);
+                output[output_size++] = (uint8_t)(value & 0xffU);
             }
             continue;
         }
@@ -369,7 +369,7 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
                 }
             }
             else {
-                output[output_size++] = (unsigned char)value;
+                output[output_size++] = (uint8_t)value;
             }
             continue;
         }
@@ -415,35 +415,35 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
 tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ctx, tinypy_value_t *left, tinypy_value_t *right, int32_t line_number, int32_t column_offset) {
     tinypy_value_type_e left_type;
     tinypy_value_type_e right_type;
-    const unsigned char *left_bytes;
-    const unsigned char *right_bytes;
+    const uint8_t *left_bytes;
+    const uint8_t *right_bytes;
     size_t left_size;
     size_t right_size;
-    unsigned char *joined;
+    uint8_t *joined;
     int32_t unicode;
     size_t index;
 
-    assert(ctx != NULL);
-    assert(left != NULL);
-    assert(right != NULL);
+    TINYPY_ASSERT(ctx != NULL);
+    TINYPY_ASSERT(left != NULL);
+    TINYPY_ASSERT(right != NULL);
     left_type = tinypy_typeof(left);
     right_type = tinypy_typeof(right);
     unicode = left_type == TINYPY_VALUE_UNICODE || right_type == TINYPY_VALUE_UNICODE;
     if (left_type == TINYPY_VALUE_UNICODE) {
         size_t code_point_count;
 
-        left_bytes = (const unsigned char *)tinypy_unicode_utf8_view(left, &left_size, &code_point_count);
+        left_bytes = (const uint8_t *)tinypy_unicode_utf8_view(left, &left_size, &code_point_count);
     }
     else {
-        left_bytes = (const unsigned char *)tinypy_string_view(left, &left_size);
+        left_bytes = (const uint8_t *)tinypy_string_view(left, &left_size);
     }
     if (right_type == TINYPY_VALUE_UNICODE) {
         size_t code_point_count;
 
-        right_bytes = (const unsigned char *)tinypy_unicode_utf8_view(right, &right_size, &code_point_count);
+        right_bytes = (const uint8_t *)tinypy_unicode_utf8_view(right, &right_size, &code_point_count);
     }
     else {
-        right_bytes = (const unsigned char *)tinypy_string_view(right, &right_size);
+        right_bytes = (const uint8_t *)tinypy_string_view(right, &right_size);
     }
     if (unicode != 0) {
         if (left_type == TINYPY_VALUE_STRING) {
@@ -461,8 +461,8 @@ tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ct
             }
         }
     }
-    assert(left_size <= SIZE_MAX - right_size);
-    joined = (unsigned char *)tinypy_internal_compiler_arena_allocate(ctx, left_size + right_size + 1U);
+    TINYPY_ASSERT(left_size <= SIZE_MAX - right_size);
+    joined = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, left_size + right_size + 1U);
     if (joined == NULL) {
         __tinypy_compiler_literal_error(ctx, "concatenated string exceeds compiler arena limit", line_number, column_offset);
         return NULL;

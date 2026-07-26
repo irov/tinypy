@@ -2,13 +2,13 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_module_from_dict(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *dict) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(name != NULL || name_size == 0U);
-    assert(tinypy_internal_value_belongs_to(vm, dict));
-    assert(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(name != NULL || name_size == 0U);
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, dict));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT);
     tinypy_module_object_t *module = (tinypy_module_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_MODULE, sizeof(*module));
     module->name = tinypy_string_from_bytes(vm, name, name_size);
     module->dict = dict;
@@ -17,8 +17,8 @@ tinypy_value_t *tinypy_internal_module_from_dict(tinypy_vm_t *vm, const char *na
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_module_new(tinypy_vm_t *vm, const char *name, size_t name_size) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(name != NULL || name_size == 0U);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(name != NULL || name_size == 0U);
     tinypy_value_t *dict = tinypy_dict_new(vm);
     tinypy_value_t *module = tinypy_internal_module_from_dict(vm, name, name_size, dict);
     TINYPY_DECREF(dict);
@@ -33,26 +33,26 @@ void tinypy_internal_module_release_references(tinypy_value_t *value, tinypy_rel
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_module_dict(const tinypy_value_t *module) {
-    assert(module != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(module)));
-    assert(TINYPY_VALUE_KIND(module) == TINYPY_VALUE_MODULE);
+    TINYPY_ASSERT(module != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(module)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(module) == TINYPY_VALUE_MODULE);
     return TINYPY_MODULE_OBJECT((tinypy_value_t *)module)->dict;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_module_name(const tinypy_value_t *module) {
-    assert(module != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(module)));
-    assert(TINYPY_VALUE_KIND(module) == TINYPY_VALUE_MODULE);
+    TINYPY_ASSERT(module != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(module)));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(module) == TINYPY_VALUE_MODULE);
     return TINYPY_MODULE_OBJECT((tinypy_value_t *)module)->name;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_module_add_value(tinypy_value_t *module_value, const char *name, size_t name_size, tinypy_value_t *value) {
-    assert(module_value != NULL);
+    TINYPY_ASSERT(module_value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module_value);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(TINYPY_VALUE_KIND(module_value) == TINYPY_VALUE_MODULE);
-    assert(name != NULL || name_size == 0U);
-    assert(tinypy_internal_value_belongs_to(vm, value));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(module_value) == TINYPY_VALUE_MODULE);
+    TINYPY_ASSERT(name != NULL || name_size == 0U);
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, value));
     tinypy_module_object_t *module = TINYPY_MODULE_OBJECT(module_value);
     tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
     tinypy_dict_set(module->dict, key, value);
@@ -62,11 +62,11 @@ void tinypy_module_add_value(tinypy_value_t *module_value, const char *name, siz
 tinypy_value_t *tinypy_module_get_value(tinypy_value_t *module_value, const char *name, size_t name_size) {
     tinypy_value_t *value;
 
-    assert(module_value != NULL);
+    TINYPY_ASSERT(module_value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module_value);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(TINYPY_VALUE_KIND(module_value) == TINYPY_VALUE_MODULE);
-    assert(name != NULL || name_size == 0U);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(TINYPY_VALUE_KIND(module_value) == TINYPY_VALUE_MODULE);
+    TINYPY_ASSERT(name != NULL || name_size == 0U);
     tinypy_module_object_t *module = TINYPY_MODULE_OBJECT(module_value);
     tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
     value = tinypy_dict_get_optional(module->dict, key);
@@ -75,13 +75,13 @@ tinypy_value_t *tinypy_module_get_value(tinypy_value_t *module_value, const char
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_vm_modules(const tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     return vm->modules;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_vm_set_module_finder(tinypy_vm_t *vm, tinypy_value_t *finder) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(finder == NULL || tinypy_internal_value_belongs_to(vm, finder));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(finder == NULL || tinypy_internal_value_belongs_to(vm, finder));
     if (finder != NULL) {
         TINYPY_INCREF(finder);
     }
@@ -93,6 +93,6 @@ void tinypy_vm_set_module_finder(tinypy_vm_t *vm, tinypy_value_t *finder) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_vm_module_finder(const tinypy_vm_t *vm) {
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     return vm->module_finder;
 }

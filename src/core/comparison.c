@@ -2,16 +2,16 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 #include <math.h>
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_comparison_is_numeric(tinypy_value_type_e kind) {
+static int32_t __tinypy_comparison_is_numeric(tinypy_value_type_e kind) {
     return kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_comparison_is_exact_builtin(const tinypy_value_t *value) {
+static int32_t __tinypy_comparison_is_exact_builtin(const tinypy_value_t *value) {
     if ((value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
         return 0;
     }
@@ -55,9 +55,9 @@ static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver,
 int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_type_e kind;
 
-    assert(value != NULL);
+    TINYPY_ASSERT(value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    assert(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     TINYPY_CLEAR_ERROR(out_error);
     kind = TINYPY_VALUE_KIND(value);
     switch (kind) {
@@ -158,7 +158,7 @@ int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_comparison_type_name_order(const tinypy_type_t *left, const tinypy_type_t *right) {
     size_t common_size = left->name_size < right->name_size ? left->name_size : right->name_size;
-    int comparison = common_size != 0U ? memcmp(left->name, right->name, common_size) : 0;
+    int32_t comparison = common_size != 0U ? memcmp(left->name, right->name, common_size) : 0;
 
     if (comparison != 0) {
         return comparison < 0 ? -1 : 1;
@@ -172,7 +172,7 @@ static int32_t __tinypy_comparison_type_name_order(const tinypy_type_t *left, co
     return (uintptr_t)left < (uintptr_t)right ? -1 : 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, int *out_unordered, tinypy_error_t **out_error) {
+static int32_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, int32_t *out_unordered, tinypy_error_t **out_error) {
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
 
@@ -194,12 +194,12 @@ static int __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *right
         return 1;
     }
     if ((left_kind == TINYPY_VALUE_BYTEARRAY || right_kind == TINYPY_VALUE_BYTEARRAY || left_kind == TINYPY_VALUE_BUFFER || right_kind == TINYPY_VALUE_BUFFER)) {
-        const unsigned char *left_bytes;
-        const unsigned char *right_bytes;
+        const uint8_t *left_bytes;
+        const uint8_t *right_bytes;
         size_t left_size;
         size_t right_size;
         size_t common_size;
-        int comparison;
+        int32_t comparison;
 
         if (tinypy_internal_bytes_view(left, &left_bytes, &left_size) != 0 && tinypy_internal_bytes_view(right, &right_bytes, &right_size) != 0) {
             common_size = left_size < right_size ? left_size : right_size;
@@ -215,10 +215,10 @@ static int __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *right
         tinypy_value_t *const *left_iterator = left_kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_ITERATOR_BEGIN(left) : TINYPY_LIST_ITERATOR_BEGIN(left);
         tinypy_value_t *const *left_iterator_end = common_size != 0U ? left_iterator + common_size : left_iterator;
         tinypy_value_t *const *right_iterator = right_kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_ITERATOR_BEGIN(right) : TINYPY_LIST_ITERATOR_BEGIN(right);
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
         tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
 
-        assert(vm->equality_depth < 1000U);
+        TINYPY_ASSERT(vm->equality_depth < 1000U);
         vm->equality_depth += 1U;
 #endif
         for (; left_iterator != left_iterator_end; ++left_iterator, ++right_iterator) {
@@ -226,14 +226,14 @@ static int __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *right
             tinypy_value_t *right_item = *right_iterator;
 
             if (tinypy_internal_equal_value(left_item, right_item, 1) == 0) {
-                int ordered = __tinypy_comparison_order(left_item, right_item, out_order, out_unordered, out_error);
-#ifndef NDEBUG
+                int32_t ordered = __tinypy_comparison_order(left_item, right_item, out_order, out_unordered, out_error);
+#if defined(TINYPY_ENABLE_ASSERTS)
                 vm->equality_depth -= 1U;
 #endif
                 return ordered;
             }
         }
-#ifndef NDEBUG
+#if defined(TINYPY_ENABLE_ASSERTS)
         vm->equality_depth -= 1U;
 #endif
         *out_order = left_size < right_size ? -1 : (left_size > right_size ? 1 : 0);
@@ -305,8 +305,8 @@ static int __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *right
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error) {
-    const unsigned char *container_bytes;
-    const unsigned char *item_bytes;
+    const uint8_t *container_bytes;
+    const uint8_t *item_bytes;
     size_t container_size;
     size_t item_size;
     size_t index;
@@ -337,10 +337,10 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
 int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error) {
     tinypy_value_type_e kind;
 
-    assert(container != NULL && item != NULL);
+    TINYPY_ASSERT(container != NULL && item != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(tinypy_internal_value_belongs_to(vm, item));
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, item));
     TINYPY_CLEAR_ERROR(out_error);
     if (container->type->sequence_slots != NULL && container->type->sequence_slots->contains != NULL) {
         return container->type->sequence_slots->contains(container, item, out_error);
@@ -361,7 +361,7 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
         size_t index;
 
         tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(item);
-        int condition = __tinypy_comparison_is_numeric(kind_2) == 0;
+        int32_t condition = __tinypy_comparison_is_numeric(kind_2) == 0;
         if (condition == 0) {
             condition = (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_FLOAT || TINYPY_VALUE_KIND(item) == TINYPY_VALUE_COMPLEX);
         }
@@ -382,7 +382,7 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
             return 0;
         }
         for (index = 0U; index < size; ++index) {
-            if (TINYPY_BYTEARRAY_OBJECT(container)->bytes[index] == (unsigned char)integer) {
+            if (TINYPY_BYTEARRAY_OBJECT(container)->bytes[index] == (uint8_t)integer) {
                 return 1;
             }
         }
@@ -492,7 +492,7 @@ static tinypy_compare_operation_e __tinypy_comparison_reverse_operation(tinypy_c
         TINYPY_COMPARE_LESS,
         TINYPY_COMPARE_LESS_EQUAL};
 
-    assert(operation <= TINYPY_COMPARE_GREATER_EQUAL);
+    TINYPY_ASSERT(operation <= TINYPY_COMPARE_GREATER_EQUAL);
     return reversed[(size_t)operation];
 }
 //////////////////////////////////////////////////////////////////////////
@@ -504,7 +504,7 @@ static int32_t __tinypy_comparison_try_rich_slot(tinypy_value_t *receiver, tinyp
     if (receiver->type->rich_compare == NULL) {
         return INT32_C(1);
     }
-    result = receiver->type->rich_compare(receiver, argument, (int)operation, out_error);
+    result = receiver->type->rich_compare(receiver, argument, (int32_t)operation, out_error);
     if (result == NULL) {
         *out_handled = INT32_C(1);
         return INT32_C(0);
@@ -633,12 +633,12 @@ static int32_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_valu
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_compare_bool(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error) {
     int32_t order;
-    int unordered;
+    int32_t unordered;
 
-    assert(left != NULL && right != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(left)));
-    assert(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(left), right));
-    assert(operation >= TINYPY_COMPARE_LESS && operation <= TINYPY_COMPARE_EXCEPTION_MATCH);
+    TINYPY_ASSERT(left != NULL && right != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(left)));
+    TINYPY_ASSERT(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(left), right));
+    TINYPY_ASSERT(operation >= TINYPY_COMPARE_LESS && operation <= TINYPY_COMPARE_EXCEPTION_MATCH);
     TINYPY_CLEAR_ERROR(out_error);
     if (operation == TINYPY_COMPARE_IS) {
         return left == right;

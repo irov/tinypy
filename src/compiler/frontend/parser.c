@@ -20,12 +20,12 @@
 /* STACK DATA TYPE */
 
 static void __tinypy_frontend_stack_reset(tinypy_parser_stack_t *);
-static int __tinypy_frontend_stack_push(tinypy_parser_stack_t *, const tinypy_parser_dfa_t *, tinypy_cst_node_t *);
+static int32_t __tinypy_frontend_stack_push(tinypy_parser_stack_t *, const tinypy_parser_dfa_t *, tinypy_cst_node_t *);
 static void __tinypy_frontend_stack_pop(tinypy_parser_stack_t *);
-static const tinypy_parser_dfa_t *__tinypy_frontend_find_dfa(const tinypy_parser_grammar_t *, int);
-static int __tinypy_frontend_state_accepts(const tinypy_parser_dfa_state_t *);
-static int __tinypy_frontend_state_transition(const tinypy_parser_grammar_t *, const tinypy_parser_dfa_state_t *, int, int *, const tinypy_parser_dfa_t **, int *);
-static int __tinypy_frontend_state_expected(const tinypy_parser_grammar_t *, const tinypy_parser_dfa_state_t *);
+static const tinypy_parser_dfa_t *__tinypy_frontend_find_dfa(const tinypy_parser_grammar_t *, int32_t);
+static int32_t __tinypy_frontend_state_accepts(const tinypy_parser_dfa_state_t *);
+static int32_t __tinypy_frontend_state_transition(const tinypy_parser_grammar_t *, const tinypy_parser_dfa_state_t *, int32_t, int32_t *, const tinypy_parser_dfa_t **, int32_t *);
+static int32_t __tinypy_frontend_state_expected(const tinypy_parser_grammar_t *, const tinypy_parser_dfa_state_t *);
 
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_frontend_stack_reset(tinypy_parser_stack_t *s) {
@@ -35,7 +35,7 @@ static void __tinypy_frontend_stack_reset(tinypy_parser_stack_t *s) {
 #define TINYPY_PARSER_STACK_EMPTY(s) ((s)->top == &(s)->entries[TINYPY_PARSER_MAX_STACK])
 
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_stack_push(register tinypy_parser_stack_t *s, const tinypy_parser_dfa_t *d, tinypy_cst_node_t *parent) {
+static int32_t __tinypy_frontend_stack_push(register tinypy_parser_stack_t *s, const tinypy_parser_dfa_t *d, tinypy_cst_node_t *parent) {
     register tinypy_parser_stack_entry_t *top;
     size_t depth;
 
@@ -54,20 +54,20 @@ static int __tinypy_frontend_stack_push(register tinypy_parser_stack_t *s, const
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_frontend_stack_pop(register tinypy_parser_stack_t *s) {
-    assert(!TINYPY_PARSER_STACK_EMPTY(s));
+    TINYPY_ASSERT(!TINYPY_PARSER_STACK_EMPTY(s));
     s->top++;
 }
 //////////////////////////////////////////////////////////////////////////
-static const tinypy_parser_dfa_t *__tinypy_frontend_find_dfa(const tinypy_parser_grammar_t *g, int type) {
-    int index = type - g->rules[0].symbol;
+static const tinypy_parser_dfa_t *__tinypy_frontend_find_dfa(const tinypy_parser_grammar_t *g, int32_t type) {
+    int32_t index = type - g->rules[0].symbol;
 
-    assert(index >= 0 && index < g->rule_count);
-    assert(g->rules[index].symbol == type);
+    TINYPY_ASSERT(index >= 0 && index < g->rule_count);
+    TINYPY_ASSERT(g->rules[index].symbol == type);
     return &g->rules[index];
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_state_accepts(const tinypy_parser_dfa_state_t *s) {
-    int index;
+static int32_t __tinypy_frontend_state_accepts(const tinypy_parser_dfa_state_t *s) {
+    int32_t index;
 
     for (index = 0; index < s->transition_count; index++) {
         if (s->transitions[index].label_index == TINYPY_GRAMMAR_EMPTY_LABEL) {
@@ -77,9 +77,9 @@ static int __tinypy_frontend_state_accepts(const tinypy_parser_dfa_state_t *s) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_state_expected(const tinypy_parser_grammar_t *g, const tinypy_parser_dfa_state_t *s) {
-    int expected = -1;
-    int index;
+static int32_t __tinypy_frontend_state_expected(const tinypy_parser_grammar_t *g, const tinypy_parser_dfa_state_t *s) {
+    int32_t expected = -1;
+    int32_t index;
 
     for (index = 0; index < s->transition_count; index++) {
         const tinypy_parser_arc_t *candidate = &s->transitions[index];
@@ -100,8 +100,8 @@ static int __tinypy_frontend_state_expected(const tinypy_parser_grammar_t *g, co
     return expected;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_state_transition(const tinypy_parser_grammar_t *g, const tinypy_parser_dfa_state_t *s, int ilabel, int *arrow, const tinypy_parser_dfa_t **push_dfa, int *push_type) {
-    int index;
+static int32_t __tinypy_frontend_state_transition(const tinypy_parser_grammar_t *g, const tinypy_parser_dfa_state_t *s, int32_t ilabel, int32_t *arrow, const tinypy_parser_dfa_t **push_dfa, int32_t *push_type) {
+    int32_t index;
 
     *arrow = -1;
     *push_dfa = NULL;
@@ -119,7 +119,7 @@ static int __tinypy_frontend_state_transition(const tinypy_parser_grammar_t *g, 
             if (candidate->label_index != ilabel) {
                 continue;
             }
-            assert(*arrow == -1);
+            TINYPY_ASSERT(*arrow == -1);
             *arrow = candidate->target_state;
             return 1;
         }
@@ -127,7 +127,7 @@ static int __tinypy_frontend_state_transition(const tinypy_parser_grammar_t *g, 
         if (!TINYPY_BITSET_TEST(nested->first_set, ilabel)) {
             continue;
         }
-        assert(*arrow == -1);
+        TINYPY_ASSERT(*arrow == -1);
         *arrow = candidate->target_state;
         *push_dfa = nested;
         *push_type = candidate_label->token_type;
@@ -139,7 +139,7 @@ static int __tinypy_frontend_state_transition(const tinypy_parser_grammar_t *g, 
 /* PARSER CREATION */
 
 //////////////////////////////////////////////////////////////////////////
-tinypy_parser_t *tinypy_internal_parser_new(tinypy_compile_ctx_t *ctx, const tinypy_parser_grammar_t *g, int start) {
+tinypy_parser_t *tinypy_internal_parser_new(tinypy_compile_ctx_t *ctx, const tinypy_parser_grammar_t *g, int32_t start) {
 
     tinypy_parser_t *ps = (tinypy_parser_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(tinypy_parser_t));
     if (ps == NULL) {
@@ -170,9 +170,9 @@ void tinypy_internal_parser_release(tinypy_parser_t *ps) {
 /* PARSER STACK OPERATIONS */
 
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_shift(register tinypy_parser_stack_t *s, int type, char *str, int newstate, int lineno, int col_offset) {
-    int err;
-    assert(!TINYPY_PARSER_STACK_EMPTY(s));
+static int32_t __tinypy_frontend_shift(register tinypy_parser_stack_t *s, int32_t type, char *str, int32_t newstate, int32_t lineno, int32_t col_offset) {
+    int32_t err;
+    TINYPY_ASSERT(!TINYPY_PARSER_STACK_EMPTY(s));
     err = tinypy_internal_compiler_cst_add_child(s->top->parent, type, str, lineno, col_offset);
     if (err) {
         return err;
@@ -181,11 +181,11 @@ static int __tinypy_frontend_shift(register tinypy_parser_stack_t *s, int type, 
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_push(register tinypy_parser_stack_t *s, int type, const tinypy_parser_dfa_t *d, int newstate, int lineno, int col_offset) {
-    int err;
+static int32_t __tinypy_frontend_push(register tinypy_parser_stack_t *s, int32_t type, const tinypy_parser_dfa_t *d, int32_t newstate, int32_t lineno, int32_t col_offset) {
+    int32_t err;
     register tinypy_cst_node_t *n;
     n = s->top->parent;
-    assert(!TINYPY_PARSER_STACK_EMPTY(s));
+    TINYPY_ASSERT(!TINYPY_PARSER_STACK_EMPTY(s));
     err = tinypy_internal_compiler_cst_add_child(n, type, (char *)NULL, lineno, col_offset);
     if (err) {
         return err;
@@ -197,7 +197,7 @@ static int __tinypy_frontend_push(register tinypy_parser_stack_t *s, int type, c
 /* PARSER PROPER */
 
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_keyword_label(const char *text) {
+static int32_t __tinypy_frontend_keyword_label(const char *text) {
     switch (text[0]) {
     case 'a':
         if (strcmp(text, "and") == 0) {
@@ -330,7 +330,7 @@ static int __tinypy_frontend_keyword_label(const char *text) {
     return -1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int __tinypy_frontend_classify(tinypy_parser_t *ps, int type, char *str) {
+static int32_t __tinypy_frontend_classify(tinypy_parser_t *ps, int32_t type, char *str) {
     static const int16_t token_labels[TINYPY_TOKEN_COUNT] = {
         7, 21, 154, 155, 2, 103, 104, 13, 15, 146, 148, 23, 29, 34,
         135, 136, 30, 138, 127, 131, 118, 119, 27, 77, 139, 152, 149,
@@ -338,7 +338,7 @@ static int __tinypy_frontend_classify(tinypy_parser_t *ps, int type, char *str) 
         50, 51, 52, 53, 54, 55, 56, 140, 57, 11, -1, -1};
 
     if (type == TINYPY_TOKEN_NAME) {
-        int keyword_label = __tinypy_frontend_keyword_label(str);
+        int32_t keyword_label = __tinypy_frontend_keyword_label(str);
 
         if (keyword_label >= 0 && !(keyword_label == 58 && (ps->flags & TINYPY_CODE_FUTURE_PRINT_FUNCTION) != 0U)) {
             return keyword_label;
@@ -353,7 +353,7 @@ static int __tinypy_frontend_classify(tinypy_parser_t *ps, int type, char *str) 
 static void __tinypy_frontend_future_hack(tinypy_parser_t *ps) {
     tinypy_cst_node_t *n = ps->stack.top->parent;
     tinypy_cst_node_t *ch, *cch;
-    int i;
+    int32_t i;
 
     /* from __future__ import ..., must have at least 4 children */
     n = TINYPY_CST_CHILD(n, 0);
@@ -394,9 +394,9 @@ static void __tinypy_frontend_future_hack(tinypy_parser_t *ps) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-int tinypy_internal_parser_add_token(register tinypy_parser_t *ps, register int type, char *str, int lineno, int col_offset, int *expected_ret) {
-    register int ilabel;
-    int err;
+int32_t tinypy_internal_parser_add_token(register tinypy_parser_t *ps, register int32_t type, char *str, int32_t lineno, int32_t col_offset, int32_t *expected_ret) {
+    register int32_t ilabel;
+    int32_t err;
 
     TINYPY_PARSER_TRACE("Token %s/'%s' ... ", __tinypy_parser_token_names[type], str);
 
@@ -416,8 +416,8 @@ int tinypy_internal_parser_add_token(register tinypy_parser_t *ps, register int 
                             d->name, ps->stack.top->state_index);
 
         {
-            int arrow;
-            int push_type;
+            int32_t arrow;
+            int32_t push_type;
             const tinypy_parser_dfa_t *push_dfa;
 
             if (__tinypy_frontend_state_transition(ps->grammar, s, ilabel,

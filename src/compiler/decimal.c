@@ -19,10 +19,10 @@ static int32_t __tinypy_decimal_bigint_reserve(tinypy_decimal_bigint_t *value, s
     }
     new_capacity = value->capacity == 0U ? 4U : value->capacity;
     while (new_capacity < capacity) {
-        assert(new_capacity <= SIZE_MAX / 2U);
+        TINYPY_ASSERT(new_capacity <= SIZE_MAX / 2U);
         new_capacity *= 2U;
     }
-    assert(new_capacity <= SIZE_MAX / sizeof(*words));
+    TINYPY_ASSERT(new_capacity <= SIZE_MAX / sizeof(*words));
     words = (uint32_t *)tinypy_internal_compiler_arena_allocate(value->ctx, new_capacity * sizeof(*words));
     if (words == NULL) {
         return INT32_C(0);
@@ -142,7 +142,7 @@ static void __tinypy_decimal_bigint_subtract_shifted(tinypy_decimal_bigint_t *le
     uint64_t borrow = 0U;
     size_t index;
 
-    assert(__tinypy_decimal_bigint_compare_shifted(left, right, right_shift) >= 0);
+    TINYPY_ASSERT(__tinypy_decimal_bigint_compare_shifted(left, right, right_shift) >= 0);
     for (index = 0U; index < left->count; ++index) {
         uint64_t subtrahend = (index < right_count ? (uint64_t)__tinypy_decimal_bigint_shifted_word(right, index, right_shift) : 0U) + borrow;
         uint64_t minuend = left->words[index];
@@ -150,7 +150,7 @@ static void __tinypy_decimal_bigint_subtract_shifted(tinypy_decimal_bigint_t *le
         left->words[index] = (uint32_t)(minuend - subtrahend);
         borrow = minuend < subtrahend ? 1U : 0U;
     }
-    assert(borrow == 0U);
+    TINYPY_ASSERT(borrow == 0U);
     while (left->count != 0U && left->words[left->count - 1U] == 0U) {
         left->count -= 1U;
     }
@@ -191,13 +191,13 @@ static int32_t __tinypy_decimal_bigint_quotient_u64(tinypy_decimal_bigint_t *num
     size_t shift;
     uint64_t quotient = 0U;
 
-    assert(denominator_bits != 0U);
+    TINYPY_ASSERT(denominator_bits != 0U);
     if (numerator_bits < denominator_bits) {
         *out_quotient = 0U;
         return INT32_C(1);
     }
     shift = numerator_bits - denominator_bits;
-    assert(shift < 64U);
+    TINYPY_ASSERT(shift < 64U);
     for (;;) {
         if (__tinypy_decimal_bigint_compare_shifted(numerator, denominator, shift) >= 0) {
             __tinypy_decimal_bigint_subtract_shifted(numerator, denominator, shift);
@@ -239,9 +239,9 @@ int32_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const
     uint64_t bits;
     size_t index;
 
-    assert(ctx != NULL);
-    assert(text != NULL);
-    assert(out_value != NULL);
+    TINYPY_ASSERT(ctx != NULL);
+    TINYPY_ASSERT(text != NULL);
+    TINYPY_ASSERT(out_value != NULL);
     if (position < size && (text[position] == '+' || text[position] == '-')) {
         negative = text[position] == '-' ? 1 : 0;
         position += 1U;
@@ -250,7 +250,7 @@ int32_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const
         return __tinypy_decimal_fail_limit(ctx, line_number, column_offset);
     }
     while (position < size && text[position] != 'e' && text[position] != 'E') {
-        unsigned char byte = (unsigned char)text[position];
+        uint8_t byte = (uint8_t)text[position];
 
         if (byte == '.') {
             past_decimal = 1;
@@ -287,7 +287,7 @@ int32_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const
             return INT32_C(0);
         }
         while (position < size) {
-            unsigned char byte = (unsigned char)text[position];
+            uint8_t byte = (uint8_t)text[position];
 
             if (byte < '0' || byte > '9') {
                 return INT32_C(0);

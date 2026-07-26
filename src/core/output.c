@@ -2,31 +2,31 @@
 
 #include "internal.h"
 
-#include <assert.h>
+#include "assertion.h"
 
 //////////////////////////////////////////////////////////////////////////
 void tinypy_output_emit(tinypy_vm_t *vm, tinypy_output_channel_e channel, const void *bytes, size_t size) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(channel == TINYPY_OUTPUT_STDOUT || channel == TINYPY_OUTPUT_STDERR || channel == TINYPY_OUTPUT_UNRAISABLE);
-    assert(bytes != NULL || size == 0U);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(channel == TINYPY_OUTPUT_STDOUT || channel == TINYPY_OUTPUT_STDERR || channel == TINYPY_OUTPUT_UNRAISABLE);
+    TINYPY_ASSERT(bytes != NULL || size == 0U);
     if (vm->has_host != 0 && vm->host.emit_output != NULL && size != 0U) {
         vm->host.emit_output(vm->host.user_data, channel, bytes, size);
     }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_output_stream_new(tinypy_vm_t *vm, tinypy_output_channel_e channel) {
-    assert(tinypy_internal_vm_valid(vm));
-    assert(channel == TINYPY_OUTPUT_STDOUT || channel == TINYPY_OUTPUT_STDERR || channel == TINYPY_OUTPUT_UNRAISABLE);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(channel == TINYPY_OUTPUT_STDOUT || channel == TINYPY_OUTPUT_STDERR || channel == TINYPY_OUTPUT_UNRAISABLE);
     tinypy_output_stream_object_t *stream = (tinypy_output_stream_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_OUTPUT_STREAM, sizeof(*stream));
     stream->channel = channel;
     return &stream->base;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_output_write(tinypy_value_t *target, const void *bytes, size_t size, tinypy_error_t **out_error) {
-    assert(target != NULL);
+    TINYPY_ASSERT(target != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-    assert(tinypy_internal_vm_valid(vm));
-    assert(bytes != NULL || size == 0U);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
+    TINYPY_ASSERT(bytes != NULL || size == 0U);
     TINYPY_CLEAR_ERROR(out_error);
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_OUTPUT_STREAM) {
         tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(target)->channel, bytes, size);
@@ -61,8 +61,8 @@ int32_t tinypy_internal_output_write(tinypy_value_t *target, const void *bytes, 
 int32_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
     tinypy_value_type_e kind;
 
-    assert(target != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(target)));
+    TINYPY_ASSERT(target != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(target)));
     kind = TINYPY_VALUE_KIND(target);
     if (kind == TINYPY_VALUE_OUTPUT_STREAM) {
         return TINYPY_OUTPUT_STREAM_OBJECT(target)->soft_space;
@@ -106,8 +106,8 @@ int32_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_output_set_soft_space(tinypy_value_t *target, int32_t soft_space) {
-    assert(target != NULL);
-    assert(tinypy_internal_vm_valid(TINYPY_VALUE_VM(target)));
+    TINYPY_ASSERT(target != NULL);
+    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(target)));
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_OUTPUT_STREAM) {
         TINYPY_OUTPUT_STREAM_OBJECT(target)->soft_space = soft_space != 0 ? INT32_C(1) : INT32_C(0);
     }
