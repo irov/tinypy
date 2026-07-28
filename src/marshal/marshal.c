@@ -454,11 +454,17 @@ static double __tinypy_marshal_double_from_bits(uint64_t bits) {
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_marshal_supports_binary64(void) {
+    return sizeof(double) == 8U && DBL_MANT_DIG == 53 && DBL_MAX_EXP == 1024
+               ? TINYPY_TRUE
+               : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_marshal_binary_double(const uint8_t *bytes, double *out_value) {
     uint64_t bits = 0U;
     size_t index;
 
-    if (sizeof(double) != 8U || DBL_MANT_DIG != 53 || DBL_MAX_EXP != 1024) {
+    if (__tinypy_marshal_supports_binary64() == TINYPY_FALSE) {
         return TINYPY_FALSE;
     }
     for (index = 0U; index != 8U; ++index) {
@@ -1429,7 +1435,7 @@ static tinypy_bool_t __tinypy_marshal_writer_binary_double(tinypy_marshal_writer
     uint8_t bytes[8];
     size_t index;
 
-    if (sizeof(double) != 8U || DBL_MANT_DIG != 53 || DBL_MAX_EXP != 1024) {
+    if (__tinypy_marshal_supports_binary64() == TINYPY_FALSE) {
         __tinypy_marshal_writer_fail(
             writer,
             TINYPY_MARSHAL_INVALID_FLOAT,

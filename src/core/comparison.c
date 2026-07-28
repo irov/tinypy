@@ -472,8 +472,8 @@ static tinypy_bool_t __tinypy_comparison_special_result(tinypy_vm_t *vm, tinypy_
     if (truth < 0) {
         return TINYPY_FALSE;
     }
-    *out_value = truth;
-    *out_not_implemented = INT32_C(0);
+    *out_value = truth != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    *out_not_implemented = TINYPY_FALSE;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////

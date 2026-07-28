@@ -807,7 +807,7 @@ static tinypy_bool_t __tinypy_codegen_addop(tinypy_codegen_t *c, int32_t opcode)
     }
     tinypy_codegen_block_t *b = c->u->u_curblock;
     tinypy_codegen_instruction_t *i = &b->b_instr[off];
-    i->i_opcode = opcode;
+    i->i_opcode = (uint8_t)opcode;
     i->i_hasarg = 0;
     if (opcode == TINYPY_OP_RETURN_VALUE) {
         b->b_return = 1;
@@ -896,7 +896,7 @@ static tinypy_bool_t __tinypy_codegen_addop_i(tinypy_codegen_t *c, int32_t opcod
         return TINYPY_FALSE;
     }
     tinypy_codegen_instruction_t *i = &c->u->u_curblock->b_instr[off];
-    i->i_opcode = opcode;
+    i->i_opcode = (uint8_t)opcode;
     i->i_oparg = oparg;
     i->i_hasarg = 1;
     __tinypy_codegen_set_lineno(c, off);
@@ -911,7 +911,7 @@ static tinypy_bool_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcod
         return TINYPY_FALSE;
     }
     tinypy_codegen_instruction_t *i = &c->u->u_curblock->b_instr[off];
-    i->i_opcode = opcode;
+    i->i_opcode = (uint8_t)opcode;
     i->i_target = b;
     i->i_hasarg = 1;
     if (absolute) {
@@ -2950,13 +2950,13 @@ static tinypy_bool_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast
         switch (e->v.Attribute.ctx) {
         case TINYPY_AST_CONTEXT_AUGMENTED_LOAD:
             TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_DUP_TOP);
-            /* Fall through to load */
+            /* fall through */
         case TINYPY_AST_CONTEXT_LOAD:
             TINYPY_CODEGEN_ADD_NAME_OPCODE(c, TINYPY_OP_LOAD_ATTR, e->v.Attribute.attr, names);
             break;
         case TINYPY_AST_CONTEXT_AUGMENTED_STORE:
             TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_ROT_TWO);
-            /* Fall through to save */
+            /* fall through */
         case TINYPY_AST_CONTEXT_STORE:
             TINYPY_CODEGEN_ADD_NAME_OPCODE(c, TINYPY_OP_STORE_ATTR, e->v.Attribute.attr, names);
             break;
@@ -3516,7 +3516,7 @@ static tinypy_bool_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_c
         }
         lnotab = (uint8_t *)
                      TINYPY_COMPILER_STRING_AS_STRING(a->a_lnotab) + a->a_lnotab_off;
-        *lnotab++ = d_bytecode;
+        *lnotab++ = (uint8_t)d_bytecode;
         *lnotab++ = 255;
         d_bytecode = 0;
         for (j = 1; j < ncodes; j++) {
@@ -3538,12 +3538,12 @@ static tinypy_bool_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_c
 
     a->a_lnotab_off += 2;
     if (d_bytecode) {
-        *lnotab++ = d_bytecode;
-        *lnotab++ = d_lineno;
+        *lnotab++ = (uint8_t)d_bytecode;
+        *lnotab++ = (uint8_t)d_lineno;
     }
     else { /* First line of a block; def stmt, etc. */
         *lnotab++ = 0;
-        *lnotab++ = d_lineno;
+        *lnotab++ = (uint8_t)d_lineno;
     }
     a->a_lineno = i->i_lineno;
     a->a_lineno_off = a->a_offset;
@@ -3558,7 +3558,7 @@ static tinypy_bool_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_c
 static tinypy_bool_t __tinypy_assembler_emit(tinypy_assembler_t *a, tinypy_codegen_instruction_t *i) {
     int32_t size, arg = 0, ext = 0;
     tinypy_compiler_size_t len = TINYPY_COMPILER_STRING_GET_SIZE(a->a_bytecode);
-    char *code;
+    uint8_t *code;
 
     size = __tinypy_instruction_size(i);
     if (i->i_hasarg) {
@@ -3576,18 +3576,18 @@ static tinypy_bool_t __tinypy_assembler_emit(tinypy_assembler_t *a, tinypy_codeg
             return TINYPY_FALSE;
         }
     }
-    code = TINYPY_COMPILER_STRING_AS_STRING(a->a_bytecode) + a->a_offset;
+    code = (uint8_t *)TINYPY_COMPILER_STRING_AS_STRING(a->a_bytecode) + a->a_offset;
     a->a_offset += size;
     if (size == 6) {
-        *code++ = (char)TINYPY_OP_EXTENDED_ARG;
-        *code++ = ext & 0xff;
-        *code++ = ext >> 8;
+        *code++ = (uint8_t)TINYPY_OP_EXTENDED_ARG;
+        *code++ = (uint8_t)(ext & 0xff);
+        *code++ = (uint8_t)(ext >> 8);
         arg &= 0xffff;
     }
     *code++ = i->i_opcode;
     if (i->i_hasarg) {
-        *code++ = arg & 0xff;
-        *code++ = arg >> 8;
+        *code++ = (uint8_t)(arg & 0xff);
+        *code++ = (uint8_t)(arg >> 8);
     }
     return TINYPY_TRUE;
 }

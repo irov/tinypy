@@ -244,11 +244,15 @@ static tinypy_hash_t __tinypy_internal_hash_unicode(const tinypy_vm_t *vm, const
     if (point_count == 0U) {
         return (tinypy_hash_t)0;
     }
-    (void)__tinypy_internal_utf8_next(bytes, byte_size, &offset, &point);
+    if (__tinypy_internal_utf8_next(bytes, byte_size, &offset, &point) == TINYPY_FALSE) {
+        return (tinypy_hash_t)0;
+    }
     hash = vm->hash_secret_prefix ^ ((uint64_t)point << 7U);
     for (index = 0U; index < point_count; ++index) {
         if (index != 0U) {
-            (void)__tinypy_internal_utf8_next(bytes, byte_size, &offset, &point);
+            if (__tinypy_internal_utf8_next(bytes, byte_size, &offset, &point) == TINYPY_FALSE) {
+                return (tinypy_hash_t)0;
+            }
         }
         hash = (hash * UINT64_C(1000003)) ^ (uint64_t)point;
     }

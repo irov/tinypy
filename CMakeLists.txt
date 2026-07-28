@@ -6,17 +6,14 @@ project(tinypy
     LANGUAGES C
 )
 
-option(TINYPY_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 option(TINYPY_BUILD_CLI "Build the optional TinyPy CLI library and executables" OFF)
 option(TINYPY_ENABLE_CYCLE_DIAGNOSTICS "Enable TinyPy cycle diagnostics in Debug builds" OFF)
 
 function(tinypy_enable_strict_warnings target)
     if(MSVC)
-        target_compile_options(${target} PRIVATE /W4)
-
-        if(TINYPY_WARNINGS_AS_ERRORS)
-            target_compile_options(${target} PRIVATE /WX)
-        endif()
+        # MSVC reports standard C99 flexible array members as C4200 even with
+        # /std:c11 and /std:c17.
+        target_compile_options(${target} PRIVATE /W4 /wd4200 /WX)
     else()
         target_compile_options(${target} PRIVATE
             -Wall
@@ -25,11 +22,8 @@ function(tinypy_enable_strict_warnings target)
             -Wshadow
             -Wstrict-prototypes
             -Wmissing-prototypes
+            -Werror
         )
-
-        if(TINYPY_WARNINGS_AS_ERRORS)
-            target_compile_options(${target} PRIVATE -Werror)
-        endif()
     endif()
 endfunction()
 
@@ -122,7 +116,7 @@ add_library(tinypy STATIC
 )
 add_library(tinypy::tinypy ALIAS tinypy)
 
-target_compile_features(tinypy PUBLIC c_std_99)
+target_compile_features(tinypy PUBLIC c_std_11)
 if(TINYPY_ENABLE_CYCLE_DIAGNOSTICS)
     target_compile_definitions(tinypy
         PUBLIC
@@ -131,7 +125,7 @@ if(TINYPY_ENABLE_CYCLE_DIAGNOSTICS)
 endif()
 set_target_properties(tinypy PROPERTIES
     C_EXTENSIONS OFF
-    C_STANDARD 99
+    C_STANDARD 11
     C_STANDARD_REQUIRED YES
 )
 
@@ -168,10 +162,10 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(tinypy_core_tests PRIVATE tinypy::tinypy)
-    target_compile_features(tinypy_core_tests PRIVATE c_std_99)
+    target_compile_features(tinypy_core_tests PRIVATE c_std_11)
     set_target_properties(tinypy_core_tests PROPERTIES
         C_EXTENSIONS OFF
-        C_STANDARD 99
+        C_STANDARD 11
         C_STANDARD_REQUIRED YES
     )
     tinypy_enable_test_assertions(tinypy_core_tests)
@@ -181,8 +175,8 @@ if(BUILD_TESTING)
         tests/runtime/test_load_code.c
     )
     target_link_libraries(tinypy_load_code_tests PRIVATE tinypy::tinypy)
-    target_compile_features(tinypy_load_code_tests PRIVATE c_std_99)
-    set_target_properties(tinypy_load_code_tests PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+    target_compile_features(tinypy_load_code_tests PRIVATE c_std_11)
+    set_target_properties(tinypy_load_code_tests PROPERTIES C_EXTENSIONS OFF C_STANDARD 11 C_STANDARD_REQUIRED YES)
     tinypy_enable_test_assertions(tinypy_load_code_tests)
     tinypy_enable_strict_warnings(tinypy_load_code_tests)
 
@@ -190,23 +184,23 @@ if(BUILD_TESTING)
         tests/compiler/test_compiler.c
     )
     target_link_libraries(tinypy_compiler_tests PRIVATE tinypy::tinypy Threads::Threads)
-    target_compile_features(tinypy_compiler_tests PRIVATE c_std_99)
-    set_target_properties(tinypy_compiler_tests PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+    target_compile_features(tinypy_compiler_tests PRIVATE c_std_11)
+    set_target_properties(tinypy_compiler_tests PROPERTIES C_EXTENSIONS OFF C_STANDARD 11 C_STANDARD_REQUIRED YES)
     tinypy_enable_test_assertions(tinypy_compiler_tests)
     tinypy_enable_strict_warnings(tinypy_compiler_tests)
 
     add_library(tinypy_compiler_fuzz OBJECT tests/fuzz/fuzz_compiler.c)
     target_link_libraries(tinypy_compiler_fuzz PRIVATE tinypy::tinypy)
-    target_compile_features(tinypy_compiler_fuzz PRIVATE c_std_99)
-    set_target_properties(tinypy_compiler_fuzz PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+    target_compile_features(tinypy_compiler_fuzz PRIVATE c_std_11)
+    set_target_properties(tinypy_compiler_fuzz PROPERTIES C_EXTENSIONS OFF C_STANDARD 11 C_STANDARD_REQUIRED YES)
     tinypy_enable_test_assertions(tinypy_compiler_fuzz)
     tinypy_enable_strict_warnings(tinypy_compiler_fuzz)
 
     add_executable(tinypy_compiler_fuzz_standalone tests/fuzz/fuzz_compiler.c)
     target_compile_definitions(tinypy_compiler_fuzz_standalone PRIVATE TINYPY_FUZZ_STANDALONE=1)
     target_link_libraries(tinypy_compiler_fuzz_standalone PRIVATE tinypy::tinypy)
-    target_compile_features(tinypy_compiler_fuzz_standalone PRIVATE c_std_99)
-    set_target_properties(tinypy_compiler_fuzz_standalone PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+    target_compile_features(tinypy_compiler_fuzz_standalone PRIVATE c_std_11)
+    set_target_properties(tinypy_compiler_fuzz_standalone PROPERTIES C_EXTENSIONS OFF C_STANDARD 11 C_STANDARD_REQUIRED YES)
     tinypy_enable_test_assertions(tinypy_compiler_fuzz_standalone)
     tinypy_enable_strict_warnings(tinypy_compiler_fuzz_standalone)
 

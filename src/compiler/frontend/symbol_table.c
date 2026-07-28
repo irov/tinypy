@@ -349,10 +349,6 @@ static tinypy_bool_t __analyze_name(tinypy_symbol_entry_t *ste, tinypy_value_t *
         TINYPY_SYMBOL_SET_SCOPE(dict, name, TINYPY_SYMBOL_SCOPE_GLOBAL_IMPLICIT);
         return TINYPY_TRUE;
     }
-    /* Should never get here. */
-    TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "failed to set scope for %s",
-                               TINYPY_COMPILER_STRING_AS_STRING(name));
-    return TINYPY_FALSE;
 }
 
 #undef SET_SCOPE
@@ -1489,7 +1485,7 @@ static tinypy_bool_t __tinypy_symbol_visit_listcomp(tinypy_symbol_table_t *st, t
     tinypy_bool_t is_generator;
     /* To inspect yield expressions independently, clear
        the generator flag, and restore it at the end */
-    is_generator = st->current->generator;
+    is_generator = st->current->generator != 0U ? TINYPY_TRUE : TINYPY_FALSE;
     st->current->generator = 0;
     TINYPY_SYMBOL_VISIT(st, expr, e->v.ListComp.elt);
     for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(generators); i++) {

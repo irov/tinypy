@@ -61,7 +61,7 @@ tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
         tinypy_error_t *error = NULL;
         tinypy_value_t *value;
         int32_t status = tinypy_internal_object_get_optional_attr_key(target, key, &value, &error);
-        tinypy_bool_t soft_space = TINYPY_FALSE;
+        int32_t soft_space = 0;
 
         TINYPY_DECREF(key);
         if (status > 0) {

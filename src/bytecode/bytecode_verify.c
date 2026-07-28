@@ -109,10 +109,6 @@ static tinypy_bool_t __tinypy_verify_align_size(size_t value, size_t *out_value)
     size_t remainder;
     size_t padding;
 
-    if (TINYPY_VERIFY_ALIGNMENT == 0U) {
-        return TINYPY_FALSE;
-    }
-
     remainder = value % TINYPY_VERIFY_ALIGNMENT;
     if (remainder == 0U) {
         *out_value = value;

@@ -202,21 +202,21 @@ static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value
     size_t index;
 
     tinypy_value_t *slice_step = tinypy_slice_step(slice);
-    tinypy_bool_t condition_3 = __tinypy_buffer_slice_bound(slice_step, INT64_C(1), &step) == 0;
-    if (condition_3 == 0) {
-        condition_3 = step == 0;
+    if (__tinypy_buffer_slice_bound(slice_step, INT64_C(1), &step) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice indices must be integers", out_error);
+        return NULL;
     }
-    if (condition_3) {
-        tinypy_internal_make_vm_error(vm, step == 0 ? TINYPY_ERROR_VALUE : TINYPY_ERROR_TYPE, step == 0 ? "slice step cannot be zero" : "slice indices must be integers", out_error);
+    if (step == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "slice step cannot be zero", out_error);
         return NULL;
     }
     tinypy_value_t *slice_start = tinypy_slice_start(slice);
-    tinypy_bool_t condition_4 = __tinypy_buffer_slice_bound(slice_start, step < 0 ? (int64_t)size - 1 : 0, &start) == 0;
-    if (condition_4 == 0) {
-        tinypy_value_t *slice_stop = tinypy_slice_stop(slice);
-        condition_4 = __tinypy_buffer_slice_bound(slice_stop, step < 0 ? -1 : (int64_t)size, &stop) == 0;
+    if (__tinypy_buffer_slice_bound(slice_start, step < 0 ? (int64_t)size - 1 : 0, &start) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice indices must be integers", out_error);
+        return NULL;
     }
-    if (condition_4) {
+    tinypy_value_t *slice_stop = tinypy_slice_stop(slice);
+    if (__tinypy_buffer_slice_bound(slice_stop, step < 0 ? -1 : (int64_t)size, &stop) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice indices must be integers", out_error);
         return NULL;
     }

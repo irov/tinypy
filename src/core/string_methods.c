@@ -382,12 +382,11 @@ static tinypy_value_t *__tinypy_string_align_method(tinypy_value_t *function, ti
     tinypy_string_builder_t builder;
     intptr_t mode = (intptr_t)user_data;
 
-    tinypy_bool_t condition = __tinypy_string_method_arguments(vm, args, kwargs, 2U, 3U, INT32_C(0), out_error) == 0;
-    if (condition == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
-        condition = __tinypy_string_integer(vm, item, &width, out_error) == 0;
+    if (__tinypy_string_method_arguments(vm, args, kwargs, 2U, 3U, INT32_C(0), out_error) == 0) {
+        return NULL;
     }
-    if (condition) {
+    tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
+    if (__tinypy_string_integer(vm, item, &width, out_error) == 0) {
         return NULL;
     }
     if (TINYPY_TUPLE_SIZE(args) == 3U) {
@@ -1311,12 +1310,11 @@ static tinypy_value_t *__tinypy_string_zfill_method(tinypy_value_t *function, ti
     tinypy_string_builder_t builder;
 
     (void)user_data;
-    tinypy_bool_t condition_7 = __tinypy_string_method_arguments(vm, args, kwargs, 2U, 2U, INT32_C(0), out_error) == 0;
-    if (condition_7 == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
-        condition_7 = __tinypy_string_integer(vm, item, &width, out_error) == 0;
+    if (__tinypy_string_method_arguments(vm, args, kwargs, 2U, 2U, INT32_C(0), out_error) == 0) {
+        return NULL;
     }
-    if (condition_7) {
+    tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
+    if (__tinypy_string_integer(vm, item, &width, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *text = TINYPY_TUPLE_GET(args, 0U);

@@ -492,12 +492,11 @@ static tinypy_value_t *__tinypy_builtin_range(tinypy_value_t *function, tinypy_v
     }
     else {
         tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-        tinypy_bool_t condition_2 = __tinypy_builtin_integer_as_i64(vm, item_2, &start, out_error) == 0;
-        if (condition_2 == 0) {
-            tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 1U);
-            condition_2 = __tinypy_builtin_integer_as_i64(vm, item_3, &stop, out_error) == 0;
+        if (__tinypy_builtin_integer_as_i64(vm, item_2, &start, out_error) == 0) {
+            return NULL;
         }
-        if (condition_2) {
+        tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 1U);
+        if (__tinypy_builtin_integer_as_i64(vm, item_3, &stop, out_error) == 0) {
             return NULL;
         }
         if (count == 3U) {
@@ -554,12 +553,11 @@ static tinypy_value_t *__tinypy_builtin_xrange(tinypy_value_t *function, tinypy_
     }
     else {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        tinypy_bool_t condition_3 = __tinypy_builtin_integer_as_i64(vm, item, &start, out_error) == 0;
-        if (condition_3 == 0) {
-            tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
-            condition_3 = __tinypy_builtin_integer_as_i64(vm, item_2, &stop, out_error) == 0;
+        if (__tinypy_builtin_integer_as_i64(vm, item, &start, out_error) == 0) {
+            return NULL;
         }
-        if (condition_3) {
+        tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
+        if (__tinypy_builtin_integer_as_i64(vm, item_2, &stop, out_error) == 0) {
             return NULL;
         }
         if (argument_count == 3U) {
@@ -1117,12 +1115,12 @@ static tinypy_value_t *__tinypy_builtin_chr_common(tinypy_value_t *function, tin
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     int64_t value;
 
-    tinypy_bool_t condition_5 = __tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 1U, out_error) == 0;
-    if (condition_5 == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition_5 = __tinypy_builtin_integer_as_i64(vm, item, &value, out_error) == 0;
+    if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 ||
+        __tinypy_builtin_argument_count(vm, args, 1U, 1U, out_error) == 0) {
+        return NULL;
     }
-    if (condition_5) {
+    tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
+    if (__tinypy_builtin_integer_as_i64(vm, item, &value, out_error) == 0) {
         return NULL;
     }
     if (user_data == NULL) {

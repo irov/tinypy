@@ -275,12 +275,11 @@ tinypy_value_t *tinypy_internal_xrange_create(tinypy_type_t *type, tinypy_value_
     }
     else {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        tinypy_bool_t condition = __tinypy_iterator_integer(vm, item, &start, out_error) == 0;
-        if (condition == 0) {
-            tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
-            condition = __tinypy_iterator_integer(vm, item_2, &stop, out_error) == 0;
+        if (__tinypy_iterator_integer(vm, item, &start, out_error) == 0) {
+            return NULL;
         }
-        if (condition) {
+        tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
+        if (__tinypy_iterator_integer(vm, item_2, &stop, out_error) == 0) {
             return NULL;
         }
         if (argument_count == 3U) {

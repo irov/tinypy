@@ -1351,15 +1351,22 @@ static tinypy_value_t *__tinypy_sre_compile(tinypy_value_t *function, tinypy_val
     indexgroup = TINYPY_TUPLE_GET(args, 5U);
     flags_value = TINYPY_TUPLE_GET(args, 1U);
     groups_value = TINYPY_TUPLE_GET(args, 3U);
-    tinypy_bool_t condition_11 = (TINYPY_VALUE_KIND(source) != TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(source) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(source) != TINYPY_VALUE_UNICODE) || __tinypy_sre_integer(flags_value, &flags) == 0 || __tinypy_sre_integer(groups_value, &groups) == 0 || groups < 0 || groups > 100 || TINYPY_VALUE_KIND(groupindex) != TINYPY_VALUE_DICT;
-    if (condition_11 == 0) {
-        condition_11 = TINYPY_VALUE_KIND(indexgroup) != TINYPY_VALUE_LIST;
+    if (TINYPY_VALUE_KIND(source) != TINYPY_VALUE_NONE &&
+        TINYPY_VALUE_KIND(source) != TINYPY_VALUE_STRING &&
+        TINYPY_VALUE_KIND(source) != TINYPY_VALUE_UNICODE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "invalid SRE compile arguments", out_error);
+        return NULL;
     }
-    tinypy_bool_t condition_10 = condition_11;
-    if (condition_10 == 0) {
-        condition_10 = (TINYPY_VALUE_KIND(code_value) != TINYPY_VALUE_LIST && TINYPY_VALUE_KIND(code_value) != TINYPY_VALUE_TUPLE);
+    if (__tinypy_sre_integer(flags_value, &flags) == 0 ||
+        __tinypy_sre_integer(groups_value, &groups) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "invalid SRE compile arguments", out_error);
+        return NULL;
     }
-    if (condition_10) {
+    if (groups < 0 || groups > 100 ||
+        TINYPY_VALUE_KIND(groupindex) != TINYPY_VALUE_DICT ||
+        TINYPY_VALUE_KIND(indexgroup) != TINYPY_VALUE_LIST ||
+        (TINYPY_VALUE_KIND(code_value) != TINYPY_VALUE_LIST &&
+         TINYPY_VALUE_KIND(code_value) != TINYPY_VALUE_TUPLE)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "invalid SRE compile arguments", out_error);
         return NULL;
     }

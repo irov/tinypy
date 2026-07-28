@@ -356,7 +356,9 @@ static tinypy_bool_t __tinypy_list_sort_compare(tinypy_vm_t *vm, tinypy_value_t 
             return TINYPY_FALSE;
         }
     }
-    *out_less = reverse != 0 ? (tinypy_equal(left, right) == 0 && less == 0 ? INT32_C(1) : INT32_C(0)) : less;
+    *out_less = reverse != 0
+                    ? (tinypy_equal(left, right) == 0 && less == 0 ? TINYPY_TRUE : TINYPY_FALSE)
+                    : (less != 0 ? TINYPY_TRUE : TINYPY_FALSE);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -382,10 +384,11 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     }
     if (TINYPY_TUPLE_SIZE(args) >= 4U) {
         tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 3U);
-        reverse = tinypy_truth(item_2, out_error);
-        if (reverse < 0) {
+        int32_t truth = tinypy_truth(item_2, out_error);
+        if (truth < 0) {
             return NULL;
         }
+        reverse = truth != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     }
     if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
         tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
@@ -406,10 +409,11 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
                 key_function = iterator->value;
             }
             else if (name_size == 7U && memcmp(name, "reverse", 7U) == 0) {
-                reverse = tinypy_truth(iterator->value, out_error);
-                if (reverse < 0) {
+                int32_t truth = tinypy_truth(iterator->value, out_error);
+                if (truth < 0) {
                     return NULL;
                 }
+                reverse = truth != 0 ? TINYPY_TRUE : TINYPY_FALSE;
             }
             else {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort received an unexpected keyword", out_error);

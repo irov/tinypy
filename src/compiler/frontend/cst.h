@@ -3,7 +3,7 @@
 
 typedef struct tinypy_cst_node_t {
     tinypy_compile_ctx_t *context;
-    short type;
+    int32_t type;
     char *text;
     int32_t line_number;
     int32_t column_offset;

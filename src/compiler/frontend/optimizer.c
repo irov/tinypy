@@ -16,12 +16,18 @@
 #define TINYPY_OPTIMIZER_IS_ABSOLUTE_JUMP(op) (op == TINYPY_OP_JUMP_ABSOLUTE || op == TINYPY_OP_CONTINUE_LOOP || op == TINYPY_OP_POP_JUMP_IF_FALSE || op == TINYPY_OP_POP_JUMP_IF_TRUE || op == TINYPY_OP_JUMP_IF_FALSE_OR_POP || op == TINYPY_OP_JUMP_IF_TRUE_OR_POP)
 #define TINYPY_OPTIMIZER_JUMPS_ON_TRUE(op) (op == TINYPY_OP_POP_JUMP_IF_TRUE || op == TINYPY_OP_JUMP_IF_TRUE_OR_POP)
 #define TINYPY_OPTIMIZER_JUMP_TARGET(arr, i) (TINYPY_OPTIMIZER_GET_ARGUMENT(arr, i) + (TINYPY_OPTIMIZER_IS_ABSOLUTE_JUMP(arr[i]) ? 0 : i + 3))
-#define TINYPY_OPTIMIZER_SET_ARGUMENT(arr, i, val) \
-    arr[i + 2] = val >> 8;                         \
-    arr[i + 1] = val & 255
 #define TINYPY_OPTIMIZER_CODE_SIZE(op) (TINYPY_COMPILER_OPCODE_HAS_ARGUMENT(op) ? 3 : 1)
 #define TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, start, bytes) \
     (blocks[start] == blocks[start + bytes - 1])
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_optimizer_set_argument(uint8_t *bytecode, tinypy_compiler_size_t offset, tinypy_compiler_size_t value) {
+    uint16_t argument = (uint16_t)value;
+
+    bytecode[offset + 1] = (uint8_t)(argument & UINT16_C(0xff));
+    bytecode[offset + 2] = (uint8_t)(argument >> 8);
+}
+#define TINYPY_OPTIMIZER_SET_ARGUMENT(arr, i, val) \
+    __tinypy_optimizer_set_argument((arr), (i), (val))
 //////////////////////////////////////////////////////////////////////////
 /* Replace TINYPY_OP_LOAD_CONST c1. TINYPY_OP_LOAD_CONST c2 ... TINYPY_OP_LOAD_CONST cn TINYPY_OP_BUILD_TUPLE n
    with    TINYPY_OP_LOAD_CONST (c1, c2, ... cn).
@@ -497,7 +503,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
                     tgttgt = TINYPY_OPTIMIZER_JUMP_TARGET(codestr, tgt);
                     /* The current opcode inherits
                        its target's stack behaviour */
-                    codestr[i] = j;
+                    codestr[i] = (uint8_t)j;
                     TINYPY_OPTIMIZER_SET_ARGUMENT(codestr, i, tgttgt);
                     goto reoptimize_current;
                 }
@@ -549,7 +555,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
             if (tgttgt < 0) /* No backward relative jumps */ {
                 continue;
             }
-            codestr[i] = opcode;
+            codestr[i] = (uint8_t)opcode;
             TINYPY_OPTIMIZER_SET_ARGUMENT(codestr, i, tgttgt);
             break;
 

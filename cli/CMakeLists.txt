@@ -5,21 +5,21 @@ add_library(tinypy_cli STATIC
 add_library(tinypy::cli ALIAS tinypy_cli)
 
 target_link_libraries(tinypy_cli PUBLIC tinypy::tinypy)
-target_compile_features(tinypy_cli PUBLIC c_std_99)
-set_target_properties(tinypy_cli PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+target_compile_features(tinypy_cli PUBLIC c_std_11)
+set_target_properties(tinypy_cli PROPERTIES C_EXTENSIONS OFF C_STANDARD 11 C_STANDARD_REQUIRED YES)
 target_include_directories(tinypy_cli PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 tinypy_enable_strict_warnings(tinypy_cli)
 
 add_executable(tinypy_console tools/main.c)
 target_link_libraries(tinypy_console PRIVATE tinypy::cli)
-target_compile_features(tinypy_console PRIVATE c_std_99)
-set_target_properties(tinypy_console PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES OUTPUT_NAME tinypy)
+target_compile_features(tinypy_console PRIVATE c_std_11)
+set_target_properties(tinypy_console PROPERTIES C_EXTENSIONS OFF C_STANDARD 11 C_STANDARD_REQUIRED YES OUTPUT_NAME tinypy)
 tinypy_enable_strict_warnings(tinypy_console)
 
 add_executable(tinypy_compile tools/compile_main.c)
 target_link_libraries(tinypy_compile PRIVATE tinypy::cli)
-target_compile_features(tinypy_compile PRIVATE c_std_99)
-set_target_properties(tinypy_compile PROPERTIES C_EXTENSIONS OFF C_STANDARD 99 C_STANDARD_REQUIRED YES)
+target_compile_features(tinypy_compile PRIVATE c_std_11)
+set_target_properties(tinypy_compile PROPERTIES C_EXTENSIONS OFF C_STANDARD 11 C_STANDARD_REQUIRED YES)
 tinypy_enable_strict_warnings(tinypy_compile)
 
 if(BUILD_TESTING)

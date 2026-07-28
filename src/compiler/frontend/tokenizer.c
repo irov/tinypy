@@ -183,7 +183,7 @@ static void __tok_backup(register tinypy_tokenizer_t *tok, register int32_t c) {
     if (c != TINYPY_TOKENIZER_END_OF_INPUT) {
         tok->cur -= 1;
         if (*tok->cur != c) {
-            *tok->cur = c;
+            *tok->cur = (char)c;
         }
     }
 }
@@ -516,8 +516,12 @@ again:
         const char *const *cp;
         tp = cbuf;
         do {
-            *tp++ = c = __tok_nextc(tok);
-        } while (c != TINYPY_TOKENIZER_END_OF_INPUT && c != '\n' && (size_t)(tp - cbuf + 1) < sizeof(cbuf));
+            c = __tok_nextc(tok);
+            if (c == TINYPY_TOKENIZER_END_OF_INPUT || c == '\n') {
+                break;
+            }
+            *tp++ = (char)c;
+        } while ((size_t)(tp - cbuf + 1) < sizeof(cbuf));
         *tp = '\0';
         for (cp = tabforms;
              cp < tabforms + sizeof(tabforms) / sizeof(tabforms[0]);

@@ -151,7 +151,6 @@ static int32_t __num_stmts(const tinypy_cst_node_t *n) {
     default:
         return 0;
     }
-    return 0;
 }
 
 /* Transform the CST rooted at tinypy_cst_node_t * to the appropriate AST
@@ -510,10 +509,11 @@ static tinypy_ast_compare_operator_e __ast_for_comp_op(tinypy_ast_builder_t *c, 
                 return TINYPY_AST_COMPARE_IS;
             }
         default:
-            TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "invalid TINYPY_GRAMMAR_COMP_OP: %s",
-                                       TINYPY_CST_TEXT(n));
-            return (tinypy_ast_compare_operator_e)0;
+            break;
         }
+        TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "invalid TINYPY_GRAMMAR_COMP_OP: %s",
+                                   TINYPY_CST_TEXT(n));
+        return (tinypy_ast_compare_operator_e)0;
     }
     else if (TINYPY_CST_CHILD_COUNT(n) == 2) {
         /* handle "not in" and "is not" */
@@ -526,10 +526,11 @@ static tinypy_ast_compare_operator_e __ast_for_comp_op(tinypy_ast_builder_t *c, 
                 return TINYPY_AST_COMPARE_IS_NOT;
             }
         default:
-            TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "invalid TINYPY_GRAMMAR_COMP_OP: %s %s",
-                                       TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 0)), TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 1)));
-            return (tinypy_ast_compare_operator_e)0;
+            break;
         }
+        TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "invalid TINYPY_GRAMMAR_COMP_OP: %s %s",
+                                   TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 0)), TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 1)));
+        return (tinypy_ast_compare_operator_e)0;
     }
     TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "invalid TINYPY_GRAMMAR_COMP_OP: has %d children",
                                TINYPY_CST_CHILD_COUNT(n));
@@ -1979,8 +1980,6 @@ loop:
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "unhandled TINYPY_GRAMMAR_EXPR: %d", TINYPY_CST_TYPE(n));
         return NULL;
     }
-    /* should never get here unless if error is set */
-    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, tinypy_ast_expression_t func) {
@@ -2450,14 +2449,15 @@ static tinypy_ast_statement_t __ast_for_flow_stmt(tinypy_ast_builder_t *c, const
                                                   c->c_arena);
             return return_value_7;
         }
+        TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
+                                   "unexpected TINYPY_GRAMMAR_RAISE_STMT child count: %d",
+                                   TINYPY_CST_CHILD_COUNT(ch));
+        return NULL;
     default:
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                    "unexpected TINYPY_GRAMMAR_FLOW_STMT: %d", TINYPY_CST_TYPE(ch));
         return NULL;
     }
-
-    TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "unhandled flow statement");
-    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_alias_t __alias_for_import_name(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, int32_t store) {
@@ -2513,7 +2513,6 @@ loop:
             }
             return a;
         }
-        break;
     case TINYPY_GRAMMAR_DOTTED_NAME:
         if (TINYPY_CST_CHILD_COUNT(n) == 1) {
             tinypy_cst_node_t *name_node = TINYPY_CST_CHILD(n, 0);
@@ -2559,7 +2558,6 @@ loop:
             tinypy_ast_alias_t return_value_3 = __tinypy_ast_alias(str, NULL, c->c_arena);
             return return_value_3;
         }
-        break;
     case TINYPY_TOKEN_STAR:
         str = __new_identifier("*", c->c_arena);
         if (!str) {
@@ -2572,9 +2570,6 @@ loop:
                                    "unexpected import name: %d", TINYPY_CST_TYPE(n));
         return NULL;
     }
-
-    TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "unhandled import name condition");
-    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_import_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
