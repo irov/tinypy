@@ -57,11 +57,6 @@ typedef enum tinypy_marshal_type_e {
     TINYPY_MARSHAL_TYPE_CODE = 16
 } tinypy_marshal_type_e;
 
-typedef enum tinypy_marshal_allocation_tag_e {
-    TINYPY_MARSHAL_ALLOC_TAG_DOCUMENT = 0x100,
-    TINYPY_MARSHAL_ALLOC_TAG_GRAPH = 0x101
-} tinypy_marshal_allocation_tag_e;
-
 typedef struct tinypy_marshal_limits_t {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -150,12 +145,12 @@ size_t tinypy_marshal_document_allocated_bytes(const tinypy_marshal_document_t *
 
 tinypy_marshal_type_e tinypy_marshal_object_type(const tinypy_marshal_object_t *object);
 uint8_t tinypy_marshal_object_wire_type(const tinypy_marshal_object_t *object);
-int32_t tinypy_marshal_bool_value(const tinypy_marshal_object_t *object);
+tinypy_bool_t tinypy_marshal_bool_value(const tinypy_marshal_object_t *object);
 int64_t tinypy_marshal_integer_value(const tinypy_marshal_object_t *object);
 void tinypy_marshal_long_view(const tinypy_marshal_object_t *object, int32_t *out_sign, const uint16_t **out_digits, size_t *out_digit_count);
 double tinypy_marshal_float_value(const tinypy_marshal_object_t *object);
 void tinypy_marshal_complex_value(const tinypy_marshal_object_t *object, double *out_real, double *out_imaginary);
-void tinypy_marshal_bytes_view(const tinypy_marshal_object_t *object, const void **out_bytes, size_t *out_size, int32_t *out_interned);
+void tinypy_marshal_bytes_view(const tinypy_marshal_object_t *object, const void **out_bytes, size_t *out_size, tinypy_bool_t *out_interned);
 void tinypy_marshal_unicode_view(const tinypy_marshal_object_t *object, const char **out_utf8, size_t *out_size, size_t *out_code_point_count);
 size_t tinypy_marshal_sequence_size(const tinypy_marshal_object_t *object);
 const tinypy_marshal_object_t *tinypy_marshal_sequence_item(const tinypy_marshal_object_t *object, size_t index);

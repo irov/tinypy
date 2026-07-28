@@ -47,29 +47,30 @@ struct tinypy_preprocess_result_t {
     uint8_t storage[];
 };
 
-static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression);
-static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement, size_t indentation);
-static int32_t __tinypy_render_arguments(tinypy_render_builder_t *builder, tinypy_ast_arguments_t arguments);
+static tinypy_bool_t __tinypy_render_expression(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression);
+static tinypy_bool_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement, size_t indentation);
+static tinypy_bool_t __tinypy_render_arguments(tinypy_render_builder_t *builder, tinypy_ast_arguments_t arguments);
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_fail(tinypy_render_builder_t *builder, const char *message, int32_t line, int32_t column) {
+static tinypy_bool_t __tinypy_render_fail(tinypy_render_builder_t *builder, const char *message, int32_t line, int32_t column) {
     tinypy_internal_compiler_error(builder->compile, TINYPY_ERROR_PREPROCESSOR, message, line, column + 1, builder->compile->out_error);
-    return 0;
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_limit(tinypy_render_builder_t *builder, const char *message, int32_t line, int32_t column) {
+static tinypy_bool_t __tinypy_render_limit(tinypy_render_builder_t *builder, const char *message, int32_t line, int32_t column) {
     tinypy_internal_compiler_error(builder->compile, TINYPY_ERROR_COMPILER_LIMIT, message, line, column + 1, builder->compile->out_error);
-    return 0;
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_append(tinypy_render_builder_t *builder, const void *data, size_t size) {
+static tinypy_bool_t __tinypy_render_append(tinypy_render_builder_t *builder, const void *data, size_t size) {
     const uint8_t *bytes = (const uint8_t *)data;
 
     if (size == 0U) {
-        return 1;
+        return TINYPY_TRUE;
     }
     if (builder->compile->limits.max_generated_source_bytes != 0U && (builder->size > builder->compile->limits.max_generated_source_bytes || size > builder->compile->limits.max_generated_source_bytes - builder->size)) {
-        return __tinypy_render_limit(builder, "generated source byte limit exceeded", 1, 0);
+        tinypy_bool_t return_value_1 = __tinypy_render_limit(builder, "generated source byte limit exceeded", 1, 0);
+        return return_value_1;
     }
     while (size != 0U) {
         size_t available;
@@ -80,7 +81,8 @@ static int32_t __tinypy_render_append(tinypy_render_builder_t *builder, const vo
             tinypy_render_chunk_t *chunk = (tinypy_render_chunk_t *)tinypy_internal_compiler_arena_allocate(builder->compile, sizeof(*chunk));
 
             if (chunk == NULL) {
-                return __tinypy_render_limit(builder, "expanded output exceeds compiler arena limit", builder->line, builder->column);
+                tinypy_bool_t return_value_2 = __tinypy_render_limit(builder, "expanded output exceeds compiler arena limit", builder->line, builder->column);
+                return return_value_2;
             }
             if (builder->tail != NULL) {
                 builder->tail->next = chunk;
@@ -107,41 +109,44 @@ static int32_t __tinypy_render_append(tinypy_render_builder_t *builder, const vo
         bytes += copied;
         size -= copied;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_text(tinypy_render_builder_t *builder, const char *text) {
+static tinypy_bool_t __tinypy_render_text(tinypy_render_builder_t *builder, const char *text) {
     unsigned long size = strlen(text);
-    return __tinypy_render_append(builder, text, size);
+    tinypy_bool_t return_value_1 = __tinypy_render_append(builder, text, size);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_character(tinypy_render_builder_t *builder, char character) {
-    return __tinypy_render_append(builder, &character, 1U);
+static tinypy_bool_t __tinypy_render_character(tinypy_render_builder_t *builder, char character) {
+    tinypy_bool_t return_value_1 = __tinypy_render_append(builder, &character, 1U);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_identifier(tinypy_render_builder_t *builder, tinypy_ast_identifier_t identifier) {
+static tinypy_bool_t __tinypy_render_identifier(tinypy_render_builder_t *builder, tinypy_ast_identifier_t identifier) {
     size_t size;
     const void *data;
 
     if (identifier == NULL) {
-        return 1;
+        return TINYPY_TRUE;
     }
     data = tinypy_string_view(identifier, &size);
-    return __tinypy_render_append(builder, data, size);
+    tinypy_bool_t return_value_1 = __tinypy_render_append(builder, data, size);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_indent(tinypy_render_builder_t *builder, size_t indentation) {
+static tinypy_bool_t __tinypy_render_indent(tinypy_render_builder_t *builder, size_t indentation) {
     size_t index;
 
     for (index = 0U; index < indentation; ++index) {
         if (__tinypy_render_text(builder, "    ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_repr_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
+static tinypy_bool_t __tinypy_render_repr_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
     tinypy_error_t *error = NULL;
     tinypy_value_t *representation = tinypy_object_repr(value, &error);
     const void *bytes;
@@ -154,56 +159,64 @@ static int32_t __tinypy_render_repr_literal(tinypy_render_builder_t *builder, ti
         if (error != NULL) {
             tinypy_error_release(error);
         }
-        return 0;
+        return TINYPY_FALSE;
     }
     bytes = tinypy_string_view(representation, &size);
     if (__tinypy_render_append(builder, bytes, size) == 0) {
         TINYPY_DECREF(representation);
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_DECREF(representation);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_hex(tinypy_render_builder_t *builder, uint32_t value, size_t width) {
+static tinypy_bool_t __tinypy_render_hex(tinypy_render_builder_t *builder, uint32_t value, size_t width) {
     static const char digits[] = "0123456789abcdef";
     char output[8];
     size_t index;
 
-    TINYPY_ASSERT(width <= sizeof(output));
     for (index = 0U; index < width; ++index) {
         output[width - index - 1U] = digits[(value >> (index * 4U)) & UINT32_C(0xf)];
     }
-    return __tinypy_render_append(builder, output, width);
+    tinypy_bool_t return_value_1 = __tinypy_render_append(builder, output, width);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_escaped_code_point(tinypy_render_builder_t *builder, uint32_t code_point, int32_t unicode) {
+static tinypy_bool_t __tinypy_render_escaped_code_point(tinypy_render_builder_t *builder, uint32_t code_point, tinypy_bool_t unicode) {
     if (code_point == (uint32_t)'\\' || code_point == (uint32_t)'\'') {
-        return __tinypy_render_character(builder, '\\') && __tinypy_render_character(builder, (char)code_point);
+        tinypy_bool_t return_value = __tinypy_render_character(builder, '\\') && __tinypy_render_character(builder, (char)code_point);
+        return return_value;
     }
     if (code_point == (uint32_t)'\n') {
-        return __tinypy_render_text(builder, "\\n");
+        tinypy_bool_t return_value = __tinypy_render_text(builder, "\\n");
+        return return_value;
     }
     if (code_point == (uint32_t)'\r') {
-        return __tinypy_render_text(builder, "\\r");
+        tinypy_bool_t return_value = __tinypy_render_text(builder, "\\r");
+        return return_value;
     }
     if (code_point == (uint32_t)'\t') {
-        return __tinypy_render_text(builder, "\\t");
+        tinypy_bool_t return_value = __tinypy_render_text(builder, "\\t");
+        return return_value;
     }
     if (code_point >= UINT32_C(0x20) && code_point < UINT32_C(0x7f)) {
-        return __tinypy_render_character(builder, (char)code_point);
+        tinypy_bool_t return_value_1 = __tinypy_render_character(builder, (char)code_point);
+        return return_value_1;
     }
     if (unicode == 0) {
-        return __tinypy_render_text(builder, "\\x") && __tinypy_render_hex(builder, code_point, 2U);
+        tinypy_bool_t return_value = __tinypy_render_text(builder, "\\x") && __tinypy_render_hex(builder, code_point, 2U);
+        return return_value;
     }
     if (code_point <= UINT32_C(0xffff)) {
-        return __tinypy_render_text(builder, "\\u") && __tinypy_render_hex(builder, code_point, 4U);
+        tinypy_bool_t return_value = __tinypy_render_text(builder, "\\u") && __tinypy_render_hex(builder, code_point, 4U);
+        return return_value;
     }
-    return __tinypy_render_text(builder, "\\U") && __tinypy_render_hex(builder, code_point, 8U);
+    tinypy_bool_t return_value = __tinypy_render_text(builder, "\\U") && __tinypy_render_hex(builder, code_point, 8U);
+    return return_value;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
-    int32_t unicode = tinypy_typeof(value) == TINYPY_VALUE_UNICODE ? INT32_C(1) : INT32_C(0);
+static tinypy_bool_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
+    tinypy_bool_t unicode = tinypy_typeof(value) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
     const uint8_t *bytes;
     size_t size;
     size_t index = 0U;
@@ -213,14 +226,14 @@ static int32_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, ti
 
         bytes = (const uint8_t *)tinypy_unicode_utf8_view(value, &size, &code_points);
         if (__tinypy_render_character(builder, 'u') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
     else {
         bytes = (const uint8_t *)tinypy_string_view(value, &size);
     }
     if (__tinypy_render_character(builder, '\'') == 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
     while (index < size) {
         uint32_t code_point = bytes[index++];
@@ -241,29 +254,32 @@ static int32_t __tinypy_render_text_literal(tinypy_render_builder_t *builder, ti
                 code_point &= UINT32_C(0x07);
                 continuation_count = 3U;
             }
-            TINYPY_ASSERT(continuation_count <= size - index);
             for (continuation = 0U; continuation < continuation_count; ++continuation) {
                 code_point = (code_point << 6U) | (uint32_t)(bytes[index++] & UINT8_C(0x3f));
             }
         }
         if (__tinypy_render_escaped_code_point(builder, code_point, unicode) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
-    return __tinypy_render_character(builder, '\'');
+    tinypy_bool_t return_value = __tinypy_render_character(builder, '\'');
+    return return_value;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_double_literal(tinypy_render_builder_t *builder, double value) {
-    int32_t result;
+static tinypy_bool_t __tinypy_render_double_literal(tinypy_render_builder_t *builder, double value) {
+    tinypy_bool_t result;
 
     if (value != value) {
-        return __tinypy_render_text(builder, "(1e400 - 1e400)");
+        tinypy_bool_t return_value_1 = __tinypy_render_text(builder, "(1e400 - 1e400)");
+        return return_value_1;
     }
     if (value > DBL_MAX) {
-        return __tinypy_render_text(builder, "1e400");
+        tinypy_bool_t return_value_2 = __tinypy_render_text(builder, "1e400");
+        return return_value_2;
     }
     if (value < -DBL_MAX) {
-        return __tinypy_render_text(builder, "-1e400");
+        tinypy_bool_t return_value_3 = __tinypy_render_text(builder, "-1e400");
+        return return_value_3;
     }
     tinypy_value_t *temporary = tinypy_float_from_double(builder->compile->vm, value);
     result = __tinypy_render_repr_literal(builder, temporary);
@@ -271,11 +287,12 @@ static int32_t __tinypy_render_double_literal(tinypy_render_builder_t *builder, 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
+static tinypy_bool_t __tinypy_render_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
     tinypy_value_type_e type = tinypy_typeof(value);
 
     if (type == TINYPY_VALUE_STRING || type == TINYPY_VALUE_UNICODE) {
-        return __tinypy_render_text_literal(builder, value);
+        tinypy_bool_t return_value_1 = __tinypy_render_text_literal(builder, value);
+        return return_value_1;
     }
     if (type == TINYPY_VALUE_TUPLE) {
         size_t size = TINYPY_TUPLE_SIZE(value);
@@ -284,25 +301,27 @@ static int32_t __tinypy_render_literal(tinypy_render_builder_t *builder, tinypy_
         tinypy_value_t *const *iterator_end = TINYPY_TUPLE_ITERATOR_END(value);
 
         if (__tinypy_render_character(builder, '(') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         for (; iterator != iterator_end; ++iterator) {
             if (iterator != iterator_begin && __tinypy_render_text(builder, ", ") == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
             tinypy_value_t *item = *iterator;
             if (__tinypy_render_literal(builder, item) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         if (size == 1U && __tinypy_render_character(builder, ',') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_render_character(builder, ')');
+        tinypy_bool_t return_value_2 = __tinypy_render_character(builder, ')');
+        return return_value_2;
     }
     if (type == TINYPY_VALUE_FLOAT) {
         double float_as_double = tinypy_float_as_double(value);
-        return __tinypy_render_double_literal(builder, float_as_double);
+        tinypy_bool_t return_value_3 = __tinypy_render_double_literal(builder, float_as_double);
+        return return_value_3;
     }
     if (type == TINYPY_VALUE_COMPLEX) {
         double real_value;
@@ -310,11 +329,14 @@ static int32_t __tinypy_render_literal(tinypy_render_builder_t *builder, tinypy_
 
         tinypy_complex_as_doubles(value, &real_value, &imaginary_value);
         if (real_value == real_value && real_value <= DBL_MAX && real_value >= -DBL_MAX && imaginary_value == imaginary_value && imaginary_value <= DBL_MAX && imaginary_value >= -DBL_MAX) {
-            return __tinypy_render_repr_literal(builder, value);
+            tinypy_bool_t return_value_4 = __tinypy_render_repr_literal(builder, value);
+            return return_value_4;
         }
-        return __tinypy_render_character(builder, '(') && __tinypy_render_double_literal(builder, real_value) && __tinypy_render_text(builder, " + (") && __tinypy_render_double_literal(builder, imaginary_value) && __tinypy_render_text(builder, ") * 1j)");
+        tinypy_bool_t return_value_5 = __tinypy_render_character(builder, '(') && __tinypy_render_double_literal(builder, real_value) && __tinypy_render_text(builder, " + (") && __tinypy_render_double_literal(builder, imaginary_value) && __tinypy_render_text(builder, ") * 1j)");
+        return return_value_5;
     }
-    return __tinypy_render_repr_literal(builder, value);
+    tinypy_bool_t return_value_6 = __tinypy_render_repr_literal(builder, value);
+    return return_value_6;
 }
 //////////////////////////////////////////////////////////////////////////
 static const char *__tinypy_render_binary_operator(tinypy_ast_binary_operator_e operation) {
@@ -375,60 +397,63 @@ static const char *__tinypy_render_compare_operator(int32_t operation) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_expression_sequence(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *sequence, const char *separator) {
+static tinypy_bool_t __tinypy_render_expression_sequence(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *sequence, const char *separator) {
     int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(sequence); ++index) {
         if (index != 0 && __tinypy_render_text(builder, separator) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(sequence, index)) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_slice(tinypy_render_builder_t *builder, tinypy_ast_slice_t slice) {
+static tinypy_bool_t __tinypy_render_slice(tinypy_render_builder_t *builder, tinypy_ast_slice_t slice) {
+    tinypy_bool_t function_result;
     int32_t index;
 
     switch (slice->kind) {
     case TINYPY_AST_KIND_ELLIPSIS:
-        return __tinypy_render_text(builder, "...");
+        function_result = __tinypy_render_text(builder, "...");
+        return function_result;
     case TINYPY_AST_KIND_INDEX:
-        return __tinypy_render_expression(builder, slice->v.Index.value);
+        function_result = __tinypy_render_expression(builder, slice->v.Index.value);
+        return function_result;
     case TINYPY_AST_KIND_SLICE:
         if (slice->v.Slice.lower != NULL && __tinypy_render_expression(builder, slice->v.Slice.lower) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_character(builder, ':') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (slice->v.Slice.upper != NULL && __tinypy_render_expression(builder, slice->v.Slice.upper) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (slice->v.Slice.step != NULL) {
             if (__tinypy_render_character(builder, ':') == 0 || __tinypy_render_expression(builder, slice->v.Slice.step) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
-        return 1;
+        return TINYPY_TRUE;
     case TINYPY_AST_KIND_EXT_SLICE:
         for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(slice->v.ExtSlice.dims); ++index) {
             if (index != 0 && __tinypy_render_text(builder, ", ") == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
             if (__tinypy_render_slice(builder, (tinypy_ast_slice_t)TINYPY_AST_SEQUENCE_GET(slice->v.ExtSlice.dims, index)) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
-        return 1;
+        return TINYPY_TRUE;
     default:
-        return 0;
+        return TINYPY_FALSE;
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_comprehensions(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *generators) {
+static tinypy_bool_t __tinypy_render_comprehensions(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *generators) {
     int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(generators); ++index) {
@@ -436,179 +461,204 @@ static int32_t __tinypy_render_comprehensions(tinypy_render_builder_t *builder, 
         int32_t if_index;
 
         if (__tinypy_render_text(builder, " for ") == 0 || __tinypy_render_expression(builder, generator->target) == 0 || __tinypy_render_text(builder, " in ") == 0 || __tinypy_render_expression(builder, generator->iter) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         for (if_index = 0; if_index < TINYPY_AST_SEQUENCE_LENGTH(generator->ifs); ++if_index) {
             if (__tinypy_render_text(builder, " if ") == 0 || __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(generator->ifs, if_index)) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_call(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
+static tinypy_bool_t __tinypy_render_call(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
     int32_t emitted = 0;
     int32_t index;
 
     if (__tinypy_render_expression(builder, expression->v.Call.func) == 0 || __tinypy_render_character(builder, '(') == 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.args); ++index) {
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Call.args, index)) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         emitted = 1;
     }
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.keywords); ++index) {
         tinypy_ast_keyword_t keyword = (tinypy_ast_keyword_t)TINYPY_AST_SEQUENCE_GET(expression->v.Call.keywords, index);
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_identifier(builder, keyword->arg) == 0 || __tinypy_render_character(builder, '=') == 0 || __tinypy_render_expression(builder, keyword->value) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         emitted = 1;
     }
     if (expression->v.Call.starargs != NULL) {
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_character(builder, '*') == 0 || __tinypy_render_expression(builder, expression->v.Call.starargs) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         emitted = 1;
     }
     if (expression->v.Call.kwargs != NULL) {
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_text(builder, "**") == 0 || __tinypy_render_expression(builder, expression->v.Call.kwargs) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
-    return __tinypy_render_character(builder, ')');
+    tinypy_bool_t return_value_1 = __tinypy_render_character(builder, ')');
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_expression(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
+static tinypy_bool_t __tinypy_render_expression(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
+    tinypy_bool_t function_result;
     int32_t index;
 
     if (expression == NULL) {
-        return 1;
+        return TINYPY_TRUE;
     }
     switch (expression->kind) {
     case TINYPY_AST_KIND_NUM:
-        return __tinypy_render_literal(builder, expression->v.Num.n);
+        function_result = __tinypy_render_literal(builder, expression->v.Num.n);
+        return function_result;
     case TINYPY_AST_KIND_STR:
-        return __tinypy_render_literal(builder, expression->v.Str.s);
+        function_result = __tinypy_render_literal(builder, expression->v.Str.s);
+        return function_result;
     case TINYPY_AST_KIND_NAME:
-        return __tinypy_render_identifier(builder, expression->v.Name.id);
+        function_result = __tinypy_render_identifier(builder, expression->v.Name.id);
+        return function_result;
     case TINYPY_AST_KIND_ATTRIBUTE:
-        return __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.Attribute.value) && __tinypy_render_text(builder, ").") && __tinypy_render_identifier(builder, expression->v.Attribute.attr);
+        function_result = __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.Attribute.value) && __tinypy_render_text(builder, ").") && __tinypy_render_identifier(builder, expression->v.Attribute.attr);
+        return function_result;
     case TINYPY_AST_KIND_SUBSCRIPT:
-        return __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.Subscript.value) && __tinypy_render_text(builder, ")[") && __tinypy_render_slice(builder, expression->v.Subscript.slice) && __tinypy_render_character(builder, ']');
+        function_result = __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.Subscript.value) && __tinypy_render_text(builder, ")[") && __tinypy_render_slice(builder, expression->v.Subscript.slice) && __tinypy_render_character(builder, ']');
+        return function_result;
     case TINYPY_AST_KIND_BOOL_OP:
         if (__tinypy_render_character(builder, '(') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.BoolOp.values); ++index) {
             if (index != 0 && __tinypy_render_text(builder, expression->v.BoolOp.op == TINYPY_AST_BOOLEAN_AND ? " and " : " or ") == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
             if (__tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.BoolOp.values, index)) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
-        return __tinypy_render_character(builder, ')');
+        tinypy_bool_t return_value_1 = __tinypy_render_character(builder, ')');
+        return return_value_1;
     case TINYPY_AST_KIND_BIN_OP: {
         const char *operator_text = __tinypy_render_binary_operator(expression->v.BinOp.op);
-        return __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.BinOp.left) && __tinypy_render_character(builder, ' ') && __tinypy_render_text(builder, operator_text) && __tinypy_render_character(builder, ' ') && __tinypy_render_expression(builder, expression->v.BinOp.right) && __tinypy_render_character(builder, ')');
+        tinypy_bool_t return_value_2 = __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.BinOp.left) && __tinypy_render_character(builder, ' ') && __tinypy_render_text(builder, operator_text) && __tinypy_render_character(builder, ' ') && __tinypy_render_expression(builder, expression->v.BinOp.right) && __tinypy_render_character(builder, ')');
+        return return_value_2;
     }
     case TINYPY_AST_KIND_UNARY_OP:
         if (__tinypy_render_character(builder, '(') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_text(builder, expression->v.UnaryOp.op == TINYPY_AST_UNARY_NOT ? "not " : (expression->v.UnaryOp.op == TINYPY_AST_UNARY_INVERT ? "~" : (expression->v.UnaryOp.op == TINYPY_AST_UNARY_ADD ? "+" : "-"))) == 0 || __tinypy_render_expression(builder, expression->v.UnaryOp.operand) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_render_character(builder, ')');
+        tinypy_bool_t return_value_3 = __tinypy_render_character(builder, ')');
+        return return_value_3;
     case TINYPY_AST_KIND_LAMBDA:
         if (__tinypy_render_text(builder, "(lambda ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_arguments(builder, expression->v.Lambda.args) == 0 || __tinypy_render_text(builder, ": ") == 0 || __tinypy_render_expression(builder, expression->v.Lambda.body) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_render_character(builder, ')');
+        tinypy_bool_t return_value_4 = __tinypy_render_character(builder, ')');
+        return return_value_4;
     case TINYPY_AST_KIND_IF_EXP:
-        return __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.IfExp.body) && __tinypy_render_text(builder, " if ") && __tinypy_render_expression(builder, expression->v.IfExp.test) && __tinypy_render_text(builder, " else ") && __tinypy_render_expression(builder, expression->v.IfExp.orelse) && __tinypy_render_character(builder, ')');
+        function_result = __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.IfExp.body) && __tinypy_render_text(builder, " if ") && __tinypy_render_expression(builder, expression->v.IfExp.test) && __tinypy_render_text(builder, " else ") && __tinypy_render_expression(builder, expression->v.IfExp.orelse) && __tinypy_render_character(builder, ')');
+        return function_result;
     case TINYPY_AST_KIND_DICT:
         if (__tinypy_render_character(builder, '{') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Dict.keys); ++index) {
             if (index != 0 && __tinypy_render_text(builder, ", ") == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
             if (__tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Dict.keys, index)) == 0 || __tinypy_render_text(builder, ": ") == 0 || __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Dict.values, index)) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
-        return __tinypy_render_character(builder, '}');
+        tinypy_bool_t return_value_5 = __tinypy_render_character(builder, '}');
+        return return_value_5;
     case TINYPY_AST_KIND_SET:
-        return __tinypy_render_character(builder, '{') && __tinypy_render_expression_sequence(builder, expression->v.Set.elts, ", ") && __tinypy_render_character(builder, '}');
+        function_result = __tinypy_render_character(builder, '{') && __tinypy_render_expression_sequence(builder, expression->v.Set.elts, ", ") && __tinypy_render_character(builder, '}');
+        return function_result;
     case TINYPY_AST_KIND_LIST_COMP:
-        return __tinypy_render_character(builder, '[') && __tinypy_render_expression(builder, expression->v.ListComp.elt) && __tinypy_render_comprehensions(builder, expression->v.ListComp.generators) && __tinypy_render_character(builder, ']');
+        function_result = __tinypy_render_character(builder, '[') && __tinypy_render_expression(builder, expression->v.ListComp.elt) && __tinypy_render_comprehensions(builder, expression->v.ListComp.generators) && __tinypy_render_character(builder, ']');
+        return function_result;
     case TINYPY_AST_KIND_SET_COMP:
-        return __tinypy_render_character(builder, '{') && __tinypy_render_expression(builder, expression->v.SetComp.elt) && __tinypy_render_comprehensions(builder, expression->v.SetComp.generators) && __tinypy_render_character(builder, '}');
+        function_result = __tinypy_render_character(builder, '{') && __tinypy_render_expression(builder, expression->v.SetComp.elt) && __tinypy_render_comprehensions(builder, expression->v.SetComp.generators) && __tinypy_render_character(builder, '}');
+        return function_result;
     case TINYPY_AST_KIND_DICT_COMP:
-        return __tinypy_render_character(builder, '{') && __tinypy_render_expression(builder, expression->v.DictComp.key) && __tinypy_render_text(builder, ": ") && __tinypy_render_expression(builder, expression->v.DictComp.value) && __tinypy_render_comprehensions(builder, expression->v.DictComp.generators) && __tinypy_render_character(builder, '}');
+        function_result = __tinypy_render_character(builder, '{') && __tinypy_render_expression(builder, expression->v.DictComp.key) && __tinypy_render_text(builder, ": ") && __tinypy_render_expression(builder, expression->v.DictComp.value) && __tinypy_render_comprehensions(builder, expression->v.DictComp.generators) && __tinypy_render_character(builder, '}');
+        return function_result;
     case TINYPY_AST_KIND_GENERATOR_EXP:
-        return __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.GeneratorExp.elt) && __tinypy_render_comprehensions(builder, expression->v.GeneratorExp.generators) && __tinypy_render_character(builder, ')');
+        function_result = __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.GeneratorExp.elt) && __tinypy_render_comprehensions(builder, expression->v.GeneratorExp.generators) && __tinypy_render_character(builder, ')');
+        return function_result;
     case TINYPY_AST_KIND_YIELD:
-        return __tinypy_render_text(builder, "(yield") && (expression->v.Yield.value == NULL || (__tinypy_render_character(builder, ' ') && __tinypy_render_expression(builder, expression->v.Yield.value))) && __tinypy_render_character(builder, ')');
+        function_result = __tinypy_render_text(builder, "(yield") && (expression->v.Yield.value == NULL || (__tinypy_render_character(builder, ' ') && __tinypy_render_expression(builder, expression->v.Yield.value))) && __tinypy_render_character(builder, ')');
+        return function_result;
     case TINYPY_AST_KIND_COMPARE:
         if (__tinypy_render_character(builder, '(') == 0 || __tinypy_render_expression(builder, expression->v.Compare.left) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         for (index = 0; index < expression->v.Compare.ops->size; ++index) {
             const char *operator_text = __tinypy_render_compare_operator(expression->v.Compare.ops->elements[index]);
-            int32_t condition_2 = __tinypy_render_character(builder, ' ') == 0 || __tinypy_render_text(builder, operator_text) == 0;
+            tinypy_bool_t condition_2 = __tinypy_render_character(builder, ' ') == 0 || __tinypy_render_text(builder, operator_text) == 0;
             if (condition_2 == 0) {
                 condition_2 = __tinypy_render_character(builder, ' ') == 0;
             }
-            int32_t condition = condition_2;
+            tinypy_bool_t condition = condition_2;
             if (condition == 0) {
                 condition = __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Compare.comparators, index)) == 0;
             }
             if (condition) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
-        return __tinypy_render_character(builder, ')');
+        tinypy_bool_t return_value_6 = __tinypy_render_character(builder, ')');
+        return return_value_6;
     case TINYPY_AST_KIND_CALL:
-        return __tinypy_render_call(builder, expression);
+        function_result = __tinypy_render_call(builder, expression);
+        return function_result;
     case TINYPY_AST_KIND_REPR:
-        return __tinypy_render_character(builder, '`') && __tinypy_render_expression(builder, expression->v.Repr.value) && __tinypy_render_character(builder, '`');
+        function_result = __tinypy_render_character(builder, '`') && __tinypy_render_expression(builder, expression->v.Repr.value) && __tinypy_render_character(builder, '`');
+        return function_result;
     case TINYPY_AST_KIND_LIST:
-        return __tinypy_render_character(builder, '[') && __tinypy_render_expression_sequence(builder, expression->v.List.elts, ", ") && __tinypy_render_character(builder, ']');
+        function_result = __tinypy_render_character(builder, '[') && __tinypy_render_expression_sequence(builder, expression->v.List.elts, ", ") && __tinypy_render_character(builder, ']');
+        return function_result;
     case TINYPY_AST_KIND_TUPLE:
         if (__tinypy_render_character(builder, '(') == 0 || __tinypy_render_expression_sequence(builder, expression->v.Tuple.elts, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (TINYPY_AST_SEQUENCE_LENGTH(expression->v.Tuple.elts) == 1 && __tinypy_render_character(builder, ',') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_render_character(builder, ')');
+        tinypy_bool_t return_value_7 = __tinypy_render_character(builder, ')');
+        return return_value_7;
     default:
-        return __tinypy_render_fail(builder, "unsupported AST expression in expanded source", expression->lineno, expression->col_offset);
+        function_result = __tinypy_render_fail(builder, "unsupported AST expression in expanded source", expression->lineno, expression->col_offset);
+        return function_result;
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_arguments(tinypy_render_builder_t *builder, tinypy_ast_arguments_t arguments) {
+static tinypy_bool_t __tinypy_render_arguments(tinypy_render_builder_t *builder, tinypy_ast_arguments_t arguments) {
     int32_t parameter_count = TINYPY_AST_SEQUENCE_LENGTH(arguments->args);
     int32_t default_count = TINYPY_AST_SEQUENCE_LENGTH(arguments->defaults);
     int32_t emitted = 0;
@@ -616,36 +666,36 @@ static int32_t __tinypy_render_arguments(tinypy_render_builder_t *builder, tinyp
 
     for (index = 0; index < parameter_count; ++index) {
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(arguments->args, index)) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (index >= parameter_count - default_count) {
             if (__tinypy_render_character(builder, '=') == 0 || __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(arguments->defaults, index - (parameter_count - default_count))) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         emitted = 1;
     }
     if (arguments->vararg != NULL) {
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_character(builder, '*') == 0 || __tinypy_render_identifier(builder, arguments->vararg) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         emitted = 1;
     }
     if (arguments->kwarg != NULL) {
         if (emitted != 0 && __tinypy_render_text(builder, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_text(builder, "**") == 0 || __tinypy_render_identifier(builder, arguments->kwarg) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_source_map_record_t *__tinypy_render_source_map_record(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement) {
@@ -660,47 +710,48 @@ static tinypy_source_map_record_t *__tinypy_render_source_map_record(tinypy_rend
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_statement_sequence(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *sequence, size_t indentation) {
+static tinypy_bool_t __tinypy_render_statement_sequence(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *sequence, size_t indentation) {
     int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(sequence); ++index) {
         if (__tinypy_render_statement(builder, (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(sequence, index), indentation) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_decorators(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *decorators, size_t indentation) {
+static tinypy_bool_t __tinypy_render_decorators(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *decorators, size_t indentation) {
     int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(decorators); ++index) {
         if (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_character(builder, '@') == 0 || __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(decorators, index)) == 0 || __tinypy_render_character(builder, '\n') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_aliases(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *aliases) {
+static tinypy_bool_t __tinypy_render_aliases(tinypy_render_builder_t *builder, tinypy_ast_sequence_t *aliases) {
     int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(aliases); ++index) {
         tinypy_ast_alias_t alias = (tinypy_ast_alias_t)TINYPY_AST_SEQUENCE_GET(aliases, index);
         if (index != 0 && __tinypy_render_text(builder, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_identifier(builder, alias->name) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (alias->asname != NULL && (__tinypy_render_text(builder, " as ") == 0 || __tinypy_render_identifier(builder, alias->asname) == 0)) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement, size_t indentation) {
+static tinypy_bool_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement, size_t indentation) {
+    tinypy_bool_t function_result;
     tinypy_source_map_record_t *record = __tinypy_render_source_map_record(builder, statement);
     int32_t index;
 
@@ -709,199 +760,205 @@ static int32_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinyp
         record->generated_column = (int32_t)(indentation * 4U);
     }
     if ((statement->kind == TINYPY_AST_KIND_FUNCTION_DEF && __tinypy_render_decorators(builder, statement->v.FunctionDef.decorator_list, indentation) == 0) || (statement->kind == TINYPY_AST_KIND_CLASS_DEF && __tinypy_render_decorators(builder, statement->v.ClassDef.decorator_list, indentation) == 0)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     if (__tinypy_render_indent(builder, indentation) == 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
     switch (statement->kind) {
     case TINYPY_AST_KIND_FUNCTION_DEF:
         if (__tinypy_render_text(builder, "def ") == 0 || __tinypy_render_identifier(builder, statement->v.FunctionDef.name) == 0 || __tinypy_render_character(builder, '(') == 0 || __tinypy_render_arguments(builder, statement->v.FunctionDef.args) == 0 || __tinypy_render_text(builder, "):\n") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_render_statement_sequence(builder, statement->v.FunctionDef.body, indentation + 1U);
+        tinypy_bool_t return_value_1 = __tinypy_render_statement_sequence(builder, statement->v.FunctionDef.body, indentation + 1U);
+        return return_value_1;
     case TINYPY_AST_KIND_CLASS_DEF:
         if (__tinypy_render_text(builder, "class ") == 0 || __tinypy_render_identifier(builder, statement->v.ClassDef.name) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (TINYPY_AST_SEQUENCE_LENGTH(statement->v.ClassDef.bases) != 0 && (__tinypy_render_character(builder, '(') == 0 || __tinypy_render_expression_sequence(builder, statement->v.ClassDef.bases, ", ") == 0 || __tinypy_render_character(builder, ')') == 0)) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_text(builder, ":\n") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_render_statement_sequence(builder, statement->v.ClassDef.body, indentation + 1U);
+        tinypy_bool_t return_value_2 = __tinypy_render_statement_sequence(builder, statement->v.ClassDef.body, indentation + 1U);
+        return return_value_2;
     case TINYPY_AST_KIND_RETURN:
         if (__tinypy_render_text(builder, "return") == 0 || (statement->v.Return.value != NULL && (__tinypy_render_character(builder, ' ') == 0 || __tinypy_render_expression(builder, statement->v.Return.value) == 0))) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_DELETE:
         if (__tinypy_render_text(builder, "del ") == 0 || __tinypy_render_expression_sequence(builder, statement->v.Delete.targets, ", ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_ASSIGN:
         if (__tinypy_render_expression_sequence(builder, statement->v.Assign.targets, " = ") == 0 || __tinypy_render_text(builder, " = ") == 0 || __tinypy_render_expression(builder, statement->v.Assign.value) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_AUG_ASSIGN: {
         const char *operator_text = __tinypy_render_binary_operator(statement->v.AugAssign.op);
         if (__tinypy_render_expression(builder, statement->v.AugAssign.target) == 0 || __tinypy_render_character(builder, ' ') == 0 || __tinypy_render_text(builder, operator_text) == 0 || __tinypy_render_text(builder, "= ") == 0 || __tinypy_render_expression(builder, statement->v.AugAssign.value) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     }
     case TINYPY_AST_KIND_PRINT:
         if (__tinypy_render_text(builder, "print") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (statement->v.Print.dest != NULL && (__tinypy_render_text(builder, " >>") == 0 || __tinypy_render_expression(builder, statement->v.Print.dest) == 0 || (TINYPY_AST_SEQUENCE_LENGTH(statement->v.Print.values) != 0 && __tinypy_render_text(builder, ", ") == 0))) {
-            return 0;
+            return TINYPY_FALSE;
         }
         else if (TINYPY_AST_SEQUENCE_LENGTH(statement->v.Print.values) != 0 && __tinypy_render_character(builder, ' ') == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (__tinypy_render_expression_sequence(builder, statement->v.Print.values, ", ") == 0 || (statement->v.Print.nl == TINYPY_COMPILER_FALSE && __tinypy_render_character(builder, ',') == 0)) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_FOR:
         if (__tinypy_render_text(builder, "for ") == 0 || __tinypy_render_expression(builder, statement->v.For.target) == 0 || __tinypy_render_text(builder, " in ") == 0 || __tinypy_render_expression(builder, statement->v.For.iter) == 0 || __tinypy_render_text(builder, ":\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.For.body, indentation + 1U) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (TINYPY_AST_SEQUENCE_LENGTH(statement->v.For.orelse) != 0) {
             if (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_text(builder, "else:\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.For.orelse, indentation + 1U) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
-        return 1;
+        return TINYPY_TRUE;
     case TINYPY_AST_KIND_WHILE:
         if (__tinypy_render_text(builder, "while ") == 0 || __tinypy_render_expression(builder, statement->v.While.test) == 0 || __tinypy_render_text(builder, ":\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.While.body, indentation + 1U) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (TINYPY_AST_SEQUENCE_LENGTH(statement->v.While.orelse) != 0) {
             if (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_text(builder, "else:\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.While.orelse, indentation + 1U) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
-        return 1;
+        return TINYPY_TRUE;
     case TINYPY_AST_KIND_IF:
         if (__tinypy_render_text(builder, "if ") == 0 || __tinypy_render_expression(builder, statement->v.If.test) == 0 || __tinypy_render_text(builder, ":\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.If.body, indentation + 1U) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (TINYPY_AST_SEQUENCE_LENGTH(statement->v.If.orelse) != 0) {
             if (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_text(builder, "else:\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.If.orelse, indentation + 1U) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
-        return 1;
+        return TINYPY_TRUE;
     case TINYPY_AST_KIND_WITH:
         if (__tinypy_render_text(builder, "with ") == 0 || __tinypy_render_expression(builder, statement->v.With.context_expr) == 0 || (statement->v.With.optional_vars != NULL && (__tinypy_render_text(builder, " as ") == 0 || __tinypy_render_expression(builder, statement->v.With.optional_vars) == 0)) || __tinypy_render_text(builder, ":\n") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_render_statement_sequence(builder, statement->v.With.body, indentation + 1U);
+        tinypy_bool_t return_value_3 = __tinypy_render_statement_sequence(builder, statement->v.With.body, indentation + 1U);
+        return return_value_3;
     case TINYPY_AST_KIND_RAISE:
         if (__tinypy_render_text(builder, "raise") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (statement->v.Raise.type != NULL && (__tinypy_render_character(builder, ' ') == 0 || __tinypy_render_expression(builder, statement->v.Raise.type) == 0 || (statement->v.Raise.inst != NULL && (__tinypy_render_text(builder, ", ") == 0 || __tinypy_render_expression(builder, statement->v.Raise.inst) == 0)) || (statement->v.Raise.tback != NULL && (__tinypy_render_text(builder, ", ") == 0 || __tinypy_render_expression(builder, statement->v.Raise.tback) == 0)))) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_TRY_EXCEPT:
         if (__tinypy_render_text(builder, "try:\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.TryExcept.body, indentation + 1U) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(statement->v.TryExcept.handlers); ++index) {
             tinypy_ast_exception_handler_t handler = (tinypy_ast_exception_handler_t)TINYPY_AST_SEQUENCE_GET(statement->v.TryExcept.handlers, index);
             if (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_text(builder, "except") == 0 || (handler->v.ExceptHandler.type != NULL && (__tinypy_render_character(builder, ' ') == 0 || __tinypy_render_expression(builder, handler->v.ExceptHandler.type) == 0)) || (handler->v.ExceptHandler.name != NULL && (__tinypy_render_text(builder, " as ") == 0 || __tinypy_render_expression(builder, handler->v.ExceptHandler.name) == 0)) || __tinypy_render_text(builder, ":\n") == 0 || __tinypy_render_statement_sequence(builder, handler->v.ExceptHandler.body, indentation + 1U) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         if (TINYPY_AST_SEQUENCE_LENGTH(statement->v.TryExcept.orelse) != 0 && (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_text(builder, "else:\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.TryExcept.orelse, indentation + 1U) == 0)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return 1;
+        return TINYPY_TRUE;
     case TINYPY_AST_KIND_TRY_FINALLY:
         if (__tinypy_render_text(builder, "try:\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.TryFinally.body, indentation + 1U) == 0 || __tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_text(builder, "finally:\n") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_render_statement_sequence(builder, statement->v.TryFinally.finalbody, indentation + 1U);
+        tinypy_bool_t return_value_4 = __tinypy_render_statement_sequence(builder, statement->v.TryFinally.finalbody, indentation + 1U);
+        return return_value_4;
     case TINYPY_AST_KIND_ASSERT:
         if (__tinypy_render_text(builder, "assert ") == 0 || __tinypy_render_expression(builder, statement->v.Assert.test) == 0 || (statement->v.Assert.msg != NULL && (__tinypy_render_text(builder, ", ") == 0 || __tinypy_render_expression(builder, statement->v.Assert.msg) == 0))) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_IMPORT:
         if (__tinypy_render_text(builder, "import ") == 0 || __tinypy_render_aliases(builder, statement->v.Import.names) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_IMPORT_FROM:
         if (__tinypy_render_text(builder, "from ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         for (index = 0; index < statement->v.ImportFrom.level; ++index) {
             if (__tinypy_render_character(builder, '.') == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         if (__tinypy_render_identifier(builder, statement->v.ImportFrom.module) == 0 || __tinypy_render_text(builder, " import ") == 0 || __tinypy_render_aliases(builder, statement->v.ImportFrom.names) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_EXEC:
         if (__tinypy_render_text(builder, "exec ") == 0 || __tinypy_render_expression(builder, statement->v.Exec.body) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (statement->v.Exec.globals != NULL) {
             if (__tinypy_render_text(builder, " in ") == 0 || __tinypy_render_expression(builder, statement->v.Exec.globals) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
             if (statement->v.Exec.locals != NULL && (__tinypy_render_text(builder, ", ") == 0 || __tinypy_render_expression(builder, statement->v.Exec.locals) == 0)) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         break;
     case TINYPY_AST_KIND_GLOBAL:
         if (__tinypy_render_text(builder, "global ") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(statement->v.Global.names); ++index) {
             if (index != 0 && __tinypy_render_text(builder, ", ") == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
             if (__tinypy_render_identifier(builder, (tinypy_ast_identifier_t)TINYPY_AST_SEQUENCE_GET(statement->v.Global.names, index)) == 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         break;
     case TINYPY_AST_KIND_EXPR:
         if (__tinypy_render_expression(builder, statement->v.Expr.value) == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_PASS:
         if (__tinypy_render_text(builder, "pass") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_BREAK:
         if (__tinypy_render_text(builder, "break") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_CONTINUE:
         if (__tinypy_render_text(builder, "continue") == 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     default:
-        return __tinypy_render_fail(builder, "unsupported AST statement in expanded source", statement->lineno, statement->col_offset);
+        function_result = __tinypy_render_fail(builder, "unsupported AST statement in expanded source", statement->lineno, statement->col_offset);
+        return function_result;
     }
-    return __tinypy_render_character(builder, '\n');
+    tinypy_bool_t return_value = __tinypy_render_character(builder, '\n');
+    return return_value;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_render_flatten(const tinypy_render_builder_t *builder, uint8_t *output) {
@@ -915,10 +972,9 @@ static void __tinypy_render_flatten(const tinypy_render_builder_t *builder, uint
         offset += chunk->size;
         chunk = chunk->next;
     }
-    TINYPY_ASSERT(offset == builder->size);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_render_decimal(tinypy_render_builder_t *builder, int32_t value) {
+static tinypy_bool_t __tinypy_render_decimal(tinypy_render_builder_t *builder, int32_t value) {
     char reverse[16];
     char output[16];
     uint32_t magnitude = value < 0 ? (uint32_t)(-(value + 1)) + 1U : (uint32_t)value;
@@ -935,7 +991,8 @@ static int32_t __tinypy_render_decimal(tinypy_render_builder_t *builder, int32_t
     while (count != 0U) {
         output[index++] = reverse[--count];
     }
-    return __tinypy_render_append(builder, output, index);
+    tinypy_bool_t return_value_1 = __tinypy_render_append(builder, output, index);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_render_record_compare(const tinypy_source_map_record_t *left, const tinypy_source_map_record_t *right) {
@@ -963,7 +1020,6 @@ static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compil
     for (record = ctx->source_map_records; record != NULL; record = record->next) {
         records[count++] = record;
     }
-    TINYPY_ASSERT(count == ctx->source_map_entries);
     for (index = 1U; index < count; ++index) {
         tinypy_source_map_record_t *item = records[index];
         size_t position = index;
@@ -1027,18 +1083,13 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
         if (__tinypy_render_decimal(&map_builder, records[index]->generated_line) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->generated_column) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->template_line) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->template_column) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->expansion_line) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_decimal(&map_builder, records[index]->expansion_column) == 0 || __tinypy_render_character(&map_builder, '\t') == 0 || __tinypy_render_append(&map_builder, symbol, symbol_size) == 0 || __tinypy_render_character(&map_builder, '\n') == 0) {
             return NULL;
         }
-        TINYPY_ASSERT(symbol_size <= SIZE_MAX - symbol_bytes);
         symbol_bytes += symbol_size;
     }
-    TINYPY_ASSERT(ctx->source_map_entries <= (SIZE_MAX - sizeof(tinypy_preprocess_result_t)) / sizeof(tinypy_source_map_entry_t));
     allocation_size = sizeof(tinypy_preprocess_result_t) + ctx->source_map_entries * sizeof(tinypy_source_map_entry_t);
-    TINYPY_ASSERT(source_builder.size + 1U <= SIZE_MAX - allocation_size);
     allocation_size += source_builder.size + 1U;
-    TINYPY_ASSERT(map_builder.size + 1U <= SIZE_MAX - allocation_size);
     allocation_size += map_builder.size + 1U;
-    TINYPY_ASSERT(symbol_bytes <= SIZE_MAX - allocation_size);
     allocation_size += symbol_bytes;
-    tinypy_preprocess_result_t *result = (tinypy_preprocess_result_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_COMPILER_DATA);
+    tinypy_preprocess_result_t *result = (tinypy_preprocess_result_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size, TINYPY_ALLOC_TAG_COMPILER_DATA);
     (void)memset(result, 0, sizeof(*result));
     result->state = TINYPY_PREPROCESS_RESULT_STATE;
     result->vm = ctx->vm;
@@ -1077,7 +1128,6 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
         }
         cursor += symbol_size;
     }
-    TINYPY_ASSERT((size_t)(cursor - (uint8_t *)result) == allocation_size);
     tinypy_sha256_digest(result->source_map, result->source_map_size, result->source_map_digest);
     return result;
 }
@@ -1085,15 +1135,13 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
 void tinypy_preprocess_result_destroy(tinypy_preprocess_result_t *result) {
     size_t allocation_size;
 
-    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     tinypy_vm_t *vm = result->vm;
     allocation_size = result->allocation_size;
     result->state = 0U;
-    tinypy_internal_vm_deallocate(vm, result, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_COMPILER_DATA);
+    tinypy_internal_vm_deallocate(vm, result, allocation_size, TINYPY_ALLOC_TAG_COMPILER_DATA);
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_preprocess_result_expanded_source(const tinypy_preprocess_result_t *result, size_t *out_size) {
-    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     if (out_size != NULL) {
         *out_size = result->source_size;
     }
@@ -1101,7 +1149,6 @@ const char *tinypy_preprocess_result_expanded_source(const tinypy_preprocess_res
 }
 //////////////////////////////////////////////////////////////////////////
 const void *tinypy_preprocess_result_source_map(const tinypy_preprocess_result_t *result, size_t *out_size) {
-    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     if (out_size != NULL) {
         *out_size = result->source_map_size;
     }
@@ -1109,18 +1156,13 @@ const void *tinypy_preprocess_result_source_map(const tinypy_preprocess_result_t
 }
 //////////////////////////////////////////////////////////////////////////
 const uint8_t *tinypy_preprocess_result_source_map_digest(const tinypy_preprocess_result_t *result) {
-    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     return result->source_map_digest;
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_preprocess_result_source_map_count(const tinypy_preprocess_result_t *result) {
-    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
     return result->entry_count;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_preprocess_result_source_map_at(const tinypy_preprocess_result_t *result, size_t index, tinypy_source_map_entry_t *out_entry) {
-    TINYPY_ASSERT(result != NULL && result->state == TINYPY_PREPROCESS_RESULT_STATE);
-    TINYPY_ASSERT(index < result->entry_count);
-    TINYPY_ASSERT(out_entry != NULL);
     *out_entry = result->entries[index];
 }

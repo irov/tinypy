@@ -1,14 +1,12 @@
 #include "internal.h"
 
-#include "assertion.h"
-
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_functools_no_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_functools_no_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     if (kwargs == NULL || TINYPY_DICT_SIZE(kwargs) == 0U) {
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function does not accept keyword arguments", out_error);
-    return INT32_C(0);
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_functools_dict_update(tinypy_value_t *target, tinypy_value_t *source) {
@@ -74,13 +72,11 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
     tinypy_value_t *combined_args;
     size_t index;
 
-    TINYPY_ASSERT(bound_count <= SIZE_MAX - call_count);
-    TINYPY_ASSERT(bound_count + call_count <= SIZE_MAX / sizeof(*items));
     if (bound_count + call_count == 0U) {
         combined_args = tinypy_tuple_from_items(vm, NULL, 0U);
     }
     else {
-        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (bound_count + call_count) * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (bound_count + call_count) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
         for (index = 0U; index < bound_count; ++index) {
             items[index] = TINYPY_TUPLE_GET(partial->args, index);
         }
@@ -88,7 +84,7 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
             items[bound_count + index] = TINYPY_TUPLE_GET(args, index);
         }
         combined_args = tinypy_tuple_from_items(vm, items, bound_count + call_count);
-        tinypy_internal_vm_deallocate(vm, items, (bound_count + call_count) * sizeof(*items), (uint32_t)TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, items, (bound_count + call_count) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
     }
     tinypy_value_t *combined_kwargs = tinypy_dict_new(vm);
     __tinypy_functools_dict_update(combined_kwargs, partial->keywords);
@@ -184,7 +180,7 @@ void tinypy_internal_initialize_functools_module(tinypy_vm_t *vm) {
     tinypy_value_t *reduce = tinypy_native_function_new(vm, "reduce", 6U, __tinypy_functools_reduce, NULL, NULL);
 
     tinypy_module_add_value(module, "__name__", 8U, name);
-    tinypy_module_add_value(module, "partial", 7U, &vm->partial_type.base.base);
+    tinypy_module_add_value(module, "partial", 7U, &vm->types[TINYPY_VALUE_PARTIAL].base.base);
     tinypy_module_add_value(module, "reduce", 6U, reduce);
     TINYPY_DECREF(reduce);
     TINYPY_DECREF(name);

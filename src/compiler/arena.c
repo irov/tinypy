@@ -12,9 +12,6 @@ void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t 
     size_t allocation_size;
     void *memory;
 
-    TINYPY_ASSERT(ctx != NULL);
-    TINYPY_ASSERT(size != 0U);
-    TINYPY_ASSERT(size <= SIZE_MAX - (TINYPY_INTERNAL_ALIGNMENT - 1U));
     aligned_size = (size + (TINYPY_INTERNAL_ALIGNMENT - 1U)) & ~(TINYPY_INTERNAL_ALIGNMENT - 1U);
     tinypy_compiler_arena_block_t *block = ctx->arena_blocks;
     if (block != NULL && aligned_size <= block->allocation_size - offsetof(tinypy_compiler_arena_block_t, data) - block->used) {
@@ -26,13 +23,12 @@ void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t 
 
     header_size = offsetof(tinypy_compiler_arena_block_t, data);
     payload_size = aligned_size > TINYPY_COMPILER_ARENA_BLOCK_SIZE ? aligned_size : TINYPY_COMPILER_ARENA_BLOCK_SIZE;
-    TINYPY_ASSERT(payload_size <= SIZE_MAX - header_size);
     allocation_size = header_size + payload_size;
     if (ctx->limits.max_arena_bytes != 0U && (ctx->arena_bytes > ctx->limits.max_arena_bytes || allocation_size > ctx->limits.max_arena_bytes - ctx->arena_bytes)) {
         return NULL;
     }
 
-    block = (tinypy_compiler_arena_block_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_COMPILER_ARENA);
+    block = (tinypy_compiler_arena_block_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size, TINYPY_ALLOC_TAG_COMPILER_ARENA);
     block->next = ctx->arena_blocks;
     block->allocation_size = allocation_size;
     block->used = aligned_size;
@@ -49,11 +45,11 @@ void *tinypy_internal_compiler_ast_allocate(tinypy_compile_ctx_t *ctx, size_t si
         return NULL;
     }
     ctx->ast_node_count += 1U;
-    return tinypy_internal_compiler_arena_allocate(ctx, size);
+    void *return_value_1 = tinypy_internal_compiler_arena_allocate(ctx, size);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx) {
-    TINYPY_ASSERT(ctx != NULL);
     tinypy_compiler_value_ref_t *value_ref = ctx->arena_values;
     while (value_ref != NULL) {
         TINYPY_DECREF(value_ref->value);
@@ -64,7 +60,7 @@ void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx) {
     while (block != NULL) {
         tinypy_compiler_arena_block_t *next = block->next;
 
-        tinypy_internal_vm_deallocate(ctx->vm, block, block->allocation_size, (uint32_t)TINYPY_ALLOC_TAG_COMPILER_ARENA);
+        tinypy_internal_vm_deallocate(ctx->vm, block, block->allocation_size, TINYPY_ALLOC_TAG_COMPILER_ARENA);
         block = next;
     }
     ctx->arena_blocks = NULL;
@@ -72,9 +68,6 @@ void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx) {
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_compiler_arena_add_value(tinypy_compile_ctx_t *ctx, tinypy_value_t *value) {
-    TINYPY_ASSERT(ctx != NULL);
-    TINYPY_ASSERT(value != NULL);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(ctx->vm, value));
     tinypy_compiler_value_ref_t *value_ref = (tinypy_compiler_value_ref_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(*value_ref));
     if (value_ref == NULL) {
         return -1;

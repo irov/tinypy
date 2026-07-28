@@ -10,7 +10,7 @@ typedef struct fuzz_allocator_state_t {
 } fuzz_allocator_state_t;
 
 //////////////////////////////////////////////////////////////////////////
-static void *__fuzz_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
+static void *__fuzz_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     fuzz_allocator_state_t *state = (fuzz_allocator_state_t *)user_data;
     void *memory;
 
@@ -23,7 +23,7 @@ static void *__fuzz_allocate(void *user_data, size_t size, size_t alignment, uin
     return memory;
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__fuzz_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
+static void *__fuzz_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
     fuzz_allocator_state_t *state = (fuzz_allocator_state_t *)user_data;
     void *resized;
 
@@ -37,7 +37,7 @@ static void *__fuzz_reallocate(void *user_data, void *memory, size_t old_size, s
     return resized;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __fuzz_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
+static void __fuzz_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     fuzz_allocator_state_t *state = (fuzz_allocator_state_t *)user_data;
 
     (void)alignment;

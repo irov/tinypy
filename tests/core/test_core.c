@@ -14,7 +14,7 @@ typedef union test_allocation_header_t {
     struct {
         size_t size;
         size_t alignment;
-        uint32_t tag;
+        tinypy_allocation_tag_e tag;
     } fields;
     void *pointer_alignment;
     void (*function_alignment)(void);
@@ -44,12 +44,12 @@ typedef struct test_allocator_state_t {
         }                                    \
     } while (0)
 //////////////////////////////////////////////////////////////////////////
-static void *__test_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
+static void *__test_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     test_allocation_header_t *header;
 
     state->allocation_calls += 1U;
-    if (tag == (uint32_t)TINYPY_ALLOC_TAG_ERROR) {
+    if (tag == TINYPY_ALLOC_TAG_ERROR) {
         state->error_allocation_calls += 1U;
     }
     state->last_allocation_size = size;
@@ -71,17 +71,18 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment, uin
     return (void *)(header + 1);
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
+static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     test_allocation_header_t *header;
     test_allocation_header_t *resized;
 
     if (memory == NULL) {
-        return __test_allocate(user_data, new_size, alignment, tag);
+        void *return_value_1 = __test_allocate(user_data, new_size, alignment, tag);
+        return return_value_1;
     }
 
     state->allocation_calls += 1U;
-    if (tag == (uint32_t)TINYPY_ALLOC_TAG_ERROR) {
+    if (tag == TINYPY_ALLOC_TAG_ERROR) {
         state->error_allocation_calls += 1U;
     }
     header = ((test_allocation_header_t *)memory) - 1;
@@ -105,7 +106,7 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
     return (void *)(resized + 1);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
+static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     test_allocation_header_t *header;
 
@@ -1258,7 +1259,7 @@ static int32_t __test_dictionary_runtime(void) {
     tinypy_value_t *borrowed = NULL;
     size_t size;
     uint64_t version;
-    int32_t contains;
+    tinypy_bool_t contains;
     size_t index;
 
     (void)memset(&state, 0, sizeof(state));
@@ -2051,7 +2052,7 @@ typedef struct test_native_state_t {
     int32_t inplace_calls;
 } test_native_state_t;
 //////////////////////////////////////////////////////////////////////////
-static int32_t __test_native_construct(tinypy_value_t *instance, void *payload, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+static tinypy_bool_t __test_native_construct(tinypy_value_t *instance, void *payload, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     test_native_payload_t *native_payload = (test_native_payload_t *)payload;
     test_native_state_t *state = (test_native_state_t *)user_data;
 
@@ -2059,11 +2060,11 @@ static int32_t __test_native_construct(tinypy_value_t *instance, void *payload, 
     (void)kwargs;
     (void)out_error;
     if (tinypy_tuple_size(args) != 0U) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     native_payload->value = 73;
     state->constructed += 1;
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __test_native_finalize(tinypy_value_t *instance, void *payload, void *user_data) {
@@ -2084,7 +2085,8 @@ static tinypy_value_t *__test_native_repr(tinypy_value_t *instance, void *payloa
         return NULL;
     }
     tinypy_vm_t *value_vm = tinypy_value_vm(instance);
-    return tinypy_string_from_bytes(value_vm, "native-73", 9U);
+    tinypy_value_t *return_value_1 = tinypy_string_from_bytes(value_vm, "native-73", 9U);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_native_compare(tinypy_value_t *instance, void *payload, tinypy_value_t *other, tinypy_compare_operation_e operation, void *user_data, tinypy_error_t **out_error) {
@@ -2101,16 +2103,20 @@ static tinypy_value_t *__test_native_compare(tinypy_value_t *instance, void *pay
         state->compare_order_count += 1U;
     }
     if (tinypy_typeof(other) != TINYPY_VALUE_INTEGER) {
-        return tinypy_not_implemented_get(state->vm);
+        tinypy_value_t *return_value_1 = tinypy_not_implemented_get(state->vm);
+        return return_value_1;
     }
     equal = native_payload->value == tinypy_integer_as_i64(other) ? INT32_C(1) : INT32_C(0);
     if (operation == TINYPY_COMPARE_EQUAL) {
-        return tinypy_bool_from_i32(state->vm, equal);
+        tinypy_value_t *return_value_2 = tinypy_bool_from_i32(state->vm, equal);
+        return return_value_2;
     }
     if (operation == TINYPY_COMPARE_NOT_EQUAL) {
-        return tinypy_bool_from_i32(state->vm, equal == 0 ? INT32_C(1) : INT32_C(0));
+        tinypy_value_t *return_value_3 = tinypy_bool_from_i32(state->vm, equal == 0 ? INT32_C(1) : INT32_C(0));
+        return return_value_3;
     }
-    return tinypy_not_implemented_get(state->vm);
+    tinypy_value_t *return_value_4 = tinypy_not_implemented_get(state->vm);
+    return return_value_4;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_hash_t __test_native_hash(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
@@ -2136,7 +2142,8 @@ static tinypy_value_t *__test_native_call(tinypy_value_t *instance, void *payloa
     if (tinypy_tuple_size(args) != 1U || tinypy_typeof(tinypy_tuple_get(args, 0U)) != TINYPY_VALUE_INTEGER) {
         return NULL;
     }
-    return tinypy_integer_from_i64(state->vm, native_payload->value + tinypy_integer_as_i64(tinypy_tuple_get(args, 0U)));
+    tinypy_value_t *return_value_1 = tinypy_integer_from_i64(state->vm, native_payload->value + tinypy_integer_as_i64(tinypy_tuple_get(args, 0U)));
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_native_negative(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
@@ -2145,7 +2152,8 @@ static tinypy_value_t *__test_native_negative(tinypy_value_t *instance, void *pa
 
     (void)instance;
     (void)out_error;
-    return tinypy_integer_from_i64(state->vm, -(int64_t)native_payload->value);
+    tinypy_value_t *return_value_1 = tinypy_integer_from_i64(state->vm, -(int64_t)native_payload->value);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_native_absolute(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
@@ -2155,7 +2163,8 @@ static tinypy_value_t *__test_native_absolute(tinypy_value_t *instance, void *pa
 
     (void)instance;
     (void)out_error;
-    return tinypy_integer_from_i64(state->vm, result);
+    tinypy_value_t *return_value_1 = tinypy_integer_from_i64(state->vm, result);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 typedef enum test_native_binary_operation_e {
@@ -2174,7 +2183,8 @@ static tinypy_value_t *__test_native_binary_result(tinypy_value_t *instance, voi
 
     (void)instance;
     if (tinypy_typeof(other) != TINYPY_VALUE_INTEGER) {
-        return tinypy_not_implemented_get(state->vm);
+        tinypy_value_t *return_value_1 = tinypy_not_implemented_get(state->vm);
+        return return_value_1;
     }
     first = reflected != 0 ? tinypy_integer_as_i64(other) : native_payload->value;
     second = reflected != 0 ? native_payload->value : tinypy_integer_as_i64(other);
@@ -2205,12 +2215,14 @@ static tinypy_value_t *__test_native_binary_result(tinypy_value_t *instance, voi
     default:
         return NULL;
     }
-    return tinypy_integer_from_i64(state->vm, result);
+    tinypy_value_t *return_value_2 = tinypy_integer_from_i64(state->vm, result);
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 #define TEST_NATIVE_BINARY_CALLBACK(__name, operation, reflected) \
     static tinypy_value_t *__name(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) { \
-        return __test_native_binary_result(instance, payload, other, user_data, out_error, operation, reflected); \
+        tinypy_value_t *return_value = __test_native_binary_result(instance, payload, other, user_data, out_error, operation, reflected); \
+        return return_value; \
     }
 
 TEST_NATIVE_BINARY_CALLBACK(__test_native_add, TEST_NATIVE_BINARY_ADD, INT32_C(0))
@@ -2230,7 +2242,8 @@ static tinypy_value_t *__test_native_inplace_result(tinypy_value_t *instance, vo
     int64_t value;
 
     if (tinypy_typeof(other) != TINYPY_VALUE_INTEGER) {
-        return tinypy_not_implemented_get(state->vm);
+        tinypy_value_t *return_value_1 = tinypy_not_implemented_get(state->vm);
+        return return_value_1;
     }
     value = tinypy_integer_as_i64(other);
     switch (operation) {
@@ -2259,7 +2272,8 @@ static tinypy_value_t *__test_native_inplace_result(tinypy_value_t *instance, vo
 //////////////////////////////////////////////////////////////////////////
 #define TEST_NATIVE_INPLACE_CALLBACK(__name, operation) \
     static tinypy_value_t *__name(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) { \
-        return __test_native_inplace_result(instance, payload, other, user_data, out_error, operation); \
+        tinypy_value_t *return_value = __test_native_inplace_result(instance, payload, other, user_data, out_error, operation); \
+        return return_value; \
     }
 
 TEST_NATIVE_INPLACE_CALLBACK(__test_native_inplace_add, TEST_NATIVE_BINARY_ADD)
@@ -2284,7 +2298,8 @@ static int32_t __test_native_attribute_name_equal(tinypy_value_t *name, const ch
     else {
         return INT32_C(0);
     }
-    return size == expected_size && (size == 0U || memcmp(bytes, expected, size) == 0) ? INT32_C(1) : INT32_C(0);
+    int32_t return_value_1 = size == expected_size && (size == 0U || memcmp(bytes, expected, size) == 0) ? INT32_C(1) : INT32_C(0);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_native_get_attribute(tinypy_value_t *instance, void *payload, tinypy_value_t *name, void *user_data, tinypy_error_t **out_error) {
@@ -2295,7 +2310,8 @@ static tinypy_value_t *__test_native_get_attribute(tinypy_value_t *instance, voi
     (void)out_error;
     state->attribute_calls += 1;
     if (__test_native_attribute_name_equal(name, "present", 7U) != 0) {
-        return tinypy_integer_from_i64(state->vm, 73);
+        tinypy_value_t *return_value_1 = tinypy_integer_from_i64(state->vm, 73);
+        return return_value_1;
     }
     if (__test_native_attribute_name_equal(name, "failure", 7U) != 0) {
         tinypy_vm_raise_error(state->vm, TINYPY_ERROR_VALUE, "native attribute failure");
@@ -2649,7 +2665,8 @@ static int32_t __test_module_name_is(tinypy_value_t *value, const char *expected
         return 0;
     }
     bytes = tinypy_string_view(value, &size);
-    return size == expected_size && memcmp(bytes, expected, expected_size) == 0;
+    int32_t return_value_1 = size == expected_size && memcmp(bytes, expected, expected_size) == 0;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_module_finder_find(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -2665,7 +2682,8 @@ static tinypy_value_t *__test_module_finder_find(tinypy_value_t *function, tinyp
     name = tinypy_tuple_get(args, 0U);
     state->find_count += 1U;
     if (__test_module_name_is(name, "finder_sample", 13U) == 0 && __test_module_name_is(name, "finder_broken", 13U) == 0) {
-        return tinypy_none_get(state->vm);
+        tinypy_value_t *return_value_1 = tinypy_none_get(state->vm);
+        return return_value_1;
     }
     tinypy_retain(state->finder);
     return state->finder;
@@ -2699,12 +2717,11 @@ static tinypy_value_t *__test_module_finder_load(tinypy_value_t *function, tinyp
     if (__test_module_name_is(name, "finder_broken", 13U) != 0) {
         tinypy_release(module);
         return NULL;
-    } {
-        tinypy_value_t *answer = tinypy_integer_from_i64(state->vm, 42);
-
-        tinypy_module_add_value(module, "answer", 6U, answer);
-        tinypy_release(answer);
     }
+    tinypy_value_t *answer = tinypy_integer_from_i64(state->vm, 42);
+
+    tinypy_module_add_value(module, "answer", 6U, answer);
+    tinypy_release(answer);
     return module;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2777,71 +2794,93 @@ int main(int argc, char **argv) {
     }
 
     if (strcmp(argv[1], "allocator") == 0) {
-        return __test_allocator_accounting();
+        int return_value_1 = __test_allocator_accounting();
+        return return_value_1;
     }
     if (strcmp(argv[1], "pool_allocator") == 0) {
-        return __test_pool_allocator();
+        int return_value_2 = __test_pool_allocator();
+        return return_value_2;
     }
     if (strcmp(argv[1], "independent_vms") == 0) {
-        return __test_independent_vms();
+        int return_value_3 = __test_independent_vms();
+        return return_value_3;
     }
     if (strcmp(argv[1], "value_lifetime") == 0) {
-        return __test_value_lifetime();
+        int return_value_4 = __test_value_lifetime();
+        return return_value_4;
     }
     if (strcmp(argv[1], "constant_cache") == 0) {
-        return __test_constant_cache();
+        int return_value_5 = __test_constant_cache();
+        return return_value_5;
     }
     if (strcmp(argv[1], "byte_strings") == 0) {
-        return __test_byte_strings();
+        int return_value_6 = __test_byte_strings();
+        return return_value_6;
     }
     if (strcmp(argv[1], "unicode_utf8") == 0) {
-        return __test_unicode_utf8();
+        int return_value_7 = __test_unicode_utf8();
+        return return_value_7;
     }
     if (strcmp(argv[1], "string_release") == 0) {
-        return __test_string_release_contract();
+        int return_value_8 = __test_string_release_contract();
+        return return_value_8;
     }
     if (strcmp(argv[1], "numeric_bits") == 0) {
-        return __test_float_complex_bits();
+        int return_value_9 = __test_float_complex_bits();
+        return return_value_9;
     }
     if (strcmp(argv[1], "long_canonical") == 0) {
-        return __test_long_canonical();
+        int return_value_10 = __test_long_canonical();
+        return return_value_10;
     }
     if (strcmp(argv[1], "tuple_ownership") == 0) {
-        return __test_tuple_ownership();
+        int return_value_11 = __test_tuple_ownership();
+        return return_value_11;
     }
     if (strcmp(argv[1], "tuple_deep") == 0) {
-        return __test_tuple_deep_release();
+        int return_value_12 = __test_tuple_deep_release();
+        return return_value_12;
     }
     if (strcmp(argv[1], "hash_equal") == 0) {
-        return __test_hash_and_equality();
+        int return_value_13 = __test_hash_and_equality();
+        return return_value_13;
     }
     if (strcmp(argv[1], "dict") == 0) {
-        return __test_dictionary_runtime();
+        int return_value_14 = __test_dictionary_runtime();
+        return return_value_14;
     }
     if (strcmp(argv[1], "type_class") == 0) {
-        return __test_type_class_runtime();
+        int return_value_15 = __test_type_class_runtime();
+        return return_value_15;
     }
     if (strcmp(argv[1], "code") == 0) {
-        return __test_code_object_runtime();
+        int return_value_16 = __test_code_object_runtime();
+        return return_value_16;
     }
     if (strcmp(argv[1], "eval_frame") == 0) {
-        return __test_eval_frame_runtime();
+        int return_value_17 = __test_eval_frame_runtime();
+        return return_value_17;
     }
     if (strcmp(argv[1], "function_call") == 0) {
-        return __test_function_call_runtime();
+        int return_value_18 = __test_function_call_runtime();
+        return return_value_18;
     }
     if (strcmp(argv[1], "operator_numeric") == 0) {
-        return __test_operator_numeric_runtime();
+        int return_value_19 = __test_operator_numeric_runtime();
+        return return_value_19;
     }
     if (strcmp(argv[1], "native_embedding") == 0) {
-        return __test_native_embedding();
+        int return_value_20 = __test_native_embedding();
+        return return_value_20;
     }
     if (strcmp(argv[1], "module_finder") == 0) {
-        return __test_module_finder();
+        int return_value_21 = __test_module_finder();
+        return return_value_21;
     }
     if (strcmp(argv[1], "cycle_diagnostics") == 0) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        return __test_cycle_diagnostics();
+        int return_value_22 = __test_cycle_diagnostics();
+        return return_value_22;
 #else
         return 0;
 #endif

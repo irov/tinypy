@@ -1,6 +1,5 @@
 #include "bytecode_verify.h"
 
-#include "assertion.h"
 #include <string.h>
 
 #define TINYPY_VERIFY_NO_BLOCK SIZE_MAX
@@ -88,43 +87,41 @@ typedef struct tinypy_verify_context_t {
 } tinypy_verify_context_t;
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_add_size(size_t left, size_t right, size_t *out_value) {
-    TINYPY_ASSERT(out_value != NULL);
+static tinypy_bool_t __tinypy_verify_add_size(size_t left, size_t right, size_t *out_value) {
     if (left > SIZE_MAX - right) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     *out_value = left + right;
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_multiply_size(size_t left, size_t right, size_t *out_value) {
-    TINYPY_ASSERT(out_value != NULL);
+static tinypy_bool_t __tinypy_verify_multiply_size(size_t left, size_t right, size_t *out_value) {
     if (left != 0U && right > SIZE_MAX / left) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     *out_value = left * right;
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_align_size(size_t value, size_t *out_value) {
+static tinypy_bool_t __tinypy_verify_align_size(size_t value, size_t *out_value) {
     size_t remainder;
     size_t padding;
 
-    TINYPY_ASSERT(out_value != NULL);
     if (TINYPY_VERIFY_ALIGNMENT == 0U) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     remainder = value % TINYPY_VERIFY_ALIGNMENT;
     if (remainder == 0U) {
         *out_value = value;
-        return 1;
+        return TINYPY_TRUE;
     }
 
     padding = TINYPY_VERIFY_ALIGNMENT - remainder;
-    return __tinypy_verify_add_size(value, padding, out_value);
+    tinypy_bool_t return_value_1 = __tinypy_verify_add_size(value, padding, out_value);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_verify_clear_result(tinypy_bytecode_verify_result_t *result) {
@@ -166,7 +163,6 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify_scratch_size(size_t bytec
     size_t markers_size;
     size_t total;
 
-    TINYPY_ASSERT(out_size != NULL);
     *out_size = 0U;
 
     if (!__tinypy_verify_multiply_size(
@@ -243,14 +239,13 @@ static void __tinypy_verify_bind_scratch(tinypy_verify_context_t *context, void 
     context->marker_capacity = state_count;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_argument_to_size(uint64_t argument, size_t *out_value) {
-    TINYPY_ASSERT(out_value != NULL);
+static tinypy_bool_t __tinypy_verify_argument_to_size(uint64_t argument, size_t *out_value) {
     if (argument > (uint64_t)SIZE_MAX) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     *out_value = (size_t)argument;
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_operand(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction) {
@@ -262,106 +257,116 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_operand(tinypy_verify_con
             context->metadata->freevar_count,
             context->metadata->cellvar_count,
             &free_count)) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_SIZE_OVERFLOW,
             instruction->offset,
             instruction->opcode,
             argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_1;
     }
 
     if ((categories & TINYPY_OPCODE_CATEGORY_CONST) != 0U && argument >= (uint64_t)context->metadata->const_count) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_OPERAND_OUT_OF_RANGE,
             instruction->offset,
             instruction->opcode,
             argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_2;
     }
     if ((categories & TINYPY_OPCODE_CATEGORY_NAME) != 0U && argument >= (uint64_t)context->metadata->name_count) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_3 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_OPERAND_OUT_OF_RANGE,
             instruction->offset,
             instruction->opcode,
             argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_3;
     }
     if ((categories & TINYPY_OPCODE_CATEGORY_LOCAL) != 0U && argument >= (uint64_t)context->metadata->varname_count) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_4 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_OPERAND_OUT_OF_RANGE,
             instruction->offset,
             instruction->opcode,
             argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_4;
     }
     if ((categories & TINYPY_OPCODE_CATEGORY_FREE) != 0U && argument >= (uint64_t)free_count) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_5 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_OPERAND_OUT_OF_RANGE,
             instruction->offset,
             instruction->opcode,
             argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_5;
     }
     if ((categories & TINYPY_OPCODE_CATEGORY_COMPARE) != 0U && argument >= UINT64_C(12)) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_6 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_OPERAND_OUT_OF_RANGE,
             instruction->offset,
             instruction->opcode,
             argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_6;
     }
 
     switch (instruction->opcode) {
     case TINYPY_OP_DUP_TOPX:
         if (argument != UINT64_C(2) && argument != UINT64_C(3)) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_7 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_INVALID_OPERAND,
                 instruction->offset,
                 instruction->opcode,
                 argument,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_7;
         }
         break;
     case TINYPY_OP_RAISE_VARARGS:
         if (argument > UINT64_C(3)) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_8 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_INVALID_OPERAND,
                 instruction->offset,
                 instruction->opcode,
                 argument,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_8;
         }
         break;
     case TINYPY_OP_BUILD_SLICE:
         if (argument != UINT64_C(2) && argument != UINT64_C(3)) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_9 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_INVALID_OPERAND,
                 instruction->offset,
                 instruction->opcode,
                 argument,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_9;
         }
         break;
     case TINYPY_OP_LIST_APPEND:
     case TINYPY_OP_SET_ADD:
     case TINYPY_OP_MAP_ADD:
         if (argument == UINT64_C(0)) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_10 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_INVALID_OPERAND,
                 instruction->offset,
                 instruction->opcode,
                 argument,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_10;
         }
         break;
     case TINYPY_OP_CALL_FUNCTION:
@@ -370,13 +375,14 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_operand(tinypy_verify_con
     case TINYPY_OP_CALL_FUNCTION_VAR_KW:
         /* CPython 2.7 encodes positional/keyword counts in two bytes. */
         if (argument > UINT64_C(0xffff)) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_11 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_INVALID_OPERAND,
                 instruction->offset,
                 instruction->opcode,
                 argument,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_11;
         }
         break;
     default:
@@ -399,22 +405,24 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_first_pass(tinypy_verify_
         tinypy_bytecode_verify_status_e status;
 
         if (decode_status != TINYPY_OPCODE_DECODE_OK) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_DECODE_ERROR,
                 offset,
                 context->bytecode[offset],
                 UINT64_C(0),
                 decode_status);
+            return return_value_1;
         }
         if (instruction.defined == 0U) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_UNKNOWN_OPCODE,
                 offset,
                 instruction.opcode,
                 instruction.argument,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_2;
         }
 
         context->boundaries[offset] = 1U;
@@ -422,13 +430,14 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_first_pass(tinypy_verify_
 
         if (context->limits.max_instruction_count != 0U && context->result->instruction_count >
                 context->limits.max_instruction_count) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_3 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_LIMIT_EXCEEDED,
                 offset,
                 instruction.opcode,
                 instruction.argument,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_3;
         }
 
         status = __tinypy_verify_operand(context, &instruction);
@@ -442,23 +451,24 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_first_pass(tinypy_verify_
     return TINYPY_BYTECODE_VERIFY_OK;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_jump_target(const tinypy_decoded_instruction_t *instruction, size_t *out_target) {
+static tinypy_bool_t __tinypy_verify_jump_target(const tinypy_decoded_instruction_t *instruction, size_t *out_target) {
     size_t argument;
     uint32_t categories = tinypy_opcode_categories(instruction->opcode);
 
     if (!__tinypy_verify_argument_to_size(instruction->argument, &argument)) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     if ((categories & TINYPY_OPCODE_CATEGORY_JREL) != 0U) {
-        return __tinypy_verify_add_size(
+        tinypy_bool_t return_value_1 = __tinypy_verify_add_size(
             instruction->next_offset,
             argument,
             out_target);
+        return return_value_1;
     }
 
     *out_target = argument;
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_jumps(tinypy_verify_context_t *context) {
@@ -479,22 +489,24 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_jumps(tinypy_verify_conte
             size_t target;
 
             if (!__tinypy_verify_jump_target(&instruction, &target) || target >= context->bytecode_size) {
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_JUMP_OUT_OF_RANGE,
                     offset,
                     instruction.opcode,
                     instruction.argument,
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_1;
             }
             if (context->boundaries[target] == 0U) {
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_JUMP_NOT_INSTRUCTION,
                     offset,
                     instruction.opcode,
                     (uint64_t)target,
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_2;
             }
         }
 
@@ -518,13 +530,13 @@ static uint8_t __tinypy_verify_opcode_at(const tinypy_verify_context_t *context,
     return instruction.opcode;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_blocks_equal(const tinypy_verify_context_t *context, size_t left, size_t right) {
+static tinypy_bool_t __tinypy_verify_blocks_equal(const tinypy_verify_context_t *context, size_t left, size_t right) {
     while (left != TINYPY_VERIFY_NO_BLOCK && right != TINYPY_VERIFY_NO_BLOCK) {
         const tinypy_verify_block_t *left_block = &context->blocks[left];
         const tinypy_verify_block_t *right_block = &context->blocks[right];
 
         if (left_block->handler != right_block->handler || left_block->level != right_block->level || left_block->depth != right_block->depth || left_block->type != right_block->type) {
-            return 0;
+            return TINYPY_FALSE;
         }
 
         left = left_block->parent;
@@ -550,14 +562,14 @@ static size_t __tinypy_verify_reason_item_count(tinypy_verify_reason_e reason) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_markers_equal(const tinypy_verify_context_t *context, size_t left, size_t right) {
+static tinypy_bool_t __tinypy_verify_markers_equal(const tinypy_verify_context_t *context, size_t left, size_t right) {
     while (left != TINYPY_VERIFY_NO_MARKER && right != TINYPY_VERIFY_NO_MARKER) {
         const tinypy_verify_marker_t *left_marker = &context->markers[left];
         const tinypy_verify_marker_t *right_marker = &context->markers[right];
 
         if (left_marker->resume_depth != right_marker->resume_depth || left_marker->continue_target != right_marker->continue_target || left_marker->reason != right_marker->reason || left_marker->needs_with_cleanup !=
                 right_marker->needs_with_cleanup) {
-            return 0;
+            return TINYPY_FALSE;
         }
 
         left = left_marker->parent;
@@ -567,24 +579,26 @@ static int32_t __tinypy_verify_markers_equal(const tinypy_verify_context_t *cont
     return left == TINYPY_VERIFY_NO_MARKER && right == TINYPY_VERIFY_NO_MARKER;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_marker_expected_depth(const tinypy_verify_marker_t *marker, size_t *out_depth) {
+static tinypy_bool_t __tinypy_verify_marker_expected_depth(const tinypy_verify_marker_t *marker, size_t *out_depth) {
     size_t verify_reason_item_count = __tinypy_verify_reason_item_count(
         (tinypy_verify_reason_e)marker->reason);
-    return __tinypy_verify_add_size(
+    tinypy_bool_t return_value_1 = __tinypy_verify_add_size(
         marker->resume_depth,
         verify_reason_item_count,
         out_depth);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t parent, tinypy_verify_reason_e reason, size_t resume_depth, size_t continue_target, uint8_t needs_with_cleanup, size_t *out_index) {
     if (context->marker_count == context->marker_capacity) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_LIMIT_EXCEEDED,
             instruction->offset,
             instruction->opcode,
             (uint64_t)context->marker_capacity,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_1;
     }
 
     tinypy_verify_marker_t *marker = &context->markers[context->marker_count];
@@ -615,36 +629,39 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
     }
 
     if (offset >= context->bytecode_size || context->boundaries[offset] == 0U) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_INTERNAL_ERROR,
             source_offset,
             source_opcode,
             (uint64_t)offset,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_1;
     }
 
     if (context->limits.max_stack_depth != 0U && stack_depth > context->limits.max_stack_depth) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
             source_offset,
             source_opcode,
             (uint64_t)stack_depth,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_2;
     }
 
     if (stack_depth > context->result->computed_max_stack) {
         context->result->computed_max_stack = stack_depth;
     }
     if (stack_depth > context->metadata->declared_stack_size) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_3 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_DECLARED_STACK_TOO_SMALL,
             source_offset,
             source_opcode,
             (uint64_t)stack_depth,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_3;
     }
 
     if (marker_index != TINYPY_VERIFY_NO_MARKER) {
@@ -653,13 +670,14 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
         size_t minimum_depth;
 
         if (!__tinypy_verify_marker_expected_depth(marker, &minimum_depth)) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_4 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
                 source_offset,
                 source_opcode,
                 UINT64_C(0),
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_4;
         }
         if (marker->reason ==
             (uint8_t)TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE) {
@@ -669,22 +687,24 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
                      minimum_depth,
                      1U,
                      &minimum_depth)) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_5 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
                 source_offset,
                 source_opcode,
                 UINT64_C(0),
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_5;
         }
         if (stack_depth < minimum_depth) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_6 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE,
                 source_offset,
                 source_opcode,
                 (uint64_t)stack_depth,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_6;
         }
     }
 
@@ -701,23 +721,25 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
                     state->block_index,
                     block_index)) {
                 uint8_t verify_opcode_at = __tinypy_verify_opcode_at(context, offset);
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_7 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_BLOCK_STACK_MISMATCH,
                     offset,
                     verify_opcode_at,
                     (uint64_t)stack_depth,
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_7;
             }
             if (state->stack_depth != stack_depth) {
                 uint8_t verify_opcode_at = __tinypy_verify_opcode_at(context, offset);
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_8 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_STACK_DEPTH_MISMATCH,
                     offset,
                     verify_opcode_at,
                     (uint64_t)stack_depth,
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_8;
             }
 
             return TINYPY_BYTECODE_VERIFY_OK;
@@ -727,13 +749,14 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
     }
 
     if (context->state_count == context->state_capacity || context->worklist_tail == context->state_capacity) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_9 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_LIMIT_EXCEEDED,
             source_offset,
             source_opcode,
             (uint64_t)context->state_capacity,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_9;
     }
 
     state_index = context->state_count;
@@ -751,20 +774,22 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
     return TINYPY_BYTECODE_VERIFY_OK;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_effect_set(tinypy_verify_effect_t *effect, size_t required, size_t pop_count, size_t push_count) {
+static tinypy_bool_t __tinypy_verify_effect_set(tinypy_verify_effect_t *effect, size_t required, size_t pop_count, size_t push_count) {
     effect->required = required;
     effect->pop_count = pop_count;
     effect->push_count = push_count;
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_effect_from_argument(uint64_t argument, size_t extra, size_t *out_value) {
+static tinypy_bool_t __tinypy_verify_effect_from_argument(uint64_t argument, size_t extra, size_t *out_value) {
     size_t value;
 
-    return __tinypy_verify_argument_to_size(argument, &value) && __tinypy_verify_add_size(value, extra, out_value);
+    tinypy_bool_t return_value_1 = __tinypy_verify_argument_to_size(argument, &value) && __tinypy_verify_add_size(value, extra, out_value);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tinypy_verify_effect_t *effect) {
+static tinypy_bool_t __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tinypy_verify_effect_t *effect) {
+    tinypy_bool_t function_result;
     size_t count;
 
     switch (opcode) {
@@ -782,7 +807,8 @@ static int32_t __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tin
     case TINYPY_OP_SETUP_FINALLY:
     case TINYPY_OP_DELETE_FAST:
     case TINYPY_OP_POP_BLOCK:
-        return __tinypy_verify_effect_set(effect, 0U, 0U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 0U, 0U, 0U);
+        return function_result;
 
     case TINYPY_OP_POP_TOP:
     case TINYPY_OP_PRINT_EXPR:
@@ -794,16 +820,21 @@ static int32_t __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tin
     case TINYPY_OP_STORE_FAST:
     case TINYPY_OP_STORE_DEREF:
     case TINYPY_OP_RETURN_VALUE:
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        return function_result;
 
     case TINYPY_OP_ROT_TWO:
-        return __tinypy_verify_effect_set(effect, 2U, 0U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 2U, 0U, 0U);
+        return function_result;
     case TINYPY_OP_ROT_THREE:
-        return __tinypy_verify_effect_set(effect, 3U, 0U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 3U, 0U, 0U);
+        return function_result;
     case TINYPY_OP_ROT_FOUR:
-        return __tinypy_verify_effect_set(effect, 4U, 0U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 4U, 0U, 0U);
+        return function_result;
     case TINYPY_OP_DUP_TOP:
-        return __tinypy_verify_effect_set(effect, 1U, 0U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 0U, 1U);
+        return function_result;
 
     case TINYPY_OP_UNARY_POSITIVE:
     case TINYPY_OP_UNARY_NEGATIVE:
@@ -812,7 +843,8 @@ static int32_t __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tin
     case TINYPY_OP_UNARY_INVERT:
     case TINYPY_OP_GET_ITER:
     case TINYPY_OP_LOAD_ATTR:
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 1U);
+        return function_result;
 
     case TINYPY_OP_BINARY_POWER:
     case TINYPY_OP_BINARY_MULTIPLY:
@@ -842,42 +874,57 @@ static int32_t __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tin
     case TINYPY_OP_INPLACE_XOR:
     case TINYPY_OP_INPLACE_OR:
     case TINYPY_OP_COMPARE_OP:
-        return __tinypy_verify_effect_set(effect, 2U, 2U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 2U, 2U, 1U);
+        return function_result;
 
     case TINYPY_OP_SLICE_0:
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 1U);
+        return function_result;
     case TINYPY_OP_SLICE_1:
     case TINYPY_OP_SLICE_2:
-        return __tinypy_verify_effect_set(effect, 2U, 2U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 2U, 2U, 1U);
+        return function_result;
     case TINYPY_OP_SLICE_3:
-        return __tinypy_verify_effect_set(effect, 3U, 3U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 3U, 3U, 1U);
+        return function_result;
 
     case TINYPY_OP_STORE_SLICE_0:
-        return __tinypy_verify_effect_set(effect, 2U, 2U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 2U, 2U, 0U);
+        return function_result;
     case TINYPY_OP_STORE_SLICE_1:
     case TINYPY_OP_STORE_SLICE_2:
-        return __tinypy_verify_effect_set(effect, 3U, 3U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 3U, 3U, 0U);
+        return function_result;
     case TINYPY_OP_STORE_SLICE_3:
-        return __tinypy_verify_effect_set(effect, 4U, 4U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 4U, 4U, 0U);
+        return function_result;
     case TINYPY_OP_DELETE_SLICE_0:
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        return function_result;
     case TINYPY_OP_DELETE_SLICE_1:
     case TINYPY_OP_DELETE_SLICE_2:
-        return __tinypy_verify_effect_set(effect, 2U, 2U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 2U, 2U, 0U);
+        return function_result;
     case TINYPY_OP_DELETE_SLICE_3:
-        return __tinypy_verify_effect_set(effect, 3U, 3U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 3U, 3U, 0U);
+        return function_result;
 
     case TINYPY_OP_STORE_MAP:
-        return __tinypy_verify_effect_set(effect, 3U, 2U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 3U, 2U, 0U);
+        return function_result;
     case TINYPY_OP_STORE_SUBSCR:
-        return __tinypy_verify_effect_set(effect, 3U, 3U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 3U, 3U, 0U);
+        return function_result;
     case TINYPY_OP_DELETE_SUBSCR:
     case TINYPY_OP_PRINT_ITEM_TO:
-        return __tinypy_verify_effect_set(effect, 2U, 2U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 2U, 2U, 0U);
+        return function_result;
     case TINYPY_OP_EXEC_STMT:
-        return __tinypy_verify_effect_set(effect, 3U, 3U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 3U, 3U, 0U);
+        return function_result;
     case TINYPY_OP_BUILD_CLASS:
-        return __tinypy_verify_effect_set(effect, 3U, 3U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 3U, 3U, 1U);
+        return function_result;
 
     case TINYPY_OP_LOAD_LOCALS:
     case TINYPY_OP_LOAD_CONST:
@@ -887,70 +934,85 @@ static int32_t __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tin
     case TINYPY_OP_LOAD_CLOSURE:
     case TINYPY_OP_LOAD_DEREF:
     case TINYPY_OP_BUILD_MAP:
-        return __tinypy_verify_effect_set(effect, 0U, 0U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 0U, 0U, 1U);
+        return function_result;
 
     case TINYPY_OP_YIELD_VALUE:
         /* POP at yield, PUSH of the sent value on generator resume. */
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 1U);
+        return function_result;
 
     case TINYPY_OP_UNPACK_SEQUENCE:
         if (!__tinypy_verify_argument_to_size(argument, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, 1U, 1U, count);
+        tinypy_bool_t return_value_2 = __tinypy_verify_effect_set(effect, 1U, 1U, count);
+        return return_value_2;
 
     case TINYPY_OP_FOR_ITER:
-        return __tinypy_verify_effect_set(effect, 1U, 0U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 0U, 1U);
+        return function_result;
 
     case TINYPY_OP_LIST_APPEND:
     case TINYPY_OP_SET_ADD:
         if (!__tinypy_verify_effect_from_argument(argument, 1U, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, count, 1U, 0U);
+        tinypy_bool_t return_value_3 = __tinypy_verify_effect_set(effect, count, 1U, 0U);
+        return return_value_3;
 
     case TINYPY_OP_MAP_ADD:
         if (!__tinypy_verify_effect_from_argument(argument, 2U, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, count, 2U, 0U);
+        tinypy_bool_t return_value_4 = __tinypy_verify_effect_set(effect, count, 2U, 0U);
+        return return_value_4;
 
     case TINYPY_OP_STORE_ATTR:
-        return __tinypy_verify_effect_set(effect, 2U, 2U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 2U, 2U, 0U);
+        return function_result;
     case TINYPY_OP_DELETE_ATTR:
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        return function_result;
 
     case TINYPY_OP_DUP_TOPX:
         if (!__tinypy_verify_argument_to_size(argument, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, count, 0U, count);
+        tinypy_bool_t return_value_5 = __tinypy_verify_effect_set(effect, count, 0U, count);
+        return return_value_5;
 
     case TINYPY_OP_BUILD_TUPLE:
     case TINYPY_OP_BUILD_LIST:
     case TINYPY_OP_BUILD_SET:
         if (!__tinypy_verify_argument_to_size(argument, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, count, count, 1U);
+        tinypy_bool_t return_value_6 = __tinypy_verify_effect_set(effect, count, count, 1U);
+        return return_value_6;
 
     case TINYPY_OP_IMPORT_NAME:
-        return __tinypy_verify_effect_set(effect, 2U, 2U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 2U, 2U, 1U);
+        return function_result;
     case TINYPY_OP_IMPORT_FROM:
-        return __tinypy_verify_effect_set(effect, 1U, 0U, 1U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 0U, 1U);
+        return function_result;
 
     case TINYPY_OP_JUMP_IF_FALSE_OR_POP:
     case TINYPY_OP_JUMP_IF_TRUE_OR_POP:
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        return function_result;
     case TINYPY_OP_POP_JUMP_IF_FALSE:
     case TINYPY_OP_POP_JUMP_IF_TRUE:
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        return function_result;
 
     case TINYPY_OP_RAISE_VARARGS:
         if (!__tinypy_verify_argument_to_size(argument, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, count, count, 0U);
+        tinypy_bool_t return_value_7 = __tinypy_verify_effect_set(effect, count, count, 0U);
+        return return_value_7;
 
     case TINYPY_OP_CALL_FUNCTION:
     case TINYPY_OP_CALL_FUNCTION_VAR:
@@ -967,37 +1029,43 @@ static int32_t __tinypy_verify_get_effect(uint8_t opcode, uint64_t argument, tin
             extra = 2U;
         }
         if (!__tinypy_verify_multiply_size(keyword, 2U, &count) || !__tinypy_verify_add_size(count, positional, &count) || !__tinypy_verify_add_size(count, extra, &count) || !__tinypy_verify_add_size(count, 1U, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, count, count, 1U);
+        tinypy_bool_t return_value_8 = __tinypy_verify_effect_set(effect, count, count, 1U);
+        return return_value_8;
     }
 
     case TINYPY_OP_MAKE_FUNCTION:
         if (!__tinypy_verify_effect_from_argument(argument, 1U, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, count, count, 1U);
+        tinypy_bool_t return_value_9 = __tinypy_verify_effect_set(effect, count, count, 1U);
+        return return_value_9;
     case TINYPY_OP_MAKE_CLOSURE:
         if (!__tinypy_verify_effect_from_argument(argument, 2U, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, count, count, 1U);
+        tinypy_bool_t return_value_10 = __tinypy_verify_effect_set(effect, count, count, 1U);
+        return return_value_10;
     case TINYPY_OP_BUILD_SLICE:
         if (!__tinypy_verify_argument_to_size(argument, &count)) {
-            return 0;
+            return TINYPY_FALSE;
         }
-        return __tinypy_verify_effect_set(effect, count, count, 1U);
+        tinypy_bool_t return_value_11 = __tinypy_verify_effect_set(effect, count, count, 1U);
+        return return_value_11;
 
     case TINYPY_OP_SETUP_WITH:
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 2U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 2U);
+        return function_result;
 
     case TINYPY_OP_WITH_CLEANUP:
     case TINYPY_OP_END_FINALLY:
-        return __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        function_result = __tinypy_verify_effect_set(effect, 1U, 1U, 0U);
+        return function_result;
 
     case TINYPY_OP_EXTENDED_ARG:
     default:
-        return 0;
+        return TINYPY_FALSE;
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1005,24 +1073,26 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_apply_effect(tinypy_verif
     size_t depth;
 
     if (stack_depth < effect->required || stack_depth < effect->pop_count) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW,
             instruction->offset,
             instruction->opcode,
             (uint64_t)stack_depth,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_1;
     }
 
     depth = stack_depth - effect->pop_count;
     if (!__tinypy_verify_add_size(depth, effect->push_count, &depth)) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
             instruction->offset,
             instruction->opcode,
             instruction->argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_2;
     }
 
     *out_depth = depth;
@@ -1037,31 +1107,34 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_push_block(tinypy_verify_
         parent_depth = context->blocks[parent].depth;
     }
     if (!__tinypy_verify_add_size(parent_depth, 1U, &depth)) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_BLOCK_STACK_OVERFLOW,
             instruction->offset,
             instruction->opcode,
             instruction->argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_1;
     }
     if (depth > context->limits.max_block_depth) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_BLOCK_STACK_OVERFLOW,
             instruction->offset,
             instruction->opcode,
             (uint64_t)depth,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_2;
     }
     if (context->block_count == context->block_capacity) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_3 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_INTERNAL_ERROR,
             instruction->offset,
             instruction->opcode,
             UINT64_C(0),
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_3;
     }
 
     tinypy_verify_block_t *block = &context->blocks[context->block_count];
@@ -1082,27 +1155,29 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
         size_t parent = block->parent;
 
         if (stack_depth < block->level) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW,
                 instruction->offset,
                 instruction->opcode,
                 (uint64_t)stack_depth,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_1;
         }
 
         if (block->type == TINYPY_OP_SETUP_LOOP && reason == TINYPY_VERIFY_REASON_CONTINUE) {
             if (stack_depth != block->level) {
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_STACK_DEPTH_MISMATCH,
                     instruction->offset,
                     instruction->opcode,
                     (uint64_t)stack_depth,
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_2;
             }
 
-            return __tinypy_verify_enqueue(
+            tinypy_bytecode_verify_status_e return_value_3 = __tinypy_verify_enqueue(
                 context,
                 continue_target,
                 stack_depth,
@@ -1110,6 +1185,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
                 TINYPY_VERIFY_NO_MARKER,
                 instruction->offset,
                 instruction->opcode);
+            return return_value_3;
         }
 
         stack_depth = block->level;
@@ -1117,7 +1193,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
 
         if (block->type == TINYPY_OP_SETUP_LOOP) {
             if (reason == TINYPY_VERIFY_REASON_BREAK) {
-                return __tinypy_verify_enqueue(
+                tinypy_bytecode_verify_status_e return_value_4 = __tinypy_verify_enqueue(
                     context,
                     block->handler,
                     stack_depth,
@@ -1125,6 +1201,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
                     TINYPY_VERIFY_NO_MARKER,
                     instruction->offset,
                     instruction->opcode);
+                return return_value_4;
             }
 
             continue;
@@ -1139,13 +1216,14 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
 
             if (block->type == TINYPY_OP_SETUP_WITH) {
                 if (resume_depth == 0U) {
-                    return __tinypy_verify_fail(
+                    tinypy_bytecode_verify_status_e return_value_5 = __tinypy_verify_fail(
                         context,
                         TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE,
                         instruction->offset,
                         instruction->opcode,
                         UINT64_C(0),
                         TINYPY_OPCODE_DECODE_OK);
+                    return return_value_5;
                 }
                 resume_depth -= 1U;
                 needs_cleanup = 1U;
@@ -1156,13 +1234,14 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
                     block->level,
                     verify_reason_item_count,
                     &handler_depth)) {
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_6 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
                     instruction->offset,
                     instruction->opcode,
                     UINT64_C(0),
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_6;
             }
 
             status = __tinypy_verify_push_marker(
@@ -1178,7 +1257,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
                 return status;
             }
 
-            return __tinypy_verify_enqueue(
+            tinypy_bytecode_verify_status_e return_value_7 = __tinypy_verify_enqueue(
                 context,
                 block->handler,
                 handler_depth,
@@ -1186,28 +1265,31 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
                 marker_index,
                 instruction->offset,
                 instruction->opcode);
+            return return_value_7;
         }
 
         /* SETUP_EXCEPT only handles exceptions, not non-local gotos. */
     }
 
     if (reason == TINYPY_VERIFY_REASON_BREAK) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_8 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_BREAK_OUTSIDE_LOOP,
             instruction->offset,
             instruction->opcode,
             UINT64_C(0),
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_8;
     }
     if (reason == TINYPY_VERIFY_REASON_CONTINUE) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_9 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_CONTINUE_OUTSIDE_LOOP,
             instruction->offset,
             instruction->opcode,
             (uint64_t)continue_target,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_9;
     }
 
     return TINYPY_BYTECODE_VERIFY_OK;
@@ -1215,16 +1297,17 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_fallthrough(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t stack_depth, size_t block_index, size_t marker_index) {
     if (instruction->next_offset == context->bytecode_size) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_FALLTHROUGH_PAST_END,
             instruction->offset,
             instruction->opcode,
             instruction->argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_1;
     }
 
-    return __tinypy_verify_enqueue(
+    tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_enqueue(
         context,
         instruction->next_offset,
         stack_depth,
@@ -1232,9 +1315,11 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_fallthrough(tinypy_verify
         marker_index,
         instruction->offset,
         instruction->opcode);
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_verify_context_t *context, size_t state_index) {
+    tinypy_bytecode_verify_status_e function_result;
     tinypy_verify_state_t state = context->states[state_index];
     size_t offset = state.offset;
     tinypy_decoded_instruction_t instruction;
@@ -1253,13 +1338,14 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             instruction.opcode,
             instruction.argument,
             &effect)) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_INTERNAL_ERROR,
             offset,
             instruction.opcode,
             instruction.argument,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_1;
     }
 
     switch (instruction.opcode) {
@@ -1303,7 +1389,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
 
         (void)__tinypy_verify_jump_target(&instruction, &target);
         if (instruction.opcode == TINYPY_OP_SETUP_LOOP) {
-            return __tinypy_verify_enqueue(
+            tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_enqueue(
                 context,
                 target,
                 level,
@@ -1311,17 +1397,19 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                 state.marker_index,
                 offset,
                 instruction.opcode);
+            return return_value_2;
         }
 
         if (instruction.opcode == TINYPY_OP_SETUP_EXCEPT) {
             if (!__tinypy_verify_add_size(level, 3U, &depth)) {
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_3 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
                     offset,
                     instruction.opcode,
                     UINT64_C(3),
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_3;
             }
             status = __tinypy_verify_push_marker(
                 context,
@@ -1335,7 +1423,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             if (status != TINYPY_BYTECODE_VERIFY_OK) {
                 return status;
             }
-            return __tinypy_verify_enqueue(
+            tinypy_bytecode_verify_status_e return_value_4 = __tinypy_verify_enqueue(
                 context,
                 target,
                 depth,
@@ -1343,17 +1431,19 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                 marker_index,
                 offset,
                 instruction.opcode);
+            return return_value_4;
         }
 
         if (instruction.opcode == TINYPY_OP_SETUP_WITH) {
             if (level == 0U || !__tinypy_verify_add_size(level, 3U, &depth)) {
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_5 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE,
                     offset,
                     instruction.opcode,
                     (uint64_t)level,
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_5;
             }
             status = __tinypy_verify_push_marker(
                 context,
@@ -1367,7 +1457,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             if (status != TINYPY_BYTECODE_VERIFY_OK) {
                 return status;
             }
-            return __tinypy_verify_enqueue(
+            tinypy_bytecode_verify_status_e return_value_6 = __tinypy_verify_enqueue(
                 context,
                 target,
                 depth,
@@ -1375,16 +1465,18 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                 marker_index,
                 offset,
                 instruction.opcode);
+            return return_value_6;
         }
 
         if (!__tinypy_verify_add_size(level, 3U, &depth)) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_7 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
                 offset,
                 instruction.opcode,
                 UINT64_C(3),
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_7;
         }
         status = __tinypy_verify_push_marker(
             context,
@@ -1398,7 +1490,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
             return status;
         }
-        return __tinypy_verify_enqueue(
+        tinypy_bytecode_verify_status_e return_value_8 = __tinypy_verify_enqueue(
             context,
             target,
             depth,
@@ -1406,34 +1498,38 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             marker_index,
             offset,
             instruction.opcode);
+        return return_value_8;
     }
 
     case TINYPY_OP_POP_BLOCK:
         if (state.block_index == TINYPY_VERIFY_NO_BLOCK) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_9 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_BLOCK_STACK_UNDERFLOW,
                 offset,
                 instruction.opcode,
                 UINT64_C(0),
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_9;
         }
         if (state.stack_depth <
             context->blocks[state.block_index].level) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_10 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW,
                 offset,
                 instruction.opcode,
                 (uint64_t)state.stack_depth,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_10;
         }
-        return __tinypy_verify_fallthrough(
+        tinypy_bytecode_verify_status_e return_value_11 = __tinypy_verify_fallthrough(
             context,
             &instruction,
             context->blocks[state.block_index].level,
             context->blocks[state.block_index].parent,
             state.marker_index);
+        return return_value_11;
 
     case TINYPY_OP_WITH_CLEANUP: {
         const tinypy_verify_marker_t *marker = NULL;
@@ -1443,13 +1539,14 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         if (state.marker_index != TINYPY_VERIFY_NO_MARKER) {
             marker = &context->markers[state.marker_index];
             if (!__tinypy_verify_marker_expected_depth(marker, &expected)) {
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_12 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
                     offset,
                     instruction.opcode,
                     UINT64_C(0),
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_12;
             }
             if (marker->needs_with_cleanup != 0U && expected != SIZE_MAX && state.stack_depth == expected + 1U) {
                 handles_pending_with = 1;
@@ -1466,22 +1563,24 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                         protected_depth,
                         1U,
                         &protected_depth)) {
-                    return __tinypy_verify_fail(
+                    tinypy_bytecode_verify_status_e return_value_13 = __tinypy_verify_fail(
                         context,
                         TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
                         offset,
                         instruction.opcode,
                         UINT64_C(0),
                         TINYPY_OPCODE_DECODE_OK);
+                    return return_value_13;
                 }
                 if (state.stack_depth < protected_depth || state.stack_depth - protected_depth < 2U) {
-                    return __tinypy_verify_fail(
+                    tinypy_bytecode_verify_status_e return_value_14 = __tinypy_verify_fail(
                         context,
                         TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE,
                         offset,
                         instruction.opcode,
                         (uint64_t)state.stack_depth,
                         TINYPY_OPCODE_DECODE_OK);
+                    return return_value_14;
                 }
             }
             status = __tinypy_verify_apply_effect(
@@ -1493,12 +1592,13 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             if (status != TINYPY_BYTECODE_VERIFY_OK) {
                 return status;
             }
-            return __tinypy_verify_fallthrough(
+            tinypy_bytecode_verify_status_e return_value_15 = __tinypy_verify_fallthrough(
                 context,
                 &instruction,
                 depth,
                 state.block_index,
                 state.marker_index);
+            return return_value_15;
         }
 
         status = __tinypy_verify_apply_effect(
@@ -1511,31 +1611,29 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             return status;
         }
 
-        {
-            size_t cleaned_marker;
+        size_t cleaned_marker;
 
-            status = __tinypy_verify_push_marker(
-                context,
-                &instruction,
-                marker->parent,
-                (tinypy_verify_reason_e)marker->reason,
-                marker->resume_depth,
-                marker->continue_target,
-                0U,
-                &cleaned_marker);
-            if (status != TINYPY_BYTECODE_VERIFY_OK) {
-                return status;
-            }
+        status = __tinypy_verify_push_marker(
+            context,
+            &instruction,
+            marker->parent,
+            (tinypy_verify_reason_e)marker->reason,
+            marker->resume_depth,
+            marker->continue_target,
+            0U,
+            &cleaned_marker);
+        if (status != TINYPY_BYTECODE_VERIFY_OK) {
+            return status;
+        }
 
-            status = __tinypy_verify_fallthrough(
-                context,
-                &instruction,
-                depth,
-                state.block_index,
-                cleaned_marker);
-            if (status != TINYPY_BYTECODE_VERIFY_OK) {
-                return status;
-            }
+        status = __tinypy_verify_fallthrough(
+            context,
+            &instruction,
+            depth,
+            state.block_index,
+            cleaned_marker);
+        if (status != TINYPY_BYTECODE_VERIFY_OK) {
+            return status;
         }
 
         if (marker->reason ==
@@ -1548,20 +1646,22 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                     marker->resume_depth,
                     1U,
                     &suppressed_depth)) {
-                return __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_16 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
                     offset,
                     instruction.opcode,
                     UINT64_C(1),
                     TINYPY_OPCODE_DECODE_OK);
+                return return_value_16;
             }
-            return __tinypy_verify_fallthrough(
+            tinypy_bytecode_verify_status_e return_value_17 = __tinypy_verify_fallthrough(
                 context,
                 &instruction,
                 suppressed_depth,
                 state.block_index,
                 marker->parent);
+            return return_value_17;
         }
 
         return TINYPY_BYTECODE_VERIFY_OK;
@@ -1578,81 +1678,86 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             if (status != TINYPY_BYTECODE_VERIFY_OK) {
                 return status;
             }
-            return __tinypy_verify_fallthrough(
+            tinypy_bytecode_verify_status_e return_value_18 = __tinypy_verify_fallthrough(
                 context,
                 &instruction,
                 depth,
                 state.block_index,
                 TINYPY_VERIFY_NO_MARKER);
-        } {
-            const tinypy_verify_marker_t *marker =
-                &context->markers[state.marker_index];
-            size_t expected;
-            size_t protected_depth;
-            tinypy_verify_reason_e marker_reason =
-                (tinypy_verify_reason_e)marker->reason;
+            return return_value_18;
+        }
+        const tinypy_verify_marker_t *marker =
+            &context->markers[state.marker_index];
+        size_t expected;
+        size_t protected_depth;
+        tinypy_verify_reason_e marker_reason =
+            (tinypy_verify_reason_e)marker->reason;
 
-            if (!__tinypy_verify_marker_expected_depth(marker, &expected)) {
-                return __tinypy_verify_fail(
-                    context,
-                    TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
-                    offset,
-                    instruction.opcode,
-                    UINT64_C(0),
-                    TINYPY_OPCODE_DECODE_OK);
-            }
-            protected_depth = expected;
-            if (marker->needs_with_cleanup != 0U && !__tinypy_verify_add_size(
-                    protected_depth,
-                    1U,
-                    &protected_depth)) {
-                return __tinypy_verify_fail(
-                    context,
-                    TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
-                    offset,
-                    instruction.opcode,
-                    UINT64_C(0),
-                    TINYPY_OPCODE_DECODE_OK);
-            }
+        if (!__tinypy_verify_marker_expected_depth(marker, &expected)) {
+            tinypy_bytecode_verify_status_e return_value_19 = __tinypy_verify_fail(
+                context,
+                TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
+                offset,
+                instruction.opcode,
+                UINT64_C(0),
+                TINYPY_OPCODE_DECODE_OK);
+            return return_value_19;
+        }
+        protected_depth = expected;
+        if (marker->needs_with_cleanup != 0U && !__tinypy_verify_add_size(
+                protected_depth,
+                1U,
+                &protected_depth)) {
+            tinypy_bytecode_verify_status_e return_value_20 = __tinypy_verify_fail(
+                context,
+                TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
+                offset,
+                instruction.opcode,
+                UINT64_C(0),
+                TINYPY_OPCODE_DECODE_OK);
+            return return_value_20;
+        }
 
-            if (state.stack_depth > protected_depth) {
-                status = __tinypy_verify_apply_effect(
-                    context,
-                    &instruction,
-                    state.stack_depth,
-                    &effect,
-                    &depth);
-                if (status != TINYPY_BYTECODE_VERIFY_OK) {
-                    return status;
-                }
-                return __tinypy_verify_fallthrough(
-                    context,
-                    &instruction,
-                    depth,
-                    state.block_index,
-                    state.marker_index);
-            }
-            if (marker->needs_with_cleanup != 0U || state.stack_depth != expected) {
-                return __tinypy_verify_fail(
-                    context,
-                    TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE,
-                    offset,
-                    instruction.opcode,
-                    (uint64_t)state.stack_depth,
-                    TINYPY_OPCODE_DECODE_OK);
-            }
-            if (marker_reason ==
-                    TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE || marker_reason == TINYPY_VERIFY_REASON_EXCEPTION_FINAL) {
-                return TINYPY_BYTECODE_VERIFY_OK;
-            }
-            return __tinypy_verify_unwind_reason(
+        if (state.stack_depth > protected_depth) {
+            status = __tinypy_verify_apply_effect(
                 context,
                 &instruction,
-                marker->resume_depth,
+                state.stack_depth,
+                &effect,
+                &depth);
+            if (status != TINYPY_BYTECODE_VERIFY_OK) {
+                return status;
+            }
+            tinypy_bytecode_verify_status_e return_value_21 = __tinypy_verify_fallthrough(
+                context,
+                &instruction,
+                depth,
                 state.block_index,
-                marker_reason,
-                marker->continue_target);
+                state.marker_index);
+            return return_value_21;
         }
+        if (marker->needs_with_cleanup != 0U || state.stack_depth != expected) {
+            tinypy_bytecode_verify_status_e return_value_22 = __tinypy_verify_fail(
+                context,
+                TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE,
+                offset,
+                instruction.opcode,
+                (uint64_t)state.stack_depth,
+                TINYPY_OPCODE_DECODE_OK);
+            return return_value_22;
+        }
+        if (marker_reason ==
+                TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE || marker_reason == TINYPY_VERIFY_REASON_EXCEPTION_FINAL) {
+            return TINYPY_BYTECODE_VERIFY_OK;
+        }
+        tinypy_bytecode_verify_status_e return_value_23 = __tinypy_verify_unwind_reason(
+            context,
+            &instruction,
+            marker->resume_depth,
+            state.block_index,
+            marker_reason,
+            marker->continue_target);
+        return return_value_23;
 
     case TINYPY_OP_RETURN_VALUE:
         status = __tinypy_verify_apply_effect(
@@ -1664,32 +1769,35 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
             return status;
         }
-        return __tinypy_verify_unwind_reason(
+        tinypy_bytecode_verify_status_e return_value_24 = __tinypy_verify_unwind_reason(
             context,
             &instruction,
             depth,
             state.block_index,
             TINYPY_VERIFY_REASON_RETURN,
             TINYPY_VERIFY_NO_TARGET);
+        return return_value_24;
 
     case TINYPY_OP_BREAK_LOOP:
-        return __tinypy_verify_unwind_reason(
-            context,
-            &instruction,
-            state.stack_depth,
-            state.block_index,
-            TINYPY_VERIFY_REASON_BREAK,
-            TINYPY_VERIFY_NO_TARGET);
+        function_result = __tinypy_verify_unwind_reason(
+                    context,
+                    &instruction,
+                    state.stack_depth,
+                    state.block_index,
+                    TINYPY_VERIFY_REASON_BREAK,
+                    TINYPY_VERIFY_NO_TARGET);
+        return function_result;
 
     case TINYPY_OP_CONTINUE_LOOP:
         (void)__tinypy_verify_jump_target(&instruction, &target);
-        return __tinypy_verify_unwind_reason(
+        tinypy_bytecode_verify_status_e return_value_25 = __tinypy_verify_unwind_reason(
             context,
             &instruction,
             state.stack_depth,
             state.block_index,
             TINYPY_VERIFY_REASON_CONTINUE,
             target);
+        return return_value_25;
 
     case TINYPY_OP_STOP_CODE:
         return TINYPY_BYTECODE_VERIFY_OK;
@@ -1706,7 +1814,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
     case TINYPY_OP_JUMP_FORWARD:
     case TINYPY_OP_JUMP_ABSOLUTE:
         (void)__tinypy_verify_jump_target(&instruction, &target);
-        return __tinypy_verify_enqueue(
+        tinypy_bytecode_verify_status_e return_value_26 = __tinypy_verify_enqueue(
             context,
             target,
             state.stack_depth,
@@ -1714,26 +1822,29 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             state.marker_index,
             offset,
             instruction.opcode);
+        return return_value_26;
 
     case TINYPY_OP_FOR_ITER:
         (void)__tinypy_verify_jump_target(&instruction, &target);
         if (state.stack_depth < 1U) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_27 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW,
                 offset,
                 instruction.opcode,
                 (uint64_t)state.stack_depth,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_27;
         }
         if (!__tinypy_verify_add_size(state.stack_depth, 1U, &depth)) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_28 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
                 offset,
                 instruction.opcode,
                 instruction.argument,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_28;
         }
         status = __tinypy_verify_fallthrough(
             context,
@@ -1744,7 +1855,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
             return status;
         }
-        return __tinypy_verify_enqueue(
+        tinypy_bytecode_verify_status_e return_value_29 = __tinypy_verify_enqueue(
             context,
             target,
             state.stack_depth - 1U,
@@ -1752,17 +1863,19 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             state.marker_index,
             offset,
             instruction.opcode);
+        return return_value_29;
 
     case TINYPY_OP_JUMP_IF_FALSE_OR_POP:
     case TINYPY_OP_JUMP_IF_TRUE_OR_POP:
         if (state.stack_depth < 1U) {
-            return __tinypy_verify_fail(
+            tinypy_bytecode_verify_status_e return_value_30 = __tinypy_verify_fail(
                 context,
                 TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW,
                 offset,
                 instruction.opcode,
                 (uint64_t)state.stack_depth,
                 TINYPY_OPCODE_DECODE_OK);
+            return return_value_30;
         }
         (void)__tinypy_verify_jump_target(&instruction, &target);
         status = __tinypy_verify_enqueue(
@@ -1776,12 +1889,13 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
             return status;
         }
-        return __tinypy_verify_fallthrough(
+        tinypy_bytecode_verify_status_e return_value_31 = __tinypy_verify_fallthrough(
             context,
             &instruction,
             state.stack_depth - 1U,
             state.block_index,
             state.marker_index);
+        return return_value_31;
 
     case TINYPY_OP_POP_JUMP_IF_FALSE:
     case TINYPY_OP_POP_JUMP_IF_TRUE:
@@ -1806,12 +1920,13 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
             return status;
         }
-        return __tinypy_verify_fallthrough(
+        tinypy_bytecode_verify_status_e return_value_32 = __tinypy_verify_fallthrough(
             context,
             &instruction,
             depth,
             state.block_index,
             state.marker_index);
+        return return_value_32;
 
     default:
         status = __tinypy_verify_apply_effect(
@@ -1823,12 +1938,13 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
             return status;
         }
-        return __tinypy_verify_fallthrough(
+        tinypy_bytecode_verify_status_e return_value_33 = __tinypy_verify_fallthrough(
             context,
             &instruction,
             depth,
             state.block_index,
             state.marker_index);
+        return return_value_33;
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1866,9 +1982,6 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify(const uint8_t *bytecode, 
     size_t required_scratch_size = 0U;
     size_t index;
 
-    TINYPY_ASSERT(out_result != NULL);
-    TINYPY_ASSERT(metadata != NULL);
-    TINYPY_ASSERT(bytecode != NULL || bytecode_size == 0U);
     __tinypy_verify_clear_result(out_result);
     status = tinypy_bytecode_verify_scratch_size(
         bytecode_size,
@@ -1892,31 +2005,34 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify(const uint8_t *bytecode, 
     __tinypy_verify_apply_default_limits(limits, &context.limits);
 
     if (context.limits.max_bytecode_size != 0U && bytecode_size > context.limits.max_bytecode_size) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
             &context,
             TINYPY_BYTECODE_VERIFY_LIMIT_EXCEEDED,
             0U,
             bytecode[0],
             (uint64_t)bytecode_size,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_1;
     }
     if (scratch == NULL || scratch_size < required_scratch_size) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
             &context,
             TINYPY_BYTECODE_VERIFY_SCRATCH_TOO_SMALL,
             0U,
             bytecode[0],
             (uint64_t)required_scratch_size,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_2;
     }
     if (((uintptr_t)scratch % (uintptr_t)TINYPY_VERIFY_ALIGNMENT) != 0U) {
-        return __tinypy_verify_fail(
+        tinypy_bytecode_verify_status_e return_value_3 = __tinypy_verify_fail(
             &context,
             TINYPY_BYTECODE_VERIFY_SCRATCH_MISALIGNED,
             0U,
             bytecode[0],
             (uint64_t)TINYPY_VERIFY_ALIGNMENT,
             TINYPY_OPCODE_DECODE_OK);
+        return return_value_3;
     }
 
     __tinypy_verify_bind_scratch(&context, scratch);

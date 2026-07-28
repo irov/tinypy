@@ -3,7 +3,6 @@
 
 #include "../internal.h"
 
-#include "assertion.h"
 #include <limits.h>
 #include <string.h>
 
@@ -100,7 +99,7 @@ int32_t __tinypy_frontend_dict_set(tinypy_value_t *dict, tinypy_value_t *key, ti
 tinypy_value_t *__tinypy_frontend_dict_get(tinypy_value_t *dict, tinypy_value_t *key);
 int32_t __tinypy_frontend_dict_delete(tinypy_value_t *dict, tinypy_value_t *key);
 int32_t __tinypy_frontend_dict_update(tinypy_value_t *dict, tinypy_value_t *source);
-int32_t __tinypy_frontend_dict_next(tinypy_value_t *dict, tinypy_compiler_size_t *position, tinypy_value_t **key, tinypy_value_t **value);
+tinypy_bool_t __tinypy_frontend_dict_next(tinypy_value_t *dict, tinypy_compiler_size_t *position, tinypy_value_t **key, tinypy_value_t **value);
 int32_t __tinypy_frontend_list_append(tinypy_value_t *list, tinypy_value_t *value);
 int32_t __tinypy_frontend_list_delete(tinypy_value_t *list, tinypy_compiler_size_t index);
 tinypy_value_t *__tinypy_frontend_dict_new_from_owner(tinypy_value_t *owner);
@@ -126,11 +125,11 @@ void *__tinypy_frontend_pointer_from_handle(tinypy_value_t *handle);
 #define TINYPY_COMPILER_SEQUENCE_LIST(sequence) __tinypy_frontend_sequence_list((sequence))
 #define TINYPY_COMPILER_STRING_RESIZE(string, size) __tinypy_frontend_string_resize((string), (size))
 
-static inline int32_t __tinypy_frontend_is_digit(int32_t character) {
+static inline tinypy_bool_t __tinypy_frontend_is_digit(int32_t character) {
     return (uint32_t)(uint8_t)character - (uint32_t)'0' < 10U;
 }
 
-static inline int32_t __tinypy_frontend_is_hex_digit(int32_t character) {
+static inline tinypy_bool_t __tinypy_frontend_is_hex_digit(int32_t character) {
     uint32_t byte = (uint32_t)(uint8_t)character;
 
     return byte - (uint32_t)'0' < 10U || (byte | 0x20U) - (uint32_t)'a' < 6U;

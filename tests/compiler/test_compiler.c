@@ -43,7 +43,7 @@ typedef struct test_interrupt_host_t {
 } test_interrupt_host_t;
 
 //////////////////////////////////////////////////////////////////////////
-static void *__test_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
+static void *__test_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     void *memory;
 
@@ -56,7 +56,7 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment, uin
     return memory;
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
+static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     void *resized;
 
@@ -69,7 +69,7 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
     return resized;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
+static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
 
     (void)alignment;
@@ -81,11 +81,11 @@ static void __test_deallocate(void *user_data, void *memory, size_t size, size_t
     free(memory);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __test_poll_interrupt(void *user_data) {
+static tinypy_bool_t __test_poll_interrupt(void *user_data) {
     test_interrupt_host_t *host = (test_interrupt_host_t *)user_data;
 
     host->polls += 1U;
-    return host->polls >= host->interrupt_after ? 1 : 0;
+    return host->polls >= host->interrupt_after ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_vm_t *__test_vm_create(test_allocator_state_t *state, int32_t optimize_level) {
@@ -104,7 +104,8 @@ static tinypy_vm_t *__test_vm_create(test_allocator_state_t *state, int32_t opti
     config.struct_size = (uint32_t)sizeof(config);
     config.allocator = &allocator;
     config.optimize_level = optimize_level;
-    return tinypy_vm_create(&config);
+    tinypy_vm_t *return_value_1 = tinypy_vm_create(&config);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static const tinypy_module_artifact_t *__test_source_resolve(void *user_data, const tinypy_module_request_t *request) {
@@ -169,7 +170,8 @@ static tinypy_vm_t *__test_vm_create_with_source_host(test_allocator_state_t *st
     config.struct_size = (uint32_t)sizeof(config);
     config.allocator = &allocator;
     config.host = &host;
-    return tinypy_vm_create(&config);
+    tinypy_vm_t *return_value_1 = tinypy_vm_create(&config);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_vm_t *__test_vm_create_with_source_multi_host(test_allocator_state_t *state, test_source_multi_host_t *source_host) {
@@ -195,7 +197,8 @@ static tinypy_vm_t *__test_vm_create_with_source_multi_host(test_allocator_state
     config.struct_size = (uint32_t)sizeof(config);
     config.allocator = &allocator;
     config.host = &host;
-    return tinypy_vm_create(&config);
+    tinypy_vm_t *return_value_1 = tinypy_vm_create(&config);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_empty_exec(void) {
@@ -1087,7 +1090,8 @@ static tinypy_value_t *__test_reentrant_compile_callback(tinypy_value_t *functio
     }
     state->inherited_future = (tinypy_code_flags(code) & TINYPY_CODE_FUTURE_DIVISION) != 0 ? 1 : 0;
     tinypy_release(code);
-    return tinypy_none_get(state->vm);
+    tinypy_value_t *return_value_1 = tinypy_none_get(state->vm);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_reentrant_compile(void) {

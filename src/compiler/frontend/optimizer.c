@@ -23,19 +23,6 @@
 #define TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, start, bytes) \
     (blocks[start] == blocks[start + bytes - 1])
 //////////////////////////////////////////////////////////////////////////
-#if defined(TINYPY_ENABLE_ASSERTS)
-static inline int32_t __tinypy_optimizer_load_constants_valid(const uint8_t *codestr, tinypy_compiler_size_t count) {
-    tinypy_compiler_size_t index;
-
-    for (index = 0; index < count; ++index) {
-        if (codestr[index * 3] != TINYPY_OP_LOAD_CONST) {
-            return 0;
-        }
-    }
-
-    return 1;
-}
-#endif
 /* Replace TINYPY_OP_LOAD_CONST c1. TINYPY_OP_LOAD_CONST c2 ... TINYPY_OP_LOAD_CONST cn TINYPY_OP_BUILD_TUPLE n
    with    TINYPY_OP_LOAD_CONST (c1, c2, ... cn).
    The consts table must still be in list form so that the
@@ -45,25 +32,20 @@ static inline int32_t __tinypy_optimizer_load_constants_valid(const uint8_t *cod
    Also works for TINYPY_OP_BUILD_LIST when followed by an "in" or "not in" test.
 */
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size_t n, tinypy_value_t *consts) {
+static tinypy_bool_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size_t n, tinypy_value_t *consts) {
     tinypy_value_t *newconst, *constant;
     tinypy_compiler_size_t i, arg, len_consts;
 
     /* Pre-conditions */
-    TINYPY_ASSERT(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
-    TINYPY_ASSERT(codestr[n * 3] == TINYPY_OP_BUILD_TUPLE || codestr[n * 3] == TINYPY_OP_BUILD_LIST);
-    TINYPY_ASSERT(TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, (n * 3)) == n);
-    TINYPY_ASSERT(__tinypy_optimizer_load_constants_valid(codestr, n));
 
     /* Buildup new tuple of constants */
     newconst = __tinypy_frontend_tuple_new(consts, n);
     if (newconst == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     len_consts = TINYPY_COMPILER_LIST_GET_SIZE(consts);
     for (i = 0; i < n; i++) {
         arg = TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, (i * 3));
-        TINYPY_ASSERT(arg < len_consts);
         constant = TINYPY_COMPILER_LIST_GET_ITEM(consts, arg);
         TINYPY_COMPILER_INCREF(constant);
         TINYPY_COMPILER_TUPLE_SET_ITEM(newconst, i, constant);
@@ -72,7 +54,7 @@ static int32_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size_t n, 
     /* Append folded constant onto consts */
     if (TINYPY_COMPILER_LIST_APPEND(consts, newconst)) {
         TINYPY_COMPILER_DECREF(newconst);
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_COMPILER_DECREF(newconst);
 
@@ -81,7 +63,7 @@ static int32_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size_t n, 
     memset(codestr, TINYPY_OP_NOP, n * 3);
     codestr[n * 3] = TINYPY_OP_LOAD_CONST;
     TINYPY_OPTIMIZER_SET_ARGUMENT(codestr, (n * 3), len_consts);
-    return 1;
+    return TINYPY_TRUE;
 }
 /* Replace TINYPY_OP_LOAD_CONST c1. TINYPY_OP_LOAD_CONST c2 BINOP
    with    TINYPY_OP_LOAD_CONST binop(c1,c2)
@@ -94,15 +76,12 @@ static int32_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size_t n, 
    becoming large in the presence of code like:  (None,)*1000.
 */
 //////////////////////////////////////////////////////////////////////////
-static int32_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t *consts) {
+static tinypy_bool_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t *consts) {
     tinypy_value_t *newconst, *v, *w;
     tinypy_compiler_size_t len_consts, size;
     int32_t opcode;
 
     /* Pre-conditions */
-    TINYPY_ASSERT(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
-    TINYPY_ASSERT(codestr[0] == TINYPY_OP_LOAD_CONST);
-    TINYPY_ASSERT(codestr[3] == TINYPY_OP_LOAD_CONST);
 
     /* Create new constant */
     v = TINYPY_COMPILER_LIST_GET_ITEM(consts, TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, 0));
@@ -119,7 +98,7 @@ static int32_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t *cons
         /* Cannot fold this operation statically since
            the result can depend on the run-time presence
            of the -Qnew flag */
-        return 0;
+        return TINYPY_FALSE;
     case TINYPY_OP_BINARY_TRUE_DIVIDE:
         newconst = TINYPY_COMPILER_NUMBER_TRUE_DIVIDE(v, w);
         break;
@@ -142,7 +121,7 @@ static int32_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t *cons
            in order to produce compatible pycs.
         */
         if (TINYPY_COMPILER_UNICODE_CHECK(v)) {
-            return 0;
+            return TINYPY_FALSE;
         }
         newconst = TINYPY_COMPILER_OBJECT_GET_ITEM(v, w);
         break;
@@ -166,11 +145,11 @@ static int32_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t *cons
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                    "unexpected binary operation %d on a constant",
                                    opcode);
-        return 0;
+        return TINYPY_FALSE;
     }
     if (newconst == NULL) {
         __tinypy_frontend_clear_raised(v);
-        return 0;
+        return TINYPY_FALSE;
     }
     size = TINYPY_COMPILER_OBJECT_SIZE(newconst);
     if (size == -1) {
@@ -178,14 +157,14 @@ static int32_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t *cons
     }
     else if (size > 20) {
         TINYPY_COMPILER_DECREF(newconst);
-        return 0;
+        return TINYPY_FALSE;
     }
 
     /* Append folded constant into consts table */
     len_consts = TINYPY_COMPILER_LIST_GET_SIZE(consts);
     if (TINYPY_COMPILER_LIST_APPEND(consts, newconst)) {
         TINYPY_COMPILER_DECREF(newconst);
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_COMPILER_DECREF(newconst);
 
@@ -193,17 +172,15 @@ static int32_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t *cons
     memset(codestr, TINYPY_OP_NOP, 4);
     codestr[4] = TINYPY_OP_LOAD_CONST;
     TINYPY_OPTIMIZER_SET_ARGUMENT(codestr, 4, len_consts);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __fold_unaryops_on_constants(uint8_t *codestr, tinypy_value_t *consts) {
+static tinypy_bool_t __fold_unaryops_on_constants(uint8_t *codestr, tinypy_value_t *consts) {
     tinypy_value_t *newconst = NULL, *v;
     tinypy_compiler_size_t len_consts;
     int32_t opcode;
 
     /* Pre-conditions */
-    TINYPY_ASSERT(TINYPY_COMPILER_LIST_CHECK_EXACT(consts));
-    TINYPY_ASSERT(codestr[0] == TINYPY_OP_LOAD_CONST);
 
     /* Create new constant */
     v = TINYPY_COMPILER_LIST_GET_ITEM(consts, TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, 0));
@@ -226,18 +203,18 @@ static int32_t __fold_unaryops_on_constants(uint8_t *codestr, tinypy_value_t *co
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                    "unexpected unary operation %d on a constant",
                                    opcode);
-        return 0;
+        return TINYPY_FALSE;
     }
     if (newconst == NULL) {
         __tinypy_frontend_clear_raised(v);
-        return 0;
+        return TINYPY_FALSE;
     }
 
     /* Append folded constant into consts table */
     len_consts = TINYPY_COMPILER_LIST_GET_SIZE(consts);
     if (TINYPY_COMPILER_LIST_APPEND(consts, newconst)) {
         TINYPY_COMPILER_DECREF(newconst);
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_COMPILER_DECREF(newconst);
 
@@ -245,7 +222,7 @@ static int32_t __fold_unaryops_on_constants(uint8_t *codestr, tinypy_value_t *co
     codestr[0] = TINYPY_OP_NOP;
     codestr[1] = TINYPY_OP_LOAD_CONST;
     TINYPY_OPTIMIZER_SET_ARGUMENT(codestr, 1, len_consts);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static uint32_t *__markblocks(tinypy_compile_ctx_t *arena, uint8_t *code, tinypy_compiler_size_t len) {
@@ -316,7 +293,6 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
     char *name;
 
     /* Bypass optimization when the lineno table is too complex */
-    TINYPY_ASSERT(TINYPY_COMPILER_STRING_CHECK(lineno_obj));
     lineno = (uint8_t *)TINYPY_COMPILER_STRING_AS_STRING(lineno_obj);
     tabsiz = TINYPY_COMPILER_STRING_GET_SIZE(lineno_obj);
     if (memchr(lineno, 255, tabsiz) != NULL) {
@@ -324,7 +300,6 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
     }
 
     /* Avoid situations where jump retargeting could overflow */
-    TINYPY_ASSERT(TINYPY_COMPILER_STRING_CHECK(code));
     codelen = TINYPY_COMPILER_STRING_GET_SIZE(code);
     if (codelen > 32700) {
         goto exitUnchanged;
@@ -358,7 +333,6 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
     if (blocks == NULL) {
         goto exitError;
     }
-    TINYPY_ASSERT(TINYPY_COMPILER_LIST_CHECK(consts));
 
     for (i = 0; i < codelen; i += TINYPY_OPTIMIZER_CODE_SIZE(codestr[i])) {
     reoptimize_current:
@@ -417,7 +391,6 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
                 }
                 TINYPY_COMPILER_DECREF(none);
             }
-            TINYPY_ASSERT(tinypy_typeof(TINYPY_COMPILER_LIST_GET_ITEM(consts, j)) == TINYPY_VALUE_NONE);
             codestr[i] = TINYPY_OP_LOAD_CONST;
             TINYPY_OPTIMIZER_SET_ARGUMENT(codestr, i, j);
             cumlc = lastlc + 1;
@@ -446,7 +419,6 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
             j = TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, i);
             h = (int32_t)i - 3 * (int32_t)j;
             if (h >= 0 && j <= lastlc && ((opcode == TINYPY_OP_BUILD_TUPLE && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, h, 3 * (j + 1))) || (opcode == TINYPY_OP_BUILD_LIST && codestr[i + 3] == TINYPY_OP_COMPARE_OP && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, h, 3 * (j + 2)) && (TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, i + 3) == 6 || TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, i + 3) == 7))) && __tuple_of_constants(&codestr[h], j, consts)) {
-                TINYPY_ASSERT(codestr[i] == TINYPY_OP_LOAD_CONST);
                 cumlc = 1;
                 break;
             }
@@ -484,7 +456,6 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
         case TINYPY_OP_BINARY_OR:
             if (lastlc >= 2 && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, i - 6, 7) && __fold_binops_on_constants(&codestr[i - 6], consts)) {
                 i -= 2;
-                TINYPY_ASSERT(codestr[i] == TINYPY_OP_LOAD_CONST);
                 cumlc = 1;
             }
             break;
@@ -496,7 +467,6 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
         case TINYPY_OP_UNARY_INVERT:
             if (lastlc >= 1 && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, i - 3, 4) && __fold_unaryops_on_constants(&codestr[i - 3], consts)) {
                 i -= 2;
-                TINYPY_ASSERT(codestr[i] == TINYPY_OP_LOAD_CONST);
                 cumlc = 1;
             }
             break;
@@ -614,7 +584,6 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
     for (i = 0; i < tabsiz; i += 2) {
         cum_orig_line += lineno[i];
         new_line = addrmap[cum_orig_line];
-        TINYPY_ASSERT(new_line - last_line < 255);
         lineno[i] = ((uint8_t)(new_line - last_line));
         last_line = new_line;
     }
@@ -652,7 +621,6 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
             codestr[h++] = codestr[i++];
         }
     }
-    TINYPY_ASSERT(h + nops == codelen);
 
     code = __tinypy_frontend_string_from_owner(code, (char *)codestr, (size_t)h);
     return code;

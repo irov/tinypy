@@ -12,12 +12,10 @@
 #include "source_parser.h"
 #include "grammar_symbols.h"
 
-#include "assertion.h"
-
 /* Data structure used internally */
 typedef struct tinypy_ast_builder_t {
     char *c_encoding;              /* source encoding */
-    int32_t c_future_unicode;          /* __future__ unicode literals flag */
+    tinypy_bool_t c_future_unicode;          /* __future__ unicode literals flag */
     tinypy_compile_ctx_t *c_arena; /* arena for allocating memeory */
     const char *c_filename;        /* filename */
 } tinypy_ast_builder_t;
@@ -70,24 +68,26 @@ static tinypy_ast_identifier_t __new_identifier(const char *n, tinypy_compile_ct
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __ast_error(const tinypy_cst_node_t *n, const char *errstr) {
+static tinypy_bool_t __ast_error(const tinypy_cst_node_t *n, const char *errstr) {
     tinypy_internal_compiler_error(n->context, TINYPY_ERROR_SYNTAX, errstr, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1, n->context->out_error);
-    return 0;
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __ast_error_finish(const char *filename) {
     (void)filename;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __forbidden_check(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, const char *x) {
+static tinypy_bool_t __forbidden_check(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, const char *x) {
     (void)c;
     if (!strcmp(x, "None")) {
-        return __ast_error(n, "cannot assign to None");
+        tinypy_bool_t return_value_1 = __ast_error(n, "cannot assign to None");
+        return return_value_1;
     }
     if (!strcmp(x, "__debug__")) {
-        return __ast_error(n, "cannot assign to __debug__");
+        tinypy_bool_t return_value_2 = __ast_error(n, "cannot assign to __debug__");
+        return return_value_2;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 
 /* __num_stmts() returns number of contained statements.
@@ -106,6 +106,7 @@ static int32_t __forbidden_check(tinypy_ast_builder_t *c, const tinypy_cst_node_
 
 //////////////////////////////////////////////////////////////////////////
 static int32_t __num_stmts(const tinypy_cst_node_t *n) {
+    int32_t function_result;
     int32_t i, l;
     tinypy_cst_node_t *ch;
 
@@ -115,7 +116,8 @@ static int32_t __num_stmts(const tinypy_cst_node_t *n) {
             return 0;
         }
         else {
-            return __num_stmts(TINYPY_CST_CHILD(n, 0));
+            int32_t return_value_1 = __num_stmts(TINYPY_CST_CHILD(n, 0));
+            return return_value_1;
         }
     case TINYPY_GRAMMAR_FILE_INPUT:
         l = 0;
@@ -127,14 +129,17 @@ static int32_t __num_stmts(const tinypy_cst_node_t *n) {
         }
         return l;
     case TINYPY_GRAMMAR_STMT:
-        return __num_stmts(TINYPY_CST_CHILD(n, 0));
+        function_result = __num_stmts(TINYPY_CST_CHILD(n, 0));
+        return function_result;
     case TINYPY_GRAMMAR_COMPOUND_STMT:
         return 1;
     case TINYPY_GRAMMAR_SIMPLE_STMT:
-        return TINYPY_CST_CHILD_COUNT(n) / 2; /* Divide by 2 to remove count of semi-colons */
+        function_result = TINYPY_CST_CHILD_COUNT(n) / 2;
+        return function_result; /* Divide by 2 to remove count of semi-colons */
     case TINYPY_GRAMMAR_SUITE:
         if (TINYPY_CST_CHILD_COUNT(n) == 1) {
-            return __num_stmts(TINYPY_CST_CHILD(n, 0));
+            int32_t return_value_2 = __num_stmts(TINYPY_CST_CHILD(n, 0));
+            return return_value_2;
         }
         else {
             l = 0;
@@ -144,10 +149,8 @@ static int32_t __num_stmts(const tinypy_cst_node_t *n) {
             return l;
         }
     default:
-        TINYPY_ASSERT(0 && "non-statement CST tinypy_cst_node_t");
         return 0;
     }
-    TINYPY_ASSERT(0);
     return 0;
 }
 
@@ -192,7 +195,6 @@ tinypy_ast_module_t __tinypy_ast_build(const tinypy_cst_node_t *n, tinypy_compil
             if (TINYPY_CST_TYPE(ch) == TINYPY_TOKEN_NEWLINE) {
                 continue;
             }
-            TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_STMT);
             num = __num_stmts(ch);
             if (num == 1) {
                 s = __ast_for_stmt(&c, ch);
@@ -203,7 +205,6 @@ tinypy_ast_module_t __tinypy_ast_build(const tinypy_cst_node_t *n, tinypy_compil
             }
             else {
                 ch = TINYPY_CST_CHILD(ch, 0);
-                TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_SIMPLE_STMT);
                 for (j = 0; j < num; j++) {
                     s = __ast_for_stmt(&c, TINYPY_CST_CHILD(ch, j * 2));
                     if (!s) {
@@ -213,7 +214,8 @@ tinypy_ast_module_t __tinypy_ast_build(const tinypy_cst_node_t *n, tinypy_compil
                 }
             }
         }
-        return __tinypy_ast_module(stmts, arena);
+        tinypy_ast_module_t return_value_1 = __tinypy_ast_module(stmts, arena);
+        return return_value_1;
     case TINYPY_GRAMMAR_EVAL_INPUT: {
         tinypy_ast_expression_t testlist_ast;
 
@@ -222,7 +224,8 @@ tinypy_ast_module_t __tinypy_ast_build(const tinypy_cst_node_t *n, tinypy_compil
         if (!testlist_ast) {
             goto error;
         }
-        return __tinypy_ast_expression(testlist_ast, arena);
+        tinypy_ast_module_t return_value_2 = __tinypy_ast_expression(testlist_ast, arena);
+        return return_value_2;
     }
     case TINYPY_GRAMMAR_SINGLE_INPUT:
         if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0)) == TINYPY_TOKEN_NEWLINE) {
@@ -234,7 +237,8 @@ tinypy_ast_module_t __tinypy_ast_build(const tinypy_cst_node_t *n, tinypy_compil
             if (!TINYPY_AST_SEQUENCE_GET(stmts, 0)) {
                 goto error;
             }
-            return __tinypy_ast_interactive(stmts, arena);
+            tinypy_ast_module_t return_value_3 = __tinypy_ast_interactive(stmts, arena);
+            return return_value_3;
         }
         else {
             n = TINYPY_CST_CHILD(n, 0);
@@ -252,7 +256,6 @@ tinypy_ast_module_t __tinypy_ast_build(const tinypy_cst_node_t *n, tinypy_compil
             }
             else {
                 /* Only a TINYPY_GRAMMAR_SIMPLE_STMT can contain multiple statements. */
-                TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_SIMPLE_STMT);
                 for (i = 0; i < TINYPY_CST_CHILD_COUNT(n); i += 2) {
                     if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, i)) == TINYPY_TOKEN_NEWLINE) {
                         break;
@@ -265,7 +268,8 @@ tinypy_ast_module_t __tinypy_ast_build(const tinypy_cst_node_t *n, tinypy_compil
                 }
             }
 
-            return __tinypy_ast_interactive(stmts, arena);
+            tinypy_ast_module_t return_value_4 = __tinypy_ast_interactive(stmts, arena);
+            return return_value_4;
         }
     default:
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
@@ -318,7 +322,7 @@ static tinypy_ast_binary_operator_e __get_operator(const tinypy_cst_node_t *n) {
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __set_context(tinypy_ast_builder_t *c, tinypy_ast_expression_t e, tinypy_ast_expression_context_e ctx, const tinypy_cst_node_t *n) {
+static tinypy_bool_t __set_context(tinypy_ast_builder_t *c, tinypy_ast_expression_t e, tinypy_ast_expression_context_e ctx, const tinypy_cst_node_t *n) {
     tinypy_ast_sequence_t *s = NULL;
     /* If a particular expression type can't be used for assign / delete,
        set expr_name to its name and an error message will be generated.
@@ -332,13 +336,12 @@ static int32_t __set_context(tinypy_ast_builder_t *c, tinypy_ast_expression_t e,
        Consider restructuring so that augmented assignment uses
        __set_context(), too.
     */
-    TINYPY_ASSERT(ctx != TINYPY_AST_CONTEXT_AUGMENTED_STORE && ctx != TINYPY_AST_CONTEXT_AUGMENTED_LOAD);
 
     switch (e->kind) {
     case TINYPY_AST_KIND_ATTRIBUTE:
         if (ctx == TINYPY_AST_CONTEXT_STORE && !__forbidden_check(c, n,
                                                                   TINYPY_COMPILER_BYTES_AS_STRING(e->v.Attribute.attr))) {
-            return 0;
+            return TINYPY_FALSE;
         }
         e->v.Attribute.ctx = ctx;
         break;
@@ -348,7 +351,7 @@ static int32_t __set_context(tinypy_ast_builder_t *c, tinypy_ast_expression_t e,
     case TINYPY_AST_KIND_NAME:
         if (ctx == TINYPY_AST_CONTEXT_STORE && !__forbidden_check(c, n,
                                                                   TINYPY_COMPILER_BYTES_AS_STRING(e->v.Name.id))) {
-            return 0;
+            return TINYPY_FALSE;
         }
         e->v.Name.ctx = ctx;
         break;
@@ -410,7 +413,7 @@ static int32_t __set_context(tinypy_ast_builder_t *c, tinypy_ast_expression_t e,
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                    "unexpected expression in assignment %d (line %d)",
                                    e->kind, e->lineno);
-        return 0;
+        return TINYPY_FALSE;
     }
     /* Check for error string set by switch */
     if (expr_name) {
@@ -421,7 +424,7 @@ static int32_t __set_context(tinypy_ast_builder_t *c, tinypy_ast_expression_t e,
         size_t part_sizes[] = {strlen(prefix), strlen(expr_name)};
 
         tinypy_internal_compiler_error_parts(n->context, TINYPY_ERROR_SYNTAX, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
-        return 0;
+        return TINYPY_FALSE;
     }
 
     /* If the LHS is a list or tuple, we need to set the assignment
@@ -432,16 +435,15 @@ static int32_t __set_context(tinypy_ast_builder_t *c, tinypy_ast_expression_t e,
 
         for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(s); i++) {
             if (!__set_context(c, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(s, i), ctx, n)) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_binary_operator_e __ast_for_augassign(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     (void)c;
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_AUGASSIGN);
     n = TINYPY_CST_CHILD(n, 0);
     switch (TINYPY_CST_TEXT(n)[0]) {
     case '+':
@@ -485,7 +487,6 @@ static tinypy_ast_compare_operator_e __ast_for_comp_op(tinypy_ast_builder_t *c, 
     /* TINYPY_GRAMMAR_COMP_OP: '<'|'>'|'=='|'>='|'<='|'<>'|'!='|'in'|'not' 'in'|'is'
                |'is' 'not'
     */
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_COMP_OP);
     if (TINYPY_CST_CHILD_COUNT(n) == 1) {
         n = TINYPY_CST_CHILD(n, 0);
         switch (TINYPY_CST_TYPE(n)) {
@@ -539,7 +540,6 @@ static tinypy_ast_sequence_t *__seq_for_testlist(tinypy_ast_builder_t *c, const 
     /* TINYPY_GRAMMAR_TESTLIST: TINYPY_GRAMMAR_TEST (',' TINYPY_GRAMMAR_TEST)* [','] */
     tinypy_ast_expression_t expression;
     int32_t i;
-    TINYPY_ASSERT(TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_LISTMAKER || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST_COMP || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST_SAFE || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST1);
 
     tinypy_ast_sequence_t *seq = TINYPY_AST_SEQUENCE_NEW((TINYPY_CST_CHILD_COUNT(n) + 1) / 2, c->c_arena);
     if (!seq) {
@@ -547,14 +547,12 @@ static tinypy_ast_sequence_t *__seq_for_testlist(tinypy_ast_builder_t *c, const 
     }
 
     for (i = 0; i < TINYPY_CST_CHILD_COUNT(n); i += 2) {
-        TINYPY_ASSERT(TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, i)) == TINYPY_GRAMMAR_TEST || TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, i)) == TINYPY_GRAMMAR_OLD_TEST);
 
         expression = __ast_for_expr(c, TINYPY_CST_CHILD(n, i));
         if (!expression) {
             return NULL;
         }
 
-        TINYPY_ASSERT(i / 2 < seq->size);
         TINYPY_AST_SEQUENCE_SET(seq, i / 2, expression);
     }
     return seq;
@@ -571,7 +569,6 @@ static tinypy_ast_expression_t __compiler_complex_args(tinypy_ast_builder_t *c, 
     /* TINYPY_GRAMMAR_FPDEF: TINYPY_TOKEN_NAME | '(' TINYPY_GRAMMAR_FPLIST ')'
        TINYPY_GRAMMAR_FPLIST: TINYPY_GRAMMAR_FPDEF (',' TINYPY_GRAMMAR_FPDEF)* [',']
     */
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_FPLIST);
     for (i = 0; i < len; i++) {
         tinypy_value_t *arg_id;
         const tinypy_cst_node_t *fpdef_node = TINYPY_CST_CHILD(n, 2 * i);
@@ -592,14 +589,11 @@ static tinypy_ast_expression_t __compiler_complex_args(tinypy_ast_builder_t *c, 
                                     c->c_arena);
         }
         else {
-            TINYPY_ASSERT(TINYPY_CST_TYPE(fpdef_node) == TINYPY_GRAMMAR_FPDEF);
             /* fpdef_node[0] is not a name, so it must be '(', get CHILD[1] */
             child = TINYPY_CST_CHILD(fpdef_node, 1);
-            TINYPY_ASSERT(TINYPY_CST_TYPE(child) == TINYPY_GRAMMAR_FPLIST);
             /* NCH == 1 means we have (x), we need to elide the extra parens */
             if (TINYPY_CST_CHILD_COUNT(child) == 1) {
                 fpdef_node = TINYPY_CST_CHILD(child, 0);
-                TINYPY_ASSERT(TINYPY_CST_TYPE(fpdef_node) == TINYPY_GRAMMAR_FPDEF);
                 goto set_name;
             }
             arg = __compiler_complex_args(c, child);
@@ -622,18 +616,19 @@ static tinypy_ast_arguments_t __ast_for_arguments(tinypy_ast_builder_t *c, const
        TINYPY_GRAMMAR_VARARGSLIST: (TINYPY_GRAMMAR_FPDEF ['=' TINYPY_GRAMMAR_TEST] ',')* ('*' TINYPY_TOKEN_NAME [',' '**' TINYPY_TOKEN_NAME]
             | '**' TINYPY_TOKEN_NAME) | TINYPY_GRAMMAR_FPDEF ['=' TINYPY_GRAMMAR_TEST] (',' TINYPY_GRAMMAR_FPDEF ['=' TINYPY_GRAMMAR_TEST])* [',']
     */
-    int32_t i, j, k, n_args = 0, n_defaults = 0, found_default = 0;
+    int32_t i, j, k, n_args = 0, n_defaults = 0;
+    tinypy_bool_t found_default = TINYPY_FALSE;
     tinypy_ast_sequence_t *args, *defaults;
     tinypy_ast_identifier_t vararg = NULL, kwarg = NULL;
     tinypy_cst_node_t *ch;
 
     if (TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_PARAMETERS) {
         if (TINYPY_CST_CHILD_COUNT(n) == 2) /* () as TINYPY_GRAMMAR_ARGUMENT list */ {
-            return __tinypy_ast_arguments(NULL, NULL, NULL, NULL, c->c_arena);
+            tinypy_ast_arguments_t return_value_1 = __tinypy_ast_arguments(NULL, NULL, NULL, NULL, c->c_arena);
+            return return_value_1;
         }
         n = TINYPY_CST_CHILD(n, 1);
     }
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_VARARGSLIST);
 
     /* first count the number of normal args & defaults */
     for (i = 0; i < TINYPY_CST_CHILD_COUNT(n); i++) {
@@ -674,7 +669,6 @@ static tinypy_ast_arguments_t __ast_for_arguments(tinypy_ast_builder_t *c, const
                 if (!expression) {
                     return NULL;
                 }
-                TINYPY_ASSERT(defaults != NULL);
                 TINYPY_AST_SEQUENCE_SET(defaults, j++, expression);
                 i += 2;
                 found_default = 1;
@@ -707,7 +701,6 @@ static tinypy_ast_arguments_t __ast_for_arguments(tinypy_ast_builder_t *c, const
                        unpacking mixed in. */
                     parenthesized = 1;
                     ch = TINYPY_CST_CHILD(ch, 0);
-                    TINYPY_ASSERT(TINYPY_CST_TYPE(ch) == TINYPY_GRAMMAR_FPDEF);
                     goto handle_fpdef;
                 }
             }
@@ -759,7 +752,8 @@ static tinypy_ast_arguments_t __ast_for_arguments(tinypy_ast_builder_t *c, const
         }
     }
 
-    return __tinypy_ast_arguments(args, vararg, kwarg, defaults, c->c_arena);
+    tinypy_ast_arguments_t return_value_2 = __tinypy_ast_arguments(args, vararg, kwarg, defaults, c->c_arena);
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_dotted_name(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
@@ -767,8 +761,6 @@ static tinypy_ast_expression_t __ast_for_dotted_name(tinypy_ast_builder_t *c, co
     tinypy_ast_identifier_t id;
     int32_t lineno, col_offset;
     int32_t i;
-
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_DOTTED_NAME);
 
     lineno = TINYPY_AST_LINE_NUMBER(n);
     col_offset = n->column_offset;
@@ -800,10 +792,6 @@ static tinypy_ast_expression_t __ast_for_decorator(tinypy_ast_builder_t *c, cons
     /* TINYPY_GRAMMAR_DECORATOR: '@' TINYPY_GRAMMAR_DOTTED_NAME [ '(' [TINYPY_GRAMMAR_ARGLIST] ')' ] TINYPY_TOKEN_NEWLINE */
     tinypy_ast_expression_t d = NULL;
     tinypy_ast_expression_t name_expr;
-
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_DECORATOR);
-    TINYPY_CST_REQUIRE(TINYPY_CST_CHILD(n, 0), TINYPY_TOKEN_AT);
-    TINYPY_CST_REQUIRE(TINYPY_CST_REVERSE_CHILD(n, -1), TINYPY_TOKEN_NEWLINE);
 
     name_expr = __ast_for_dotted_name(c, TINYPY_CST_CHILD(n, 1));
     if (!name_expr) {
@@ -838,7 +826,6 @@ static tinypy_ast_sequence_t *__ast_for_decorators(tinypy_ast_builder_t *c, cons
     tinypy_ast_expression_t d;
     int32_t i;
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_DECORATORS);
     tinypy_ast_sequence_t *decorator_seq = TINYPY_AST_SEQUENCE_NEW(TINYPY_CST_CHILD_COUNT(n), c->c_arena);
     if (!decorator_seq) {
         return NULL;
@@ -860,8 +847,6 @@ static tinypy_ast_statement_t __ast_for_funcdef(tinypy_ast_builder_t *c, const t
     tinypy_ast_arguments_t args;
     int32_t name_i = 1;
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_FUNCDEF);
-
     name = TINYPY_AST_NEW_IDENTIFIER(TINYPY_CST_CHILD(n, name_i));
     if (!name) {
         return NULL;
@@ -878,8 +863,9 @@ static tinypy_ast_statement_t __ast_for_funcdef(tinypy_ast_builder_t *c, const t
         return NULL;
     }
 
-    return __tinypy_ast_function_def(name, args, body, decorator_seq, TINYPY_AST_LINE_NUMBER(n),
-                                     n->column_offset, c->c_arena);
+    tinypy_ast_statement_t return_value_1 = __tinypy_ast_function_def(name, args, body, decorator_seq, TINYPY_AST_LINE_NUMBER(n),
+                                         n->column_offset, c->c_arena);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_decorated(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
@@ -887,14 +873,10 @@ static tinypy_ast_statement_t __ast_for_decorated(tinypy_ast_builder_t *c, const
     tinypy_ast_statement_t thing = NULL;
     tinypy_ast_sequence_t *decorator_seq = NULL;
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_DECORATED);
-
     decorator_seq = __ast_for_decorators(c, TINYPY_CST_CHILD(n, 0));
     if (!decorator_seq) {
         return NULL;
     }
-
-    TINYPY_ASSERT(TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 1)) == TINYPY_GRAMMAR_FUNCDEF || TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 1)) == TINYPY_GRAMMAR_CLASSDEF);
 
     if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 1)) == TINYPY_GRAMMAR_FUNCDEF) {
         thing = __ast_for_funcdef(c, TINYPY_CST_CHILD(n, 1), decorator_seq);
@@ -937,14 +919,14 @@ static tinypy_ast_expression_t __ast_for_lambdef(tinypy_ast_builder_t *c, const 
         }
     }
 
-    return __tinypy_ast_lambda(args, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    tinypy_ast_expression_t return_value_1 = __tinypy_ast_lambda(args, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_ifexpr(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     /* TINYPY_GRAMMAR_TEST: TINYPY_GRAMMAR_OR_TEST 'if' TINYPY_GRAMMAR_OR_TEST 'else' TINYPY_GRAMMAR_TEST */
     tinypy_ast_expression_t expression, body, orelse;
 
-    TINYPY_ASSERT(TINYPY_CST_CHILD_COUNT(n) == 5);
     body = __ast_for_expr(c, TINYPY_CST_CHILD(n, 0));
     if (!body) {
         return NULL;
@@ -957,8 +939,9 @@ static tinypy_ast_expression_t __ast_for_ifexpr(tinypy_ast_builder_t *c, const t
     if (!orelse) {
         return NULL;
     }
-    return __tinypy_ast_if_exp(expression, body, orelse, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                               c->c_arena);
+    tinypy_ast_expression_t return_value_1 = __tinypy_ast_if_exp(expression, body, orelse, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                   c->c_arena);
+    return return_value_1;
 }
 
 /* XXX(nnorwitz): the listcomp and genexpr code should be refactored
@@ -979,7 +962,6 @@ static int32_t __count_list_fors(tinypy_ast_builder_t *c, const tinypy_cst_node_
 
 count_list_for:
     n_fors++;
-    TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_LIST_FOR);
     if (TINYPY_CST_CHILD_COUNT(ch) == 5) {
         ch = TINYPY_CST_CHILD(ch, 4);
     }
@@ -987,7 +969,6 @@ count_list_for:
         return n_fors;
     }
 count_list_iter:
-    TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_LIST_ITER);
     ch = TINYPY_CST_CHILD(ch, 0);
     if (TINYPY_CST_TYPE(ch) == TINYPY_GRAMMAR_LIST_FOR) {
         goto count_list_for;
@@ -1018,12 +999,10 @@ static int32_t __count_list_ifs(tinypy_ast_builder_t *c, const tinypy_cst_node_t
     int32_t n_ifs = 0;
 
 count_list_iter:
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_LIST_ITER);
     if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0)) == TINYPY_GRAMMAR_LIST_FOR) {
         return n_ifs;
     }
     n = TINYPY_CST_CHILD(n, 0);
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_LIST_IF);
     n_ifs++;
     if (TINYPY_CST_CHILD_COUNT(n) == 2) {
         return n_ifs;
@@ -1041,9 +1020,6 @@ static tinypy_ast_expression_t __ast_for_listcomp(tinypy_ast_builder_t *c, const
     */
     tinypy_ast_expression_t elt, first;
     int32_t i, n_fors;
-
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_LISTMAKER);
-    TINYPY_ASSERT(TINYPY_CST_CHILD_COUNT(n) > 1);
 
     elt = __ast_for_expr(c, TINYPY_CST_CHILD(n, 0));
     if (!elt) {
@@ -1066,8 +1042,6 @@ static tinypy_ast_expression_t __ast_for_listcomp(tinypy_ast_builder_t *c, const
         tinypy_ast_sequence_t *t;
         tinypy_ast_expression_t expression;
         tinypy_cst_node_t *for_ch;
-
-        TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_LIST_FOR);
 
         for_ch = TINYPY_CST_CHILD(ch, 1);
         t = __ast_for_exprlist(c, for_ch, TINYPY_AST_CONTEXT_STORE);
@@ -1113,9 +1087,7 @@ static tinypy_ast_expression_t __ast_for_listcomp(tinypy_ast_builder_t *c, const
             }
 
             for (j = 0; j < n_ifs; j++) {
-                TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_LIST_ITER);
                 ch = TINYPY_CST_CHILD(ch, 0);
-                TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_LIST_IF);
 
                 list_for_expr = __ast_for_expr(c, TINYPY_CST_CHILD(ch, 1));
                 if (!list_for_expr) {
@@ -1136,7 +1108,8 @@ static tinypy_ast_expression_t __ast_for_listcomp(tinypy_ast_builder_t *c, const
         TINYPY_AST_SEQUENCE_SET(listcomps, i, lc);
     }
 
-    return __tinypy_ast_list_comp(elt, listcomps, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    tinypy_ast_expression_t return_value_1 = __tinypy_ast_list_comp(elt, listcomps, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    return return_value_1;
 }
 
 /*
@@ -1152,7 +1125,6 @@ static int32_t __count_comp_fors(tinypy_ast_builder_t *c, const tinypy_cst_node_
 
 count_comp_for:
     n_fors++;
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_COMP_FOR);
     if (TINYPY_CST_CHILD_COUNT(n) == 5) {
         n = TINYPY_CST_CHILD(n, 4);
     }
@@ -1160,7 +1132,6 @@ count_comp_for:
         return n_fors;
     }
 count_comp_iter:
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_COMP_ITER);
     n = TINYPY_CST_CHILD(n, 0);
     if (TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_COMP_FOR) {
         goto count_comp_for;
@@ -1192,12 +1163,10 @@ static int32_t __count_comp_ifs(tinypy_ast_builder_t *c, const tinypy_cst_node_t
     int32_t n_ifs = 0;
 
     while (1) {
-        TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_COMP_ITER);
         if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0)) == TINYPY_GRAMMAR_COMP_FOR) {
             return n_ifs;
         }
         n = TINYPY_CST_CHILD(n, 0);
-        TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_COMP_IF);
         n_ifs++;
         if (TINYPY_CST_CHILD_COUNT(n) == 2) {
             return n_ifs;
@@ -1224,8 +1193,6 @@ static tinypy_ast_sequence_t *__ast_for_comprehension(tinypy_ast_builder_t *c, c
         tinypy_ast_sequence_t *t;
         tinypy_ast_expression_t expression, first;
         tinypy_cst_node_t *for_ch;
-
-        TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_COMP_FOR);
 
         for_ch = TINYPY_CST_CHILD(n, 1);
         t = __ast_for_exprlist(c, for_ch, TINYPY_AST_CONTEXT_STORE);
@@ -1269,9 +1236,7 @@ static tinypy_ast_sequence_t *__ast_for_comprehension(tinypy_ast_builder_t *c, c
             }
 
             for (j = 0; j < n_ifs; j++) {
-                TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_COMP_ITER);
                 n = TINYPY_CST_CHILD(n, 0);
-                TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_COMP_IF);
 
                 expression = __ast_for_expr(c, TINYPY_CST_CHILD(n, 1));
                 if (!expression) {
@@ -1296,8 +1261,6 @@ static tinypy_ast_sequence_t *__ast_for_comprehension(tinypy_ast_builder_t *c, c
 static tinypy_ast_expression_t __ast_for_itercomp(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, int32_t type) {
     tinypy_ast_expression_t elt;
 
-    TINYPY_ASSERT(TINYPY_CST_CHILD_COUNT(n) > 1);
-
     elt = __ast_for_expr(c, TINYPY_CST_CHILD(n, 0));
     if (!elt) {
         return NULL;
@@ -1309,10 +1272,12 @@ static tinypy_ast_expression_t __ast_for_itercomp(tinypy_ast_builder_t *c, const
     }
 
     if (type == TINYPY_AST_BUILDER_COMPREHENSION_GENERATOR) {
-        return __tinypy_ast_generator_exp(elt, comps, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_1 = __tinypy_ast_generator_exp(elt, comps, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_1;
     }
     else if (type == TINYPY_AST_BUILDER_COMPREHENSION_SET) {
-        return __tinypy_ast_set_comp(elt, comps, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_2 = __tinypy_ast_set_comp(elt, comps, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_2;
     }
     else {
         /* Should never happen */
@@ -1322,9 +1287,6 @@ static tinypy_ast_expression_t __ast_for_itercomp(tinypy_ast_builder_t *c, const
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_dictcomp(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     tinypy_ast_expression_t key, value;
-
-    TINYPY_ASSERT(TINYPY_CST_CHILD_COUNT(n) > 3);
-    TINYPY_CST_REQUIRE(TINYPY_CST_CHILD(n, 1), TINYPY_TOKEN_COLON);
 
     key = __ast_for_expr(c, TINYPY_CST_CHILD(n, 0));
     if (!key) {
@@ -1341,17 +1303,18 @@ static tinypy_ast_expression_t __ast_for_dictcomp(tinypy_ast_builder_t *c, const
         return NULL;
     }
 
-    return __tinypy_ast_dict_comp(key, value, comps, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    tinypy_ast_expression_t return_value_1 = __tinypy_ast_dict_comp(key, value, comps, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_genexp(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
-    TINYPY_ASSERT(TINYPY_CST_TYPE(n) == (TINYPY_GRAMMAR_TESTLIST_COMP) || TINYPY_CST_TYPE(n) == (TINYPY_GRAMMAR_ARGUMENT));
-    return __ast_for_itercomp(c, n, TINYPY_AST_BUILDER_COMPREHENSION_GENERATOR);
+    tinypy_ast_expression_t return_value_1 = __ast_for_itercomp(c, n, TINYPY_AST_BUILDER_COMPREHENSION_GENERATOR);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_setcomp(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
-    TINYPY_ASSERT(TINYPY_CST_TYPE(n) == (TINYPY_GRAMMAR_DICTORSETMAKER));
-    return __ast_for_itercomp(c, n, TINYPY_AST_BUILDER_COMPREHENSION_SET);
+    tinypy_ast_expression_t return_value_1 = __ast_for_itercomp(c, n, TINYPY_AST_BUILDER_COMPREHENSION_SET);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
@@ -1368,7 +1331,8 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
         if (!name) {
             return NULL;
         }
-        return __tinypy_ast_name(name, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_1 = __tinypy_ast_name(name, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_1;
     }
     case TINYPY_TOKEN_STRING: {
         tinypy_value_t *str = __parsestrplus(c, n);
@@ -1379,7 +1343,8 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
             return NULL;
         }
         TINYPY_COMPILER_ARENA_ADD_VALUE(c->c_arena, str);
-        return __tinypy_ast_str(str, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_2 = __tinypy_ast_str(str, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_2;
     }
     case TINYPY_TOKEN_NUMBER: {
         tinypy_value_t *pynum = __parsenumber(c, TINYPY_CST_TEXT(ch));
@@ -1388,38 +1353,44 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
         }
 
         TINYPY_COMPILER_ARENA_ADD_VALUE(c->c_arena, pynum);
-        return __tinypy_ast_num(pynum, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_3 = __tinypy_ast_num(pynum, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_3;
     }
     case TINYPY_TOKEN_LEFT_PARENTHESIS: /* some parenthesized expressions */
         ch = TINYPY_CST_CHILD(n, 1);
 
         if (TINYPY_CST_TYPE(ch) == TINYPY_TOKEN_RIGHT_PARENTHESIS) {
-            return __tinypy_ast_tuple(NULL, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            tinypy_ast_expression_t return_value_4 = __tinypy_ast_tuple(NULL, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            return return_value_4;
         }
 
         if (TINYPY_CST_TYPE(ch) == TINYPY_GRAMMAR_YIELD_EXPR) {
-            return __ast_for_expr(c, ch);
+            tinypy_ast_expression_t return_value_5 = __ast_for_expr(c, ch);
+            return return_value_5;
         }
 
-        return __ast_for_testlist_comp(c, ch);
+        tinypy_ast_expression_t return_value_6 = __ast_for_testlist_comp(c, ch);
+        return return_value_6;
     case TINYPY_TOKEN_LEFT_BRACKET: /* list (or list comprehension) */
         ch = TINYPY_CST_CHILD(n, 1);
 
         if (TINYPY_CST_TYPE(ch) == TINYPY_TOKEN_RIGHT_BRACKET) {
-            return __tinypy_ast_list(NULL, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            tinypy_ast_expression_t return_value_7 = __tinypy_ast_list(NULL, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            return return_value_7;
         }
 
-        TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_LISTMAKER);
         if (TINYPY_CST_CHILD_COUNT(ch) == 1 || TINYPY_CST_TYPE(TINYPY_CST_CHILD(ch, 1)) == TINYPY_TOKEN_COMMA) {
             tinypy_ast_sequence_t *elts = __seq_for_testlist(c, ch);
             if (!elts) {
                 return NULL;
             }
 
-            return __tinypy_ast_list(elts, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            tinypy_ast_expression_t return_value_8 = __tinypy_ast_list(elts, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            return return_value_8;
         }
         else {
-            return __ast_for_listcomp(c, ch);
+            tinypy_ast_expression_t return_value_9 = __ast_for_listcomp(c, ch);
+            return return_value_9;
         }
     case TINYPY_TOKEN_LEFT_BRACE: {
         /* TINYPY_GRAMMAR_DICTORSETMAKER:
@@ -1432,7 +1403,8 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
         ch = TINYPY_CST_CHILD(n, 1);
         if (TINYPY_CST_TYPE(ch) == TINYPY_TOKEN_RIGHT_BRACE) {
             /* it's an empty dict */
-            return __tinypy_ast_dict(NULL, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            tinypy_ast_expression_t return_value_10 = __tinypy_ast_dict(NULL, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            return return_value_10;
         }
         else if (TINYPY_CST_CHILD_COUNT(ch) == 1 || TINYPY_CST_TYPE(TINYPY_CST_CHILD(ch, 1)) == TINYPY_TOKEN_COMMA) {
             /* it's a simple set */
@@ -1450,14 +1422,17 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
                 }
                 TINYPY_AST_SEQUENCE_SET(elts, i / 2, expression);
             }
-            return __tinypy_ast_set(elts, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            tinypy_ast_expression_t return_value_11 = __tinypy_ast_set(elts, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            return return_value_11;
         }
         else if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(ch, 1)) == TINYPY_GRAMMAR_COMP_FOR) {
             /* it's a set comprehension */
-            return __ast_for_setcomp(c, ch);
+            tinypy_ast_expression_t return_value_12 = __ast_for_setcomp(c, ch);
+            return return_value_12;
         }
         else if (TINYPY_CST_CHILD_COUNT(ch) > 3 && TINYPY_CST_TYPE(TINYPY_CST_CHILD(ch, 3)) == TINYPY_GRAMMAR_COMP_FOR) {
-            return __ast_for_dictcomp(c, ch);
+            tinypy_ast_expression_t return_value_13 = __ast_for_dictcomp(c, ch);
+            return return_value_13;
         }
         else {
             /* it's a dict */
@@ -1489,7 +1464,8 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
 
                 TINYPY_AST_SEQUENCE_SET(values, i / 4, expression);
             }
-            return __tinypy_ast_dict(keys, values, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            tinypy_ast_expression_t return_value_14 = __tinypy_ast_dict(keys, values, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            return return_value_14;
         }
     }
     case TINYPY_TOKEN_BACKQUOTE: { /* repr */
@@ -1499,7 +1475,8 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
             return NULL;
         }
 
-        return __tinypy_ast_repr(expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_15 = __tinypy_ast_repr(expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_15;
     }
     default:
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "unhandled TINYPY_GRAMMAR_ATOM %d", TINYPY_CST_TYPE(ch));
@@ -1510,14 +1487,13 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
 static tinypy_ast_slice_t __ast_for_slice(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     tinypy_ast_expression_t lower = NULL, upper = NULL, step = NULL;
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_SUBSCRIPT);
-
     /* TINYPY_GRAMMAR_SUBSCRIPT: '.' '.' '.' | TINYPY_GRAMMAR_TEST | [TINYPY_GRAMMAR_TEST] ':' [TINYPY_GRAMMAR_TEST] [TINYPY_GRAMMAR_SLICEOP]
        TINYPY_GRAMMAR_SLICEOP: ':' [TINYPY_GRAMMAR_TEST]
     */
     tinypy_cst_node_t *ch = TINYPY_CST_CHILD(n, 0);
     if (TINYPY_CST_TYPE(ch) == TINYPY_TOKEN_DOT) {
-        return __tinypy_ast_ellipsis(c->c_arena);
+        tinypy_ast_slice_t return_value_1 = __tinypy_ast_ellipsis(c->c_arena);
+        return return_value_1;
     }
 
     if (TINYPY_CST_CHILD_COUNT(n) == 1 && TINYPY_CST_TYPE(ch) == TINYPY_GRAMMAR_TEST) {
@@ -1528,7 +1504,8 @@ static tinypy_ast_slice_t __ast_for_slice(tinypy_ast_builder_t *c, const tinypy_
             return NULL;
         }
 
-        return __tinypy_ast_index(step, c->c_arena);
+        tinypy_ast_slice_t return_value_2 = __tinypy_ast_index(step, c->c_arena);
+        return return_value_2;
     }
 
     if (TINYPY_CST_TYPE(ch) == TINYPY_GRAMMAR_TEST) {
@@ -1591,7 +1568,8 @@ static tinypy_ast_slice_t __ast_for_slice(tinypy_ast_builder_t *c, const tinypy_
         }
     }
 
-    return __tinypy_ast_slice(lower, upper, step, c->c_arena);
+    tinypy_ast_slice_t return_value_3 = __tinypy_ast_slice(lower, upper, step, c->c_arena);
+    return return_value_3;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_binop(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
@@ -1656,14 +1634,15 @@ static tinypy_ast_expression_t __ast_for_trailer(tinypy_ast_builder_t *c, const 
        TINYPY_GRAMMAR_SUBSCRIPTLIST: TINYPY_GRAMMAR_SUBSCRIPT (',' TINYPY_GRAMMAR_SUBSCRIPT)* [',']
        TINYPY_GRAMMAR_SUBSCRIPT: '.' '.' '.' | TINYPY_GRAMMAR_TEST | [TINYPY_GRAMMAR_TEST] ':' [TINYPY_GRAMMAR_TEST] [TINYPY_GRAMMAR_SLICEOP]
      */
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_TRAILER);
     if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0)) == TINYPY_TOKEN_LEFT_PARENTHESIS) {
         if (TINYPY_CST_CHILD_COUNT(n) == 2) {
-            return __tinypy_ast_call(left_expr, NULL, NULL, NULL, NULL, TINYPY_AST_LINE_NUMBER(n),
-                                     n->column_offset, c->c_arena);
+            tinypy_ast_expression_t return_value_2 = __tinypy_ast_call(left_expr, NULL, NULL, NULL, NULL, TINYPY_AST_LINE_NUMBER(n),
+                                                 n->column_offset, c->c_arena);
+            return return_value_2;
         }
         else {
-            return __ast_for_call(c, TINYPY_CST_CHILD(n, 1), left_expr);
+            tinypy_ast_expression_t return_value_1 = __ast_for_call(c, TINYPY_CST_CHILD(n, 1), left_expr);
+            return return_value_1;
         }
     }
     else if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0)) == TINYPY_TOKEN_DOT) {
@@ -1671,20 +1650,20 @@ static tinypy_ast_expression_t __ast_for_trailer(tinypy_ast_builder_t *c, const 
         if (!attr_id) {
             return NULL;
         }
-        return __tinypy_ast_attribute(left_expr, attr_id, TINYPY_AST_CONTEXT_LOAD,
-                                      TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_3 = __tinypy_ast_attribute(left_expr, attr_id, TINYPY_AST_CONTEXT_LOAD,
+                                              TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_3;
     }
     else {
-        TINYPY_CST_REQUIRE(TINYPY_CST_CHILD(n, 0), TINYPY_TOKEN_LEFT_BRACKET);
-        TINYPY_CST_REQUIRE(TINYPY_CST_CHILD(n, 2), TINYPY_TOKEN_RIGHT_BRACKET);
         n = TINYPY_CST_CHILD(n, 1);
         if (TINYPY_CST_CHILD_COUNT(n) == 1) {
             tinypy_ast_slice_t slc = __ast_for_slice(c, TINYPY_CST_CHILD(n, 0));
             if (!slc) {
                 return NULL;
             }
-            return __tinypy_ast_subscript(left_expr, slc, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                          c->c_arena);
+            tinypy_ast_expression_t return_value_4 = __tinypy_ast_subscript(left_expr, slc, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                                      c->c_arena);
+            return return_value_4;
         }
         else {
             /* The grammar is ambiguous here. The ambiguity is resolved
@@ -1712,8 +1691,9 @@ static tinypy_ast_expression_t __ast_for_trailer(tinypy_ast_builder_t *c, const 
             }
             if (!simple) {
                 tinypy_ast_slice_t ast_ext_slice = __tinypy_ast_ext_slice(slices, c->c_arena);
-                return __tinypy_ast_subscript(left_expr, ast_ext_slice,
-                                              TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+                tinypy_ast_expression_t return_value_5 = __tinypy_ast_subscript(left_expr, ast_ext_slice,
+                                                              TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+                return return_value_5;
             }
             /* extract Index values and put them in a Tuple */
             elts = TINYPY_AST_SEQUENCE_NEW(TINYPY_AST_SEQUENCE_LENGTH(slices), c->c_arena);
@@ -1722,7 +1702,6 @@ static tinypy_ast_expression_t __ast_for_trailer(tinypy_ast_builder_t *c, const 
             }
             for (j = 0; j < TINYPY_AST_SEQUENCE_LENGTH(slices); ++j) {
                 slc = (tinypy_ast_slice_t)TINYPY_AST_SEQUENCE_GET(slices, j);
-                TINYPY_ASSERT(slc->kind == TINYPY_AST_KIND_INDEX && slc->v.Index.value);
                 TINYPY_AST_SEQUENCE_SET(elts, j, slc->v.Index.value);
             }
             e = __tinypy_ast_tuple(elts, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
@@ -1730,13 +1709,15 @@ static tinypy_ast_expression_t __ast_for_trailer(tinypy_ast_builder_t *c, const 
                 return NULL;
             }
             tinypy_ast_slice_t ast_index = __tinypy_ast_index(e, c->c_arena);
-            return __tinypy_ast_subscript(left_expr, ast_index,
-                                          TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            tinypy_ast_expression_t return_value_6 = __tinypy_ast_subscript(left_expr, ast_index,
+                                                      TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            return return_value_6;
         }
     }
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_factor(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
+    tinypy_ast_expression_t function_result;
     tinypy_cst_node_t *pfactor, *ppower, *patom, *pnum;
     tinypy_ast_expression_t expression;
 
@@ -1761,7 +1742,8 @@ static tinypy_ast_expression_t __ast_for_factor(tinypy_ast_builder_t *c, const t
         }
 
         TINYPY_COMPILER_ARENA_ADD_VALUE(c->c_arena, pynum);
-        return __tinypy_ast_num(pynum, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_1 = __tinypy_ast_num(pynum, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_1;
     }
 
     expression = __ast_for_expr(c, TINYPY_CST_CHILD(n, 1));
@@ -1771,14 +1753,17 @@ static tinypy_ast_expression_t __ast_for_factor(tinypy_ast_builder_t *c, const t
 
     switch (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0))) {
     case TINYPY_TOKEN_PLUS:
-        return __tinypy_ast_unary_op(TINYPY_AST_UNARY_ADD, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                     c->c_arena);
+        function_result = __tinypy_ast_unary_op(TINYPY_AST_UNARY_ADD, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                             c->c_arena);
+        return function_result;
     case TINYPY_TOKEN_MINUS:
-        return __tinypy_ast_unary_op(TINYPY_AST_UNARY_SUBTRACT, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                     c->c_arena);
+        function_result = __tinypy_ast_unary_op(TINYPY_AST_UNARY_SUBTRACT, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                             c->c_arena);
+        return function_result;
     case TINYPY_TOKEN_TILDE:
-        return __tinypy_ast_unary_op(TINYPY_AST_UNARY_INVERT, expression, TINYPY_AST_LINE_NUMBER(n),
-                                     n->column_offset, c->c_arena);
+        function_result = __tinypy_ast_unary_op(TINYPY_AST_UNARY_INVERT, expression, TINYPY_AST_LINE_NUMBER(n),
+                                             n->column_offset, c->c_arena);
+        return function_result;
     }
     TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "unhandled TINYPY_GRAMMAR_FACTOR: %d",
                                TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0)));
@@ -1789,7 +1774,6 @@ static tinypy_ast_expression_t __ast_for_power(tinypy_ast_builder_t *c, const ti
     /* TINYPY_GRAMMAR_POWER: TINYPY_GRAMMAR_ATOM TINYPY_GRAMMAR_TRAILER* ('**' TINYPY_GRAMMAR_FACTOR)*  */
     int32_t i;
     tinypy_ast_expression_t e, tmp;
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_POWER);
     e = __ast_for_atom(c, TINYPY_CST_CHILD(n, 0));
     if (!e) {
         return NULL;
@@ -1829,6 +1813,7 @@ static tinypy_ast_expression_t __ast_for_power(tinypy_ast_builder_t *c, const ti
 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_expr(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
+    tinypy_ast_expression_t function_result;
     /* handle the full range of simple expressions
        TINYPY_GRAMMAR_TEST: TINYPY_GRAMMAR_OR_TEST ['if' TINYPY_GRAMMAR_OR_TEST 'else' TINYPY_GRAMMAR_TEST] | TINYPY_GRAMMAR_LAMBDEF
        TINYPY_GRAMMAR_OR_TEST: TINYPY_GRAMMAR_AND_TEST ('or' TINYPY_GRAMMAR_AND_TEST)*
@@ -1862,10 +1847,12 @@ loop:
     case TINYPY_GRAMMAR_TEST:
     case TINYPY_GRAMMAR_OLD_TEST:
         if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0)) == TINYPY_GRAMMAR_LAMBDEF || TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0)) == TINYPY_GRAMMAR_OLD_LAMBDEF) {
-            return __ast_for_lambdef(c, TINYPY_CST_CHILD(n, 0));
+            tinypy_ast_expression_t return_value_1 = __ast_for_lambdef(c, TINYPY_CST_CHILD(n, 0));
+            return return_value_1;
         }
         else if (TINYPY_CST_CHILD_COUNT(n) > 1) {
-            return __ast_for_ifexpr(c, n);
+            tinypy_ast_expression_t return_value_2 = __ast_for_ifexpr(c, n);
+            return return_value_2;
         }
         /* Fallthrough */
     case TINYPY_GRAMMAR_OR_TEST:
@@ -1886,11 +1873,12 @@ loop:
             TINYPY_AST_SEQUENCE_SET(seq, i / 2, e);
         }
         if (!strcmp(TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 1)), "and")) {
-            return __tinypy_ast_bool_op(TINYPY_AST_BOOLEAN_AND, seq, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                        c->c_arena);
+            tinypy_ast_expression_t return_value_7 = __tinypy_ast_bool_op(TINYPY_AST_BOOLEAN_AND, seq, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                                    c->c_arena);
+            return return_value_7;
         }
-        TINYPY_ASSERT(!strcmp(TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 1)), "or"));
-        return __tinypy_ast_bool_op(TINYPY_AST_BOOLEAN_OR, seq, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_3 = __tinypy_ast_bool_op(TINYPY_AST_BOOLEAN_OR, seq, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_3;
     case TINYPY_GRAMMAR_NOT_TEST:
         if (TINYPY_CST_CHILD_COUNT(n) == 1) {
             n = TINYPY_CST_CHILD(n, 0);
@@ -1902,8 +1890,9 @@ loop:
                 return NULL;
             }
 
-            return __tinypy_ast_unary_op(TINYPY_AST_UNARY_NOT, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                         c->c_arena);
+            tinypy_ast_expression_t return_value_8 = __tinypy_ast_unary_op(TINYPY_AST_UNARY_NOT, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                                     c->c_arena);
+            return return_value_8;
         }
     case TINYPY_GRAMMAR_COMPARISON:
         if (TINYPY_CST_CHILD_COUNT(n) == 1) {
@@ -1943,8 +1932,9 @@ loop:
                 return NULL;
             }
 
-            return __tinypy_ast_compare(expression, ops, cmps, TINYPY_AST_LINE_NUMBER(n),
-                                        n->column_offset, c->c_arena);
+            tinypy_ast_expression_t return_value_9 = __tinypy_ast_compare(expression, ops, cmps, TINYPY_AST_LINE_NUMBER(n),
+                                                    n->column_offset, c->c_arena);
+            return return_value_9;
         }
         break;
 
@@ -1962,7 +1952,8 @@ loop:
             n = TINYPY_CST_CHILD(n, 0);
             goto loop;
         }
-        return __ast_for_binop(c, n);
+        tinypy_ast_expression_t return_value_4 = __ast_for_binop(c, n);
+        return return_value_4;
     case TINYPY_GRAMMAR_YIELD_EXPR: {
         tinypy_ast_expression_t exp = NULL;
         if (TINYPY_CST_CHILD_COUNT(n) == 2) {
@@ -1971,16 +1962,19 @@ loop:
                 return NULL;
             }
         }
-        return __tinypy_ast_yield(exp, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_5 = __tinypy_ast_yield(exp, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_5;
     }
     case TINYPY_GRAMMAR_FACTOR:
         if (TINYPY_CST_CHILD_COUNT(n) == 1) {
             n = TINYPY_CST_CHILD(n, 0);
             goto loop;
         }
-        return __ast_for_factor(c, n);
+        tinypy_ast_expression_t return_value_6 = __ast_for_factor(c, n);
+        return return_value_6;
     case TINYPY_GRAMMAR_POWER:
-        return __ast_for_power(c, n);
+        function_result = __ast_for_power(c, n);
+        return function_result;
     default:
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR, "unhandled TINYPY_GRAMMAR_EXPR: %d", TINYPY_CST_TYPE(n));
         return NULL;
@@ -1997,8 +1991,6 @@ static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *c, const tin
 
     int32_t i, nargs, nkeywords, ngens;
     tinypy_ast_expression_t vararg = NULL, kwarg = NULL;
-
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_ARGLIST);
 
     nargs = 0;
     nkeywords = 0;
@@ -2130,8 +2122,9 @@ static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *c, const tin
         }
     }
 
-    return __tinypy_ast_call(func, args, keywords, vararg, kwarg, func->lineno,
-                             func->col_offset, c->c_arena);
+    tinypy_ast_expression_t return_value_1 = __tinypy_ast_call(func, args, keywords, vararg, kwarg, func->lineno,
+                                 func->col_offset, c->c_arena);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_testlist(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
@@ -2139,43 +2132,35 @@ static tinypy_ast_expression_t __ast_for_testlist(tinypy_ast_builder_t *c, const
     /* TINYPY_GRAMMAR_TESTLIST: TINYPY_GRAMMAR_TEST (',' TINYPY_GRAMMAR_TEST)* [','] */
     /* TINYPY_GRAMMAR_TESTLIST_SAFE: TINYPY_GRAMMAR_TEST (',' TINYPY_GRAMMAR_TEST)+ [','] */
     /* TINYPY_GRAMMAR_TESTLIST1: TINYPY_GRAMMAR_TEST (',' TINYPY_GRAMMAR_TEST)* */
-    TINYPY_ASSERT(TINYPY_CST_CHILD_COUNT(n) > 0);
-    if (TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST_COMP) {
-        if (TINYPY_CST_CHILD_COUNT(n) > 1) {
-            TINYPY_ASSERT(TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 1)) != TINYPY_GRAMMAR_COMP_FOR);
-        }
-    }
-    else {
-        TINYPY_ASSERT(TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST_SAFE || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST1);
-    }
     if (TINYPY_CST_CHILD_COUNT(n) == 1) {
-        return __ast_for_expr(c, TINYPY_CST_CHILD(n, 0));
+        tinypy_ast_expression_t return_value_1 = __ast_for_expr(c, TINYPY_CST_CHILD(n, 0));
+        return return_value_1;
     }
     else {
         tinypy_ast_sequence_t *tmp = __seq_for_testlist(c, n);
         if (!tmp) {
             return NULL;
         }
-        return __tinypy_ast_tuple(tmp, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_expression_t return_value_2 = __tinypy_ast_tuple(tmp, TINYPY_AST_CONTEXT_LOAD, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_2;
     }
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_testlist_comp(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     /* TINYPY_GRAMMAR_TESTLIST_COMP: TINYPY_GRAMMAR_TEST ( TINYPY_GRAMMAR_COMP_FOR | (',' TINYPY_GRAMMAR_TEST)* [','] ) */
     /* TINYPY_GRAMMAR_ARGUMENT: TINYPY_GRAMMAR_TEST [ TINYPY_GRAMMAR_COMP_FOR ] */
-    TINYPY_ASSERT(TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_TESTLIST_COMP || TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_ARGUMENT);
     if (TINYPY_CST_CHILD_COUNT(n) > 1 && TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 1)) == TINYPY_GRAMMAR_COMP_FOR) {
-        return __ast_for_genexp(c, n);
+        tinypy_ast_expression_t return_value_1 = __ast_for_genexp(c, n);
+        return return_value_1;
     }
-    return __ast_for_testlist(c, n);
+    tinypy_ast_expression_t return_value_2 = __ast_for_testlist(c, n);
+    return return_value_2;
 }
 
 /* like __ast_for_testlist() but returns a sequence */
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__ast_for_class_bases(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     /* TINYPY_GRAMMAR_TESTLIST: TINYPY_GRAMMAR_TEST (',' TINYPY_GRAMMAR_TEST)* [','] */
-    TINYPY_ASSERT(TINYPY_CST_CHILD_COUNT(n) > 0);
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_TESTLIST);
     if (TINYPY_CST_CHILD_COUNT(n) == 1) {
         tinypy_ast_expression_t base;
         tinypy_ast_sequence_t *bases = TINYPY_AST_SEQUENCE_NEW(1, c->c_arena);
@@ -2190,11 +2175,11 @@ static tinypy_ast_sequence_t *__ast_for_class_bases(tinypy_ast_builder_t *c, con
         return bases;
     }
 
-    return __seq_for_testlist(c, n);
+    tinypy_ast_sequence_t *return_value_1 = __seq_for_testlist(c, n);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_expr_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_EXPR_STMT);
     /* TINYPY_GRAMMAR_EXPR_STMT: TINYPY_GRAMMAR_TESTLIST (TINYPY_GRAMMAR_AUGASSIGN (TINYPY_GRAMMAR_YIELD_EXPR|TINYPY_GRAMMAR_TESTLIST)
                 | ('=' (TINYPY_GRAMMAR_YIELD_EXPR|TINYPY_GRAMMAR_TESTLIST))*)
        TINYPY_GRAMMAR_TESTLIST: TINYPY_GRAMMAR_TEST (',' TINYPY_GRAMMAR_TEST)* [',']
@@ -2209,7 +2194,8 @@ static tinypy_ast_statement_t __ast_for_expr_stmt(tinypy_ast_builder_t *c, const
             return NULL;
         }
 
-        return __tinypy_ast_expr(e, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_statement_t return_value_1 = __tinypy_ast_expr(e, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_1;
     }
     else if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 1)) == TINYPY_GRAMMAR_AUGASSIGN) {
         tinypy_ast_expression_t expr1, expr2;
@@ -2253,8 +2239,9 @@ static tinypy_ast_statement_t __ast_for_expr_stmt(tinypy_ast_builder_t *c, const
             return NULL;
         }
 
-        return __tinypy_ast_aug_assign(expr1, newoperator, expr2, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                       c->c_arena);
+        tinypy_ast_statement_t return_value_2 = __tinypy_ast_aug_assign(expr1, newoperator, expr2, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                               c->c_arena);
+        return return_value_2;
     }
     else {
         int32_t i;
@@ -2263,7 +2250,6 @@ static tinypy_ast_statement_t __ast_for_expr_stmt(tinypy_ast_builder_t *c, const
         tinypy_ast_expression_t expression;
 
         /* a normal assignment */
-        TINYPY_CST_REQUIRE(TINYPY_CST_CHILD(n, 1), TINYPY_TOKEN_EQUAL);
         targets = TINYPY_AST_SEQUENCE_NEW(TINYPY_CST_CHILD_COUNT(n) / 2, c->c_arena);
         if (!targets) {
             return NULL;
@@ -2297,8 +2283,9 @@ static tinypy_ast_statement_t __ast_for_expr_stmt(tinypy_ast_builder_t *c, const
         if (!expression) {
             return NULL;
         }
-        return __tinypy_ast_assign(targets, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                   c->c_arena);
+        tinypy_ast_statement_t return_value_3 = __tinypy_ast_assign(targets, expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                           c->c_arena);
+        return return_value_3;
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2311,7 +2298,6 @@ static tinypy_ast_statement_t __ast_for_print_stmt(tinypy_ast_builder_t *c, cons
     tinypy_compiler_boolean_e nl;
     int32_t i, j, values_count, start = 1;
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_PRINT_STMT);
     if (TINYPY_CST_CHILD_COUNT(n) >= 2 && TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 1)) == TINYPY_TOKEN_RIGHT_SHIFT) {
         dest = __ast_for_expr(c, TINYPY_CST_CHILD(n, 2));
         if (!dest) {
@@ -2334,14 +2320,13 @@ static tinypy_ast_statement_t __ast_for_print_stmt(tinypy_ast_builder_t *c, cons
         }
     }
     nl = (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, TINYPY_CST_CHILD_COUNT(n) - 1)) == TINYPY_TOKEN_COMMA) ? TINYPY_COMPILER_FALSE : TINYPY_COMPILER_TRUE;
-    return __tinypy_ast_print(dest, seq, nl, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    tinypy_ast_statement_t return_value_1 = __tinypy_ast_print(dest, seq, nl, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_sequence_t *__ast_for_exprlist(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, tinypy_ast_expression_context_e context) {
     int32_t i;
     tinypy_ast_expression_t e;
-
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_EXPRLIST);
 
     tinypy_ast_sequence_t *seq = TINYPY_AST_SEQUENCE_NEW((TINYPY_CST_CHILD_COUNT(n) + 1) / 2, c->c_arena);
     if (!seq) {
@@ -2363,16 +2348,17 @@ static tinypy_ast_sequence_t *__ast_for_exprlist(tinypy_ast_builder_t *c, const 
 static tinypy_ast_statement_t __ast_for_del_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
 
     /* TINYPY_GRAMMAR_DEL_STMT: 'del' TINYPY_GRAMMAR_EXPRLIST */
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_DEL_STMT);
 
     tinypy_ast_sequence_t *expr_list = __ast_for_exprlist(c, TINYPY_CST_CHILD(n, 1), TINYPY_AST_CONTEXT_DELETE);
     if (!expr_list) {
         return NULL;
     }
-    return __tinypy_ast_delete(expr_list, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    tinypy_ast_statement_t return_value_1 = __tinypy_ast_delete(expr_list, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_flow_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
+    tinypy_ast_statement_t function_result;
     /* TINYPY_GRAMMAR_FLOW_STMT: TINYPY_GRAMMAR_BREAK_STMT | TINYPY_GRAMMAR_CONTINUE_STMT | TINYPY_GRAMMAR_RETURN_STMT | TINYPY_GRAMMAR_RAISE_STMT
                  | TINYPY_GRAMMAR_YIELD_STMT
       TINYPY_GRAMMAR_BREAK_STMT: 'break'
@@ -2383,44 +2369,50 @@ static tinypy_ast_statement_t __ast_for_flow_stmt(tinypy_ast_builder_t *c, const
       TINYPY_GRAMMAR_RAISE_STMT: 'raise' [TINYPY_GRAMMAR_TEST [',' TINYPY_GRAMMAR_TEST [',' TINYPY_GRAMMAR_TEST]]]
     */
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_FLOW_STMT);
     tinypy_cst_node_t *ch = TINYPY_CST_CHILD(n, 0);
     switch (TINYPY_CST_TYPE(ch)) {
     case TINYPY_GRAMMAR_BREAK_STMT:
-        return __tinypy_ast_break(TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        function_result = __tinypy_ast_break(TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return function_result;
     case TINYPY_GRAMMAR_CONTINUE_STMT:
-        return __tinypy_ast_continue(TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        function_result = __tinypy_ast_continue(TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return function_result;
     case TINYPY_GRAMMAR_YIELD_STMT: { /* will reduce to TINYPY_GRAMMAR_YIELD_EXPR */
         tinypy_ast_expression_t exp = __ast_for_expr(c, TINYPY_CST_CHILD(ch, 0));
         if (!exp) {
             return NULL;
         }
-        return __tinypy_ast_expr(exp, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_statement_t return_value_1 = __tinypy_ast_expr(exp, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_1;
     }
     case TINYPY_GRAMMAR_RETURN_STMT:
         if (TINYPY_CST_CHILD_COUNT(ch) == 1) {
-            return __tinypy_ast_return(NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            tinypy_ast_statement_t return_value_2 = __tinypy_ast_return(NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            return return_value_2;
         }
         else {
             tinypy_ast_expression_t expression = __ast_for_testlist(c, TINYPY_CST_CHILD(ch, 1));
             if (!expression) {
                 return NULL;
             }
-            return __tinypy_ast_return(expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                       c->c_arena);
+            tinypy_ast_statement_t return_value_3 = __tinypy_ast_return(expression, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                                   c->c_arena);
+            return return_value_3;
         }
     case TINYPY_GRAMMAR_RAISE_STMT:
         if (TINYPY_CST_CHILD_COUNT(ch) == 1) {
-            return __tinypy_ast_raise(NULL, NULL, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                      c->c_arena);
+            tinypy_ast_statement_t return_value_4 = __tinypy_ast_raise(NULL, NULL, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                                  c->c_arena);
+            return return_value_4;
         }
         else if (TINYPY_CST_CHILD_COUNT(ch) == 2) {
             tinypy_ast_expression_t expression = __ast_for_expr(c, TINYPY_CST_CHILD(ch, 1));
             if (!expression) {
                 return NULL;
             }
-            return __tinypy_ast_raise(expression, NULL, NULL, TINYPY_AST_LINE_NUMBER(n),
-                                      n->column_offset, c->c_arena);
+            tinypy_ast_statement_t return_value_5 = __tinypy_ast_raise(expression, NULL, NULL, TINYPY_AST_LINE_NUMBER(n),
+                                                  n->column_offset, c->c_arena);
+            return return_value_5;
         }
         else if (TINYPY_CST_CHILD_COUNT(ch) == 4) {
             tinypy_ast_expression_t expr1, expr2;
@@ -2434,8 +2426,9 @@ static tinypy_ast_statement_t __ast_for_flow_stmt(tinypy_ast_builder_t *c, const
                 return NULL;
             }
 
-            return __tinypy_ast_raise(expr1, expr2, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                      c->c_arena);
+            tinypy_ast_statement_t return_value_6 = __tinypy_ast_raise(expr1, expr2, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                                  c->c_arena);
+            return return_value_6;
         }
         else if (TINYPY_CST_CHILD_COUNT(ch) == 6) {
             tinypy_ast_expression_t expr1, expr2, expr3;
@@ -2453,8 +2446,9 @@ static tinypy_ast_statement_t __ast_for_flow_stmt(tinypy_ast_builder_t *c, const
                 return NULL;
             }
 
-            return __tinypy_ast_raise(expr1, expr2, expr3, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                      c->c_arena);
+            tinypy_ast_statement_t return_value_7 = __tinypy_ast_raise(expr1, expr2, expr3, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                                  c->c_arena);
+            return return_value_7;
         }
     default:
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
@@ -2496,7 +2490,8 @@ loop:
         if (!name) {
             return NULL;
         }
-        return __tinypy_ast_alias(name, str, c->c_arena);
+        tinypy_ast_alias_t return_value_1 = __tinypy_ast_alias(name, str, c->c_arena);
+        return return_value_1;
     }
     case TINYPY_GRAMMAR_DOTTED_AS_NAME:
         if (TINYPY_CST_CHILD_COUNT(n) == 1) {
@@ -2509,7 +2504,6 @@ loop:
             if (!a) {
                 return NULL;
             }
-            TINYPY_ASSERT(!a->asname);
             if (!__forbidden_check(c, asname_node, TINYPY_CST_TEXT(asname_node))) {
                 return NULL;
             }
@@ -2530,7 +2524,8 @@ loop:
             if (!name) {
                 return NULL;
             }
-            return __tinypy_ast_alias(name, NULL, c->c_arena);
+            tinypy_ast_alias_t return_value_2 = __tinypy_ast_alias(name, NULL, c->c_arena);
+            return return_value_2;
         }
         else {
             /* Create a string of the form "a.b.c" */
@@ -2547,22 +2542,22 @@ loop:
             s = (char *)TINYPY_COMPILER_ARENA_MALLOC(c->c_arena, len + 1U);
             if (!s) {
                 return NULL;
-            } {
-                char *write = s;
-                for (i = 0; i < TINYPY_CST_CHILD_COUNT(n); i += 2) {
-                    char *sch = TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, i));
-                    size_t component_size = strlen(sch);
-                    (void)memcpy(write, sch, component_size);
-                    write += component_size;
-                    *write++ = '.';
-                }
-                write[-1] = '\0';
             }
+            char *write = s;
+            for (i = 0; i < TINYPY_CST_CHILD_COUNT(n); i += 2) {
+                char *sch = TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, i));
+                size_t component_size = strlen(sch);
+                (void)memcpy(write, sch, component_size);
+                write += component_size;
+                *write++ = '.';
+            }
+            write[-1] = '\0';
             str = __new_identifier(s, c->c_arena);
             if (!str) {
                 return NULL;
             }
-            return __tinypy_ast_alias(str, NULL, c->c_arena);
+            tinypy_ast_alias_t return_value_3 = __tinypy_ast_alias(str, NULL, c->c_arena);
+            return return_value_3;
         }
         break;
     case TINYPY_TOKEN_STAR:
@@ -2570,7 +2565,8 @@ loop:
         if (!str) {
             return NULL;
         }
-        return __tinypy_ast_alias(str, NULL, c->c_arena);
+        tinypy_ast_alias_t return_value_4 = __tinypy_ast_alias(str, NULL, c->c_arena);
+        return return_value_4;
     default:
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                    "unexpected import name: %d", TINYPY_CST_TYPE(n));
@@ -2592,13 +2588,11 @@ static tinypy_ast_statement_t __ast_for_import_stmt(tinypy_ast_builder_t *c, con
     int32_t i;
     tinypy_ast_sequence_t *aliases;
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_IMPORT_STMT);
     lineno = TINYPY_AST_LINE_NUMBER(n);
     col_offset = n->column_offset;
     n = TINYPY_CST_CHILD(n, 0);
     if (TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_IMPORT_NAME) {
         n = TINYPY_CST_CHILD(n, 1);
-        TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_DOTTED_AS_NAMES);
         aliases = TINYPY_AST_SEQUENCE_NEW((TINYPY_CST_CHILD_COUNT(n) + 1) / 2, c->c_arena);
         if (!aliases) {
             return NULL;
@@ -2610,7 +2604,8 @@ static tinypy_ast_statement_t __ast_for_import_stmt(tinypy_ast_builder_t *c, con
             }
             TINYPY_AST_SEQUENCE_SET(aliases, i / 2, import_alias);
         }
-        return __tinypy_ast_import(aliases, lineno, col_offset, c->c_arena);
+        tinypy_ast_statement_t return_value_1 = __tinypy_ast_import(aliases, lineno, col_offset, c->c_arena);
+        return return_value_1;
     }
     else if (TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_IMPORT_FROM) {
         int32_t n_children;
@@ -2686,8 +2681,9 @@ static tinypy_ast_statement_t __ast_for_import_stmt(tinypy_ast_builder_t *c, con
         if (mod != NULL) {
             modname = mod->name;
         }
-        return __tinypy_ast_import_from(modname, aliases, ndots, lineno, col_offset,
-                                        c->c_arena);
+        tinypy_ast_statement_t return_value_2 = __tinypy_ast_import_from(modname, aliases, ndots, lineno, col_offset,
+                                                c->c_arena);
+        return return_value_2;
     }
     TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                "unknown import statement: starts with command '%s'",
@@ -2700,7 +2696,6 @@ static tinypy_ast_statement_t __ast_for_global_stmt(tinypy_ast_builder_t *c, con
     tinypy_ast_identifier_t name;
     int32_t i;
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_GLOBAL_STMT);
     tinypy_ast_sequence_t *s = TINYPY_AST_SEQUENCE_NEW(TINYPY_CST_CHILD_COUNT(n) / 2, c->c_arena);
     if (!s) {
         return NULL;
@@ -2712,7 +2707,8 @@ static tinypy_ast_statement_t __ast_for_global_stmt(tinypy_ast_builder_t *c, con
         }
         TINYPY_AST_SEQUENCE_SET(s, i / 2, name);
     }
-    return __tinypy_ast_global(s, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    tinypy_ast_statement_t return_value_1 = __tinypy_ast_global(s, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_exec_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
@@ -2726,7 +2722,6 @@ static tinypy_ast_statement_t __ast_for_exec_stmt(tinypy_ast_builder_t *c, const
     }
 
     /* TINYPY_GRAMMAR_EXEC_STMT: 'exec' TINYPY_GRAMMAR_EXPR ['in' TINYPY_GRAMMAR_TEST [',' TINYPY_GRAMMAR_TEST]] */
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_EXEC_STMT);
     expr1 = __ast_for_expr(c, TINYPY_CST_CHILD(n, 1));
     if (!expr1) {
         return NULL;
@@ -2754,20 +2749,21 @@ static tinypy_ast_statement_t __ast_for_exec_stmt(tinypy_ast_builder_t *c, const
         }
     }
 
-    return __tinypy_ast_exec(expr1, globals, locals, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                             c->c_arena);
+    tinypy_ast_statement_t return_value_1 = __tinypy_ast_exec(expr1, globals, locals, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                 c->c_arena);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_assert_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     /* TINYPY_GRAMMAR_ASSERT_STMT: 'assert' TINYPY_GRAMMAR_TEST [',' TINYPY_GRAMMAR_TEST] */
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_ASSERT_STMT);
     if (TINYPY_CST_CHILD_COUNT(n) == 2) {
         tinypy_ast_expression_t expression = __ast_for_expr(c, TINYPY_CST_CHILD(n, 1));
         if (!expression) {
             return NULL;
         }
-        return __tinypy_ast_assert(expression, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                   c->c_arena);
+        tinypy_ast_statement_t return_value_2 = __tinypy_ast_assert(expression, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                           c->c_arena);
+        return return_value_2;
     }
     else if (TINYPY_CST_CHILD_COUNT(n) == 4) {
         tinypy_ast_expression_t expr1, expr2;
@@ -2781,7 +2777,8 @@ static tinypy_ast_statement_t __ast_for_assert_stmt(tinypy_ast_builder_t *c, con
             return NULL;
         }
 
-        return __tinypy_ast_assert(expr1, expr2, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_statement_t return_value_1 = __tinypy_ast_assert(expr1, expr2, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_1;
     }
     TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                "improper number of parts to 'assert' statement: %d",
@@ -2794,8 +2791,6 @@ static tinypy_ast_sequence_t *__ast_for_suite(tinypy_ast_builder_t *c, const tin
     tinypy_ast_statement_t s;
     int32_t i, total, num, end, pos = 0;
     tinypy_cst_node_t *ch;
-
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_SUITE);
 
     total = __num_stmts(n);
     tinypy_ast_sequence_t *seq = TINYPY_AST_SEQUENCE_NEW(total, c->c_arena);
@@ -2824,7 +2819,6 @@ static tinypy_ast_sequence_t *__ast_for_suite(tinypy_ast_builder_t *c, const tin
     else {
         for (i = 2; i < (TINYPY_CST_CHILD_COUNT(n) - 1); i++) {
             ch = TINYPY_CST_CHILD(n, i);
-            TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_STMT);
             num = __num_stmts(ch);
             if (num == 1) {
                 /* TINYPY_GRAMMAR_SMALL_STMT or TINYPY_GRAMMAR_COMPOUND_STMT with only one child */
@@ -2837,11 +2831,9 @@ static tinypy_ast_sequence_t *__ast_for_suite(tinypy_ast_builder_t *c, const tin
             else {
                 int32_t j;
                 ch = TINYPY_CST_CHILD(ch, 0);
-                TINYPY_CST_REQUIRE(ch, TINYPY_GRAMMAR_SIMPLE_STMT);
                 for (j = 0; j < TINYPY_CST_CHILD_COUNT(ch); j += 2) {
                     /* statement terminates with a semi-colon ';' */
                     if (TINYPY_CST_CHILD_COUNT(TINYPY_CST_CHILD(ch, j)) == 0) {
-                        TINYPY_ASSERT((j + 1) == TINYPY_CST_CHILD_COUNT(ch));
                         break;
                     }
                     s = __ast_for_stmt(c, TINYPY_CST_CHILD(ch, j));
@@ -2853,7 +2845,6 @@ static tinypy_ast_sequence_t *__ast_for_suite(tinypy_ast_builder_t *c, const tin
             }
         }
     }
-    TINYPY_ASSERT(pos == seq->size);
     return seq;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2861,8 +2852,6 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
     /* TINYPY_GRAMMAR_IF_STMT: 'if' TINYPY_GRAMMAR_TEST ':' TINYPY_GRAMMAR_SUITE ('elif' TINYPY_GRAMMAR_TEST ':' TINYPY_GRAMMAR_SUITE)* ['else' ':' TINYPY_GRAMMAR_SUITE]
     */
     char *s;
-
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_IF_STMT);
 
     if (TINYPY_CST_CHILD_COUNT(n) == 4) {
         tinypy_ast_expression_t expression;
@@ -2877,8 +2866,9 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
             return NULL;
         }
 
-        return __tinypy_ast_if(expression, suite_seq, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                               c->c_arena);
+        tinypy_ast_statement_t return_value_1 = __tinypy_ast_if(expression, suite_seq, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                       c->c_arena);
+        return return_value_1;
     }
 
     s = TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 4));
@@ -2903,11 +2893,13 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
             return NULL;
         }
 
-        return __tinypy_ast_if(expression, seq1, seq2, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                               c->c_arena);
+        tinypy_ast_statement_t return_value_2 = __tinypy_ast_if(expression, seq1, seq2, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                       c->c_arena);
+        return return_value_2;
     }
     else if (s[2] == 'i') {
-        int32_t i, n_elif, has_else = 0;
+        int32_t i, n_elif;
+        tinypy_bool_t has_else = TINYPY_FALSE;
         tinypy_ast_expression_t expression;
         tinypy_ast_sequence_t *suite_seq;
         tinypy_ast_sequence_t *orelse = NULL;
@@ -2978,8 +2970,9 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
         if (!suite_seq) {
             return NULL;
         }
-        return __tinypy_ast_if(expression, suite_seq, orelse,
-                               TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        tinypy_ast_statement_t return_value_3 = __tinypy_ast_if(expression, suite_seq, orelse,
+                                       TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+        return return_value_3;
     }
 
     TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
@@ -2989,7 +2982,6 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_while_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     /* TINYPY_GRAMMAR_WHILE_STMT: 'while' TINYPY_GRAMMAR_TEST ':' TINYPY_GRAMMAR_SUITE ['else' ':' TINYPY_GRAMMAR_SUITE] */
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_WHILE_STMT);
 
     if (TINYPY_CST_CHILD_COUNT(n) == 4) {
         tinypy_ast_expression_t expression;
@@ -3003,8 +2995,9 @@ static tinypy_ast_statement_t __ast_for_while_stmt(tinypy_ast_builder_t *c, cons
         if (!suite_seq) {
             return NULL;
         }
-        return __tinypy_ast_while(expression, suite_seq, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                  c->c_arena);
+        tinypy_ast_statement_t return_value_1 = __tinypy_ast_while(expression, suite_seq, NULL, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                          c->c_arena);
+        return return_value_1;
     }
     else if (TINYPY_CST_CHILD_COUNT(n) == 7) {
         tinypy_ast_expression_t expression;
@@ -3023,8 +3016,9 @@ static tinypy_ast_statement_t __ast_for_while_stmt(tinypy_ast_builder_t *c, cons
             return NULL;
         }
 
-        return __tinypy_ast_while(expression, seq1, seq2, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                                  c->c_arena);
+        tinypy_ast_statement_t return_value_2 = __tinypy_ast_while(expression, seq1, seq2, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                          c->c_arena);
+        return return_value_2;
     }
 
     TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
@@ -3038,7 +3032,6 @@ static tinypy_ast_statement_t __ast_for_for_stmt(tinypy_ast_builder_t *c, const 
     tinypy_ast_expression_t expression;
     tinypy_ast_expression_t target, first;
     /* TINYPY_GRAMMAR_FOR_STMT: 'for' TINYPY_GRAMMAR_EXPRLIST 'in' TINYPY_GRAMMAR_TESTLIST ':' TINYPY_GRAMMAR_SUITE ['else' ':' TINYPY_GRAMMAR_SUITE] */
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_FOR_STMT);
 
     if (TINYPY_CST_CHILD_COUNT(n) == 9) {
         seq = __ast_for_suite(c, TINYPY_CST_CHILD(n, 8));
@@ -3071,14 +3064,13 @@ static tinypy_ast_statement_t __ast_for_for_stmt(tinypy_ast_builder_t *c, const 
         return NULL;
     }
 
-    return __tinypy_ast_for(target, expression, suite_seq, seq, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
-                            c->c_arena);
+    tinypy_ast_statement_t return_value_1 = __tinypy_ast_for(target, expression, suite_seq, seq, TINYPY_AST_LINE_NUMBER(n), n->column_offset,
+                                c->c_arena);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_exception_handler_t __ast_for_except_clause(tinypy_ast_builder_t *c, const tinypy_cst_node_t *exc, tinypy_cst_node_t *body) {
     /* TINYPY_GRAMMAR_EXCEPT_CLAUSE: 'except' [TINYPY_GRAMMAR_TEST [(',' | 'as') TINYPY_GRAMMAR_TEST]] */
-    TINYPY_CST_REQUIRE(exc, TINYPY_GRAMMAR_EXCEPT_CLAUSE);
-    TINYPY_CST_REQUIRE(body, TINYPY_GRAMMAR_SUITE);
 
     if (TINYPY_CST_CHILD_COUNT(exc) == 1) {
         tinypy_ast_sequence_t *suite_seq = __ast_for_suite(c, body);
@@ -3086,8 +3078,9 @@ static tinypy_ast_exception_handler_t __ast_for_except_clause(tinypy_ast_builder
             return NULL;
         }
 
-        return __tinypy_ast_except_handler(NULL, NULL, suite_seq, TINYPY_AST_LINE_NUMBER(exc),
-                                           exc->column_offset, c->c_arena);
+        tinypy_ast_exception_handler_t return_value_1 = __tinypy_ast_except_handler(NULL, NULL, suite_seq, TINYPY_AST_LINE_NUMBER(exc),
+                                                   exc->column_offset, c->c_arena);
+        return return_value_1;
     }
     else if (TINYPY_CST_CHILD_COUNT(exc) == 2) {
         tinypy_ast_expression_t expression;
@@ -3102,8 +3095,9 @@ static tinypy_ast_exception_handler_t __ast_for_except_clause(tinypy_ast_builder
             return NULL;
         }
 
-        return __tinypy_ast_except_handler(expression, NULL, suite_seq, TINYPY_AST_LINE_NUMBER(exc),
-                                           exc->column_offset, c->c_arena);
+        tinypy_ast_exception_handler_t return_value_2 = __tinypy_ast_except_handler(expression, NULL, suite_seq, TINYPY_AST_LINE_NUMBER(exc),
+                                                   exc->column_offset, c->c_arena);
+        return return_value_2;
     }
     else if (TINYPY_CST_CHILD_COUNT(exc) == 4) {
         tinypy_ast_sequence_t *suite_seq;
@@ -3124,8 +3118,9 @@ static tinypy_ast_exception_handler_t __ast_for_except_clause(tinypy_ast_builder
             return NULL;
         }
 
-        return __tinypy_ast_except_handler(expression, e, suite_seq, TINYPY_AST_LINE_NUMBER(exc),
-                                           exc->column_offset, c->c_arena);
+        tinypy_ast_exception_handler_t return_value_3 = __tinypy_ast_except_handler(expression, e, suite_seq, TINYPY_AST_LINE_NUMBER(exc),
+                                                   exc->column_offset, c->c_arena);
+        return return_value_3;
     }
 
     TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
@@ -3138,8 +3133,6 @@ static tinypy_ast_statement_t __ast_for_try_stmt(tinypy_ast_builder_t *c, const 
     const int32_t nch = TINYPY_CST_CHILD_COUNT(n);
     int32_t n_except = (nch - 3) / 3;
     tinypy_ast_sequence_t *body, *orelse = NULL, *finally = NULL;
-
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_TRY_STMT);
 
     body = __ast_for_suite(c, TINYPY_CST_CHILD(n, 2));
     if (body == NULL) {
@@ -3214,8 +3207,8 @@ static tinypy_ast_statement_t __ast_for_try_stmt(tinypy_ast_builder_t *c, const 
     }
 
     /* must be a try ... finally (except clauses are in body, if any exist) */
-    TINYPY_ASSERT(finally != NULL);
-    return __tinypy_ast_try_finally(body, finally, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    tinypy_ast_statement_t return_value_1 = __tinypy_ast_try_finally(body, finally, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    return return_value_1;
 }
 
 /* TINYPY_GRAMMAR_WITH_ITEM: TINYPY_GRAMMAR_TEST ['as' TINYPY_GRAMMAR_EXPR] */
@@ -3223,7 +3216,6 @@ static tinypy_ast_statement_t __ast_for_try_stmt(tinypy_ast_builder_t *c, const 
 static tinypy_ast_statement_t __ast_for_with_item(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, tinypy_ast_sequence_t *content) {
     tinypy_ast_expression_t context_expr, optional_vars = NULL;
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_WITH_ITEM);
     context_expr = __ast_for_expr(c, TINYPY_CST_CHILD(n, 0));
     if (!context_expr) {
         return NULL;
@@ -3239,8 +3231,9 @@ static tinypy_ast_statement_t __ast_for_with_item(tinypy_ast_builder_t *c, const
         }
     }
 
-    return __tinypy_ast_with(context_expr, optional_vars, content, TINYPY_AST_LINE_NUMBER(n),
-                             n->column_offset, c->c_arena);
+    tinypy_ast_statement_t return_value_1 = __tinypy_ast_with(context_expr, optional_vars, content, TINYPY_AST_LINE_NUMBER(n),
+                                 n->column_offset, c->c_arena);
+    return return_value_1;
 }
 
 /* TINYPY_GRAMMAR_WITH_STMT: 'with' TINYPY_GRAMMAR_WITH_ITEM (',' TINYPY_GRAMMAR_WITH_ITEM)* ':' TINYPY_GRAMMAR_SUITE */
@@ -3248,8 +3241,6 @@ static tinypy_ast_statement_t __ast_for_with_item(tinypy_ast_builder_t *c, const
 static tinypy_ast_statement_t __ast_for_with_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     int32_t i;
     tinypy_ast_statement_t ret;
-
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_WITH_STMT);
 
     /* process the with items inside-out */
     i = TINYPY_CST_CHILD_COUNT(n) - 1;
@@ -3284,8 +3275,6 @@ static tinypy_ast_statement_t __ast_for_classdef(tinypy_ast_builder_t *c, const 
     /* TINYPY_GRAMMAR_CLASSDEF: 'class' TINYPY_TOKEN_NAME ['(' TINYPY_GRAMMAR_TESTLIST ')'] ':' TINYPY_GRAMMAR_SUITE */
     tinypy_ast_sequence_t *bases, *s;
 
-    TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_CLASSDEF);
-
     if (!__forbidden_check(c, n, TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 1)))) {
         return NULL;
     }
@@ -3299,8 +3288,9 @@ static tinypy_ast_statement_t __ast_for_classdef(tinypy_ast_builder_t *c, const 
         if (!classname) {
             return NULL;
         }
-        return __tinypy_ast_class_def(classname, NULL, s, decorator_seq, TINYPY_AST_LINE_NUMBER(n),
-                                      n->column_offset, c->c_arena);
+        tinypy_ast_statement_t return_value_1 = __tinypy_ast_class_def(classname, NULL, s, decorator_seq, TINYPY_AST_LINE_NUMBER(n),
+                                              n->column_offset, c->c_arena);
+        return return_value_1;
     }
     /* check for empty base list */
     if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 3)) == TINYPY_TOKEN_RIGHT_PARENTHESIS) {
@@ -3312,8 +3302,9 @@ static tinypy_ast_statement_t __ast_for_classdef(tinypy_ast_builder_t *c, const 
         if (!classname) {
             return NULL;
         }
-        return __tinypy_ast_class_def(classname, NULL, s, decorator_seq, TINYPY_AST_LINE_NUMBER(n),
-                                      n->column_offset, c->c_arena);
+        tinypy_ast_statement_t return_value_2 = __tinypy_ast_class_def(classname, NULL, s, decorator_seq, TINYPY_AST_LINE_NUMBER(n),
+                                              n->column_offset, c->c_arena);
+        return return_value_2;
     }
 
     /* else handle the base class list */
@@ -3330,17 +3321,17 @@ static tinypy_ast_statement_t __ast_for_classdef(tinypy_ast_builder_t *c, const 
     if (!classname) {
         return NULL;
     }
-    return __tinypy_ast_class_def(classname, bases, s, decorator_seq,
-                                  TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    tinypy_ast_statement_t return_value_3 = __tinypy_ast_class_def(classname, bases, s, decorator_seq,
+                                      TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    return return_value_3;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
+    tinypy_ast_statement_t function_result;
     if (TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_STMT) {
-        TINYPY_ASSERT(TINYPY_CST_CHILD_COUNT(n) == 1);
         n = TINYPY_CST_CHILD(n, 0);
     }
     if (TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_SIMPLE_STMT) {
-        TINYPY_ASSERT(__num_stmts(n) == 1);
         n = TINYPY_CST_CHILD(n, 0);
     }
     if (TINYPY_CST_TYPE(n) == TINYPY_GRAMMAR_SMALL_STMT) {
@@ -3351,23 +3342,32 @@ static tinypy_ast_statement_t __ast_for_stmt(tinypy_ast_builder_t *c, const tiny
         */
         switch (TINYPY_CST_TYPE(n)) {
         case TINYPY_GRAMMAR_EXPR_STMT:
-            return __ast_for_expr_stmt(c, n);
+            function_result = __ast_for_expr_stmt(c, n);
+            return function_result;
         case TINYPY_GRAMMAR_PRINT_STMT:
-            return __ast_for_print_stmt(c, n);
+            function_result = __ast_for_print_stmt(c, n);
+            return function_result;
         case TINYPY_GRAMMAR_DEL_STMT:
-            return __ast_for_del_stmt(c, n);
+            function_result = __ast_for_del_stmt(c, n);
+            return function_result;
         case TINYPY_GRAMMAR_PASS_STMT:
-            return __tinypy_ast_pass(TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            function_result = __tinypy_ast_pass(TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+            return function_result;
         case TINYPY_GRAMMAR_FLOW_STMT:
-            return __ast_for_flow_stmt(c, n);
+            function_result = __ast_for_flow_stmt(c, n);
+            return function_result;
         case TINYPY_GRAMMAR_IMPORT_STMT:
-            return __ast_for_import_stmt(c, n);
+            function_result = __ast_for_import_stmt(c, n);
+            return function_result;
         case TINYPY_GRAMMAR_GLOBAL_STMT:
-            return __ast_for_global_stmt(c, n);
+            function_result = __ast_for_global_stmt(c, n);
+            return function_result;
         case TINYPY_GRAMMAR_EXEC_STMT:
-            return __ast_for_exec_stmt(c, n);
+            function_result = __ast_for_exec_stmt(c, n);
+            return function_result;
         case TINYPY_GRAMMAR_ASSERT_STMT:
-            return __ast_for_assert_stmt(c, n);
+            function_result = __ast_for_assert_stmt(c, n);
+            return function_result;
         default:
             TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                        "unhandled TINYPY_GRAMMAR_SMALL_STMT: TYPE=%d NCH=%d\n",
@@ -3380,24 +3380,31 @@ static tinypy_ast_statement_t __ast_for_stmt(tinypy_ast_builder_t *c, const tiny
                         | TINYPY_GRAMMAR_FUNCDEF | TINYPY_GRAMMAR_CLASSDEF | TINYPY_GRAMMAR_DECORATED
         */
         tinypy_cst_node_t *ch = TINYPY_CST_CHILD(n, 0);
-        TINYPY_CST_REQUIRE(n, TINYPY_GRAMMAR_COMPOUND_STMT);
         switch (TINYPY_CST_TYPE(ch)) {
         case TINYPY_GRAMMAR_IF_STMT:
-            return __ast_for_if_stmt(c, ch);
+            function_result = __ast_for_if_stmt(c, ch);
+            return function_result;
         case TINYPY_GRAMMAR_WHILE_STMT:
-            return __ast_for_while_stmt(c, ch);
+            function_result = __ast_for_while_stmt(c, ch);
+            return function_result;
         case TINYPY_GRAMMAR_FOR_STMT:
-            return __ast_for_for_stmt(c, ch);
+            function_result = __ast_for_for_stmt(c, ch);
+            return function_result;
         case TINYPY_GRAMMAR_TRY_STMT:
-            return __ast_for_try_stmt(c, ch);
+            function_result = __ast_for_try_stmt(c, ch);
+            return function_result;
         case TINYPY_GRAMMAR_WITH_STMT:
-            return __ast_for_with_stmt(c, ch);
+            function_result = __ast_for_with_stmt(c, ch);
+            return function_result;
         case TINYPY_GRAMMAR_FUNCDEF:
-            return __ast_for_funcdef(c, ch, NULL);
+            function_result = __ast_for_funcdef(c, ch, NULL);
+            return function_result;
         case TINYPY_GRAMMAR_CLASSDEF:
-            return __ast_for_classdef(c, ch, NULL);
+            function_result = __ast_for_classdef(c, ch, NULL);
+            return function_result;
         case TINYPY_GRAMMAR_DECORATED:
-            return __ast_for_decorated(c, ch);
+            function_result = __ast_for_decorated(c, ch);
+            return function_result;
         default:
             TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                        "unhandled TINYPY_GRAMMAR_SMALL_STMT: TYPE=%d NCH=%d\n",
@@ -3408,17 +3415,18 @@ static tinypy_ast_statement_t __ast_for_stmt(tinypy_ast_builder_t *c, const tiny
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__parsenumber(tinypy_ast_builder_t *c, const char *s) {
-    return tinypy_internal_compiler_parse_number(c->c_arena, s, 1, 1);
+    tinypy_value_t *return_value_1 = tinypy_internal_compiler_parse_number(c->c_arena, s, 1, 1);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__parsestr(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, const char *s) {
-    return tinypy_internal_compiler_parse_string(c->c_arena, s, c->c_future_unicode, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
+    tinypy_value_t *return_value_1 = tinypy_internal_compiler_parse_string(c->c_arena, s, c->c_future_unicode, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__parsestrplus(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     int32_t index;
 
-    TINYPY_CST_REQUIRE(TINYPY_CST_CHILD(n, 0), TINYPY_TOKEN_STRING);
     tinypy_value_t *value = __parsestr(c, n, TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 0)));
     if (value == NULL) {
         return NULL;

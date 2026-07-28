@@ -13,7 +13,7 @@ typedef enum tinypy_module_artifact_flag_e {
     TINYPY_MODULE_ARTIFACT_PACKAGE = 1 << 0
 } tinypy_module_artifact_flag_e;
 //////////////////////////////////////////////////////////////////////////
-typedef int32_t (*tinypy_native_module_initialize_t)(tinypy_value_t *module, void *user_data, tinypy_error_t **out_error);
+typedef tinypy_bool_t (*tinypy_native_module_initialize_t)(tinypy_value_t *module, void *user_data, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 struct tinypy_module_request_t {
     uint32_t abi_version;

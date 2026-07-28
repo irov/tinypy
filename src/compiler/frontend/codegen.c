@@ -136,7 +136,7 @@ typedef struct tinypy_codegen_t {
     tinypy_future_features_t *c_future; /* pointer to module's __future__ */
     tinypy_compiler_flags_t *c_flags;
 
-    int32_t c_interactive; /* TINYPY_COMPILER_TRUE if in interactive mode */
+    tinypy_bool_t c_interactive; /* TINYPY_COMPILER_TRUE if in interactive mode */
     int32_t c_nestlevel;
 
     tinypy_codegen_unit_t *u;      /* compiler state for current block */
@@ -155,39 +155,39 @@ typedef struct tinypy_codegen_t {
     int32_t c_optimize;
 } tinypy_codegen_t;
 
-static int32_t __tinypy_codegen_enter_scope(tinypy_codegen_t *, tinypy_ast_identifier_t, void *, int32_t);
+static tinypy_bool_t __tinypy_codegen_enter_scope(tinypy_codegen_t *, tinypy_ast_identifier_t, void *, int32_t);
 static void __tinypy_codegen_exit_scope(tinypy_codegen_t *);
 static void __tinypy_codegen_free(tinypy_codegen_t *);
 static tinypy_codegen_block_t *__tinypy_codegen_new_block(tinypy_codegen_t *);
 static int32_t __tinypy_codegen_next_instr(tinypy_codegen_t *, tinypy_codegen_block_t *);
-static int32_t __tinypy_codegen_addop(tinypy_codegen_t *, int32_t);
-static int32_t __tinypy_codegen_addop_o(tinypy_codegen_t *, int32_t, tinypy_value_t *, tinypy_value_t *);
-static int32_t __tinypy_codegen_addop_i(tinypy_codegen_t *, int32_t, int32_t);
-static int32_t __tinypy_codegen_addop_j(tinypy_codegen_t *, int32_t, tinypy_codegen_block_t *, int32_t);
+static tinypy_bool_t __tinypy_codegen_addop(tinypy_codegen_t *, int32_t);
+static tinypy_bool_t __tinypy_codegen_addop_o(tinypy_codegen_t *, int32_t, tinypy_value_t *, tinypy_value_t *);
+static tinypy_bool_t __tinypy_codegen_addop_i(tinypy_codegen_t *, int32_t, int32_t);
+static tinypy_bool_t __tinypy_codegen_addop_j(tinypy_codegen_t *, int32_t, tinypy_codegen_block_t *, int32_t);
 static tinypy_codegen_block_t *__tinypy_codegen_use_new_block(tinypy_codegen_t *);
-static int32_t __tinypy_codegen_error(tinypy_codegen_t *, const char *);
-static int32_t __tinypy_codegen_nameop(tinypy_codegen_t *, tinypy_ast_identifier_t, tinypy_ast_expression_context_e);
+static tinypy_bool_t __tinypy_codegen_error(tinypy_codegen_t *, const char *);
+static tinypy_bool_t __tinypy_codegen_nameop(tinypy_codegen_t *, tinypy_ast_identifier_t, tinypy_ast_expression_context_e);
 
 static tinypy_code_object_t *__tinypy_codegen_mod(tinypy_codegen_t *, tinypy_ast_module_t);
-static int32_t __tinypy_codegen_visit_stmt(tinypy_codegen_t *, tinypy_ast_statement_t);
-static int32_t __tinypy_codegen_visit_keyword(tinypy_codegen_t *, tinypy_ast_keyword_t);
-static int32_t __tinypy_codegen_visit_expr(tinypy_codegen_t *, tinypy_ast_expression_t);
-static int32_t __tinypy_codegen_augassign(tinypy_codegen_t *, tinypy_ast_statement_t);
-static int32_t __tinypy_codegen_visit_slice(tinypy_codegen_t *, tinypy_ast_slice_t, tinypy_ast_expression_context_e);
+static tinypy_bool_t __tinypy_codegen_visit_stmt(tinypy_codegen_t *, tinypy_ast_statement_t);
+static tinypy_bool_t __tinypy_codegen_visit_keyword(tinypy_codegen_t *, tinypy_ast_keyword_t);
+static tinypy_bool_t __tinypy_codegen_visit_expr(tinypy_codegen_t *, tinypy_ast_expression_t);
+static tinypy_bool_t __tinypy_codegen_augassign(tinypy_codegen_t *, tinypy_ast_statement_t);
+static tinypy_bool_t __tinypy_codegen_visit_slice(tinypy_codegen_t *, tinypy_ast_slice_t, tinypy_ast_expression_context_e);
 
-static int32_t __tinypy_codegen_push_fblock(tinypy_codegen_t *, tinypy_codegen_frame_block_e, tinypy_codegen_block_t *);
+static tinypy_bool_t __tinypy_codegen_push_fblock(tinypy_codegen_t *, tinypy_codegen_frame_block_e, tinypy_codegen_block_t *);
 static void __tinypy_codegen_pop_fblock(tinypy_codegen_t *, tinypy_codegen_frame_block_e, tinypy_codegen_block_t *);
 /* Returns TINYPY_COMPILER_TRUE if there is a loop on the fblock stack. */
-static int32_t __tinypy_codegen_in_loop(tinypy_codegen_t *);
+static tinypy_bool_t __tinypy_codegen_in_loop(tinypy_codegen_t *);
 
 static int32_t __tinypy_codegen_inplace_binary_operator(tinypy_codegen_t *, tinypy_ast_binary_operator_e);
 static int32_t __tinypy_codegen_expression_constant(tinypy_codegen_t *c, tinypy_ast_expression_t e);
 
-static int32_t __tinypy_codegen_with(tinypy_codegen_t *, tinypy_ast_statement_t);
+static tinypy_bool_t __tinypy_codegen_with(tinypy_codegen_t *, tinypy_ast_statement_t);
 
 static tinypy_code_object_t *__tinypy_assembler_build(tinypy_codegen_t *, int32_t addNone);
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_init(tinypy_codegen_t *c) {
+static tinypy_bool_t __tinypy_codegen_init(tinypy_codegen_t *c) {
     tinypy_vm_t *vm = c->c_arena->vm;
 
     c->c_stack = tinypy_list_from_items(vm, NULL, 0U);
@@ -207,7 +207,7 @@ static int32_t __tinypy_codegen_init(tinypy_codegen_t *c) {
     tinypy_internal_string_set_interned(c->c_assertion_error, 1);
     c->c_optimize = c->c_arena->options.optimize_level;
 
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_code_object_t *__tinypy_ast_compile(tinypy_compile_ctx_t *arena, tinypy_ast_module_t mod, const char *filename, tinypy_compiler_flags_t *flags, tinypy_future_features_t *future, tinypy_symbol_table_t *symbols) {
@@ -238,7 +238,6 @@ tinypy_code_object_t *__tinypy_ast_compile(tinypy_compile_ctx_t *arena, tinypy_a
     co = __tinypy_codegen_mod(&c, mod);
 
     __tinypy_codegen_free(&c);
-    TINYPY_ASSERT(co || TINYPY_COMPILER_ERR_OCCURRED());
     return co;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -297,7 +296,6 @@ static tinypy_value_t *__tinypy_codegen_dict_by_type(tinypy_value_t *src, int32_
     tinypy_compiler_size_t i = offset, scope, num_keys, key_i;
     tinypy_value_t *k, *v, *dest = __tinypy_frontend_dict_new_from_owner(src);
 
-    TINYPY_ASSERT(offset >= 0);
     if (dest == NULL) {
         return NULL;
     }
@@ -321,7 +319,6 @@ static tinypy_value_t *__tinypy_codegen_dict_by_type(tinypy_value_t *src, int32_
         k = TINYPY_COMPILER_LIST_GET_ITEM(sorted_keys, key_i);
         v = TINYPY_COMPILER_DICT_GET_ITEM(src, k);
         /* Scope values are encoded by symbol_table.h. */
-        TINYPY_ASSERT(TINYPY_COMPILER_INT_CHECK(v));
         scope = (TINYPY_COMPILER_INT_AS_LONG(v) >> TINYPY_SYMBOL_SCOPE_OFFSET) & TINYPY_SYMBOL_SCOPE_MASK;
 
         if (scope == scope_type || TINYPY_COMPILER_INT_AS_LONG(v) & flag) {
@@ -348,26 +345,7 @@ static tinypy_value_t *__tinypy_codegen_dict_by_type(tinypy_value_t *src, int32_
     return dest;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_codegen_unit_check(tinypy_codegen_unit_t *u) {
-    tinypy_codegen_block_t *block;
-    for (block = u->u_blocks; block != NULL; block = block->b_list) {
-        TINYPY_ASSERT((void *)block != (void *)0xcbcbcbcb);
-        TINYPY_ASSERT((void *)block != (void *)0xfbfbfbfb);
-        TINYPY_ASSERT((void *)block != (void *)0xdbdbdbdb);
-        if (block->b_instr != NULL) {
-            TINYPY_ASSERT(block->b_ialloc > 0);
-            TINYPY_ASSERT(block->b_iused > 0);
-            TINYPY_ASSERT(block->b_ialloc >= block->b_iused);
-        }
-        else {
-            TINYPY_ASSERT(block->b_iused == 0);
-            TINYPY_ASSERT(block->b_ialloc == 0);
-        }
-    }
-}
-//////////////////////////////////////////////////////////////////////////
 static void __tinypy_codegen_unit_free(tinypy_codegen_unit_t *u) {
-    __tinypy_codegen_unit_check(u);
     TINYPY_COMPILER_CLEAR(u->u_name);
     TINYPY_COMPILER_CLEAR(u->u_consts);
     TINYPY_COMPILER_CLEAR(u->u_names);
@@ -377,18 +355,18 @@ static void __tinypy_codegen_unit_free(tinypy_codegen_unit_t *u) {
     TINYPY_COMPILER_CLEAR(u->u_private);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_enter_scope(tinypy_codegen_t *c, tinypy_ast_identifier_t name, void *key, int32_t lineno) {
+static tinypy_bool_t __tinypy_codegen_enter_scope(tinypy_codegen_t *c, tinypy_ast_identifier_t name, void *key, int32_t lineno) {
 
     tinypy_codegen_unit_t *u = (tinypy_codegen_unit_t *)TINYPY_COMPILER_ARENA_MALLOC(c->c_arena, sizeof(tinypy_codegen_unit_t));
     if (!u) {
-        return 0;
+        return TINYPY_FALSE;
     }
     memset(u, 0, sizeof(tinypy_codegen_unit_t));
     u->u_argcount = 0;
     u->u_ste = __tinypy_symbol_table_lookup(c->c_st, key);
     if (!u->u_ste) {
         __tinypy_codegen_unit_free(u);
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_COMPILER_INCREF(name);
     u->u_name = name;
@@ -396,15 +374,14 @@ static int32_t __tinypy_codegen_enter_scope(tinypy_codegen_t *c, tinypy_ast_iden
     u->u_cellvars = __tinypy_codegen_dict_by_type(u->u_ste->symbols, TINYPY_SYMBOL_SCOPE_CELL, 0, 0);
     if (!u->u_varnames || !u->u_cellvars) {
         __tinypy_codegen_unit_free(u);
-        return 0;
+        return TINYPY_FALSE;
     }
 
-    TINYPY_ASSERT(TINYPY_COMPILER_DICT_SIZE(u->u_cellvars) <= INT_MAX);
     u->u_freevars = __tinypy_codegen_dict_by_type(u->u_ste->symbols, TINYPY_SYMBOL_SCOPE_FREE, TINYPY_SYMBOL_DEFINITION_FREE_CLASS,
                                                   (int32_t)TINYPY_COMPILER_DICT_SIZE(u->u_cellvars));
     if (!u->u_freevars) {
         __tinypy_codegen_unit_free(u);
-        return 0;
+        return TINYPY_FALSE;
     }
 
     u->u_blocks = NULL;
@@ -415,12 +392,12 @@ static int32_t __tinypy_codegen_enter_scope(tinypy_codegen_t *c, tinypy_ast_iden
     u->u_consts = __tinypy_frontend_dict_new_from_owner(name);
     if (!u->u_consts) {
         __tinypy_codegen_unit_free(u);
-        return 0;
+        return TINYPY_FALSE;
     }
     u->u_names = __tinypy_frontend_dict_new_from_owner(name);
     if (!u->u_names) {
         __tinypy_codegen_unit_free(u);
-        return 0;
+        return TINYPY_FALSE;
     }
 
     u->u_private = NULL;
@@ -431,7 +408,7 @@ static int32_t __tinypy_codegen_enter_scope(tinypy_codegen_t *c, tinypy_ast_iden
         if (!handle || TINYPY_COMPILER_LIST_APPEND(c->c_stack, handle) < 0) {
             TINYPY_COMPILER_XDECREF(handle);
             __tinypy_codegen_unit_free(u);
-            return 0;
+            return TINYPY_FALSE;
         }
         TINYPY_COMPILER_DECREF(handle);
         u->u_private = c->u->u_private;
@@ -442,10 +419,10 @@ static int32_t __tinypy_codegen_enter_scope(tinypy_codegen_t *c, tinypy_ast_iden
     c->c_nestlevel++;
     if (__tinypy_codegen_use_new_block(c) == NULL) {
         __tinypy_codegen_exit_scope(c);
-        return 0;
+        return TINYPY_FALSE;
     }
 
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_codegen_exit_scope(tinypy_codegen_t *c) {
@@ -455,17 +432,12 @@ static void __tinypy_codegen_exit_scope(tinypy_codegen_t *c) {
     c->c_nestlevel--;
     __tinypy_codegen_unit_free(c->u);
     /* Restore c->u to the parent unit. */
-    TINYPY_ASSERT(TINYPY_COMPILER_LIST_GET_SIZE(c->c_stack) <= INT_MAX);
     n = (int32_t)TINYPY_COMPILER_LIST_GET_SIZE(c->c_stack) - 1;
     if (n >= 0) {
         handle = TINYPY_COMPILER_LIST_GET_ITEM(c->c_stack, n);
         c->u = (tinypy_codegen_unit_t *)__tinypy_frontend_pointer_from_handle(handle);
-        TINYPY_ASSERT(c->u);
         /* we are deleting from a list so this really shouldn't fail */
-        if (TINYPY_COMPILER_SEQUENCE_DEL_ITEM(c->c_stack, n) < 0) {
-            TINYPY_ASSERT(0 && "compiler scope stack deletion failed");
-        }
-        __tinypy_codegen_unit_check(c->u);
+        (void)TINYPY_COMPILER_SEQUENCE_DEL_ITEM(c->c_stack, n);
     }
     else {
         c->u = NULL;
@@ -515,7 +487,6 @@ static tinypy_codegen_block_t *__tinypy_codegen_next_block(tinypy_codegen_t *c) 
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_codegen_block_t *__tinypy_codegen_use_next_block(tinypy_codegen_t *c, tinypy_codegen_block_t *block) {
-    TINYPY_ASSERT(block != NULL);
     c->u->u_curblock->b_next = block;
     c->u->u_curblock = block;
     return block;
@@ -527,7 +498,6 @@ static tinypy_codegen_block_t *__tinypy_codegen_use_next_block(tinypy_codegen_t 
 
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_codegen_next_instr(tinypy_codegen_t *c, tinypy_codegen_block_t *b) {
-    TINYPY_ASSERT(b != NULL);
     if (c->c_arena->limits.max_instructions != 0U && c->c_arena->instruction_count >= c->c_arena->limits.max_instructions) {
         tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_COMPILER_LIMIT, "instruction limit exceeded", c->u->u_lineno, 1, c->c_arena->out_error);
         return -1;
@@ -593,6 +563,7 @@ static void __tinypy_codegen_set_lineno(tinypy_codegen_t *c, int32_t off) {
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_opcode_stack_effect(int32_t opcode, int32_t oparg) {
+    int32_t function_result;
     switch (opcode) {
     case TINYPY_OP_POP_TOP:
         return -1;
@@ -793,12 +764,15 @@ static int32_t __tinypy_opcode_stack_effect(int32_t opcode, int32_t oparg) {
         return -oparg;
 #define TINYPY_CODEGEN_ARGUMENT_COUNT(o) (((o) % 256) + 2 * ((o) / 256))
     case TINYPY_OP_CALL_FUNCTION:
-        return -TINYPY_CODEGEN_ARGUMENT_COUNT(oparg);
+        function_result = -TINYPY_CODEGEN_ARGUMENT_COUNT(oparg);
+        return function_result;
     case TINYPY_OP_CALL_FUNCTION_VAR:
     case TINYPY_OP_CALL_FUNCTION_KW:
-        return -TINYPY_CODEGEN_ARGUMENT_COUNT(oparg) - 1;
+        function_result = -TINYPY_CODEGEN_ARGUMENT_COUNT(oparg) - 1;
+        return function_result;
     case TINYPY_OP_CALL_FUNCTION_VAR_KW:
-        return -TINYPY_CODEGEN_ARGUMENT_COUNT(oparg) - 2;
+        function_result = -TINYPY_CODEGEN_ARGUMENT_COUNT(oparg) - 2;
+        return function_result;
 #undef NARGS
     case TINYPY_OP_MAKE_FUNCTION:
         return -oparg;
@@ -818,8 +792,6 @@ static int32_t __tinypy_opcode_stack_effect(int32_t opcode, int32_t oparg) {
         return 1;
     case TINYPY_OP_STORE_DEREF:
         return -1;
-    default:
-        TINYPY_ASSERT(0 && "invalid opcode stack effect");
     }
     return 0; /* not reachable */
 }
@@ -828,10 +800,10 @@ static int32_t __tinypy_opcode_stack_effect(int32_t opcode, int32_t oparg) {
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_addop(tinypy_codegen_t *c, int32_t opcode) {
+static tinypy_bool_t __tinypy_codegen_addop(tinypy_codegen_t *c, int32_t opcode) {
     int32_t off = __tinypy_codegen_next_instr(c, c->u->u_curblock);
     if (off < 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
     tinypy_codegen_block_t *b = c->u->u_curblock;
     tinypy_codegen_instruction_t *i = &b->b_instr[off];
@@ -841,7 +813,7 @@ static int32_t __tinypy_codegen_addop(tinypy_codegen_t *c, int32_t opcode) {
         b->b_return = 1;
     }
     __tinypy_codegen_set_lineno(c, off);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_codegen_add_o(tinypy_codegen_t *c, tinypy_value_t *dict, tinypy_value_t *o) {
@@ -887,56 +859,56 @@ static int32_t __tinypy_codegen_add_o(tinypy_codegen_t *c, tinypy_value_t *dict,
         arg = TINYPY_COMPILER_INT_AS_LONG(v);
     }
     TINYPY_COMPILER_DECREF(t);
-    TINYPY_ASSERT(arg <= INT_MAX);
     return (int32_t)arg;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_addop_o(tinypy_codegen_t *c, int32_t opcode, tinypy_value_t *dict, tinypy_value_t *o) {
+static tinypy_bool_t __tinypy_codegen_addop_o(tinypy_codegen_t *c, int32_t opcode, tinypy_value_t *dict, tinypy_value_t *o) {
     int32_t arg = __tinypy_codegen_add_o(c, dict, o);
     if (arg < 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
-    return __tinypy_codegen_addop_i(c, opcode, arg);
+    tinypy_bool_t return_value_1 = __tinypy_codegen_addop_i(c, opcode, arg);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_addop_name(tinypy_codegen_t *c, int32_t opcode, tinypy_value_t *dict, tinypy_value_t *o) {
+static tinypy_bool_t __tinypy_codegen_addop_name(tinypy_codegen_t *c, int32_t opcode, tinypy_value_t *dict, tinypy_value_t *o) {
     int32_t arg;
     tinypy_value_t *mangled = __tinypy_frontend_mangle(c->c_arena, c->u->u_private, o);
     if (!mangled) {
-        return 0;
+        return TINYPY_FALSE;
     }
     arg = __tinypy_codegen_add_o(c, dict, mangled);
     TINYPY_COMPILER_DECREF(mangled);
     if (arg < 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
-    return __tinypy_codegen_addop_i(c, opcode, arg);
+    tinypy_bool_t return_value_1 = __tinypy_codegen_addop_i(c, opcode, arg);
+    return return_value_1;
 }
 /* Add an opcode with an integer argument.
    Returns 0 on failure, 1 on success.
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_addop_i(tinypy_codegen_t *c, int32_t opcode, int32_t oparg) {
+static tinypy_bool_t __tinypy_codegen_addop_i(tinypy_codegen_t *c, int32_t opcode, int32_t oparg) {
     int32_t off = __tinypy_codegen_next_instr(c, c->u->u_curblock);
     if (off < 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
     tinypy_codegen_instruction_t *i = &c->u->u_curblock->b_instr[off];
     i->i_opcode = opcode;
     i->i_oparg = oparg;
     i->i_hasarg = 1;
     __tinypy_codegen_set_lineno(c, off);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcode, tinypy_codegen_block_t *b, int32_t absolute) {
+static tinypy_bool_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcode, tinypy_codegen_block_t *b, int32_t absolute) {
     int32_t off;
 
-    TINYPY_ASSERT(b != NULL);
     off = __tinypy_codegen_next_instr(c, c->u->u_curblock);
     if (off < 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
     tinypy_codegen_instruction_t *i = &c->u->u_curblock->b_instr[off];
     i->i_opcode = opcode;
@@ -949,7 +921,7 @@ static int32_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcode, tin
         i->i_jrel = 1;
     }
     __tinypy_codegen_set_lineno(c, off);
-    return 1;
+    return TINYPY_TRUE;
 }
 
 /* The distinction between NEW_BLOCK and NEXT_BLOCK is subtle.  (I'd
@@ -965,33 +937,33 @@ static int32_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcode, tin
 #define TINYPY_CODEGEN_NEW_BLOCK(C)                      \
     {                                                    \
         if (__tinypy_codegen_use_new_block((C)) == NULL) \
-            return 0;                                    \
+            return 0;                \
     }
 
 #define TINYPY_CODEGEN_NEXT_BLOCK(C)                  \
     {                                                 \
         if (__tinypy_codegen_next_block((C)) == NULL) \
-            return 0;                                 \
+            return 0;             \
     }
 
 #define TINYPY_CODEGEN_ADD_OPCODE(C, OP)        \
     {                                           \
         if (!__tinypy_codegen_addop((C), (OP))) \
-            return 0;                           \
+            return 0;       \
     }
 
 #define TINYPY_CODEGEN_ADD_OPCODE_IN_SCOPE(C, OP) \
     {                                             \
         if (!__tinypy_codegen_addop((C), (OP))) { \
             __tinypy_codegen_exit_scope(c);       \
-            return 0;                             \
+            return 0;         \
         }                                         \
     }
 
 #define TINYPY_CODEGEN_ADD_OBJECT_OPCODE(C, OP, O, TYPE)                 \
     {                                                                    \
         if (!__tinypy_codegen_addop_o((C), (OP), (C)->u->u_##TYPE, (O))) \
-            return 0;                                                    \
+            return 0;                                \
     }
 
 /* Same as ADDOP_O, but steals a reference. */
@@ -999,7 +971,7 @@ static int32_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcode, tin
     {                                                                    \
         if (!__tinypy_codegen_addop_o((C), (OP), (C)->u->u_##TYPE, (O))) { \
             TINYPY_COMPILER_DECREF((O));                                 \
-            return 0;                                                    \
+            return 0;                               \
         }                                                                \
         TINYPY_COMPILER_DECREF((O));                                     \
     }
@@ -1007,25 +979,25 @@ static int32_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcode, tin
 #define TINYPY_CODEGEN_ADD_NAME_OPCODE(C, OP, O, TYPE)                      \
     {                                                                       \
         if (!__tinypy_codegen_addop_name((C), (OP), (C)->u->u_##TYPE, (O))) \
-            return 0;                                                       \
+            return 0;                                   \
     }
 
 #define TINYPY_CODEGEN_ADD_INTEGER_OPCODE(C, OP, O)    \
     {                                                  \
         if (!__tinypy_codegen_addop_i((C), (OP), (O))) \
-            return 0;                                  \
+            return 0;              \
     }
 
 #define TINYPY_CODEGEN_ADD_ABSOLUTE_JUMP(C, OP, O)        \
     {                                                     \
         if (!__tinypy_codegen_addop_j((C), (OP), (O), 1)) \
-            return 0;                                     \
+            return 0;                 \
     }
 
 #define TINYPY_CODEGEN_ADD_RELATIVE_JUMP(C, OP, O)        \
     {                                                     \
         if (!__tinypy_codegen_addop_j((C), (OP), (O), 0)) \
-            return 0;                                     \
+            return 0;                 \
     }
 
 /* AST visitor helpers dispatch to the matching tinypy node handler. */
@@ -1033,21 +1005,21 @@ static int32_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcode, tin
 #define TINYPY_CODEGEN_VISIT(C, TYPE, V)              \
     {                                                 \
         if (!__tinypy_codegen_visit_##TYPE((C), (V))) \
-            return 0;                                 \
+            return 0;             \
     }
 
 #define TINYPY_CODEGEN_VISIT_IN_SCOPE(C, TYPE, V)     \
     {                                                 \
         if (!__tinypy_codegen_visit_##TYPE((C), (V))) { \
             __tinypy_codegen_exit_scope(c);           \
-            return 0;                                 \
+            return 0;             \
         }                                             \
     }
 
 #define TINYPY_CODEGEN_VISIT_SLICE(C, V, CTX)               \
     {                                                       \
         if (!__tinypy_codegen_visit_slice((C), (V), (CTX))) \
-            return 0;                                       \
+            return 0;                   \
     }
 
 #define TINYPY_CODEGEN_VISIT_SEQUENCE(C, TYPE, SEQ)                                 \
@@ -1058,7 +1030,7 @@ static int32_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcode, tin
             TINYPY_AST_SEQUENCE_TYPE(TYPE)                                          \
             elt = (TINYPY_AST_SEQUENCE_TYPE(TYPE))TINYPY_AST_SEQUENCE_GET(seq, _i); \
             if (!__tinypy_codegen_visit_##TYPE((C), elt))                           \
-                return 0;                                                           \
+                return 0;                                       \
         }                                                                           \
     }
 
@@ -1071,26 +1043,26 @@ static int32_t __tinypy_codegen_addop_j(tinypy_codegen_t *c, int32_t opcode, tin
             elt = (TINYPY_AST_SEQUENCE_TYPE(TYPE))TINYPY_AST_SEQUENCE_GET(seq, _i); \
             if (!__tinypy_codegen_visit_##TYPE((C), elt)) { \
                 __tinypy_codegen_exit_scope(c);                                     \
-                return 0;                                                           \
+                return 0;                                       \
             }                                                                       \
         }                                                                           \
     }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_isdocstring(tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_isdocstring(tinypy_ast_statement_t s) {
     if (s->kind != TINYPY_AST_KIND_EXPR) {
-        return 0;
+        return TINYPY_FALSE;
     }
     return s->v.Expr.value->kind == TINYPY_AST_KIND_STR;
 }
 /* Compile a sequence of statements, checking for a docstring. */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_body(tinypy_codegen_t *c, tinypy_ast_sequence_t *stmts) {
+static tinypy_bool_t __tinypy_codegen_body(tinypy_codegen_t *c, tinypy_ast_sequence_t *stmts) {
     int32_t i = 0;
     tinypy_ast_statement_t st;
 
     if (!TINYPY_AST_SEQUENCE_LENGTH(stmts)) {
-        return 1;
+        return TINYPY_TRUE;
     }
     st = (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(stmts, 0);
     if (__tinypy_codegen_isdocstring(st) && c->c_optimize < 2) {
@@ -1098,13 +1070,13 @@ static int32_t __tinypy_codegen_body(tinypy_codegen_t *c, tinypy_ast_sequence_t 
         i = 1;
         TINYPY_CODEGEN_VISIT(c, expr, st->v.Expr.value);
         if (!__tinypy_codegen_nameop(c, c->c_doc_name, TINYPY_AST_CONTEXT_STORE)) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
     for (; i < TINYPY_AST_SEQUENCE_LENGTH(stmts); i++) {
         TINYPY_CODEGEN_VISIT(c, stmt, (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(stmts, i));
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_code_object_t *__tinypy_codegen_mod(tinypy_codegen_t *c, tinypy_ast_module_t mod) {
@@ -1152,12 +1124,8 @@ static tinypy_code_object_t *__tinypy_codegen_mod(tinypy_codegen_t *c, tinypy_as
 
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_codegen_reference_type(tinypy_codegen_t *c, tinypy_value_t *name) {
-    int32_t scope = __tinypy_symbol_table_scope(c->u->u_ste, name);
-    if (scope == 0) {
-        TINYPY_ASSERT(0 && "unknown compiler scope");
-    }
-
-    return scope;
+    int32_t return_value_1 = __tinypy_symbol_table_scope(c->u->u_ste, name);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_codegen_lookup_arg(tinypy_value_t *dict, tinypy_value_t *name) {
@@ -1171,17 +1139,16 @@ static int32_t __tinypy_codegen_lookup_arg(tinypy_value_t *dict, tinypy_value_t 
     if (v == NULL) {
         return -1;
     }
-    TINYPY_ASSERT(TINYPY_COMPILER_INT_AS_LONG(v) >= INT_MIN);
-    TINYPY_ASSERT(TINYPY_COMPILER_INT_AS_LONG(v) <= INT_MAX);
-    return (int32_t)TINYPY_COMPILER_INT_AS_LONG(v);
+    int32_t return_value_1 = (int32_t)TINYPY_COMPILER_INT_AS_LONG(v);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_make_closure(tinypy_codegen_t *c, tinypy_code_object_t *co, int32_t args) {
+static tinypy_bool_t __tinypy_codegen_make_closure(tinypy_codegen_t *c, tinypy_code_object_t *co, int32_t args) {
     int32_t i, free = __tinypy_bytecode_free_variable_count(co);
     if (free == 0) {
         TINYPY_CODEGEN_ADD_OBJECT_OPCODE(c, TINYPY_OP_LOAD_CONST, (tinypy_value_t *)co, consts);
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_MAKE_FUNCTION, args);
-        return 1;
+        return TINYPY_TRUE;
     }
     for (i = 0; i < free; ++i) {
         /* Bypass com_addop_varname because it will generate
@@ -1203,31 +1170,28 @@ static int32_t __tinypy_codegen_make_closure(tinypy_codegen_t *c, tinypy_code_ob
         else /* (reftype == TINYPY_SYMBOL_SCOPE_FREE) */ {
             arg = __tinypy_codegen_lookup_arg(c->u->u_freevars, name);
         }
-        if (arg == -1) {
-            TINYPY_ASSERT(0 && "closure variable lookup failed");
-        }
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_LOAD_CLOSURE, arg);
     }
     TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_BUILD_TUPLE, free);
     TINYPY_CODEGEN_ADD_OBJECT_OPCODE(c, TINYPY_OP_LOAD_CONST, (tinypy_value_t *)co, consts);
     TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_MAKE_CLOSURE, args);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_decorators(tinypy_codegen_t *c, tinypy_ast_sequence_t *decos) {
+static tinypy_bool_t __tinypy_codegen_decorators(tinypy_codegen_t *c, tinypy_ast_sequence_t *decos) {
     int32_t i;
 
     if (!decos) {
-        return 1;
+        return TINYPY_TRUE;
     }
 
     for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(decos); i++) {
         TINYPY_CODEGEN_VISIT(c, expr, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(decos, i));
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_arguments(tinypy_codegen_t *c, tinypy_ast_arguments_t args) {
+static tinypy_bool_t __tinypy_codegen_arguments(tinypy_codegen_t *c, tinypy_ast_arguments_t args) {
     int32_t i;
     int32_t n = TINYPY_AST_SEQUENCE_LENGTH(args->args);
     /* Correctly handle nested argument lists */
@@ -1236,37 +1200,35 @@ static int32_t __tinypy_codegen_arguments(tinypy_codegen_t *c, tinypy_ast_argume
         if (arg->kind == TINYPY_AST_KIND_TUPLE) {
             tinypy_value_t *id = __tinypy_frontend_format_identifier(c->c_module_name, ".", i, "");
             if (id == NULL) {
-                return 0;
+                return TINYPY_FALSE;
             }
             if (!__tinypy_codegen_nameop(c, id, TINYPY_AST_CONTEXT_LOAD)) {
                 TINYPY_COMPILER_DECREF(id);
-                return 0;
+                return TINYPY_FALSE;
             }
             TINYPY_COMPILER_DECREF(id);
             TINYPY_CODEGEN_VISIT(c, expr, arg);
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_function(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_function(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     tinypy_value_t *first_const = c->c_none;
     tinypy_ast_arguments_t args = s->v.FunctionDef.args;
     tinypy_ast_sequence_t *decos = s->v.FunctionDef.decorator_list;
     tinypy_ast_statement_t st;
     int32_t i, n, docstring;
 
-    TINYPY_ASSERT(s->kind == TINYPY_AST_KIND_FUNCTION_DEF);
-
     if (!__tinypy_codegen_decorators(c, decos)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     if (args->defaults) {
         TINYPY_CODEGEN_VISIT_SEQUENCE(c, expr, args->defaults);
     }
     if (!__tinypy_codegen_enter_scope(c, s->v.FunctionDef.name, (void *)s,
                                       s->lineno)) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     st = (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(s->v.FunctionDef.body, 0);
@@ -1276,7 +1238,7 @@ static int32_t __tinypy_codegen_function(tinypy_codegen_t *c, tinypy_ast_stateme
     }
     if (__tinypy_codegen_add_o(c, c->u->u_consts, first_const) < 0) {
         __tinypy_codegen_exit_scope(c);
-        return 0;
+        return TINYPY_FALSE;
     }
 
     /* unpack nested arguments */
@@ -1292,7 +1254,7 @@ static int32_t __tinypy_codegen_function(tinypy_codegen_t *c, tinypy_ast_stateme
     tinypy_code_object_t *co = __tinypy_assembler_build(c, 1);
     __tinypy_codegen_exit_scope(c);
     if (co == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     __tinypy_codegen_make_closure(c, co, TINYPY_AST_SEQUENCE_LENGTH(args->defaults));
@@ -1302,15 +1264,16 @@ static int32_t __tinypy_codegen_function(tinypy_codegen_t *c, tinypy_ast_stateme
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_CALL_FUNCTION, 1);
     }
 
-    return __tinypy_codegen_nameop(c, s->v.FunctionDef.name, TINYPY_AST_CONTEXT_STORE);
+    tinypy_bool_t return_value_1 = __tinypy_codegen_nameop(c, s->v.FunctionDef.name, TINYPY_AST_CONTEXT_STORE);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     int32_t n, i;
     tinypy_ast_sequence_t *decos = s->v.ClassDef.decorator_list;
 
     if (!__tinypy_codegen_decorators(c, decos)) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     /* push class name on stack, needed by TINYPY_OP_BUILD_CLASS */
@@ -1323,7 +1286,7 @@ static int32_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_statement_
     TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_BUILD_TUPLE, n);
     if (!__tinypy_codegen_enter_scope(c, s->v.ClassDef.name, (void *)s,
                                       s->lineno)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_COMPILER_INCREF(s->v.ClassDef.name);
     TINYPY_COMPILER_XSETREF(c->u->u_private, s->v.ClassDef.name);
@@ -1331,7 +1294,7 @@ static int32_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_statement_
     if (!str || !__tinypy_codegen_nameop(c, str, TINYPY_AST_CONTEXT_LOAD)) {
         TINYPY_COMPILER_XDECREF(str);
         __tinypy_codegen_exit_scope(c);
-        return 0;
+        return TINYPY_FALSE;
     }
 
     TINYPY_COMPILER_DECREF(str);
@@ -1339,13 +1302,13 @@ static int32_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_statement_
     if (!str || !__tinypy_codegen_nameop(c, str, TINYPY_AST_CONTEXT_STORE)) {
         TINYPY_COMPILER_XDECREF(str);
         __tinypy_codegen_exit_scope(c);
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_COMPILER_DECREF(str);
 
     if (!__tinypy_codegen_body(c, s->v.ClassDef.body)) {
         __tinypy_codegen_exit_scope(c);
-        return 0;
+        return TINYPY_FALSE;
     }
 
     TINYPY_CODEGEN_ADD_OPCODE_IN_SCOPE(c, TINYPY_OP_LOAD_LOCALS);
@@ -1353,7 +1316,7 @@ static int32_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_statement_
     tinypy_code_object_t *co = __tinypy_assembler_build(c, 1);
     __tinypy_codegen_exit_scope(c);
     if (co == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     __tinypy_codegen_make_closure(c, co, 0);
@@ -1366,22 +1329,21 @@ static int32_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_statement_
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_CALL_FUNCTION, 1);
     }
     if (!__tinypy_codegen_nameop(c, s->v.ClassDef.name, TINYPY_AST_CONTEXT_STORE)) {
-        return 0;
+        return TINYPY_FALSE;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_ifexp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+static tinypy_bool_t __tinypy_codegen_ifexp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
     tinypy_codegen_block_t *end, *next;
 
-    TINYPY_ASSERT(e->kind == TINYPY_AST_KIND_IF_EXP);
     end = __tinypy_codegen_new_block(c);
     if (end == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     next = __tinypy_codegen_new_block(c);
     if (next == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_CODEGEN_VISIT(c, expr, e->v.IfExp.test);
     TINYPY_CODEGEN_ADD_ABSOLUTE_JUMP(c, TINYPY_OP_POP_JUMP_IF_FALSE, next);
@@ -1390,18 +1352,17 @@ static int32_t __tinypy_codegen_ifexp(tinypy_codegen_t *c, tinypy_ast_expression
     __tinypy_codegen_use_next_block(c, next);
     TINYPY_CODEGEN_VISIT(c, expr, e->v.IfExp.orelse);
     __tinypy_codegen_use_next_block(c, end);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_lambda(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+static tinypy_bool_t __tinypy_codegen_lambda(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
     tinypy_ast_arguments_t args = e->v.Lambda.args;
-    TINYPY_ASSERT(e->kind == TINYPY_AST_KIND_LAMBDA);
 
     if (args->defaults) {
         TINYPY_CODEGEN_VISIT_SEQUENCE(c, expr, args->defaults);
     }
     if (!__tinypy_codegen_enter_scope(c, c->c_lambda_name, (void *)e, e->lineno)) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     /* unpack nested arguments */
@@ -1410,7 +1371,7 @@ static int32_t __tinypy_codegen_lambda(tinypy_codegen_t *c, tinypy_ast_expressio
     /* Make None the first constant, so the lambda can't have a
        docstring. */
     if (__tinypy_codegen_add_o(c, c->u->u_consts, c->c_none) < 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     c->u->u_argcount = TINYPY_AST_SEQUENCE_LENGTH(args->args);
@@ -1424,20 +1385,19 @@ static int32_t __tinypy_codegen_lambda(tinypy_codegen_t *c, tinypy_ast_expressio
     tinypy_code_object_t *co = __tinypy_assembler_build(c, 1);
     __tinypy_codegen_exit_scope(c);
     if (co == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     __tinypy_codegen_make_closure(c, co, TINYPY_AST_SEQUENCE_LENGTH(args->defaults));
     TINYPY_COMPILER_DECREF(co);
 
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_print(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_print(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     int32_t i, n;
     tinypy_compiler_boolean_e dest;
 
-    TINYPY_ASSERT(s->kind == TINYPY_AST_KIND_PRINT);
     n = TINYPY_AST_SEQUENCE_LENGTH(s->v.Print.values);
     dest = TINYPY_COMPILER_FALSE;
     if (s->v.Print.dest) {
@@ -1468,16 +1428,15 @@ static int32_t __tinypy_codegen_print(tinypy_codegen_t *c, tinypy_ast_statement_
     else if (dest) {
         TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_POP_TOP);
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_if(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_if(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     tinypy_codegen_block_t *end, *next;
     int32_t constant;
-    TINYPY_ASSERT(s->kind == TINYPY_AST_KIND_IF);
     end = __tinypy_codegen_new_block(c);
     if (end == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     constant = __tinypy_codegen_expression_constant(c, s->v.If.test);
@@ -1496,7 +1455,7 @@ static int32_t __tinypy_codegen_if(tinypy_codegen_t *c, tinypy_ast_statement_t s
         if (s->v.If.orelse) {
             next = __tinypy_codegen_new_block(c);
             if (next == NULL) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         else {
@@ -1512,21 +1471,21 @@ static int32_t __tinypy_codegen_if(tinypy_codegen_t *c, tinypy_ast_statement_t s
         }
     }
     __tinypy_codegen_use_next_block(c, end);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_for(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_for(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     tinypy_codegen_block_t *start, *cleanup, *end;
 
     start = __tinypy_codegen_new_block(c);
     cleanup = __tinypy_codegen_new_block(c);
     end = __tinypy_codegen_new_block(c);
     if (start == NULL || end == NULL || cleanup == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_CODEGEN_ADD_RELATIVE_JUMP(c, TINYPY_OP_SETUP_LOOP, end);
     if (!__tinypy_codegen_push_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_LOOP, start)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_CODEGEN_VISIT(c, expr, s->v.For.iter);
     TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_GET_ITER);
@@ -1540,10 +1499,10 @@ static int32_t __tinypy_codegen_for(tinypy_codegen_t *c, tinypy_ast_statement_t 
     __tinypy_codegen_pop_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_LOOP, start);
     TINYPY_CODEGEN_VISIT_SEQUENCE(c, stmt, s->v.For.orelse);
     __tinypy_codegen_use_next_block(c, end);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_while(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_while(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     tinypy_codegen_block_t *loop, *orelse, *end, *anchor = NULL;
     int32_t constant = __tinypy_codegen_expression_constant(c, s->v.While.test);
 
@@ -1551,23 +1510,23 @@ static int32_t __tinypy_codegen_while(tinypy_codegen_t *c, tinypy_ast_statement_
         if (s->v.While.orelse) {
             TINYPY_CODEGEN_VISIT_SEQUENCE(c, stmt, s->v.While.orelse);
         }
-        return 1;
+        return TINYPY_TRUE;
     }
     loop = __tinypy_codegen_new_block(c);
     end = __tinypy_codegen_new_block(c);
     if (constant == -1) {
         anchor = __tinypy_codegen_new_block(c);
         if (anchor == NULL) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
     if (loop == NULL || end == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     if (s->v.While.orelse) {
         orelse = __tinypy_codegen_new_block(c);
         if (orelse == NULL) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
     else {
@@ -1577,7 +1536,7 @@ static int32_t __tinypy_codegen_while(tinypy_codegen_t *c, tinypy_ast_statement_
     TINYPY_CODEGEN_ADD_RELATIVE_JUMP(c, TINYPY_OP_SETUP_LOOP, end);
     __tinypy_codegen_use_next_block(c, loop);
     if (!__tinypy_codegen_push_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_LOOP, loop)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     if (constant == -1) {
         TINYPY_CODEGEN_VISIT(c, expr, s->v.While.test);
@@ -1600,17 +1559,19 @@ static int32_t __tinypy_codegen_while(tinypy_codegen_t *c, tinypy_ast_statement_
     }
     __tinypy_codegen_use_next_block(c, end);
 
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_continue(tinypy_codegen_t *c) {
+static tinypy_bool_t __tinypy_codegen_continue(tinypy_codegen_t *c) {
+    tinypy_bool_t function_result;
     static const char LOOP_ERROR_MSG[] = "'continue' not properly in loop";
     static const char IN_FINALLY_ERROR_MSG[] =
         "'continue' not supported inside 'finally' clause";
     int32_t i;
 
     if (!c->u->u_nfblocks) {
-        return __tinypy_codegen_error(c, LOOP_ERROR_MSG);
+        tinypy_bool_t return_value_1 = __tinypy_codegen_error(c, LOOP_ERROR_MSG);
+        return return_value_1;
     }
     i = c->u->u_nfblocks - 1;
     switch (c->u->u_fblock[i].fb_type) {
@@ -1623,19 +1584,22 @@ static int32_t __tinypy_codegen_continue(tinypy_codegen_t *c) {
             /* Prevent continue anywhere under a finally
                   even if hidden in a sub-try or except. */
             if (c->u->u_fblock[i].fb_type == TINYPY_CODEGEN_FRAME_BLOCK_FINALLY_END) {
-                return __tinypy_codegen_error(c, IN_FINALLY_ERROR_MSG);
+                tinypy_bool_t return_value_2 = __tinypy_codegen_error(c, IN_FINALLY_ERROR_MSG);
+                return return_value_2;
             }
         }
         if (i == -1) {
-            return __tinypy_codegen_error(c, LOOP_ERROR_MSG);
+            tinypy_bool_t return_value_3 = __tinypy_codegen_error(c, LOOP_ERROR_MSG);
+            return return_value_3;
         }
         TINYPY_CODEGEN_ADD_ABSOLUTE_JUMP(c, TINYPY_OP_CONTINUE_LOOP, c->u->u_fblock[i].fb_block);
         break;
     case TINYPY_CODEGEN_FRAME_BLOCK_FINALLY_END:
-        return __tinypy_codegen_error(c, IN_FINALLY_ERROR_MSG);
+        function_result = __tinypy_codegen_error(c, IN_FINALLY_ERROR_MSG);
+        return function_result;
     }
 
-    return 1;
+    return TINYPY_TRUE;
 }
 /* Code generated for "try: <body> finally: <finalbody>" is as follows:
 
@@ -1671,18 +1635,18 @@ static int32_t __tinypy_codegen_continue(tinypy_codegen_t *c) {
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_try_finally(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_try_finally(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     tinypy_codegen_block_t *body, *end;
     body = __tinypy_codegen_new_block(c);
     end = __tinypy_codegen_new_block(c);
     if (body == NULL || end == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     TINYPY_CODEGEN_ADD_RELATIVE_JUMP(c, TINYPY_OP_SETUP_FINALLY, end);
     __tinypy_codegen_use_next_block(c, body);
     if (!__tinypy_codegen_push_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_FINALLY_TRY, body)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_CODEGEN_VISIT_SEQUENCE(c, stmt, s->v.TryFinally.body);
     TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_POP_BLOCK);
@@ -1691,13 +1655,13 @@ static int32_t __tinypy_codegen_try_finally(tinypy_codegen_t *c, tinypy_ast_stat
     TINYPY_CODEGEN_ADD_OBJECT_OPCODE(c, TINYPY_OP_LOAD_CONST, c->c_none, consts);
     __tinypy_codegen_use_next_block(c, end);
     if (!__tinypy_codegen_push_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_FINALLY_END, end)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_CODEGEN_VISIT_SEQUENCE(c, stmt, s->v.TryFinally.finalbody);
     TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_END_FINALLY);
     __tinypy_codegen_pop_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_FINALLY_END, end);
 
-    return 1;
+    return TINYPY_TRUE;
 }
 /*
    Code generated for "try: S except E1, V1: S1 except E2, V2: S2 ...":
@@ -1731,7 +1695,7 @@ static int32_t __tinypy_codegen_try_finally(tinypy_codegen_t *c, tinypy_ast_stat
    Of course, parts are not generated if Vi or Ei is not present.
 */
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_try_except(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_try_except(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     tinypy_codegen_block_t *body, *orelse, *except, *end;
     int32_t i, n;
 
@@ -1740,12 +1704,12 @@ static int32_t __tinypy_codegen_try_except(tinypy_codegen_t *c, tinypy_ast_state
     orelse = __tinypy_codegen_new_block(c);
     end = __tinypy_codegen_new_block(c);
     if (body == NULL || except == NULL || orelse == NULL || end == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_CODEGEN_ADD_RELATIVE_JUMP(c, TINYPY_OP_SETUP_EXCEPT, except);
     __tinypy_codegen_use_next_block(c, body);
     if (!__tinypy_codegen_push_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_EXCEPT, body)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_CODEGEN_VISIT_SEQUENCE(c, stmt, s->v.TryExcept.body);
     TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_POP_BLOCK);
@@ -1757,13 +1721,14 @@ static int32_t __tinypy_codegen_try_except(tinypy_codegen_t *c, tinypy_ast_state
         tinypy_ast_exception_handler_t handler = (tinypy_ast_exception_handler_t)TINYPY_AST_SEQUENCE_GET(
             s->v.TryExcept.handlers, i);
         if (!handler->v.ExceptHandler.type && i < n - 1) {
-            return __tinypy_codegen_error(c, "default 'except:' must be last");
+            tinypy_bool_t return_value_1 = __tinypy_codegen_error(c, "default 'except:' must be last");
+            return return_value_1;
         }
         c->u->u_lineno_set = TINYPY_COMPILER_FALSE;
         c->u->u_lineno = handler->lineno;
         except = __tinypy_codegen_new_block(c);
         if (except == NULL) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (handler->v.ExceptHandler.type) {
             TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_DUP_TOP);
@@ -1787,10 +1752,10 @@ static int32_t __tinypy_codegen_try_except(tinypy_codegen_t *c, tinypy_ast_state
     __tinypy_codegen_use_next_block(c, orelse);
     TINYPY_CODEGEN_VISIT_SEQUENCE(c, stmt, s->v.TryExcept.orelse);
     __tinypy_codegen_use_next_block(c, end);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_import_as(tinypy_codegen_t *c, tinypy_ast_identifier_t name, tinypy_ast_identifier_t asname) {
+static tinypy_bool_t __tinypy_codegen_import_as(tinypy_codegen_t *c, tinypy_ast_identifier_t name, tinypy_ast_identifier_t asname) {
     /* The TINYPY_OP_IMPORT_NAME opcode was already generated.  This function
        merely needs to bind the result to a name.
 
@@ -1811,7 +1776,7 @@ static int32_t __tinypy_codegen_import_as(tinypy_codegen_t *c, tinypy_ast_identi
             source_size = dot != NULL ? (size_t)(dot - src) : strlen(src);
             attr = __tinypy_frontend_string_from_owner(name, src, source_size);
             if (!attr) {
-                return 0;
+                return TINYPY_FALSE;
             }
             TINYPY_CODEGEN_ADD_NEW_OBJECT_OPCODE(c, TINYPY_OP_LOAD_ATTR, attr, names);
             if (dot == NULL) {
@@ -1820,10 +1785,11 @@ static int32_t __tinypy_codegen_import_as(tinypy_codegen_t *c, tinypy_ast_identi
             src = dot + 1;
         }
     }
-    return __tinypy_codegen_nameop(c, asname, TINYPY_AST_CONTEXT_STORE);
+    tinypy_bool_t return_value_1 = __tinypy_codegen_nameop(c, asname, TINYPY_AST_CONTEXT_STORE);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_import(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_import(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     /* The Import tinypy_cst_node_t stores a module name like a.b.c as a single
        string.  This is convenient for all cases except
          import a.b.c as d
@@ -1835,7 +1801,7 @@ static int32_t __tinypy_codegen_import(tinypy_codegen_t *c, tinypy_ast_statement
 
     for (i = 0; i < n; i++) {
         tinypy_ast_alias_t alias = (tinypy_ast_alias_t)TINYPY_AST_SEQUENCE_GET(s->v.Import.names, i);
-        int32_t r;
+        tinypy_bool_t r;
         tinypy_value_t *level;
 
         if (c->c_flags && (c->c_flags->flags & TINYPY_CODE_FUTURE_ABSOLUTE_IMPORT)) {
@@ -1846,7 +1812,7 @@ static int32_t __tinypy_codegen_import(tinypy_codegen_t *c, tinypy_ast_statement
         }
 
         if (level == NULL) {
-            return 0;
+            return TINYPY_FALSE;
         }
 
         TINYPY_CODEGEN_ADD_NEW_OBJECT_OPCODE(c, TINYPY_OP_LOAD_CONST, level, consts);
@@ -1867,7 +1833,7 @@ static int32_t __tinypy_codegen_import(tinypy_codegen_t *c, tinypy_ast_statement
                 tmp = __tinypy_frontend_string_from_owner(alias->name, base,
                                                           (size_t)(dot - base));
                 if (tmp == NULL) {
-                    return 0;
+                    return TINYPY_FALSE;
                 }
             }
             r = __tinypy_codegen_nameop(c, tmp, TINYPY_AST_CONTEXT_STORE);
@@ -1879,10 +1845,10 @@ static int32_t __tinypy_codegen_import(tinypy_codegen_t *c, tinypy_ast_statement
             }
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_from_import(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_from_import(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     int32_t i, n = TINYPY_AST_SEQUENCE_LENGTH(s->v.ImportFrom.names);
 
     tinypy_value_t *level, *names;
@@ -1895,13 +1861,13 @@ static int32_t __tinypy_codegen_from_import(tinypy_codegen_t *c, tinypy_ast_stat
     }
 
     if (!level) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_CODEGEN_ADD_NEW_OBJECT_OPCODE(c, TINYPY_OP_LOAD_CONST, level, consts);
 
     names = __tinypy_frontend_tuple_new(c->c_module_name, n);
     if (!names) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     /* build up the names */
@@ -1911,14 +1877,15 @@ static int32_t __tinypy_codegen_from_import(tinypy_codegen_t *c, tinypy_ast_stat
         TINYPY_COMPILER_TUPLE_SET_ITEM(names, i, alias->name);
     }
 
-    int32_t condition_2 = s->lineno > c->c_future->line_number && s->v.ImportFrom.module;
+    tinypy_bool_t condition_2 = s->lineno > c->c_future->line_number && s->v.ImportFrom.module;
     if (condition_2 != 0) {
         condition_2 = !strcmp(TINYPY_COMPILER_STRING_AS_STRING(s->v.ImportFrom.module), "__future__");
     }
     if (condition_2) {
         TINYPY_COMPILER_DECREF(names);
-        return __tinypy_codegen_error(c, "from __future__ imports must occur "
-                                         "at the beginning of the file");
+        tinypy_bool_t return_value_1 = __tinypy_codegen_error(c, "from __future__ imports must occur "
+                                                 "at the beginning of the file");
+        return return_value_1;
     }
     TINYPY_CODEGEN_ADD_NEW_OBJECT_OPCODE(c, TINYPY_OP_LOAD_CONST, names, consts);
 
@@ -1933,9 +1900,8 @@ static int32_t __tinypy_codegen_from_import(tinypy_codegen_t *c, tinypy_ast_stat
         tinypy_ast_identifier_t store_name;
 
         if (i == 0 && *TINYPY_COMPILER_STRING_AS_STRING(alias->name) == '*') {
-            TINYPY_ASSERT(n == 1);
             TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_IMPORT_STAR);
-            return 1;
+            return TINYPY_TRUE;
         }
 
         TINYPY_CODEGEN_ADD_NAME_OPCODE(c, TINYPY_OP_IMPORT_FROM, alias->name, names);
@@ -1945,30 +1911,30 @@ static int32_t __tinypy_codegen_from_import(tinypy_codegen_t *c, tinypy_ast_stat
         }
 
         if (!__tinypy_codegen_nameop(c, store_name, TINYPY_AST_CONTEXT_STORE)) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
     /* remove imported module */
     TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_POP_TOP);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_assert(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_assert(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     if (c->c_optimize != 0) {
-        return 1;
+        return TINYPY_TRUE;
     }
     if (s->v.Assert.test->kind == TINYPY_AST_KIND_TUPLE && TINYPY_AST_SEQUENCE_LENGTH(s->v.Assert.test->v.Tuple.elts) > 0) {
         const char *msg =
             "assertion is always TINYPY_COMPILER_TRUE, perhaps remove parentheses?";
         if (TINYPY_COMPILER_ERR_WARN_EXPLICIT(TINYPY_COMPILER_EXC_SYNTAX_WARNING, msg, c->c_filename,
                                               c->u->u_lineno, NULL, NULL) == -1) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
     TINYPY_CODEGEN_VISIT(c, expr, s->v.Assert.test);
     tinypy_codegen_block_t *end = __tinypy_codegen_new_block(c);
     if (end == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     TINYPY_CODEGEN_ADD_ABSOLUTE_JUMP(c, TINYPY_OP_POP_JUMP_IF_TRUE, end);
     TINYPY_CODEGEN_ADD_OBJECT_OPCODE(c, TINYPY_OP_LOAD_GLOBAL, c->c_assertion_error, names);
@@ -1978,10 +1944,11 @@ static int32_t __tinypy_codegen_assert(tinypy_codegen_t *c, tinypy_ast_statement
     }
     TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_RAISE_VARARGS, 1);
     __tinypy_codegen_use_next_block(c, end);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_visit_stmt(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_visit_stmt(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+    tinypy_bool_t function_result;
     int32_t i, n;
 
     /* Always assign a lineno to the next instruction for a stmt. */
@@ -1990,12 +1957,15 @@ static int32_t __tinypy_codegen_visit_stmt(tinypy_codegen_t *c, tinypy_ast_state
 
     switch (s->kind) {
     case TINYPY_AST_KIND_FUNCTION_DEF:
-        return __tinypy_codegen_function(c, s);
+        function_result = __tinypy_codegen_function(c, s);
+        return function_result;
     case TINYPY_AST_KIND_CLASS_DEF:
-        return __tinypy_codegen_class(c, s);
+        function_result = __tinypy_codegen_class(c, s);
+        return function_result;
     case TINYPY_AST_KIND_RETURN:
         if (c->u->u_ste->block_type != TINYPY_SYMBOL_BLOCK_FUNCTION) {
-            return __tinypy_codegen_error(c, "'return' outside function");
+            tinypy_bool_t return_value_1 = __tinypy_codegen_error(c, "'return' outside function");
+            return return_value_1;
         }
         if (s->v.Return.value) {
             TINYPY_CODEGEN_VISIT(c, expr, s->v.Return.value);
@@ -2020,15 +1990,20 @@ static int32_t __tinypy_codegen_visit_stmt(tinypy_codegen_t *c, tinypy_ast_state
         }
         break;
     case TINYPY_AST_KIND_AUG_ASSIGN:
-        return __tinypy_codegen_augassign(c, s);
+        function_result = __tinypy_codegen_augassign(c, s);
+        return function_result;
     case TINYPY_AST_KIND_PRINT:
-        return __tinypy_codegen_print(c, s);
+        function_result = __tinypy_codegen_print(c, s);
+        return function_result;
     case TINYPY_AST_KIND_FOR:
-        return __tinypy_codegen_for(c, s);
+        function_result = __tinypy_codegen_for(c, s);
+        return function_result;
     case TINYPY_AST_KIND_WHILE:
-        return __tinypy_codegen_while(c, s);
+        function_result = __tinypy_codegen_while(c, s);
+        return function_result;
     case TINYPY_AST_KIND_IF:
-        return __tinypy_codegen_if(c, s);
+        function_result = __tinypy_codegen_if(c, s);
+        return function_result;
     case TINYPY_AST_KIND_RAISE:
         n = 0;
         if (s->v.Raise.type) {
@@ -2046,15 +2021,20 @@ static int32_t __tinypy_codegen_visit_stmt(tinypy_codegen_t *c, tinypy_ast_state
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_RAISE_VARARGS, n);
         break;
     case TINYPY_AST_KIND_TRY_EXCEPT:
-        return __tinypy_codegen_try_except(c, s);
+        function_result = __tinypy_codegen_try_except(c, s);
+        return function_result;
     case TINYPY_AST_KIND_TRY_FINALLY:
-        return __tinypy_codegen_try_finally(c, s);
+        function_result = __tinypy_codegen_try_finally(c, s);
+        return function_result;
     case TINYPY_AST_KIND_ASSERT:
-        return __tinypy_codegen_assert(c, s);
+        function_result = __tinypy_codegen_assert(c, s);
+        return function_result;
     case TINYPY_AST_KIND_IMPORT:
-        return __tinypy_codegen_import(c, s);
+        function_result = __tinypy_codegen_import(c, s);
+        return function_result;
     case TINYPY_AST_KIND_IMPORT_FROM:
-        return __tinypy_codegen_from_import(c, s);
+        function_result = __tinypy_codegen_from_import(c, s);
+        return function_result;
     case TINYPY_AST_KIND_EXEC:
         TINYPY_CODEGEN_VISIT(c, expr, s->v.Exec.body);
         if (s->v.Exec.globals) {
@@ -2088,16 +2068,19 @@ static int32_t __tinypy_codegen_visit_stmt(tinypy_codegen_t *c, tinypy_ast_state
         break;
     case TINYPY_AST_KIND_BREAK:
         if (!__tinypy_codegen_in_loop(c)) {
-            return __tinypy_codegen_error(c, "'break' outside loop");
+            tinypy_bool_t return_value_2 = __tinypy_codegen_error(c, "'break' outside loop");
+            return return_value_2;
         }
         TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_BREAK_LOOP);
         break;
     case TINYPY_AST_KIND_CONTINUE:
-        return __tinypy_codegen_continue(c);
+        function_result = __tinypy_codegen_continue(c);
+        return function_result;
     case TINYPY_AST_KIND_WITH:
-        return __tinypy_codegen_with(c, s);
+        function_result = __tinypy_codegen_with(c, s);
+        return function_result;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_codegen_unary_operator(tinypy_ast_unary_operator_e op) {
@@ -2220,7 +2203,7 @@ static int32_t __tinypy_codegen_inplace_binary_operator(tinypy_codegen_t *c, tin
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_identifier_t name, tinypy_ast_expression_context_e ctx) {
+static tinypy_bool_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_identifier_t name, tinypy_ast_expression_context_e ctx) {
     int32_t op, scope, arg;
     enum {
         OP_FAST,
@@ -2234,7 +2217,7 @@ static int32_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_identifie
 
     tinypy_value_t *mangled = __tinypy_frontend_mangle(c->c_arena, c->u->u_private, name);
     if (!mangled) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     op = 0;
@@ -2268,7 +2251,6 @@ static int32_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_identifie
     }
 
     /* XXX Leave assert here, but handle __doc__ and the like better */
-    TINYPY_ASSERT(scope || TINYPY_COMPILER_STRING_AS_STRING(name)[0] == '_');
 
     switch (optype) {
     case OP_DEREF:
@@ -2289,7 +2271,6 @@ static int32_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_identifie
             size_t message_size;
             char *message;
 
-            TINYPY_ASSERT(name_size <= SIZE_MAX - sizeof(prefix) - sizeof(suffix));
             message_size = sizeof(prefix) - 1U + name_size + sizeof(suffix);
             message = (char *)TINYPY_COMPILER_ARENA_MALLOC(c->c_arena, message_size);
             if (message == NULL) {
@@ -2309,13 +2290,13 @@ static int32_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_identifie
                                                c->c_arena->out_error);
             }
             TINYPY_COMPILER_DECREF(mangled);
-            return 0;
+            return TINYPY_FALSE;
         }
         case TINYPY_AST_CONTEXT_PARAMETER:
         default:
             TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                            "param invalid for deref variable");
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case OP_FAST:
@@ -2336,10 +2317,10 @@ static int32_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_identifie
         default:
             TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                            "param invalid for local variable");
-            return 0;
+            return TINYPY_FALSE;
         }
         TINYPY_CODEGEN_ADD_NEW_OBJECT_OPCODE(c, op, mangled, varnames);
-        return 1;
+        return TINYPY_TRUE;
     case OP_GLOBAL:
         switch (ctx) {
         case TINYPY_AST_CONTEXT_LOAD:
@@ -2358,7 +2339,7 @@ static int32_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_identifie
         default:
             TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                            "param invalid for global variable");
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case OP_NAME:
@@ -2379,24 +2360,23 @@ static int32_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_identifie
         default:
             TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                            "param invalid for name variable");
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     }
 
-    TINYPY_ASSERT(op);
     arg = __tinypy_codegen_add_o(c, dict, mangled);
     TINYPY_COMPILER_DECREF(mangled);
     if (arg < 0) {
-        return 0;
+        return TINYPY_FALSE;
     }
-    return __tinypy_codegen_addop_i(c, op, arg);
+    tinypy_bool_t return_value_1 = __tinypy_codegen_addop_i(c, op, arg);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_boolop(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+static tinypy_bool_t __tinypy_codegen_boolop(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
     int32_t jumpi, i, n;
 
-    TINYPY_ASSERT(e->kind == TINYPY_AST_KIND_BOOL_OP);
     if (e->v.BoolOp.op == TINYPY_AST_BOOLEAN_AND) {
         jumpi = TINYPY_OP_JUMP_IF_FALSE_OR_POP;
     }
@@ -2405,21 +2385,20 @@ static int32_t __tinypy_codegen_boolop(tinypy_codegen_t *c, tinypy_ast_expressio
     }
     tinypy_codegen_block_t *end = __tinypy_codegen_new_block(c);
     if (end == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     tinypy_ast_sequence_t *s = e->v.BoolOp.values;
     n = TINYPY_AST_SEQUENCE_LENGTH(s) - 1;
-    TINYPY_ASSERT(n >= 0);
     for (i = 0; i < n; ++i) {
         TINYPY_CODEGEN_VISIT(c, expr, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(s, i));
         TINYPY_CODEGEN_ADD_ABSOLUTE_JUMP(c, jumpi, end);
     }
     TINYPY_CODEGEN_VISIT(c, expr, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(s, n));
     __tinypy_codegen_use_next_block(c, end);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_list(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+static tinypy_bool_t __tinypy_codegen_list(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
     int32_t n = TINYPY_AST_SEQUENCE_LENGTH(e->v.List.elts);
     if (e->v.List.ctx == TINYPY_AST_CONTEXT_STORE) {
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_UNPACK_SEQUENCE, n);
@@ -2428,10 +2407,10 @@ static int32_t __tinypy_codegen_list(tinypy_codegen_t *c, tinypy_ast_expression_
     if (e->v.List.ctx == TINYPY_AST_CONTEXT_LOAD) {
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_BUILD_LIST, n);
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_tuple(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+static tinypy_bool_t __tinypy_codegen_tuple(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
     int32_t n = TINYPY_AST_SEQUENCE_LENGTH(e->v.Tuple.elts);
     if (e->v.Tuple.ctx == TINYPY_AST_CONTEXT_STORE) {
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_UNPACK_SEQUENCE, n);
@@ -2440,21 +2419,20 @@ static int32_t __tinypy_codegen_tuple(tinypy_codegen_t *c, tinypy_ast_expression
     if (e->v.Tuple.ctx == TINYPY_AST_CONTEXT_LOAD) {
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_BUILD_TUPLE, n);
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_compare(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+static tinypy_bool_t __tinypy_codegen_compare(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
     int32_t i, n;
     tinypy_codegen_block_t *cleanup = NULL;
 
     /* XXX the logic can be cleaned up for 1 or multiple comparisons */
     TINYPY_CODEGEN_VISIT(c, expr, e->v.Compare.left);
     n = TINYPY_AST_SEQUENCE_LENGTH(e->v.Compare.ops);
-    TINYPY_ASSERT(n > 0);
     if (n > 1) {
         cleanup = __tinypy_codegen_new_block(c);
         if (cleanup == NULL) {
-            return 0;
+            return TINYPY_FALSE;
         }
         TINYPY_CODEGEN_VISIT(c, expr,
                              (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(e->v.Compare.comparators, 0));
@@ -2478,7 +2456,7 @@ static int32_t __tinypy_codegen_compare(tinypy_codegen_t *c, tinypy_ast_expressi
     if (n > 1) {
         tinypy_codegen_block_t *end = __tinypy_codegen_new_block(c);
         if (end == NULL) {
-            return 0;
+            return TINYPY_FALSE;
         }
         TINYPY_CODEGEN_ADD_RELATIVE_JUMP(c, TINYPY_OP_JUMP_FORWARD, end);
         __tinypy_codegen_use_next_block(c, cleanup);
@@ -2486,10 +2464,10 @@ static int32_t __tinypy_codegen_compare(tinypy_codegen_t *c, tinypy_ast_expressi
         TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_POP_TOP);
         __tinypy_codegen_use_next_block(c, end);
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_call(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+static tinypy_bool_t __tinypy_codegen_call(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
     int32_t n, code = 0;
 
     TINYPY_CODEGEN_VISIT(c, expr, e->v.Call.func);
@@ -2521,10 +2499,10 @@ static int32_t __tinypy_codegen_call(tinypy_codegen_t *c, tinypy_ast_expression_
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_CALL_FUNCTION_VAR_KW, n);
         break;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_listcomp_generator(tinypy_codegen_t *c, tinypy_ast_sequence_t *generators, int32_t gen_index, tinypy_ast_expression_t elt) {
+static tinypy_bool_t __tinypy_codegen_listcomp_generator(tinypy_codegen_t *c, tinypy_ast_sequence_t *generators, int32_t gen_index, tinypy_ast_expression_t elt) {
     /* generate code for the iterator, then each of the ifs,
        and then write to the element */
 
@@ -2538,7 +2516,7 @@ static int32_t __tinypy_codegen_listcomp_generator(tinypy_codegen_t *c, tinypy_a
     anchor = __tinypy_codegen_new_block(c);
 
     if (start == NULL || skip == NULL || if_cleanup == NULL || anchor == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     l = (tinypy_ast_comprehension_t)TINYPY_AST_SEQUENCE_GET(generators, gen_index);
@@ -2560,7 +2538,7 @@ static int32_t __tinypy_codegen_listcomp_generator(tinypy_codegen_t *c, tinypy_a
 
     if (++gen_index < TINYPY_AST_SEQUENCE_LENGTH(generators)) {
         if (!__tinypy_codegen_listcomp_generator(c, generators, gen_index, elt)) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
 
@@ -2575,14 +2553,14 @@ static int32_t __tinypy_codegen_listcomp_generator(tinypy_codegen_t *c, tinypy_a
     TINYPY_CODEGEN_ADD_ABSOLUTE_JUMP(c, TINYPY_OP_JUMP_ABSOLUTE, start);
     __tinypy_codegen_use_next_block(c, anchor);
 
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_listcomp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
-    TINYPY_ASSERT(e->kind == TINYPY_AST_KIND_LIST_COMP);
+static tinypy_bool_t __tinypy_codegen_listcomp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
     TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_BUILD_LIST, 0);
-    return __tinypy_codegen_listcomp_generator(c, e->v.ListComp.generators, 0,
-                                               e->v.ListComp.elt);
+    tinypy_bool_t return_value_1 = __tinypy_codegen_listcomp_generator(c, e->v.ListComp.generators, 0,
+                                                   e->v.ListComp.elt);
+    return return_value_1;
 }
 /* Dict and set comprehensions and generator expressions work by creating a
    nested function to perform the actual iteration. This means that the
@@ -2600,7 +2578,7 @@ static int32_t __tinypy_codegen_listcomp(tinypy_codegen_t *c, tinypy_ast_express
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_comprehension_generator(tinypy_codegen_t *c, tinypy_ast_sequence_t *generators, int32_t gen_index, tinypy_ast_expression_t elt, tinypy_ast_expression_t val, int32_t type) {
+static tinypy_bool_t __tinypy_codegen_comprehension_generator(tinypy_codegen_t *c, tinypy_ast_sequence_t *generators, int32_t gen_index, tinypy_ast_expression_t elt, tinypy_ast_expression_t val, int32_t type) {
     /* generate code for the iterator, then each of the ifs,
        and then write to the element */
 
@@ -2614,7 +2592,7 @@ static int32_t __tinypy_codegen_comprehension_generator(tinypy_codegen_t *c, tin
     anchor = __tinypy_codegen_new_block(c);
 
     if (start == NULL || skip == NULL || if_cleanup == NULL || anchor == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     gen = (tinypy_ast_comprehension_t)TINYPY_AST_SEQUENCE_GET(generators, gen_index);
@@ -2647,7 +2625,7 @@ static int32_t __tinypy_codegen_comprehension_generator(tinypy_codegen_t *c, tin
         if (!__tinypy_codegen_comprehension_generator(c,
                                                       generators, gen_index,
                                                       elt, val, type)) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
 
@@ -2672,7 +2650,7 @@ static int32_t __tinypy_codegen_comprehension_generator(tinypy_codegen_t *c, tin
             TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_MAP_ADD, gen_index + 1);
             break;
         default:
-            return 0;
+            return TINYPY_FALSE;
         }
 
         __tinypy_codegen_use_next_block(c, skip);
@@ -2681,10 +2659,10 @@ static int32_t __tinypy_codegen_comprehension_generator(tinypy_codegen_t *c, tin
     TINYPY_CODEGEN_ADD_ABSOLUTE_JUMP(c, TINYPY_OP_JUMP_ABSOLUTE, start);
     __tinypy_codegen_use_next_block(c, anchor);
 
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_comprehension(tinypy_codegen_t *c, tinypy_ast_expression_t e, int32_t type, tinypy_ast_identifier_t name, tinypy_ast_sequence_t *generators, tinypy_ast_expression_t elt, tinypy_ast_expression_t val) {
+static tinypy_bool_t __tinypy_codegen_comprehension(tinypy_codegen_t *c, tinypy_ast_expression_t e, int32_t type, tinypy_ast_identifier_t name, tinypy_ast_sequence_t *generators, tinypy_ast_expression_t elt, tinypy_ast_expression_t val) {
     tinypy_code_object_t *co = NULL;
     tinypy_ast_expression_t outermost_iter;
 
@@ -2737,39 +2715,39 @@ static int32_t __tinypy_codegen_comprehension(tinypy_codegen_t *c, tinypy_ast_ex
     TINYPY_CODEGEN_VISIT(c, expr, outermost_iter);
     TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_GET_ITER);
     TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_CALL_FUNCTION, 1);
-    return 1;
+    return TINYPY_TRUE;
 error_in_scope:
     __tinypy_codegen_exit_scope(c);
 error:
     TINYPY_COMPILER_XDECREF(co);
-    return 0;
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_genexp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
-    TINYPY_ASSERT(e->kind == TINYPY_AST_KIND_GENERATOR_EXP);
-    return __tinypy_codegen_comprehension(c, e, TINYPY_CODEGEN_COMPREHENSION_GENERATOR, c->c_genexpr_name,
-                                          e->v.GeneratorExp.generators,
-                                          e->v.GeneratorExp.elt, NULL);
+static tinypy_bool_t __tinypy_codegen_genexp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+    tinypy_bool_t return_value_1 = __tinypy_codegen_comprehension(c, e, TINYPY_CODEGEN_COMPREHENSION_GENERATOR, c->c_genexpr_name,
+                                              e->v.GeneratorExp.generators,
+                                              e->v.GeneratorExp.elt, NULL);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_setcomp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
-    TINYPY_ASSERT(e->kind == TINYPY_AST_KIND_SET_COMP);
-    return __tinypy_codegen_comprehension(c, e, TINYPY_CODEGEN_COMPREHENSION_SET, c->c_setcomp_name,
-                                          e->v.SetComp.generators,
-                                          e->v.SetComp.elt, NULL);
+static tinypy_bool_t __tinypy_codegen_setcomp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+    tinypy_bool_t return_value_1 = __tinypy_codegen_comprehension(c, e, TINYPY_CODEGEN_COMPREHENSION_SET, c->c_setcomp_name,
+                                              e->v.SetComp.generators,
+                                              e->v.SetComp.elt, NULL);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_dictcomp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
-    TINYPY_ASSERT(e->kind == TINYPY_AST_KIND_DICT_COMP);
-    return __tinypy_codegen_comprehension(c, e, TINYPY_CODEGEN_COMPREHENSION_DICT, c->c_dictcomp_name,
-                                          e->v.DictComp.generators,
-                                          e->v.DictComp.key, e->v.DictComp.value);
+static tinypy_bool_t __tinypy_codegen_dictcomp(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+    tinypy_bool_t return_value_1 = __tinypy_codegen_comprehension(c, e, TINYPY_CODEGEN_COMPREHENSION_DICT, c->c_dictcomp_name,
+                                              e->v.DictComp.generators,
+                                              e->v.DictComp.key, e->v.DictComp.value);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_visit_keyword(tinypy_codegen_t *c, tinypy_ast_keyword_t k) {
+static tinypy_bool_t __tinypy_codegen_visit_keyword(tinypy_codegen_t *c, tinypy_ast_keyword_t k) {
     TINYPY_CODEGEN_ADD_OBJECT_OPCODE(c, TINYPY_OP_LOAD_CONST, k->arg, consts);
     TINYPY_CODEGEN_VISIT(c, expr, k->value);
-    return 1;
+    return TINYPY_TRUE;
 }
 /* Test whether expression is constant.  For constants, report
    whether they are TINYPY_COMPILER_TRUE or TINYPY_COMPILER_FALSE.
@@ -2779,11 +2757,14 @@ static int32_t __tinypy_codegen_visit_keyword(tinypy_codegen_t *c, tinypy_ast_ke
 
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_codegen_expression_constant(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+    int32_t function_result;
     switch (e->kind) {
     case TINYPY_AST_KIND_NUM:
-        return TINYPY_COMPILER_OBJECT_IS_TRUE(e->v.Num.n);
+        function_result = TINYPY_COMPILER_OBJECT_IS_TRUE(e->v.Num.n);
+        return function_result;
     case TINYPY_AST_KIND_STR:
-        return TINYPY_COMPILER_OBJECT_IS_TRUE(e->v.Str.s);
+        function_result = TINYPY_COMPILER_OBJECT_IS_TRUE(e->v.Str.s);
+        return function_result;
     case TINYPY_AST_KIND_NAME:
         /* __debug__ is not assignable, so we can optimize
          * it away in if and while statements */
@@ -2820,15 +2801,13 @@ static int32_t __tinypy_codegen_expression_constant(tinypy_codegen_t *c, tinypy_
        exit(*exc)
  */
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_with(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_with(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     tinypy_codegen_block_t *block, *finally;
-
-    TINYPY_ASSERT(s->kind == TINYPY_AST_KIND_WITH);
 
     block = __tinypy_codegen_new_block(c);
     finally = __tinypy_codegen_new_block(c);
     if (!block || !finally) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     /* Evaluate EXPR */
@@ -2841,7 +2820,7 @@ static int32_t __tinypy_codegen_with(tinypy_codegen_t *c, tinypy_ast_statement_t
        functions the same as TINYPY_OP_SETUP_FINALLY except that exceptions are
        normalized. */
     if (!__tinypy_codegen_push_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_FINALLY_TRY, block)) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     if (s->v.With.optional_vars) {
@@ -2862,7 +2841,7 @@ static int32_t __tinypy_codegen_with(tinypy_codegen_t *c, tinypy_ast_statement_t
     TINYPY_CODEGEN_ADD_OBJECT_OPCODE(c, TINYPY_OP_LOAD_CONST, c->c_none, consts);
     __tinypy_codegen_use_next_block(c, finally);
     if (!__tinypy_codegen_push_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_FINALLY_END, finally)) {
-        return 0;
+        return TINYPY_FALSE;
     }
 
     /* Finally block starts; context.__exit__ is on the stack under
@@ -2873,10 +2852,11 @@ static int32_t __tinypy_codegen_with(tinypy_codegen_t *c, tinypy_ast_statement_t
     /* Finally block ends. */
     TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_END_FINALLY);
     __tinypy_codegen_pop_fblock(c, TINYPY_CODEGEN_FRAME_BLOCK_FINALLY_END, finally);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+static tinypy_bool_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+    tinypy_bool_t function_result;
     int32_t i, n;
 
     /* If expr e has a different line number than the last expr/stmt,
@@ -2888,7 +2868,8 @@ static int32_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expre
     }
     switch (e->kind) {
     case TINYPY_AST_KIND_BOOL_OP:
-        return __tinypy_codegen_boolop(c, e);
+        function_result = __tinypy_codegen_boolop(c, e);
+        return function_result;
     case TINYPY_AST_KIND_BIN_OP:
         TINYPY_CODEGEN_VISIT(c, expr, e->v.BinOp.left);
         TINYPY_CODEGEN_VISIT(c, expr, e->v.BinOp.right);
@@ -2899,9 +2880,11 @@ static int32_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expre
         TINYPY_CODEGEN_ADD_OPCODE(c, __tinypy_codegen_unary_operator(e->v.UnaryOp.op));
         break;
     case TINYPY_AST_KIND_LAMBDA:
-        return __tinypy_codegen_lambda(c, e);
+        function_result = __tinypy_codegen_lambda(c, e);
+        return function_result;
     case TINYPY_AST_KIND_IF_EXP:
-        return __tinypy_codegen_ifexp(c, e);
+        function_result = __tinypy_codegen_ifexp(c, e);
+        return function_result;
     case TINYPY_AST_KIND_DICT:
         n = TINYPY_AST_SEQUENCE_LENGTH(e->v.Dict.values);
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_BUILD_MAP, (n > 0xFFFF ? 0xFFFF : n));
@@ -2919,16 +2902,21 @@ static int32_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expre
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_BUILD_SET, n);
         break;
     case TINYPY_AST_KIND_LIST_COMP:
-        return __tinypy_codegen_listcomp(c, e);
+        function_result = __tinypy_codegen_listcomp(c, e);
+        return function_result;
     case TINYPY_AST_KIND_SET_COMP:
-        return __tinypy_codegen_setcomp(c, e);
+        function_result = __tinypy_codegen_setcomp(c, e);
+        return function_result;
     case TINYPY_AST_KIND_DICT_COMP:
-        return __tinypy_codegen_dictcomp(c, e);
+        function_result = __tinypy_codegen_dictcomp(c, e);
+        return function_result;
     case TINYPY_AST_KIND_GENERATOR_EXP:
-        return __tinypy_codegen_genexp(c, e);
+        function_result = __tinypy_codegen_genexp(c, e);
+        return function_result;
     case TINYPY_AST_KIND_YIELD:
         if (c->u->u_ste->block_type != TINYPY_SYMBOL_BLOCK_FUNCTION) {
-            return __tinypy_codegen_error(c, "'yield' outside function");
+            tinypy_bool_t return_value_1 = __tinypy_codegen_error(c, "'yield' outside function");
+            return return_value_1;
         }
         if (e->v.Yield.value) {
             TINYPY_CODEGEN_VISIT(c, expr, e->v.Yield.value);
@@ -2939,9 +2927,11 @@ static int32_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expre
         TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_YIELD_VALUE);
         break;
     case TINYPY_AST_KIND_COMPARE:
-        return __tinypy_codegen_compare(c, e);
+        function_result = __tinypy_codegen_compare(c, e);
+        return function_result;
     case TINYPY_AST_KIND_CALL:
-        return __tinypy_codegen_call(c, e);
+        function_result = __tinypy_codegen_call(c, e);
+        return function_result;
     case TINYPY_AST_KIND_REPR:
         TINYPY_CODEGEN_VISIT(c, expr, e->v.Repr.value);
         TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_UNARY_CONVERT);
@@ -2977,7 +2967,7 @@ static int32_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expre
         default:
             TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                            "param invalid in attribute expression");
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_SUBSCRIPT:
@@ -3005,32 +2995,33 @@ static int32_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expre
         default:
             TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                            "param invalid in subscript expression");
-            return 0;
+            return TINYPY_FALSE;
         }
         break;
     case TINYPY_AST_KIND_NAME:
-        return __tinypy_codegen_nameop(c, e->v.Name.id, e->v.Name.ctx);
+        function_result = __tinypy_codegen_nameop(c, e->v.Name.id, e->v.Name.ctx);
+        return function_result;
     /* child nodes of List and Tuple will have expr_context set */
     case TINYPY_AST_KIND_LIST:
-        return __tinypy_codegen_list(c, e);
+        function_result = __tinypy_codegen_list(c, e);
+        return function_result;
     case TINYPY_AST_KIND_TUPLE:
-        return __tinypy_codegen_tuple(c, e);
+        function_result = __tinypy_codegen_tuple(c, e);
+        return function_result;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_augassign(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+static tinypy_bool_t __tinypy_codegen_augassign(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
     tinypy_ast_expression_t e = s->v.AugAssign.target;
     tinypy_ast_expression_t auge;
-
-    TINYPY_ASSERT(s->kind == TINYPY_AST_KIND_AUG_ASSIGN);
 
     switch (e->kind) {
     case TINYPY_AST_KIND_ATTRIBUTE:
         auge = __tinypy_ast_attribute(e->v.Attribute.value, e->v.Attribute.attr,
                                       TINYPY_AST_CONTEXT_AUGMENTED_LOAD, e->lineno, e->col_offset, c->c_arena);
         if (auge == NULL) {
-            return 0;
+            return TINYPY_FALSE;
         }
         TINYPY_CODEGEN_VISIT(c, expr, auge);
         TINYPY_CODEGEN_VISIT(c, expr, s->v.AugAssign.value);
@@ -3042,7 +3033,7 @@ static int32_t __tinypy_codegen_augassign(tinypy_codegen_t *c, tinypy_ast_statem
         auge = __tinypy_ast_subscript(e->v.Subscript.value, e->v.Subscript.slice,
                                       TINYPY_AST_CONTEXT_AUGMENTED_LOAD, e->lineno, e->col_offset, c->c_arena);
         if (auge == NULL) {
-            return 0;
+            return TINYPY_FALSE;
         }
         TINYPY_CODEGEN_VISIT(c, expr, auge);
         TINYPY_CODEGEN_VISIT(c, expr, s->v.AugAssign.value);
@@ -3052,66 +3043,64 @@ static int32_t __tinypy_codegen_augassign(tinypy_codegen_t *c, tinypy_ast_statem
         break;
     case TINYPY_AST_KIND_NAME:
         if (!__tinypy_codegen_nameop(c, e->v.Name.id, TINYPY_AST_CONTEXT_LOAD)) {
-            return 0;
+            return TINYPY_FALSE;
         }
         TINYPY_CODEGEN_VISIT(c, expr, s->v.AugAssign.value);
         TINYPY_CODEGEN_ADD_OPCODE(c, __tinypy_codegen_inplace_binary_operator(c, s->v.AugAssign.op));
-        return __tinypy_codegen_nameop(c, e->v.Name.id, TINYPY_AST_CONTEXT_STORE);
+        tinypy_bool_t return_value_1 = __tinypy_codegen_nameop(c, e->v.Name.id, TINYPY_AST_CONTEXT_STORE);
+        return return_value_1;
     default:
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                    "invalid tinypy_cst_node_t type (%d) for augmented assignment",
                                    e->kind);
-        return 0;
+        return TINYPY_FALSE;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_push_fblock(tinypy_codegen_t *c, tinypy_codegen_frame_block_e t, tinypy_codegen_block_t *b) {
+static tinypy_bool_t __tinypy_codegen_push_fblock(tinypy_codegen_t *c, tinypy_codegen_frame_block_e t, tinypy_codegen_block_t *b) {
     if (c->u->u_nfblocks >= TINYPY_COMPILER_MAX_BLOCKS) {
         tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_SYNTAX,
                                        "too many statically nested blocks",
                                        c->u->u_lineno, 1,
                                        c->c_arena->out_error);
-        return 0;
+        return TINYPY_FALSE;
     }
     tinypy_codegen_frame_block_t *f = &c->u->u_fblock[c->u->u_nfblocks++];
     f->fb_type = t;
     f->fb_block = b;
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_codegen_pop_fblock(tinypy_codegen_t *c, tinypy_codegen_frame_block_e t, tinypy_codegen_block_t *b) {
     tinypy_codegen_unit_t *u = c->u;
-    TINYPY_ASSERT(u->u_nfblocks > 0);
     u->u_nfblocks--;
-    TINYPY_ASSERT(u->u_fblock[u->u_nfblocks].fb_type == t);
-    TINYPY_ASSERT(u->u_fblock[u->u_nfblocks].fb_block == b);
     (void)t;
     (void)b;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_in_loop(tinypy_codegen_t *c) {
+static tinypy_bool_t __tinypy_codegen_in_loop(tinypy_codegen_t *c) {
     int32_t i;
     tinypy_codegen_unit_t *u = c->u;
     for (i = 0; i < u->u_nfblocks; ++i) {
         if (u->u_fblock[i].fb_type == TINYPY_CODEGEN_FRAME_BLOCK_LOOP) {
-            return 1;
+            return TINYPY_TRUE;
         }
     }
-    return 0;
+    return TINYPY_FALSE;
 }
 /* Raises a SyntaxError and returns 0.
    If something goes wrong, a different exception may be raised.
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_error(tinypy_codegen_t *c, const char *errstr) {
+static tinypy_bool_t __tinypy_codegen_error(tinypy_codegen_t *c, const char *errstr) {
     tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_SYNTAX, errstr,
                                    c->u->u_lineno, 1, c->c_arena->out_error);
-    return 0;
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_handle_subscr(tinypy_codegen_t *c, const char *kind, tinypy_ast_expression_context_e ctx) {
+static tinypy_bool_t __tinypy_codegen_handle_subscr(tinypy_codegen_t *c, const char *kind, tinypy_ast_expression_context_e ctx) {
     int32_t op = 0;
 
     (void)kind;
@@ -3133,7 +3122,7 @@ static int32_t __tinypy_codegen_handle_subscr(tinypy_codegen_t *c, const char *k
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                    "invalid %s kind %d in subscript\n",
                                    kind, ctx);
-        return 0;
+        return TINYPY_FALSE;
     }
     if (ctx == TINYPY_AST_CONTEXT_AUGMENTED_LOAD) {
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_DUP_TOPX, 2);
@@ -3142,13 +3131,12 @@ static int32_t __tinypy_codegen_handle_subscr(tinypy_codegen_t *c, const char *k
         TINYPY_CODEGEN_ADD_OPCODE(c, TINYPY_OP_ROT_THREE);
     }
     TINYPY_CODEGEN_ADD_OPCODE(c, op);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_slice(tinypy_codegen_t *c, tinypy_ast_slice_t s, tinypy_ast_expression_context_e ctx) {
+static tinypy_bool_t __tinypy_codegen_slice(tinypy_codegen_t *c, tinypy_ast_slice_t s, tinypy_ast_expression_context_e ctx) {
     int32_t n = 2;
     (void)ctx;
-    TINYPY_ASSERT(s->kind == TINYPY_AST_KIND_SLICE);
 
     /* only handles the cases where TINYPY_OP_BUILD_SLICE is emitted */
     if (s->v.Slice.lower) {
@@ -3170,13 +3158,12 @@ static int32_t __tinypy_codegen_slice(tinypy_codegen_t *c, tinypy_ast_slice_t s,
         TINYPY_CODEGEN_VISIT(c, expr, s->v.Slice.step);
     }
     TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_BUILD_SLICE, n);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_simple_slice(tinypy_codegen_t *c, tinypy_ast_slice_t s, tinypy_ast_expression_context_e ctx) {
+static tinypy_bool_t __tinypy_codegen_simple_slice(tinypy_codegen_t *c, tinypy_ast_slice_t s, tinypy_ast_expression_context_e ctx) {
     int32_t op = 0, slice_offset = 0, stack_count = 0;
 
-    TINYPY_ASSERT(s->v.Slice.step == NULL);
     if (s->v.Slice.lower) {
         slice_offset++;
         stack_count++;
@@ -3235,20 +3222,22 @@ static int32_t __tinypy_codegen_simple_slice(tinypy_codegen_t *c, tinypy_ast_sli
     default:
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                        "param invalid in simple slice");
-        return 0;
+        return TINYPY_FALSE;
     }
 
     TINYPY_CODEGEN_ADD_OPCODE(c, op + slice_offset);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_visit_nested_slice(tinypy_codegen_t *c, tinypy_ast_slice_t s, tinypy_ast_expression_context_e ctx) {
+static tinypy_bool_t __tinypy_codegen_visit_nested_slice(tinypy_codegen_t *c, tinypy_ast_slice_t s, tinypy_ast_expression_context_e ctx) {
+    tinypy_bool_t function_result;
     switch (s->kind) {
     case TINYPY_AST_KIND_ELLIPSIS:
         TINYPY_CODEGEN_ADD_OBJECT_OPCODE(c, TINYPY_OP_LOAD_CONST, c->c_ellipsis, consts);
         break;
     case TINYPY_AST_KIND_SLICE:
-        return __tinypy_codegen_slice(c, s, ctx);
+        function_result = __tinypy_codegen_slice(c, s, ctx);
+        return function_result;
     case TINYPY_AST_KIND_INDEX:
         TINYPY_CODEGEN_VISIT(c, expr, s->v.Index.value);
         break;
@@ -3256,12 +3245,12 @@ static int32_t __tinypy_codegen_visit_nested_slice(tinypy_codegen_t *c, tinypy_a
     default:
         TINYPY_COMPILER_ERR_SET_STRING(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                        "extended slice invalid in nested slice");
-        return 0;
+        return TINYPY_FALSE;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_visit_slice(tinypy_codegen_t *c, tinypy_ast_slice_t s, tinypy_ast_expression_context_e ctx) {
+static tinypy_bool_t __tinypy_codegen_visit_slice(tinypy_codegen_t *c, tinypy_ast_slice_t s, tinypy_ast_expression_context_e ctx) {
     char *kindname = NULL;
     switch (s->kind) {
     case TINYPY_AST_KIND_INDEX:
@@ -3279,11 +3268,12 @@ static int32_t __tinypy_codegen_visit_slice(tinypy_codegen_t *c, tinypy_ast_slic
     case TINYPY_AST_KIND_SLICE:
         kindname = "slice";
         if (!s->v.Slice.step) {
-            return __tinypy_codegen_simple_slice(c, s, ctx);
+            tinypy_bool_t return_value_1 = __tinypy_codegen_simple_slice(c, s, ctx);
+            return return_value_1;
         }
         if (ctx != TINYPY_AST_CONTEXT_AUGMENTED_STORE) {
             if (!__tinypy_codegen_slice(c, s, ctx)) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         break;
@@ -3295,7 +3285,7 @@ static int32_t __tinypy_codegen_visit_slice(tinypy_codegen_t *c, tinypy_ast_slic
                 tinypy_ast_slice_t sub = (tinypy_ast_slice_t)TINYPY_AST_SEQUENCE_GET(
                     s->v.ExtSlice.dims, i);
                 if (!__tinypy_codegen_visit_nested_slice(c, sub, ctx)) {
-                    return 0;
+                    return TINYPY_FALSE;
                 }
             }
             TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_BUILD_TUPLE, n);
@@ -3304,9 +3294,10 @@ static int32_t __tinypy_codegen_visit_slice(tinypy_codegen_t *c, tinypy_ast_slic
     default:
         TINYPY_COMPILER_ERR_FORMAT(TINYPY_COMPILER_EXC_SYSTEM_ERROR,
                                    "invalid subscript kind %d", s->kind);
-        return 0;
+        return TINYPY_FALSE;
     }
-    return __tinypy_codegen_handle_subscr(c, kindname, ctx);
+    tinypy_bool_t return_value_2 = __tinypy_codegen_handle_subscr(c, kindname, ctx);
+    return return_value_2;
 }
 
 /* End of the compiler section, beginning of the assembler section */
@@ -3361,7 +3352,7 @@ static int32_t __tinypy_codegen_stack_depth_walk(tinypy_codegen_t *c, tinypy_cod
         if (depth > maxdepth) {
             maxdepth = depth;
         }
-        TINYPY_ASSERT(depth >= 0); /* invalid code or bug in __tinypy_codegen_stack_depth() */
+         /* invalid code or bug in __tinypy_codegen_stack_depth() */
         if (instr->i_jrel || instr->i_jabs) {
             target_depth = depth;
             if (instr->i_opcode == TINYPY_OP_FOR_ITER) {
@@ -3405,31 +3396,32 @@ static int32_t __tinypy_codegen_stack_depth(tinypy_codegen_t *c) {
     if (!entryblock) {
         return 0;
     }
-    return __tinypy_codegen_stack_depth_walk(c, entryblock, 0, 0);
+    int32_t return_value_1 = __tinypy_codegen_stack_depth_walk(c, entryblock, 0, 0);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_assembler_init(tinypy_codegen_t *c, tinypy_assembler_t *a, int32_t nblocks, int32_t firstlineno) {
+static tinypy_bool_t __tinypy_assembler_init(tinypy_codegen_t *c, tinypy_assembler_t *a, int32_t nblocks, int32_t firstlineno) {
     memset(a, 0, sizeof(tinypy_assembler_t));
     a->a_lineno = firstlineno;
     a->a_bytecode = __tinypy_frontend_string_uninitialized(c->c_module_name, TINYPY_CODEGEN_DEFAULT_CODE_SIZE);
     if (!a->a_bytecode) {
-        return 0;
+        return TINYPY_FALSE;
     }
     a->a_lnotab = __tinypy_frontend_string_uninitialized(c->c_module_name, TINYPY_CODEGEN_DEFAULT_LINE_TABLE_SIZE);
     if (!a->a_lnotab) {
-        return 0;
+        return TINYPY_FALSE;
     }
     if ((size_t)nblocks > SIZE_MAX / sizeof(tinypy_codegen_block_t *)) {
         TINYPY_COMPILER_ERR_NO_MEMORY();
-        return 0;
+        return TINYPY_FALSE;
     }
     a->a_postorder = (tinypy_codegen_block_t **)TINYPY_COMPILER_ARENA_MALLOC(c->c_arena,
                                                                              sizeof(tinypy_codegen_block_t *) * (size_t)nblocks);
     if (!a->a_postorder) {
         TINYPY_COMPILER_ERR_NO_MEMORY();
-        return 0;
+        return TINYPY_FALSE;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_assembler_free(tinypy_assembler_t *a) {
@@ -3463,7 +3455,7 @@ static int32_t __tinypy_codegen_block_size(tinypy_codegen_block_t *b) {
    Objects/lnotab_notes.txt for the description of the line number table. */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_codegen_instruction_t *i) {
+static tinypy_bool_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_codegen_instruction_t *i) {
     int32_t d_bytecode, d_lineno;
     int32_t len;
     uint8_t *lnotab;
@@ -3471,17 +3463,13 @@ static int32_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_codegen
     d_bytecode = a->a_offset - a->a_lineno_off;
     d_lineno = i->i_lineno - a->a_lineno;
 
-    TINYPY_ASSERT(d_bytecode >= 0);
-    TINYPY_ASSERT(d_lineno >= 0);
-
     if (d_bytecode == 0 && d_lineno == 0) {
-        return 1;
+        return TINYPY_TRUE;
     }
 
     if (d_bytecode > 255) {
         int32_t j, nbytes, ncodes = d_bytecode / 255;
         nbytes = a->a_lnotab_off + 2 * ncodes;
-        TINYPY_ASSERT(TINYPY_COMPILER_STRING_GET_SIZE(a->a_lnotab) <= INT_MAX);
         len = (int32_t)TINYPY_COMPILER_STRING_GET_SIZE(a->a_lnotab);
         if (nbytes >= len) {
             if ((len <= INT_MAX / 2) && (len * 2 < nbytes)) {
@@ -3492,10 +3480,10 @@ static int32_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_codegen
             }
             else {
                 TINYPY_COMPILER_ERR_NO_MEMORY();
-                return 0;
+                return TINYPY_FALSE;
             }
             if (TINYPY_COMPILER_STRING_RESIZE(&a->a_lnotab, len) < 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         lnotab = (uint8_t *)
@@ -3507,11 +3495,9 @@ static int32_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_codegen
         d_bytecode -= ncodes * 255;
         a->a_lnotab_off += ncodes * 2;
     }
-    TINYPY_ASSERT(d_bytecode <= 255);
     if (d_lineno > 255) {
         int32_t j, nbytes, ncodes = d_lineno / 255;
         nbytes = a->a_lnotab_off + 2 * ncodes;
-        TINYPY_ASSERT(TINYPY_COMPILER_STRING_GET_SIZE(a->a_lnotab) <= INT_MAX);
         len = (int32_t)TINYPY_COMPILER_STRING_GET_SIZE(a->a_lnotab);
         if (nbytes >= len) {
             if ((len <= INT_MAX / 2) && len * 2 < nbytes) {
@@ -3522,10 +3508,10 @@ static int32_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_codegen
             }
             else {
                 TINYPY_COMPILER_ERR_NO_MEMORY();
-                return 0;
+                return TINYPY_FALSE;
             }
             if (TINYPY_COMPILER_STRING_RESIZE(&a->a_lnotab, len) < 0) {
-                return 0;
+                return TINYPY_FALSE;
             }
         }
         lnotab = (uint8_t *)
@@ -3541,11 +3527,10 @@ static int32_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_codegen
         a->a_lnotab_off += ncodes * 2;
     }
 
-    TINYPY_ASSERT(TINYPY_COMPILER_STRING_GET_SIZE(a->a_lnotab) <= INT_MAX);
     len = (int32_t)TINYPY_COMPILER_STRING_GET_SIZE(a->a_lnotab);
     if (a->a_lnotab_off + 2 >= len) {
         if (TINYPY_COMPILER_STRING_RESIZE(&a->a_lnotab, len * 2) < 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
     lnotab = (uint8_t *)
@@ -3562,7 +3547,7 @@ static int32_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_codegen
     }
     a->a_lineno = i->i_lineno;
     a->a_lineno_off = a->a_offset;
-    return 1;
+    return TINYPY_TRUE;
 }
 /* __tinypy_assembler_emit()
    Extend the bytecode with a new instruction.
@@ -3570,7 +3555,7 @@ static int32_t __tinypy_assembler_add_line(tinypy_assembler_t *a, tinypy_codegen
 */
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_assembler_emit(tinypy_assembler_t *a, tinypy_codegen_instruction_t *i) {
+static tinypy_bool_t __tinypy_assembler_emit(tinypy_assembler_t *a, tinypy_codegen_instruction_t *i) {
     int32_t size, arg = 0, ext = 0;
     tinypy_compiler_size_t len = TINYPY_COMPILER_STRING_GET_SIZE(a->a_bytecode);
     char *code;
@@ -3581,20 +3566,19 @@ static int32_t __tinypy_assembler_emit(tinypy_assembler_t *a, tinypy_codegen_ins
         ext = arg >> 16;
     }
     if (i->i_lineno && !__tinypy_assembler_add_line(a, i)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     if (a->a_offset + size >= len) {
         if (len > PTRDIFF_MAX / 2) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (TINYPY_COMPILER_STRING_RESIZE(&a->a_bytecode, len * 2) < 0) {
-            return 0;
+            return TINYPY_FALSE;
         }
     }
     code = TINYPY_COMPILER_STRING_AS_STRING(a->a_bytecode) + a->a_offset;
     a->a_offset += size;
     if (size == 6) {
-        TINYPY_ASSERT(i->i_hasarg);
         *code++ = (char)TINYPY_OP_EXTENDED_ARG;
         *code++ = ext & 0xff;
         *code++ = ext >> 8;
@@ -3602,11 +3586,10 @@ static int32_t __tinypy_assembler_emit(tinypy_assembler_t *a, tinypy_codegen_ins
     }
     *code++ = i->i_opcode;
     if (i->i_hasarg) {
-        TINYPY_ASSERT(size == 3 || size == 6);
         *code++ = arg & 0xff;
         *code++ = arg >> 8;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_assembler_resolve_jumps(tinypy_assembler_t *a, tinypy_codegen_t *c) {
@@ -3682,8 +3665,6 @@ static tinypy_value_t *__tinypy_codegen_ordered_keys(tinypy_value_t *dict, int32
            The object we want is always first, though. */
         k = TINYPY_COMPILER_TUPLE_GET_ITEM(k, 1);
         TINYPY_COMPILER_INCREF(k);
-        TINYPY_ASSERT((i - offset) < size);
-        TINYPY_ASSERT((i - offset) >= 0);
         TINYPY_COMPILER_TUPLE_SET_ITEM(tuple, i - offset, k);
     }
     return tuple;
@@ -3716,13 +3697,11 @@ static int32_t __tinypy_codegen_flags(tinypy_codegen_t *c) {
     /* (Only) inherit compilerflags in TINYPY_COMPILER_FUTURE_MASK */
     flags |= (c->c_flags->flags & TINYPY_COMPILER_FUTURE_MASK);
 
-    TINYPY_ASSERT(TINYPY_COMPILER_DICT_SIZE(c->u->u_freevars) <= INT_MAX);
     n = (int32_t)TINYPY_COMPILER_DICT_SIZE(c->u->u_freevars);
     if (n < 0) {
         return -1;
     }
     if (n == 0) {
-        TINYPY_ASSERT(TINYPY_COMPILER_DICT_SIZE(c->u->u_cellvars) <= INT_MAX);
         n = (int32_t)TINYPY_COMPILER_DICT_SIZE(c->u->u_cellvars);
         if (n < 0) {
             return -1;
@@ -3764,7 +3743,6 @@ static tinypy_code_object_t *__tinypy_codegen_make_code(tinypy_codegen_t *c, tin
     if (!cellvars) {
         goto error;
     }
-    TINYPY_ASSERT(TINYPY_COMPILER_TUPLE_SIZE(cellvars) <= INT_MAX);
     freevars = __tinypy_codegen_ordered_keys(c->u->u_freevars, (int32_t)TINYPY_COMPILER_TUPLE_SIZE(cellvars));
     if (!freevars) {
         goto error;
@@ -3775,7 +3753,6 @@ static tinypy_code_object_t *__tinypy_codegen_make_code(tinypy_codegen_t *c, tin
         goto error;
     }
 
-    TINYPY_ASSERT(TINYPY_COMPILER_DICT_SIZE(c->u->u_varnames) <= INT_MAX);
     nlocals = (int32_t)TINYPY_COMPILER_DICT_SIZE(c->u->u_varnames);
     flags = __tinypy_codegen_flags(c);
     if (flags < 0) {
@@ -3824,7 +3801,7 @@ static tinypy_code_object_t *__tinypy_assembler_build(tinypy_codegen_t *c, int32
     /* Make sure every block that falls off the end returns None.
        XXX TINYPY_CODEGEN_NEXT_BLOCK() isn't quite right, because if the last
        block ends with a jump or return b_next shouldn't set.
-     */
+    */
     if (!c->u->u_curblock->b_return) {
         TINYPY_CODEGEN_NEXT_BLOCK(c);
         if (addNone) {

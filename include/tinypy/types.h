@@ -4,13 +4,17 @@
 #include <stddef.h>
 #include <stdint.h>
 //////////////////////////////////////////////////////////////////////////
-#define TINYPY_ABI_VERSION UINT32_C(1)
+#define TINYPY_ABI_VERSION UINT32_C(2)
 
 /* Hashes deliberately emulate the 64-bit CPython 2.7 `long` policy on every
  * host, including 32-bit hosts. This gives bytecode/cache users one stable
  * result width instead of inheriting the embedding process word size. */
 #define TINYPY_HASH_BITS 64
 typedef int64_t tinypy_hash_t;
+typedef uint8_t tinypy_bool_t;
+
+#define TINYPY_FALSE ((tinypy_bool_t)0U)
+#define TINYPY_TRUE ((tinypy_bool_t)1U)
 
 typedef struct tinypy_vm_t tinypy_vm_t;
 typedef struct tinypy_value_t tinypy_value_t;
@@ -50,9 +54,8 @@ typedef enum tinypy_error_kind_e {
 //////////////////////////////////////////////////////////////////////////
 /* Unless a parameter is explicitly documented as optional, pointer validity
  * and object ownership are C API preconditions. Direct typed/indexed accessors
- * additionally require the documented kind and bounds. These contracts are
- * asserted when TINYPY_ENABLE_ASSERTS is defined and are otherwise undefined
- * behavior.
+ * additionally require the documented kind and bounds. Violating these
+ * contracts is undefined behavior.
  * Direct typed accessors never convert a wrong kind, index or scalar range
  * into a status. Pointer-returning operations use NULL for semantic failure
  * and may provide an explicit tinypy_error_t. A host allocator must return
@@ -131,7 +134,11 @@ typedef enum tinypy_allocation_tag_e {
     TINYPY_ALLOC_TAG_MARSHAL_WRITE = 14,
     TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT = 15,
     TINYPY_ALLOC_TAG_POOL_ARENA = 16,
-    TINYPY_ALLOC_TAG_POOL_TABLE = 17
+    TINYPY_ALLOC_TAG_POOL_TABLE = 17,
+    TINYPY_MARSHAL_ALLOC_TAG_DOCUMENT = 0x100,
+    TINYPY_MARSHAL_ALLOC_TAG_GRAPH = 0x101,
+    TINYPY_BUILD_PROFILE_ALLOC_TAG_PROFILE = 0x300,
+    TINYPY_BUILD_PROFILE_ALLOC_TAG_DATA = 0x301
 } tinypy_allocation_tag_e;
 //////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_output_channel_e {

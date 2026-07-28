@@ -55,7 +55,6 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
         position += 1U;
     }
     capacity = size + 2U;
-    TINYPY_ASSERT(capacity <= SIZE_MAX / sizeof(*digits));
     digits = (uint16_t *)tinypy_internal_compiler_arena_allocate(ctx, capacity * sizeof(*digits));
     if (digits == NULL) {
         __tinypy_compiler_literal_error(ctx, "integer literal exceeds compiler arena limit", line_number, column_offset);
@@ -78,7 +77,6 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
             carry = product >> 15U;
         }
         while (carry != 0U) {
-            TINYPY_ASSERT(digit_count < capacity);
             digits[digit_count] = (uint16_t)(carry & 0x7fffU);
             digit_count += 1U;
             carry >>= 15U;
@@ -110,9 +108,11 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
         else {
             value = sign < 0 ? -(int64_t)magnitude : (int64_t)magnitude;
         }
-        return tinypy_integer_from_i64(ctx->vm, value);
+        tinypy_value_t *return_value_1 = tinypy_integer_from_i64(ctx->vm, value);
+        return return_value_1;
     }
-    return tinypy_long_from_base15_digits(ctx->vm, sign, digits, digit_count);
+    tinypy_value_t *return_value_2 = tinypy_long_from_base15_digits(ctx->vm, sign, digits, digit_count);
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx, const char *text, int32_t line_number, int32_t column_offset) {
@@ -123,10 +123,7 @@ tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx,
     int32_t prefixed_integer = 0;
     size_t index;
 
-    TINYPY_ASSERT(ctx != NULL);
-    TINYPY_ASSERT(text != NULL);
     size = strlen(text);
-    TINYPY_ASSERT(size != 0U);
     if (text[size - 1U] == 'j' || text[size - 1U] == 'J') {
         imaginary = 1;
         size -= 1U;
@@ -153,9 +150,11 @@ tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx,
                 return NULL;
             }
             if (imaginary != 0) {
-                return tinypy_complex_from_doubles(ctx->vm, 0.0, value);
+                tinypy_value_t *return_value_1 = tinypy_complex_from_doubles(ctx->vm, 0.0, value);
+                return return_value_1;
             }
-            return tinypy_float_from_double(ctx->vm, value);
+            tinypy_value_t *return_value_2 = tinypy_float_from_double(ctx->vm, value);
+            return return_value_2;
         }
     }
     if (imaginary != 0) {
@@ -168,16 +167,18 @@ tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx,
             __tinypy_compiler_literal_error(ctx, "invalid complex literal", line_number, column_offset);
             return NULL;
         }
-        return tinypy_complex_from_doubles(ctx->vm, 0.0, value);
+        tinypy_value_t *return_value_3 = tinypy_complex_from_doubles(ctx->vm, 0.0, value);
+        return return_value_3;
     }
-    return __tinypy_compiler_parse_integer(ctx, text, size, force_long, line_number, column_offset);
+    tinypy_value_t *return_value_4 = __tinypy_compiler_parse_integer(ctx, text, size, force_long, line_number, column_offset);
+    return return_value_4;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_utf8_append(uint8_t *output, size_t capacity, size_t *size, uint32_t code_point) {
+static tinypy_bool_t __tinypy_compiler_utf8_append(uint8_t *output, size_t capacity, size_t *size, uint32_t code_point) {
     size_t needed;
 
     if (code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdfff)) {
-        return 0;
+        return TINYPY_FALSE;
     }
     if (code_point <= 0x7fU) {
         needed = 1U;
@@ -192,10 +193,10 @@ static int32_t __tinypy_compiler_utf8_append(uint8_t *output, size_t capacity, s
         needed = 4U;
     }
     else {
-        return 0;
+        return TINYPY_FALSE;
     }
     if (needed > capacity - *size) {
-        return 0;
+        return TINYPY_FALSE;
     }
     if (needed == 1U) {
         output[(*size)++] = (uint8_t)code_point;
@@ -215,7 +216,7 @@ static int32_t __tinypy_compiler_utf8_append(uint8_t *output, size_t capacity, s
         output[(*size)++] = (uint8_t)(0x80U | ((code_point >> 6U) & 0x3fU));
         output[(*size)++] = (uint8_t)(0x80U | (code_point & 0x3fU));
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_compiler_escape_value(uint8_t byte) {
@@ -246,13 +247,13 @@ static int32_t __tinypy_compiler_escape_value(uint8_t byte) {
     return -1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx, const char *text, int32_t future_unicode, int32_t line_number, int32_t column_offset) {
+tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx, const char *text, tinypy_bool_t future_unicode, int32_t line_number, int32_t column_offset) {
     const uint8_t *source = (const uint8_t *)text;
     size_t size = strlen(text);
     size_t position = 0U;
-    int32_t raw = 0;
-    int32_t unicode = future_unicode;
-    int32_t decoded_escape = 0;
+    tinypy_bool_t raw = TINYPY_FALSE;
+    tinypy_bool_t unicode = future_unicode;
+    tinypy_bool_t decoded_escape = TINYPY_FALSE;
     uint8_t quote;
     size_t quote_size = 1U;
     size_t content_end;
@@ -401,15 +402,15 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
         output[output_size++] = byte;
     }
     if (unicode != 0) {
-        return tinypy_unicode_from_utf8(ctx->vm, (const char *)output, output_size);
-    } {
-        tinypy_value_t *result = tinypy_string_from_bytes(ctx->vm, output, output_size);
-
-        if (decoded_escape != 0 && output_size != 0U) {
-            tinypy_internal_string_set_interned(result, 0);
-        }
-        return result;
+        tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(ctx->vm, (const char *)output, output_size);
+        return return_value_1;
     }
+    tinypy_value_t *result = tinypy_string_from_bytes(ctx->vm, output, output_size);
+
+    if (decoded_escape != 0 && output_size != 0U) {
+        tinypy_internal_string_set_interned(result, 0);
+    }
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ctx, tinypy_value_t *left, tinypy_value_t *right, int32_t line_number, int32_t column_offset) {
@@ -420,12 +421,9 @@ tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ct
     size_t left_size;
     size_t right_size;
     uint8_t *joined;
-    int32_t unicode;
+    tinypy_bool_t unicode;
     size_t index;
 
-    TINYPY_ASSERT(ctx != NULL);
-    TINYPY_ASSERT(left != NULL);
-    TINYPY_ASSERT(right != NULL);
     left_type = tinypy_typeof(left);
     right_type = tinypy_typeof(right);
     unicode = left_type == TINYPY_VALUE_UNICODE || right_type == TINYPY_VALUE_UNICODE;
@@ -461,7 +459,6 @@ tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ct
             }
         }
     }
-    TINYPY_ASSERT(left_size <= SIZE_MAX - right_size);
     joined = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, left_size + right_size + 1U);
     if (joined == NULL) {
         __tinypy_compiler_literal_error(ctx, "concatenated string exceeds compiler arena limit", line_number, column_offset);
@@ -470,9 +467,11 @@ tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ct
     (void)memcpy(joined, left_bytes, left_size);
     (void)memcpy(joined + left_size, right_bytes, right_size);
     if (unicode != 0) {
-        return tinypy_unicode_from_utf8(ctx->vm, (const char *)joined, left_size + right_size);
+        tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(ctx->vm, (const char *)joined, left_size + right_size);
+        return return_value_1;
     }
-    return tinypy_string_from_bytes(ctx->vm, joined, left_size + right_size);
+    tinypy_value_t *return_value_2 = tinypy_string_from_bytes(ctx->vm, joined, left_size + right_size);
+    return return_value_2;
 
 non_ascii:
     __tinypy_compiler_literal_error(ctx, "non-ASCII byte string cannot be combined with unicode literal", line_number, column_offset);

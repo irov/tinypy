@@ -2,26 +2,12 @@
 
 #include "internal.h"
 
-#include "assertion.h"
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *defaults, tinypy_value_t *closure) {
     tinypy_value_t *doc;
     tinypy_value_t *module_name;
 
-    TINYPY_ASSERT(code != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    TINYPY_ASSERT(globals != NULL);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, globals));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(globals) == TINYPY_VALUE_DICT);
-    TINYPY_ASSERT(defaults == NULL || tinypy_internal_value_belongs_to(vm, defaults));
-    TINYPY_ASSERT(defaults == NULL || TINYPY_VALUE_KIND(defaults) == TINYPY_VALUE_TUPLE);
-    TINYPY_ASSERT(closure == NULL || tinypy_internal_value_belongs_to(vm, closure));
-    TINYPY_ASSERT(closure == NULL || TINYPY_VALUE_KIND(closure) == TINYPY_VALUE_TUPLE);
-    TINYPY_ASSERT(closure == NULL || TINYPY_TUPLE_SIZE(closure) == TINYPY_TUPLE_SIZE(TINYPY_CODE_FREEVARS(code)));
-    TINYPY_ASSERT(closure == NULL || __tinypy_internal_values_have_kind(TINYPY_TUPLE_ITERATOR_BEGIN(closure), TINYPY_TUPLE_SIZE(closure), TINYPY_VALUE_CELL));
 
     tinypy_function_object_t *function = (tinypy_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_FUNCTION, sizeof(*function));
     function->code = code;
@@ -30,10 +16,10 @@ tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *global
     function->closure = closure;
     function->name = TINYPY_CODE_NAME(code);
     tinypy_value_t *consts = TINYPY_CODE_CONSTS(code);
-    int32_t condition = TINYPY_TUPLE_SIZE(consts) != 0U;
+    tinypy_bool_t condition = TINYPY_TUPLE_SIZE(consts) != 0U;
     if (condition != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(consts, 0U);
-        int32_t condition_2 = TINYPY_VALUE_KIND(item) == TINYPY_VALUE_STRING;
+        tinypy_bool_t condition_2 = TINYPY_VALUE_KIND(item) == TINYPY_VALUE_STRING;
         if (condition_2 == 0) {
             tinypy_value_t *item_2 = TINYPY_TUPLE_GET(consts, 0U);
             condition_2 = TINYPY_VALUE_KIND(item_2) == TINYPY_VALUE_UNICODE;
@@ -89,18 +75,12 @@ void tinypy_internal_function_release_references(tinypy_value_t *value, tinypy_r
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    return tinypy_internal_eval_function(callable, args, kwargs, out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_eval_function(callable, args, kwargs, out_error);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    TINYPY_ASSERT(callable != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(args != NULL);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, args));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(args) == TINYPY_VALUE_TUPLE);
-    TINYPY_ASSERT(kwargs == NULL || tinypy_internal_value_belongs_to(vm, kwargs));
-    TINYPY_ASSERT(kwargs == NULL || TINYPY_VALUE_KIND(kwargs) == TINYPY_VALUE_DICT);
     TINYPY_CLEAR_ERROR(out_error);
     if (callable->type->call == NULL) {
         if (tinypy_internal_object_has_special(callable, "__call__", 8U) != 0) {
@@ -117,47 +97,36 @@ tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tiny
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object is not callable", out_error);
         return NULL;
     }
-    return callable->type->call(callable, args, kwargs, out_error);
+    tinypy_value_t *return_value_1 = callable->type->call(callable, args, kwargs, out_error);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_code(const tinypy_value_t *function) {
-    TINYPY_ASSERT(function != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_FUNCTION);
-    return TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->code;
+    tinypy_value_t *return_value_1 = TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->code;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_globals(const tinypy_value_t *function) {
-    TINYPY_ASSERT(function != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_FUNCTION);
-    return TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->globals;
+    tinypy_value_t *return_value_1 = TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->globals;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_defaults(const tinypy_value_t *function) {
-    TINYPY_ASSERT(function != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_FUNCTION);
-    return TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->defaults;
+    tinypy_value_t *return_value_1 = TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->defaults;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_closure(const tinypy_value_t *function) {
-    TINYPY_ASSERT(function != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_FUNCTION);
-    return TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->closure;
+    tinypy_value_t *return_value_1 = TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->closure;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_name(const tinypy_value_t *function) {
-    TINYPY_ASSERT(function != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_FUNCTION);
-    return TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->name;
+    tinypy_value_t *return_value_1 = TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->name;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_doc(const tinypy_value_t *function) {
-    TINYPY_ASSERT(function != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(function)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(function) == TINYPY_VALUE_FUNCTION);
-    return TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->doc;
+    tinypy_value_t *return_value_1 = TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->doc;
+    return return_value_1;
 }

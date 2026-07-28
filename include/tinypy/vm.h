@@ -8,11 +8,11 @@ typedef struct tinypy_allocator_t {
     uint32_t struct_size;
     void *user_data;
 
-    void *(*allocate)(void *user_data, size_t size, size_t alignment, uint32_t tag);
+    void *(*allocate)(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag);
 
-    void *(*reallocate)(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag);
+    void *(*reallocate)(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag);
 
-    void (*deallocate)(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag);
+    void (*deallocate)(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag);
 } tinypy_allocator_t;
 
 typedef struct tinypy_diagnostic_t {
@@ -38,7 +38,7 @@ typedef struct tinypy_host_t {
 
     tinypy_diagnostic_callback_t diagnostic;
 
-    int32_t (*poll_interrupt)(void *user_data);
+    tinypy_bool_t (*poll_interrupt)(void *user_data);
 } tinypy_host_t;
 
 typedef struct tinypy_vm_config_t {
@@ -53,7 +53,7 @@ typedef struct tinypy_vm_config_t {
     size_t max_heap_bytes;
     uint64_t feature_flags;
     int32_t optimize_level;
-    int32_t cycle_diagnostics;
+    tinypy_bool_t cycle_diagnostics;
 } tinypy_vm_config_t;
 
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config);

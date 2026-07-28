@@ -8,7 +8,6 @@ project(tinypy
 
 option(TINYPY_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 option(TINYPY_BUILD_CLI "Build the optional TinyPy CLI library and executables" OFF)
-option(TINYPY_ENABLE_ASSERTS "Enable TinyPy internal runtime assertions" OFF)
 option(TINYPY_ENABLE_CYCLE_DIAGNOSTICS "Enable TinyPy cycle diagnostics in Debug builds" OFF)
 
 function(tinypy_enable_strict_warnings target)
@@ -71,7 +70,6 @@ add_library(tinypy STATIC
     src/compiler/generated/grammar.c
     src/core/dict.c
     src/core/dict_view.c
-    src/core/assertion.c
     src/core/buffer.c
     src/core/bytearray.c
     src/core/weakref.c
@@ -86,6 +84,7 @@ add_library(tinypy STATIC
     src/core/comparison.c
     src/core/container_methods.c
     src/core/constructors.c
+    src/core/cycle_diagnostics.c
     src/core/descriptor.c
     src/core/error.c
     src/core/exception.c
@@ -124,9 +123,6 @@ add_library(tinypy STATIC
 add_library(tinypy::tinypy ALIAS tinypy)
 
 target_compile_features(tinypy PUBLIC c_std_99)
-if(TINYPY_ENABLE_ASSERTS)
-    target_compile_definitions(tinypy PRIVATE TINYPY_ENABLE_ASSERTS=1)
-endif()
 if(TINYPY_ENABLE_CYCLE_DIAGNOSTICS)
     target_compile_definitions(tinypy
         PUBLIC

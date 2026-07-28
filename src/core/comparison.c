@@ -2,18 +2,17 @@
 
 #include "internal.h"
 
-#include "assertion.h"
 #include <math.h>
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_comparison_is_numeric(tinypy_value_type_e kind) {
+static tinypy_bool_t __tinypy_comparison_is_numeric(tinypy_value_type_e kind) {
     return kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_comparison_is_exact_builtin(const tinypy_value_t *value) {
+static tinypy_bool_t __tinypy_comparison_is_exact_builtin(const tinypy_value_t *value) {
     if ((value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
-        return 0;
+        return TINYPY_FALSE;
     }
     switch (TINYPY_VALUE_KIND(value)) {
     case TINYPY_VALUE_NONE:
@@ -29,9 +28,9 @@ static int32_t __tinypy_comparison_is_exact_builtin(const tinypy_value_t *value)
     case TINYPY_VALUE_DICT:
     case TINYPY_VALUE_SET:
     case TINYPY_VALUE_FROZENSET:
-        return 1;
+        return TINYPY_TRUE;
     default:
-        return 0;
+        return TINYPY_FALSE;
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -53,11 +52,10 @@ static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver,
 
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
+    int32_t function_result;
     tinypy_value_type_e kind;
 
-    TINYPY_ASSERT(value != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     TINYPY_CLEAR_ERROR(out_error);
     kind = TINYPY_VALUE_KIND(value);
     switch (kind) {
@@ -65,46 +63,54 @@ int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
         return INT32_C(0);
     case TINYPY_VALUE_BOOL:
     case TINYPY_VALUE_INTEGER:
-        return TINYPY_INTEGER_VALUE(value) != 0 ? INT32_C(1) : INT32_C(0);
+        function_result = TINYPY_INTEGER_VALUE(value) != 0 ? INT32_C(1) : INT32_C(0);
+        return function_result;
     case TINYPY_VALUE_LONG:
-        return TINYPY_LONG_SIGN(value) != 0 ? INT32_C(1) : INT32_C(0);
+        function_result = TINYPY_LONG_SIGN(value) != 0 ? INT32_C(1) : INT32_C(0);
+        return function_result;
     case TINYPY_VALUE_FLOAT:
-        return TINYPY_FLOAT_OBJECT(value)->value != 0.0 ? INT32_C(1) : INT32_C(0);
+        function_result = TINYPY_FLOAT_OBJECT(value)->value != 0.0 ? INT32_C(1) : INT32_C(0);
+        return function_result;
     case TINYPY_VALUE_COMPLEX:
-        return TINYPY_COMPLEX_OBJECT(value)->real != 0.0 || TINYPY_COMPLEX_OBJECT(value)->imaginary != 0.0 ? INT32_C(1) : INT32_C(0);
+        function_result = TINYPY_COMPLEX_OBJECT(value)->real != 0.0 || TINYPY_COMPLEX_OBJECT(value)->imaginary != 0.0 ? INT32_C(1) : INT32_C(0);
+        return function_result;
     case TINYPY_VALUE_STRING:
     case TINYPY_VALUE_UNICODE:
     case TINYPY_VALUE_TUPLE:
     case TINYPY_VALUE_LIST:
-        return TINYPY_SIZED_SIZE(value) != 0 ? INT32_C(1) : INT32_C(0);
+        function_result = TINYPY_SIZED_SIZE(value) != 0 ? INT32_C(1) : INT32_C(0);
+        return function_result;
     case TINYPY_VALUE_DICT:
-        return TINYPY_DICT_OBJECT(value)->used != 0U ? INT32_C(1) : INT32_C(0);
+        function_result = TINYPY_DICT_OBJECT(value)->used != 0U ? INT32_C(1) : INT32_C(0);
+        return function_result;
     case TINYPY_VALUE_SET:
     case TINYPY_VALUE_FROZENSET:
-        return tinypy_set_size(value) != 0U ? INT32_C(1) : INT32_C(0);
+        function_result = tinypy_set_size(value) != 0U ? INT32_C(1) : INT32_C(0);
+        return function_result;
     case TINYPY_VALUE_XRANGE:
-        return TINYPY_XRANGE_OBJECT(value)->length != 0U ? INT32_C(1) : INT32_C(0);
+        function_result = TINYPY_XRANGE_OBJECT(value)->length != 0U ? INT32_C(1) : INT32_C(0);
+        return function_result;
     default:
         break;
-    } {
-        tinypy_length_slot_t length_slot = value->type->mapping_slots != NULL && value->type->mapping_slots->length != NULL
-                                               ? value->type->mapping_slots->length
-                                               : (value->type->sequence_slots != NULL ? value->type->sequence_slots->length : NULL);
+    }
+    tinypy_length_slot_t length_slot = value->type->mapping_slots != NULL && value->type->mapping_slots->length != NULL
+                                           ? value->type->mapping_slots->length
+                                           : (value->type->sequence_slots != NULL ? value->type->sequence_slots->length : NULL);
 
-        if (length_slot != NULL) {
-            ptrdiff_t length = length_slot(value, out_error);
+    if (length_slot != NULL) {
+        ptrdiff_t length = length_slot(value, out_error);
 
-            if (length < 0) {
-                if (out_error == NULL || *out_error == NULL) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "length slot returned a negative value", out_error);
-                }
-                return INT32_C(-1);
+        if (length < 0) {
+            if (out_error == NULL || *out_error == NULL) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "length slot returned a negative value", out_error);
             }
-            return length != 0 ? INT32_C(1) : INT32_C(0);
+            return INT32_C(-1);
         }
+        return length != 0 ? INT32_C(1) : INT32_C(0);
     }
     if (value->type->number_slots != NULL && value->type->number_slots->nonzero != NULL) {
-        return value->type->number_slots->nonzero(value, out_error);
+        int32_t return_value_1 = value->type->number_slots->nonzero(value, out_error);
+        return return_value_1;
     }
     if (tinypy_internal_object_has_special(value, "__nonzero__", 11U) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_no_args(value, "__nonzero__", 11U, out_error);
@@ -172,7 +178,7 @@ static int32_t __tinypy_comparison_type_name_order(const tinypy_type_t *left, co
     return (uintptr_t)left < (uintptr_t)right ? -1 : 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, int32_t *out_unordered, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_bool_t *out_unordered, tinypy_error_t **out_error) {
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
 
@@ -181,17 +187,17 @@ static int32_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *r
         if (left_kind == TINYPY_VALUE_COMPLEX || right_kind == TINYPY_VALUE_COMPLEX) {
             tinypy_vm_t *vm_2 = TINYPY_VALUE_VM(left);
             tinypy_internal_make_vm_error(vm_2, TINYPY_ERROR_TYPE, "complex numbers have no ordering relation", out_error);
-            return 0;
+            return TINYPY_FALSE;
         }
         if (tinypy_internal_numeric_order(left, right, out_order) == 0) {
             *out_order = 0;
             *out_unordered = 1;
         }
-        return 1;
+        return TINYPY_TRUE;
     }
     if ((left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE) && (right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE)) {
         *out_order = tinypy_internal_text_order(left, right);
-        return 1;
+        return TINYPY_TRUE;
     }
     if ((left_kind == TINYPY_VALUE_BYTEARRAY || right_kind == TINYPY_VALUE_BYTEARRAY || left_kind == TINYPY_VALUE_BUFFER || right_kind == TINYPY_VALUE_BUFFER)) {
         const uint8_t *left_bytes;
@@ -205,7 +211,7 @@ static int32_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *r
             common_size = left_size < right_size ? left_size : right_size;
             comparison = common_size != 0U ? memcmp(left_bytes, right_bytes, common_size) : 0;
             *out_order = comparison < 0 ? -1 : (comparison > 0 ? 1 : (left_size < right_size ? -1 : (left_size > right_size ? 1 : 0)));
-            return 1;
+            return TINYPY_TRUE;
         }
     }
     if (left_kind == right_kind && (left_kind == TINYPY_VALUE_TUPLE || left_kind == TINYPY_VALUE_LIST)) {
@@ -215,36 +221,24 @@ static int32_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *r
         tinypy_value_t *const *left_iterator = left_kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_ITERATOR_BEGIN(left) : TINYPY_LIST_ITERATOR_BEGIN(left);
         tinypy_value_t *const *left_iterator_end = common_size != 0U ? left_iterator + common_size : left_iterator;
         tinypy_value_t *const *right_iterator = right_kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_ITERATOR_BEGIN(right) : TINYPY_LIST_ITERATOR_BEGIN(right);
-#if defined(TINYPY_ENABLE_ASSERTS)
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-
-        TINYPY_ASSERT(vm->equality_depth < 1000U);
-        vm->equality_depth += 1U;
-#endif
         for (; left_iterator != left_iterator_end; ++left_iterator, ++right_iterator) {
             tinypy_value_t *left_item = *left_iterator;
             tinypy_value_t *right_item = *right_iterator;
 
             if (tinypy_internal_equal_value(left_item, right_item, 1) == 0) {
-                int32_t ordered = __tinypy_comparison_order(left_item, right_item, out_order, out_unordered, out_error);
-#if defined(TINYPY_ENABLE_ASSERTS)
-                vm->equality_depth -= 1U;
-#endif
+                tinypy_bool_t ordered = __tinypy_comparison_order(left_item, right_item, out_order, out_unordered, out_error);
                 return ordered;
             }
         }
-#if defined(TINYPY_ENABLE_ASSERTS)
-        vm->equality_depth -= 1U;
-#endif
         *out_order = left_size < right_size ? -1 : (left_size > right_size ? 1 : 0);
-        return 1;
+        return TINYPY_TRUE;
     }
     if ((left_kind == TINYPY_VALUE_SET || left_kind == TINYPY_VALUE_FROZENSET) && (right_kind == TINYPY_VALUE_SET || right_kind == TINYPY_VALUE_FROZENSET)) {
-        int32_t left_subset = tinypy_set_size(left) <= tinypy_set_size(right) && tinypy_internal_set_equal(left, right) != 0;
+        tinypy_bool_t left_subset = tinypy_set_size(left) <= tinypy_set_size(right) && tinypy_internal_set_equal(left, right) != 0;
 
         if (tinypy_internal_set_equal(left, right) != 0) {
             *out_order = 0;
-            return 1;
+            return TINYPY_TRUE;
         }
         if (tinypy_set_size(left) < tinypy_set_size(right)) {
             tinypy_value_t *dict = TINYPY_SET_OBJECT(left)->dict;
@@ -260,7 +254,7 @@ static int32_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *r
             }
             if (left_subset != 0) {
                 *out_order = -1;
-                return 1;
+                return TINYPY_TRUE;
             }
         }
         else if (tinypy_set_size(left) > tinypy_set_size(right)) {
@@ -277,31 +271,31 @@ static int32_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_value_t *r
             }
             if (right_subset != 0) {
                 *out_order = 1;
-                return 1;
+                return TINYPY_TRUE;
             }
         }
         *out_order = 0;
         *out_unordered = 1;
-        return 1;
+        return TINYPY_TRUE;
     }
     if (left_kind == TINYPY_VALUE_NONE || right_kind == TINYPY_VALUE_NONE) {
         *out_order = left_kind == TINYPY_VALUE_NONE ? -1 : 1;
-        return 1;
+        return TINYPY_TRUE;
     }
     if (__tinypy_comparison_is_numeric(left_kind) != __tinypy_comparison_is_numeric(right_kind)) {
         *out_order = __tinypy_comparison_is_numeric(left_kind) != 0 ? -1 : 1;
-        return 1;
+        return TINYPY_TRUE;
     }
     if (left->type != right->type) {
         *out_order = __tinypy_comparison_type_name_order(left->type, right->type);
-        return 1;
+        return TINYPY_TRUE;
     }
     if (left == right) {
         *out_order = 0;
-        return 1;
+        return TINYPY_TRUE;
     }
     *out_order = (uintptr_t)left < (uintptr_t)right ? -1 : 1;
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error) {
@@ -337,23 +331,24 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
 int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error) {
     tinypy_value_type_e kind;
 
-    TINYPY_ASSERT(container != NULL && item != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, item));
     TINYPY_CLEAR_ERROR(out_error);
     if (container->type->sequence_slots != NULL && container->type->sequence_slots->contains != NULL) {
-        return container->type->sequence_slots->contains(container, item, out_error);
+        int32_t return_value_1 = container->type->sequence_slots->contains(container, item, out_error);
+        return return_value_1;
     }
     kind = TINYPY_VALUE_KIND(container);
     if (kind == TINYPY_VALUE_DICT) {
-        return tinypy_dict_contains(container, item) != 0 ? 1 : 0;
+        int32_t return_value_2 = tinypy_dict_contains(container, item) != 0 ? 1 : 0;
+        return return_value_2;
     }
     if (kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
-        return tinypy_set_contains(container, item, out_error);
+        int32_t return_value_3 = tinypy_set_contains(container, item, out_error);
+        return return_value_3;
     }
     if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
-        return __tinypy_comparison_text_contains(container, item, out_error);
+        int32_t return_value_4 = __tinypy_comparison_text_contains(container, item, out_error);
+        return return_value_4;
     }
     if (kind == TINYPY_VALUE_BYTEARRAY) {
         int64_t integer;
@@ -361,7 +356,7 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
         size_t index;
 
         tinypy_value_type_e kind_2 = TINYPY_VALUE_KIND(item);
-        int32_t condition = __tinypy_comparison_is_numeric(kind_2) == 0;
+        tinypy_bool_t condition = __tinypy_comparison_is_numeric(kind_2) == 0;
         if (condition == 0) {
             condition = (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_FLOAT || TINYPY_VALUE_KIND(item) == TINYPY_VALUE_COMPLEX);
         }
@@ -411,42 +406,41 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
         truth = tinypy_truth(result, out_error);
         TINYPY_DECREF(result);
         return truth;
-    } {
-        tinypy_error_t *iteration_error = NULL;
-        tinypy_value_t *iterator = tinypy_iter(container, &iteration_error);
+    }
+    tinypy_error_t *iteration_error = NULL;
+    tinypy_value_t *iterator = tinypy_iter(container, &iteration_error);
 
-        if (iterator == NULL) {
-            if (out_error != NULL) {
-                *out_error = iteration_error;
-            }
-            else if (iteration_error != NULL) {
-                tinypy_error_release(iteration_error);
-            }
-            return -1;
+    if (iterator == NULL) {
+        if (out_error != NULL) {
+            *out_error = iteration_error;
         }
-        for (;;) {
-            tinypy_value_t *candidate = tinypy_next(iterator, &iteration_error);
+        else if (iteration_error != NULL) {
+            tinypy_error_release(iteration_error);
+        }
+        return -1;
+    }
+    for (;;) {
+        tinypy_value_t *candidate = tinypy_next(iterator, &iteration_error);
 
-            if (candidate == NULL) {
-                break;
-            }
-            if (tinypy_internal_equal_value(candidate, item, 1) != 0) {
-                TINYPY_DECREF(candidate);
-                TINYPY_DECREF(iterator);
-                return 1;
-            }
+        if (candidate == NULL) {
+            break;
+        }
+        if (tinypy_internal_equal_value(candidate, item, 1) != 0) {
             TINYPY_DECREF(candidate);
+            TINYPY_DECREF(iterator);
+            return 1;
         }
-        TINYPY_DECREF(iterator);
-        if (iteration_error != NULL) {
-            if (out_error != NULL) {
-                *out_error = iteration_error;
-            }
-            else {
-                tinypy_error_release(iteration_error);
-            }
-            return -1;
+        TINYPY_DECREF(candidate);
+    }
+    TINYPY_DECREF(iterator);
+    if (iteration_error != NULL) {
+        if (out_error != NULL) {
+            *out_error = iteration_error;
         }
+        else {
+            tinypy_error_release(iteration_error);
+        }
+        return -1;
     }
     return 0;
 }
@@ -465,22 +459,22 @@ static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver,
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_comparison_special_result(tinypy_vm_t *vm, tinypy_value_t *result, int32_t *out_value, int32_t *out_not_implemented, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_comparison_special_result(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_bool_t *out_value, tinypy_bool_t *out_not_implemented, tinypy_error_t **out_error) {
     int32_t truth;
 
     if (result == &vm->not_implemented_object.base) {
         TINYPY_DECREF(result);
         *out_not_implemented = INT32_C(1);
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     truth = tinypy_truth(result, out_error);
     TINYPY_DECREF(result);
     if (truth < 0) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     *out_value = truth;
     *out_not_implemented = INT32_C(0);
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_compare_operation_e __tinypy_comparison_reverse_operation(tinypy_compare_operation_e operation) {
@@ -492,34 +486,33 @@ static tinypy_compare_operation_e __tinypy_comparison_reverse_operation(tinypy_c
         TINYPY_COMPARE_LESS,
         TINYPY_COMPARE_LESS_EQUAL};
 
-    TINYPY_ASSERT(operation <= TINYPY_COMPARE_GREATER_EQUAL);
     return reversed[(size_t)operation];
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_comparison_try_rich_slot(tinypy_value_t *receiver, tinypy_value_t *argument, tinypy_compare_operation_e operation, int32_t *out_handled, int32_t *out_value, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_comparison_try_rich_slot(tinypy_value_t *receiver, tinypy_value_t *argument, tinypy_compare_operation_e operation, tinypy_bool_t *out_handled, tinypy_bool_t *out_value, tinypy_error_t **out_error) {
     tinypy_value_t *result;
-    int32_t not_implemented;
+    tinypy_bool_t not_implemented;
 
     *out_handled = INT32_C(0);
     if (receiver->type->rich_compare == NULL) {
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     result = receiver->type->rich_compare(receiver, argument, (int32_t)operation, out_error);
     if (result == NULL) {
         *out_handled = INT32_C(1);
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     if (__tinypy_comparison_special_result(TINYPY_VALUE_VM(receiver), result, out_value, &not_implemented, out_error) == 0) {
         *out_handled = INT32_C(1);
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     if (not_implemented == 0) {
         *out_handled = INT32_C(1);
     }
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, int32_t *out_handled, int32_t *out_value, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_bool_t *out_handled, tinypy_bool_t *out_value, tinypy_error_t **out_error) {
     static const char *left_names[] = {"__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__"};
     static const char *right_names[] = {"__gt__", "__ge__", "__eq__", "__ne__", "__lt__", "__le__"};
     static const size_t name_sizes[] = {6U, 6U, 6U, 6U, 6U, 6U};
@@ -528,66 +521,66 @@ static int32_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_valu
 
     *out_handled = INT32_C(0);
     if (operation > TINYPY_COMPARE_GREATER_EQUAL) {
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     if (right->type != left->type && tinypy_type_is_subtype(right->type, left->type) != 0) {
         tinypy_compare_operation_e reversed_operation = __tinypy_comparison_reverse_operation(operation);
 
         if (__tinypy_comparison_try_rich_slot(right, left, reversed_operation, out_handled, out_value, out_error) == 0) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         if (*out_handled != 0) {
-            return INT32_C(1);
+            return TINYPY_TRUE;
         }
     }
     if (__tinypy_comparison_try_rich_slot(left, right, operation, out_handled, out_value, out_error) == 0) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     if (*out_handled != 0) {
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     if (right->type != left->type) {
         tinypy_compare_operation_e reversed_operation = __tinypy_comparison_reverse_operation(operation);
 
         if (__tinypy_comparison_try_rich_slot(right, left, reversed_operation, out_handled, out_value, out_error) == 0) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         if (*out_handled != 0) {
-            return INT32_C(1);
+            return TINYPY_TRUE;
         }
     }
     if (tinypy_internal_object_has_special(left, left_names[index], name_sizes[index]) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_binary(left, left_names[index], name_sizes[index], right, out_error);
-        int32_t not_implemented;
+        tinypy_bool_t not_implemented;
 
         if (result == NULL) {
             *out_handled = INT32_C(1);
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         if (__tinypy_comparison_special_result(vm, result, out_value, &not_implemented, out_error) == 0) {
             *out_handled = INT32_C(1);
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         if (not_implemented == 0) {
             *out_handled = INT32_C(1);
-            return INT32_C(1);
+            return TINYPY_TRUE;
         }
     }
     if ((right->type != left->type || (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_OLD_INSTANCE && tinypy_old_instance_class(left) != tinypy_old_instance_class(right))) && tinypy_internal_object_has_special(right, right_names[index], name_sizes[index]) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_binary(right, right_names[index], name_sizes[index], left, out_error);
-        int32_t not_implemented;
+        tinypy_bool_t not_implemented;
 
         if (result == NULL) {
             *out_handled = INT32_C(1);
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         if (__tinypy_comparison_special_result(vm, result, out_value, &not_implemented, out_error) == 0) {
             *out_handled = INT32_C(1);
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         if (not_implemented == 0) {
             *out_handled = INT32_C(1);
-            return INT32_C(1);
+            return TINYPY_TRUE;
         }
     }
     if (tinypy_internal_object_has_special(left, "__cmp__", 7U) != 0) {
@@ -596,7 +589,7 @@ static int32_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_valu
 
         if (result == NULL) {
             *out_handled = INT32_C(1);
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         if (TINYPY_VALUE_KIND(result) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(result) == TINYPY_VALUE_INTEGER) {
             order = TINYPY_INTEGER_VALUE(result);
@@ -605,7 +598,7 @@ static int32_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_valu
             TINYPY_DECREF(result);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__cmp__ returned a non-integer", out_error);
             *out_handled = INT32_C(1);
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         TINYPY_DECREF(result);
         if (operation == TINYPY_COMPARE_LESS) {
@@ -628,17 +621,13 @@ static int32_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_valu
         }
         *out_handled = INT32_C(1);
     }
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_compare_bool(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error) {
     int32_t order;
-    int32_t unordered;
+    tinypy_bool_t unordered;
 
-    TINYPY_ASSERT(left != NULL && right != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(left)));
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(left), right));
-    TINYPY_ASSERT(operation >= TINYPY_COMPARE_LESS && operation <= TINYPY_COMPARE_EXCEPTION_MATCH);
     TINYPY_CLEAR_ERROR(out_error);
     if (operation == TINYPY_COMPARE_IS) {
         return left == right;
@@ -652,11 +641,12 @@ int32_t tinypy_compare_bool(tinypy_value_t *left, tinypy_value_t *right, tinypy_
         return contained < 0 || operation == TINYPY_COMPARE_IN ? contained : contained == 0;
     }
     if (operation == TINYPY_COMPARE_EXCEPTION_MATCH) {
-        return tinypy_exception_matches(left, right, out_error);
+        int32_t return_value_1 = tinypy_exception_matches(left, right, out_error);
+        return return_value_1;
     }
     if (operation <= TINYPY_COMPARE_GREATER_EQUAL && (__tinypy_comparison_is_exact_builtin(left) == 0 || __tinypy_comparison_is_exact_builtin(right) == 0)) {
-        int32_t handled;
-        int32_t special_value;
+        tinypy_bool_t handled;
+        tinypy_bool_t special_value;
 
         if (__tinypy_comparison_try_special(left, right, operation, &handled, &special_value, out_error) == 0) {
             return -1;
@@ -666,10 +656,12 @@ int32_t tinypy_compare_bool(tinypy_value_t *left, tinypy_value_t *right, tinypy_
         }
     }
     if (operation == TINYPY_COMPARE_EQUAL) {
-        return tinypy_equal(left, right);
+        int32_t return_value_2 = tinypy_equal(left, right);
+        return return_value_2;
     }
     if (operation == TINYPY_COMPARE_NOT_EQUAL) {
-        return tinypy_equal(left, right) == 0;
+        int32_t return_value_3 = tinypy_equal(left, right) == 0;
+        return return_value_3;
     }
     if (__tinypy_comparison_order(left, right, &order, &unordered, out_error) == 0) {
         return -1;

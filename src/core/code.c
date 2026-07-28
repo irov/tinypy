@@ -3,10 +3,8 @@
 
 #include "internal.h"
 
-#include "assertion.h"
-
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_internal_code_all_name_chars(const tinypy_value_t *value) {
+static tinypy_bool_t __tinypy_internal_code_all_name_chars(const tinypy_value_t *value) {
     size_t size;
     const uint8_t *bytes = (const uint8_t *)tinypy_string_view(value, &size);
     size_t index;
@@ -17,9 +15,9 @@ static int32_t __tinypy_internal_code_all_name_chars(const tinypy_value_t *value
         if ((byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') || byte == '_' || (byte >= 'a' && byte <= 'z')) {
             continue;
         }
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_code_intern_constants(tinypy_value_t *value) {
@@ -61,28 +59,12 @@ static void __tinypy_internal_code_intern_identifiers(tinypy_value_t *tuple) {
     for (; iterator != iterator_end; ++iterator) {
         tinypy_value_t *value = *iterator;
 
-        TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING);
         tinypy_internal_string_set_interned(value, 1);
     }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *bytecode, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *varnames, tinypy_value_t *freevars, tinypy_value_t *cellvars, tinypy_value_t *filename, tinypy_value_t *name, int32_t first_line_number, tinypy_value_t *lnotab) {
-    TINYPY_ASSERT(bytecode != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(bytecode);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(arg_count >= 0);
-    TINYPY_ASSERT(local_count >= 0);
-    TINYPY_ASSERT(stack_size >= 0);
-    TINYPY_ASSERT(first_line_number >= 0);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, bytecode) && TINYPY_VALUE_KIND(bytecode) == TINYPY_VALUE_STRING);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, consts) && TINYPY_VALUE_KIND(consts) == TINYPY_VALUE_TUPLE);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, names) && TINYPY_VALUE_KIND(names) == TINYPY_VALUE_TUPLE);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, varnames) && TINYPY_VALUE_KIND(varnames) == TINYPY_VALUE_TUPLE);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, freevars) && TINYPY_VALUE_KIND(freevars) == TINYPY_VALUE_TUPLE);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, cellvars) && TINYPY_VALUE_KIND(cellvars) == TINYPY_VALUE_TUPLE);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, filename) && TINYPY_VALUE_KIND(filename) == TINYPY_VALUE_STRING);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, name) && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, lnotab) && TINYPY_VALUE_KIND(lnotab) == TINYPY_VALUE_STRING);
 
     __tinypy_internal_code_intern_identifiers(names);
     __tinypy_internal_code_intern_identifiers(varnames);
@@ -148,9 +130,6 @@ void tinypy_internal_code_attach_compile_environment(tinypy_value_t *code_value,
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
 
-    TINYPY_ASSERT(code_value != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code_value)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code_value) == TINYPY_VALUE_CODE);
     tinypy_code_object_t *code = TINYPY_CODE_OBJECT(code_value);
     if (code->compile_environment != environment) {
         if (environment != NULL) {
@@ -173,123 +152,92 @@ void tinypy_internal_code_attach_compile_environment(tinypy_value_t *code_value,
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_code_attach_compile_options(tinypy_value_t *code, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile) {
-    TINYPY_ASSERT(code != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
     tinypy_compile_environment_t *environment = tinypy_internal_compile_environment_create(vm, feature_flags, optimize_level, profile);
     tinypy_internal_code_attach_compile_environment(code, environment);
     tinypy_internal_compile_environment_release(environment);
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_compile_options_inherit_frame(tinypy_vm_t *vm, tinypy_compile_options_t *options) {
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(options != NULL);
+tinypy_bool_t tinypy_internal_compile_options_inherit_frame(tinypy_vm_t *vm, tinypy_compile_options_t *options) {
     if (vm->current_frame == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     tinypy_compile_environment_t *environment = TINYPY_CODE_OBJECT(vm->current_frame->code)->compile_environment;
     if (environment == NULL) {
-        return 0;
+        return TINYPY_FALSE;
     }
     options->feature_flags = tinypy_internal_compile_environment_feature_flags(environment);
     options->optimize_level = tinypy_internal_compile_environment_optimize_level(environment);
     options->build_profile = tinypy_internal_compile_environment_build_profile(environment);
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_code_arg_count(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->arg_count;
+    int32_t return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->arg_count;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_code_local_count(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->local_count;
+    int32_t return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->local_count;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_code_stack_size(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->stack_size;
+    int32_t return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->stack_size;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_code_flags(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->flags;
+    int32_t return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->flags;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_bytecode(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->bytecode;
+    tinypy_value_t *return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->bytecode;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_consts(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->consts;
+    tinypy_value_t *return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->consts;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_names(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->names;
+    tinypy_value_t *return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->names;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_varnames(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->varnames;
+    tinypy_value_t *return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->varnames;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_freevars(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->freevars;
+    tinypy_value_t *return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->freevars;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_cellvars(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->cellvars;
+    tinypy_value_t *return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->cellvars;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_filename(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->filename;
+    tinypy_value_t *return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->filename;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_name(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->name;
+    tinypy_value_t *return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->name;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_code_first_line_number(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->first_line_number;
+    int32_t return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->first_line_number;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_code_lnotab(const tinypy_value_t *code) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    return TINYPY_CODE_OBJECT((tinypy_value_t *)code)->lnotab;
+    tinypy_value_t *return_value_1 = TINYPY_CODE_OBJECT((tinypy_value_t *)code)->lnotab;
+    return return_value_1;
 }

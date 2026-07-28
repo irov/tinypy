@@ -61,7 +61,7 @@ struct tinypy_compile_options_t {
     uint32_t struct_size;
     tinypy_compile_mode_e mode;
     uint32_t flags;
-    int32_t dont_inherit;
+    tinypy_bool_t dont_inherit;
     int32_t optimize_level;
     uint32_t feature_flags;
     const tinypy_compile_limits_t *limits;
@@ -155,16 +155,11 @@ typedef struct tinypy_build_profile_error_t {
     size_t message_size;
 } tinypy_build_profile_error_t;
 
-typedef enum tinypy_build_profile_allocation_tag_e {
-    TINYPY_BUILD_PROFILE_ALLOC_TAG_PROFILE = 0x300,
-    TINYPY_BUILD_PROFILE_ALLOC_TAG_DATA = 0x301
-} tinypy_build_profile_allocation_tag_e;
-
 void tinypy_build_value_init(tinypy_build_value_t *value, tinypy_build_value_type_e type);
 void tinypy_build_profile_limits_init(tinypy_build_profile_limits_t *limits);
 
 /* Exact bare-name lexical rule: ^__[A-Z][A-Z0-9_]*__$ */
-int32_t tinypy_preprocessor_name_is_reserved(const char *name, size_t name_size);
+tinypy_bool_t tinypy_preprocessor_name_is_reserved(const char *name, size_t name_size);
 
 /* __NDEBUG__ is synthesized from optimize_level and must not be supplied by
  * the caller. Input order never affects the resulting sorted profile/digest.
@@ -180,7 +175,7 @@ size_t tinypy_build_profile_constant_count(const tinypy_build_profile_t *profile
  * are borrowed until profile destruction. */
 void tinypy_build_profile_constant_at(const tinypy_build_profile_t *profile, size_t index, const char **out_name, size_t *out_name_size, const tinypy_build_value_t **out_value);
 
-int32_t tinypy_build_profile_find(const tinypy_build_profile_t *profile, const char *name, size_t name_size, const tinypy_build_value_t **out_value);
+tinypy_bool_t tinypy_build_profile_find(const tinypy_build_profile_t *profile, const char *name, size_t name_size, const tinypy_build_value_t **out_value);
 
 const uint8_t *tinypy_build_profile_digest(const tinypy_build_profile_t *profile);
 const char *tinypy_build_profile_result_name(tinypy_build_profile_result_e result);

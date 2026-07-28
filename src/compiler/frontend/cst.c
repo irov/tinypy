@@ -28,7 +28,6 @@ tinypy_cst_node_t *tinypy_internal_compiler_cst_new(tinypy_compile_ctx_t *ctx, i
 static int32_t __fancy_roundup(int32_t n) {
     /* Round up to the closest power of 2 >= n. */
     int32_t result = 256;
-    TINYPY_ASSERT(n > 128);
     while (result < n) {
         result <<= 1;
         if (result <= 0) {

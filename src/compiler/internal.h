@@ -64,8 +64,8 @@ typedef struct tinypy_compile_ctx_t {
     size_t generated_ast_nodes;
     size_t source_map_entries;
     uint32_t preprocessor_future_flags;
-    int32_t source_is_unicode;
-    int32_t failed;
+    tinypy_bool_t source_is_unicode;
+    tinypy_bool_t failed;
     tinypy_error_t **out_error;
 } tinypy_compile_ctx_t;
 
@@ -73,17 +73,17 @@ void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t 
 void *tinypy_internal_compiler_ast_allocate(tinypy_compile_ctx_t *ctx, size_t size);
 void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx);
 int32_t tinypy_internal_compiler_arena_add_value(tinypy_compile_ctx_t *ctx, tinypy_value_t *value);
-int32_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const void *source, size_t source_size, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const void *source, size_t source_size, tinypy_error_t **out_error);
 void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, tinypy_error_t **out_error);
 void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, int32_t column_offset);
 tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx, const char *text, int32_t line_number, int32_t column_offset);
-int32_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const char *text, size_t size, double *out_value, int32_t line_number, int32_t column_offset);
-int32_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size, uint32_t *out_code_point);
-tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx, const char *text, int32_t future_unicode, int32_t line_number, int32_t column_offset);
+tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const char *text, size_t size, double *out_value, int32_t line_number, int32_t column_offset);
+tinypy_bool_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size, uint32_t *out_code_point);
+tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx, const char *text, tinypy_bool_t future_unicode, int32_t line_number, int32_t column_offset);
 tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ctx, tinypy_value_t *left, tinypy_value_t *right, int32_t line_number, int32_t column_offset);
-int32_t tinypy_internal_preprocessor_transform(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module, uint32_t future_flags);
-int32_t tinypy_internal_meta_transform(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module);
+tinypy_bool_t tinypy_internal_preprocessor_transform(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module, uint32_t future_flags);
+tinypy_bool_t tinypy_internal_meta_transform(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module);
 tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module);
 
 #endif

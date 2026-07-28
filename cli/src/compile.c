@@ -1,28 +1,29 @@
 #include "tinypy/tinypy.h"
 #include "tinypy_cli/cli.h"
 
-#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
+static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     (void)user_data;
     (void)alignment;
     (void)tag;
-    return malloc(size);
+    void *return_value_1 = malloc(size);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__tinypy_cli_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
+static void *__tinypy_cli_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
     (void)user_data;
     (void)old_size;
     (void)alignment;
     (void)tag;
-    return realloc(memory, new_size);
+    void *return_value_1 = realloc(memory, new_size);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
+static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     (void)user_data;
     (void)size;
     (void)alignment;
@@ -30,7 +31,7 @@ static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, 
     free(memory);
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_mode(const char *text, tinypy_compile_mode_e *out_mode) {
+static tinypy_bool_t __tinypy_cli_mode(const char *text, tinypy_compile_mode_e *out_mode) {
     if (strcmp(text, "exec") == 0) {
         *out_mode = TINYPY_COMPILE_EXEC;
     }
@@ -41,10 +42,10 @@ static int32_t __tinypy_cli_mode(const char *text, tinypy_compile_mode_e *out_mo
         *out_mode = TINYPY_COMPILE_SINGLE;
     }
     else {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
 
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static uint8_t *__tinypy_cli_read(const char *path, size_t *out_size) {
@@ -69,7 +70,6 @@ static uint8_t *__tinypy_cli_read(const char *path, size_t *out_size) {
     }
 
     data = (uint8_t *)malloc((size_t)length == 0U ? 1U : (size_t)length);
-    assert(data != NULL);
 
     if ((size_t)length != 0U && fread(data, 1U, (size_t)length, stream) != (size_t)length) {
         free(data);
@@ -82,12 +82,12 @@ static uint8_t *__tinypy_cli_read(const char *path, size_t *out_size) {
     return data;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_write(const char *path, const void *data, size_t size) {
+static tinypy_bool_t __tinypy_cli_write(const char *path, const void *data, size_t size) {
     FILE *stream = fopen(path, "wb");
-    int32_t result;
+    tinypy_bool_t result;
 
     if (stream == NULL) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
 
     result = size == 0U || fwrite(data, 1U, size, stream) == size ? INT32_C(1) : INT32_C(0);
@@ -145,7 +145,6 @@ int32_t tinypy_cli_compile_run(int32_t argc, char **argv) {
     config.optimize_level = optimize;
 
     vm = tinypy_vm_create(&config);
-    assert(vm != NULL);
 
     tinypy_compile_options_init(&options, mode);
     options.optimize_level = optimize;
@@ -170,7 +169,6 @@ int32_t tinypy_cli_compile_run(int32_t argc, char **argv) {
     }
 
     marshal = (uint8_t *)malloc(marshal_size == 0U ? 1U : marshal_size);
-    assert(marshal != NULL);
 
     if (tinypy_marshal_dump_code_v2(code, marshal, marshal_size, &marshal_size, NULL, NULL) == TINYPY_MARSHAL_OK && __tinypy_cli_write(argv[2], marshal, marshal_size) != 0) {
         result = EXIT_SUCCESS;

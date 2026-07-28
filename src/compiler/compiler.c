@@ -49,10 +49,11 @@ static uint32_t __tinypy_compiler_inherited_flags(const tinypy_compile_ctx_t *ct
         return ctx->options.flags;
     }
     tinypy_value_t *frame_code = tinypy_frame_code(frame);
-    return ctx->options.flags | ((uint32_t)TINYPY_CODE_FLAGS(frame_code) & future_mask);
+    uint32_t return_value_1 = ctx->options.flags | ((uint32_t)TINYPY_CODE_FLAGS(frame_code) & future_mask);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_compiler_source_is_empty_suite(const tinypy_compile_ctx_t *ctx) {
+static tinypy_bool_t __tinypy_compiler_source_is_empty_suite(const tinypy_compile_ctx_t *ctx) {
     size_t position = 0U;
 
     while (position < ctx->source.size) {
@@ -72,9 +73,9 @@ static int32_t __tinypy_compiler_source_is_empty_suite(const tinypy_compile_ctx_
             position += 4U;
             continue;
         }
-        return 0;
+        return TINYPY_FALSE;
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_compiler_empty_code(tinypy_compile_ctx_t *ctx) {
@@ -117,7 +118,6 @@ static int32_t __tinypy_compiler_parser_start(tinypy_compile_mode_e mode) {
     if (mode == TINYPY_COMPILE_EVAL) {
         return TINYPY_GRAMMAR_EVAL_INPUT;
     }
-    TINYPY_ASSERT(mode == TINYPY_COMPILE_SINGLE);
     return TINYPY_GRAMMAR_SINGLE_INPUT;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -212,7 +212,6 @@ static tinypy_cst_node_t *__tinypy_compiler_parse(tinypy_compile_ctx_t *ctx, tin
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_compile_limits_init(tinypy_compile_limits_t *limits) {
-    TINYPY_ASSERT(limits != NULL);
     (void)memset(limits, 0, sizeof(*limits));
     limits->abi_version = TINYPY_COMPILER_ABI_VERSION;
     limits->struct_size = (uint32_t)sizeof(*limits);
@@ -238,8 +237,6 @@ void tinypy_compile_limits_init(tinypy_compile_limits_t *limits) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_compile_options_init(tinypy_compile_options_t *options, tinypy_compile_mode_e mode) {
-    TINYPY_ASSERT(options != NULL);
-    TINYPY_ASSERT(mode >= TINYPY_COMPILE_EXEC && mode <= TINYPY_COMPILE_SINGLE);
     (void)memset(options, 0, sizeof(*options));
     options->abi_version = TINYPY_COMPILER_ABI_VERSION;
     options->struct_size = (uint32_t)sizeof(*options);
@@ -254,10 +251,12 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
     tinypy_code_object_t *code;
 
     if (ctx->options.mode == TINYPY_COMPILE_EXEC && __tinypy_compiler_source_is_empty_suite(ctx) != 0) {
-        return __tinypy_compiler_empty_code(ctx);
+        tinypy_value_t *return_value_1 = __tinypy_compiler_empty_code(ctx);
+        return return_value_1;
     }
     if (ctx->options.mode == TINYPY_COMPILE_SINGLE && __tinypy_compiler_source_is_empty_suite(ctx) != 0 && ctx->source.size > 1U) {
-        return __tinypy_compiler_empty_code(ctx);
+        tinypy_value_t *return_value_2 = __tinypy_compiler_empty_code(ctx);
+        return return_value_2;
     }
     tinypy_cst_node_t *tree = __tinypy_compiler_parse(ctx, out_error);
     if (tree == NULL) {
@@ -304,21 +303,10 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
     return (tinypy_value_t *)code;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, int32_t source_is_unicode, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, tinypy_bool_t source_is_unicode, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
     tinypy_compile_ctx_t ctx;
     tinypy_value_t *code = NULL;
 
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(source != NULL || source_size == 0U);
-    TINYPY_ASSERT(logical_filename != NULL || filename_size == 0U);
-    TINYPY_ASSERT(options != NULL);
-    TINYPY_ASSERT(options->abi_version == TINYPY_COMPILER_ABI_VERSION);
-    TINYPY_ASSERT(options->struct_size >= (uint32_t)sizeof(*options));
-    TINYPY_ASSERT(options->mode >= TINYPY_COMPILE_EXEC && options->mode <= TINYPY_COMPILE_SINGLE);
-    TINYPY_ASSERT(options->optimize_level >= 0 && options->optimize_level <= 2);
-    TINYPY_ASSERT((options->feature_flags & ~((uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_COMPILE_FEATURE_META)) == 0U);
-    TINYPY_ASSERT((options->feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) == 0U ? options->build_profile == NULL : options->build_profile != NULL);
-    TINYPY_ASSERT(options->build_profile == NULL || tinypy_build_profile_optimize_level(options->build_profile) == options->optimize_level);
     TINYPY_CLEAR_ERROR(out_error);
     (void)memset(&ctx, 0, sizeof(ctx));
     ctx.vm = vm;
@@ -328,8 +316,6 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
     ctx.source_is_unicode = source_is_unicode;
     ctx.out_error = out_error;
     if (options->limits != NULL) {
-        TINYPY_ASSERT(options->limits->abi_version == TINYPY_COMPILER_ABI_VERSION);
-        TINYPY_ASSERT(options->limits->struct_size >= (uint32_t)sizeof(*options->limits));
         ctx.limits = *options->limits;
     }
     else {
@@ -346,7 +332,8 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
-    return tinypy_internal_compiler_compile_source(vm, source, source_size, 0, logical_filename, filename_size, options, out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, 0, logical_filename, filename_size, options, out_error);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
@@ -355,17 +342,6 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     tinypy_compiler_flags_t flags;
     tinypy_ast_module_t module;
 
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(source != NULL || source_size == 0U);
-    TINYPY_ASSERT(logical_filename != NULL || filename_size == 0U);
-    TINYPY_ASSERT(options != NULL);
-    TINYPY_ASSERT(options->abi_version == TINYPY_COMPILER_ABI_VERSION);
-    TINYPY_ASSERT(options->struct_size >= (uint32_t)sizeof(*options));
-    TINYPY_ASSERT(options->mode >= TINYPY_COMPILE_EXEC && options->mode <= TINYPY_COMPILE_SINGLE);
-    TINYPY_ASSERT(options->optimize_level >= 0 && options->optimize_level <= 2);
-    TINYPY_ASSERT((options->feature_flags & ~((uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR | (uint32_t)TINYPY_COMPILE_FEATURE_META)) == 0U);
-    TINYPY_ASSERT((options->feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) == 0U ? options->build_profile == NULL : options->build_profile != NULL);
-    TINYPY_ASSERT(options->build_profile == NULL || tinypy_build_profile_optimize_level(options->build_profile) == options->optimize_level);
     TINYPY_CLEAR_ERROR(out_error);
     (void)memset(&ctx, 0, sizeof(ctx));
     ctx.vm = vm;
@@ -374,8 +350,6 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     ctx.filename_size = filename_size;
     ctx.out_error = out_error;
     if (options->limits != NULL) {
-        TINYPY_ASSERT(options->limits->abi_version == TINYPY_COMPILER_ABI_VERSION);
-        TINYPY_ASSERT(options->limits->struct_size >= (uint32_t)sizeof(*options->limits));
         ctx.limits = *options->limits;
     }
     else {
@@ -443,19 +417,11 @@ static tinypy_value_t *__tinypy_compiler_run_source(tinypy_vm_t *vm, const void 
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_eval_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, tinypy_value_t *globals, tinypy_value_t *locals, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(globals != NULL);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, globals));
-    TINYPY_ASSERT(locals == NULL || tinypy_internal_value_belongs_to(vm, locals));
-    TINYPY_ASSERT(options != NULL);
-    return __tinypy_compiler_run_source(vm, source, source_size, logical_filename, filename_size, globals, locals, options, TINYPY_COMPILE_EVAL, 0, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_compiler_run_source(vm, source, source_size, logical_filename, filename_size, globals, locals, options, TINYPY_COMPILE_EVAL, 0, out_error);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_exec_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, tinypy_value_t *globals, tinypy_value_t *locals, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(globals != NULL);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, globals));
-    TINYPY_ASSERT(locals == NULL || tinypy_internal_value_belongs_to(vm, locals));
-    TINYPY_ASSERT(options != NULL);
-    return __tinypy_compiler_run_source(vm, source, source_size, logical_filename, filename_size, globals, locals, options, TINYPY_COMPILE_EXEC, 1, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_compiler_run_source(vm, source, source_size, logical_filename, filename_size, globals, locals, options, TINYPY_COMPILE_EXEC, 1, out_error);
+    return return_value_1;
 }

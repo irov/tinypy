@@ -8,8 +8,7 @@
  * empty tuple are VM-local constants whose base reference is owned by vm.
  * Constructors retain a cached constant for the caller like any other
  * result. The accessors require a valid live vm. A contract violation,
- * including reference-count saturation, is asserted in debug builds and is
- * undefined behavior when TINYPY_ENABLE_ASSERTS is not set. */
+ * including reference-count saturation, is undefined behavior. */
 tinypy_value_t *tinypy_none_get(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_not_implemented_get(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_ellipsis_get(tinypy_vm_t *vm);
@@ -26,8 +25,7 @@ tinypy_value_t *tinypy_string_from_bytes(tinypy_vm_t *vm, const void *bytes, siz
 const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size);
 
 /* Creates a Python 2 unicode value from one canonical UTF-8 byte sequence.
- * Invalid UTF-8 is a caller contract violation: it asserts in debug builds
- * and is undefined behavior when TINYPY_ENABLE_ASSERTS is not set. */
+ * Invalid UTF-8 is a caller contract violation and is undefined behavior. */
 tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size_t size);
 
 /* Returns the canonical UTF-8 representation and both byte and Unicode scalar
@@ -37,7 +35,7 @@ const char *tinypy_unicode_utf8_view(const tinypy_value_t *value, size_t *out_si
 tinypy_value_type_e tinypy_typeof(const tinypy_value_t *value);
 tinypy_vm_t *tinypy_value_vm(const tinypy_value_t *value);
 tinypy_ref_t tinypy_refcount(const tinypy_value_t *value);
-int32_t tinypy_is_callable(const tinypy_value_t *value);
+tinypy_bool_t tinypy_is_callable(const tinypy_value_t *value);
 
 /* Passing a value of the wrong documented kind is a C contract violation. */
 int32_t tinypy_bool_as_i32(const tinypy_value_t *value);
@@ -47,8 +45,7 @@ int32_t tinypy_bool_as_i32(const tinypy_value_t *value);
 int64_t tinypy_integer_as_i64(const tinypy_value_t *value);
 
 /* Reference operations require a live value. Its VM is recovered through the
- * value's type. Contract violations assert in debug builds and are undefined
- * in release. */
+ * value's type. Contract violations are undefined behavior. */
 void tinypy_retain(tinypy_value_t *value);
 void tinypy_release(tinypy_value_t *value);
 //////////////////////////////////////////////////////////////////////////

@@ -7,17 +7,15 @@
     "from __future__ imports must occur at the beginning of the file"
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_statement_t s, const char *filename) {
+static tinypy_bool_t __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_statement_t s, const char *filename) {
     int32_t i;
-
-    TINYPY_ASSERT(s->kind == TINYPY_AST_KIND_IMPORT_FROM);
 
     tinypy_ast_sequence_t *names = s->v.ImportFrom.names;
     for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(names); i++) {
         tinypy_ast_alias_t name = (tinypy_ast_alias_t)TINYPY_AST_SEQUENCE_GET(names, i);
         const char *feature = TINYPY_COMPILER_STRING_AS_STRING(name->name);
         if (!feature) {
-            return 0;
+            return TINYPY_FALSE;
         }
         if (strcmp(feature, TINYPY_FUTURE_FEATURE_NESTED_SCOPES) == 0) {
             continue;
@@ -42,7 +40,7 @@ static int32_t __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *are
         }
         else if (strcmp(feature, "braces") == 0) {
             tinypy_internal_compiler_error(arena, TINYPY_ERROR_SYNTAX, "not a chance", s->lineno, 1, arena->out_error);
-            return 0;
+            return TINYPY_FALSE;
         }
         else {
             static const char prefix[] = "future feature ";
@@ -53,17 +51,20 @@ static int32_t __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *are
 
             (void)filename;
             tinypy_internal_compiler_error_parts(arena, TINYPY_ERROR_SYNTAX, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), s->lineno, 1);
-            return 0;
+            return TINYPY_FALSE;
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_module_t mod, const char *filename) {
-    int32_t i, found_docstring = 0, done = 0, prev_line = 0;
+static tinypy_bool_t __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_module_t mod, const char *filename) {
+    int32_t i;
+    int32_t prev_line = 0;
+    tinypy_bool_t found_docstring = TINYPY_FALSE;
+    tinypy_bool_t done = TINYPY_FALSE;
 
     if (!(mod->kind == TINYPY_AST_KIND_MODULE || mod->kind == TINYPY_AST_KIND_INTERACTIVE)) {
-        return 1;
+        return TINYPY_TRUE;
     }
 
     /* A subsequent pass will detect future imports that don't
@@ -78,7 +79,7 @@ static int32_t __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinyp
         tinypy_ast_statement_t s = (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(mod->v.Module.body, i);
 
         if (done && s->lineno > prev_line) {
-            return 1;
+            return TINYPY_TRUE;
         }
         prev_line = s->lineno;
 
@@ -90,17 +91,17 @@ static int32_t __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinyp
 
         if (s->kind == TINYPY_AST_KIND_IMPORT_FROM) {
             tinypy_ast_identifier_t modname = s->v.ImportFrom.module;
-            int32_t condition = modname && TINYPY_COMPILER_STRING_GET_SIZE(modname) == 10;
+            tinypy_bool_t condition = modname && TINYPY_COMPILER_STRING_GET_SIZE(modname) == 10;
             if (condition != 0) {
                 condition = !strcmp(TINYPY_COMPILER_STRING_AS_STRING(modname), "__future__");
             }
             if (condition) {
                 if (done) {
                     tinypy_internal_compiler_error(arena, TINYPY_ERROR_SYNTAX, TINYPY_FUTURE_LATE_IMPORT_MESSAGE, s->lineno, 1, arena->out_error);
-                    return 0;
+                    return TINYPY_FALSE;
                 }
                 if (!__tinypy_frontend_future_check_features(arena, ff, s, filename)) {
-                    return 0;
+                    return TINYPY_FALSE;
                 }
                 ff->line_number = s->lineno;
             }
@@ -121,7 +122,7 @@ static int32_t __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena, tinyp
             done = 1;
         }
     }
-    return 1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_future_features_t *__tinypy_future_scan(tinypy_compile_ctx_t *arena, tinypy_ast_module_t mod, const char *filename) {

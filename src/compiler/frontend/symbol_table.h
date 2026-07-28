@@ -18,7 +18,7 @@ typedef struct tinypy_symbol_entry_t {
     tinypy_value_t *children;
     tinypy_symbol_block_e block_type;
     int32_t unoptimized;
-    int32_t nested;
+    tinypy_bool_t nested;
     unsigned has_free_variables : 1;
     unsigned child_has_free_variables : 1;
     unsigned generator : 1;

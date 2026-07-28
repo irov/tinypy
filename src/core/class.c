@@ -2,30 +2,28 @@
 
 #include "internal.h"
 
-#include "assertion.h"
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_class_name_equal(tinypy_value_t *name, const char *expected, size_t expected_size) {
+static tinypy_bool_t __tinypy_class_name_equal(tinypy_value_t *name, const char *expected, size_t expected_size) {
     size_t name_size;
     const uint8_t *bytes;
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(name);
 
     if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     bytes = TINYPY_TEXT_BYTES(name);
     name_size = TINYPY_TEXT_BYTE_SIZE(name);
 
-    return name_size == expected_size && (name_size == 0U || memcmp(bytes, expected, name_size) == 0) ? INT32_C(1) : INT32_C(0);
+    tinypy_bool_t return_value_1 = name_size == expected_size && (name_size == 0U || memcmp(bytes, expected, name_size) == 0) ? TINYPY_TRUE : TINYPY_FALSE;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
 
-    TINYPY_ASSERT(class_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_CLASS);
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
     tinypy_value_t *attribute = tinypy_internal_dict_get_optional(vm, class_object->dict, key);
     if (attribute != NULL) {
@@ -52,35 +50,31 @@ tinypy_value_t *tinypy_internal_class_lookup(tinypy_value_t *class_value, const 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base) {
+tinypy_bool_t tinypy_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base) {
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
 
-    TINYPY_ASSERT(class_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_CLASS);
-    TINYPY_ASSERT(candidate_base != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(candidate_base) == TINYPY_VALUE_CLASS);
-    TINYPY_ASSERT(TINYPY_VALUE_VM(class_value) == TINYPY_VALUE_VM(candidate_base));
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT((tinypy_value_t *)class_value);
     if (class_value == candidate_base) {
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     iterator = TINYPY_TUPLE_ITERATOR_BEGIN(class_object->bases);
     iterator_end = TINYPY_TUPLE_ITERATOR_END(class_object->bases);
     for (; iterator != iterator_end; ++iterator) {
         tinypy_value_t *item = *iterator;
         if (tinypy_class_is_subclass(item, candidate_base) != 0) {
-            return INT32_C(1);
+            return TINYPY_TRUE;
         }
     }
-    return INT32_C(0);
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_class_bind(tinypy_value_t *class_value, tinypy_value_t *attribute, tinypy_value_t *instance) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(attribute);
 
     if (kind == TINYPY_VALUE_FUNCTION) {
-        return tinypy_method_new(attribute, instance, class_value);
+        tinypy_value_t *return_value_1 = tinypy_method_new(attribute, instance, class_value);
+        return return_value_1;
     }
     if (kind == TINYPY_VALUE_STATIC_METHOD) {
         tinypy_value_t *callable = tinypy_static_method_callable(attribute);
@@ -90,7 +84,8 @@ static tinypy_value_t *__tinypy_class_bind(tinypy_value_t *class_value, tinypy_v
     }
     if (kind == TINYPY_VALUE_CLASS_METHOD) {
         tinypy_value_t *class_method_callable = tinypy_class_method_callable(attribute);
-        return tinypy_method_new(class_method_callable, class_value, class_value);
+        tinypy_value_t *return_value_2 = tinypy_method_new(class_method_callable, class_value, class_value);
+        return return_value_2;
     }
     TINYPY_INCREF(attribute);
     return attribute;
@@ -100,15 +95,7 @@ tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_valu
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
 
-    TINYPY_ASSERT(name != NULL || name_size == 0U);
-    TINYPY_ASSERT(bases != NULL);
-    TINYPY_ASSERT(namespace_dict != NULL);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(bases);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, bases));
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(vm, namespace_dict));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(bases) == TINYPY_VALUE_TUPLE);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(namespace_dict) == TINYPY_VALUE_DICT);
     TINYPY_CLEAR_ERROR(out_error);
     iterator = TINYPY_TUPLE_ITERATOR_BEGIN(bases);
     iterator_end = TINYPY_TUPLE_ITERATOR_END(bases);
@@ -137,8 +124,6 @@ tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_valu
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_class_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
-    TINYPY_ASSERT(value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_CLASS);
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(value);
     visit(class_object->name, user_data);
     visit(class_object->bases, user_data);
@@ -146,8 +131,6 @@ void tinypy_internal_class_release_references(tinypy_value_t *value, tinypy_rele
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_old_instance_new(tinypy_value_t *class_value) {
-    TINYPY_ASSERT(class_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_CLASS);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
     tinypy_old_instance_object_t *instance = (tinypy_old_instance_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_OLD_INSTANCE, sizeof(*instance));
     instance->class_object = class_value;
@@ -157,8 +140,6 @@ tinypy_value_t *tinypy_old_instance_new(tinypy_value_t *class_value) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_old_instance_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
-    TINYPY_ASSERT(value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE);
     tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(value);
     visit(instance->class_object, user_data);
     visit(instance->dict, user_data);
@@ -184,8 +165,6 @@ static tinypy_value_t *__tinypy_class_special_attribute(tinypy_value_t *class_va
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_class_get_attribute(tinypy_value_t *class_value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    TINYPY_ASSERT(class_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_CLASS);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_value_t *special = __tinypy_class_special_attribute(class_value, name);
@@ -193,7 +172,8 @@ tinypy_value_t *tinypy_internal_class_get_attribute(tinypy_value_t *class_value,
         return special;
     }
     tinypy_value_t *attribute = __tinypy_class_lookup_key(vm, class_value, name);
-    return attribute != NULL ? __tinypy_class_bind(class_value, attribute, NULL) : NULL;
+    tinypy_value_t *return_value_1 = attribute != NULL ? __tinypy_class_bind(class_value, attribute, NULL) : NULL;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_old_instance_get_direct(tinypy_vm_t *vm, tinypy_value_t *instance_value, tinypy_value_t *name) {
@@ -213,71 +193,63 @@ static tinypy_value_t *__tinypy_old_instance_get_direct(tinypy_vm_t *vm, tinypy_
         return attribute;
     }
     attribute = __tinypy_class_lookup_key(vm, instance->class_object, name);
-    return attribute != NULL ? __tinypy_class_bind(instance->class_object, attribute, instance_value) : NULL;
+    tinypy_value_t *return_value_1 = attribute != NULL ? __tinypy_class_bind(instance->class_object, attribute, instance_value) : NULL;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    TINYPY_ASSERT(instance_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(instance_value) == TINYPY_VALUE_OLD_INSTANCE);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(instance_value);
     tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(instance_value);
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_value_t *result = __tinypy_old_instance_get_direct(vm, instance_value, name);
     if (result != NULL || __tinypy_class_name_equal(name, "__getattr__", 11U) != 0) {
         return result;
-    } {
-        tinypy_value_t *hook_attribute = __tinypy_class_lookup_key(vm, instance->class_object, vm->special_getattr_key);
-        tinypy_value_t *hook;
-        tinypy_value_t *args;
-
-        if (hook_attribute == NULL) {
-            return NULL;
-        }
-        hook = __tinypy_class_bind(instance->class_object, hook_attribute, instance_value);
-        args = tinypy_tuple_from_items(vm, &name, 1U);
-        result = tinypy_call(hook, args, NULL, out_error);
-        TINYPY_DECREF(args);
-        TINYPY_DECREF(hook);
-        return result;
     }
+    tinypy_value_t *hook_attribute = __tinypy_class_lookup_key(vm, instance->class_object, vm->special_getattr_key);
+    tinypy_value_t *hook;
+    tinypy_value_t *args;
+
+    if (hook_attribute == NULL) {
+        return NULL;
+    }
+    hook = __tinypy_class_bind(instance->class_object, hook_attribute, instance_value);
+    args = tinypy_tuple_from_items(vm, &name, 1U);
+    result = tinypy_call(hook, args, NULL, out_error);
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(hook);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
-    TINYPY_ASSERT(class_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_CLASS);
+tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_dict_set(class_object->dict, name, attribute_value);
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_old_instance_set_attribute(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
-    TINYPY_ASSERT(instance_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(instance_value) == TINYPY_VALUE_OLD_INSTANCE);
+tinypy_bool_t tinypy_internal_old_instance_set_attribute(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
     tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(instance_value);
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_dict_set(instance->dict, name, attribute_value);
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_class_delete_from_dict(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *name, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_class_delete_from_dict(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *name, tinypy_error_t **out_error) {
     if (tinypy_internal_dict_delete_optional(vm, dict, name) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "attribute does not exist", out_error);
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_class_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    TINYPY_ASSERT(value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_CLASS);
-    return __tinypy_class_delete_from_dict(TINYPY_VALUE_VM(value), TINYPY_CLASS_OBJECT(value)->dict, name, out_error);
+tinypy_bool_t tinypy_internal_class_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_bool_t return_value_1 = __tinypy_class_delete_from_dict(TINYPY_VALUE_VM(value), TINYPY_CLASS_OBJECT(value)->dict, name, out_error);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_old_instance_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    TINYPY_ASSERT(value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE);
-    return __tinypy_class_delete_from_dict(TINYPY_VALUE_VM(value), TINYPY_OLD_INSTANCE_OBJECT(value)->dict, name, out_error);
+tinypy_bool_t tinypy_internal_old_instance_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_bool_t return_value_1 = __tinypy_class_delete_from_dict(TINYPY_VALUE_VM(value), TINYPY_OLD_INSTANCE_OBJECT(value)->dict, name, out_error);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_class_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -310,36 +282,32 @@ tinypy_value_t *tinypy_internal_class_call(tinypy_value_t *callable, tinypy_valu
     return instance;
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_old_instance_has_special(tinypy_value_t *value, const char *name, size_t name_size) {
-    return TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_class_lookup(TINYPY_OLD_INSTANCE_OBJECT(value)->class_object, name, name_size) != NULL ? INT32_C(1) : INT32_C(0);
+tinypy_bool_t tinypy_internal_old_instance_has_special(tinypy_value_t *value, const char *name, size_t name_size) {
+    tinypy_bool_t return_value_1 = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_class_lookup(TINYPY_OLD_INSTANCE_OBJECT(value)->class_object, name, name_size) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_name(const tinypy_value_t *class_value) {
-    TINYPY_ASSERT(class_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_CLASS);
-    return TINYPY_CLASS_OBJECT((tinypy_value_t *)class_value)->name;
+    tinypy_value_t *return_value_1 = TINYPY_CLASS_OBJECT((tinypy_value_t *)class_value)->name;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_bases(const tinypy_value_t *class_value) {
-    TINYPY_ASSERT(class_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_CLASS);
-    return TINYPY_CLASS_OBJECT((tinypy_value_t *)class_value)->bases;
+    tinypy_value_t *return_value_1 = TINYPY_CLASS_OBJECT((tinypy_value_t *)class_value)->bases;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_dict(const tinypy_value_t *class_value) {
-    TINYPY_ASSERT(class_value != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_CLASS);
-    return TINYPY_CLASS_OBJECT((tinypy_value_t *)class_value)->dict;
+    tinypy_value_t *return_value_1 = TINYPY_CLASS_OBJECT((tinypy_value_t *)class_value)->dict;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_old_instance_class(const tinypy_value_t *instance) {
-    TINYPY_ASSERT(instance != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_OLD_INSTANCE);
-    return TINYPY_OLD_INSTANCE_OBJECT((tinypy_value_t *)instance)->class_object;
+    tinypy_value_t *return_value_1 = TINYPY_OLD_INSTANCE_OBJECT((tinypy_value_t *)instance)->class_object;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_old_instance_dict(const tinypy_value_t *instance) {
-    TINYPY_ASSERT(instance != NULL);
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_OLD_INSTANCE);
-    return TINYPY_OLD_INSTANCE_OBJECT((tinypy_value_t *)instance)->dict;
+    tinypy_value_t *return_value_1 = TINYPY_OLD_INSTANCE_OBJECT((tinypy_value_t *)instance)->dict;
+    return return_value_1;
 }

@@ -51,26 +51,26 @@ static uint32_t __tinypy_unicode_name_hash(const char *name, size_t name_size) {
     return hash;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_unicode_name_is_unified_ideograph(uint32_t code_point) {
+static tinypy_bool_t __tinypy_unicode_name_is_unified_ideograph(uint32_t code_point) {
     return (code_point >= UINT32_C(0x3400) && code_point <= UINT32_C(0x4db5)) || (code_point >= UINT32_C(0x4e00) && code_point <= UINT32_C(0x9fcb)) || (code_point >= UINT32_C(0x20000) && code_point <= UINT32_C(0x2a6d6)) || (code_point >= UINT32_C(0x2a700) && code_point <= UINT32_C(0x2b734));
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_unicode_name_append(char *buffer, size_t capacity, size_t *size, const char *text) {
+static tinypy_bool_t __tinypy_unicode_name_append(char *buffer, size_t capacity, size_t *size, const char *text) {
     size_t text_size = strlen(text);
 
     if (text_size > capacity - *size) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     (void)memcpy(buffer + *size, text, text_size);
     *size += text_size;
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_unicode_name_code_to_name(uint32_t code_point, char *buffer, size_t capacity) {
+static tinypy_bool_t __tinypy_unicode_name_code_to_name(uint32_t code_point, char *buffer, size_t capacity) {
     size_t size = 0U;
 
     if (code_point >= UINT32_C(0x110000) || capacity == 0U) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     if (code_point >= TINYPY_UNICODE_NAME_S_BASE && code_point < TINYPY_UNICODE_NAME_S_BASE + TINYPY_UNICODE_NAME_S_COUNT) {
         uint32_t syllable = code_point - TINYPY_UNICODE_NAME_S_BASE;
@@ -79,10 +79,10 @@ static int32_t __tinypy_unicode_name_code_to_name(uint32_t code_point, char *buf
         uint32_t trailing = syllable % TINYPY_UNICODE_NAME_T_COUNT;
 
         if (__tinypy_unicode_name_append(buffer, capacity, &size, "HANGUL SYLLABLE ") == 0 || __tinypy_unicode_name_append(buffer, capacity, &size, __tinypy_unicode_name_hangul_syllables[leading][0]) == 0 || __tinypy_unicode_name_append(buffer, capacity, &size, __tinypy_unicode_name_hangul_syllables[vowel][1]) == 0 || __tinypy_unicode_name_append(buffer, capacity, &size, __tinypy_unicode_name_hangul_syllables[trailing][2]) == 0 || size == capacity) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         buffer[size] = '\0';
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     if (__tinypy_unicode_name_is_unified_ideograph(code_point) != 0) {
         static const char prefix[] = "CJK UNIFIED IDEOGRAPH-";
@@ -90,7 +90,7 @@ static int32_t __tinypy_unicode_name_code_to_name(uint32_t code_point, char *buf
         size_t digit_count = 0U;
 
         if (__tinypy_unicode_name_append(buffer, capacity, &size, prefix) == 0) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         do {
             uint32_t digit = code_point & UINT32_C(0x0f);
@@ -99,72 +99,71 @@ static int32_t __tinypy_unicode_name_code_to_name(uint32_t code_point, char *buf
             code_point >>= 4U;
         } while (code_point != 0U);
         if (digit_count >= capacity - size) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         while (digit_count != 0U) {
             buffer[size++] = reversed[--digit_count];
         }
         buffer[size] = '\0';
-        return INT32_C(1);
-    } {
-        uint32_t offset = phrasebook_offset1[code_point >> phrasebook_shift];
-        int32_t output_started = 0;
-
-        offset = phrasebook_offset2[(offset << phrasebook_shift) + (code_point & ((UINT32_C(1) << phrasebook_shift) - 1U))];
-        if (offset == 0U) {
-            return INT32_C(0);
-        }
-        for (;;) {
-            int32_t word = (int32_t)phrasebook[offset] - phrasebook_short;
-            const uint8_t *text;
-
-            if (word >= 0) {
-                word = (word << 8) + (int32_t)phrasebook[offset + 1U];
-                offset += 2U;
-            }
-            else {
-                word = (int32_t)phrasebook[offset];
-                offset += 1U;
-            }
-            if (output_started != 0) {
-                if (size >= capacity) {
-                    return INT32_C(0);
-                }
-                buffer[size++] = ' ';
-            }
-            text = lexicon + lexicon_offset[(size_t)word];
-            while (*text < 128U) {
-                if (size >= capacity) {
-                    return INT32_C(0);
-                }
-                buffer[size++] = (char)*text++;
-            }
-            if (size >= capacity) {
-                return INT32_C(0);
-            }
-            buffer[size++] = (char)(*text & 127U);
-            if (*text == 128U) {
-                break;
-            }
-            output_started = 1;
-        }
+        return TINYPY_TRUE;
     }
-    return INT32_C(1);
+    uint32_t offset = phrasebook_offset1[code_point >> phrasebook_shift];
+    tinypy_bool_t output_started = TINYPY_FALSE;
+
+    offset = phrasebook_offset2[(offset << phrasebook_shift) + (code_point & ((UINT32_C(1) << phrasebook_shift) - 1U))];
+    if (offset == 0U) {
+        return TINYPY_FALSE;
+    }
+    for (;;) {
+        int32_t word = (int32_t)phrasebook[offset] - phrasebook_short;
+        const uint8_t *text;
+
+        if (word >= 0) {
+            word = (word << 8) + (int32_t)phrasebook[offset + 1U];
+            offset += 2U;
+        }
+        else {
+            word = (int32_t)phrasebook[offset];
+            offset += 1U;
+        }
+        if (output_started != 0) {
+            if (size >= capacity) {
+                return TINYPY_FALSE;
+            }
+            buffer[size++] = ' ';
+        }
+        text = lexicon + lexicon_offset[(size_t)word];
+        while (*text < 128U) {
+            if (size >= capacity) {
+                return TINYPY_FALSE;
+            }
+            buffer[size++] = (char)*text++;
+        }
+        if (size >= capacity) {
+            return TINYPY_FALSE;
+        }
+        buffer[size++] = (char)(*text & 127U);
+        if (*text == 128U) {
+            break;
+        }
+        output_started = 1;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_unicode_name_equal(uint32_t code_point, const char *name, size_t name_size) {
+static tinypy_bool_t __tinypy_unicode_name_equal(uint32_t code_point, const char *name, size_t name_size) {
     char buffer[NAME_MAXLEN];
     size_t index;
 
     if (name_size >= sizeof(buffer) || __tinypy_unicode_name_code_to_name(code_point, buffer, sizeof(buffer)) == 0) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     for (index = 0U; index < name_size; ++index) {
         if (__tinypy_unicode_name_upper((uint8_t)name[index]) != (uint8_t)buffer[index]) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
     }
-    return buffer[name_size] == '\0' ? INT32_C(1) : INT32_C(0);
+    return buffer[name_size] == '\0' ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_unicode_name_find_syllable(const char *text, size_t text_size, size_t count, size_t column, size_t *out_length, int32_t *out_position) {
@@ -188,7 +187,7 @@ static void __tinypy_unicode_name_find_syllable(const char *text, size_t text_si
     }
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size, uint32_t *out_code_point) {
+tinypy_bool_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size, uint32_t *out_code_point) {
     static const char hangul_prefix[] = "HANGUL SYLLABLE ";
     static const char ideograph_prefix[] = "CJK UNIFIED IDEOGRAPH-";
     uint32_t hash;
@@ -197,8 +196,6 @@ int32_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size
     uint32_t code_point;
     uint32_t increment;
 
-    TINYPY_ASSERT(name != NULL);
-    TINYPY_ASSERT(out_code_point != NULL);
     if (name_size >= sizeof(hangul_prefix) - 1U && memcmp(name, hangul_prefix, sizeof(hangul_prefix) - 1U) == 0) {
         const char *position = name + sizeof(hangul_prefix) - 1U;
         size_t remaining = name_size - (sizeof(hangul_prefix) - 1U);
@@ -217,16 +214,16 @@ int32_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size
         position += length;
         remaining -= length;
         if (leading < 0 || vowel < 0 || trailing < 0 || remaining != 0U) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         *out_code_point = TINYPY_UNICODE_NAME_S_BASE + ((uint32_t)leading * TINYPY_UNICODE_NAME_V_COUNT + (uint32_t)vowel) * TINYPY_UNICODE_NAME_T_COUNT + (uint32_t)trailing;
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     if (name_size >= sizeof(ideograph_prefix) - 1U && memcmp(name, ideograph_prefix, sizeof(ideograph_prefix) - 1U) == 0) {
         size_t position = sizeof(ideograph_prefix) - 1U;
 
         if (name_size - position != 4U && name_size - position != 5U) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         code_point = 0U;
         while (position < name_size) {
@@ -240,28 +237,28 @@ int32_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size
                 digit = (uint32_t)(byte - 'A') + 10U;
             }
             else {
-                return INT32_C(0);
+                return TINYPY_FALSE;
             }
             code_point = code_point * 16U + digit;
         }
         if (__tinypy_unicode_name_is_unified_ideograph(code_point) == 0) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         *out_code_point = code_point;
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     if (name_size == 0U || name_size >= NAME_MAXLEN) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     hash = __tinypy_unicode_name_hash(name, name_size);
     index = (~hash) & mask;
     code_point = code_hash[index];
     if (code_point == 0U) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     if (__tinypy_unicode_name_equal(code_point, name, name_size) != 0) {
         *out_code_point = code_point;
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     increment = (hash ^ (hash >> 3U)) & mask;
     if (increment == 0U) {
@@ -271,11 +268,11 @@ int32_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size
         index = (index + increment) & mask;
         code_point = code_hash[index];
         if (code_point == 0U) {
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         if (__tinypy_unicode_name_equal(code_point, name, name_size) != 0) {
             *out_code_point = code_point;
-            return INT32_C(1);
+            return TINYPY_TRUE;
         }
         increment <<= 1U;
         if (increment > mask) {

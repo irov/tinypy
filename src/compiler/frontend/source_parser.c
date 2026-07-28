@@ -24,7 +24,6 @@ static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char 
     size_t size = begin != NULL && end != NULL ? (size_t)(end - begin) : 0U;
     char *copy;
 
-    TINYPY_ASSERT(begin == NULL || end >= begin);
     copy = (char *)tinypy_internal_compiler_arena_allocate(ctx, size + 1U);
     if (copy == NULL) {
         return NULL;
@@ -38,14 +37,8 @@ static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char 
 //////////////////////////////////////////////////////////////////////////
 tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const char *source, size_t source_size, const char *filename, const tinypy_parser_grammar_t *g, int32_t start, tinypy_parser_error_detail_t *error, int32_t *flags) {
     tinypy_cst_node_t *result = NULL;
-    int32_t started = 0;
+    tinypy_bool_t started = TINYPY_FALSE;
 
-    TINYPY_ASSERT(ctx != NULL);
-    TINYPY_ASSERT(source != NULL);
-    TINYPY_ASSERT(filename != NULL);
-    TINYPY_ASSERT(g != NULL);
-    TINYPY_ASSERT(error != NULL);
-    TINYPY_ASSERT(flags != NULL);
     __tinypy_frontend_init_error(error, filename);
     tinypy_tokenizer_t *tok = tinypy_internal_tokenizer_from_string(ctx, source, source_size, start == TINYPY_GRAMMAR_FILE_INPUT);
     if (tok == NULL) {

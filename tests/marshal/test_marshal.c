@@ -30,7 +30,7 @@ typedef struct test_writer_t {
     int32_t failed;
 } test_writer_t;
 
-static void *__test_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
+static void *__test_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     void *memory;
     (void)alignment;
@@ -45,15 +45,16 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment, uin
     return memory;
 }
 
-static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
+static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
     (void)user_data;
     (void)old_size;
     (void)alignment;
     (void)tag;
-    return realloc(memory, new_size);
+    void *return_value_1 = realloc(memory, new_size);
+    return return_value_1;
 }
 
-static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
+static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     (void)size;
     (void)alignment;
@@ -190,13 +191,14 @@ static void __writer_code(test_writer_t *writer, int32_t include_nested, int32_t
 
 static tinypy_marshal_result_e __read_writer(test_writer_t *writer, test_allocator_state_t *state, const tinypy_marshal_limits_t *limits, tinypy_marshal_document_t **out_document, tinypy_marshal_error_t *out_error) {
     tinypy_allocator_t allocator = __test_allocator(state);
-    return tinypy_marshal_read_v2(
+    tinypy_marshal_result_e return_value_1 = tinypy_marshal_read_v2(
         writer->bytes,
         writer->size,
         &allocator,
         limits,
         out_document,
         out_error);
+    return return_value_1;
 }
 
 static int32_t __test_exact_dump(const tinypy_marshal_document_t *document, const uint8_t *expected, size_t expected_size, test_allocator_state_t *state) {
@@ -278,7 +280,7 @@ static int32_t __test_nested_code_and_interns(void) {
     const tinypy_marshal_object_t *nested;
     const void *bytes;
     size_t size;
-    int32_t interned;
+    tinypy_bool_t interned;
 
     (void)memset(&writer, 0, sizeof(writer));
     __test_state_init(&state);
@@ -352,9 +354,9 @@ static int32_t __test_all_wire_types(void) {
     size_t size;
     size_t points;
     size_t digit_count;
-    int32_t interned;
+    tinypy_bool_t interned;
     int32_t sign;
-    int32_t bool_value;
+    tinypy_bool_t bool_value;
     int64_t integer_value;
     double real;
     double imaginary;

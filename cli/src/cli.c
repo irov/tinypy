@@ -2,7 +2,6 @@
 #include "tinypy/tinypy.h"
 #include "tinypy_cli/cli.h"
 
-#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +27,7 @@ typedef struct tinypy_cli_allocation_header_t {
     void *base;
     size_t size;
     size_t alignment;
-    uint32_t tag;
+    tinypy_allocation_tag_e tag;
 } tinypy_cli_allocation_header_t;
 
 //////////////////////////////////////////////////////////////////////////
@@ -63,7 +62,7 @@ typedef enum tinypy_cli_execute_result_e {
 } tinypy_cli_execute_result_e;
 
 //////////////////////////////////////////////////////////////////////////
-static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignment, uint32_t tag) {
+static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     tinypy_cli_allocator_state_t *state = (tinypy_cli_allocator_state_t *)user_data;
     tinypy_cli_allocation_header_t *header;
     uint8_t *base;
@@ -73,11 +72,8 @@ static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignmen
     if (alignment < sizeof(void *)) {
         alignment = sizeof(void *);
     }
-    assert((alignment & (alignment - 1U)) == 0U);
-    assert(size <= SIZE_MAX - sizeof(*header) - alignment + 1U);
     allocation_size = sizeof(*header) + size + alignment - 1U;
     base = (uint8_t *)malloc(allocation_size);
-    assert(base != NULL);
     address = ((uintptr_t)(base + sizeof(*header)) + (uintptr_t)alignment - 1U) & ~((uintptr_t)alignment - 1U);
     header = (tinypy_cli_allocation_header_t *)(address - sizeof(*header));
     header->base = base;
@@ -96,25 +92,20 @@ static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignmen
     return (void *)address;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, size_t alignment, uint32_t tag) {
+static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
     tinypy_cli_allocator_state_t *state = (tinypy_cli_allocator_state_t *)user_data;
     tinypy_cli_allocation_header_t *header = (tinypy_cli_allocation_header_t *)((uint8_t *)memory - sizeof(*header));
 
     if (alignment < sizeof(void *)) {
         alignment = sizeof(void *);
     }
-    assert(header->size == size);
-    assert(header->alignment == alignment);
-    assert(header->tag == tag);
-    assert(state->current_allocations != 0U);
-    assert(state->current_bytes >= size);
     (void)tag;
     state->current_allocations -= 1U;
     state->current_bytes -= size;
     free(header->base);
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__tinypy_cli_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, uint32_t tag) {
+static void *__tinypy_cli_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
     void *resized = __tinypy_cli_allocate(user_data, new_size, alignment, tag);
 
     (void)memcpy(resized, memory, old_size < new_size ? old_size : new_size);
@@ -125,7 +116,6 @@ static void *__tinypy_cli_reallocate(void *user_data, void *memory, size_t old_s
 static char *__tinypy_cli_string_duplicate(const char *text, size_t size) {
     char *copy = (char *)malloc(size + 1U);
 
-    assert(copy != NULL);
     if (size != 0U) {
         (void)memcpy(copy, text, size);
     }
@@ -133,12 +123,12 @@ static char *__tinypy_cli_string_duplicate(const char *text, size_t size) {
     return copy;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_buffer_reserve(tinypy_cli_buffer_t *buffer, size_t required) {
+static tinypy_bool_t __tinypy_cli_buffer_reserve(tinypy_cli_buffer_t *buffer, size_t required) {
     size_t capacity;
     uint8_t *data;
 
     if (required <= buffer->capacity) {
-        return INT32_C(1);
+        return TINYPY_TRUE;
     }
     capacity = buffer->capacity == 0U ? 4096U : buffer->capacity;
     while (capacity < required) {
@@ -150,26 +140,25 @@ static int32_t __tinypy_cli_buffer_reserve(tinypy_cli_buffer_t *buffer, size_t r
     }
     data = (uint8_t *)realloc(buffer->data, capacity);
     if (data == NULL) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     buffer->data = data;
     buffer->capacity = capacity;
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_buffer_append(tinypy_cli_buffer_t *buffer, const void *data, size_t size) {
-    assert(data != NULL || size == 0U);
+static tinypy_bool_t __tinypy_cli_buffer_append(tinypy_cli_buffer_t *buffer, const void *data, size_t size) {
     if (size > SIZE_MAX - buffer->size || __tinypy_cli_buffer_reserve(buffer, buffer->size + size) == 0) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     if (size != 0U) {
         (void)memcpy(buffer->data + buffer->size, data, size);
     }
     buffer->size += size;
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_read_stream(FILE *stream, uint8_t **out_data, size_t *out_size) {
+static tinypy_bool_t __tinypy_cli_read_stream(FILE *stream, uint8_t **out_data, size_t *out_size) {
     tinypy_cli_buffer_t buffer = {NULL, 0U, 0U};
     uint8_t chunk[16384];
 
@@ -178,31 +167,30 @@ static int32_t __tinypy_cli_read_stream(FILE *stream, uint8_t **out_data, size_t
 
         if (read_size != 0U && __tinypy_cli_buffer_append(&buffer, chunk, read_size) == 0) {
             free(buffer.data);
-            return INT32_C(0);
+            return TINYPY_FALSE;
         }
         if (read_size != sizeof(chunk)) {
             if (ferror(stream) != 0) {
                 free(buffer.data);
-                return INT32_C(0);
+                return TINYPY_FALSE;
             }
             break;
         }
     }
     if (buffer.data == NULL) {
         buffer.data = (uint8_t *)malloc(1U);
-        assert(buffer.data != NULL);
     }
     *out_data = buffer.data;
     *out_size = buffer.size;
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_read_file(const char *path, uint8_t **out_data, size_t *out_size) {
+static tinypy_bool_t __tinypy_cli_read_file(const char *path, uint8_t **out_data, size_t *out_size) {
     FILE *stream = fopen(path, "rb");
-    int32_t result;
+    tinypy_bool_t result;
 
     if (stream == NULL) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     result = __tinypy_cli_read_stream(stream, out_data, out_size);
     if (fclose(stream) != 0) {
@@ -213,9 +201,11 @@ static int32_t __tinypy_cli_read_file(const char *path, uint8_t **out_data, size
 //////////////////////////////////////////////////////////////////////////
 static char *__tinypy_cli_current_directory(void) {
 #if defined(_WIN32)
-    return _getcwd(NULL, 0);
+    char *return_value = _getcwd(NULL, 0);
+    return return_value;
 #else
-    return getcwd(NULL, 0U);
+    char *return_value = getcwd(NULL, 0U);
+    return return_value;
 #endif
 }
 //////////////////////////////////////////////////////////////////////////
@@ -226,12 +216,14 @@ static char *__tinypy_cli_directory_name(const char *path) {
         size -= 1U;
     }
     if (size == 0U) {
-        return __tinypy_cli_string_duplicate(".", 1U);
+        char *return_value_1 = __tinypy_cli_string_duplicate(".", 1U);
+        return return_value_1;
     }
     while (size > 1U && (path[size - 1U] == '/' || path[size - 1U] == '\\')) {
         size -= 1U;
     }
-    return __tinypy_cli_string_duplicate(path, size);
+    char *return_value_2 = __tinypy_cli_string_duplicate(path, size);
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 static char *__tinypy_cli_module_path(const char *root, const char *name, size_t name_size, int32_t package) {
@@ -251,7 +243,6 @@ static char *__tinypy_cli_module_path(const char *root, const char *name, size_t
     }
     path_size = root_size + (size_t)separator + name_size + suffix_size;
     path = (char *)malloc(path_size + 1U);
-    assert(path != NULL);
     cursor = 0U;
     if (root_size != 0U) {
         (void)memcpy(path, root, root_size);
@@ -280,7 +271,6 @@ static const tinypy_module_artifact_t *__tinypy_cli_try_module(tinypy_cli_contex
         return NULL;
     }
     entry = (tinypy_cli_artifact_t *)calloc(1U, sizeof(*entry));
-    assert(entry != NULL);
     entry->source = source;
     entry->canonical_name = __tinypy_cli_string_duplicate(request->canonical_name, request->canonical_name_size);
     entry->logical_filename = path;
@@ -351,34 +341,35 @@ static void __tinypy_cli_diagnostic(void *user_data, const tinypy_diagnostic_t *
 }
 #endif
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_message_contains(const char *message, size_t message_size, const char *needle) {
+static tinypy_bool_t __tinypy_cli_message_contains(const char *message, size_t message_size, const char *needle) {
     size_t needle_size = strlen(needle);
     size_t index;
 
     if (needle_size > message_size) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     for (index = 0U; index <= message_size - needle_size; index += 1U) {
         if (memcmp(message + index, needle, needle_size) == 0) {
-            return INT32_C(1);
+            return TINYPY_TRUE;
         }
     }
-    return INT32_C(0);
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_error_is_incomplete(const tinypy_error_t *error) {
+static tinypy_bool_t __tinypy_cli_error_is_incomplete(const tinypy_error_t *error) {
     const char *message;
     size_t message_size;
     tinypy_error_kind_e kind = tinypy_error_kind(error);
 
     if (kind != TINYPY_ERROR_SYNTAX && kind != TINYPY_ERROR_INDENTATION) {
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     message = tinypy_error_message(error, &message_size);
-    return __tinypy_cli_message_contains(message, message_size, "unexpected EOF") != 0 || __tinypy_cli_message_contains(message, message_size, "unexpected end of file") != 0 || __tinypy_cli_message_contains(message, message_size, "EOF while scanning") != 0 || __tinypy_cli_message_contains(message, message_size, "expected an indented block") != 0;
+    tinypy_bool_t return_value_1 = __tinypy_cli_message_contains(message, message_size, "unexpected EOF") != 0 || __tinypy_cli_message_contains(message, message_size, "unexpected end of file") != 0 || __tinypy_cli_message_contains(message, message_size, "EOF while scanning") != 0 || __tinypy_cli_message_contains(message, message_size, "expected an indented block") != 0;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_error_has_syntax_location(tinypy_error_kind_e kind) {
+static tinypy_bool_t __tinypy_cli_error_has_syntax_location(tinypy_error_kind_e kind) {
     return kind == TINYPY_ERROR_SYNTAX || kind == TINYPY_ERROR_INDENTATION || kind == TINYPY_ERROR_TAB || kind == TINYPY_ERROR_SOURCE_DECODING || kind == TINYPY_ERROR_PREPROCESSOR || kind == TINYPY_ERROR_META;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -388,12 +379,14 @@ static const char *__tinypy_cli_text_view(const tinypy_value_t *value, size_t *o
         return NULL;
     }
     if (tinypy_typeof(value) == TINYPY_VALUE_STRING) {
-        return (const char *)tinypy_string_view(value, out_size);
+        const char *return_value_1 = (const char *)tinypy_string_view(value, out_size);
+        return return_value_1;
     }
     if (tinypy_typeof(value) == TINYPY_VALUE_UNICODE) {
         size_t code_point_count;
 
-        return tinypy_unicode_utf8_view(value, out_size, &code_point_count);
+        const char *return_value_2 = tinypy_unicode_utf8_view(value, out_size, &code_point_count);
+        return return_value_2;
     }
     *out_size = 0U;
     return NULL;
@@ -465,9 +458,11 @@ static const char *__tinypy_cli_exception_type_name(const tinypy_vm_t *vm, const
     tinypy_value_t *raised_type = tinypy_vm_raised_exception_type(vm);
 
     if (raised_type != NULL) {
-        return tinypy_type_name(tinypy_value_as_const_type(raised_type), out_size);
+        const char *return_value_1 = tinypy_type_name(tinypy_value_as_const_type(raised_type), out_size);
+        return return_value_1;
     }
-    return __tinypy_cli_error_type_name(tinypy_error_kind(error), out_size);
+    const char *return_value_2 = __tinypy_cli_error_type_name(tinypy_error_kind(error), out_size);
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_cli_print_exception(const tinypy_vm_t *vm, const tinypy_error_t *error) {
@@ -579,7 +574,7 @@ static void __tinypy_cli_print_error(const tinypy_vm_t *vm, const tinypy_error_t
     __tinypy_cli_print_exception(vm, error);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_cli_execute_result_e __tinypy_cli_execute(tinypy_vm_t *vm, tinypy_value_t *globals, const void *source, size_t source_size, const char *filename, tinypy_compile_mode_e mode, int32_t optimize_level, int32_t allow_incomplete) {
+static tinypy_cli_execute_result_e __tinypy_cli_execute(tinypy_vm_t *vm, tinypy_value_t *globals, const void *source, size_t source_size, const char *filename, tinypy_compile_mode_e mode, int32_t optimize_level, tinypy_bool_t allow_incomplete) {
     tinypy_compile_options_t options;
     tinypy_error_t *error = NULL;
     tinypy_value_t *result;
@@ -609,7 +604,7 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute(tinypy_vm_t *vm, tinypy_
     return TINYPY_CLI_EXECUTE_ERROR;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *vm, tinypy_value_t *globals, const void *source, size_t source_size, const char *filename, int32_t optimize_level, int32_t allow_incomplete) {
+static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *vm, tinypy_value_t *globals, const void *source, size_t source_size, const char *filename, int32_t optimize_level, tinypy_bool_t allow_incomplete) {
     tinypy_compile_options_t options;
     tinypy_error_t *error = NULL;
     tinypy_value_t *result;
@@ -643,7 +638,6 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *
                 size_t code_point_count;
                 const char *bytes;
 
-                assert(tinypy_typeof(representation) == TINYPY_VALUE_UNICODE);
                 bytes = tinypy_unicode_utf8_view(representation, &size, &code_point_count);
                 (void)code_point_count;
                 tinypy_output_emit(vm, TINYPY_OUTPUT_STDOUT, bytes, size);
@@ -675,7 +669,7 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *
     return TINYPY_CLI_EXECUTE_ERROR;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_add_main_value(tinypy_vm_t *vm, tinypy_value_t *module, const char *name, const char *text) {
+static tinypy_bool_t __tinypy_cli_add_main_value(tinypy_vm_t *vm, tinypy_value_t *module, const char *name, const char *text) {
     tinypy_value_t *value;
     size_t name_size;
     size_t text_size;
@@ -685,7 +679,7 @@ static int32_t __tinypy_cli_add_main_value(tinypy_vm_t *vm, tinypy_value_t *modu
     value = tinypy_string_from_bytes(vm, text, text_size);
     tinypy_module_add_value(module, name, name_size, value);
     tinypy_release(value);
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_cli_create_main(tinypy_vm_t *vm, const char *filename) {
@@ -707,7 +701,7 @@ static tinypy_value_t *__tinypy_cli_create_main(tinypy_vm_t *vm, const char *fil
     return module;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_set_sys_values(tinypy_vm_t *vm, int32_t argc, const char *const *argv, tinypy_cli_context_t *context) {
+static tinypy_bool_t __tinypy_cli_set_sys_values(tinypy_vm_t *vm, int32_t argc, const char *const *argv, tinypy_cli_context_t *context) {
     tinypy_error_t *error = NULL;
     tinypy_value_t *sys_module = tinypy_import_module(vm, "sys", 3U, NULL, NULL, 0, &error);
     tinypy_value_t **items;
@@ -719,10 +713,9 @@ static int32_t __tinypy_cli_set_sys_values(tinypy_vm_t *vm, int32_t argc, const 
             __tinypy_cli_print_error(vm, error, "<startup>");
             tinypy_error_release(error);
         }
-        return INT32_C(0);
+        return TINYPY_FALSE;
     }
     items = (tinypy_value_t **)malloc((size_t)(argc > 0 ? argc : 1) * sizeof(*items));
-    assert(items != NULL);
     for (index = 0U; index < (size_t)argc; index += 1U) {
         size_t argument_size;
 
@@ -737,7 +730,6 @@ static int32_t __tinypy_cli_set_sys_values(tinypy_vm_t *vm, int32_t argc, const 
     }
     free(items);
     items = (tinypy_value_t **)malloc((context->import_root_count != 0U ? context->import_root_count : 1U) * sizeof(*items));
-    assert(items != NULL);
     for (index = 0U; index < context->import_root_count; index += 1U) {
         size_t import_root_size;
 
@@ -752,24 +744,26 @@ static int32_t __tinypy_cli_set_sys_values(tinypy_vm_t *vm, int32_t argc, const 
     }
     free(items);
     tinypy_release(sys_module);
-    return INT32_C(1);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_stdin_is_terminal(void) {
+static tinypy_bool_t __tinypy_cli_stdin_is_terminal(void) {
 #if defined(_WIN32)
     int32_t file_descriptor;
 
     file_descriptor = _fileno(stdin);
-    return _isatty(file_descriptor) != 0 ? INT32_C(1) : INT32_C(0);
+    tinypy_bool_t return_value_1 = _isatty(file_descriptor) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return return_value_1;
 #else
-    return isatty(STDIN_FILENO) != 0 ? INT32_C(1) : INT32_C(0);
+    tinypy_bool_t return_value_2 = isatty(STDIN_FILENO) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return return_value_2;
 #endif
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_cli_repl(tinypy_vm_t *vm, tinypy_value_t *globals, int32_t optimize_level) {
+static tinypy_bool_t __tinypy_cli_repl(tinypy_vm_t *vm, tinypy_value_t *globals, int32_t optimize_level) {
     tinypy_cli_buffer_t source = {NULL, 0U, 0U};
     char line[4096];
-    int32_t result = INT32_C(1);
+    tinypy_bool_t result = TINYPY_TRUE;
 
     (void)fputs("TinyPy 0.1.0 (Python 2.7 compatible)\n", stdout);
     for (;;) {
@@ -830,8 +824,8 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
     int32_t command_argument = -1;
     int32_t script_argument = -1;
     int32_t show_stats = INT32_C(0);
-    int32_t interactive = INT32_C(0);
-    int32_t success = INT32_C(1);
+    tinypy_bool_t interactive = TINYPY_FALSE;
+    tinypy_bool_t success = TINYPY_TRUE;
     clock_t begin;
     clock_t end;
 
@@ -883,7 +877,6 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
         filename = "<string>";
         python_argc = argc - command_argument;
         python_argv = (const char **)malloc((size_t)python_argc * sizeof(*python_argv));
-        assert(python_argv != NULL);
         python_argv[0] = "-c";
         for (argument = 1; argument < python_argc; argument += 1) {
             python_argv[argument] = argv[command_argument + argument];
@@ -909,7 +902,6 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
         filename = "<stdin>";
         python_argc = 1;
         python_argv = (const char **)malloc(sizeof(*python_argv));
-        assert(python_argv != NULL);
         python_argv[0] = "";
         if (__tinypy_cli_stdin_is_terminal() != 0) {
             interactive = INT32_C(1);

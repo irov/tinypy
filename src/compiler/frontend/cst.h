@@ -21,6 +21,5 @@ tinypy_compiler_size_t tinypy_internal_compiler_cst_size(tinypy_cst_node_t *node
 #define TINYPY_CST_REVERSE_CHILD(node, index) TINYPY_CST_CHILD((node), TINYPY_CST_CHILD_COUNT(node) + (index))
 #define TINYPY_CST_TYPE(node) ((node)->type)
 #define TINYPY_CST_TEXT(node) ((node)->text)
-#define TINYPY_CST_REQUIRE(node, required_type) TINYPY_ASSERT(TINYPY_CST_TYPE(node) == (required_type))
 
 #endif

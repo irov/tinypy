@@ -161,21 +161,21 @@ typedef struct tinypy_decoded_instruction_t {
     size_t extended_arg_count;
     uint64_t argument;
     uint8_t opcode;
-    uint8_t defined;
-    uint8_t has_argument;
+    tinypy_bool_t defined;
+    tinypy_bool_t has_argument;
     uint8_t reserved;
 } tinypy_decoded_instruction_t;
 
 const tinypy_opcode_info_t *tinypy_opcode_get_info(uint8_t opcode);
 /* Returns NULL for an unassigned opcode value. */
 const char *tinypy_opcode_name(uint8_t opcode);
-int32_t tinypy_opcode_is_defined(uint8_t opcode);
-int32_t tinypy_opcode_has_argument(uint8_t opcode);
+tinypy_bool_t tinypy_opcode_is_defined(uint8_t opcode);
+tinypy_bool_t tinypy_opcode_has_argument(uint8_t opcode);
 uint32_t tinypy_opcode_categories(uint8_t opcode);
-int32_t tinypy_opcode_has_category(uint8_t opcode, tinypy_opcode_category_e category);
+tinypy_bool_t tinypy_opcode_has_category(uint8_t opcode, tinypy_opcode_category_e category);
 
 /* Exact, case-sensitive lookup of a CPython opmap name. */
-int32_t tinypy_opcode_lookup(const char *name, size_t name_size, uint8_t *out_opcode);
+tinypy_bool_t tinypy_opcode_lookup(const char *name, size_t name_size, uint8_t *out_opcode);
 
 /*
  * Decode one logical instruction at offset.  One or more EXTENDED_ARG

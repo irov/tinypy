@@ -3,8 +3,6 @@
 
 #include "value_ops.h"
 
-#include "assertion.h"
-
 #include "tokenizer.h"
 #include "parser_error.h"
 
@@ -110,16 +108,16 @@ static char *__new_string(tinypy_compile_ctx_t *ctx, const char *s, tinypy_compi
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static char *__decode_str(const char *str, size_t source_size, int32_t exec_input, tinypy_tokenizer_t *tok) {
+static char *__decode_str(const char *str, size_t source_size, tinypy_bool_t exec_input, tinypy_tokenizer_t *tok) {
     (void)exec_input;
-    TINYPY_ASSERT(source_size <= (size_t)PTRDIFF_MAX);
-    return __new_string(tok->ctx, str, (tinypy_compiler_size_t)source_size);
+    char *return_value_1 = __new_string(tok->ctx, str, (tinypy_compiler_size_t)source_size);
+    return return_value_1;
 }
 
 /* Set up tokenizer for string */
 
 //////////////////////////////////////////////////////////////////////////
-tinypy_tokenizer_t *tinypy_internal_tokenizer_from_string(tinypy_compile_ctx_t *ctx, const char *str, size_t source_size, int32_t exec_input) {
+tinypy_tokenizer_t *tinypy_internal_tokenizer_from_string(tinypy_compile_ctx_t *ctx, const char *str, size_t source_size, tinypy_bool_t exec_input) {
     tinypy_tokenizer_t *tok = __tok_new(ctx);
     if (tok == NULL) {
         return NULL;
@@ -151,7 +149,8 @@ static int32_t __tok_nextc(register tinypy_tokenizer_t *tok) {
     char *end;
 
     if (tok->cur != tok->inp) {
-        return TINYPY_COMPILER_CHARMASK(*tok->cur++);
+        int32_t return_value_1 = TINYPY_COMPILER_CHARMASK(*tok->cur++);
+        return return_value_1;
     }
     if (tok->done != TINYPY_PARSER_OK) {
         return TINYPY_TOKENIZER_END_OF_INPUT;
@@ -173,7 +172,8 @@ static int32_t __tok_nextc(register tinypy_tokenizer_t *tok) {
     tok->line_start = tok->cur;
     tok->line_number += 1;
     tok->inp = end;
-    return TINYPY_COMPILER_CHARMASK(*tok->cur++);
+    int32_t return_value_2 = TINYPY_COMPILER_CHARMASK(*tok->cur++);
+    return return_value_2;
 }
 
 /* Back-up one character */
@@ -182,7 +182,6 @@ static int32_t __tok_nextc(register tinypy_tokenizer_t *tok) {
 static void __tok_backup(register tinypy_tokenizer_t *tok, register int32_t c) {
     if (c != TINYPY_TOKENIZER_END_OF_INPUT) {
         tok->cur -= 1;
-        TINYPY_ASSERT(tok->cur >= tok->buf);
         if (*tok->cur != c) {
             *tok->cur = c;
         }
@@ -381,13 +380,13 @@ int32_t __tinypy_token_three_characters(int32_t c1, int32_t c2, int32_t c3) {
     return TINYPY_TOKEN_OPERATOR;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __indenterror(tinypy_tokenizer_t *tok) {
+static tinypy_bool_t __indenterror(tinypy_tokenizer_t *tok) {
     if (tok->alterror) {
         tok->done = TINYPY_PARSER_TAB_SPACE_ERROR;
         tok->cur = tok->inp;
-        return 1;
+        return TINYPY_TRUE;
     }
-    return 0;
+    return TINYPY_FALSE;
 }
 
 /* Get next token, after space stripping etc. */
@@ -395,7 +394,7 @@ static int32_t __indenterror(tinypy_tokenizer_t *tok) {
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tok_get(register tinypy_tokenizer_t *tok, char **p_start, char **p_end) {
     register int32_t c;
-    int32_t blankline;
+    tinypy_bool_t blankline;
 
     *p_start = *p_end = NULL;
 nextline:
@@ -659,7 +658,7 @@ again:
                 } while (c == '0' || c == '1');
             }
             else {
-                int32_t found_decimal = 0;
+                tinypy_bool_t found_decimal = TINYPY_FALSE;
                 /* Octal; c is first char of it */
                 /* There's no 'isoctdigit' macro, sigh */
                 while ('0' <= c && c < '8') {
@@ -823,24 +822,22 @@ letter_quote:
     }
 
     /* Check for two-character token */
-    {
-        int32_t c2 = __tok_nextc(tok);
-        int32_t token = __tinypy_token_two_characters(c, c2);
-        if (token != TINYPY_TOKEN_OPERATOR) {
-            int32_t c3 = __tok_nextc(tok);
-            int32_t token3 = __tinypy_token_three_characters(c, c2, c3);
-            if (token3 != TINYPY_TOKEN_OPERATOR) {
-                token = token3;
-            }
-            else {
-                __tok_backup(tok, c3);
-            }
-            *p_start = tok->start;
-            *p_end = tok->cur;
-            return token;
+    int32_t c2 = __tok_nextc(tok);
+    int32_t token = __tinypy_token_two_characters(c, c2);
+    if (token != TINYPY_TOKEN_OPERATOR) {
+        int32_t c3 = __tok_nextc(tok);
+        int32_t token3 = __tinypy_token_three_characters(c, c2, c3);
+        if (token3 != TINYPY_TOKEN_OPERATOR) {
+            token = token3;
         }
-        __tok_backup(tok, c2);
+        else {
+            __tok_backup(tok, c3);
+        }
+        *p_start = tok->start;
+        *p_end = tok->cur;
+        return token;
     }
+    __tok_backup(tok, c2);
 
     /* Keep track of parentheses nesting level */
     switch (c) {
@@ -859,9 +856,11 @@ letter_quote:
     /* Punctuation character */
     *p_start = tok->start;
     *p_end = tok->cur;
-    return __tinypy_token_one_character(c);
+    int32_t return_value_1 = __tinypy_token_one_character(c);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_tokenizer_get(tinypy_tokenizer_t *tok, char **p_start, char **p_end) {
-    return __tok_get(tok, p_start, p_end);
+    int32_t return_value_1 = __tok_get(tok, p_start, p_end);
+    return return_value_1;
 }

@@ -2,26 +2,9 @@
 
 #include "internal.h"
 
-#include "assertion.h"
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-#if defined(TINYPY_ENABLE_ASSERTS)
-static inline int32_t __tinypy_internal_frame_slots_empty(const tinypy_frame_object_t *frame) {
-    tinypy_value_t *cellvars = TINYPY_CODE_CELLVARS(frame->code);
-    tinypy_value_t *freevars = TINYPY_CODE_FREEVARS(frame->code);
-    size_t local_slot_count = (size_t)TINYPY_CODE_LOCAL_COUNT(frame->code) + TINYPY_TUPLE_SIZE(cellvars) + TINYPY_TUPLE_SIZE(freevars);
-    size_t index;
-
-    for (index = 0U; index < local_slot_count; ++index) {
-        if (frame->locals_plus[index] != NULL) {
-            return 0;
-        }
-    }
-
-    return 1;
-}
-#endif
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_internal_frame_line_number(const tinypy_frame_object_t *frame) {
     const tinypy_code_object_t *code = TINYPY_CODE_OBJECT(frame->code);
@@ -76,10 +59,8 @@ static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_vm_t *vm, 
             else {
                 vm->frame_free_list = next;
             }
-            TINYPY_ASSERT(vm->frame_free_count != 0U);
             vm->frame_free_count -= 1U;
             frame->base.base.ref = 1;
-            TINYPY_ASSERT(frame->base.base.type == &vm->frame_type);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
             __tinypy_internal_cycle_diagnostics_value_reuse(vm, &frame->base.base);
 #endif
@@ -93,11 +74,11 @@ static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_vm_t *vm, 
         frame = next;
     }
 
-    frame = (tinypy_frame_object_t *)tinypy_internal_vm_allocate(vm, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_VALUE);
+    frame = (tinypy_frame_object_t *)tinypy_internal_vm_allocate(vm, allocation_size, TINYPY_ALLOC_TAG_VALUE);
 
     frame->base.base.ref = 1;
-    frame->base.base.type = &vm->frame_type;
-    TINYPY_INCREF(&vm->frame_type.base.base);
+    frame->base.base.type = &vm->types[TINYPY_VALUE_FRAME];
+    TINYPY_INCREF(&vm->types[TINYPY_VALUE_FRAME].base.base);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_value_register(vm, &frame->base.base);
 #endif
@@ -111,9 +92,6 @@ static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_vm_t *vm, 
 void tinypy_internal_frame_free_list_push(tinypy_vm_t *vm, tinypy_value_t *value) {
     tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT(value);
 
-    TINYPY_ASSERT(value->type == &vm->frame_type);
-    TINYPY_ASSERT(value->ref == 0);
-    TINYPY_ASSERT(vm->frame_free_count < TINYPY_FRAME_FREE_LIST_MAX);
     frame->back = vm->frame_free_list != NULL ? &vm->frame_free_list->base.base : NULL;
     vm->frame_free_list = frame;
     vm->frame_free_count += 1U;
@@ -125,26 +103,18 @@ void tinypy_internal_frame_free_list_finalize(tinypy_vm_t *vm) {
         size_t allocation_size = offsetof(tinypy_frame_object_t, locals_plus) + TINYPY_SIZED_SIZE(&frame->base) * sizeof(tinypy_value_t *);
 
         vm->frame_free_list = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
-        TINYPY_ASSERT(vm->frame_free_count != 0U);
         vm->frame_free_count -= 1U;
-        TINYPY_ASSERT(vm->frame_type.base.base.ref > 1);
-        vm->frame_type.base.base.ref -= 1;
+        vm->types[TINYPY_VALUE_FRAME].base.base.ref -= 1;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_value_unregister(vm, &frame->base.base);
 #endif
-        tinypy_internal_vm_deallocate(vm, frame, allocation_size, (uint32_t)TINYPY_ALLOC_TAG_VALUE);
+        tinypy_internal_vm_deallocate(vm, frame, allocation_size, TINYPY_ALLOC_TAG_VALUE);
     }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&frame->base.base);
 
-    TINYPY_ASSERT(frame->stack_top == frame->value_stack);
-    TINYPY_ASSERT(frame->previous_handled_type == NULL);
-    TINYPY_ASSERT(frame->previous_handled_value == NULL);
-    TINYPY_ASSERT(frame->previous_handled_traceback == NULL);
-    TINYPY_ASSERT(__tinypy_internal_frame_slots_empty(frame));
-    TINYPY_ASSERT(frame->base.base.ref == 1);
     frame->base.base.ref = 0;
     if (frame->back != NULL) {
         TINYPY_DECREF(frame->back);
@@ -165,7 +135,7 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
     }
     else {
         tinypy_internal_value_destroy(&frame->base.base);
-        TINYPY_DECREF(&vm->frame_type.base.base);
+        TINYPY_DECREF(&vm->types[TINYPY_VALUE_FRAME].base.base);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -228,11 +198,7 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
     tinypy_value_t *freevars = TINYPY_CODE_FREEVARS(code);
     free_count = TINYPY_TUPLE_SIZE(freevars);
     stack_size = (size_t)TINYPY_CODE_STACK_SIZE(code);
-    TINYPY_ASSERT(local_count <= SIZE_MAX - cell_count);
-    TINYPY_ASSERT(local_count + cell_count <= SIZE_MAX - free_count);
-    TINYPY_ASSERT(local_count + cell_count + free_count <= SIZE_MAX - stack_size);
     extras = local_count + cell_count + free_count + stack_size;
-    TINYPY_ASSERT(extras <= (SIZE_MAX - offsetof(tinypy_frame_object_t, locals_plus)) / sizeof(tinypy_value_t *));
     allocation_size = offsetof(tinypy_frame_object_t, locals_plus) + extras * sizeof(tinypy_value_t *);
     tinypy_value_t *builtins = __tinypy_internal_frame_make_builtins(vm, globals);
     tinypy_frame_object_t *frame = __tinypy_internal_frame_allocate(vm, allocation_size, local_count + cell_count + free_count);
@@ -284,19 +250,13 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_frame_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals) {
-    TINYPY_ASSERT(code != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(code)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(code) == TINYPY_VALUE_CODE);
-    TINYPY_ASSERT(globals != NULL);
-    TINYPY_ASSERT(tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(code), globals));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(globals) == TINYPY_VALUE_DICT);
-    TINYPY_ASSERT(locals == NULL || tinypy_internal_value_belongs_to(TINYPY_VALUE_VM(code), locals));
-    TINYPY_ASSERT(locals == NULL || TINYPY_VALUE_KIND(locals) == TINYPY_VALUE_DICT);
-    return __tinypy_internal_frame_new(code, globals, locals, 0);
+    tinypy_value_t *return_value_1 = __tinypy_internal_frame_new(code, globals, locals, 0);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_frame_new_function(tinypy_value_t *code, tinypy_value_t *globals) {
-    return __tinypy_internal_frame_new(code, globals, NULL, 1);
+    tinypy_value_t *return_value_1 = __tinypy_internal_frame_new(code, globals, NULL, 1);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_frame_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
@@ -335,63 +295,45 @@ void tinypy_internal_frame_release_references(tinypy_value_t *value, tinypy_rele
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_frame_back(const tinypy_value_t *frame) {
-    TINYPY_ASSERT(frame != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(frame)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
-    return TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->back;
+    tinypy_value_t *return_value_1 = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->back;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_frame_code(const tinypy_value_t *frame) {
-    TINYPY_ASSERT(frame != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(frame)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
-    return TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->code;
+    tinypy_value_t *return_value_1 = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->code;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_frame_builtins(const tinypy_value_t *frame) {
-    TINYPY_ASSERT(frame != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(frame)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
-    return TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->builtins;
+    tinypy_value_t *return_value_1 = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->builtins;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_frame_globals(const tinypy_value_t *frame) {
-    TINYPY_ASSERT(frame != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(frame)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
-    return TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->globals;
+    tinypy_value_t *return_value_1 = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->globals;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_frame_locals(const tinypy_value_t *frame) {
-    TINYPY_ASSERT(frame != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(frame)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
-    return tinypy_internal_frame_locals(TINYPY_FRAME_OBJECT((tinypy_value_t *)frame));
+    tinypy_value_t *return_value_1 = tinypy_internal_frame_locals(TINYPY_FRAME_OBJECT((tinypy_value_t *)frame));
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_frame_last_instruction(const tinypy_value_t *frame) {
-    TINYPY_ASSERT(frame != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(frame)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
-    return TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->last_instruction;
+    int32_t return_value_1 = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame)->last_instruction;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_frame_line_number(const tinypy_value_t *frame) {
-    TINYPY_ASSERT(frame != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(frame)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
-    return __tinypy_internal_frame_line_number(TINYPY_FRAME_OBJECT((tinypy_value_t *)frame));
+    int32_t return_value_1 = __tinypy_internal_frame_line_number(TINYPY_FRAME_OBJECT((tinypy_value_t *)frame));
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_frame_stack_depth(const tinypy_value_t *frame) {
-    TINYPY_ASSERT(frame != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(frame)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(frame) == TINYPY_VALUE_FRAME);
     tinypy_frame_object_t *object = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame);
     return (size_t)(object->stack_top - object->value_stack);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_vm_current_frame(const tinypy_vm_t *vm) {
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
     return vm->current_frame != NULL ? &vm->current_frame->base.base : NULL;
 }

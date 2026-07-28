@@ -2,17 +2,13 @@
 
 #include "internal.h"
 
-#include "assertion.h"
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_super_new(tinypy_type_t *type, tinypy_value_t *object, tinypy_error_t **out_error) {
     tinypy_type_t *object_type = NULL;
 
-    TINYPY_ASSERT(type != NULL);
     tinypy_vm_t *vm = type->vm;
-    TINYPY_ASSERT(tinypy_internal_vm_valid(vm));
-    TINYPY_ASSERT(object == NULL || tinypy_internal_value_belongs_to(vm, object));
     TINYPY_CLEAR_ERROR(out_error);
     if (object != NULL) {
         if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)object, type) != 0) {
@@ -59,7 +55,7 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
     size_t name_size;
     size_t mro_size;
     size_t index;
-    int32_t found_type = 0;
+    tinypy_bool_t found_type = TINYPY_FALSE;
     tinypy_value_type_e name_kind = TINYPY_VALUE_KIND(name);
 
     if (name_kind == TINYPY_VALUE_STRING || name_kind == TINYPY_VALUE_UNICODE) {
@@ -74,7 +70,8 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
                 TINYPY_INCREF(super_value->object);
                 return super_value->object;
             }
-            return tinypy_none_get(vm);
+            tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+            return return_value_1;
         }
     }
     if (super_value->object_type == NULL) {
@@ -94,7 +91,8 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
         tinypy_value_t *attribute = tinypy_dict_get_optional(mro_type->dict, name);
 
         if (attribute != NULL) {
-            return tinypy_internal_descriptor_get_value(vm, attribute, super_value->object, super_value->object_type, out_error);
+            tinypy_value_t *return_value_2 = tinypy_internal_descriptor_get_value(vm, attribute, super_value->object, super_value->object_type, out_error);
+            return return_value_2;
         }
     }
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "super object has no requested attribute", out_error);
@@ -115,26 +113,21 @@ tinypy_value_t *tinypy_internal_super_create(tinypy_type_t *type, tinypy_value_t
         return NULL;
     }
     tinypy_value_t *object = count == 2U ? TINYPY_TUPLE_GET(args, 1U) : NULL;
-    return tinypy_super_new((tinypy_type_t *)requested_type, object, out_error);
+    tinypy_value_t *return_value_1 = tinypy_super_new((tinypy_type_t *)requested_type, object, out_error);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_super_type(const tinypy_value_t *super_value) {
-    TINYPY_ASSERT(super_value != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(super_value)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(super_value) == TINYPY_VALUE_SUPER);
-    return TINYPY_SUPER_OBJECT((tinypy_value_t *)super_value)->type;
+    const tinypy_type_t *return_value_1 = TINYPY_SUPER_OBJECT((tinypy_value_t *)super_value)->type;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_super_object(const tinypy_value_t *super_value) {
-    TINYPY_ASSERT(super_value != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(super_value)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(super_value) == TINYPY_VALUE_SUPER);
-    return TINYPY_SUPER_OBJECT((tinypy_value_t *)super_value)->object;
+    tinypy_value_t *return_value_1 = TINYPY_SUPER_OBJECT((tinypy_value_t *)super_value)->object;
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_super_object_type(const tinypy_value_t *super_value) {
-    TINYPY_ASSERT(super_value != NULL);
-    TINYPY_ASSERT(tinypy_internal_vm_valid(TINYPY_VALUE_VM(super_value)));
-    TINYPY_ASSERT(TINYPY_VALUE_KIND(super_value) == TINYPY_VALUE_SUPER);
-    return TINYPY_SUPER_OBJECT((tinypy_value_t *)super_value)->object_type;
+    const tinypy_type_t *return_value_1 = TINYPY_SUPER_OBJECT((tinypy_value_t *)super_value)->object_type;
+    return return_value_1;
 }

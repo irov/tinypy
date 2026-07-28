@@ -1,5 +1,6 @@
 #include "tinypy_cli/cli.h"
 
 int main(int argc, char **argv) {
-    return tinypy_cli_run(argc, argv);
+    int return_value_1 = tinypy_cli_run(argc, argv);
+    return return_value_1;
 }
