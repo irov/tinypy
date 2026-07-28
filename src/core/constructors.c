@@ -352,12 +352,12 @@ tinypy_value_t *tinypy_internal_type_create(tinypy_type_t *type, tinypy_value_t 
         return NULL;
     }
     base_count = TINYPY_TUPLE_SIZE(bases);
-    base_types = base_count != 0U ? (tinypy_type_t **)tinypy_internal_vm_allocate(vm, base_count * sizeof(*base_types), TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
+    base_types = base_count != 0U ? (tinypy_type_t **)tinypy_internal_vm_allocate(vm, base_count * sizeof(*base_types)) : NULL;
     for (index = 0U; index < base_count; ++index) {
         tinypy_value_t *base = TINYPY_TUPLE_GET(bases, index);
 
         if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_TYPE) {
-            tinypy_internal_vm_deallocate(vm, base_types, base_count * sizeof(*base_types), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, base_types, base_count * sizeof(*base_types));
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type base is not a type", out_error);
             return NULL;
         }
@@ -366,7 +366,7 @@ tinypy_value_t *tinypy_internal_type_create(tinypy_type_t *type, tinypy_value_t 
     name_bytes = (const char *)tinypy_string_view(name, &name_size);
     created = tinypy_type_new(vm, name_bytes, name_size, (const tinypy_type_t *const *)base_types, base_count, NULL, namespace_dict, out_error);
     if (base_types != NULL) {
-        tinypy_internal_vm_deallocate(vm, base_types, base_count * sizeof(*base_types), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, base_types, base_count * sizeof(*base_types));
     }
     tinypy_value_t *return_value_1 = created != NULL ? tinypy_type_as_value(created) : NULL;
     return return_value_1;
@@ -823,13 +823,13 @@ static tinypy_value_t *__tinypy_constructor_type_new_method(tinypy_value_t *func
     }
     base_count = TINYPY_TUPLE_SIZE(bases);
     if (base_count != 0U) {
-        base_types = (tinypy_type_t **)tinypy_internal_vm_allocate(vm, base_count * sizeof(*base_types), TINYPY_ALLOC_TAG_TEMPORARY);
+        base_types = (tinypy_type_t **)tinypy_internal_vm_allocate(vm, base_count * sizeof(*base_types));
     }
     for (index = 0U; index < base_count; ++index) {
         tinypy_value_t *base = TINYPY_TUPLE_GET(bases, index);
 
         if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_TYPE) {
-            tinypy_internal_vm_deallocate(vm, base_types, base_count * sizeof(*base_types), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, base_types, base_count * sizeof(*base_types));
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type.__new__ base is not a type", out_error);
             return NULL;
         }
@@ -838,7 +838,7 @@ static tinypy_value_t *__tinypy_constructor_type_new_method(tinypy_value_t *func
     name_bytes = (const char *)tinypy_string_view(name, &name_size);
     created = tinypy_type_new(vm, name_bytes, name_size, (const tinypy_type_t *const *)base_types, base_count, (tinypy_type_t *)metaclass_value, namespace_dict, out_error);
     if (base_types != NULL) {
-        tinypy_internal_vm_deallocate(vm, base_types, base_count * sizeof(*base_types), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, base_types, base_count * sizeof(*base_types));
     }
     tinypy_value_t *return_value_1 = created != NULL ? tinypy_type_as_value(created) : NULL;
     return return_value_1;
@@ -986,13 +986,13 @@ static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t 
     size_t index;
 
     output_count = argument_count + 1U;
-    items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items));
     items[0] = &self->type->base.base;
     for (index = 0U; index < argument_count; ++index) {
         items[index + 1U] = TINYPY_TUPLE_GET(new_arguments, index);
     }
     constructor_arguments = tinypy_tuple_from_items(vm, items, output_count);
-    tinypy_internal_vm_deallocate(vm, items, output_count * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, items, output_count * sizeof(*items));
     if (tinypy_object_has_attr(self, "__getstate__", 12U) != 0) {
         tinypy_value_t *getstate = tinypy_object_get_attr(self, "__getstate__", 12U, out_error);
 

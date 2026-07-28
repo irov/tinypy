@@ -884,9 +884,9 @@ struct tinypy_error_t {
 tinypy_bool_t tinypy_internal_host_valid(const tinypy_host_t *host);
 tinypy_bool_t tinypy_internal_vm_valid(const tinypy_vm_t *vm);
 
-void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size, tinypy_allocation_tag_e tag);
-void *tinypy_internal_vm_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, tinypy_allocation_tag_e tag);
-void tinypy_internal_vm_deallocate(tinypy_vm_t *vm, void *memory, size_t size, tinypy_allocation_tag_e tag);
+void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size);
+void *tinypy_internal_vm_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size);
+void tinypy_internal_vm_deallocate(tinypy_vm_t *vm, void *memory, size_t size);
 
 void tinypy_internal_make_error(const tinypy_allocator_t *allocator, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error);
 void tinypy_internal_make_vm_error(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error);

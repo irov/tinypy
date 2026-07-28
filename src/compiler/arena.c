@@ -28,7 +28,7 @@ void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t 
         return NULL;
     }
 
-    block = (tinypy_compiler_arena_block_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size, TINYPY_ALLOC_TAG_COMPILER_ARENA);
+    block = (tinypy_compiler_arena_block_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size);
     block->next = ctx->arena_blocks;
     block->allocation_size = allocation_size;
     block->used = aligned_size;
@@ -60,7 +60,7 @@ void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx) {
     while (block != NULL) {
         tinypy_compiler_arena_block_t *next = block->next;
 
-        tinypy_internal_vm_deallocate(ctx->vm, block, block->allocation_size, TINYPY_ALLOC_TAG_COMPILER_ARENA);
+        tinypy_internal_vm_deallocate(ctx->vm, block, block->allocation_size);
         block = next;
     }
     ctx->arena_blocks = NULL;

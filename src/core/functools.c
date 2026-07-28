@@ -76,7 +76,7 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
         combined_args = tinypy_tuple_from_items(vm, NULL, 0U);
     }
     else {
-        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (bound_count + call_count) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (bound_count + call_count) * sizeof(*items));
         for (index = 0U; index < bound_count; ++index) {
             items[index] = TINYPY_TUPLE_GET(partial->args, index);
         }
@@ -84,7 +84,7 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
             items[bound_count + index] = TINYPY_TUPLE_GET(args, index);
         }
         combined_args = tinypy_tuple_from_items(vm, items, bound_count + call_count);
-        tinypy_internal_vm_deallocate(vm, items, (bound_count + call_count) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, items, (bound_count + call_count) * sizeof(*items));
     }
     tinypy_value_t *combined_kwargs = tinypy_dict_new(vm);
     __tinypy_functools_dict_update(combined_kwargs, partial->keywords);

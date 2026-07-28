@@ -27,7 +27,6 @@ typedef struct tinypy_cli_allocation_header_t {
     void *base;
     size_t size;
     size_t alignment;
-    tinypy_allocation_tag_e tag;
 } tinypy_cli_allocation_header_t;
 
 //////////////////////////////////////////////////////////////////////////
@@ -62,7 +61,7 @@ typedef enum tinypy_cli_execute_result_e {
 } tinypy_cli_execute_result_e;
 
 //////////////////////////////////////////////////////////////////////////
-static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignment) {
     tinypy_cli_allocator_state_t *state = (tinypy_cli_allocator_state_t *)user_data;
     tinypy_cli_allocation_header_t *header;
     uint8_t *base;
@@ -79,7 +78,6 @@ static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignmen
     header->base = base;
     header->size = size;
     header->alignment = alignment;
-    header->tag = tag;
     state->current_allocations += 1U;
     state->total_allocations += 1U;
     state->current_bytes += size;
@@ -92,24 +90,23 @@ static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignmen
     return (void *)address;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, size_t alignment) {
     tinypy_cli_allocator_state_t *state = (tinypy_cli_allocator_state_t *)user_data;
     tinypy_cli_allocation_header_t *header = (tinypy_cli_allocation_header_t *)((uint8_t *)memory - sizeof(*header));
 
     if (alignment < sizeof(void *)) {
         alignment = sizeof(void *);
     }
-    (void)tag;
     state->current_allocations -= 1U;
     state->current_bytes -= size;
     free(header->base);
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__tinypy_cli_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
-    void *resized = __tinypy_cli_allocate(user_data, new_size, alignment, tag);
+static void *__tinypy_cli_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
+    void *resized = __tinypy_cli_allocate(user_data, new_size, alignment);
 
     (void)memcpy(resized, memory, old_size < new_size ? old_size : new_size);
-    __tinypy_cli_deallocate(user_data, memory, old_size, alignment, tag);
+    __tinypy_cli_deallocate(user_data, memory, old_size, alignment);
     return resized;
 }
 //////////////////////////////////////////////////////////////////////////

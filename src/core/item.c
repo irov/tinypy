@@ -221,7 +221,7 @@ static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, c
     int64_t source_index = indices->start;
 
     if (indices->length != 0U) {
-        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, indices->length * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, indices->length * sizeof(*items));
         for (index = 0U; index < indices->length; ++index) {
             items[index] = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(container, (size_t)source_index) : TINYPY_LIST_GET(container, (size_t)source_index);
             source_index += indices->step;
@@ -229,7 +229,7 @@ static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, c
     }
     tinypy_value_t *result = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_TUPLE ? tinypy_tuple_from_items(vm, items, indices->length) : tinypy_list_from_items(vm, items, indices->length);
     if (items != NULL) {
-        tinypy_internal_vm_deallocate(vm, items, indices->length * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, items, indices->length * sizeof(*items));
     }
     return result;
 }
@@ -251,13 +251,13 @@ static tinypy_value_t *__tinypy_item_string_slice(tinypy_value_t *container, con
         tinypy_value_t *return_value_2 = tinypy_string_from_bytes(vm, bytes + (size_t)indices->start, indices->length);
         return return_value_2;
     }
-    selected = (uint8_t *)tinypy_internal_vm_allocate(vm, indices->length, TINYPY_ALLOC_TAG_TEMPORARY);
+    selected = (uint8_t *)tinypy_internal_vm_allocate(vm, indices->length);
     for (index = 0U; index < indices->length; ++index) {
         selected[index] = bytes[(size_t)source_index];
         source_index += indices->step;
     }
     tinypy_value_t *result = tinypy_string_from_bytes(vm, selected, indices->length);
-    tinypy_internal_vm_deallocate(vm, selected, indices->length, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, selected, indices->length);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -279,7 +279,7 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
         tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(vm, NULL, 0U);
         return return_value_1;
     }
-    offsets = (size_t *)tinypy_internal_vm_allocate(vm, (code_point_count + 1U) * sizeof(*offsets), TINYPY_ALLOC_TAG_TEMPORARY);
+    offsets = (size_t *)tinypy_internal_vm_allocate(vm, (code_point_count + 1U) * sizeof(*offsets));
     for (scalar_index = 0U; scalar_index < code_point_count; ++scalar_index) {
         uint8_t lead = (uint8_t)utf8[byte_index];
 
@@ -287,7 +287,7 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
         byte_index += lead < 0x80U ? 1U : (lead < 0xe0U ? 2U : (lead < 0xf0U ? 3U : 4U));
     }
     offsets[code_point_count] = byte_size;
-    selected = (char *)tinypy_internal_vm_allocate(vm, byte_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    selected = (char *)tinypy_internal_vm_allocate(vm, byte_size);
     for (index = 0U; index < indices->length; ++index) {
         size_t scalar = (size_t)source_index;
         size_t scalar_size = offsets[scalar + 1U] - offsets[scalar];
@@ -297,8 +297,8 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
         source_index += indices->step;
     }
     tinypy_value_t *result = tinypy_unicode_from_utf8(vm, selected, selected_size);
-    tinypy_internal_vm_deallocate(vm, selected, byte_size, TINYPY_ALLOC_TAG_TEMPORARY);
-    tinypy_internal_vm_deallocate(vm, offsets, (code_point_count + 1U) * sizeof(*offsets), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, selected, byte_size);
+    tinypy_internal_vm_deallocate(vm, offsets, (code_point_count + 1U) * sizeof(*offsets));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

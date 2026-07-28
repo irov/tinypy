@@ -408,14 +408,14 @@ static void __tinypy_eval_make_name_error(tinypy_vm_t *vm, tinypy_value_t *name,
     name_bytes = TINYPY_TEXT_BYTES(name);
     name_size = TINYPY_TEXT_BYTE_SIZE(name);
     message_size = (sizeof(prefix) - 1U) + name_size + (sizeof(suffix) - 1U);
-    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U, TINYPY_ALLOC_TAG_TEMPORARY);
+    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U);
     (void)memcpy(message, prefix, sizeof(prefix) - 1U);
     if (name_size != 0U) {
         (void)memcpy(message + sizeof(prefix) - 1U, name_bytes, name_size);
     }
     (void)memcpy(message + sizeof(prefix) - 1U + name_size, suffix, sizeof(suffix));
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_NAME, message, out_error);
-    tinypy_internal_vm_deallocate(vm, message, message_size + 1U, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, message, message_size + 1U);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_build_sequence(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t count, int32_t as_list) {
@@ -1038,9 +1038,9 @@ static tinypy_bool_t __tinypy_eval_verify_code(tinypy_vm_t *vm, tinypy_code_obje
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, tinypy_bytecode_verify_status_name(status), out_error);
         return TINYPY_FALSE;
     }
-    scratch = tinypy_internal_vm_allocate(vm, scratch_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    scratch = tinypy_internal_vm_allocate(vm, scratch_size);
     status = tinypy_bytecode_verify(bytecode, bytecode_size, &metadata, NULL, scratch, scratch_size, &result);
-    tinypy_internal_vm_deallocate(vm, scratch, scratch_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
     if (status != TINYPY_BYTECODE_VERIFY_OK) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, tinypy_bytecode_verify_status_name(status), out_error);
         return TINYPY_FALSE;

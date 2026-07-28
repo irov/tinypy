@@ -58,7 +58,7 @@ void tinypy_internal_method_free_list_finalize(tinypy_vm_t *vm) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_value_unregister(vm, &method->base);
 #endif
-        tinypy_internal_vm_deallocate(vm, method, sizeof(*method), TINYPY_ALLOC_TAG_VALUE);
+        tinypy_internal_vm_deallocate(vm, method, sizeof(*method));
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -125,13 +125,13 @@ tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_val
         return return_value_1;
     }
     output_count = argument_count + 1U;
-    items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items));
     items[0] = bound_self;
     for (index = 0U; index < argument_count; ++index) {
         items[index + 1U] = TINYPY_TUPLE_GET(args, index);
     }
     tinypy_value_t *call_args = tinypy_tuple_from_items(vm, items, output_count);
-    tinypy_internal_vm_deallocate(vm, items, output_count * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, items, output_count * sizeof(*items));
     tinypy_value_t *result = tinypy_call(method->function, call_args, kwargs, out_error);
     TINYPY_DECREF(call_args);
     return result;

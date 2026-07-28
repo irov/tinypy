@@ -32,7 +32,7 @@ static void __tinypy_object_make_attribute_error(tinypy_value_t *value, const ch
     char *message;
 
     message_size = 1U + type_name_size + (sizeof(separator) - 1U) + name_size + (sizeof(suffix) - 1U);
-    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U, TINYPY_ALLOC_TAG_TEMPORARY);
+    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U);
     message[0] = '\'';
     if (type_name_size != 0U) {
         (void)memcpy(message + 1U, type_name, type_name_size);
@@ -43,7 +43,7 @@ static void __tinypy_object_make_attribute_error(tinypy_value_t *value, const ch
     }
     (void)memcpy(message + 1U + type_name_size + sizeof(separator) - 1U + name_size, suffix, sizeof(suffix));
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, message, out_error);
-    tinypy_internal_vm_deallocate(vm, message, message_size + 1U, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, message, message_size + 1U);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_object_make_attribute_error_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
@@ -91,14 +91,14 @@ static tinypy_value_t *__tinypy_object_type_tuple(tinypy_vm_t *vm, tinypy_type_t
         tinypy_value_t *return_value_1 = tinypy_tuple_from_items(vm, NULL, 0U);
         return return_value_1;
     }
-    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*items));
     for (index = 0U; index < size; ++index) {
         tinypy_type_t *item = (tinypy_type_t *)(mro != 0 ? tinypy_type_mro_at(type, index) : tinypy_type_base_at(type, index));
 
         items[index] = &item->base.base;
     }
     tinypy_value_t *result = tinypy_tuple_from_items(vm, items, size);
-    tinypy_internal_vm_deallocate(vm, items, size * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, items, size * sizeof(*items));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

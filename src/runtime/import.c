@@ -75,7 +75,7 @@ static char *__tinypy_import_canonical_name(tinypy_vm_t *vm, const char *name, s
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "absolute import name is empty", out_error);
             return NULL;
         }
-        canonical = (char *)tinypy_internal_vm_allocate(vm, name_size, TINYPY_ALLOC_TAG_TEMPORARY);
+        canonical = (char *)tinypy_internal_vm_allocate(vm, name_size);
         (void)memcpy(canonical, name, name_size);
         *out_size = name_size;
         return canonical;
@@ -96,7 +96,7 @@ static char *__tinypy_import_canonical_name(tinypy_vm_t *vm, const char *name, s
         base_size -= 1U;
     }
     *out_size = base_size + name_size + (name_size != 0U ? 1U : 0U);
-    canonical = (char *)tinypy_internal_vm_allocate(vm, *out_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    canonical = (char *)tinypy_internal_vm_allocate(vm, *out_size);
     (void)memcpy(canonical, package_bytes, base_size);
     if (name_size != 0U) {
         canonical[base_size] = '.';
@@ -206,14 +206,14 @@ static void __tinypy_import_make_not_found_error(tinypy_vm_t *vm, const char *na
     char *message;
 
     message_size = (sizeof(prefix) - 1U) + name_size;
-    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U, TINYPY_ALLOC_TAG_TEMPORARY);
+    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U);
     (void)memcpy(message, prefix, sizeof(prefix) - 1U);
     if (name_size != 0U) {
         (void)memcpy(message + sizeof(prefix) - 1U, name, name_size);
     }
     message[message_size] = '\0';
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, message, out_error);
-    tinypy_internal_vm_deallocate(vm, message, message_size + 1U, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, message, message_size + 1U);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_import_finder_path(tinypy_vm_t *vm, const char *name, size_t name_size) {
@@ -518,7 +518,7 @@ tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t n
 
         if (__tinypy_import_package_view(globals, &package_bytes, &package_size) != 0) {
             canonical_size = package_size + name_size + 1U;
-            canonical = (char *)tinypy_internal_vm_allocate(vm, canonical_size, TINYPY_ALLOC_TAG_TEMPORARY);
+            canonical = (char *)tinypy_internal_vm_allocate(vm, canonical_size);
             (void)memcpy(canonical, package_bytes, package_size);
             canonical[package_size] = '.';
             (void)memcpy(canonical + package_size + 1U, name, name_size);
@@ -526,7 +526,7 @@ tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t n
                                    ? canonical_size
                                    : package_size + 1U + __tinypy_import_first_component_size(name, name_size);
             tinypy_value_t *result = __tinypy_import_load_path(vm, canonical, canonical_size, importer, importer_size, return_name_size, &not_found, out_error);
-            tinypy_internal_vm_deallocate(vm, canonical, canonical_size, TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, canonical, canonical_size);
             if (result != NULL || not_found == 0) {
                 return result;
             }
@@ -542,7 +542,7 @@ tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t n
                            ? canonical_size
                            : __tinypy_import_first_component_size(canonical, canonical_size);
     tinypy_value_t *result = __tinypy_import_load_path(vm, canonical, canonical_size, importer, importer_size, return_name_size, &not_found, out_error);
-    tinypy_internal_vm_deallocate(vm, canonical, canonical_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, canonical, canonical_size);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -560,12 +560,12 @@ tinypy_value_t *tinypy_internal_import_from(tinypy_value_t *module, const char *
     }
     tinypy_value_t *module_name_2 = tinypy_module_name(module);
     module_name = (const char *)tinypy_string_view(module_name_2, &module_name_size);
-    full_name = (char *)tinypy_internal_vm_allocate(vm, module_name_size + name_size + 1U, TINYPY_ALLOC_TAG_TEMPORARY);
+    full_name = (char *)tinypy_internal_vm_allocate(vm, module_name_size + name_size + 1U);
     (void)memcpy(full_name, module_name, module_name_size);
     full_name[module_name_size] = '.';
     (void)memcpy(full_name + module_name_size + 1U, name, name_size);
     value = __tinypy_import_load_path(vm, full_name, module_name_size + name_size + 1U, module_name, module_name_size, module_name_size + name_size + 1U, &not_found, out_error);
-    tinypy_internal_vm_deallocate(vm, full_name, module_name_size + name_size + 1U, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, full_name, module_name_size + name_size + 1U);
     return value;
 }
 //////////////////////////////////////////////////////////////////////////

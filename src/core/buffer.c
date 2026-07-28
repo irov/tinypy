@@ -277,14 +277,14 @@ static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value
         tinypy_value_t *return_value_2 = tinypy_string_from_bytes(vm, bytes + (size_t)start, length);
         return return_value_2;
     }
-    selected = (uint8_t *)tinypy_internal_vm_allocate(vm, length, TINYPY_ALLOC_TAG_TEMPORARY);
+    selected = (uint8_t *)tinypy_internal_vm_allocate(vm, length);
     source = start;
     for (index = 0U; index < length; ++index) {
         selected[index] = bytes[(size_t)source];
         source += step;
     }
     tinypy_value_t *result = tinypy_string_from_bytes(vm, selected, length);
-    tinypy_internal_vm_deallocate(vm, selected, length, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, selected, length);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

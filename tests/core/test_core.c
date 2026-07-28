@@ -14,7 +14,6 @@ typedef union test_allocation_header_t {
     struct {
         size_t size;
         size_t alignment;
-        tinypy_allocation_tag_e tag;
     } fields;
     void *pointer_alignment;
     void (*function_alignment)(void);
@@ -24,7 +23,6 @@ typedef union test_allocation_header_t {
 //////////////////////////////////////////////////////////////////////////
 typedef struct test_allocator_state_t {
     size_t allocation_calls;
-    size_t error_allocation_calls;
     size_t deallocation_calls;
     size_t outstanding_allocations;
     size_t outstanding_bytes;
@@ -44,14 +42,11 @@ typedef struct test_allocator_state_t {
         }                                    \
     } while (0)
 //////////////////////////////////////////////////////////////////////////
-static void *__test_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__test_allocate(void *user_data, size_t size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     test_allocation_header_t *header;
 
     state->allocation_calls += 1U;
-    if (tag == TINYPY_ALLOC_TAG_ERROR) {
-        state->error_allocation_calls += 1U;
-    }
     state->last_allocation_size = size;
 
     if (size > SIZE_MAX - sizeof(*header)) {
@@ -65,29 +60,25 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment, tin
 
     header->fields.size = size;
     header->fields.alignment = alignment;
-    header->fields.tag = tag;
     state->outstanding_allocations += 1U;
     state->outstanding_bytes += size;
     return (void *)(header + 1);
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     test_allocation_header_t *header;
     test_allocation_header_t *resized;
 
     if (memory == NULL) {
-        void *return_value_1 = __test_allocate(user_data, new_size, alignment, tag);
+        void *return_value_1 = __test_allocate(user_data, new_size, alignment);
         return return_value_1;
     }
 
     state->allocation_calls += 1U;
-    if (tag == TINYPY_ALLOC_TAG_ERROR) {
-        state->error_allocation_calls += 1U;
-    }
     header = ((test_allocation_header_t *)memory) - 1;
     state->last_allocation_size = new_size;
-    if (header->fields.size != old_size || header->fields.alignment != alignment || header->fields.tag != tag || new_size > SIZE_MAX - sizeof(*header)) {
+    if (header->fields.size != old_size || header->fields.alignment != alignment || new_size > SIZE_MAX - sizeof(*header)) {
         return NULL;
     }
 
@@ -102,11 +93,10 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
     state->outstanding_bytes += new_size;
     resized->fields.size = new_size;
     resized->fields.alignment = alignment;
-    resized->fields.tag = tag;
     return (void *)(resized + 1);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     test_allocation_header_t *header;
 
@@ -115,7 +105,7 @@ static void __test_deallocate(void *user_data, void *memory, size_t size, size_t
     }
 
     header = ((test_allocation_header_t *)memory) - 1;
-    if (header->fields.size != size || header->fields.alignment != alignment || header->fields.tag != tag) {
+    if (header->fields.size != size || header->fields.alignment != alignment) {
         (void)fprintf(stderr, "allocator size mismatch\n");
         abort();
     }
@@ -1360,7 +1350,7 @@ static int32_t __test_type_class_runtime(void) {
     const tinypy_type_t *type_type;
     const tinypy_type_t *observed_type;
     const tinypy_type_t *bases[2];
-    size_t error_allocation_calls;
+    size_t allocation_calls;
     size_t probe;
     size_t size;
 
@@ -1480,11 +1470,11 @@ static int32_t __test_type_class_runtime(void) {
     TEST_CHECK(tinypy_object_has_attr_value(instance, key) != 0);
     tinypy_release(key);
     key = NULL;
-    error_allocation_calls = state.error_allocation_calls;
+    allocation_calls = state.allocation_calls;
     for (probe = 0U; probe != 100000U; ++probe) {
         TEST_CHECK(tinypy_object_has_attr(instance, "absent", 6U) == 0);
     }
-    TEST_CHECK(state.error_allocation_calls == error_allocation_calls);
+    TEST_CHECK(state.allocation_calls == allocation_calls);
     TEST_CHECK(tinypy_vm_has_error(vm) == 0);
 
     bases[0] = base_a;

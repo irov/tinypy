@@ -40,8 +40,8 @@ typedef struct tinypy_pool_allocator_t {
 
 void tinypy_internal_pool_initialize(tinypy_vm_t *vm);
 void tinypy_internal_pool_finalize(tinypy_vm_t *vm);
-void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size, tinypy_allocation_tag_e tag);
-void *tinypy_internal_pool_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, tinypy_allocation_tag_e tag);
-void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size, tinypy_allocation_tag_e tag);
+void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size);
+void *tinypy_internal_pool_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size);
+void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size);
 
 #endif

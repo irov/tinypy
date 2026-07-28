@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 //////////////////////////////////////////////////////////////////////////
-#define TINYPY_ABI_VERSION UINT32_C(2)
+#define TINYPY_ABI_VERSION UINT32_C(3)
 
 /* Hashes deliberately emulate the 64-bit CPython 2.7 `long` policy on every
  * host, including 32-bit hosts. This gives bytecode/cache users one stable
@@ -116,30 +116,6 @@ typedef enum tinypy_value_type_e {
     TINYPY_VALUE_SRE_MATCH = 50,
     TINYPY_VALUE_NATIVE_INSTANCE = 51
 } tinypy_value_type_e;
-//////////////////////////////////////////////////////////////////////////
-typedef enum tinypy_allocation_tag_e {
-    TINYPY_ALLOC_TAG_VM = 1,
-    TINYPY_ALLOC_TAG_VALUE = 2,
-    TINYPY_ALLOC_TAG_ERROR = 3,
-    TINYPY_ALLOC_TAG_LIST_ITEMS = 4,
-    TINYPY_ALLOC_TAG_DICT_TABLE = 5,
-    TINYPY_ALLOC_TAG_TYPE_MRO = 6,
-    TINYPY_ALLOC_TAG_MARSHAL_CACHE = 7,
-    TINYPY_ALLOC_TAG_TEMPORARY = 8,
-    TINYPY_ALLOC_TAG_BYTEARRAY_DATA = 9,
-    TINYPY_ALLOC_TAG_TUPLE_ITEMS = 10,
-    TINYPY_ALLOC_TAG_SRE_DATA = 11,
-    TINYPY_ALLOC_TAG_COMPILER_ARENA = 12,
-    TINYPY_ALLOC_TAG_COMPILER_DATA = 13,
-    TINYPY_ALLOC_TAG_MARSHAL_WRITE = 14,
-    TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT = 15,
-    TINYPY_ALLOC_TAG_POOL_ARENA = 16,
-    TINYPY_ALLOC_TAG_POOL_TABLE = 17,
-    TINYPY_MARSHAL_ALLOC_TAG_DOCUMENT = 0x100,
-    TINYPY_MARSHAL_ALLOC_TAG_GRAPH = 0x101,
-    TINYPY_BUILD_PROFILE_ALLOC_TAG_PROFILE = 0x300,
-    TINYPY_BUILD_PROFILE_ALLOC_TAG_DATA = 0x301
-} tinypy_allocation_tag_e;
 //////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_output_channel_e {
     TINYPY_OUTPUT_STDOUT = 1,

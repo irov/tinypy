@@ -29,10 +29,10 @@ static void __tinypy_representation_reserve(tinypy_representation_builder_t *bui
         capacity *= 2U;
     }
     if (builder->bytes == NULL) {
-        builder->bytes = (uint8_t *)tinypy_internal_vm_allocate(builder->vm, capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+        builder->bytes = (uint8_t *)tinypy_internal_vm_allocate(builder->vm, capacity);
     }
     else {
-        builder->bytes = (uint8_t *)tinypy_internal_vm_reallocate(builder->vm, builder->bytes, builder->capacity, capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+        builder->bytes = (uint8_t *)tinypy_internal_vm_reallocate(builder->vm, builder->bytes, builder->capacity, capacity);
     }
     builder->capacity = capacity;
 }
@@ -64,10 +64,10 @@ static tinypy_bool_t __tinypy_representation_enter(tinypy_representation_builder
         size_t new_size = capacity * sizeof(*builder->active);
 
         if (builder->active == NULL) {
-            builder->active = (tinypy_value_t **)tinypy_internal_vm_allocate(builder->vm, new_size, TINYPY_ALLOC_TAG_TEMPORARY);
+            builder->active = (tinypy_value_t **)tinypy_internal_vm_allocate(builder->vm, new_size);
         }
         else {
-            builder->active = (tinypy_value_t **)tinypy_internal_vm_reallocate(builder->vm, builder->active, old_size, new_size, TINYPY_ALLOC_TAG_TEMPORARY);
+            builder->active = (tinypy_value_t **)tinypy_internal_vm_reallocate(builder->vm, builder->active, old_size, new_size);
         }
         builder->active_capacity = capacity;
     }
@@ -131,8 +131,8 @@ static void __tinypy_representation_long(tinypy_representation_builder_t *builde
     }
     work_size = digit_count * sizeof(*work);
     chunks_size = digit_count * sizeof(*chunks);
-    work = (uint16_t *)tinypy_internal_vm_allocate(builder->vm, work_size, TINYPY_ALLOC_TAG_TEMPORARY);
-    chunks = (uint32_t *)tinypy_internal_vm_allocate(builder->vm, chunks_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    work = (uint16_t *)tinypy_internal_vm_allocate(builder->vm, work_size);
+    chunks = (uint32_t *)tinypy_internal_vm_allocate(builder->vm, chunks_size);
     (void)memcpy(work, TINYPY_LONG_OBJECT(value)->digits, work_size);
     active_digits = digit_count;
     while (active_digits != 0U) {
@@ -159,8 +159,8 @@ static void __tinypy_representation_long(tinypy_representation_builder_t *builde
         __tinypy_representation_unsigned_decimal(builder, chunks[chunk_count - 1U], 9U);
     }
     __tinypy_representation_append_character(builder, (uint8_t)'L');
-    tinypy_internal_vm_deallocate(builder->vm, chunks, chunks_size, TINYPY_ALLOC_TAG_TEMPORARY);
-    tinypy_internal_vm_deallocate(builder->vm, work, work_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(builder->vm, chunks, chunks_size);
+    tinypy_internal_vm_deallocate(builder->vm, work, work_size);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_double(tinypy_representation_builder_t *builder, double value) {
@@ -629,19 +629,19 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tiny
     TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_representation_value(&builder, value, raw, out_error) == 0) {
         if (builder.active != NULL) {
-            tinypy_internal_vm_deallocate(builder.vm, builder.active, builder.active_capacity * sizeof(*builder.active), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(builder.vm, builder.active, builder.active_capacity * sizeof(*builder.active));
         }
         if (builder.bytes != NULL) {
-            tinypy_internal_vm_deallocate(builder.vm, builder.bytes, builder.capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(builder.vm, builder.bytes, builder.capacity);
         }
         return NULL;
     }
     tinypy_value_t *result = tinypy_string_from_bytes(builder.vm, builder.bytes, builder.size);
     if (builder.active != NULL) {
-        tinypy_internal_vm_deallocate(builder.vm, builder.active, builder.active_capacity * sizeof(*builder.active), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(builder.vm, builder.active, builder.active_capacity * sizeof(*builder.active));
     }
     if (builder.bytes != NULL) {
-        tinypy_internal_vm_deallocate(builder.vm, builder.bytes, builder.capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(builder.vm, builder.bytes, builder.capacity);
     }
     return result;
 }

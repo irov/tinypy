@@ -25,8 +25,7 @@ tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *
 
     tinypy_value_t *value = (tinypy_value_t *)tinypy_internal_vm_allocate(
         vm,
-        allocation_size,
-        TINYPY_ALLOC_TAG_VALUE);
+        allocation_size);
 
     (void)memset(value, 0, allocation_size);
     value->ref = 1U;
@@ -79,8 +78,7 @@ void tinypy_internal_value_destroy(tinypy_value_t *value) {
     tinypy_internal_vm_deallocate(
         vm,
         value,
-        allocation_size,
-        TINYPY_ALLOC_TAG_VALUE);
+        allocation_size);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_release_visit(tinypy_value_t *child, void *user_data) {
@@ -98,7 +96,7 @@ void tinypy_internal_integer_free_list_finalize(tinypy_vm_t *vm) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_value_unregister(vm, &value->base);
 #endif
-        tinypy_internal_vm_deallocate(vm, value, sizeof(*value), TINYPY_ALLOC_TAG_VALUE);
+        tinypy_internal_vm_deallocate(vm, value, sizeof(*value));
     }
 }
 //////////////////////////////////////////////////////////////////////////

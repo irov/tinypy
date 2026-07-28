@@ -262,8 +262,7 @@ static void *__tinypy_marshal_graph_allocate(tinypy_marshal_parser_t *parser, si
     tinypy_marshal_allocation_t *allocation = (tinypy_marshal_allocation_t *)document->allocator.allocate(
         document->allocator.user_data,
         total_size,
-        TINYPY_MARSHAL_ALIGNMENT,
-        TINYPY_MARSHAL_ALLOC_TAG_GRAPH);
+        TINYPY_MARSHAL_ALIGNMENT);
 
     allocation->next = document->allocations;
     allocation->total_size = total_size;
@@ -1286,8 +1285,7 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(const void *bytes, size_t size, c
     tinypy_marshal_document_t *document = (tinypy_marshal_document_t *)allocator->allocate(
         allocator->user_data,
         sizeof(*document),
-        TINYPY_MARSHAL_ALIGNMENT,
-        TINYPY_MARSHAL_ALLOC_TAG_DOCUMENT);
+        TINYPY_MARSHAL_ALIGNMENT);
 
     (void)memset(document, 0, sizeof(*document));
     document->state = TINYPY_MARSHAL_DOCUMENT_LIVE;
@@ -1865,16 +1863,14 @@ void tinypy_marshal_document_destroy(tinypy_marshal_document_t *document) {
             allocator.user_data,
             allocation,
             allocation->total_size,
-            TINYPY_MARSHAL_ALIGNMENT,
-            TINYPY_MARSHAL_ALLOC_TAG_GRAPH);
+            TINYPY_MARSHAL_ALIGNMENT);
         allocation = next;
     }
     allocator.deallocate(
         allocator.user_data,
         document,
         sizeof(*document),
-        TINYPY_MARSHAL_ALIGNMENT,
-        TINYPY_MARSHAL_ALLOC_TAG_DOCUMENT);
+        TINYPY_MARSHAL_ALIGNMENT);
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_marshal_object_t *tinypy_marshal_document_root(const tinypy_marshal_document_t *document) {

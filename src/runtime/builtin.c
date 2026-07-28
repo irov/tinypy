@@ -814,7 +814,7 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
         for (; iterator != iterator_end; ++iterator) {
             total += TINYPY_TEXT_BYTE_SIZE(*iterator);
         }
-        buffer = total != 0U ? (uint8_t *)tinypy_internal_vm_allocate(vm, total, TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
+        buffer = total != 0U ? (uint8_t *)tinypy_internal_vm_allocate(vm, total) : NULL;
         iterator = TINYPY_LIST_ITERATOR_BEGIN(selected);
         iterator_end = TINYPY_LIST_ITERATOR_END(selected);
         for (; iterator != iterator_end; ++iterator) {
@@ -826,7 +826,7 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
         }
         result = tinypy_string_from_bytes(vm, buffer, total);
         if (buffer != NULL) {
-            tinypy_internal_vm_deallocate(vm, buffer, total, TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, buffer, total);
         }
     }
     else {
@@ -852,7 +852,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
     }
     tinypy_value_t *callable = TINYPY_TUPLE_GET(args, 0U);
     iterable_count = TINYPY_TUPLE_SIZE(args) - 1U;
-    tinypy_value_t **lists = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*lists), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_value_t **lists = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*lists));
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, iterable_index + 1U);
         lists[iterable_index] = __tinypy_builtin_collect(vm, item, out_error);
@@ -860,7 +860,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
             while (iterable_index != 0U) {
                 TINYPY_DECREF(lists[--iterable_index]);
             }
-            tinypy_internal_vm_deallocate(vm, lists, iterable_count * sizeof(*lists), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, lists, iterable_count * sizeof(*lists));
             return NULL;
         }
         if (TINYPY_LIST_SIZE(lists[iterable_index]) > maximum) {
@@ -869,7 +869,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
     }
     result = tinypy_list_from_items(vm, NULL, 0U);
     for (index = 0U; index < maximum; ++index) {
-        tinypy_value_t **call_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*call_items), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_value_t **call_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*call_items));
         tinypy_value_t *mapped;
 
         for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
@@ -890,7 +890,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
             mapped = tinypy_call(callable, call_args, NULL, out_error);
             TINYPY_DECREF(call_args);
         }
-        tinypy_internal_vm_deallocate(vm, call_items, iterable_count * sizeof(*call_items), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, call_items, iterable_count * sizeof(*call_items));
         if (mapped == NULL) {
             TINYPY_DECREF(result);
             result = NULL;
@@ -902,7 +902,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
         TINYPY_DECREF(lists[iterable_index]);
     }
-    tinypy_internal_vm_deallocate(vm, lists, iterable_count * sizeof(*lists), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, lists, iterable_count * sizeof(*lists));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -921,7 +921,7 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
         tinypy_value_t *return_value_1 = tinypy_list_from_items(vm, NULL, 0U);
         return return_value_1;
     }
-    tinypy_value_t **lists = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*lists), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_value_t **lists = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*lists));
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, iterable_index);
         lists[iterable_index] = __tinypy_builtin_collect(vm, item, out_error);
@@ -929,7 +929,7 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
             while (iterable_index != 0U) {
                 TINYPY_DECREF(lists[--iterable_index]);
             }
-            tinypy_internal_vm_deallocate(vm, lists, iterable_count * sizeof(*lists), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, lists, iterable_count * sizeof(*lists));
             return NULL;
         }
         if (TINYPY_LIST_SIZE(lists[iterable_index]) < minimum) {
@@ -938,21 +938,21 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
     }
     tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
     for (index = 0U; index < minimum; ++index) {
-        tinypy_value_t **tuple_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*tuple_items), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_value_t **tuple_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*tuple_items));
         tinypy_value_t *tuple;
 
         for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
             tuple_items[iterable_index] = TINYPY_LIST_GET(lists[iterable_index], index);
         }
         tuple = tinypy_tuple_from_items(vm, tuple_items, iterable_count);
-        tinypy_internal_vm_deallocate(vm, tuple_items, iterable_count * sizeof(*tuple_items), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, tuple_items, iterable_count * sizeof(*tuple_items));
         tinypy_list_append(result, tuple);
         TINYPY_DECREF(tuple);
     }
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
         TINYPY_DECREF(lists[iterable_index]);
     }
-    tinypy_internal_vm_deallocate(vm, lists, iterable_count * sizeof(*lists), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, lists, iterable_count * sizeof(*lists));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

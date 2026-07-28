@@ -184,8 +184,7 @@ static void *__tinypy_profile_allocate(tinypy_build_profile_t *profile, size_t p
     tinypy_profile_allocation_t *allocation = (tinypy_profile_allocation_t *)profile->allocator.allocate(
         profile->allocator.user_data,
         total_size,
-        TINYPY_PROFILE_ALIGNMENT,
-        TINYPY_BUILD_PROFILE_ALLOC_TAG_DATA);
+        TINYPY_PROFILE_ALIGNMENT);
     allocation->next = profile->allocations;
     allocation->total_size = total_size;
     profile->allocations = allocation;
@@ -681,16 +680,14 @@ static void __tinypy_profile_destroy_partial(tinypy_build_profile_t *profile) {
             allocator.user_data,
             allocation,
             allocation->total_size,
-            TINYPY_PROFILE_ALIGNMENT,
-            TINYPY_BUILD_PROFILE_ALLOC_TAG_DATA);
+            TINYPY_PROFILE_ALIGNMENT);
         allocation = next;
     }
     allocator.deallocate(
         allocator.user_data,
         profile,
         sizeof(*profile),
-        TINYPY_PROFILE_ALIGNMENT,
-        TINYPY_BUILD_PROFILE_ALLOC_TAG_PROFILE);
+        TINYPY_PROFILE_ALIGNMENT);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator_t *allocator, int32_t optimize_level, const tinypy_build_constant_t *constants, size_t constant_count, const tinypy_build_profile_limits_t *limits, tinypy_build_profile_t **out_profile, tinypy_build_profile_error_t *out_error) {
@@ -760,8 +757,7 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
     tinypy_build_profile_t *profile = (tinypy_build_profile_t *)allocator->allocate(
         allocator->user_data,
         sizeof(*profile),
-        TINYPY_PROFILE_ALIGNMENT,
-        TINYPY_BUILD_PROFILE_ALLOC_TAG_PROFILE);
+        TINYPY_PROFILE_ALIGNMENT);
     (void)memset(profile, 0, sizeof(*profile));
     profile->state = TINYPY_BUILD_PROFILE_STATE;
     profile->optimize_level = optimize_level;
@@ -949,7 +945,7 @@ tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_
 
     source_count = profile != NULL ? tinypy_build_profile_constant_count(profile) : 0U;
     if (source_count != 0U) {
-        constants = (tinypy_build_constant_t *)tinypy_internal_vm_allocate(vm, source_count * sizeof(*constants), TINYPY_ALLOC_TAG_TEMPORARY);
+        constants = (tinypy_build_constant_t *)tinypy_internal_vm_allocate(vm, source_count * sizeof(*constants));
     }
     for (index = 0U; index < source_count; ++index) {
         const char *name;
@@ -970,10 +966,10 @@ tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_
     }
     result = profile != NULL ? tinypy_build_profile_create(&vm->allocator, profile->optimize_level, constants, constant_count, &profile->limits, &profile_copy, NULL) : TINYPY_BUILD_PROFILE_OK;
     if (constants != NULL) {
-        tinypy_internal_vm_deallocate(vm, constants, source_count * sizeof(*constants), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, constants, source_count * sizeof(*constants));
     }
     (void)result;
-    tinypy_compile_environment_t *environment = (tinypy_compile_environment_t *)tinypy_internal_vm_allocate(vm, sizeof(*environment), TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT);
+    tinypy_compile_environment_t *environment = (tinypy_compile_environment_t *)tinypy_internal_vm_allocate(vm, sizeof(*environment));
     environment->state = TINYPY_COMPILE_ENVIRONMENT_STATE;
     environment->ref = 1;
     environment->vm = vm;
@@ -997,7 +993,7 @@ void tinypy_internal_compile_environment_release(tinypy_compile_environment_t *e
     if (environment->profile != NULL) {
         tinypy_build_profile_destroy(environment->profile);
     }
-    tinypy_internal_vm_deallocate(vm, environment, sizeof(*environment), TINYPY_ALLOC_TAG_COMPILE_ENVIRONMENT);
+    tinypy_internal_vm_deallocate(vm, environment, sizeof(*environment));
 }
 //////////////////////////////////////////////////////////////////////////
 uint32_t tinypy_internal_compile_environment_feature_flags(const tinypy_compile_environment_t *environment) {

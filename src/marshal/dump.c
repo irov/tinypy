@@ -144,10 +144,10 @@ static void __tinypy_marshal_dump_add_intern(tinypy_marshal_dump_writer_t *write
 
         new_size = new_capacity * sizeof(*writer->interns);
         if (writer->interns == NULL) {
-            writer->interns = (const tinypy_value_t **)tinypy_internal_vm_allocate(writer->vm, new_size, TINYPY_ALLOC_TAG_MARSHAL_WRITE);
+            writer->interns = (const tinypy_value_t **)tinypy_internal_vm_allocate(writer->vm, new_size);
         }
         else {
-            writer->interns = (const tinypy_value_t **)tinypy_internal_vm_reallocate(writer->vm, (void *)writer->interns, old_size, new_size, TINYPY_ALLOC_TAG_MARSHAL_WRITE);
+            writer->interns = (const tinypy_value_t **)tinypy_internal_vm_reallocate(writer->vm, (void *)writer->interns, old_size, new_size);
         }
         writer->intern_capacity = new_capacity;
     }
@@ -325,7 +325,7 @@ static tinypy_bool_t __tinypy_marshal_dump_value(tinypy_marshal_dump_writer_t *w
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_dump_writer_destroy(tinypy_marshal_dump_writer_t *writer) {
     if (writer->interns != NULL) {
-        tinypy_internal_vm_deallocate(writer->vm, (void *)writer->interns, writer->intern_capacity * sizeof(*writer->interns), TINYPY_ALLOC_TAG_MARSHAL_WRITE);
+        tinypy_internal_vm_deallocate(writer->vm, (void *)writer->interns, writer->intern_capacity * sizeof(*writer->interns));
     }
 }
 //////////////////////////////////////////////////////////////////////////

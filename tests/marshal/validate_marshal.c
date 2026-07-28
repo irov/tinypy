@@ -4,28 +4,25 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void *__validator_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__validator_allocate(void *user_data, size_t size, size_t alignment) {
     (void)user_data;
     (void)alignment;
-    (void)tag;
     void *return_value_1 = malloc(size);
     return return_value_1;
 }
 
-static void *__validator_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__validator_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
     (void)user_data;
     (void)old_size;
     (void)alignment;
-    (void)tag;
     void *return_value_1 = realloc(memory, new_size);
     return return_value_1;
 }
 
-static void __validator_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void __validator_deallocate(void *user_data, void *memory, size_t size, size_t alignment) {
     (void)user_data;
     (void)size;
     (void)alignment;
-    (void)tag;
     free(memory);
 }
 

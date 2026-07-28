@@ -15,21 +15,21 @@ static inline size_t __tinypy_pool_block_size(uint32_t size_class) {
     return ((size_t)size_class + 1U) * TINYPY_INTERNAL_ALIGNMENT;
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__tinypy_pool_raw_allocate(tinypy_vm_t *vm, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__tinypy_pool_raw_allocate(tinypy_vm_t *vm, size_t size, size_t alignment) {
     void *memory;
 
-    memory = vm->allocator.allocate(vm->allocator.user_data, size, alignment, tag);
+    memory = vm->allocator.allocate(vm->allocator.user_data, size, alignment);
     vm->allocated_bytes += size;
     return memory;
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__tinypy_pool_raw_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__tinypy_pool_raw_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, size_t alignment) {
     void *resized;
 
     if (new_size == old_size) {
         return memory;
     }
-    resized = vm->allocator.reallocate(vm->allocator.user_data, memory, old_size, new_size, alignment, tag);
+    resized = vm->allocator.reallocate(vm->allocator.user_data, memory, old_size, new_size, alignment);
     if (new_size > old_size) {
         vm->allocated_bytes += new_size - old_size;
     }
@@ -39,9 +39,9 @@ static void *__tinypy_pool_raw_reallocate(tinypy_vm_t *vm, void *memory, size_t 
     return resized;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_pool_raw_deallocate(tinypy_vm_t *vm, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void __tinypy_pool_raw_deallocate(tinypy_vm_t *vm, void *memory, size_t size, size_t alignment) {
 
-    vm->allocator.deallocate(vm->allocator.user_data, memory, size, alignment, tag);
+    vm->allocator.deallocate(vm->allocator.user_data, memory, size, alignment);
     vm->allocated_bytes -= size;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -59,10 +59,10 @@ static void __tinypy_pool_grow_arena_table(tinypy_vm_t *vm) {
     old_size = (size_t)old_count * sizeof(*arenas);
     new_size = (size_t)new_count * sizeof(*arenas);
     if (allocator->arenas == NULL) {
-        arenas = (tinypy_pool_arena_t *)__tinypy_pool_raw_allocate(vm, new_size, TINYPY_INTERNAL_ALIGNMENT, TINYPY_ALLOC_TAG_POOL_TABLE);
+        arenas = (tinypy_pool_arena_t *)__tinypy_pool_raw_allocate(vm, new_size, TINYPY_INTERNAL_ALIGNMENT);
     }
     else {
-        arenas = (tinypy_pool_arena_t *)__tinypy_pool_raw_reallocate(vm, allocator->arenas, old_size, new_size, TINYPY_INTERNAL_ALIGNMENT, TINYPY_ALLOC_TAG_POOL_TABLE);
+        arenas = (tinypy_pool_arena_t *)__tinypy_pool_raw_reallocate(vm, allocator->arenas, old_size, new_size, TINYPY_INTERNAL_ALIGNMENT);
     }
     allocator->arenas = arenas;
     (void)memset(arenas + old_count, 0, (size_t)(new_count - old_count) * sizeof(*arenas));
@@ -86,7 +86,7 @@ static tinypy_pool_arena_t *__tinypy_pool_new_arena(tinypy_vm_t *vm) {
     tinypy_pool_arena_t *arena = allocator->unused_arenas;
     allocator->unused_arenas = arena->next_arena;
 
-    memory = __tinypy_pool_raw_allocate(vm, TINYPY_INTERNAL_POOL_ARENA_SIZE, TINYPY_INTERNAL_ALIGNMENT, TINYPY_ALLOC_TAG_POOL_ARENA);
+    memory = __tinypy_pool_raw_allocate(vm, TINYPY_INTERNAL_POOL_ARENA_SIZE, TINYPY_INTERNAL_ALIGNMENT);
     address = (uintptr_t)memory;
     aligned_address = (address + TINYPY_INTERNAL_POOL_SIZE_MASK) & ~(uintptr_t)TINYPY_INTERNAL_POOL_SIZE_MASK;
     excess = (size_t)(aligned_address - address);
@@ -146,7 +146,7 @@ static void __tinypy_pool_release_arena(tinypy_vm_t *vm, tinypy_pool_arena_t *ar
     arena->total_pool_count = 0U;
     arena->free_pools = NULL;
     allocator->active_arena_count -= 1U;
-    __tinypy_pool_raw_deallocate(vm, memory, TINYPY_INTERNAL_POOL_ARENA_SIZE, TINYPY_INTERNAL_ALIGNMENT, TINYPY_ALLOC_TAG_POOL_ARENA);
+    __tinypy_pool_raw_deallocate(vm, memory, TINYPY_INTERNAL_POOL_ARENA_SIZE, TINYPY_INTERNAL_ALIGNMENT);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_pool_slide_usable_arena(tinypy_pool_allocator_t *allocator, tinypy_pool_arena_t *arena) {
@@ -202,12 +202,12 @@ void tinypy_internal_pool_finalize(tinypy_vm_t *vm) {
         size_t allocation_size;
 
         allocation_size = (size_t)allocator->maximum_arena_count * sizeof(*allocator->arenas);
-        __tinypy_pool_raw_deallocate(vm, allocator->arenas, allocation_size, TINYPY_INTERNAL_ALIGNMENT, TINYPY_ALLOC_TAG_POOL_TABLE);
+        __tinypy_pool_raw_deallocate(vm, allocator->arenas, allocation_size, TINYPY_INTERNAL_ALIGNMENT);
     }
     (void)memset(allocator, 0, sizeof(*allocator));
 }
 //////////////////////////////////////////////////////////////////////////
-void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size, tinypy_allocation_tag_e tag) {
+void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size) {
     tinypy_pool_t *head;
     tinypy_pool_t *pool;
     tinypy_pool_block_t *block;
@@ -215,7 +215,7 @@ void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size, tinypy_allocat
     size_t block_size;
 
     if (size > TINYPY_INTERNAL_POOL_SMALL_REQUEST) {
-        void *return_value_1 = __tinypy_pool_raw_allocate(vm, size, TINYPY_INTERNAL_ALIGNMENT, tag);
+        void *return_value_1 = __tinypy_pool_raw_allocate(vm, size, TINYPY_INTERNAL_ALIGNMENT);
         return return_value_1;
     }
 
@@ -292,14 +292,14 @@ void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size, tinypy_allocat
     return block;
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size, tinypy_allocation_tag_e tag) {
+void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size) {
     tinypy_pool_t *pool;
     tinypy_pool_block_t *last_free;
     uintptr_t pool_address;
     uint32_t free_pool_count;
 
     if (size > TINYPY_INTERNAL_POOL_SMALL_REQUEST) {
-        __tinypy_pool_raw_deallocate(vm, memory, size, TINYPY_INTERNAL_ALIGNMENT, tag);
+        __tinypy_pool_raw_deallocate(vm, memory, size, TINYPY_INTERNAL_ALIGNMENT);
         return;
     }
 
@@ -342,7 +342,7 @@ void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size,
     __tinypy_pool_link_used_front(allocator, pool, pool->size_class);
 }
 //////////////////////////////////////////////////////////////////////////
-void *tinypy_internal_pool_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, tinypy_allocation_tag_e tag) {
+void *tinypy_internal_pool_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size) {
     void *resized;
     size_t copy_size;
 
@@ -362,13 +362,13 @@ void *tinypy_internal_pool_reallocate(tinypy_vm_t *vm, void *memory, size_t old_
         }
     }
     else if (new_size > TINYPY_INTERNAL_POOL_SMALL_REQUEST) {
-        void *return_value_1 = __tinypy_pool_raw_reallocate(vm, memory, old_size, new_size, TINYPY_INTERNAL_ALIGNMENT, tag);
+        void *return_value_1 = __tinypy_pool_raw_reallocate(vm, memory, old_size, new_size, TINYPY_INTERNAL_ALIGNMENT);
         return return_value_1;
     }
 
-    resized = tinypy_internal_pool_allocate(vm, new_size, tag);
+    resized = tinypy_internal_pool_allocate(vm, new_size);
     copy_size = old_size < new_size ? old_size : new_size;
     (void)memcpy(resized, memory, copy_size);
-    tinypy_internal_pool_deallocate(vm, memory, old_size, tag);
+    tinypy_internal_pool_deallocate(vm, memory, old_size);
     return resized;
 }

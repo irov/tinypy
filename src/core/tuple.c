@@ -38,7 +38,7 @@ void tinypy_internal_tuple_subclass_destroy(tinypy_value_t *value) {
     if (tuple->items == NULL) {
         return;
     }
-    tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), tuple->items, TINYPY_SIZED_SIZE(value) * sizeof(*tuple->items), TINYPY_ALLOC_TAG_TUPLE_ITEMS);
+    tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), tuple->items, TINYPY_SIZED_SIZE(value) * sizeof(*tuple->items));
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, tinypy_value_t *const *items, size_t size) {
@@ -47,7 +47,7 @@ tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, t
     tinypy_tuple_subclass_object_t *tuple = (tinypy_tuple_subclass_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
     tuple->base.size = size;
     if (size != 0U) {
-        tuple->items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*tuple->items), TINYPY_ALLOC_TAG_TUPLE_ITEMS);
+        tuple->items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*tuple->items));
     }
     for (size_t index = 0U; index < size; ++index) {
         tuple->items[index] = items[index];

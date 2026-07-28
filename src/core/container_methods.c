@@ -423,7 +423,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     }
     size = TINYPY_LIST_SIZE(list);
     if (size > 1U) {
-        keys = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*keys), TINYPY_ALLOC_TAG_TEMPORARY);
+        keys = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*keys));
     }
     for (index = 0U; index < size; ++index) {
         if (key_function != NULL && TINYPY_VALUE_KIND(key_function) != TINYPY_VALUE_NONE) {
@@ -439,7 +439,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
                     TINYPY_DECREF(keys[release_index]);
                 }
                 if (keys != NULL) {
-                    tinypy_internal_vm_deallocate(vm, keys, size * sizeof(*keys), TINYPY_ALLOC_TAG_TEMPORARY);
+                    tinypy_internal_vm_deallocate(vm, keys, size * sizeof(*keys));
                 }
                 return NULL;
             }
@@ -469,7 +469,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
                         TINYPY_DECREF(keys[release_index]);
                     }
                 }
-                tinypy_internal_vm_deallocate(vm, keys, size * sizeof(*keys), TINYPY_ALLOC_TAG_TEMPORARY);
+                tinypy_internal_vm_deallocate(vm, keys, size * sizeof(*keys));
                 return NULL;
             }
             if (less == 0) {
@@ -488,7 +488,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
                 TINYPY_DECREF(keys[index]);
             }
         }
-        tinypy_internal_vm_deallocate(vm, keys, size * sizeof(*keys), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, keys, size * sizeof(*keys));
         TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_list_reindex(vm, list);

@@ -166,7 +166,7 @@ static void __tinypy_internal_dict_resize(tinypy_vm_t *vm, tinypy_value_t *dict,
     new_size = __tinypy_internal_dict_table_size(new_capacity);
 
     tinypy_dict_entry_t *new_entries = (tinypy_dict_entry_t *)tinypy_internal_vm_allocate(
-        vm, new_size, TINYPY_ALLOC_TAG_DICT_TABLE);
+        vm, new_size);
     (void)memset(new_entries, 0, new_size);
 
     tinypy_dict_entry_t *iterator = old_entries;
@@ -186,8 +186,7 @@ static void __tinypy_internal_dict_resize(tinypy_vm_t *vm, tinypy_value_t *dict,
         tinypy_internal_vm_deallocate(
             vm,
             old_entries,
-            old_size,
-            TINYPY_ALLOC_TAG_DICT_TABLE);
+            old_size);
     }
     TINYPY_DICT_OBJECT(dict)->table = new_entries;
     TINYPY_DICT_OBJECT(dict)->mask = new_capacity - 1U;
@@ -223,8 +222,7 @@ void tinypy_internal_dict_destroy(tinypy_value_t *value) {
         tinypy_internal_vm_deallocate(
             TINYPY_VALUE_VM(value),
             entries,
-            table_size,
-            TINYPY_ALLOC_TAG_DICT_TABLE);
+            table_size);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -431,8 +429,7 @@ void tinypy_dict_clear(tinypy_value_t *dict) {
         tinypy_internal_vm_deallocate(
             vm,
             entries,
-            table_size,
-            TINYPY_ALLOC_TAG_DICT_TABLE);
+            table_size);
         (void)memset(
             TINYPY_DICT_OBJECT(dict)->small_table,
             0,

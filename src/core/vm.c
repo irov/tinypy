@@ -737,18 +737,18 @@ tinypy_bool_t tinypy_internal_vm_valid(const tinypy_vm_t *vm) {
     return vm != NULL && vm->state == TINYPY_VM_STATE_LIVE;
 }
 //////////////////////////////////////////////////////////////////////////
-void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size, tinypy_allocation_tag_e tag) {
-    void *return_value_1 = tinypy_internal_pool_allocate(vm, size, tag);
+void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size) {
+    void *return_value_1 = tinypy_internal_pool_allocate(vm, size);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-void *tinypy_internal_vm_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, tinypy_allocation_tag_e tag) {
-    void *return_value_1 = tinypy_internal_pool_reallocate(vm, memory, old_size, new_size, tag);
+void *tinypy_internal_vm_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size) {
+    void *return_value_1 = tinypy_internal_pool_reallocate(vm, memory, old_size, new_size);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_vm_deallocate(tinypy_vm_t *vm, void *memory, size_t size, tinypy_allocation_tag_e tag) {
-    tinypy_internal_pool_deallocate(vm, memory, size, tag);
+void tinypy_internal_vm_deallocate(tinypy_vm_t *vm, void *memory, size_t size) {
+    tinypy_internal_pool_deallocate(vm, memory, size);
 }
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -759,8 +759,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     tinypy_vm_t *vm = (tinypy_vm_t *)allocator->allocate(
         allocator->user_data,
         sizeof(*vm),
-        TINYPY_INTERNAL_ALIGNMENT,
-        TINYPY_ALLOC_TAG_VM);
+        TINYPY_INTERNAL_ALIGNMENT);
 
     (void)memset(vm, 0, sizeof(*vm));
     vm->state = TINYPY_VM_STATE_LIVE;
@@ -895,10 +894,10 @@ static void __tinypy_shutdown_entries_reserve(tinypy_shutdown_graph_t *graph) {
     new_capacity = graph->entry_capacity == 0U ? 256U : graph->entry_capacity * 2U;
     old_size = graph->entry_capacity * sizeof(*graph->entries);
     new_size = new_capacity * sizeof(*graph->entries);
-    tinypy_shutdown_entry_t *new_entries = (tinypy_shutdown_entry_t *)tinypy_internal_vm_allocate(graph->vm, new_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_shutdown_entry_t *new_entries = (tinypy_shutdown_entry_t *)tinypy_internal_vm_allocate(graph->vm, new_size);
     if (graph->entries != NULL) {
         (void)memcpy(new_entries, graph->entries, graph->entry_count * sizeof(*new_entries));
-        tinypy_internal_vm_deallocate(graph->vm, graph->entries, old_size, TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(graph->vm, graph->entries, old_size);
     }
     graph->entries = new_entries;
     graph->entry_capacity = new_capacity;
@@ -910,7 +909,7 @@ static void __tinypy_shutdown_slots_rebuild(tinypy_shutdown_graph_t *graph, size
     size_t index;
 
     new_size = new_capacity * sizeof(*new_slots);
-    new_slots = (size_t *)tinypy_internal_vm_allocate(graph->vm, new_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    new_slots = (size_t *)tinypy_internal_vm_allocate(graph->vm, new_size);
     (void)memset(new_slots, 0, new_size);
     for (index = 0U; index < graph->entry_count; ++index) {
         size_t slot = __tinypy_shutdown_pointer_hash(graph->entries[index].value) & (new_capacity - 1U);
@@ -921,7 +920,7 @@ static void __tinypy_shutdown_slots_rebuild(tinypy_shutdown_graph_t *graph, size
         new_slots[slot] = index + 1U;
     }
     if (graph->slots != NULL) {
-        tinypy_internal_vm_deallocate(graph->vm, graph->slots, graph->slot_capacity * sizeof(*graph->slots), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(graph->vm, graph->slots, graph->slot_capacity * sizeof(*graph->slots));
     }
     graph->slots = new_slots;
     graph->slot_count = graph->entry_count;
@@ -1046,7 +1045,7 @@ static void __tinypy_shutdown_destroy_entry(tinypy_shutdown_graph_t *graph, tiny
     if (entry->destroy != NULL) {
         entry->destroy(entry->value);
     }
-    tinypy_internal_vm_deallocate(graph->vm, entry->value, entry->allocation_size, TINYPY_ALLOC_TAG_VALUE);
+    tinypy_internal_vm_deallocate(graph->vm, entry->value, entry->allocation_size);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_shutdown_destroy_graph(tinypy_shutdown_graph_t *graph) {
@@ -1077,10 +1076,10 @@ static void __tinypy_shutdown_destroy_graph(tinypy_shutdown_graph_t *graph) {
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_shutdown_graph_destroy(tinypy_shutdown_graph_t *graph) {
     if (graph->slots != NULL) {
-        tinypy_internal_vm_deallocate(graph->vm, graph->slots, graph->slot_capacity * sizeof(*graph->slots), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(graph->vm, graph->slots, graph->slot_capacity * sizeof(*graph->slots));
     }
     if (graph->entries != NULL) {
-        tinypy_internal_vm_deallocate(graph->vm, graph->entries, graph->entry_capacity * sizeof(*graph->entries), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(graph->vm, graph->entries, graph->entry_capacity * sizeof(*graph->entries));
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1129,6 +1128,5 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
         allocator.user_data,
         vm,
         sizeof(*vm),
-        TINYPY_INTERNAL_ALIGNMENT,
-        TINYPY_ALLOC_TAG_VM);
+        TINYPY_INTERNAL_ALIGNMENT);
 }

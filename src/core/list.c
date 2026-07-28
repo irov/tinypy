@@ -20,8 +20,7 @@ void tinypy_internal_list_destroy(tinypy_value_t *value) {
         tinypy_internal_vm_deallocate(
             TINYPY_VALUE_VM(value),
             TINYPY_LIST_OBJECT(value)->items,
-            TINYPY_LIST_OBJECT(value)->allocated * sizeof(tinypy_value_t *),
-            TINYPY_ALLOC_TAG_LIST_ITEMS);
+            TINYPY_LIST_OBJECT(value)->allocated * sizeof(tinypy_value_t *));
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -56,8 +55,7 @@ static void __tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list
     if (TINYPY_LIST_OBJECT(list)->items == NULL) {
         items = (tinypy_value_t **)tinypy_internal_vm_allocate(
             vm,
-            new_size,
-            TINYPY_ALLOC_TAG_LIST_ITEMS);
+            new_size);
     }
     else {
         old_size = __tinypy_internal_list_storage_size(
@@ -66,8 +64,7 @@ static void __tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list
             vm,
             TINYPY_LIST_OBJECT(list)->items,
             old_size,
-            new_size,
-            TINYPY_ALLOC_TAG_LIST_ITEMS);
+            new_size);
     }
     TINYPY_LIST_OBJECT(list)->items = items;
     TINYPY_LIST_OBJECT(list)->allocated = new_capacity;
@@ -88,8 +85,7 @@ tinypy_value_t *tinypy_list_from_items(tinypy_vm_t *vm, tinypy_value_t *const *i
         TINYPY_LIST_OBJECT(result)->items =
             (tinypy_value_t **)tinypy_internal_vm_allocate(
                 vm,
-                storage_size,
-                TINYPY_ALLOC_TAG_LIST_ITEMS);
+                storage_size);
         TINYPY_LIST_OBJECT(result)->allocated = size;
     }
 

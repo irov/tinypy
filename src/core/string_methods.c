@@ -24,10 +24,10 @@ static void __tinypy_string_builder_reserve(tinypy_string_builder_t *builder, si
         capacity *= 2U;
     }
     if (builder->bytes == NULL) {
-        builder->bytes = (uint8_t *)tinypy_internal_vm_allocate(builder->vm, capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+        builder->bytes = (uint8_t *)tinypy_internal_vm_allocate(builder->vm, capacity);
     }
     else {
-        builder->bytes = (uint8_t *)tinypy_internal_vm_reallocate(builder->vm, builder->bytes, builder->capacity, capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+        builder->bytes = (uint8_t *)tinypy_internal_vm_reallocate(builder->vm, builder->bytes, builder->capacity, capacity);
     }
     builder->capacity = capacity;
 }
@@ -49,7 +49,7 @@ static tinypy_value_t *__tinypy_string_builder_finish(tinypy_string_builder_t *b
     tinypy_value_t *result = unicode != 0 ? tinypy_unicode_from_utf8(builder->vm, (const char *)builder->bytes, builder->size) : tinypy_string_from_bytes(builder->vm, builder->bytes, builder->size);
 
     if (builder->bytes != NULL) {
-        tinypy_internal_vm_deallocate(builder->vm, builder->bytes, builder->capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(builder->vm, builder->bytes, builder->capacity);
     }
     builder->bytes = NULL;
     builder->size = 0U;
@@ -59,7 +59,7 @@ static tinypy_value_t *__tinypy_string_builder_finish(tinypy_string_builder_t *b
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_string_builder_discard(tinypy_string_builder_t *builder) {
     if (builder->bytes != NULL) {
-        tinypy_internal_vm_deallocate(builder->vm, builder->bytes, builder->capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(builder->vm, builder->bytes, builder->capacity);
     }
     builder->bytes = NULL;
 }
@@ -1149,7 +1149,7 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
         tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, NULL, 0U);
         return return_value_1;
     }
-    output = (uint8_t *)tinypy_internal_vm_allocate(vm, source_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    output = (uint8_t *)tinypy_internal_vm_allocate(vm, source_size);
     for (input_index = 0U; input_index < source_size; ++input_index) {
         uint8_t character = source[input_index];
         size_t deleted_index;
@@ -1166,7 +1166,7 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
         }
     }
     result = tinypy_string_from_bytes(vm, output, output_size);
-    tinypy_internal_vm_deallocate(vm, output, source_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, output, source_size);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1761,10 +1761,10 @@ static void __tinypy_percent_long_digits(tinypy_string_builder_t *builder, const
         return;
     }
     allocation_size = digit_count * sizeof(*work);
-    work = (uint16_t *)tinypy_internal_vm_allocate(builder->vm, allocation_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    work = (uint16_t *)tinypy_internal_vm_allocate(builder->vm, allocation_size);
     (void)memcpy(work, TINYPY_LONG_OBJECT(value)->digits, allocation_size);
     reverse_capacity = digit_count * 15U;
-    reverse = (uint8_t *)tinypy_internal_vm_allocate(builder->vm, reverse_capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+    reverse = (uint8_t *)tinypy_internal_vm_allocate(builder->vm, reverse_capacity);
     active = digit_count;
     while (active != 0U) {
         uint32_t remainder = 0U;
@@ -1789,8 +1789,8 @@ static void __tinypy_percent_long_digits(tinypy_string_builder_t *builder, const
     while (reverse_count != 0U) {
         __tinypy_string_builder_character(builder, reverse[--reverse_count]);
     }
-    tinypy_internal_vm_deallocate(builder->vm, reverse, reverse_capacity, TINYPY_ALLOC_TAG_TEMPORARY);
-    tinypy_internal_vm_deallocate(builder->vm, work, allocation_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(builder->vm, reverse, reverse_capacity);
+    tinypy_internal_vm_deallocate(builder->vm, work, allocation_size);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_percent_append_integer(tinypy_vm_t *vm, tinypy_string_builder_t *builder, tinypy_value_t *value, uint8_t conversion, int32_t alternate, int32_t plus, int32_t space, int64_t precision, size_t *out_prefix_size, tinypy_error_t **out_error) {

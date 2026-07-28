@@ -8,11 +8,11 @@ typedef struct tinypy_allocator_t {
     uint32_t struct_size;
     void *user_data;
 
-    void *(*allocate)(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag);
+    void *(*allocate)(void *user_data, size_t size, size_t alignment);
 
-    void *(*reallocate)(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag);
+    void *(*reallocate)(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment);
 
-    void (*deallocate)(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag);
+    void (*deallocate)(void *user_data, void *memory, size_t size, size_t alignment);
 } tinypy_allocator_t;
 
 typedef struct tinypy_diagnostic_t {

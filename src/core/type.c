@@ -93,14 +93,14 @@ static tinypy_value_t *__tinypy_internal_type_remove_subclass(tinypy_value_t *fu
             tinypy_value_t **items;
             size_t output_index = 0U;
 
-            items = (tinypy_value_t **)tinypy_internal_vm_allocate(base->vm, (size - 1U) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+            items = (tinypy_value_t **)tinypy_internal_vm_allocate(base->vm, (size - 1U) * sizeof(*items));
             for (index = 0U; index < size; ++index) {
                 if (index != found) {
                     items[output_index++] = TINYPY_TUPLE_GET(previous, index);
                 }
             }
             base->subclasses = tinypy_tuple_from_items(base->vm, items, size - 1U);
-            tinypy_internal_vm_deallocate(base->vm, items, (size - 1U) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(base->vm, items, (size - 1U) * sizeof(*items));
         }
         TINYPY_DECREF(previous);
     }
@@ -118,13 +118,13 @@ static void __tinypy_internal_type_add_subclass(tinypy_type_t *base, tinypy_type
     tinypy_value_t *callback = tinypy_native_function_new(base->vm, "__remove_subclass", 17U, __tinypy_internal_type_remove_subclass, base, NULL);
     tinypy_value_t *reference = tinypy_weakref_new(&subclass->base.base, callback, &error);
     TINYPY_DECREF(callback);
-    items = (tinypy_value_t **)tinypy_internal_vm_allocate(base->vm, (size + 1U) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    items = (tinypy_value_t **)tinypy_internal_vm_allocate(base->vm, (size + 1U) * sizeof(*items));
     for (index = 0U; index < size; ++index) {
         items[index] = TINYPY_TUPLE_GET(base->subclasses, index);
     }
     items[size] = reference;
     subclasses = tinypy_tuple_from_items(base->vm, items, size + 1U);
-    tinypy_internal_vm_deallocate(base->vm, items, (size + 1U) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(base->vm, items, (size + 1U) * sizeof(*items));
     if (base->subclasses != NULL) {
         TINYPY_DECREF(base->subclasses);
     }
@@ -260,15 +260,15 @@ static tinypy_bool_t __tinypy_internal_mro_head_in_tail(tinypy_type_t *candidate
 static void __tinypy_internal_mro_free(tinypy_vm_t *vm, tinypy_mro_sequence_t *sequences, size_t sequence_size, tinypy_type_t **storage, size_t storage_size, tinypy_type_t **result, size_t result_size) {
     if (result != NULL) {
         tinypy_internal_vm_deallocate(
-            vm, result, result_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+            vm, result, result_size);
     }
     if (storage != NULL) {
         tinypy_internal_vm_deallocate(
-            vm, storage, storage_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+            vm, storage, storage_size);
     }
     if (sequences != NULL) {
         tinypy_internal_vm_deallocate(
-            vm, sequences, sequence_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+            vm, sequences, sequence_size);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -302,11 +302,11 @@ static tinypy_type_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, const tinypy_
     result_size = result_capacity * sizeof(*result);
 
     sequences = (tinypy_mro_sequence_t *)tinypy_internal_vm_allocate(
-        vm, sequence_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, sequence_size);
     storage = (tinypy_type_t **)tinypy_internal_vm_allocate(
-        vm, storage_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, storage_size);
     result = (tinypy_type_t **)tinypy_internal_vm_allocate(
-        vm, result_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, result_size);
     (void)memset(sequences, 0, sequence_size);
     result[0] = NULL;
 
@@ -380,9 +380,9 @@ static tinypy_type_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, const tinypy_
     }
 
     tinypy_internal_vm_deallocate(
-        vm, storage, storage_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, storage, storage_size);
     tinypy_internal_vm_deallocate(
-        vm, sequences, sequence_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, sequences, sequence_size);
     *out_count = result_count;
     *out_allocation_size = result_size;
     return result;
@@ -452,12 +452,12 @@ static tinypy_value_t *__tinypy_internal_type_mangle_slot_name(tinypy_vm_t *vm, 
         return return_value_2;
     }
     mangled_size = 1U + class_name_size - class_start + size;
-    mangled = (uint8_t *)tinypy_internal_vm_allocate(vm, mangled_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    mangled = (uint8_t *)tinypy_internal_vm_allocate(vm, mangled_size);
     mangled[0] = '_';
     (void)memcpy(mangled + 1U, class_name + class_start, class_name_size - class_start);
     (void)memcpy(mangled + 1U + class_name_size - class_start, bytes, size);
     tinypy_value_t *result = tinypy_string_from_bytes(vm, mangled, mangled_size);
-    tinypy_internal_vm_deallocate(vm, mangled, mangled_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, mangled, mangled_size);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -534,13 +534,13 @@ static tinypy_value_t *__tinypy_internal_type_parse_slots(tinypy_vm_t *vm, const
         TINYPY_DECREF(name);
     }
     size_t list_size = TINYPY_LIST_SIZE(names);
-    tinypy_value_t **items = list_size != 0U ? (tinypy_value_t **)tinypy_internal_vm_allocate(vm, list_size * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
+    tinypy_value_t **items = list_size != 0U ? (tinypy_value_t **)tinypy_internal_vm_allocate(vm, list_size * sizeof(*items)) : NULL;
     for (index = 0U; index < list_size; ++index) {
         items[index] = TINYPY_LIST_GET(names, index);
     }
     tinypy_value_t *result = tinypy_tuple_from_items(vm, items, list_size);
     if (items != NULL) {
-        tinypy_internal_vm_deallocate(vm, items, list_size * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, items, list_size * sizeof(*items));
     }
     TINYPY_DECREF(names);
     return result;
@@ -653,13 +653,13 @@ tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_si
     own_slots = __tinypy_internal_type_parse_slots(vm, name, name_size, dict, &slots_declared, &dict_slot, &weakref_slot, out_error);
     if (own_slots == NULL) {
         TINYPY_DECREF(dict);
-        tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
         return NULL;
     }
     if (layout_base->layout_kind == TINYPY_VALUE_TUPLE && TINYPY_TUPLE_SIZE(own_slots) != 0U) {
         TINYPY_DECREF(own_slots);
         TINYPY_DECREF(dict);
-        tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "nonempty __slots__ are not supported for tuple subtypes", out_error);
         return NULL;
     }
@@ -745,7 +745,7 @@ tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_si
 
     base_values_size = actual_base_count * sizeof(*base_values);
     base_values = (tinypy_value_t **)tinypy_internal_vm_allocate(
-        vm, base_values_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, base_values_size);
     for (index = 0U; index < actual_base_count; ++index) {
         base_values[index] = &((tinypy_type_t *)actual_bases[index])->base.base;
     }
@@ -754,7 +754,7 @@ tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_si
 
     mro_values_size = (mro_tail_count + 1U) * sizeof(*mro_values);
     mro_values = (tinypy_value_t **)tinypy_internal_vm_allocate(
-        vm, mro_values_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, mro_values_size);
     mro_values[0] = &type->base.base;
     for (index = 0U; index < mro_tail_count; ++index) {
         mro_values[index + 1U] = &mro_types[index + 1U]->base.base;
@@ -785,9 +785,9 @@ tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_si
         if (__tinypy_internal_type_namespace_value(vm, type->dict, (const char *)bytes, byte_size) != NULL) {
             TINYPY_DECREF(own_slots);
             TINYPY_DECREF(&type->base.base);
-            tinypy_internal_vm_deallocate(vm, mro_values, mro_values_size, TINYPY_ALLOC_TAG_TYPE_MRO);
-            tinypy_internal_vm_deallocate(vm, base_values, base_values_size, TINYPY_ALLOC_TAG_TYPE_MRO);
-            tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+            tinypy_internal_vm_deallocate(vm, mro_values, mro_values_size);
+            tinypy_internal_vm_deallocate(vm, base_values, base_values_size);
+            tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "slot name conflicts with a class variable", out_error);
             return NULL;
         }
@@ -799,11 +799,11 @@ tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_si
     type->has_finalizer = tinypy_type_get_attr(type, "__del__", 7U) != NULL ? INT32_C(1) : INT32_C(0);
 
     tinypy_internal_vm_deallocate(
-        vm, mro_values, mro_values_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, mro_values, mro_values_size);
     tinypy_internal_vm_deallocate(
-        vm, base_values, base_values_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, base_values, base_values_size);
     tinypy_internal_vm_deallocate(
-        vm, mro_types, mro_workspace_size, TINYPY_ALLOC_TAG_TYPE_MRO);
+        vm, mro_types, mro_workspace_size);
     for (index = 0U; index < actual_base_count; ++index) {
         __tinypy_internal_type_add_subclass((tinypy_type_t *)actual_bases[index], type);
     }
@@ -983,13 +983,13 @@ static tinypy_value_t *__tinypy_internal_type_call_with_first(tinypy_value_t *ca
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     size_t argument_count = TINYPY_TUPLE_SIZE(args);
 
-    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (argument_count + 1U) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (argument_count + 1U) * sizeof(*items));
     items[0] = first;
     for (size_t index = 0U; index < argument_count; ++index) {
         items[index + 1U] = TINYPY_TUPLE_GET(args, index);
     }
     tinypy_value_t *call_args = tinypy_tuple_from_items(vm, items, argument_count + 1U);
-    tinypy_internal_vm_deallocate(vm, items, (argument_count + 1U) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, items, (argument_count + 1U) * sizeof(*items));
     tinypy_value_t *result = tinypy_call(callable, call_args, kwargs, out_error);
     TINYPY_DECREF(call_args);
     return result;

@@ -43,12 +43,11 @@ typedef struct test_interrupt_host_t {
 } test_interrupt_host_t;
 
 //////////////////////////////////////////////////////////////////////////
-static void *__test_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__test_allocate(void *user_data, size_t size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     void *memory;
 
     (void)alignment;
-    (void)tag;
     memory = malloc(size);
     assert(memory != NULL);
     state->allocations += 1U;
@@ -56,12 +55,11 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment, tin
     return memory;
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     void *resized;
 
     (void)alignment;
-    (void)tag;
     resized = realloc(memory, new_size);
     assert(resized != NULL);
     state->bytes -= old_size;
@@ -69,11 +67,10 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
     return resized;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
 
     (void)alignment;
-    (void)tag;
     assert(state->allocations != 0U);
     assert(state->bytes >= size);
     state->allocations -= 1U;

@@ -45,7 +45,7 @@ static tinypy_value_t *__tinypy_codecs_normalize(tinypy_vm_t *vm, tinypy_value_t
         tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, NULL, 0U);
         return return_value_1;
     }
-    normalized = (uint8_t *)tinypy_internal_vm_allocate(vm, source_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    normalized = (uint8_t *)tinypy_internal_vm_allocate(vm, source_size);
     for (source_index = 0U; source_index < source_size; ++source_index) {
         uint8_t character = source[source_index];
 
@@ -68,7 +68,7 @@ static tinypy_value_t *__tinypy_codecs_normalize(tinypy_vm_t *vm, tinypy_value_t
         }
     }
     tinypy_value_t *result = tinypy_string_from_bytes(vm, normalized, normalized_size);
-    tinypy_internal_vm_deallocate(vm, normalized, source_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, normalized, source_size);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

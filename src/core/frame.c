@@ -74,7 +74,7 @@ static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_vm_t *vm, 
         frame = next;
     }
 
-    frame = (tinypy_frame_object_t *)tinypy_internal_vm_allocate(vm, allocation_size, TINYPY_ALLOC_TAG_VALUE);
+    frame = (tinypy_frame_object_t *)tinypy_internal_vm_allocate(vm, allocation_size);
 
     frame->base.base.ref = 1;
     frame->base.base.type = &vm->types[TINYPY_VALUE_FRAME];
@@ -108,7 +108,7 @@ void tinypy_internal_frame_free_list_finalize(tinypy_vm_t *vm) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_value_unregister(vm, &frame->base.base);
 #endif
-        tinypy_internal_vm_deallocate(vm, frame, allocation_size, TINYPY_ALLOC_TAG_VALUE);
+        tinypy_internal_vm_deallocate(vm, frame, allocation_size);
     }
 }
 //////////////////////////////////////////////////////////////////////////

@@ -57,10 +57,10 @@ static void __tinypy_bytearray_reserve(tinypy_value_t *value, size_t minimum) {
         capacity = grown;
     }
     if (bytearray->bytes == NULL) {
-        bytearray->bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, capacity, TINYPY_ALLOC_TAG_BYTEARRAY_DATA);
+        bytearray->bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, capacity);
     }
     else {
-        bytearray->bytes = (uint8_t *)tinypy_internal_vm_reallocate(vm, bytearray->bytes, bytearray->capacity, capacity, TINYPY_ALLOC_TAG_BYTEARRAY_DATA);
+        bytearray->bytes = (uint8_t *)tinypy_internal_vm_reallocate(vm, bytearray->bytes, bytearray->capacity, capacity);
     }
     bytearray->capacity = capacity;
 }
@@ -104,7 +104,7 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
     *out_size = 0U;
     if (tinypy_internal_bytes_view(source, &view, &view_size) != 0) {
         if (view_size != 0U) {
-            bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, view_size, TINYPY_ALLOC_TAG_TEMPORARY);
+            bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, view_size);
             (void)memcpy(bytes, view, view_size);
         }
         *out_bytes = bytes;
@@ -126,7 +126,7 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
             TINYPY_DECREF(item);
             TINYPY_DECREF(iterator);
             if (bytes != NULL) {
-                tinypy_internal_vm_deallocate(vm, bytes, capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+                tinypy_internal_vm_deallocate(vm, bytes, capacity);
             }
             return TINYPY_FALSE;
         }
@@ -135,10 +135,10 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
             size_t new_capacity = capacity == 0U ? 16U : capacity * 2U;
 
             if (bytes == NULL) {
-                bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, new_capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+                bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, new_capacity);
             }
             else {
-                bytes = (uint8_t *)tinypy_internal_vm_reallocate(vm, bytes, capacity, new_capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+                bytes = (uint8_t *)tinypy_internal_vm_reallocate(vm, bytes, capacity, new_capacity);
             }
             capacity = new_capacity;
         }
@@ -148,7 +148,7 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
     TINYPY_DECREF(iterator);
     if (iteration_error != NULL) {
         if (bytes != NULL) {
-            tinypy_internal_vm_deallocate(vm, bytes, capacity, TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, bytes, capacity);
         }
         if (out_error != NULL) {
             *out_error = iteration_error;
@@ -159,7 +159,7 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
         return TINYPY_FALSE;
     }
     if (size != 0U && capacity != size) {
-        bytes = (uint8_t *)tinypy_internal_vm_reallocate(vm, bytes, capacity, size, TINYPY_ALLOC_TAG_TEMPORARY);
+        bytes = (uint8_t *)tinypy_internal_vm_reallocate(vm, bytes, capacity, size);
     }
     *out_bytes = bytes;
     *out_size = size;
@@ -307,7 +307,7 @@ static void __tinypy_bytearray_delete_index(tinypy_value_t *value, size_t index)
 tinypy_value_t *tinypy_bytearray_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size) {
     tinypy_bytearray_object_t *bytearray = (tinypy_bytearray_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_BYTEARRAY, sizeof(*bytearray));
     if (size != 0U) {
-        bytearray->bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, size, TINYPY_ALLOC_TAG_BYTEARRAY_DATA);
+        bytearray->bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, size);
         bytearray->capacity = size;
         (void)memcpy(bytearray->bytes, bytes, size);
     }
@@ -336,7 +336,7 @@ void tinypy_internal_bytearray_destroy(tinypy_value_t *value) {
     if (bytearray->bytes == NULL) {
         return;
     }
-    tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), bytearray->bytes, bytearray->capacity, TINYPY_ALLOC_TAG_BYTEARRAY_DATA);
+    tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), bytearray->bytes, bytearray->capacity);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -372,7 +372,7 @@ tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_val
     }
     tinypy_value_t *result = tinypy_bytearray_from_bytes(vm, bytes, size);
     if (bytes != NULL) {
-        tinypy_internal_vm_deallocate(vm, bytes, size, TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, bytes, size);
     }
     return result;
 }
@@ -405,12 +405,12 @@ tinypy_value_t *tinypy_internal_bytearray_get_item(tinypy_value_t *value, tinypy
             tinypy_value_t *return_value_2 = tinypy_bytearray_from_bytes(vm, TINYPY_BYTEARRAY_OBJECT(value)->bytes + (size_t)slice.start, slice.length);
             return return_value_2;
         }
-        selected = (uint8_t *)tinypy_internal_vm_allocate(vm, slice.length, TINYPY_ALLOC_TAG_TEMPORARY);
+        selected = (uint8_t *)tinypy_internal_vm_allocate(vm, slice.length);
         for (selected_index = 0U; selected_index < slice.length; ++selected_index) {
             selected[selected_index] = TINYPY_BYTEARRAY_OBJECT(value)->bytes[(size_t)(slice.start + (int64_t)selected_index * slice.step)];
         }
         result = tinypy_bytearray_from_bytes(vm, selected, slice.length);
-        tinypy_internal_vm_deallocate(vm, selected, slice.length, TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, selected, slice.length);
         return result;
     }
     if (__tinypy_bytearray_index(vm, key, size, &index, out_error) == 0) {
@@ -440,14 +440,14 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
             }
             if (slice.step != 1 && replacement_size != slice.length) {
                 if (replacement != NULL) {
-                    tinypy_internal_vm_deallocate(vm, replacement, replacement_size, TINYPY_ALLOC_TAG_TEMPORARY);
+                    tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
                 }
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "extended slice assignment has the wrong size", out_error);
                 return TINYPY_FALSE;
             }
             __tinypy_bytearray_replace_slice(value, &slice, replacement, replacement_size);
             if (replacement != NULL) {
-                tinypy_internal_vm_deallocate(vm, replacement, replacement_size, TINYPY_ALLOC_TAG_TEMPORARY);
+                tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
             }
             return TINYPY_TRUE;
         }
@@ -501,12 +501,12 @@ tinypy_value_t *tinypy_internal_bytearray_repr(tinypy_value_t *value, tinypy_err
         return NULL;
     }
     quoted_bytes = (const uint8_t *)tinypy_string_view(quoted, &quoted_size);
-    bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, quoted_size + 12U, TINYPY_ALLOC_TAG_TEMPORARY);
+    bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, quoted_size + 12U);
     (void)memcpy(bytes, "bytearray(b", 11U);
     (void)memcpy(bytes + 11U, quoted_bytes, quoted_size);
     bytes[quoted_size + 11U] = (uint8_t)')';
     tinypy_value_t *result = tinypy_string_from_bytes(vm, bytes, quoted_size + 12U);
-    tinypy_internal_vm_deallocate(vm, bytes, quoted_size + 12U, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, bytes, quoted_size + 12U);
     TINYPY_DECREF(quoted);
     return result;
 }
@@ -548,7 +548,7 @@ static tinypy_value_t *__tinypy_bytearray_add_method(tinypy_value_t *function, t
         tinypy_value_t *return_value_1 = tinypy_bytearray_from_bytes(vm, NULL, 0U);
         return return_value_1;
     }
-    bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, left_size + right_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, left_size + right_size);
     if (left_size != 0U) {
         (void)memcpy(bytes, TINYPY_BYTEARRAY_OBJECT(left)->bytes, left_size);
     }
@@ -556,7 +556,7 @@ static tinypy_value_t *__tinypy_bytearray_add_method(tinypy_value_t *function, t
         (void)memcpy(bytes + left_size, right_bytes, right_size);
     }
     tinypy_value_t *result = tinypy_bytearray_from_bytes(vm, bytes, left_size + right_size);
-    tinypy_internal_vm_deallocate(vm, bytes, left_size + right_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, bytes, left_size + right_size);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -604,7 +604,7 @@ static tinypy_value_t *__tinypy_bytearray_extend_method(tinypy_value_t *function
     }
     TINYPY_SIZED_SIZE(value) = size + extension_size;
     if (extension != NULL) {
-        tinypy_internal_vm_deallocate(vm, extension, extension_size, TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, extension, extension_size);
     }
     tinypy_value_t *return_value_1 = tinypy_none_get(vm);
     return return_value_1;

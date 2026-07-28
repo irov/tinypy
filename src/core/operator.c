@@ -71,7 +71,7 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
     int32_t sign;
 
     capacity = maximum_count + 1U;
-    digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits));
     if (left->sign == 0) {
         size_t index;
         sign = right_sign;
@@ -145,7 +145,7 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
         }
     }
     tinypy_value_t *result = tinypy_long_from_base15_digits(vm, sign, digits, count);
-    tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -160,7 +160,7 @@ static tinypy_value_t *__tinypy_operator_long_multiply_views(tinypy_vm_t *vm, co
         return return_value_1;
     }
     capacity = left->count + right->count;
-    digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits));
     (void)memset(digits, 0, capacity * sizeof(*digits));
     for (left_index = 0U; left_index < left->count; ++left_index) {
         uint32_t carry = 0U;
@@ -180,7 +180,7 @@ static tinypy_value_t *__tinypy_operator_long_multiply_views(tinypy_vm_t *vm, co
         count -= 1U;
     }
     tinypy_value_t *result = tinypy_long_from_base15_digits(vm, left->sign == right->sign ? 1 : -1, digits, count);
-    tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -244,8 +244,8 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
     }
     quotient_capacity = left->count + 1U;
     remainder_capacity = right->count + 1U;
-    quotient = (uint16_t *)tinypy_internal_vm_allocate(vm, quotient_capacity * sizeof(*quotient), TINYPY_ALLOC_TAG_TEMPORARY);
-    remainder_digits = (uint16_t *)tinypy_internal_vm_allocate(vm, remainder_capacity * sizeof(*remainder_digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    quotient = (uint16_t *)tinypy_internal_vm_allocate(vm, quotient_capacity * sizeof(*quotient));
+    remainder_digits = (uint16_t *)tinypy_internal_vm_allocate(vm, remainder_capacity * sizeof(*remainder_digits));
     (void)memset(quotient, 0, quotient_capacity * sizeof(*quotient));
     (void)memset(remainder_digits, 0, remainder_capacity * sizeof(*remainder_digits));
     total_bits = left->count * 15U;
@@ -300,8 +300,8 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
         remainder_sign = right->sign;
     }
     tinypy_value_t *result = want_remainder != 0 ? tinypy_long_from_base15_digits(vm, remainder_sign, remainder_digits, remainder_count) : tinypy_long_from_base15_digits(vm, quotient_sign, quotient, quotient_count);
-    tinypy_internal_vm_deallocate(vm, remainder_digits, remainder_capacity * sizeof(*remainder_digits), TINYPY_ALLOC_TAG_TEMPORARY);
-    tinypy_internal_vm_deallocate(vm, quotient, quotient_capacity * sizeof(*quotient), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, remainder_digits, remainder_capacity * sizeof(*remainder_digits));
+    tinypy_internal_vm_deallocate(vm, quotient, quotient_capacity * sizeof(*quotient));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -451,7 +451,7 @@ static tinypy_value_t *__tinypy_operator_concat_text(tinypy_vm_t *vm, tinypy_val
         tinypy_value_t *return_value_1 = unicode != 0 ? tinypy_unicode_from_utf8(vm, "", 0U) : tinypy_string_from_bytes(vm, NULL, 0U);
         return return_value_1;
     }
-    buffer = (uint8_t *)tinypy_internal_vm_allocate(vm, left_size + right_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    buffer = (uint8_t *)tinypy_internal_vm_allocate(vm, left_size + right_size);
     if (left_size != 0U) {
         (void)memcpy(buffer, left_bytes, left_size);
     }
@@ -459,7 +459,7 @@ static tinypy_value_t *__tinypy_operator_concat_text(tinypy_vm_t *vm, tinypy_val
         (void)memcpy(buffer + left_size, right_bytes, right_size);
     }
     tinypy_value_t *result = unicode != 0 ? tinypy_unicode_from_utf8(vm, (const char *)buffer, left_size + right_size) : tinypy_string_from_bytes(vm, buffer, left_size + right_size);
-    tinypy_internal_vm_deallocate(vm, buffer, left_size + right_size, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, buffer, left_size + right_size);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -557,8 +557,8 @@ static tinypy_value_t *__tinypy_operator_integer_bitwise(tinypy_vm_t *vm, tinypy
     __tinypy_operator_integer_view(left, &left_view);
     __tinypy_operator_integer_view(right, &right_view);
     width = (left_view.count > right_view.count ? left_view.count : right_view.count) + 1U;
-    left_digits = (uint16_t *)tinypy_internal_vm_allocate(vm, width * sizeof(*left_digits), TINYPY_ALLOC_TAG_TEMPORARY);
-    right_digits = (uint16_t *)tinypy_internal_vm_allocate(vm, width * sizeof(*right_digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    left_digits = (uint16_t *)tinypy_internal_vm_allocate(vm, width * sizeof(*left_digits));
+    right_digits = (uint16_t *)tinypy_internal_vm_allocate(vm, width * sizeof(*right_digits));
     __tinypy_operator_twos_complement(&left_view, left_digits, width);
     __tinypy_operator_twos_complement(&right_view, right_digits, width);
     for (index = 0U; index < width; ++index) {
@@ -577,8 +577,8 @@ static tinypy_value_t *__tinypy_operator_integer_bitwise(tinypy_vm_t *vm, tinypy
     }
     prefer_long = left_kind == TINYPY_VALUE_LONG || right_kind == TINYPY_VALUE_LONG;
     tinypy_value_t *result = __tinypy_operator_integer_from_digits(vm, sign, left_digits, width, prefer_long);
-    tinypy_internal_vm_deallocate(vm, right_digits, width * sizeof(*right_digits), TINYPY_ALLOC_TAG_TEMPORARY);
-    tinypy_internal_vm_deallocate(vm, left_digits, width * sizeof(*left_digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, right_digits, width * sizeof(*right_digits));
+    tinypy_internal_vm_deallocate(vm, left_digits, width * sizeof(*left_digits));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -633,7 +633,7 @@ static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tin
         return NULL;
     }
     capacity = view.count + digit_shift + (bit_shift != 0U ? 1U : 0U);
-    digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits));
     (void)memset(digits, 0, capacity * sizeof(*digits));
     for (index = 0U; index < view.count; ++index) {
         uint32_t shifted = ((uint32_t)view.digits[index] << bit_shift) | carry;
@@ -645,7 +645,7 @@ static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tin
         digits[view.count + digit_shift] = (uint16_t)carry;
     }
     tinypy_value_t *result = __tinypy_operator_integer_from_digits(vm, view.sign, digits, capacity, prefer_long);
-    tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -667,7 +667,7 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
         return return_value_2;
     }
     capacity = view.count - digit_shift + 1U;
-    digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    digits = (uint16_t *)tinypy_internal_vm_allocate(vm, capacity * sizeof(*digits));
     (void)memset(digits, 0, capacity * sizeof(*digits));
     for (index = 0U; index < digit_shift; ++index) {
         if (view.digits[index] != 0U) {
@@ -697,7 +697,7 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
         }
     }
     tinypy_value_t *result = __tinypy_operator_integer_from_digits(vm, view.sign, digits, capacity, prefer_long);
-    tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -965,7 +965,7 @@ static tinypy_value_t *__tinypy_operator_concat_sequence(tinypy_vm_t *vm, tinypy
     size_t right_size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(right) : TINYPY_LIST_SIZE(right);
     size_t index;
 
-    tinypy_value_t **items = left_size + right_size != 0U ? (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (left_size + right_size) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
+    tinypy_value_t **items = left_size + right_size != 0U ? (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (left_size + right_size) * sizeof(*items)) : NULL;
     for (index = 0U; index < left_size; ++index) {
         items[index] = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(left, index) : TINYPY_LIST_GET(left, index);
     }
@@ -974,7 +974,7 @@ static tinypy_value_t *__tinypy_operator_concat_sequence(tinypy_vm_t *vm, tinypy
     }
     tinypy_value_t *result = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_from_items(vm, items, left_size + right_size) : tinypy_list_from_items(vm, items, left_size + right_size);
     if (items != NULL) {
-        tinypy_internal_vm_deallocate(vm, items, (left_size + right_size) * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, items, (left_size + right_size) * sizeof(*items));
     }
     return result;
 }
@@ -1022,19 +1022,19 @@ static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t 
             tinypy_value_t *return_value_1 = kind == TINYPY_VALUE_STRING ? tinypy_string_from_bytes(vm, NULL, 0U) : tinypy_unicode_from_utf8(vm, NULL, 0U);
             return return_value_1;
         }
-        uint8_t *buffer = (uint8_t *)tinypy_internal_vm_allocate(vm, total_size, TINYPY_ALLOC_TAG_TEMPORARY);
+        uint8_t *buffer = (uint8_t *)tinypy_internal_vm_allocate(vm, total_size);
         tinypy_value_t *result;
 
         for (index = 0U; index < count; ++index) {
             (void)memcpy(buffer + index * unit_size, bytes, unit_size);
         }
         result = kind == TINYPY_VALUE_STRING ? tinypy_string_from_bytes(vm, buffer, total_size) : tinypy_unicode_from_utf8(vm, (const char *)buffer, total_size);
-        tinypy_internal_vm_deallocate(vm, buffer, total_size, TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, buffer, total_size);
         return result;
     }
     unit_size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(sequence) : TINYPY_LIST_SIZE(sequence);
     total_size = unit_size * count; {
-        tinypy_value_t **items = total_size != 0U ? (tinypy_value_t **)tinypy_internal_vm_allocate(vm, total_size * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
+        tinypy_value_t **items = total_size != 0U ? (tinypy_value_t **)tinypy_internal_vm_allocate(vm, total_size * sizeof(*items)) : NULL;
         tinypy_value_t *result;
 
         for (index = 0U; index < total_size; ++index) {
@@ -1042,7 +1042,7 @@ static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t 
         }
         result = kind == TINYPY_VALUE_TUPLE ? tinypy_tuple_from_items(vm, items, total_size) : tinypy_list_from_items(vm, items, total_size);
         if (items != NULL) {
-            tinypy_internal_vm_deallocate(vm, items, total_size * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, items, total_size * sizeof(*items));
         }
         return result;
     }

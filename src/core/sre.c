@@ -363,9 +363,9 @@ static tinypy_bool_t __tinypy_sre_match_repeat(tinypy_sre_state_t *state, size_t
     if (greedy == 0 && pattern->code[until] != TINYPY_SRE_OP_MIN_UNTIL) {
         return TINYPY_FALSE;
     }
-    positions = (size_t *)tinypy_internal_vm_allocate(state->vm, capacity * sizeof(*positions), TINYPY_ALLOC_TAG_TEMPORARY);
-    saved_lastindex = (ptrdiff_t *)tinypy_internal_vm_allocate(state->vm, capacity * sizeof(*saved_lastindex), TINYPY_ALLOC_TAG_TEMPORARY);
-    saved_marks = pattern->groups != 0U ? (size_t *)tinypy_internal_vm_allocate(state->vm, capacity * pattern->groups * 2U * sizeof(*saved_marks), TINYPY_ALLOC_TAG_TEMPORARY) : NULL;
+    positions = (size_t *)tinypy_internal_vm_allocate(state->vm, capacity * sizeof(*positions));
+    saved_lastindex = (ptrdiff_t *)tinypy_internal_vm_allocate(state->vm, capacity * sizeof(*saved_lastindex));
+    saved_marks = pattern->groups != 0U ? (size_t *)tinypy_internal_vm_allocate(state->vm, capacity * pattern->groups * 2U * sizeof(*saved_marks)) : NULL;
     positions[0] = *position;
     saved_lastindex[0] = *lastindex;
     if (pattern->groups != 0U) {
@@ -408,19 +408,19 @@ static tinypy_bool_t __tinypy_sre_match_repeat(tinypy_sre_state_t *state, size_t
                     __tinypy_sre_copy_marks(marks, trial_marks, pattern->groups * 2U);
                 }
                 if (saved_marks != NULL) {
-                    tinypy_internal_vm_deallocate(state->vm, saved_marks, capacity * pattern->groups * 2U * sizeof(*saved_marks), TINYPY_ALLOC_TAG_TEMPORARY);
+                    tinypy_internal_vm_deallocate(state->vm, saved_marks, capacity * pattern->groups * 2U * sizeof(*saved_marks));
                 }
-                tinypy_internal_vm_deallocate(state->vm, saved_lastindex, capacity * sizeof(*saved_lastindex), TINYPY_ALLOC_TAG_TEMPORARY);
-                tinypy_internal_vm_deallocate(state->vm, positions, capacity * sizeof(*positions), TINYPY_ALLOC_TAG_TEMPORARY);
+                tinypy_internal_vm_deallocate(state->vm, saved_lastindex, capacity * sizeof(*saved_lastindex));
+                tinypy_internal_vm_deallocate(state->vm, positions, capacity * sizeof(*positions));
                 return TINYPY_TRUE;
             }
         }
     }
     if (saved_marks != NULL) {
-        tinypy_internal_vm_deallocate(state->vm, saved_marks, capacity * pattern->groups * 2U * sizeof(*saved_marks), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(state->vm, saved_marks, capacity * pattern->groups * 2U * sizeof(*saved_marks));
     }
-    tinypy_internal_vm_deallocate(state->vm, saved_lastindex, capacity * sizeof(*saved_lastindex), TINYPY_ALLOC_TAG_TEMPORARY);
-    tinypy_internal_vm_deallocate(state->vm, positions, capacity * sizeof(*positions), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(state->vm, saved_lastindex, capacity * sizeof(*saved_lastindex));
+    tinypy_internal_vm_deallocate(state->vm, positions, capacity * sizeof(*positions));
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -752,7 +752,7 @@ void tinypy_internal_sre_pattern_destroy(tinypy_value_t *value) {
     tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(value);
 
     if (pattern->code != NULL) {
-        tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), pattern->code, pattern->code_size * sizeof(*pattern->code), TINYPY_ALLOC_TAG_SRE_DATA);
+        tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), pattern->code, pattern->code_size * sizeof(*pattern->code));
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -767,7 +767,7 @@ void tinypy_internal_sre_match_destroy(tinypy_value_t *value) {
     tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(value);
 
     if (match->marks != NULL) {
-        tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), match->marks, match->mark_count * sizeof(*match->marks), TINYPY_ALLOC_TAG_SRE_DATA);
+        tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), match->marks, match->mark_count * sizeof(*match->marks));
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -785,7 +785,7 @@ static tinypy_value_t *__tinypy_sre_match_new(tinypy_sre_state_t *state, tinypy_
     TINYPY_INCREF(match->pattern);
     TINYPY_INCREF(string);
     if (match->mark_count != 0U) {
-        match->marks = (size_t *)tinypy_internal_vm_allocate(state->vm, match->mark_count * sizeof(*match->marks), TINYPY_ALLOC_TAG_SRE_DATA);
+        match->marks = (size_t *)tinypy_internal_vm_allocate(state->vm, match->mark_count * sizeof(*match->marks));
         __tinypy_sre_copy_marks(match->marks, marks, match->mark_count);
     }
     return &match->base;
@@ -985,7 +985,7 @@ static tinypy_value_t *__tinypy_sre_match_group(tinypy_value_t *function, tinypy
         TINYPY_DECREF(none);
         return result;
     }
-    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, count * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, count * sizeof(*items));
     tinypy_value_t *result;
     size_t item_index;
 
@@ -997,7 +997,7 @@ static tinypy_value_t *__tinypy_sre_match_group(tinypy_value_t *function, tinypy
             while (item_index != 0U) {
                 TINYPY_DECREF(items[--item_index]);
             }
-            tinypy_internal_vm_deallocate(vm, items, count * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, items, count * sizeof(*items));
             TINYPY_DECREF(none);
             return NULL;
         }
@@ -1007,7 +1007,7 @@ static tinypy_value_t *__tinypy_sre_match_group(tinypy_value_t *function, tinypy
     for (item_index = 0U; item_index < count; ++item_index) {
         TINYPY_DECREF(items[item_index]);
     }
-    tinypy_internal_vm_deallocate(vm, items, count * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, items, count * sizeof(*items));
     TINYPY_DECREF(none);
     return result;
 }
@@ -1035,7 +1035,7 @@ static tinypy_value_t *__tinypy_sre_match_groups(tinypy_value_t *function, tinyp
         tinypy_value_t *return_value_1 = tinypy_tuple_from_items(vm, NULL, 0U);
         return return_value_1;
     }
-    items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, pattern->groups * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, pattern->groups * sizeof(*items));
     for (index = 0U; index < pattern->groups; ++index) {
         items[index] = __tinypy_sre_match_group_value(match, index + 1U, default_value);
     }
@@ -1043,7 +1043,7 @@ static tinypy_value_t *__tinypy_sre_match_groups(tinypy_value_t *function, tinyp
     for (index = 0U; index < pattern->groups; ++index) {
         TINYPY_DECREF(items[index]);
     }
-    tinypy_internal_vm_deallocate(vm, items, pattern->groups * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, items, pattern->groups * sizeof(*items));
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1151,7 +1151,7 @@ static tinypy_value_t *__tinypy_sre_pattern_findall(tinypy_value_t *function, ti
         }
         else {
             tinypy_value_t *empty = __tinypy_sre_empty_like(vm, string);
-            tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, pattern->groups * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, pattern->groups * sizeof(*items));
             size_t index;
 
             for (index = 0U; index < pattern->groups; ++index) {
@@ -1161,7 +1161,7 @@ static tinypy_value_t *__tinypy_sre_pattern_findall(tinypy_value_t *function, ti
             for (index = 0U; index < pattern->groups; ++index) {
                 TINYPY_DECREF(items[index]);
             }
-            tinypy_internal_vm_deallocate(vm, items, pattern->groups * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+            tinypy_internal_vm_deallocate(vm, items, pattern->groups * sizeof(*items));
             TINYPY_DECREF(empty);
         }
         tinypy_list_append(result, item);
@@ -1199,7 +1199,7 @@ static tinypy_value_t *__tinypy_sre_join(tinypy_vm_t *vm, tinypy_value_t *pieces
         tinypy_value_t *return_value_1 = unicode != 0 ? tinypy_unicode_from_utf8(vm, NULL, 0U) : tinypy_string_from_bytes(vm, NULL, 0U);
         return return_value_1;
     }
-    bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, total, TINYPY_ALLOC_TAG_TEMPORARY);
+    bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, total);
     for (index = 0U; index < count; ++index) {
         tinypy_value_t *piece = TINYPY_LIST_GET(pieces, index);
         size_t size = TINYPY_TEXT_BYTE_SIZE(piece);
@@ -1210,7 +1210,7 @@ static tinypy_value_t *__tinypy_sre_join(tinypy_vm_t *vm, tinypy_value_t *pieces
         offset += size;
     }
     tinypy_value_t *result = unicode != 0 ? tinypy_unicode_from_utf8(vm, (const char *)bytes, total) : tinypy_string_from_bytes(vm, bytes, total);
-    tinypy_internal_vm_deallocate(vm, bytes, total, TINYPY_ALLOC_TAG_TEMPORARY);
+    tinypy_internal_vm_deallocate(vm, bytes, total);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1385,7 +1385,7 @@ static tinypy_value_t *__tinypy_sre_compile(tinypy_value_t *function, tinypy_val
     TINYPY_INCREF(source);
     TINYPY_INCREF(groupindex);
     TINYPY_INCREF(indexgroup);
-    pattern->code = (uint32_t *)tinypy_internal_vm_allocate(vm, code_size * sizeof(*pattern->code), TINYPY_ALLOC_TAG_SRE_DATA);
+    pattern->code = (uint32_t *)tinypy_internal_vm_allocate(vm, code_size * sizeof(*pattern->code));
     for (index = 0U; index < code_size; ++index) {
         tinypy_value_t *item = TINYPY_VALUE_KIND(code_value) == TINYPY_VALUE_LIST ? TINYPY_LIST_GET(code_value, index) : TINYPY_TUPLE_GET(code_value, index);
         int64_t value;

@@ -52,13 +52,13 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
         size_t index;
 
         output_count = argument_count + 1U;
-        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, output_count * sizeof(*items));
         items[0] = function->self;
         for (index = 0U; index < argument_count; ++index) {
             items[index + 1U] = TINYPY_TUPLE_GET(args, index);
         }
         call_args = tinypy_tuple_from_items(vm, items, output_count);
-        tinypy_internal_vm_deallocate(vm, items, output_count * sizeof(*items), TINYPY_ALLOC_TAG_TEMPORARY);
+        tinypy_internal_vm_deallocate(vm, items, output_count * sizeof(*items));
     }
 
     tinypy_value_t *result = function->callback(callable, call_args, kwargs, function->user_data, out_error);

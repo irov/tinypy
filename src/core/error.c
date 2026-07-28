@@ -29,7 +29,7 @@ static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allo
     allocation_size += filename_size + 1U;
     allocation_size += source_line_size + 1U;
 
-    tinypy_error_t *error = (tinypy_error_t *)allocator->allocate(allocator->user_data, allocation_size, TINYPY_INTERNAL_ALIGNMENT, TINYPY_ALLOC_TAG_ERROR);
+    tinypy_error_t *error = (tinypy_error_t *)allocator->allocate(allocator->user_data, allocation_size, TINYPY_INTERNAL_ALIGNMENT);
 
     error->allocator = *allocator;
     error->kind = error_kind;
@@ -213,6 +213,5 @@ void tinypy_error_release(tinypy_error_t *error) {
         allocator.user_data,
         error,
         allocation_size,
-        TINYPY_INTERNAL_ALIGNMENT,
-        TINYPY_ALLOC_TAG_ERROR);
+        TINYPY_INTERNAL_ALIGNMENT);
 }

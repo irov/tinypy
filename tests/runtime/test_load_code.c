@@ -8,7 +8,6 @@ typedef union test_allocation_header_t {
     struct {
         size_t size;
         size_t alignment;
-        tinypy_allocation_tag_e tag;
     } fields;
     void *pointer_alignment;
     void (*function_alignment)(void);
@@ -19,7 +18,6 @@ typedef union test_allocation_header_t {
 typedef struct test_allocator_state_t {
     size_t outstanding_allocations;
     size_t outstanding_bytes;
-    size_t outstanding_by_tag[16];
 } test_allocator_state_t;
 
 typedef struct test_module_entry_t {
@@ -47,7 +45,7 @@ typedef struct test_output_state_t {
 } test_output_state_t;
 
 //////////////////////////////////////////////////////////////////////////
-static void *__test_allocate(void *user_data, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__test_allocate(void *user_data, size_t size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     test_allocation_header_t *header = (test_allocation_header_t *)malloc(sizeof(*header) + size);
 
@@ -56,21 +54,17 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment, tin
     }
     header->fields.size = size;
     header->fields.alignment = alignment;
-    header->fields.tag = tag;
     state->outstanding_allocations += 1U;
     state->outstanding_bytes += size;
-    if (tag < 16U) {
-        state->outstanding_by_tag[tag] += 1U;
-    }
     return header + 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void *__test_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     test_allocation_header_t *header = ((test_allocation_header_t *)memory) - 1;
     test_allocation_header_t *resized;
 
-    if (header->fields.size != old_size || header->fields.alignment != alignment || header->fields.tag != tag) {
+    if (header->fields.size != old_size || header->fields.alignment != alignment) {
         return NULL;
     }
     resized = (test_allocation_header_t *)realloc(header, sizeof(*header) + new_size);
@@ -83,18 +77,15 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
     return resized + 1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment, tinypy_allocation_tag_e tag) {
+static void __test_deallocate(void *user_data, void *memory, size_t size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
     test_allocation_header_t *header = ((test_allocation_header_t *)memory) - 1;
 
-    if (header->fields.size != size || header->fields.alignment != alignment || header->fields.tag != tag) {
+    if (header->fields.size != size || header->fields.alignment != alignment) {
         abort();
     }
     state->outstanding_allocations -= 1U;
     state->outstanding_bytes -= size;
-    if (tag < 16U) {
-        state->outstanding_by_tag[tag] -= 1U;
-    }
     free(header);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -535,7 +526,6 @@ int main(int argc, char **argv) {
     test_allocator_state_t state;
     tinypy_vm_t *vm;
     size_t base_allocations;
-    size_t base_by_tag[16];
     int32_t index;
 
     if (argc == 14 && strcmp(argv[1], "--eval-import") == 0) {
@@ -549,7 +539,6 @@ int main(int argc, char **argv) {
     (void)memset(&state, 0, sizeof(state));
     vm = __test_vm_create(&state);
     base_allocations = state.outstanding_allocations;
-    (void)memcpy(base_by_tag, state.outstanding_by_tag, sizeof(base_by_tag));
     if (argc == 3 && (strcmp(argv[1], "--eval") == 0 || strcmp(argv[1], "--eval-any") == 0)) {
         int32_t compare = strcmp(argv[1], "--eval");
         if (__test_eval_file(vm, argv[2], compare == 0) == 0) {
@@ -559,11 +548,6 @@ int main(int argc, char **argv) {
             tinypy_value_t *vm_raised_exception = tinypy_vm_raised_exception(vm);
             tinypy_value_t *vm_handled_exception = tinypy_vm_handled_exception(vm);
             (void)fprintf(stderr, "%s: evaluation leaked VM allocations: base=%zu actual=%zu bytes=%zu raised=%p handled=%p\n", argv[2], base_allocations, state.outstanding_allocations, state.outstanding_bytes, (void *)vm_raised_exception, (void *)vm_handled_exception);
-            for (index = 0; index < 16; index += 1) {
-                if (state.outstanding_by_tag[index] != base_by_tag[index]) {
-                    (void)fprintf(stderr, "tag %d: base=%zu actual=%zu\n", index, base_by_tag[index], state.outstanding_by_tag[index]);
-                }
-            }
             return 1;
         }
         tinypy_vm_destroy(vm);

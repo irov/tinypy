@@ -758,7 +758,7 @@ class PublicApiNamingTests(unittest.TestCase):
         self.assertIn("typedef tinypy_hash_t (*tinypy_hash_slot_t)(", internal_header)
         self.assertIn("typedef tinypy_bool_t (*tinypy_init_slot_t)(", internal_header)
 
-    def test_allocator_tags_use_the_common_enum(self) -> None:
+    def test_allocator_api_has_no_categories(self) -> None:
         types_header = (ROOT / "include/tinypy/types.h").read_text(
             encoding="utf-8"
         )
@@ -770,16 +770,22 @@ class PublicApiNamingTests(unittest.TestCase):
             if path.suffix in {".c", ".h"}
         )
 
-        self.assertIn("typedef enum tinypy_allocation_tag_e {", types_header)
-        self.assertIn("TINYPY_MARSHAL_ALLOC_TAG_DOCUMENT", types_header)
-        self.assertIn("TINYPY_BUILD_PROFILE_ALLOC_TAG_PROFILE", types_header)
-        self.assertIn("tinypy_allocation_tag_e tag", vm_header)
-        self.assertNotIn("uint32_t tag", vm_header)
-        self.assertNotRegex(
-            implementation,
-            r"\(uint32_t\)TINYPY_[A-Z0-9_]*ALLOC_TAG_[A-Z0-9_]+",
+        self.assertNotIn("tinypy_allocation_tag_e", types_header)
+        self.assertNotIn("ALLOC_TAG_", types_header)
+        self.assertIn(
+            "void *(*allocate)(void *user_data, size_t size, size_t alignment);",
+            vm_header,
         )
-        self.assertNotIn("uint32_t tag", implementation)
+        self.assertIn(
+            "void *(*reallocate)(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment);",
+            vm_header,
+        )
+        self.assertIn(
+            "void (*deallocate)(void *user_data, void *memory, size_t size, size_t alignment);",
+            vm_header,
+        )
+        self.assertNotIn("ALLOC_TAG_", implementation)
+        self.assertNotIn("tinypy_allocation_tag_e", implementation)
 
     def test_cycle_diagnostics_implementation_is_isolated(self) -> None:
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")

@@ -1089,7 +1089,7 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
     allocation_size += source_builder.size + 1U;
     allocation_size += map_builder.size + 1U;
     allocation_size += symbol_bytes;
-    tinypy_preprocess_result_t *result = (tinypy_preprocess_result_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size, TINYPY_ALLOC_TAG_COMPILER_DATA);
+    tinypy_preprocess_result_t *result = (tinypy_preprocess_result_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size);
     (void)memset(result, 0, sizeof(*result));
     result->state = TINYPY_PREPROCESS_RESULT_STATE;
     result->vm = ctx->vm;
@@ -1138,7 +1138,7 @@ void tinypy_preprocess_result_destroy(tinypy_preprocess_result_t *result) {
     tinypy_vm_t *vm = result->vm;
     allocation_size = result->allocation_size;
     result->state = 0U;
-    tinypy_internal_vm_deallocate(vm, result, allocation_size, TINYPY_ALLOC_TAG_COMPILER_DATA);
+    tinypy_internal_vm_deallocate(vm, result, allocation_size);
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_preprocess_result_expanded_source(const tinypy_preprocess_result_t *result, size_t *out_size) {
