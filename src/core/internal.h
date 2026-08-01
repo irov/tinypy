@@ -5,6 +5,10 @@
 #error "TINYPY_CYCLE_DIAGNOSTICS is Debug-only"
 #endif
 
+#if defined(TINYPY_DEBUGGER) && defined(NDEBUG)
+#error "TINYPY_DEBUGGER is Debug-only"
+#endif
+
 #include "tinypy/dict.h"
 #include "tinypy/dict_view.h"
 #include "tinypy/buffer.h"
@@ -18,6 +22,7 @@
 #include "tinypy/error.h"
 #include "tinypy/exception.h"
 #include "tinypy/frame.h"
+#include "tinypy/debugger.h"
 #include "tinypy/function.h"
 #include "tinypy/generator.h"
 #include "tinypy/iterator.h"
@@ -562,6 +567,9 @@ typedef struct tinypy_frame_object_t {
     tinypy_value_t **value_stack;
     tinypy_value_t **stack_top;
     int32_t last_instruction;
+#if defined(TINYPY_DEBUGGER)
+    int32_t debugger_line;
+#endif
     uint32_t block_count;
     tinypy_frame_block_t blocks[TINYPY_FRAME_MAX_BLOCKS];
     tinypy_global_cache_entry_t global_cache[TINYPY_FRAME_GLOBAL_CACHE_SIZE];
@@ -839,6 +847,10 @@ struct tinypy_vm_t {
     tinypy_frame_object_t *current_frame;
     size_t evaluation_depth;
     size_t recursion_limit;
+#if defined(TINYPY_DEBUGGER)
+    tinypy_debugger_t debugger;
+    tinypy_bool_t has_debugger;
+#endif
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     tinypy_cycle_diagnostics_state_t *cycle_diagnostics;
 #endif

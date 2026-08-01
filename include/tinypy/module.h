@@ -47,6 +47,7 @@ struct tinypy_module_artifact_t {
 tinypy_value_t *tinypy_module_new(tinypy_vm_t *vm, const char *name, size_t name_size);
 tinypy_value_t *tinypy_module_dict(const tinypy_value_t *module);
 tinypy_value_t *tinypy_module_name(const tinypy_value_t *module);
+void tinypy_module_swap_dict(tinypy_value_t *left, tinypy_value_t *right);
 void tinypy_module_add_value(tinypy_value_t *module, const char *name, size_t name_size, tinypy_value_t *value);
 tinypy_value_t *tinypy_module_get_value(tinypy_value_t *module, const char *name, size_t name_size);
 tinypy_value_t *tinypy_vm_modules(const tinypy_vm_t *vm);

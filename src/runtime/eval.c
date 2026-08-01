@@ -940,6 +940,23 @@ static tinypy_bool_t __tinypy_eval_poll_interrupt(tinypy_vm_t *vm, tinypy_error_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+#if defined(TINYPY_DEBUGGER)
+static void __tinypy_eval_debugger_event(tinypy_vm_t *vm, tinypy_debugger_event_e kind, tinypy_frame_object_t *frame) {
+    if (vm->has_debugger == 0) {
+        return;
+    }
+
+    tinypy_debugger_event_t event;
+    event.abi_version = TINYPY_ABI_VERSION;
+    event.struct_size = (uint32_t)sizeof(event);
+    event.event = kind;
+    event.frame = &frame->base.base;
+    event.exception = kind == TINYPY_DEBUGGER_EVENT_EXCEPTION ? vm->raised_value : NULL;
+    event.traceback = kind == TINYPY_DEBUGGER_EVENT_EXCEPTION ? vm->raised_traceback : NULL;
+    vm->debugger.callback(vm->debugger.user_data, &event);
+}
+#endif
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_eval_push_exception_triple(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback) {
     tinypy_value_t *stack_traceback;
 
@@ -1509,6 +1526,9 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
     bytecode_size = TINYPY_SIZED_SIZE(TINYPY_CODE_BYTECODE(code));
     vm->current_frame = frame;
     vm->evaluation_depth += 1U;
+#if defined(TINYPY_DEBUGGER)
+    __tinypy_eval_debugger_event(vm, TINYPY_DEBUGGER_EVENT_CALL, frame);
+#endif
 
     if (throw_value != NULL) {
         tinypy_internal_exception_set_raised(vm, throw_value, throw_traceback);
@@ -1526,6 +1546,13 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
 
         __tinypy_eval_decode_trusted(bytecode, instruction_offset, &instruction);
         frame->last_instruction = (int32_t)instruction.offset;
+#if defined(TINYPY_DEBUGGER)
+        int32_t debugger_line = tinypy_frame_line_number(&frame->base.base);
+        if (debugger_line != frame->debugger_line) {
+            frame->debugger_line = debugger_line;
+            __tinypy_eval_debugger_event(vm, TINYPY_DEBUGGER_EVENT_LINE, frame);
+        }
+#endif
         instruction_offset = instruction.next_offset;
         argument = (size_t)instruction.argument;
 
@@ -2429,6 +2456,11 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             break;
         }
 
+        if (reason == TINYPY_EVAL_REASON_EXCEPTION) {
+#if defined(TINYPY_DEBUGGER)
+            __tinypy_eval_debugger_event(vm, TINYPY_DEBUGGER_EVENT_EXCEPTION, frame);
+#endif
+        }
         if (reason != TINYPY_EVAL_REASON_NOT && reason != TINYPY_EVAL_REASON_YIELD && (reason != TINYPY_EVAL_REASON_RETURN || frame->block_count != 0U) && __tinypy_eval_unwind_reason(vm, frame, &reason, &instruction_offset, &result, out_error) != 0) {
             continue;
         }
@@ -2447,6 +2479,11 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
         if (out_error != NULL && *out_error == NULL) {
             tinypy_internal_exception_make_diagnostic(vm, out_error);
         }
+    }
+    else if (reason == TINYPY_EVAL_REASON_RETURN) {
+#if defined(TINYPY_DEBUGGER)
+        __tinypy_eval_debugger_event(vm, TINYPY_DEBUGGER_EVENT_RETURN, frame);
+#endif
     }
     if (generator_execution != 0 && reason == TINYPY_EVAL_REASON_YIELD) {
         generator->instruction_offset = instruction_offset;

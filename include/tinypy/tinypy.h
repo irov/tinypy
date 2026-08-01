@@ -23,6 +23,7 @@
 #include "tinypy/code.h"
 #include "tinypy/cell.h"
 #include "tinypy/frame.h"
+#include "tinypy/debugger.h"
 #include "tinypy/function.h"
 #include "tinypy/method.h"
 #include "tinypy/iterator.h"

@@ -83,6 +83,7 @@ add_library(tinypy STATIC
     src/core/error.c
     src/core/exception.c
     src/core/frame.c
+    src/core/debugger.c
     src/core/functools.c
     src/core/function.c
     src/core/generator.c
@@ -117,6 +118,11 @@ add_library(tinypy STATIC
 add_library(tinypy::tinypy ALIAS tinypy)
 
 target_compile_features(tinypy PUBLIC c_std_11)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_definitions(tinypy PUBLIC TINYPY_DEBUGGER)
+elseif(CMAKE_CONFIGURATION_TYPES)
+    target_compile_definitions(tinypy PUBLIC $<$<CONFIG:Debug>:TINYPY_DEBUGGER>)
+endif()
 if(TINYPY_ENABLE_CYCLE_DIAGNOSTICS)
     target_compile_definitions(tinypy
         PUBLIC

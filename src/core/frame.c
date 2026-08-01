@@ -228,6 +228,9 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
     frame->value_stack = frame->locals_plus + local_count + cell_count + free_count;
     frame->stack_top = frame->value_stack;
     frame->last_instruction = -1;
+#if defined(TINYPY_DEBUGGER)
+    frame->debugger_line = -1;
+#endif
     frame->block_count = 0U;
     if (frame->back != NULL) {
         TINYPY_INCREF(frame->back);

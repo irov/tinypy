@@ -35,6 +35,14 @@ tinypy_value_t *tinypy_module_name(const tinypy_value_t *module) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_module_swap_dict(tinypy_value_t *left_value, tinypy_value_t *right_value) {
+    tinypy_module_object_t *left = TINYPY_MODULE_OBJECT(left_value);
+    tinypy_module_object_t *right = TINYPY_MODULE_OBJECT(right_value);
+    tinypy_value_t *temporary = left->dict;
+    left->dict = right->dict;
+    right->dict = temporary;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_module_add_value(tinypy_value_t *module_value, const char *name, size_t name_size, tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module_value);
     tinypy_module_object_t *module = TINYPY_MODULE_OBJECT(module_value);
