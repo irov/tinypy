@@ -24,6 +24,18 @@ assert keyed == [(1, "c"), (1, "a"), (2, "b")]
 keyed.sort(key=lambda pair: pair[1], reverse=True)
 assert keyed == [(1, "c"), (2, "b"), (1, "a")]
 
+singleton_key_calls = []
+
+def singleton_key(pair):
+    singleton_key_calls.append(pair)
+    return pair[0]
+
+singleton = [(1, "only")]
+singleton.sort(key=singleton_key)
+assert singleton == [(1, "only")]
+assert singleton_key_calls == [(1, "only")]
+assert sorted(singleton, key=lambda pair: pair[1]) == [(1, "only")]
+
 mapping = {"a": 1, "b": 2}
 assert mapping.get("a") == 1
 assert mapping.get("missing") is None
