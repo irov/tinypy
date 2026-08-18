@@ -127,7 +127,9 @@ static tinypy_value_t *__tinypy_eval_get_item(tinypy_vm_t *vm, tinypy_value_t *c
     size_t index;
 
     if (container->type == &vm->types[TINYPY_VALUE_DICT]) {
-        item = tinypy_internal_dict_get_optional(vm, container, key);
+        if (tinypy_internal_dict_get_optional_checked(vm, container, key, &item, out_error) == 0) {
+            return NULL;
+        }
         if (item != NULL) {
             TINYPY_INCREF(item);
             return item;
@@ -151,8 +153,8 @@ static tinypy_bool_t __tinypy_eval_set_item(tinypy_vm_t *vm, tinypy_value_t *con
     size_t index;
 
     if (container->type == &vm->types[TINYPY_VALUE_DICT]) {
-        tinypy_dict_set(container, key, value);
-        return TINYPY_TRUE;
+        tinypy_bool_t return_value_1 = tinypy_internal_dict_set_checked(vm, container, key, value, out_error);
+        return return_value_1;
     }
     if (container->type == &vm->types[TINYPY_VALUE_LIST] && __tinypy_eval_sequence_index(vm, key, TINYPY_LIST_SIZE(container), &index) != 0) {
         tinypy_list_set(container, index, value);

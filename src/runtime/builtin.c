@@ -1202,43 +1202,12 @@ static tinypy_value_t *__tinypy_builtin_hash(tinypy_value_t *function, tinypy_va
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
-    if (tinypy_internal_object_has_special(value, "__hash__", 8U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__hash__", 8U, out_error);
-        tinypy_value_t *empty;
-        tinypy_value_t *result;
-        tinypy_hash_t hash;
-
-        if (method == NULL) {
-            return NULL;
-        }
-        if (TINYPY_VALUE_KIND(method) == TINYPY_VALUE_NONE) {
-            TINYPY_DECREF(method);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable type", out_error);
-            return NULL;
-        }
-        empty = tinypy_tuple_from_items(vm, NULL, 0U);
-        result = tinypy_call(method, empty, NULL, out_error);
-        TINYPY_DECREF(empty);
-        TINYPY_DECREF(method);
-        if (result == NULL) {
-            return NULL;
-        }
-        if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_INTEGER && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_LONG) {
-            TINYPY_DECREF(result);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__hash__ returned a non-integer", out_error);
-            return NULL;
-        }
-        hash = tinypy_hash(result);
-        TINYPY_DECREF(result);
-        tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, (int64_t)hash);
-        return return_value_1;
-    }
-    tinypy_hash_t hash_2 = tinypy_internal_hash_value(value, out_error);
+    tinypy_hash_t hash = tinypy_internal_hash_value(value, out_error);
     if (tinypy_vm_has_error(vm) != 0) {
         return NULL;
     }
-    tinypy_value_t *return_value_2 = tinypy_integer_from_i64(vm, (int64_t)hash_2);
-    return return_value_2;
+    tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, (int64_t)hash);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_pow(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

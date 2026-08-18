@@ -42,6 +42,8 @@ typedef struct test_interrupt_host_t {
     size_t interrupt_after;
 } test_interrupt_host_t;
 
+static tinypy_value_t *__test_dict_get(tinypy_vm_t *vm, tinypy_value_t *dict, const char *name, size_t name_size);
+
 //////////////////////////////////////////////////////////////////////////
 static void *__test_allocate(void *user_data, size_t size, size_t alignment) {
     test_allocator_state_t *state = (test_allocator_state_t *)user_data;
@@ -314,6 +316,72 @@ static int32_t __test_source_decoding(void) {
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
     tinypy_error_release(error);
 
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_literal_compatibility(void) {
+    static const char octal_source[] = "(0o17, 0O20)";
+    static const char raw_source[] = "r'a\\\nb'";
+    static const char future_source[] = "from __future__ import unicode_literals\nvalue = 'text'\n";
+    static const uint8_t latin1_source[] = "# coding: latin-1\nvalue = '\xe9'\nunicode_value = u'\xe9'\n";
+    static const char invalid_number_source[] = "first = 1\nsecond = 2\nvalue = 0789\n";
+    static const char invalid_byte_escape_source[] = "value = \"\\x0\"\n";
+    static const uint8_t raw_expected[] = {'a', '\\', '\n', 'b'};
+    static const uint8_t latin1_expected[] = {0xe9U};
+    static const uint8_t unicode_expected[] = {0xc3U, 0xa9U};
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *result;
+    tinypy_value_t *code;
+    tinypy_error_t *error = NULL;
+    const char *bytes;
+    size_t size;
+    size_t code_point_count;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+    result = tinypy_eval_source(vm, octal_source, sizeof(octal_source) - 1U, "literal.py", 10U, globals, NULL, &options, NULL);
+    assert(result != NULL && tinypy_tuple_size(result) == 2U);
+    assert(tinypy_integer_as_i64(tinypy_tuple_get(result, 0U)) == 15);
+    assert(tinypy_integer_as_i64(tinypy_tuple_get(result, 1U)) == 16);
+    tinypy_release(result);
+    result = tinypy_eval_source(vm, raw_source, sizeof(raw_source) - 1U, "literal.py", 10U, globals, NULL, &options, NULL);
+    assert(result != NULL && tinypy_typeof(result) == TINYPY_VALUE_STRING);
+    bytes = tinypy_string_view(result, &size);
+    assert(size == sizeof(raw_expected) && memcmp(bytes, raw_expected, sizeof(raw_expected)) == 0);
+    tinypy_release(result);
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, future_source, sizeof(future_source) - 1U, "future.py", 9U, &options, NULL);
+    assert(code != NULL);
+    assert((tinypy_code_flags(code) & TINYPY_CODE_FUTURE_UNICODE_LITERALS) != 0);
+    tinypy_release(code);
+    result = tinypy_exec_source(vm, future_source, sizeof(future_source) - 1U, "future.py", 9U, globals, NULL, &options, NULL);
+    assert(result != NULL);
+    tinypy_release(result);
+    assert(tinypy_typeof(__test_dict_get(vm, globals, "value", 5U)) == TINYPY_VALUE_UNICODE);
+
+    result = tinypy_exec_source(vm, latin1_source, sizeof(latin1_source) - 1U, "latin1.py", 9U, globals, NULL, &options, NULL);
+    assert(result != NULL);
+    tinypy_release(result);
+    bytes = tinypy_string_view(__test_dict_get(vm, globals, "value", 5U), &size);
+    assert(size == sizeof(latin1_expected) && memcmp(bytes, latin1_expected, sizeof(latin1_expected)) == 0);
+    bytes = tinypy_unicode_utf8_view(__test_dict_get(vm, globals, "unicode_value", 13U), &size, &code_point_count);
+    assert(size == sizeof(unicode_expected) && memcmp(bytes, unicode_expected, sizeof(unicode_expected)) == 0);
+    assert(code_point_count == 1U);
+
+    code = tinypy_compile_source(vm, invalid_number_source, sizeof(invalid_number_source) - 1U, "number.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL);
+    assert(tinypy_error_line_number(error) == 3);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, invalid_byte_escape_source, sizeof(invalid_byte_escape_source) - 1U, "escape.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_VALUE);
+    tinypy_error_release(error);
+    tinypy_release(globals);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
@@ -1743,6 +1811,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_source_decoding() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_literal_compatibility() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_named_unicode_escapes() != 0) {

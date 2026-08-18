@@ -4,7 +4,7 @@
 
 tinypy — встраиваемая реализация Python 2.7 для выполнения доверенного и
 ограниченного кода из memory buffers. Runtime, compiler и форматы данных
-реализованы на C99 и не требуют установленного Python.
+реализованы на C11 и не требуют установленного Python.
 
 Core не обращается напрямую к:
 
@@ -390,7 +390,7 @@ hash, future flags, payload size и checksum. Loader никогда не при�
 
 Обязательные gates:
 
-- C99 build с warnings-as-errors;
+- C11 build с warnings-as-errors;
 - C и C++ public-header compilation;
 - unit tests object model, bytecode runtime, compiler, marshal и artifacts;
 - source modes `exec`, `eval`, `single` и dynamic compilation;

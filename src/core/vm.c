@@ -999,6 +999,9 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph) {
     __tinypy_shutdown_add(graph, vm->handled_type);
     __tinypy_shutdown_add(graph, vm->handled_value);
     __tinypy_shutdown_add(graph, vm->handled_traceback);
+    for (index = 0U; index < 256U; ++index) {
+        __tinypy_shutdown_add(graph, vm->unicode_char_cache[index]);
+    }
     if (vm->current_frame != NULL) {
         __tinypy_shutdown_add(graph, &vm->current_frame->base.base);
     }

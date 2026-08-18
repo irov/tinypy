@@ -38,7 +38,7 @@ static tinypy_value_t *__tinypy_internal_iterator_next_sequence(tinypy_iterator_
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(iterator->iterable);
     size_t size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(iterator->iterable) : TINYPY_LIST_SIZE(iterator->iterable);
 
-    if (iterator->index == size) {
+    if (iterator->index >= size) {
         return NULL;
     }
     tinypy_value_t *item = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(iterator->iterable, iterator->index) : TINYPY_LIST_GET(iterator->iterable, iterator->index);
@@ -67,23 +67,18 @@ static tinypy_value_t *__tinypy_internal_iterator_next_unicode(tinypy_iterator_o
     const char *utf8;
     size_t byte_size;
     size_t code_point_count;
-    size_t byte_index = 0U;
-    size_t scalar_index = 0U;
+    size_t byte_index;
     size_t scalar_size;
 
     utf8 = tinypy_unicode_utf8_view(iterator->iterable, &byte_size, &code_point_count);
     if (iterator->index == code_point_count) {
         return NULL;
     }
-    while (scalar_index < iterator->index) {
-        uint8_t lead = (uint8_t)utf8[byte_index];
-
-        byte_index += lead < 0x80U ? 1U : (lead < 0xe0U ? 2U : (lead < 0xf0U ? 3U : 4U));
-        ++scalar_index;
-    }
+    byte_index = iterator->table_position;
     uint8_t lead = (uint8_t)utf8[byte_index];
 
     scalar_size = lead < 0x80U ? 1U : (lead < 0xe0U ? 2U : (lead < 0xf0U ? 3U : 4U));
+    iterator->table_position += scalar_size;
     iterator->index += 1U;
     tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator->iterable);
     tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(vm, utf8 + byte_index, scalar_size);

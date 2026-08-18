@@ -32,7 +32,7 @@ static tinypy_ast_expression_t __ast_for_testlist_comp(tinypy_ast_builder_t *, c
 /* Note different signature for __ast_for_call */
 static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *, const tinypy_cst_node_t *, tinypy_ast_expression_t);
 
-static tinypy_value_t *__parsenumber(tinypy_ast_builder_t *, const char *);
+static tinypy_value_t *__parsenumber(tinypy_ast_builder_t *, const char *, int32_t, int32_t);
 static tinypy_value_t *__parsestr(tinypy_ast_builder_t *, const tinypy_cst_node_t *n, const char *);
 static tinypy_value_t *__parsestrplus(tinypy_ast_builder_t *, const tinypy_cst_node_t *n);
 
@@ -1348,7 +1348,7 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
         return return_value_2;
     }
     case TINYPY_TOKEN_NUMBER: {
-        tinypy_value_t *pynum = __parsenumber(c, TINYPY_CST_TEXT(ch));
+        tinypy_value_t *pynum = __parsenumber(c, TINYPY_CST_TEXT(ch), TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
         if (!pynum) {
             return NULL;
         }
@@ -1737,7 +1737,7 @@ static tinypy_ast_expression_t __ast_for_factor(tinypy_ast_builder_t *c, const t
         }
         s[0] = '-';
         strcpy(s + 1, TINYPY_CST_TEXT(pnum));
-        pynum = __parsenumber(c, s);
+        pynum = __parsenumber(c, s, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
         if (!pynum) {
             return NULL;
         }
@@ -3409,8 +3409,8 @@ static tinypy_ast_statement_t __ast_for_stmt(tinypy_ast_builder_t *c, const tiny
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__parsenumber(tinypy_ast_builder_t *c, const char *s) {
-    tinypy_value_t *return_value_1 = tinypy_internal_compiler_parse_number(c->c_arena, s, 1, 1);
+static tinypy_value_t *__parsenumber(tinypy_ast_builder_t *c, const char *s, int32_t line_number, int32_t column_offset) {
+    tinypy_value_t *return_value_1 = tinypy_internal_compiler_parse_number(c->c_arena, s, line_number, column_offset);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

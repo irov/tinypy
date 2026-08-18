@@ -305,6 +305,7 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source is not valid UTF-8", 1, 1, out_error);
         return TINYPY_FALSE;
     }
+    ctx->source_is_latin1 = latin1 != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     output_capacity = latin1 != 0 ? (source_size - input_offset) * 2U + 2U : source_size - input_offset + 2U;
     output = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, output_capacity);
     if (output == NULL) {

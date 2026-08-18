@@ -348,18 +348,36 @@ const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size) {
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size_t size) {
     size_t code_point_count;
+    size_t cache_index = SIZE_MAX;
+
+    if (size == 1U && (uint8_t)utf8[0] < 0x80U) {
+        cache_index = (size_t)(uint8_t)utf8[0];
+    }
+    else if (size == 2U && ((uint8_t)utf8[0] == 0xc2U || (uint8_t)utf8[0] == 0xc3U) && ((uint8_t)utf8[1] & 0xc0U) == 0x80U) {
+        cache_index = (size_t)((((uint32_t)(uint8_t)utf8[0] & 0x1fU) << 6U) | ((uint32_t)(uint8_t)utf8[1] & 0x3fU));
+    }
+    if (cache_index != SIZE_MAX && vm->unicode_char_cache[cache_index] != NULL) {
+        tinypy_value_t *cached = vm->unicode_char_cache[cache_index];
+
+        TINYPY_INCREF(cached);
+        return cached;
+    }
 
     code_point_count = __tinypy_internal_utf8_code_point_count(
         (const uint8_t *)utf8,
         size);
 
-    tinypy_value_t *return_value_1 = __tinypy_internal_text_from_bytes(
+    tinypy_value_t *result = __tinypy_internal_text_from_bytes(
         vm,
         (const uint8_t *)utf8,
         size,
         code_point_count,
         TINYPY_VALUE_UNICODE);
-    return return_value_1;
+    if (cache_index != SIZE_MAX) {
+        vm->unicode_char_cache[cache_index] = result;
+        TINYPY_INCREF(result);
+    }
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_unicode_utf8_view(const tinypy_value_t *value, size_t *out_size, size_t *out_code_point_count) {

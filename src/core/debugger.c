@@ -28,7 +28,9 @@ tinypy_bool_t tinypy_debugger_set(tinypy_vm_t *vm, const tinypy_debugger_t *debu
 static tinypy_bool_t __tinypy_debugger_frame_name_equal(tinypy_value_t *value, const char *name, size_t name_size) {
     size_t value_size = 0U;
     const char *bytes = (const char *)tinypy_string_view(value, &value_size);
-    return value_size == name_size && memcmp(bytes, name, name_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    int32_t equal = value_size == name_size && memcmp(bytes, name, name_size) == 0;
+
+    return equal != 0 ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t **__tinypy_debugger_frame_slot(tinypy_frame_object_t *frame, const char *name, size_t name_size, tinypy_value_t **out_cell) {
@@ -72,7 +74,8 @@ tinypy_value_t *tinypy_debugger_frame_get(const tinypy_value_t *frame_value, tin
             return *slot;
         }
         if (cell != NULL) {
-            return tinypy_cell_get(cell);
+            tinypy_value_t *return_value_1 = tinypy_cell_get(cell);
+            return return_value_1;
         }
         dictionary = tinypy_internal_frame_locals(frame);
     }

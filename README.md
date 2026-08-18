@@ -1,6 +1,6 @@
 # tinypy
 
-tinypy is a host-embedded Python 2.7 runtime and compiler written in C99.
+tinypy is a host-embedded Python 2.7 runtime and compiler written in C11.
 It executes source or bytecode entirely from memory and exposes a versioned C
 ABI with the `tinypy_` prefix.
 

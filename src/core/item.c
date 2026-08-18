@@ -421,7 +421,9 @@ tinypy_value_t *tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, 
     }
     kind = TINYPY_VALUE_KIND(container);
     if (kind == TINYPY_VALUE_DICT) {
-        item = tinypy_internal_dict_get_optional(vm, container, key);
+        if (tinypy_internal_dict_get_optional_checked(vm, container, key, &item, out_error) == 0) {
+            return NULL;
+        }
         if (item == NULL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_KEY, "dictionary key is absent", out_error);
             return NULL;
@@ -541,8 +543,8 @@ tinypy_bool_t tinypy_set_item(tinypy_value_t *container, tinypy_value_t *key, ti
     }
     kind = TINYPY_VALUE_KIND(container);
     if (kind == TINYPY_VALUE_DICT) {
-        tinypy_dict_set(container, key, value);
-        return TINYPY_TRUE;
+        tinypy_bool_t return_value_3 = tinypy_internal_dict_set_checked(vm, container, key, value, out_error);
+        return return_value_3;
     }
     if (kind == TINYPY_VALUE_LIST) {
         if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE) {
@@ -582,11 +584,15 @@ tinypy_bool_t tinypy_delete_item(tinypy_value_t *container, tinypy_value_t *key,
     }
     kind = TINYPY_VALUE_KIND(container);
     if (kind == TINYPY_VALUE_DICT) {
-        if (tinypy_dict_contains(container, key) == 0) {
+        tinypy_bool_t deleted;
+
+        if (tinypy_internal_dict_delete_optional_checked(vm, container, key, &deleted, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        if (deleted == 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_KEY, "dictionary key is absent", out_error);
             return TINYPY_FALSE;
         }
-        tinypy_dict_delete(container, key);
         return TINYPY_TRUE;
     }
     if (kind == TINYPY_VALUE_LIST) {

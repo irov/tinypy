@@ -10,12 +10,6 @@ enum {
 };
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_set_value_hashable(const tinypy_value_t *value) {
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-
-    return kind != TINYPY_VALUE_LIST && kind != TINYPY_VALUE_DICT && kind != TINYPY_VALUE_SET;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_set_allocate(tinypy_vm_t *vm, tinypy_bool_t frozen) {
     tinypy_value_type_e kind = frozen != 0 ? TINYPY_VALUE_FROZENSET : TINYPY_VALUE_SET;
     tinypy_set_object_t *set = (tinypy_set_object_t *)tinypy_internal_value_allocate(vm, kind, sizeof(*set));
@@ -29,16 +23,12 @@ static tinypy_bool_t __tinypy_set_insert(tinypy_value_t *set, tinypy_value_t *it
     tinypy_set_object_t *object = TINYPY_SET_OBJECT(set);
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (__tinypy_set_value_hashable(item) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable type used as a set member", out_error);
+    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_bool_t inserted = tinypy_internal_dict_set_checked(vm, object->dict, item, none, out_error);
+    TINYPY_DECREF(none);
+    if (inserted == 0) {
         return TINYPY_FALSE;
     }
-    if (tinypy_dict_contains(object->dict, item) != 0) {
-        return TINYPY_TRUE;
-    }
-    tinypy_value_t *none = tinypy_none_get(vm);
-    tinypy_dict_set(object->dict, item, none);
-    TINYPY_DECREF(none);
     object->hash_computed = 0;
     return TINYPY_TRUE;
 }
@@ -133,37 +123,122 @@ static tinypy_bool_t __tinypy_set_is_subset(const tinypy_value_t *left, const ti
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_set_intersection_update_set(tinypy_value_t *set, const tinypy_value_t *other) {
+tinypy_bool_t tinypy_internal_set_is_subset_checked(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t *out_subset, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_value_t *left_dict = TINYPY_SET_OBJECT((tinypy_value_t *)left)->dict;
+    tinypy_value_t *right_dict = TINYPY_SET_OBJECT((tinypy_value_t *)right)->dict;
+    tinypy_dict_entry_t *entries;
+    size_t capacity;
+    size_t index;
+    uint64_t left_version;
+
+    if (TINYPY_DICT_SIZE(left_dict) > TINYPY_DICT_SIZE(right_dict)) {
+        *out_subset = TINYPY_FALSE;
+        return TINYPY_TRUE;
+    }
+    entries = TINYPY_DICT_ITERATOR_BEGIN(left_dict);
+    capacity = TINYPY_DICT_OBJECT(left_dict)->mask + 1U;
+    left_version = TINYPY_DICT_OBJECT(left_dict)->mutation_version;
+    for (index = 0U; index < capacity; ++index) {
+        tinypy_dict_entry_t *entry = &entries[index];
+        tinypy_value_t *key;
+        tinypy_bool_t found;
+
+        if (entry->state != TINYPY_DICT_ENTRY_ACTIVE) {
+            continue;
+        }
+        key = entry->key;
+        TINYPY_INCREF(key);
+        if (tinypy_internal_dict_lookup_hash_checked(vm, right_dict, key, entry->hash, NULL, &found, out_error) == 0) {
+            TINYPY_DECREF(key);
+            return TINYPY_FALSE;
+        }
+        TINYPY_DECREF(key);
+        if (TINYPY_DICT_OBJECT(left_dict)->mutation_version != left_version || TINYPY_DICT_OBJECT(left_dict)->table != entries) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "set changed size during iteration", out_error);
+            return TINYPY_FALSE;
+        }
+        if (found == 0) {
+            *out_subset = TINYPY_FALSE;
+            return TINYPY_TRUE;
+        }
+    }
+    *out_subset = TINYPY_TRUE;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_set_intersection_update_set(tinypy_value_t *set, const tinypy_value_t *other, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
     tinypy_value_t *dict = TINYPY_SET_OBJECT(set)->dict;
     tinypy_value_t *other_dict = TINYPY_SET_OBJECT((tinypy_value_t *)other)->dict;
-    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(dict);
-    tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(dict);
+    tinypy_dict_entry_t *entries = TINYPY_DICT_ITERATOR_BEGIN(dict);
+    size_t capacity = TINYPY_DICT_OBJECT(dict)->mask + 1U;
+    uint64_t version = TINYPY_DICT_OBJECT(dict)->mutation_version;
+    size_t index;
 
-    for (; iterator != iterator_end; ++iterator) {
-        if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE && tinypy_dict_contains(other_dict, iterator->key) == 0) {
-            tinypy_dict_delete(dict, iterator->key);
+    for (index = 0U; index < capacity; ++index) {
+        if (entries[index].state == TINYPY_DICT_ENTRY_ACTIVE) {
+            tinypy_value_t *key = entries[index].key;
+            tinypy_bool_t found;
+
+            TINYPY_INCREF(key);
+            if (tinypy_internal_dict_lookup_hash_checked(vm, other_dict, key, entries[index].hash, NULL, &found, out_error) == 0) {
+                TINYPY_DECREF(key);
+                return TINYPY_FALSE;
+            }
+            TINYPY_DECREF(key);
+            if (TINYPY_DICT_OBJECT(dict)->mutation_version != version || TINYPY_DICT_OBJECT(dict)->table != entries) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "set changed size during iteration", out_error);
+                return TINYPY_FALSE;
+            }
+            if (found == 0) {
+                (void)tinypy_internal_dict_delete_index(vm, dict, index, NULL, NULL);
+                version = TINYPY_DICT_OBJECT(dict)->mutation_version;
+            }
         }
     }
     TINYPY_SET_OBJECT(set)->hash_computed = 0;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_set_difference_update_set(tinypy_value_t *set, const tinypy_value_t *other) {
+static tinypy_bool_t __tinypy_set_difference_update_set(tinypy_value_t *set, const tinypy_value_t *other, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
     tinypy_value_t *other_dict = TINYPY_SET_OBJECT((tinypy_value_t *)other)->dict;
     tinypy_value_t *dict = TINYPY_SET_OBJECT(set)->dict;
 
     if (set == other) {
         tinypy_dict_clear(dict);
         TINYPY_SET_OBJECT(set)->hash_computed = 0;
-        return;
+        return TINYPY_TRUE;
     }
-    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(other_dict);
-    tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(other_dict);
-    for (; iterator != iterator_end; ++iterator) {
-        if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE && tinypy_dict_contains(dict, iterator->key) != 0) {
-            tinypy_dict_delete(dict, iterator->key);
+    tinypy_dict_entry_t *entries = TINYPY_DICT_ITERATOR_BEGIN(other_dict);
+    size_t capacity = TINYPY_DICT_OBJECT(other_dict)->mask + 1U;
+    uint64_t version = TINYPY_DICT_OBJECT(other_dict)->mutation_version;
+    size_t index;
+
+    for (index = 0U; index < capacity; ++index) {
+        if (entries[index].state == TINYPY_DICT_ENTRY_ACTIVE) {
+            tinypy_value_t *key = entries[index].key;
+            size_t found_index;
+            tinypy_bool_t found;
+
+            TINYPY_INCREF(key);
+            if (tinypy_internal_dict_lookup_hash_checked(vm, dict, key, entries[index].hash, &found_index, &found, out_error) == 0) {
+                TINYPY_DECREF(key);
+                return TINYPY_FALSE;
+            }
+            TINYPY_DECREF(key);
+            if (TINYPY_DICT_OBJECT(other_dict)->mutation_version != version || TINYPY_DICT_OBJECT(other_dict)->table != entries) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "set changed size during iteration", out_error);
+                return TINYPY_FALSE;
+            }
+            if (found != 0) {
+                (void)tinypy_internal_dict_delete_index(vm, dict, found_index, NULL, NULL);
+            }
         }
     }
     TINYPY_SET_OBJECT(set)->hash_computed = 0;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_set_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
@@ -207,13 +282,13 @@ size_t tinypy_set_size(const tinypy_value_t *set) {
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_set_contains(const tinypy_value_t *set, const tinypy_value_t *item, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
+    tinypy_bool_t contains;
+
     TINYPY_CLEAR_ERROR(out_error);
-    if (__tinypy_set_value_hashable(item) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable type used for set lookup", out_error);
+    if (tinypy_internal_dict_contains_checked(vm, TINYPY_SET_OBJECT((tinypy_value_t *)set)->dict, item, &contains, out_error) == 0) {
         return INT32_C(-1);
     }
-    int32_t return_value_1 = tinypy_dict_contains(TINYPY_SET_OBJECT((tinypy_value_t *)set)->dict, item);
-    return return_value_1;
+    return contains != 0 ? INT32_C(1) : INT32_C(0);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_set_add(tinypy_value_t *set, tinypy_value_t *item, tinypy_error_t **out_error) {
@@ -222,14 +297,15 @@ tinypy_bool_t tinypy_set_add(tinypy_value_t *set, tinypy_value_t *item, tinypy_e
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_set_discard(tinypy_value_t *set, tinypy_value_t *item, tinypy_error_t **out_error) {
-    int32_t contains;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
+    tinypy_bool_t deleted;
 
-    contains = tinypy_set_contains(set, item, out_error);
-    if (contains <= 0) {
-        return contains < 0 ? TINYPY_FALSE : TINYPY_TRUE;
+    if (tinypy_internal_dict_delete_optional_checked(vm, TINYPY_SET_OBJECT(set)->dict, item, &deleted, out_error) == 0) {
+        return TINYPY_FALSE;
     }
-    tinypy_dict_delete(TINYPY_SET_OBJECT(set)->dict, item);
-    TINYPY_SET_OBJECT(set)->hash_computed = 0;
+    if (deleted != 0) {
+        TINYPY_SET_OBJECT(set)->hash_computed = 0;
+    }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -246,6 +322,22 @@ tinypy_bool_t tinypy_internal_set_equal(const tinypy_value_t *left, const tinypy
         return TINYPY_FALSE;
     }
     tinypy_bool_t return_value_1 = tinypy_set_size(left) == tinypy_set_size(right) && __tinypy_set_is_subset(left, right) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_set_equal_checked(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
+    tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
+    tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
+
+    if ((left_kind != TINYPY_VALUE_SET && left_kind != TINYPY_VALUE_FROZENSET) || (right_kind != TINYPY_VALUE_SET && right_kind != TINYPY_VALUE_FROZENSET)) {
+        *out_equal = TINYPY_FALSE;
+        return TINYPY_TRUE;
+    }
+    if (tinypy_set_size(left) != tinypy_set_size(right)) {
+        *out_equal = TINYPY_FALSE;
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t return_value_1 = tinypy_internal_set_is_subset_checked(left, right, out_equal, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -289,10 +381,16 @@ tinypy_value_t *tinypy_internal_set_binary(tinypy_value_t *left, tinypy_value_t 
     }
     tinypy_value_t *result = __tinypy_set_copy_kind(left, left_kind == TINYPY_VALUE_FROZENSET);
     if (operation == TINYPY_SET_BINARY_AND) {
-        __tinypy_set_intersection_update_set(result, right);
+        if (__tinypy_set_intersection_update_set(result, right, out_error) == 0) {
+            TINYPY_DECREF(result);
+            return NULL;
+        }
     }
     else if (operation == TINYPY_SET_BINARY_SUBTRACT) {
-        __tinypy_set_difference_update_set(result, right);
+        if (__tinypy_set_difference_update_set(result, right, out_error) == 0) {
+            TINYPY_DECREF(result);
+            return NULL;
+        }
     }
     else if (operation == TINYPY_SET_BINARY_OR) {
         if (__tinypy_set_update_iterable(result, right, out_error) == 0) {
@@ -302,20 +400,40 @@ tinypy_value_t *tinypy_internal_set_binary(tinypy_value_t *left, tinypy_value_t 
     }
     else {
         tinypy_value_t *right_dict = TINYPY_SET_OBJECT(right)->dict;
-        tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(right_dict);
-        tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(right_dict);
+        tinypy_dict_entry_t *entries = TINYPY_DICT_ITERATOR_BEGIN(right_dict);
+        size_t capacity = TINYPY_DICT_OBJECT(right_dict)->mask + 1U;
+        uint64_t version = TINYPY_DICT_OBJECT(right_dict)->mutation_version;
+        size_t index;
 
-        for (; iterator != iterator_end; ++iterator) {
-            if (iterator->state != TINYPY_DICT_ENTRY_ACTIVE) {
+        for (index = 0U; index < capacity; ++index) {
+            if (entries[index].state != TINYPY_DICT_ENTRY_ACTIVE) {
                 continue;
             }
-            if (tinypy_dict_contains(TINYPY_SET_OBJECT(result)->dict, iterator->key) != 0) {
-                tinypy_dict_delete(TINYPY_SET_OBJECT(result)->dict, iterator->key);
-            }
-            else if (__tinypy_set_insert(result, iterator->key, out_error) == 0) {
+            tinypy_value_t *key = entries[index].key;
+            size_t found_index;
+            tinypy_bool_t found;
+
+            TINYPY_INCREF(key);
+            if (tinypy_internal_dict_lookup_hash_checked(vm, TINYPY_SET_OBJECT(result)->dict, key, entries[index].hash, &found_index, &found, out_error) == 0) {
+                TINYPY_DECREF(key);
                 TINYPY_DECREF(result);
                 return NULL;
             }
+            if (TINYPY_DICT_OBJECT(right_dict)->mutation_version != version || TINYPY_DICT_OBJECT(right_dict)->table != entries) {
+                TINYPY_DECREF(key);
+                TINYPY_DECREF(result);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "set changed size during iteration", out_error);
+                return NULL;
+            }
+            if (found != 0) {
+                (void)tinypy_internal_dict_delete_index(vm, TINYPY_SET_OBJECT(result)->dict, found_index, NULL, NULL);
+            }
+            else if (__tinypy_set_insert(result, key, out_error) == 0) {
+                TINYPY_DECREF(key);
+                TINYPY_DECREF(result);
+                return NULL;
+            }
+            TINYPY_DECREF(key);
         }
     }
     return result;
@@ -372,7 +490,7 @@ static tinypy_value_t *__tinypy_set_discard_method(tinypy_value_t *function, tin
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_set_remove_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    int32_t contains;
+    tinypy_bool_t deleted;
 
     (void)user_data;
     if (__tinypy_set_method_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
@@ -380,15 +498,14 @@ static tinypy_value_t *__tinypy_set_remove_method(tinypy_value_t *function, tiny
     }
     tinypy_value_t *set = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
-    contains = tinypy_set_contains(set, item, out_error);
-    if (contains < 0) {
+    if (tinypy_internal_dict_delete_optional_checked(vm, TINYPY_SET_OBJECT(set)->dict, item, &deleted, out_error) == 0) {
         return NULL;
     }
-    if (contains == 0) {
+    if (deleted == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_KEY, "set member was not found", out_error);
         return NULL;
     }
-    tinypy_dict_delete(TINYPY_SET_OBJECT(set)->dict, item);
+    TINYPY_SET_OBJECT(set)->hash_computed = 0;
     tinypy_value_t *return_value_1 = __tinypy_set_none(vm);
     return return_value_1;
 }
@@ -422,10 +539,11 @@ static tinypy_value_t *__tinypy_set_pop_method(tinypy_value_t *function, tinypy_
     for (; iterator != iterator_end; ++iterator) {
 
         if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE) {
-            tinypy_value_t *item = iterator->key;
+            size_t index = (size_t)(iterator - TINYPY_DICT_ITERATOR_BEGIN(dict));
+            tinypy_value_t *item;
 
-            TINYPY_INCREF(item);
-            tinypy_dict_delete(dict, item);
+            (void)tinypy_internal_dict_delete_index(vm, dict, index, &item, NULL);
+            TINYPY_SET_OBJECT(set)->hash_computed = 0;
             return item;
         }
     }
@@ -495,7 +613,11 @@ static tinypy_value_t *__tinypy_set_intersection_method(tinypy_value_t *function
             TINYPY_DECREF(result);
             return NULL;
         }
-        __tinypy_set_intersection_update_set(result, other);
+        if (__tinypy_set_intersection_update_set(result, other, out_error) == 0) {
+            TINYPY_DECREF(other);
+            TINYPY_DECREF(result);
+            return NULL;
+        }
         TINYPY_DECREF(other);
     }
     return result;
@@ -523,7 +645,11 @@ static tinypy_value_t *__tinypy_set_difference_method(tinypy_value_t *function, 
             TINYPY_DECREF(result);
             return NULL;
         }
-        __tinypy_set_difference_update_set(result, other);
+        if (__tinypy_set_difference_update_set(result, other, out_error) == 0) {
+            TINYPY_DECREF(other);
+            TINYPY_DECREF(result);
+            return NULL;
+        }
         TINYPY_DECREF(other);
     }
     return result;
@@ -589,7 +715,10 @@ static tinypy_value_t *__tinypy_set_intersection_update_method(tinypy_value_t *f
         if (other == NULL) {
             return NULL;
         }
-        __tinypy_set_intersection_update_set(self, other);
+        if (__tinypy_set_intersection_update_set(self, other, out_error) == 0) {
+            TINYPY_DECREF(other);
+            return NULL;
+        }
         TINYPY_DECREF(other);
     }
     tinypy_value_t *return_value_1 = __tinypy_set_none(vm);
@@ -615,7 +744,10 @@ static tinypy_value_t *__tinypy_set_difference_update_method(tinypy_value_t *fun
         if (other == NULL) {
             return NULL;
         }
-        __tinypy_set_difference_update_set(self, other);
+        if (__tinypy_set_difference_update_set(self, other, out_error) == 0) {
+            TINYPY_DECREF(other);
+            return NULL;
+        }
         TINYPY_DECREF(other);
     }
     tinypy_value_t *return_value_1 = __tinypy_set_none(vm);
@@ -674,7 +806,12 @@ static tinypy_value_t *__tinypy_set_issubset_method(tinypy_value_t *function, ti
         return NULL;
     }
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-    result = __tinypy_set_is_subset(item_2, other);
+    tinypy_bool_t subset;
+    if (tinypy_internal_set_is_subset_checked(item_2, other, &subset, out_error) == 0) {
+        TINYPY_DECREF(other);
+        return NULL;
+    }
+    result = subset != 0 ? INT32_C(1) : INT32_C(0);
     TINYPY_DECREF(other);
     tinypy_value_t *return_value_1 = tinypy_bool_from_i32(vm, result);
     return return_value_1;
@@ -694,7 +831,12 @@ static tinypy_value_t *__tinypy_set_issuperset_method(tinypy_value_t *function, 
         return NULL;
     }
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-    result = __tinypy_set_is_subset(other, item_2);
+    tinypy_bool_t subset;
+    if (tinypy_internal_set_is_subset_checked(other, item_2, &subset, out_error) == 0) {
+        TINYPY_DECREF(other);
+        return NULL;
+    }
+    result = subset != 0 ? INT32_C(1) : INT32_C(0);
     TINYPY_DECREF(other);
     tinypy_value_t *return_value_1 = tinypy_bool_from_i32(vm, result);
     return return_value_1;
@@ -703,8 +845,10 @@ static tinypy_value_t *__tinypy_set_issuperset_method(tinypy_value_t *function, 
 static tinypy_value_t *__tinypy_set_isdisjoint_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *dict;
-    tinypy_dict_entry_t *iterator;
-    tinypy_dict_entry_t *iterator_end;
+    tinypy_dict_entry_t *entries;
+    size_t capacity;
+    uint64_t version;
+    size_t index;
     int32_t disjoint = INT32_C(1);
 
     (void)user_data;
@@ -718,13 +862,31 @@ static tinypy_value_t *__tinypy_set_isdisjoint_method(tinypy_value_t *function, 
         return NULL;
     }
     dict = TINYPY_SET_OBJECT(self)->dict;
-    iterator = TINYPY_DICT_ITERATOR_BEGIN(dict);
-    iterator_end = TINYPY_DICT_ITERATOR_END(dict);
-    for (; iterator != iterator_end; ++iterator) {
+    entries = TINYPY_DICT_ITERATOR_BEGIN(dict);
+    capacity = TINYPY_DICT_OBJECT(dict)->mask + 1U;
+    version = TINYPY_DICT_OBJECT(dict)->mutation_version;
+    for (index = 0U; index < capacity; ++index) {
 
-        if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE && tinypy_dict_contains(TINYPY_SET_OBJECT(other)->dict, iterator->key) != 0) {
-            disjoint = INT32_C(0);
-            break;
+        if (entries[index].state == TINYPY_DICT_ENTRY_ACTIVE) {
+            tinypy_value_t *key = entries[index].key;
+            tinypy_bool_t found;
+
+            TINYPY_INCREF(key);
+            if (tinypy_internal_dict_lookup_hash_checked(vm, TINYPY_SET_OBJECT(other)->dict, key, entries[index].hash, NULL, &found, out_error) == 0) {
+                TINYPY_DECREF(key);
+                TINYPY_DECREF(other);
+                return NULL;
+            }
+            TINYPY_DECREF(key);
+            if (TINYPY_DICT_OBJECT(dict)->mutation_version != version || TINYPY_DICT_OBJECT(dict)->table != entries) {
+                TINYPY_DECREF(other);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "set changed size during iteration", out_error);
+                return NULL;
+            }
+            if (found != 0) {
+                disjoint = INT32_C(0);
+                break;
+            }
         }
     }
     TINYPY_DECREF(other);

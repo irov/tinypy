@@ -195,13 +195,14 @@ static const char *__tinypy_compiler_parser_error_message(int32_t error, int32_t
     return "invalid syntax";
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_cst_node_t *__tinypy_compiler_parse(tinypy_compile_ctx_t *ctx, tinypy_error_t **out_error) {
+static tinypy_cst_node_t *__tinypy_compiler_parse(tinypy_compile_ctx_t *ctx, int32_t *out_parser_flags, tinypy_error_t **out_error) {
     tinypy_parser_error_detail_t detail;
     uint32_t compiler_inherited_flags = __tinypy_compiler_inherited_flags(ctx);
     int32_t flags = __tinypy_compiler_parser_flags(compiler_inherited_flags);
 
     int32_t compiler_parser_start = __tinypy_compiler_parser_start(ctx->options.mode);
     tinypy_cst_node_t *tree = tinypy_internal_parse_source(ctx, (const char *)ctx->source.bytes, ctx->source.size, ctx->logical_filename, &__tinypy_parser_grammar, compiler_parser_start, &detail, &flags);
+    *out_parser_flags = flags;
     if (tree != NULL) {
         return tree;
     }
@@ -246,6 +247,7 @@ void tinypy_compile_options_init(tinypy_compile_options_t *options, tinypy_compi
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tinypy_error_t **out_error) {
     tinypy_compiler_flags_t flags;
+    int32_t parser_flags;
     tinypy_ast_module_t module;
     tinypy_symbol_table_t *symbols;
     tinypy_code_object_t *code;
@@ -258,11 +260,11 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
         tinypy_value_t *return_value_2 = __tinypy_compiler_empty_code(ctx);
         return return_value_2;
     }
-    tinypy_cst_node_t *tree = __tinypy_compiler_parse(ctx, out_error);
+    tinypy_cst_node_t *tree = __tinypy_compiler_parse(ctx, &parser_flags, out_error);
     if (tree == NULL) {
         return NULL;
     }
-    flags.flags = (int32_t)__tinypy_compiler_inherited_flags(ctx) | TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8;
+    flags.flags = (int32_t)__tinypy_compiler_inherited_flags(ctx) | parser_flags | TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8;
     module = __tinypy_ast_build(tree, &flags, ctx->logical_filename, ctx);
     if (module == NULL) {
         if (ctx->failed == 0) {
@@ -340,6 +342,7 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     tinypy_compile_ctx_t ctx;
     tinypy_preprocess_result_t *result = NULL;
     tinypy_compiler_flags_t flags;
+    int32_t parser_flags;
     tinypy_ast_module_t module;
 
     TINYPY_CLEAR_ERROR(out_error);
@@ -358,11 +361,11 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     if (tinypy_internal_compiler_source_prepare(&ctx, source, source_size, out_error) == 0) {
         goto complete;
     }
-    tinypy_cst_node_t *tree = __tinypy_compiler_parse(&ctx, out_error);
+    tinypy_cst_node_t *tree = __tinypy_compiler_parse(&ctx, &parser_flags, out_error);
     if (tree == NULL) {
         goto complete;
     }
-    flags.flags = (int32_t)__tinypy_compiler_inherited_flags(&ctx) | TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8;
+    flags.flags = (int32_t)__tinypy_compiler_inherited_flags(&ctx) | parser_flags | TINYPY_COMPILER_FLAG_SOURCE_IS_UTF8;
     module = __tinypy_ast_build(tree, &flags, ctx.logical_filename, &ctx);
     if (module == NULL) {
         if (ctx.failed == 0) {

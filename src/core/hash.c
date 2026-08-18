@@ -269,9 +269,10 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, t
     uint64_t hash = UINT64_C(0x345678);
     uint64_t multiplier = UINT64_C(1000003);
     while (remaining != 0U) {
+        tinypy_value_t *previous_raised = TINYPY_VALUE_VM(value)->raised_value;
         tinypy_hash_t item_hash = tinypy_internal_hash_value(items[index], out_error);
 
-        if (tinypy_vm_has_error(TINYPY_VALUE_VM(value)) != 0) {
+        if ((out_error != NULL && *out_error != NULL) || TINYPY_VALUE_VM(value)->raised_value != previous_raised) {
             return (tinypy_hash_t)0;
         }
 
@@ -285,10 +286,59 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinypy_hash_t *out_hash, tinypy_error_t **out_error) {
+    tinypy_value_t *mutable_value = (tinypy_value_t *)value;
+
+    if (tinypy_internal_object_has_special(mutable_value, "__hash__", 8U) == 0) {
+        return INT32_C(0);
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *method = tinypy_object_get_attr(mutable_value, "__hash__", 8U, out_error);
+
+    if (method == NULL) {
+        return INT32_C(-1);
+    }
+    if (TINYPY_VALUE_KIND(method) == TINYPY_VALUE_NONE) {
+        TINYPY_DECREF(method);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable type", out_error);
+        return INT32_C(-1);
+    }
+    tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *result = tinypy_call(method, empty, NULL, out_error);
+
+    TINYPY_DECREF(empty);
+    TINYPY_DECREF(method);
+    if (result == NULL) {
+        return INT32_C(-1);
+    }
+    tinypy_value_type_e result_kind = TINYPY_VALUE_KIND(result);
+    if (result_kind != TINYPY_VALUE_BOOL && result_kind != TINYPY_VALUE_INTEGER && result_kind != TINYPY_VALUE_LONG) {
+        TINYPY_DECREF(result);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__hash__ returned a non-integer", out_error);
+        return INT32_C(-1);
+    }
+    *out_hash = tinypy_internal_hash_value(result, out_error);
+    TINYPY_DECREF(result);
+    tinypy_bool_t failed = out_error != NULL && *out_error != NULL;
+
+    return failed != 0 ? INT32_C(-1) : INT32_C(1);
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_hash_t function_result;
     double real;
 
+    if ((value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
+        tinypy_hash_t hash;
+        int32_t special = __tinypy_internal_hash_special(value, &hash, out_error);
+
+        if (special > 0) {
+            return hash;
+        }
+        if (special < 0) {
+            return (tinypy_hash_t)0;
+        }
+    }
     if (value->type->hash != NULL) {
         tinypy_hash_t return_value_1 = value->type->hash((tinypy_value_t *)value, out_error);
         return return_value_1;
@@ -365,8 +415,9 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_err
                 tinypy_hash_t return_value_5 = __tinypy_internal_hash_fix((uint64_t)((uintptr_t)value >> 4U));
                 return return_value_5;
             }
+            tinypy_value_t *previous_raised = TINYPY_VALUE_VM(value)->raised_value;
             weakref->hash = tinypy_internal_hash_value(weakref->object, out_error);
-            if (tinypy_vm_has_error(TINYPY_VALUE_VM(value)) != 0) {
+            if ((out_error != NULL && *out_error != NULL) || TINYPY_VALUE_VM(value)->raised_value != previous_raised) {
                 return (tinypy_hash_t)0;
             }
             weakref->hash_computed = INT32_C(1);
@@ -384,12 +435,26 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_err
     case TINYPY_VALUE_LIST:
     case TINYPY_VALUE_DICT:
     case TINYPY_VALUE_SET:
-    case TINYPY_VALUE_BYTEARRAY:
+    case TINYPY_VALUE_BYTEARRAY: {
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable type", out_error);
         return (tinypy_hash_t)0;
-    default:
+    }
+    default: {
+        tinypy_hash_t hash;
+        int32_t special = __tinypy_internal_hash_special(value, &hash, out_error);
+
+        if (special > 0) {
+            return hash;
+        }
+        if (special < 0) {
+            return (tinypy_hash_t)0;
+        }
         function_result = __tinypy_internal_hash_fix(
                     (uint64_t)((uintptr_t)value >> 4U));
         return function_result;
+    }
     }
 }
 //////////////////////////////////////////////////////////////////////////
