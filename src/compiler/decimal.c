@@ -2,13 +2,23 @@
 
 #include <string.h>
 
+#define TINYPY_DECIMAL_INLINE_WORDS ((size_t)64U)
+
 typedef struct tinypy_decimal_bigint_t {
     tinypy_compile_ctx_t *ctx;
     uint32_t *words;
     size_t count;
     size_t capacity;
+    uint32_t inline_words[TINYPY_DECIMAL_INLINE_WORDS];
 } tinypy_decimal_bigint_t;
 
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_decimal_bigint_initialize(tinypy_decimal_bigint_t *value, tinypy_compile_ctx_t *ctx) {
+    value->ctx = ctx;
+    value->words = value->inline_words;
+    value->count = 0U;
+    value->capacity = TINYPY_DECIMAL_INLINE_WORDS;
+}
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_decimal_bigint_reserve(tinypy_decimal_bigint_t *value, size_t capacity) {
     uint32_t *words;
@@ -17,8 +27,15 @@ static tinypy_bool_t __tinypy_decimal_bigint_reserve(tinypy_decimal_bigint_t *va
     if (capacity <= value->capacity) {
         return TINYPY_TRUE;
     }
+    if (capacity > SIZE_MAX / sizeof(*words)) {
+        return TINYPY_FALSE;
+    }
     new_capacity = value->capacity == 0U ? 4U : value->capacity;
     while (new_capacity < capacity) {
+        if (new_capacity > SIZE_MAX / 2U) {
+            new_capacity = capacity;
+            break;
+        }
         new_capacity *= 2U;
     }
     words = (uint32_t *)tinypy_internal_compiler_arena_allocate(value->ctx, new_capacity * sizeof(*words));
@@ -46,7 +63,7 @@ static tinypy_bool_t __tinypy_decimal_bigint_multiply_add(tinypy_decimal_bigint_
     uint64_t carry = addition;
     size_t index;
 
-    if (__tinypy_decimal_bigint_reserve(value, value->count + 1U) == 0) {
+    if (value->count == SIZE_MAX || __tinypy_decimal_bigint_reserve(value, value->count + 1U) == 0) {
         return TINYPY_FALSE;
     }
     for (index = 0U; index < value->count; ++index) {
@@ -214,12 +231,14 @@ static tinypy_bool_t __tinypy_decimal_fail_limit(tinypy_compile_ctx_t *ctx, int3
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const char *text, size_t size, double *out_value, int32_t line_number, int32_t column_offset) {
-    tinypy_decimal_bigint_t numerator = {ctx, NULL, 0U, 0U};
-    tinypy_decimal_bigint_t denominator = {ctx, NULL, 0U, 0U};
-    tinypy_decimal_bigint_t scaled_numerator = {ctx, NULL, 0U, 0U};
-    tinypy_decimal_bigint_t scaled_denominator = {ctx, NULL, 0U, 0U};
-    tinypy_decimal_bigint_t doubled_remainder = {ctx, NULL, 0U, 0U};
+    tinypy_decimal_bigint_t numerator;
+    tinypy_decimal_bigint_t denominator;
+    tinypy_decimal_bigint_t scaled_numerator;
+    tinypy_decimal_bigint_t scaled_denominator;
+    tinypy_decimal_bigint_t doubled_remainder;
     size_t position = 0U;
+    size_t significand_begin;
+    size_t significand_end;
     size_t fractional_digits = 0U;
     size_t significant_digits = 0U;
     int32_t saw_nonzero = 0;
@@ -235,10 +254,16 @@ tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx,
     uint64_t bits;
     size_t index;
 
+    __tinypy_decimal_bigint_initialize(&numerator, ctx);
+    __tinypy_decimal_bigint_initialize(&denominator, ctx);
+    __tinypy_decimal_bigint_initialize(&scaled_numerator, ctx);
+    __tinypy_decimal_bigint_initialize(&scaled_denominator, ctx);
+    __tinypy_decimal_bigint_initialize(&doubled_remainder, ctx);
     if (position < size && (text[position] == '+' || text[position] == '-')) {
         negative = text[position] == '-' ? 1 : 0;
         position += 1U;
     }
+    significand_begin = position;
     if (__tinypy_decimal_bigint_set_u32(&numerator, 0U) == 0 || __tinypy_decimal_bigint_set_u32(&denominator, 1U) == 0) {
         tinypy_bool_t return_value_1 = __tinypy_decimal_fail_limit(ctx, line_number, column_offset);
         return return_value_1;
@@ -254,10 +279,6 @@ tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx,
         if (byte < '0' || byte > '9') {
             return TINYPY_FALSE;
         }
-        if (__tinypy_decimal_bigint_multiply_add(&numerator, 10U, (uint32_t)(byte - '0')) == 0) {
-            tinypy_bool_t return_value_2 = __tinypy_decimal_fail_limit(ctx, line_number, column_offset);
-            return return_value_2;
-        }
         if (saw_nonzero != 0 || byte != '0') {
             saw_nonzero = 1;
             significant_digits += 1U;
@@ -267,6 +288,7 @@ tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx,
         }
         position += 1U;
     }
+    significand_end = position;
     if (saw_nonzero == 0) {
         bits = negative != 0 ? UINT64_C(0x8000000000000000) : UINT64_C(0);
         (void)memcpy(out_value, &bits, sizeof(bits));
@@ -305,6 +327,14 @@ tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx,
         (void)memcpy(out_value, &bits, sizeof(bits));
         return TINYPY_TRUE;
     }
+    for (index = significand_begin; index < significand_end; ++index) {
+        uint8_t byte = (uint8_t)text[index];
+
+        if (byte != '.' && __tinypy_decimal_bigint_multiply_add(&numerator, 10U, (uint32_t)(byte - '0')) == 0) {
+            tinypy_bool_t return_value_2 = __tinypy_decimal_fail_limit(ctx, line_number, column_offset);
+            return return_value_2;
+        }
+    }
     if (decimal_exponent >= 0) {
         for (index = 0U; index < (size_t)decimal_exponent; ++index) {
             if (__tinypy_decimal_bigint_multiply_add(&numerator, 5U, 0U) == 0) {
@@ -328,8 +358,9 @@ tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx,
         }
     }
     else {
-        tinypy_decimal_bigint_t shifted = {ctx, NULL, 0U, 0U};
+        tinypy_decimal_bigint_t shifted;
 
+        __tinypy_decimal_bigint_initialize(&shifted, ctx);
         if (__tinypy_decimal_bigint_shift_left(&shifted, &numerator, (size_t)(-binary_exponent)) == 0) {
             tinypy_bool_t return_value_5 = __tinypy_decimal_fail_limit(ctx, line_number, column_offset);
             return return_value_5;
@@ -394,4 +425,15 @@ tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx,
     }
     (void)memcpy(out_value, &bits, sizeof(bits));
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_decimal_double(tinypy_vm_t *vm, const char *text, size_t size, double *out_value) {
+    tinypy_compile_ctx_t ctx;
+    tinypy_bool_t result;
+
+    (void)memset(&ctx, 0, sizeof(ctx));
+    ctx.vm = vm;
+    result = tinypy_internal_compiler_decimal_double(&ctx, text, size, out_value, 0, 0);
+    tinypy_internal_compiler_arena_destroy(&ctx);
+    return result;
 }

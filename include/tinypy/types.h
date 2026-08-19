@@ -49,7 +49,10 @@ typedef enum tinypy_error_kind_e {
     TINYPY_ERROR_SOURCE_DECODING = 17,
     TINYPY_ERROR_COMPILER_LIMIT = 18,
     TINYPY_ERROR_PREPROCESSOR = 19,
-    TINYPY_ERROR_META = 20
+    TINYPY_ERROR_META = 20,
+    TINYPY_ERROR_UNICODE_DECODE = 21,
+    TINYPY_ERROR_UNICODE_ENCODE = 22,
+    TINYPY_ERROR_BUFFER = 23
 } tinypy_error_kind_e;
 //////////////////////////////////////////////////////////////////////////
 /* Unless a parameter is explicitly documented as optional, pointer validity

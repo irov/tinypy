@@ -6,11 +6,11 @@
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_cst_node_t *tinypy_internal_compiler_cst_new(tinypy_compile_ctx_t *ctx, int32_t type) {
-    tinypy_cst_node_t *n = (tinypy_cst_node_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(tinypy_cst_node_t));
-    if (n == NULL) {
+    if (ctx->limits.max_cst_nodes != 0U && ctx->cst_node_count >= ctx->limits.max_cst_nodes) {
         return NULL;
     }
-    if (ctx->limits.max_cst_nodes != 0U && ctx->cst_node_count >= ctx->limits.max_cst_nodes) {
+    tinypy_cst_node_t *n = (tinypy_cst_node_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(tinypy_cst_node_t));
+    if (n == NULL) {
         return NULL;
     }
     ctx->cst_node_count += 1U;
@@ -19,6 +19,7 @@ tinypy_cst_node_t *tinypy_internal_compiler_cst_new(tinypy_compile_ctx_t *ctx, i
     n->text = NULL;
     n->line_number = 0;
     n->child_count = 0;
+    n->child_capacity = 0;
     n->children = NULL;
     return n;
 }
@@ -27,14 +28,16 @@ tinypy_cst_node_t *tinypy_internal_compiler_cst_new(tinypy_compile_ctx_t *ctx, i
 //////////////////////////////////////////////////////////////////////////
 static int32_t __fancy_roundup(int32_t n) {
     /* Round up to the closest power of 2 >= n. */
-    int32_t result = 256;
-    while (result < n) {
-        result <<= 1;
-        if (result <= 0) {
+    uint32_t result = UINT32_C(256);
+    uint32_t required = (uint32_t)n;
+
+    while (result < required) {
+        if (result > (uint32_t)INT32_MAX / UINT32_C(2)) {
             return -1;
         }
+        result <<= 1U;
     }
-    return result;
+    return (int32_t)result;
 }
 
 /* A gimmick to make massive numbers of reallocs quicker.  The result is
@@ -62,8 +65,8 @@ static int32_t __fancy_roundup(int32_t n) {
  * Larger arrays grow proportionally. This keeps the number of arena copies
  * bounded while preserving the compact representation of common small nodes.
  *
- * Note that this would be straightforward if a tinypy_cst_node_t stored its current
- * capacity.  The code is tricky to avoid that.
+ * tinypy_cst_node_t stores the rounded capacity so repeated additions do not
+ * recompute it or copy until the current allocation is full.
  */
 #define TINYPY_CST_ROUND_UP(n) ((n) <= 1 ? (n) : (n) <= 128 ? (((n) + 3) & ~3) \
                                                             : __fancy_roundup(n))
@@ -71,7 +74,6 @@ static int32_t __fancy_roundup(int32_t n) {
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_compiler_cst_add_child(register tinypy_cst_node_t *n1, int32_t type, char *str, int32_t lineno, int32_t col_offset) {
     const int32_t nch = n1->child_count;
-    int32_t current_capacity;
     int32_t required_capacity;
 
     if (n1->context->limits.max_cst_nodes != 0U && n1->context->cst_node_count >= n1->context->limits.max_cst_nodes) {
@@ -81,17 +83,16 @@ int32_t tinypy_internal_compiler_cst_add_child(register tinypy_cst_node_t *n1, i
         return TINYPY_PARSER_OVERFLOW;
     }
 
-    current_capacity = TINYPY_CST_ROUND_UP(nch);
     required_capacity = TINYPY_CST_ROUND_UP(nch + 1);
-    if (current_capacity < 0 || required_capacity < 0) {
+    if (required_capacity < 0) {
         return TINYPY_PARSER_OVERFLOW;
     }
-    if (current_capacity < required_capacity) {
+    if (n1->child_capacity < required_capacity) {
         if ((size_t)required_capacity > SIZE_MAX / sizeof(tinypy_cst_node_t)) {
             return TINYPY_PARSER_OUT_OF_MEMORY;
         }
-        tinypy_cst_node_t *new_children = (tinypy_cst_node_t *)tinypy_internal_compiler_arena_allocate(n1->context,
-                                                                                                       (size_t)required_capacity * sizeof(tinypy_cst_node_t));
+        tinypy_cst_node_t *new_children = (tinypy_cst_node_t *)tinypy_internal_compiler_arena_allocate_uninitialized(n1->context,
+                                                                                                                     (size_t)required_capacity * sizeof(tinypy_cst_node_t));
         if (new_children == NULL) {
             return TINYPY_PARSER_OUT_OF_MEMORY;
         }
@@ -99,6 +100,7 @@ int32_t tinypy_internal_compiler_cst_add_child(register tinypy_cst_node_t *n1, i
             memcpy(new_children, n1->children, (size_t)nch * sizeof(tinypy_cst_node_t));
         }
         n1->children = new_children;
+        n1->child_capacity = required_capacity;
     }
 
     tinypy_cst_node_t *n = &n1->children[n1->child_count++];
@@ -109,6 +111,7 @@ int32_t tinypy_internal_compiler_cst_add_child(register tinypy_cst_node_t *n1, i
     n->line_number = lineno;
     n->column_offset = col_offset;
     n->child_count = 0;
+    n->child_capacity = 0;
     n->children = NULL;
     return 0;
 }

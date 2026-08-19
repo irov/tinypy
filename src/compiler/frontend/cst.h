@@ -8,6 +8,7 @@ typedef struct tinypy_cst_node_t {
     int32_t line_number;
     int32_t column_offset;
     int32_t child_count;
+    int32_t child_capacity;
     struct tinypy_cst_node_t *children;
 } tinypy_cst_node_t;
 

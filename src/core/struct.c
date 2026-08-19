@@ -14,6 +14,21 @@ typedef struct tinypy_struct_format_t {
     size_t byte_size;
 } tinypy_struct_format_t;
 
+#define TINYPY_STRUCT_CACHE_SIZE 32U
+
+typedef struct tinypy_struct_cache_entry_t {
+    tinypy_value_t *key;
+    tinypy_struct_format_t format;
+    uint64_t age;
+} tinypy_struct_cache_entry_t;
+
+typedef struct tinypy_struct_state_t {
+    tinypy_vm_t *vm;
+    size_t reference_count;
+    uint64_t clock;
+    tinypy_struct_cache_entry_t entries[TINYPY_STRUCT_CACHE_SIZE];
+} tinypy_struct_state_t;
+
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_struct_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, tinypy_error_t **out_error) {
     if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) < minimum) {
@@ -35,11 +50,12 @@ static tinypy_bool_t __tinypy_struct_format_view(tinypy_vm_t *vm, tinypy_value_t
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_struct_parse_format(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_struct_format_t *out_format, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_struct_parse_format_uncached(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_struct_format_t *out_format, tinypy_error_t **out_error) {
     const uint8_t *bytes;
     size_t size;
     size_t index = 0U;
     size_t count = 0U;
+    size_t size_limit = SIZE_MAX;
     int32_t have_count = INT32_C(0);
 
     if (__tinypy_struct_format_view(vm, value, &bytes, &size, out_error) == 0) {
@@ -48,6 +64,9 @@ static tinypy_bool_t __tinypy_struct_parse_format(tinypy_vm_t *vm, tinypy_value_
     out_format->byte_order = TINYPY_STRUCT_NATIVE_ENDIAN;
     out_format->item_count = 0U;
     out_format->byte_size = 0U;
+    if (sizeof(size_t) > sizeof(int64_t)) {
+        size_limit = (size_t)INT64_MAX;
+    }
     if (index < size) {
         uint8_t prefix = bytes[index];
 
@@ -64,12 +83,20 @@ static tinypy_bool_t __tinypy_struct_parse_format(tinypy_vm_t *vm, tinypy_value_
     while (index < size) {
         uint8_t character = bytes[index++];
 
-        if (character == (uint8_t)' ' || character == (uint8_t)'\t' || character == (uint8_t)'\r' || character == (uint8_t)'\n') {
+        if (character == (uint8_t)' ' || character == (uint8_t)'\t' || character == (uint8_t)'\r' || character == (uint8_t)'\n' || character == (uint8_t)'\v' || character == (uint8_t)'\f') {
+            if (have_count != 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "bad char in struct format", out_error);
+                return TINYPY_FALSE;
+            }
             continue;
         }
         if (character >= (uint8_t)'0' && character <= (uint8_t)'9') {
             size_t digit = (size_t)(character - (uint8_t)'0');
 
+            if (count > (size_limit - digit) / 10U) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "total struct size too long", out_error);
+                return TINYPY_FALSE;
+            }
             count = count * 10U + digit;
             have_count = INT32_C(1);
             continue;
@@ -81,15 +108,92 @@ static tinypy_bool_t __tinypy_struct_parse_format(tinypy_vm_t *vm, tinypy_value_
         if (have_count == 0) {
             count = 1U;
         }
+        if (count > size_limit / 8U || out_format->byte_size > size_limit - count * 8U || out_format->item_count > size_limit - count) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "total struct size too long", out_error);
+            return TINYPY_FALSE;
+        }
         out_format->byte_size += count * 8U;
         out_format->item_count += count;
         count = 0U;
         have_count = INT32_C(0);
     }
-    if (have_count != 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "repeat count given without format specifier", out_error);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_struct_cache_clear(tinypy_struct_state_t *state) {
+    size_t index;
+
+    for (index = 0U; index < TINYPY_STRUCT_CACHE_SIZE; ++index) {
+        tinypy_struct_cache_entry_t *entry = &state->entries[index];
+
+        if (entry->key != NULL) {
+            TINYPY_DECREF(entry->key);
+            entry->key = NULL;
+        }
+        entry->age = UINT64_C(0);
+    }
+    state->clock = UINT64_C(0);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_struct_state_finalize(void *user_data) {
+    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
+
+    state->reference_count -= 1U;
+    if (state->reference_count == 0U) {
+        __tinypy_struct_cache_clear(state);
+        tinypy_internal_vm_deallocate(state->vm, state, sizeof(*state));
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_struct_parse_format(tinypy_struct_state_t *state, tinypy_value_t *value, tinypy_struct_format_t *out_format, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = state->vm;
+    const uint8_t *bytes;
+    size_t size;
+    size_t index;
+    size_t replacement = 0U;
+    uint64_t oldest_age = UINT64_MAX;
+
+    if (__tinypy_struct_format_view(vm, value, &bytes, &size, out_error) == 0) {
         return TINYPY_FALSE;
     }
+    for (index = 0U; index < TINYPY_STRUCT_CACHE_SIZE; ++index) {
+        tinypy_struct_cache_entry_t *entry = &state->entries[index];
+
+        if (entry->key != NULL && (entry->key == value || (TINYPY_TEXT_BYTE_SIZE(entry->key) == size && memcmp(TINYPY_TEXT_BYTES(entry->key), bytes, size) == 0))) {
+            if (state->clock == UINT64_MAX) {
+                __tinypy_struct_cache_clear(state);
+                break;
+            }
+            state->clock += UINT64_C(1);
+            entry->age = state->clock;
+            *out_format = entry->format;
+            return TINYPY_TRUE;
+        }
+        if (entry->key == NULL) {
+            replacement = index;
+            oldest_age = UINT64_C(0);
+        }
+        else if (oldest_age != UINT64_C(0) && entry->age < oldest_age) {
+            replacement = index;
+            oldest_age = entry->age;
+        }
+    }
+    if (__tinypy_struct_parse_format_uncached(vm, value, out_format, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (state->clock == UINT64_MAX) {
+        __tinypy_struct_cache_clear(state);
+        replacement = 0U;
+    }
+    tinypy_struct_cache_entry_t *entry = &state->entries[replacement];
+    if (entry->key != NULL) {
+        TINYPY_DECREF(entry->key);
+    }
+    TINYPY_INCREF(value);
+    state->clock += UINT64_C(1);
+    entry->key = value;
+    entry->format = *out_format;
+    entry->age = state->clock;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -145,14 +249,14 @@ static tinypy_bool_t __tinypy_struct_as_double(tinypy_vm_t *vm, tinypy_value_t *
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_calcsize(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
 
-    (void)user_data;
     if (__tinypy_struct_arguments(vm, args, kwargs, 1U, out_error) == 0 || TINYPY_TUPLE_SIZE(args) != 1U) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-    if (__tinypy_struct_parse_format(vm, item, &format, out_error) == 0) {
+    if (__tinypy_struct_parse_format(state, item, &format, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, (int64_t)format.byte_size);
@@ -161,17 +265,17 @@ static tinypy_value_t *__tinypy_struct_calcsize(tinypy_value_t *function, tinypy
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_unpack(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
     const uint8_t *bytes;
     size_t byte_size;
     size_t index;
 
-    (void)user_data;
     if (__tinypy_struct_arguments(vm, args, kwargs, 2U, out_error) == 0 || TINYPY_TUPLE_SIZE(args) != 2U) {
         return NULL;
     }
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-    if (__tinypy_struct_parse_format(vm, item_2, &format, out_error) == 0) {
+    if (__tinypy_struct_parse_format(state, item_2, &format, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
@@ -205,16 +309,16 @@ static tinypy_value_t *__tinypy_struct_unpack(tinypy_value_t *function, tinypy_v
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_pack(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
     uint8_t *bytes;
     size_t index;
 
-    (void)user_data;
     if (__tinypy_struct_arguments(vm, args, kwargs, 1U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-    if (__tinypy_struct_parse_format(vm, item_2, &format, out_error) == 0) {
+    if (__tinypy_struct_parse_format(state, item_2, &format, out_error) == 0) {
         return NULL;
     }
     if (TINYPY_TUPLE_SIZE(args) != format.item_count + 1U) {
@@ -245,38 +349,45 @@ static tinypy_value_t *__tinypy_struct_pack(tinypy_value_t *function, tinypy_val
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_clearcache(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
 
-    (void)user_data;
     if (__tinypy_struct_arguments(vm, args, kwargs, 0U, out_error) == 0 || TINYPY_TUPLE_SIZE(args) != 0U) {
         return NULL;
     }
+    __tinypy_struct_cache_clear(state);
     tinypy_value_t *return_value_1 = tinypy_none_get(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_struct_add_function(tinypy_vm_t *vm, tinypy_value_t *module, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
+static void __tinypy_struct_add_function(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_struct_state_t *state, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
+    tinypy_value_t *function;
+
+    state->reference_count += 1U;
+    function = tinypy_native_function_new(vm, name, name_size, callback, state, __tinypy_struct_state_finalize);
 
     tinypy_module_add_value(module, name, name_size, function);
     TINYPY_DECREF(function);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_struct_module(tinypy_vm_t *vm) {
+    tinypy_struct_state_t *state = (tinypy_struct_state_t *)tinypy_internal_vm_allocate(vm, sizeof(*state));
     tinypy_value_t *module = tinypy_module_new(vm, "_struct", 7U);
     tinypy_value_t *name = tinypy_string_from_bytes(vm, "_struct", 7U);
     tinypy_value_t *doc = tinypy_string_from_bytes(vm, "Functions to convert between Python values and C structs.", 57U);
     tinypy_value_t *version = tinypy_string_from_bytes(vm, "0.2", 3U);
 
+    (void)memset(state, 0, sizeof(*state));
+    state->vm = vm;
     tinypy_module_add_value(module, "__name__", 8U, name);
     tinypy_module_add_value(module, "__doc__", 7U, doc);
     tinypy_module_add_value(module, "__version__", 11U, version);
     tinypy_module_add_value(module, "error", 5U, &vm->exception_types[TINYPY_EXCEPTION_VALUE_ERROR]->base.base);
     tinypy_module_add_value(module, "_PY_STRUCT_FLOAT_COERCE", 23U, &vm->true_object.base);
     tinypy_module_add_value(module, "_PY_STRUCT_RANGE_CHECKING", 25U, &vm->true_object.base);
-    __tinypy_struct_add_function(vm, module, "calcsize", 8U, __tinypy_struct_calcsize);
-    __tinypy_struct_add_function(vm, module, "pack", 4U, __tinypy_struct_pack);
-    __tinypy_struct_add_function(vm, module, "unpack", 6U, __tinypy_struct_unpack);
-    __tinypy_struct_add_function(vm, module, "_clearcache", 11U, __tinypy_struct_clearcache);
+    __tinypy_struct_add_function(vm, module, state, "calcsize", 8U, __tinypy_struct_calcsize);
+    __tinypy_struct_add_function(vm, module, state, "pack", 4U, __tinypy_struct_pack);
+    __tinypy_struct_add_function(vm, module, state, "unpack", 6U, __tinypy_struct_unpack);
+    __tinypy_struct_add_function(vm, module, state, "_clearcache", 11U, __tinypy_struct_clearcache);
     TINYPY_DECREF(version);
     TINYPY_DECREF(doc);
     TINYPY_DECREF(name);

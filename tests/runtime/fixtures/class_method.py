@@ -154,6 +154,133 @@ object_initializer_result = object_initializer.initialized
 property_fields_result = DescriptorBase.descriptor_value.fget is not None and DescriptorBase.descriptor_value.fset is not None
 
 
+def keyword_property_getter(self):
+    return 42
+
+
+keyword_property = property(fget=keyword_property_getter, doc="keyword property")
+
+
+class KeywordPropertyOwner(object):
+    value = keyword_property
+
+
+assert KeywordPropertyOwner().value == 42
+assert keyword_property.fget is keyword_property_getter
+assert keyword_property.__doc__ == "keyword property"
+
+
+class CallableDescriptor(object):
+    def __call__(self, value):
+        return value + 1
+
+
+callable_descriptor = CallableDescriptor()
+
+
+class CallableStaticOwner(object):
+    increment = staticmethod(callable_descriptor)
+
+
+assert CallableStaticOwner.increment(41) == 42
+
+
+class CallableClassMethod(object):
+    def __call__(self, owner, value):
+        return owner.__name__, value
+
+
+class CallableClassOwner(object):
+    identify = classmethod(CallableClassMethod())
+
+
+assert CallableClassOwner.identify(42) == ("CallableClassOwner", 42)
+
+
+class CallablePropertyGetter(object):
+    "callable getter doc"
+
+    def __call__(self, instance):
+        return 42
+
+
+class CallablePropertyOwner(object):
+    value = property().getter(CallablePropertyGetter())
+
+
+assert CallablePropertyOwner().value == 42
+assert CallablePropertyOwner.value.__doc__ == "callable getter doc"
+
+
+def first_documented_getter(self):
+    "first getter doc"
+
+
+def second_documented_getter(self):
+    "second getter doc"
+
+
+assert property(first_documented_getter).getter(second_documented_getter).__doc__ == "second getter doc"
+assert property(first_documented_getter, doc="explicit doc").getter(second_documented_getter).__doc__ == "explicit doc"
+assert type(staticmethod(42)) is staticmethod
+assert type(classmethod(42)) is classmethod
+noncallable_getter = property().getter(42)
+noncallable_setter = property().setter(42)
+noncallable_deleter = property().deleter(42)
+assert noncallable_getter.fget == 42
+assert noncallable_setter.fset == 42
+assert noncallable_deleter.fdel == 42
+
+
+class IncompleteProperties(object):
+    unreadable = property()
+    readonly = property(lambda self: 1)
+
+
+incomplete_properties = IncompleteProperties()
+try:
+    incomplete_properties.unreadable
+except AttributeError:
+    pass
+else:
+    raise AssertionError("property without getter did not raise AttributeError")
+
+try:
+    incomplete_properties.readonly = 2
+except AttributeError:
+    pass
+else:
+    raise AssertionError("property without setter did not raise AttributeError")
+
+try:
+    del incomplete_properties.readonly
+except AttributeError:
+    pass
+else:
+    raise AssertionError("property without deleter did not raise AttributeError")
+
+try:
+    super(DescriptorChild, descriptor_object).missing
+except AttributeError:
+    pass
+else:
+    raise AssertionError("missing super attribute did not raise AttributeError")
+
+try:
+    super(DescriptorChild).missing
+except AttributeError:
+    pass
+else:
+    raise AssertionError("unbound super attribute did not raise AttributeError")
+
+try:
+    property(keyword_property_getter, fget=keyword_property_getter)
+except TypeError:
+    pass
+else:
+    raise AssertionError("duplicate property argument was accepted")
+
+
 class CopiedMethodBase(object):
     def copied_method(self, value):
         return value

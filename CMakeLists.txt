@@ -80,6 +80,7 @@ add_library(tinypy STATIC
     src/core/constructors.c
     src/core/cycle_diagnostics.c
     src/core/descriptor.c
+    src/core/double_conversion.c
     src/core/error.c
     src/core/exception.c
     src/core/frame.c
@@ -106,6 +107,7 @@ add_library(tinypy STATIC
     src/core/numeric.c
     src/core/tuple.c
     src/core/type.c
+    src/core/unicode.c
     src/core/value.c
     src/core/vm.c
     src/marshal/marshal.c

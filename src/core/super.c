@@ -75,7 +75,7 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
         }
     }
     if (super_value->object_type == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "unbound super has no requested attribute", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "unbound super has no requested attribute", out_error);
         return NULL;
     }
     mro_size = tinypy_type_mro_size(super_value->object_type);
@@ -95,7 +95,7 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
             return return_value_2;
         }
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "super object has no requested attribute", out_error);
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "super object has no requested attribute", out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////

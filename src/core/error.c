@@ -162,6 +162,12 @@ const char *tinypy_error_kind_name(tinypy_error_kind_e error_kind) {
         return "preprocessor error";
     case TINYPY_ERROR_META:
         return "meta error";
+    case TINYPY_ERROR_UNICODE_DECODE:
+        return "unicode decode error";
+    case TINYPY_ERROR_UNICODE_ENCODE:
+        return "unicode encode error";
+    case TINYPY_ERROR_BUFFER:
+        return "buffer error";
     default:
         return "unknown error kind";
     }

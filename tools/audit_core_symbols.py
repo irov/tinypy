@@ -118,6 +118,12 @@ def parse_nm_undefined(output: str) -> Set[str]:
         match = re.search(r"(?:^|\s)U\s+([^\s]+)$", stripped)
         if match is not None:
             symbols.add(normalize_symbol(match.group(1)))
+            continue
+
+        # Darwin's `nm -u` omits the `U` column and prints one symbol per
+        # line. Archive member headings were already skipped above.
+        if re.fullmatch(r"[^\s]+", stripped) is not None:
+            symbols.add(normalize_symbol(stripped))
     return symbols
 
 

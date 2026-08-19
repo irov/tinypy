@@ -58,7 +58,7 @@ tinypy_bool_t __tinypy_frontend_dict_next(tinypy_value_t *dict, tinypy_compiler_
         tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[index];
 
         index += 1U;
-        if (entry->state != TINYPY_DICT_ENTRY_ACTIVE) {
+        if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
             continue;
         }
         *position = (tinypy_compiler_size_t)index;

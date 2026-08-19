@@ -122,6 +122,67 @@ static tinypy_bool_t __tinypy_marshal_dump_double(tinypy_marshal_dump_writer_t *
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_marshal_dump_unicode(tinypy_marshal_dump_writer_t *writer, const tinypy_value_t *value) {
+    size_t size;
+    size_t code_points;
+    const uint8_t *utf8 = (const uint8_t *)tinypy_unicode_utf8_view(value, &size, &code_points);
+    size_t output_size = size;
+    size_t offset = 0U;
+    tinypy_bool_t has_pairs = TINYPY_FALSE;
+
+    (void)code_points;
+    while (offset < size) {
+        uint32_t code_point;
+        size_t width = tinypy_internal_utf8_decode(utf8 + offset, size - offset, &code_point);
+
+        if (code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdbff) && width <= size - offset) {
+            uint32_t next_code_point;
+            size_t next_width = tinypy_internal_utf8_decode(utf8 + offset + width, size - offset - width, &next_code_point);
+
+            if (next_width != 0U && next_code_point >= UINT32_C(0xdc00) && next_code_point <= UINT32_C(0xdfff)) {
+                output_size -= width + next_width - 4U;
+                offset += next_width;
+                has_pairs = TINYPY_TRUE;
+            }
+        }
+        offset += width;
+    }
+    if (__tinypy_marshal_dump_u8(writer, (uint8_t)'u') == 0 || __tinypy_marshal_dump_size32(writer, output_size) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (has_pairs == 0) {
+        tinypy_bool_t return_value_1 = __tinypy_marshal_dump_put(writer, utf8, size);
+        return return_value_1;
+    }
+    offset = 0U;
+    while (offset < size) {
+        uint32_t code_point;
+        size_t width = tinypy_internal_utf8_decode(utf8 + offset, size - offset, &code_point);
+
+        if (code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdbff)) {
+            uint32_t next_code_point;
+            size_t next_width = tinypy_internal_utf8_decode(utf8 + offset + width, size - offset - width, &next_code_point);
+
+            if (next_width != 0U && next_code_point >= UINT32_C(0xdc00) && next_code_point <= UINT32_C(0xdfff)) {
+                uint32_t combined = UINT32_C(0x10000) + ((code_point - UINT32_C(0xd800)) << 10U) + (next_code_point - UINT32_C(0xdc00));
+                uint8_t encoded[4];
+                size_t encoded_size = tinypy_internal_utf8_encode(combined, encoded);
+
+                if (__tinypy_marshal_dump_put(writer, encoded, encoded_size) == 0) {
+                    return TINYPY_FALSE;
+                }
+                offset += width + next_width;
+                continue;
+            }
+        }
+        if (__tinypy_marshal_dump_put(writer, utf8 + offset, width) == 0) {
+            return TINYPY_FALSE;
+        }
+        offset += width;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static ptrdiff_t __tinypy_marshal_dump_find_intern(const tinypy_marshal_dump_writer_t *writer, const uint8_t *bytes, size_t size) {
     size_t index;
 
@@ -222,7 +283,7 @@ static tinypy_bool_t __tinypy_marshal_dump_set(tinypy_marshal_dump_writer_t *wri
         return TINYPY_FALSE;
     }
     for (; iterator != iterator_end; ++iterator) {
-        if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE && __tinypy_marshal_dump_value(writer, iterator->key, depth + 1U, TINYPY_MARSHAL_DUMP_STRING_LITERAL) == 0) {
+        if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator) && __tinypy_marshal_dump_value(writer, iterator->key, depth + 1U, TINYPY_MARSHAL_DUMP_STRING_LITERAL) == 0) {
             return TINYPY_FALSE;
         }
     }
@@ -298,15 +359,9 @@ static tinypy_bool_t __tinypy_marshal_dump_value(tinypy_marshal_dump_writer_t *w
     case TINYPY_VALUE_STRING:
         function_result = __tinypy_marshal_dump_string(writer, value, string_context);
         return function_result;
-    case TINYPY_VALUE_UNICODE: {
-        size_t size;
-        size_t code_points;
-        const char *utf8 = tinypy_unicode_utf8_view(value, &size, &code_points);
-
-        (void)code_points;
-        tinypy_bool_t return_value_6 = __tinypy_marshal_dump_u8(writer, (uint8_t)'u') && __tinypy_marshal_dump_size32(writer, size) && __tinypy_marshal_dump_put(writer, utf8, size);
-        return return_value_6;
-    }
+    case TINYPY_VALUE_UNICODE:
+        function_result = __tinypy_marshal_dump_unicode(writer, value);
+        return function_result;
     case TINYPY_VALUE_TUPLE:
         function_result = __tinypy_marshal_dump_tuple(writer, value, depth, string_context);
         return function_result;

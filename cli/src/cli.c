@@ -94,9 +94,7 @@ static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, 
     tinypy_cli_allocator_state_t *state = (tinypy_cli_allocator_state_t *)user_data;
     tinypy_cli_allocation_header_t *header = (tinypy_cli_allocation_header_t *)((uint8_t *)memory - sizeof(*header));
 
-    if (alignment < sizeof(void *)) {
-        alignment = sizeof(void *);
-    }
+    (void)alignment;
     state->current_allocations -= 1U;
     state->current_bytes -= size;
     free(header->base);
@@ -191,7 +189,12 @@ static tinypy_bool_t __tinypy_cli_read_file(const char *path, uint8_t **out_data
     }
     result = __tinypy_cli_read_stream(stream, out_data, out_size);
     if (fclose(stream) != 0) {
-        result = INT32_C(0);
+        if (result != 0) {
+            free(*out_data);
+            *out_data = NULL;
+            *out_size = 0U;
+        }
+        result = TINYPY_FALSE;
     }
     return result;
 }

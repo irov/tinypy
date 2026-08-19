@@ -5,24 +5,29 @@
 #define TINYPY_COMPILER_ARENA_BLOCK_SIZE ((size_t)4096U)
 
 //////////////////////////////////////////////////////////////////////////
-void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t size) {
+void *tinypy_internal_compiler_arena_allocate_uninitialized(tinypy_compile_ctx_t *ctx, size_t size) {
     size_t aligned_size;
     size_t header_size;
     size_t payload_size;
     size_t allocation_size;
     void *memory;
 
+    if (size > SIZE_MAX - (TINYPY_INTERNAL_ALIGNMENT - 1U)) {
+        return NULL;
+    }
     aligned_size = (size + (TINYPY_INTERNAL_ALIGNMENT - 1U)) & ~(TINYPY_INTERNAL_ALIGNMENT - 1U);
     tinypy_compiler_arena_block_t *block = ctx->arena_blocks;
     if (block != NULL && aligned_size <= block->allocation_size - offsetof(tinypy_compiler_arena_block_t, data) - block->used) {
         memory = block->data + block->used;
         block->used += aligned_size;
-        (void)memset(memory, 0, size);
         return memory;
     }
 
     header_size = offsetof(tinypy_compiler_arena_block_t, data);
     payload_size = aligned_size > TINYPY_COMPILER_ARENA_BLOCK_SIZE ? aligned_size : TINYPY_COMPILER_ARENA_BLOCK_SIZE;
+    if (payload_size > SIZE_MAX - header_size) {
+        return NULL;
+    }
     allocation_size = header_size + payload_size;
     if (ctx->limits.max_arena_bytes != 0U && (ctx->arena_bytes > ctx->limits.max_arena_bytes || allocation_size > ctx->limits.max_arena_bytes - ctx->arena_bytes)) {
         return NULL;
@@ -35,6 +40,15 @@ void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t 
     ctx->arena_blocks = block;
     ctx->arena_bytes += allocation_size;
     memory = block->data;
+    return memory;
+}
+//////////////////////////////////////////////////////////////////////////
+void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t size) {
+    void *memory = tinypy_internal_compiler_arena_allocate_uninitialized(ctx, size);
+
+    if (memory == NULL) {
+        return NULL;
+    }
     (void)memset(memory, 0, size);
     return memory;
 }

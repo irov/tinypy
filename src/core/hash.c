@@ -286,10 +286,10 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinypy_hash_t *out_hash, tinypy_error_t **out_error) {
+static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinypy_bool_t overrides_only, tinypy_hash_t *out_hash, tinypy_error_t **out_error) {
     tinypy_value_t *mutable_value = (tinypy_value_t *)value;
 
-    if (tinypy_internal_object_has_special(mutable_value, "__hash__", 8U) == 0) {
+    if ((overrides_only != 0 ? tinypy_internal_object_has_special_override(mutable_value, "__hash__", 8U) : tinypy_internal_object_has_special(mutable_value, "__hash__", 8U)) == 0) {
         return INT32_C(0);
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
@@ -325,12 +325,9 @@ static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_hash_t function_result;
-    double real;
-
     if ((value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
         tinypy_hash_t hash;
-        int32_t special = __tinypy_internal_hash_special(value, &hash, out_error);
+        int32_t special = __tinypy_internal_hash_special(value, TINYPY_TRUE, &hash, out_error);
 
         if (special > 0) {
             return hash;
@@ -343,6 +340,14 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_err
         tinypy_hash_t return_value_1 = value->type->hash((tinypy_value_t *)value, out_error);
         return return_value_1;
     }
+    tinypy_hash_t return_value_1 = tinypy_internal_hash_builtin_value(value, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_hash_t function_result;
+    double real;
+
     switch (TINYPY_VALUE_KIND(value)) {
     case TINYPY_VALUE_NONE:
         function_result = __tinypy_internal_hash_fix(
@@ -443,7 +448,7 @@ tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_err
     }
     default: {
         tinypy_hash_t hash;
-        int32_t special = __tinypy_internal_hash_special(value, &hash, out_error);
+        int32_t special = __tinypy_internal_hash_special(value, TINYPY_FALSE, &hash, out_error);
 
         if (special > 0) {
             return hash;

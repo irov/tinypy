@@ -401,11 +401,15 @@ static void __test_unicode_value(tinypy_value_t *value, const uint8_t *expected,
 static int32_t __test_named_unicode_escapes(void) {
     static const char source[] = "(u'\\N{LATIN SMALL LETTER A}', u'\\N{GREEK SMALL LETTER PI}', u'\\N{HANGUL SYLLABLE GA}', u'\\N{CJK UNIFIED IDEOGRAPH-4E00}')";
     static const char invalid_source[] = "u'\\N{NOT A CHARACTER}'";
-    static const char surrogate_source[] = "u'\\ud800'";
+    static const char surrogate_source[] = "(u'\\ud800', u'\\U0000dfff', u'\\ud834\\udd20', u'\\U0001d120')";
     static const uint8_t latin_a[] = {0x61U};
     static const uint8_t greek_pi[] = {0xcfU, 0x80U};
     static const uint8_t hangul_ga[] = {0xeaU, 0xb0U, 0x80U};
     static const uint8_t cjk_one[] = {0xe4U, 0xb8U, 0x80U};
+    static const uint8_t high_surrogate[] = {0xedU, 0xa0U, 0x80U};
+    static const uint8_t low_surrogate[] = {0xedU, 0xbfU, 0xbfU};
+    static const uint8_t surrogate_pair[] = {0xedU, 0xa0U, 0xb4U, 0xedU, 0xb4U, 0xa0U};
+    static const uint8_t non_bmp[] = {0xf0U, 0x9dU, 0x84U, 0xa0U};
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
     tinypy_compile_options_t options;
@@ -430,8 +434,12 @@ static int32_t __test_named_unicode_escapes(void) {
     tinypy_error_release(error);
     error = NULL;
     result = tinypy_eval_source(vm, surrogate_source, sizeof(surrogate_source) - 1U, "unicode.py", 10U, globals, NULL, &options, &error);
-    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
-    tinypy_error_release(error);
+    assert(result != NULL && error == NULL && tinypy_tuple_size(result) == 4U);
+    __test_unicode_value(tinypy_tuple_get(result, 0U), high_surrogate, sizeof(high_surrogate));
+    __test_unicode_value(tinypy_tuple_get(result, 1U), low_surrogate, sizeof(low_surrogate));
+    __test_unicode_value(tinypy_tuple_get(result, 2U), surrogate_pair, sizeof(surrogate_pair));
+    __test_unicode_value(tinypy_tuple_get(result, 3U), non_bmp, sizeof(non_bmp));
+    tinypy_release(result);
     tinypy_release(globals);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);

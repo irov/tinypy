@@ -31,7 +31,7 @@ static const tinypy_exception_definition_t __tinypy_exception_definitions[TINYPY
     {"FutureWarning", 13U, TINYPY_EXCEPTION_WARNING}, {"ImportWarning", 13U, TINYPY_EXCEPTION_WARNING},
     {"UnicodeWarning", 14U, TINYPY_EXCEPTION_WARNING}, {"BytesWarning", 12U, TINYPY_EXCEPTION_WARNING},
     {"SystemExit", 10U, TINYPY_EXCEPTION_BASE}, {"KeyboardInterrupt", 17U, TINYPY_EXCEPTION_BASE},
-    {"GeneratorExit", 13U, TINYPY_EXCEPTION_BASE}};
+    {"GeneratorExit", 13U, TINYPY_EXCEPTION_BASE}, {"BufferError", 11U, TINYPY_EXCEPTION_STANDARD_ERROR}};
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_exception_string_length(const char *text) {
     size_t size = 0U;
@@ -109,6 +109,12 @@ static tinypy_exception_type_index_e __tinypy_exception_index_from_error(tinypy_
         return TINYPY_EXCEPTION_ATTRIBUTE_ERROR;
     case TINYPY_ERROR_LOOKUP:
         return TINYPY_EXCEPTION_LOOKUP_ERROR;
+    case TINYPY_ERROR_UNICODE_DECODE:
+        return TINYPY_EXCEPTION_UNICODE_DECODE_ERROR;
+    case TINYPY_ERROR_UNICODE_ENCODE:
+        return TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR;
+    case TINYPY_ERROR_BUFFER:
+        return TINYPY_EXCEPTION_BUFFER_ERROR;
     case TINYPY_ERROR_SYNTAX:
     case TINYPY_ERROR_PREPROCESSOR:
     case TINYPY_ERROR_META:
@@ -158,6 +164,12 @@ static tinypy_error_kind_e __tinypy_exception_error_from_type(tinypy_vm_t *vm, t
     if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_LOOKUP_ERROR]) != 0) {
         return TINYPY_ERROR_LOOKUP;
     }
+    if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_UNICODE_DECODE_ERROR]) != 0) {
+        return TINYPY_ERROR_UNICODE_DECODE;
+    }
+    if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR]) != 0) {
+        return TINYPY_ERROR_UNICODE_ENCODE;
+    }
     if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_TAB_ERROR]) != 0) {
         return TINYPY_ERROR_TAB;
     }
@@ -169,6 +181,9 @@ static tinypy_error_kind_e __tinypy_exception_error_from_type(tinypy_vm_t *vm, t
     }
     if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_VALUE_ERROR]) != 0) {
         return TINYPY_ERROR_VALUE;
+    }
+    if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_BUFFER_ERROR]) != 0) {
+        return TINYPY_ERROR_BUFFER;
     }
     return TINYPY_ERROR_RUNTIME;
 }

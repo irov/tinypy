@@ -185,9 +185,6 @@ tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx,
 static tinypy_bool_t __tinypy_compiler_utf8_append(uint8_t *output, size_t capacity, size_t *size, uint32_t code_point) {
     size_t needed;
 
-    if (code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdfff)) {
-        return TINYPY_FALSE;
-    }
     if (code_point <= 0x7fU) {
         needed = 1U;
     }

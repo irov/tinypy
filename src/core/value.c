@@ -38,19 +38,115 @@ tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
+size_t tinypy_internal_variable_builtin_payload_size(const tinypy_value_t *value) {
+    size_t result;
+
+    switch (TINYPY_VALUE_KIND(value)) {
+    case TINYPY_VALUE_STRING:
+        result = offsetof(tinypy_string_object_t, bytes) + TINYPY_SIZED_SIZE(value) + 1U;
+        break;
+    case TINYPY_VALUE_UNICODE:
+        result = offsetof(tinypy_unicode_object_t, utf8) + TINYPY_UNICODE_OBJECT(value)->byte_size + 1U;
+        break;
+    case TINYPY_VALUE_LONG:
+        result = offsetof(tinypy_long_object_t, digits) + TINYPY_LONG_DIGIT_COUNT(value) * sizeof(uint16_t);
+        break;
+    default:
+        result = 0U;
+        break;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_internal_builtin_subclass_allocation_size(const tinypy_type_t *type, size_t payload_size) {
+    const size_t alignment = sizeof(tinypy_value_t *);
+    size_t aligned_payload;
+    size_t pointer_count = type->slot_count + (type->dict_offset != 0U ? 1U : 0U) + (type->weakref_offset != 0U ? 1U : 0U);
+
+    if (payload_size > SIZE_MAX - (alignment - 1U)) {
+        return 0U;
+    }
+    aligned_payload = (payload_size + alignment - 1U) & ~(alignment - 1U);
+    if (pointer_count > (SIZE_MAX - aligned_payload) / sizeof(tinypy_value_t *)) {
+        return 0U;
+    }
+    return aligned_payload + pointer_count * sizeof(tinypy_value_t *);
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = type->vm;
+    tinypy_value_type_e kind;
+    size_t payload_size;
+    size_t allocation_size;
+    tinypy_value_t *result;
+
+    if (value == NULL || type == value->type) {
+        return value;
+    }
+    kind = type->layout_kind;
+    if (TINYPY_VALUE_KIND(value) != kind) {
+        if (type == &vm->types[kind]) {
+            return value;
+        }
+        TINYPY_DECREF(value);
+        tinypy_internal_make_vm_error(vm, kind == TINYPY_VALUE_INTEGER ? TINYPY_ERROR_OVERFLOW : TINYPY_ERROR_TYPE, "immutable constructor produced an incompatible value", out_error);
+        return NULL;
+    }
+    payload_size = kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_LONG
+                       ? tinypy_internal_variable_builtin_payload_size(value)
+                       : vm->types[kind].basic_size;
+    if (type == &vm->types[kind]) {
+        result = tinypy_internal_value_allocate(vm, kind, payload_size);
+        (void)memcpy((uint8_t *)result + sizeof(tinypy_value_t), (const uint8_t *)value + sizeof(tinypy_value_t), payload_size - sizeof(tinypy_value_t));
+        if (kind == TINYPY_VALUE_STRING) {
+            TINYPY_STRING_OBJECT(result)->interned = TINYPY_FALSE;
+        }
+        else if (kind == TINYPY_VALUE_UNICODE) {
+            TINYPY_UNICODE_OBJECT(result)->index_offsets = NULL;
+        }
+        TINYPY_DECREF(value);
+        return result;
+    }
+    allocation_size = tinypy_internal_builtin_subclass_allocation_size(type, payload_size);
+    if (allocation_size == 0U) {
+        TINYPY_DECREF(value);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "immutable subtype is too large", out_error);
+        return NULL;
+    }
+    result = tinypy_internal_object_allocate(vm, type, allocation_size);
+    (void)memcpy((uint8_t *)result + sizeof(tinypy_value_t), (const uint8_t *)value + sizeof(tinypy_value_t), payload_size - sizeof(tinypy_value_t));
+    if (kind == TINYPY_VALUE_STRING) {
+        TINYPY_STRING_OBJECT(result)->interned = TINYPY_FALSE;
+    }
+    else if (kind == TINYPY_VALUE_UNICODE) {
+        TINYPY_UNICODE_OBJECT(result)->index_offsets = NULL;
+    }
+    TINYPY_DECREF(value);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 size_t tinypy_internal_value_allocation_size(const tinypy_value_t *value) {
     size_t function_result;
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     switch (kind) {
     case TINYPY_VALUE_STRING:
-        function_result = offsetof(tinypy_string_object_t, bytes) + TINYPY_SIZED_SIZE(value) + 1U;
+        function_result = tinypy_internal_variable_builtin_payload_size(value);
+        if (value->type != &TINYPY_VALUE_VM(value)->types[kind]) {
+            function_result = tinypy_internal_builtin_subclass_allocation_size(value->type, function_result);
+        }
         return function_result;
     case TINYPY_VALUE_UNICODE:
-        function_result = offsetof(tinypy_unicode_object_t, utf8) + TINYPY_UNICODE_OBJECT(value)->byte_size + 1U;
+        function_result = tinypy_internal_variable_builtin_payload_size(value);
+        if (value->type != &TINYPY_VALUE_VM(value)->types[kind]) {
+            function_result = tinypy_internal_builtin_subclass_allocation_size(value->type, function_result);
+        }
         return function_result;
     case TINYPY_VALUE_LONG:
-        function_result = offsetof(tinypy_long_object_t, digits) + TINYPY_LONG_DIGIT_COUNT(value) * sizeof(uint16_t);
+        function_result = tinypy_internal_variable_builtin_payload_size(value);
+        if (value->type != &TINYPY_VALUE_VM(value)->types[kind]) {
+            function_result = tinypy_internal_builtin_subclass_allocation_size(value->type, function_result);
+        }
         return function_result;
     case TINYPY_VALUE_TUPLE:
         if (value->type == &TINYPY_VALUE_VM(value)->types[TINYPY_VALUE_TUPLE]) {
@@ -204,14 +300,20 @@ static inline size_t __tinypy_internal_text_allocation_size(tinypy_value_type_e 
                              ? offsetof(tinypy_string_object_t, bytes)
                              : offsetof(tinypy_unicode_object_t, utf8);
 
+    if (byte_size > SIZE_MAX - object_size - 1U) {
+        return 0U;
+    }
     return object_size + byte_size + 1U;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_text_from_bytes(tinypy_vm_t *vm, const uint8_t *bytes, size_t byte_size, size_t code_point_count, tinypy_value_type_e type) {
+tinypy_value_t *tinypy_internal_text_allocate_uninitialized(tinypy_vm_t *vm, tinypy_value_type_e type, size_t byte_size, size_t code_point_count, uint8_t **out_bytes) {
     size_t allocation_size;
     uint8_t *payload;
 
     allocation_size = __tinypy_internal_text_allocation_size(type, byte_size);
+    if (allocation_size == 0U) {
+        return NULL;
+    }
 
     tinypy_value_t *value = tinypy_internal_value_allocate(vm, type, allocation_size);
 
@@ -223,12 +325,21 @@ static tinypy_value_t *__tinypy_internal_text_from_bytes(tinypy_vm_t *vm, const 
     else {
         TINYPY_SIZED_SIZE(value) = code_point_count;
         TINYPY_UNICODE_OBJECT(value)->byte_size = byte_size;
+        TINYPY_UNICODE_OBJECT(value)->index_offsets = NULL;
         payload = TINYPY_UNICODE_OBJECT(value)->utf8;
     }
-    if (byte_size != 0U) {
+    payload[byte_size] = 0U;
+    *out_bytes = payload;
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_text_from_bytes(tinypy_vm_t *vm, const uint8_t *bytes, size_t byte_size, size_t code_point_count, tinypy_value_type_e type) {
+    uint8_t *payload;
+    tinypy_value_t *value = tinypy_internal_text_allocate_uninitialized(vm, type, byte_size, code_point_count, &payload);
+
+    if (value != NULL && byte_size != 0U) {
         (void)memcpy(payload, bytes, byte_size);
     }
-    payload[byte_size] = 0U;
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -350,6 +461,9 @@ tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size
     size_t code_point_count;
     size_t cache_index = SIZE_MAX;
 
+    if (__tinypy_internal_text_allocation_size(TINYPY_VALUE_UNICODE, size) == 0U) {
+        return NULL;
+    }
     if (size == 1U && (uint8_t)utf8[0] < 0x80U) {
         cache_index = (size_t)(uint8_t)utf8[0];
     }

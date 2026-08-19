@@ -5,6 +5,15 @@
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t **tinypy_internal_weakref_head_slot(tinypy_value_t *value) {
     if (value->type->weakref_offset != 0U) {
+        tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+        if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_LONG) {
+            size_t payload_size = tinypy_internal_variable_builtin_payload_size(value);
+            size_t aligned_payload = (payload_size + sizeof(tinypy_value_t *) - 1U) & ~(sizeof(tinypy_value_t *) - 1U);
+            size_t offset = value->type->slot_count + (value->type->dict_offset != 0U ? 1U : 0U);
+
+            return (tinypy_value_t **)((uint8_t *)value + aligned_payload) + offset;
+        }
         return (tinypy_value_t **)((uint8_t *)value + value->type->weakref_offset);
     }
     return NULL;

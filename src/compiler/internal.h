@@ -71,6 +71,7 @@ typedef struct tinypy_compile_ctx_t {
 } tinypy_compile_ctx_t;
 
 void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t size);
+void *tinypy_internal_compiler_arena_allocate_uninitialized(tinypy_compile_ctx_t *ctx, size_t size);
 void *tinypy_internal_compiler_ast_allocate(tinypy_compile_ctx_t *ctx, size_t size);
 void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx);
 int32_t tinypy_internal_compiler_arena_add_value(tinypy_compile_ctx_t *ctx, tinypy_value_t *value);

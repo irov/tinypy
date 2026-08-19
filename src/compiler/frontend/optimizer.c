@@ -157,6 +157,9 @@ static tinypy_bool_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t
         __tinypy_frontend_clear_raised(v);
         return TINYPY_FALSE;
     }
+    if (TINYPY_VALUE_KIND(newconst) == TINYPY_VALUE_STRING) {
+        tinypy_internal_string_set_interned(newconst, TINYPY_FALSE);
+    }
     size = TINYPY_COMPILER_OBJECT_SIZE(newconst);
     if (size == -1) {
         __tinypy_frontend_clear_raised(newconst);

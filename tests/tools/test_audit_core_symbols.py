@@ -18,10 +18,12 @@ object.o:
                  U _malloc
                  U ___memcpy_chk
                  U pthread_mutex_lock
+darwin.o:
+_localeconv
 """
         self.assertEqual(
             AUDIT.parse_nm_undefined(output),
-            {"malloc", "__memcpy_chk", "pthread_mutex_lock"},
+            {"malloc", "__memcpy_chk", "pthread_mutex_lock", "localeconv"},
         )
 
     def test_subtracts_symbols_defined_inside_archive(self):

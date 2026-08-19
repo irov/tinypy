@@ -2,6 +2,8 @@
 
 #include "internal.h"
 
+#include <string.h>
+
 typedef enum tinypy_internal_c_descriptor_field_e {
     TINYPY_INTERNAL_C_DESCRIPTOR_FUNCTION_CODE = 1,
     TINYPY_INTERNAL_C_DESCRIPTOR_FUNCTION_GLOBALS = 2,
@@ -113,12 +115,13 @@ tinypy_value_t *tinypy_class_method_callable(const tinypy_value_t *descriptor) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_property_new(tinypy_vm_t *vm, tinypy_value_t *getter, tinypy_value_t *setter, tinypy_value_t *deleter, tinypy_value_t *doc) {
+static tinypy_value_t *__tinypy_property_new(tinypy_vm_t *vm, tinypy_value_t *getter, tinypy_value_t *setter, tinypy_value_t *deleter, tinypy_value_t *doc, tinypy_bool_t getter_doc) {
     tinypy_property_object_t *property = (tinypy_property_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_PROPERTY, sizeof(*property));
     property->getter = getter;
     property->setter = setter;
     property->deleter = deleter;
     property->doc = doc;
+    property->getter_doc = getter_doc;
     if (getter != NULL) {
         TINYPY_INCREF(getter);
     }
@@ -132,6 +135,25 @@ tinypy_value_t *tinypy_property_new(tinypy_vm_t *vm, tinypy_value_t *getter, tin
         TINYPY_INCREF(doc);
     }
     return &property->base;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_property_new(tinypy_vm_t *vm, tinypy_value_t *getter, tinypy_value_t *setter, tinypy_value_t *deleter, tinypy_value_t *doc) {
+    tinypy_value_t *return_value = __tinypy_property_new(vm, getter, setter, deleter, doc, TINYPY_FALSE);
+    return return_value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_property_getter_doc(tinypy_vm_t *vm, tinypy_value_t *getter, tinypy_value_t **out_doc, tinypy_error_t **out_error) {
+    tinypy_value_t *key;
+    int32_t found;
+
+    *out_doc = NULL;
+    if (getter == NULL) {
+        return TINYPY_TRUE;
+    }
+    key = tinypy_string_from_bytes(vm, "__doc__", 7U);
+    found = tinypy_internal_object_get_optional_attr_key(getter, key, out_doc, out_error);
+    TINYPY_DECREF(key);
+    return found >= 0 ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_property_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
@@ -162,7 +184,7 @@ tinypy_value_t *tinypy_internal_property_get(tinypy_value_t *descriptor, tinypy_
         return descriptor;
     }
     if (property->getter == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "unreadable property", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "unreadable property", out_error);
         return NULL;
     }
     if (property->getter->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
@@ -184,7 +206,7 @@ tinypy_bool_t tinypy_internal_property_set(tinypy_value_t *descriptor, tinypy_va
 
     TINYPY_CLEAR_ERROR(out_error);
     if (callable == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, value != NULL ? "property has no setter" : "property has no deleter", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, value != NULL ? "property has no setter" : "property has no deleter", out_error);
         return TINYPY_FALSE;
     }
     items[0] = instance;
@@ -215,10 +237,6 @@ static tinypy_value_t *__tinypy_internal_descriptor_constructor(tinypy_type_t *t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor constructor requires one callable", out_error);
         return NULL;
     }
-    if (TINYPY_TUPLE_GET(args, 0U)->type->call == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor argument is not callable", out_error);
-        return NULL;
-    }
     if (class_method != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
         tinypy_value_t *return_value_1 = tinypy_class_method_new(item);
@@ -242,12 +260,10 @@ tinypy_value_t *tinypy_internal_class_method_create(tinypy_type_t *type, tinypy_
 tinypy_value_t *tinypy_internal_property_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     tinypy_value_t *values[4] = {NULL, NULL, NULL, NULL};
+    tinypy_value_t *owned_doc = NULL;
+    tinypy_bool_t getter_doc = TINYPY_FALSE;
     size_t count = TINYPY_TUPLE_SIZE(args);
 
-    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "property keyword arguments are not implemented", out_error);
-        return NULL;
-    }
     if (count > 4U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "property accepts at most four arguments", out_error);
         return NULL;
@@ -257,10 +273,58 @@ tinypy_value_t *tinypy_internal_property_create(tinypy_type_t *type, tinypy_valu
 
         values[index] = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE ? NULL : value;
     }
-    if (values[3] == NULL && values[0] != NULL && TINYPY_VALUE_KIND(values[0]) == TINYPY_VALUE_FUNCTION) {
-        values[3] = tinypy_function_doc(values[0]);
+    if (kwargs != NULL) {
+        tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
+        tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(kwargs);
+
+        for (; iterator != iterator_end; ++iterator) {
+            const uint8_t *key_bytes;
+            size_t key_size;
+            size_t parameter;
+
+            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
+                continue;
+            }
+            if (TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_UNICODE) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "property received an unexpected keyword", out_error);
+                return NULL;
+            }
+            key_bytes = TINYPY_TEXT_BYTES(iterator->key);
+            key_size = TINYPY_TEXT_BYTE_SIZE(iterator->key);
+            if (key_size == 4U && memcmp(key_bytes, "fget", 4U) == 0) {
+                parameter = 0U;
+            }
+            else if (key_size == 4U && memcmp(key_bytes, "fset", 4U) == 0) {
+                parameter = 1U;
+            }
+            else if (key_size == 4U && memcmp(key_bytes, "fdel", 4U) == 0) {
+                parameter = 2U;
+            }
+            else if (key_size == 3U && memcmp(key_bytes, "doc", 3U) == 0) {
+                parameter = 3U;
+            }
+            else {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "property received an unexpected keyword", out_error);
+                return NULL;
+            }
+            if (parameter < count) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "property received multiple values for an argument", out_error);
+                return NULL;
+            }
+            values[parameter] = TINYPY_VALUE_KIND(iterator->value) == TINYPY_VALUE_NONE ? NULL : iterator->value;
+        }
     }
-    tinypy_value_t *return_value_1 = tinypy_property_new(vm, values[0], values[1], values[2], values[3]);
+    if (values[3] == NULL) {
+        getter_doc = TINYPY_TRUE;
+        if (values[0] != NULL && __tinypy_property_getter_doc(vm, values[0], &owned_doc, out_error) == 0) {
+            return NULL;
+        }
+        values[3] = owned_doc;
+    }
+    tinypy_value_t *return_value_1 = __tinypy_property_new(vm, values[0], values[1], values[2], values[3], getter_doc);
+    if (owned_doc != NULL) {
+        TINYPY_DECREF(owned_doc);
+    }
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -288,14 +352,22 @@ static tinypy_value_t *__tinypy_internal_property_copy(tinypy_value_t *function,
     if (TINYPY_VALUE_KIND(replacement) == TINYPY_VALUE_NONE) {
         replacement = NULL;
     }
-    if (replacement != NULL && replacement->type->call == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "property accessor must be callable", out_error);
-        return NULL;
-    }
     tinypy_value_t *getter = field == 0 ? replacement : property->getter;
     tinypy_value_t *setter = field == 1 ? replacement : property->setter;
     tinypy_value_t *deleter = field == 2 ? replacement : property->deleter;
-    tinypy_value_t *return_value_1 = tinypy_property_new(vm, getter, setter, deleter, property->doc);
+    tinypy_value_t *doc = property->doc;
+    tinypy_value_t *owned_doc = NULL;
+
+    if (field == 0 && property->getter_doc != 0) {
+        if (__tinypy_property_getter_doc(vm, getter, &owned_doc, out_error) == 0) {
+            return NULL;
+        }
+        doc = owned_doc;
+    }
+    tinypy_value_t *return_value_1 = __tinypy_property_new(vm, getter, setter, deleter, doc, property->getter_doc);
+    if (owned_doc != NULL) {
+        TINYPY_DECREF(owned_doc);
+    }
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

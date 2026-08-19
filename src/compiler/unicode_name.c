@@ -148,6 +148,7 @@ static tinypy_bool_t __tinypy_unicode_name_code_to_name(uint32_t code_point, cha
         }
         output_started = 1;
     }
+    buffer[size] = '\0';
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -211,7 +212,6 @@ tinypy_bool_t tinypy_internal_compiler_unicode_name(const char *name, size_t nam
         position += length;
         remaining -= length;
         __tinypy_unicode_name_find_syllable(position, remaining, TINYPY_UNICODE_NAME_T_COUNT, 2U, &length, &trailing);
-        position += length;
         remaining -= length;
         if (leading < 0 || vowel < 0 || trailing < 0 || remaining != 0U) {
             return TINYPY_FALSE;

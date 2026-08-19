@@ -17,7 +17,8 @@ tinypy_value_t *tinypy_integer_from_i64(tinypy_vm_t *vm, int64_t value);
 
 /* Python 2 str stores arbitrary bytes. bytes may be NULL only when size is
  * zero. A trailing NUL is stored for C interoperability but is not part of
- * the value and callers must always use the explicit size. */
+ * the value and callers must always use the explicit size. Returns NULL when
+ * size cannot be represented by the object allocation. */
 tinypy_value_t *tinypy_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size);
 
 /* The returned view is borrowed and remains valid until value is released or
@@ -25,7 +26,8 @@ tinypy_value_t *tinypy_string_from_bytes(tinypy_vm_t *vm, const void *bytes, siz
 const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size);
 
 /* Creates a Python 2 unicode value from one canonical UTF-8 byte sequence.
- * Invalid UTF-8 is a caller contract violation and is undefined behavior. */
+ * Invalid UTF-8 is a caller contract violation and is undefined behavior.
+ * Returns NULL when size cannot be represented by the object allocation. */
 tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size_t size);
 
 /* Returns the canonical UTF-8 representation and both byte and Unicode scalar

@@ -608,7 +608,7 @@ tinypy_bool_t tinypy_internal_import_star(tinypy_value_t *module, tinypy_value_t
         const uint8_t *bytes;
         size_t size;
 
-        if (iterator->state != TINYPY_DICT_ENTRY_ACTIVE || TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING) {
+        if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator) || TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING) {
             continue;
         }
         bytes = (const uint8_t *)tinypy_string_view(iterator->key, &size);

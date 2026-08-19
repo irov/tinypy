@@ -57,10 +57,12 @@ tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, t
 }
 //////////////////////////////////////////////////////////////////////////
 static inline size_t __tinypy_internal_tuple_allocation_size(size_t item_count) {
-    size_t payload_size;
+    size_t header_size = offsetof(tinypy_tuple_object_t, items);
 
-    payload_size = item_count * sizeof(tinypy_value_t *);
-    return offsetof(tinypy_tuple_object_t, items) + payload_size;
+    if (item_count > (SIZE_MAX - header_size) / sizeof(tinypy_value_t *)) {
+        return 0U;
+    }
+    return header_size + item_count * sizeof(tinypy_value_t *);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_tuple_from_borrowed_items(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size) {
@@ -70,6 +72,9 @@ tinypy_value_t *tinypy_internal_tuple_from_borrowed_items(tinypy_vm_t *vm, tinyp
         return result;
     }
     size_t allocation_size = __tinypy_internal_tuple_allocation_size(size);
+    if (allocation_size == 0U) {
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_internal_value_allocate(
         vm, TINYPY_VALUE_TUPLE, allocation_size);
     TINYPY_SIZED_SIZE(result) = size;
@@ -90,6 +95,9 @@ tinypy_value_t *tinypy_tuple_new(tinypy_vm_t *vm, size_t size) {
     }
 
     size_t allocation_size = __tinypy_internal_tuple_allocation_size(size);
+    if (allocation_size == 0U) {
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_internal_value_allocate(vm, TINYPY_VALUE_TUPLE, allocation_size);
     TINYPY_SIZED_SIZE(result) = size;
     tinypy_value_t **items = TINYPY_TUPLE_OBJECT(result)->items;
@@ -108,6 +116,9 @@ tinypy_value_t *tinypy_tuple_from_items(tinypy_vm_t *vm, tinypy_value_t *const *
         return result;
     }
     size_t allocation_size = __tinypy_internal_tuple_allocation_size(size);
+    if (allocation_size == 0U) {
+        return NULL;
+    }
 
     tinypy_value_t *result = tinypy_internal_value_allocate(
         vm,

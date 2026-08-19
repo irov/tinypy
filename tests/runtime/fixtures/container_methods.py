@@ -17,6 +17,193 @@ values.sort()
 assert values == [1, 2, 3]
 values_iterator = values.__iter__()
 assert next(values_iterator) == 1
+assert values.__len__() == 3
+assert values.__getitem__(1) == 2
+assert values.__repr__() == "[1, 2, 3]"
+
+tuple_values = (3, 1, 3, 2)
+assert tuple_values.count(3) == 2
+assert tuple_values.index(3) == 0
+assert tuple_values.index(3, 1) == 2
+assert tuple_values.index(3, -2, 99) == 2
+assert tuple_values.index(3, -10L ** 100, 10L ** 100) == 0
+assert tuple_values.__len__() == 4
+assert tuple_values.__getitem__(1) == 1
+assert tuple_values.__repr__() == "(3, 1, 3, 2)"
+assert tuple.__contains__(tuple_values, 2)
+assert tuple.__add__((1,), (2,)) == (1, 2)
+assert tuple.__mul__((1, 2), 2) == (1, 2, 1, 2)
+assert tuple.__hash__((1, 2)) == hash((1, 2))
+tuple_iterator = tuple_values.__iter__()
+assert next(tuple_iterator) == 3
+
+direct_list = [1, 2]
+list.__setitem__(direct_list, 0, 3)
+assert direct_list == [3, 2]
+list.__delitem__(direct_list, 1)
+assert direct_list == [3]
+assert list.__contains__(direct_list, 3)
+assert list.__add__(direct_list, [4]) == [3, 4]
+assert list.__mul__(direct_list, 2) == [3, 3]
+assert list.__eq__([1], [1]) and list.__lt__([1], [2])
+assert list.__hash__ is None
+direct_list_alias = direct_list
+assert list.__iadd__(direct_list, (4, 5)) is direct_list
+assert direct_list_alias == [3, 4, 5]
+assert list.__imul__(direct_list, 2) is direct_list
+assert direct_list_alias == [3, 4, 5, 3, 4, 5]
+inplace_list = [1]
+inplace_list_alias = inplace_list
+inplace_list += (2, 3)
+assert inplace_list is inplace_list_alias and inplace_list == [1, 2, 3]
+inplace_list *= 2
+assert inplace_list is inplace_list_alias and inplace_list == [1, 2, 3, 1, 2, 3]
+
+direct_dict = {"a": 1}
+dict.__setitem__(direct_dict, "b", 2)
+assert dict.__contains__(direct_dict, "a")
+dict.__delitem__(direct_dict, "a")
+assert direct_dict == {"b": 2}
+assert dict.__hash__ is None
+
+assert str.__getitem__("abc", 1) == "b"
+assert str.__contains__("abc", "b")
+assert str.__add__("a", "b") == "ab"
+assert str.__mul__("ab", 2) == "abab"
+assert str.__mod__("%s", "x") == "x"
+assert str.__hash__("abc") == hash("abc")
+assert str.__format__("x", ">3") == "  x"
+assert unicode.__hash__(u"abc") == hash(u"abc")
+assert unicode.__format__(u"x", u">3") == u"  x"
+assert int.__add__(2, 3) == 5
+assert int.__rsub__(2, 10) == 8
+assert long.__lshift__(1L, 5) == 32L
+assert float.__div__(3.0, 2) == 1.5
+assert complex.__abs__(3 + 4j) == 5.0
+assert int.__hash__(42) == hash(42)
+assert long.__hash__(42L) == hash(42L)
+assert float.__hash__(1.5) == hash(1.5)
+assert complex.__hash__(1 + 2j) == hash(1 + 2j)
+assert int.__format__(15, "04x") == "000f"
+assert float.__format__(1.5, ".1f") == "1.5"
+
+
+class InplaceProtocol(object):
+    def __ipow__(self, other):
+        return "ipow"
+
+    def __imod__(self, other):
+        return "imod"
+
+    def __ifloordiv__(self, other):
+        return "ifloordiv"
+
+    def __ilshift__(self, other):
+        return "ilshift"
+
+    def __irshift__(self, other):
+        return "irshift"
+
+    def __iand__(self, other):
+        return "iand"
+
+    def __ixor__(self, other):
+        return "ixor"
+
+    def __ior__(self, other):
+        return "ior"
+
+
+inplace_protocol = InplaceProtocol()
+inplace_protocol **= 2
+assert inplace_protocol == "ipow"
+inplace_protocol = InplaceProtocol()
+inplace_protocol %= 2
+assert inplace_protocol == "imod"
+inplace_protocol = InplaceProtocol()
+inplace_protocol //= 2
+assert inplace_protocol == "ifloordiv"
+inplace_protocol = InplaceProtocol()
+inplace_protocol <<= 2
+assert inplace_protocol == "ilshift"
+inplace_protocol = InplaceProtocol()
+inplace_protocol >>= 2
+assert inplace_protocol == "irshift"
+inplace_protocol = InplaceProtocol()
+inplace_protocol &= 2
+assert inplace_protocol == "iand"
+inplace_protocol = InplaceProtocol()
+inplace_protocol ^= 2
+assert inplace_protocol == "ixor"
+inplace_protocol = InplaceProtocol()
+inplace_protocol |= 2
+assert inplace_protocol == "ior"
+
+
+class TupleIndex(object):
+    def __index__(self):
+        return 1
+
+
+assert tuple_values.index(3, TupleIndex()) == 2
+assert values.index(2, TupleIndex()) == 1
+
+
+def drag_drop_item_index(*values):
+    items_queue = values[1::2]
+    return items_queue.index("ItemB")
+
+
+assert drag_drop_item_index("SocketA", "ItemA", "SocketB", "ItemB") == 1
+
+try:
+    tuple_values.index(99)
+except ValueError as tuple_index_error:
+    assert str(tuple_index_error) == "tuple.index(x): x not in tuple"
+else:
+    raise AssertionError("tuple.index did not raise ValueError")
+
+iterated_values = [1, 2, 3]
+iterated_result = []
+for iterated_value in iterated_values:
+    iterated_result.append(iterated_value)
+    if iterated_value == 1:
+        iterated_values.append(4)
+assert iterated_result == [1, 2, 3, 4]
+
+iterated_values = [1, 2, 3]
+iterated_result = []
+for iterated_value in iterated_values:
+    iterated_result.append(iterated_value)
+    if iterated_value == 1:
+        iterated_values.pop()
+assert iterated_result == [1, 2]
+
+unpacked_left, unpacked_right = "ab"
+assert unpacked_left == "a" and unpacked_right == "b"
+
+
+def unpack_values():
+    yield 3
+    yield 4
+
+
+unpacked_left, unpacked_right = unpack_values()
+assert unpacked_left == 3 and unpacked_right == 4
+
+try:
+    unpacked_left, unpacked_right = [1]
+except ValueError:
+    pass
+else:
+    raise AssertionError("short unpack did not raise ValueError")
+
+try:
+    unpacked_left, unpacked_right = [1, 2, 3]
+except ValueError:
+    pass
+else:
+    raise AssertionError("long unpack did not raise ValueError")
 
 keyed = [(2, "b"), (1, "c"), (1, "a")]
 keyed.sort(key=lambda pair: pair[0])
@@ -149,6 +336,10 @@ already_sorted.sort()
 assert already_sorted[0] == 0 and already_sorted[-1] == 2047
 
 mapping = {"a": 1, "b": 2}
+assert mapping.__len__() == 2
+assert mapping.__getitem__("a") == 1
+assert sorted(list(mapping.__iter__())) == ["a", "b"]
+assert mapping.__repr__() == repr(mapping)
 assert mapping.get("a") == 1
 assert mapping.get("missing") is None
 assert mapping.get("missing", 7) == 7
@@ -163,6 +354,43 @@ assert mapping.setdefault("a", 9) == 1
 assert mapping.setdefault("c", 3) == 3
 mapping.update({"d": 4}, e=5)
 mapping.update((("f", 6),))
+mapping.update(["g7"])
+assert mapping["g"] == "7"
+
+
+def update_pair():
+    yield "h"
+    yield 8
+
+
+mapping.update([update_pair()])
+assert mapping["h"] == 8
+
+
+class UpdateMapping(object):
+    def keys(self):
+        return ["i"]
+
+    def __getitem__(self, key):
+        return 9
+
+
+mapping.update(UpdateMapping())
+assert mapping["i"] == 9
+
+
+def partially_invalid_update():
+    yield ("partial", 10)
+    yield ("invalid",)
+
+
+try:
+    mapping.update(partially_invalid_update())
+except ValueError:
+    pass
+else:
+    raise AssertionError("invalid update pair was accepted")
+assert mapping["partial"] == 10
 assert mapping.pop("d") == 4
 assert mapping.pop("missing", 8) == 8
 copy = mapping.copy()
@@ -171,6 +399,15 @@ item = copy.popitem()
 assert item[0] not in copy
 copy.clear()
 assert copy == {}
+assert dict.fromkeys(["a", "b"]) == {"a": None, "b": None}
+assert dict.fromkeys(("a", "b"), 7) == {"a": 7, "b": 7}
+
+# Python 2 dict ordering compares size, then the smallest differing key/value.
+assert cmp({1: 2}, {1: 3}) == -1
+assert cmp({1: 2}, {2: 0}) == -1
+assert cmp({1: 2}, {1: 2}) == 0
+assert cmp({1: 2}, {1: 2, 2: 3}) == -1
+assert {1: 2} < {1: 3}
 
 
 class CountingHashKey(object):
@@ -241,23 +478,289 @@ assert all([True, 0]) is False
 assert any([0, 2]) is True
 assert any([0, False]) is False
 assert list(enumerate(["a", "b"], 3)) == [(3, "a"), (4, "b")]
+assert list(enumerate(sequence=["a", "b"], start=9223372036854775807L)) == [
+    (9223372036854775807L, "a"),
+    (9223372036854775808L, "b"),
+]
 assert filter(lambda value: value % 2, [1, 2, 3]) == [1, 3]
 assert filter(None, (0, 1, 2)) == (1, 2)
 assert filter(lambda value: value != "b", "abc") == "ac"
+assert filter(None, u"abc") == u"abc"
+assert filter(None, "\x00") == "\x00"
+assert filter(lambda value: True, ["", ""]) == ["", ""]
+assert dict.fromkeys(xrange(1000), 1)[999] == 1
+
+
+class NonBooleanComparison(object):
+    def __eq__(self, other):
+        return 7
+
+    def __lt__(self, other):
+        return 8
+
+    def __divmod__(self, other):
+        return "custom-divmod"
+
+
+assert (NonBooleanComparison() == 1) == 7
+assert (NonBooleanComparison() < 1) == 8
+assert divmod(NonBooleanComparison(), 1) == "custom-divmod"
+assert 1 // 1.5 == 0.0
+assert repr(0.0 % -1.5) == "-0.0"
+assert (1 + 2j) // 1 == 1 + 0j
+assert (1 + 2j) % 1 == 2j
+assert divmod(1 + 2j, 1) == (1 + 0j, 2j)
+assert +(True) == 1 and type(+(True)) is int
+assert +(False) == 0 and type(+(False)) is int
+assert (1 + 2j) ** 10 == 237 - 3116j
+assert (1 + 2j) ** -2 == (-0.12 - 0.16j)
+indeterminate_complex_power = (1 + 2j) ** (1e300 + 1e300j)
+assert indeterminate_complex_power != indeterminate_complex_power
+assert repr(complex("-0-0j") ** 1) == "-0j"
+try:
+    complex("1e-300-0j") ** -2
+except ZeroDivisionError:
+    pass
+else:
+    raise AssertionError("underflowed negative complex power did not fail")
+assert (1 + 0j) % 1e-300 == 1.1102230246251565e-16 + 0j
+assert divmod(1 + 2j, 1e-20) == (1e20 + 0j, 2j)
+assert repr((-0.0) % (-2j)) == "(-0+0j)"
+nan_power = float("nan") ** 2.0
+assert nan_power != nan_power
+assert 0.0 ** -float("inf") == float("inf")
+assert (-float("inf")) ** 0.5 == float("inf")
 assert map(lambda value: value + 1, [1, 2]) == [2, 3]
 assert map(None, [1, 2], [3]) == [(1, 3), (2, None)]
 assert zip([1, 2], [3, 4, 5]) == [(1, 3), (2, 4)]
 assert sum([1, 2, 3]) == 6
+assert sum(xrange(10000)) == 49995000
+assert type(sum([9223372036854775807, 1])) is long
+assert sum([9223372036854775807, 1]) == 9223372036854775808L
+assert sum([], True) is True
+
+
+class ReflectedSumValue(object):
+    def __radd__(self, other):
+        return "reflected sum"
+
+
+assert sum([ReflectedSumValue()]) == "reflected sum"
 assert min(3, 1, 2) == 1
 assert max([1, 4, 2]) == 4
 assert max(["a", "bbb", "cc"], key=len) == "bbb"
+
+builtin_events = []
+
+
+def filter_source():
+    for value in xrange(3):
+        builtin_events.append("g" + str(value))
+        yield value
+
+
+def filter_predicate(value):
+    builtin_events.append("p" + str(value))
+    return True
+
+
+assert filter(filter_predicate, filter_source()) == [0, 1, 2]
+assert builtin_events == ["g0", "p0", "g1", "p1", "g2", "p2"]
+
+builtin_events = []
+
+
+def map_source(prefix, count):
+    for value in xrange(count):
+        builtin_events.append(prefix + str(value))
+        yield value
+
+
+assert map(None, map_source("a", 2), map_source("b", 3)) == [(0, 0), (1, 1), (None, 2)]
+assert builtin_events == ["a0", "b0", "a1", "b1", "b2"]
+
+
+class BoundBuiltinCallbacks(object):
+    def increment(self, value):
+        return value + 1
+
+    def odd(self, value):
+        return value % 2
+
+    def negative(self, value):
+        return -value
+
+
+bound_builtin_callbacks = BoundBuiltinCallbacks()
+assert map(bound_builtin_callbacks.increment, xrange(3)) == [1, 2, 3]
+assert filter(bound_builtin_callbacks.odd, xrange(5)) == [1, 3]
+assert min([1, 3, 2], key=bound_builtin_callbacks.negative) == 3
+
+builtin_events = []
+
+
+def minimum_source():
+    for value in [3, 1, 2]:
+        builtin_events.append("g" + str(value))
+        yield value
+
+
+def minimum_key(value):
+    builtin_events.append("k" + str(value))
+    return value
+
+
+assert min(minimum_source(), key=minimum_key) == 1
+assert builtin_events == ["g3", "k3", "g1", "k1", "g2", "k2"]
+
+try:
+    sum(["a"], "")
+except TypeError:
+    pass
+else:
+    raise AssertionError("sum accepted a string start value")
+
+sum_events = []
+
+
+class SumIteratedBeforeStartValidation(object):
+    def __iter__(self):
+        sum_events.append("iter")
+        return iter(())
+
+
+try:
+    sum(SumIteratedBeforeStartValidation(), "")
+except TypeError:
+    pass
+else:
+    raise AssertionError("sum accepted a string start value")
+assert sum_events == ["iter"]
+
 assert list(reversed([1, 2, 3])) == [3, 2, 1]
+
+
+class ReverseProtocol(object):
+    def __reversed__(self):
+        return iter((4, 3, 2))
+
+
+assert list(reversed(ReverseProtocol())) == [4, 3, 2]
+
+
+class ReverseSequence(object):
+    def __init__(self):
+        self.items = [1, 2, 3]
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, index):
+        return self.items[index]
+
+
+assert list(reversed(ReverseSequence())) == [3, 2, 1]
+
+
+class StopIterationSequence(object):
+    def __getitem__(self, index):
+        if index == 0:
+            return 0
+        if index == 1:
+            raise StopIteration
+        return index
+
+
+stop_iteration_sequence = iter(StopIterationSequence())
+assert next(stop_iteration_sequence) == 0
+for exhausted_attempt in xrange(2):
+    try:
+        next(stop_iteration_sequence)
+    except StopIteration:
+        pass
+    else:
+        raise AssertionError("sequence iterator resumed after StopIteration")
+
+
+class StopIterationReverseSequence(object):
+    def __len__(self):
+        return 3
+
+    def __getitem__(self, index):
+        if index == 2:
+            return 2
+        if index == 1:
+            raise StopIteration
+        return index
+
+
+assert list(reversed(StopIterationReverseSequence())) == [2]
+shrinking_reverse_source = [1, 2, 3]
+shrinking_reverse = reversed(shrinking_reverse_source)
+shrinking_reverse_source.pop()
+assert list(shrinking_reverse) == []
+assert list(reversed(xrange(-9223372036854775808L, 9223372036854775807L, 9223372036854775807L))) == [
+    9223372036854775806,
+    -1,
+    -9223372036854775808L,
+]
+
+call_values = [1, 2, 3, 4]
+
+
+def next_call_value():
+    return call_values.pop(0)
+
+
+assert list(iter(next_call_value, 4)) == [1, 2, 3]
+stop_call_count = [0]
+
+
+def stop_call_value():
+    stop_call_count[0] += 1
+    if stop_call_count[0] == 1:
+        raise StopIteration
+    return 1
+
+
+stop_call_iterator = iter(stop_call_value, 2)
+for exhausted_attempt in xrange(2):
+    try:
+        next(stop_call_iterator)
+    except StopIteration:
+        pass
+    else:
+        raise AssertionError("call iterator resumed after StopIteration")
+assert stop_call_count == [1]
 assert chr(65) == "A"
 assert unichr(0x20ac) == u"\u20ac"
+surrogate_character = unichr(0xd800)
+assert len(surrogate_character) == 1 and ord(surrogate_character) == 0xd800
+assert repr(surrogate_character) == "u'\\ud800'"
+assert surrogate_character.encode("utf-8") == "\xed\xa0\x80"
 assert cmp(1, 2) == -1 and cmp(2, 2) == 0 and cmp(3, 2) == 1
 assert hash("value") == hash("value")
 assert pow(2, 5) == 32
+assert pow(14, 5, 200) == 24
+assert repr(pow(2L, 1000L, 97L)) == "36L"
+promoted_modular_power = pow(3037000500, 2, 535)
+assert promoted_modular_power == 355L and type(promoted_modular_power) is long
 assert round(1.25, 1) == 1.3
+assert round(-1.25, 1) == -1.3
+assert round(2.675, 2) == 2.67
+assert round(1250.0, -2) == 1300.0
+assert round(1e308, 308) == 1e308
+assert round(number=1.25, ndigits=1) == 1.3
+assert round(1.25, 1L << 100) == 1.25
+assert round(1.25, -(1L << 100)) == 0.0
+
+
+class RoundFloat(object):
+    def __float__(self):
+        return 1.25
+
+
+assert round(RoundFloat(), 1) == 1.3
 assert globals() is locals()
 assert list(xrange(1, 5, 2)) == [1, 3]
 range_value = xrange(2, 10, 2)
@@ -269,11 +772,31 @@ assert list(range_value) == [2, 4, 6, 8]
 assert list(range_value) == [2, 4, 6, 8]
 enumerated = enumerate(["a", "b"], 3)
 assert type(enumerated).__name__ == "enumerate"
-assert next(enumerated) == (3, "a")
+assert enumerated.next() == (3, "a")
 assert list(enumerated) == [(4, "b")]
 reverse_iterator = reversed([1, 2, 3])
-assert next(reverse_iterator) == 3
+assert reverse_iterator.next() == 3
 assert list(reverse_iterator) == [2, 1]
+
+
+class LongLength(object):
+    def __len__(self):
+        return 3L
+
+
+class NegativeLength(object):
+    def __len__(self):
+        return -1
+
+
+assert len(LongLength()) == 3
+assert type(len(LongLength())) is int
+try:
+    len(NegativeLength())
+except ValueError:
+    pass
+else:
+    raise AssertionError("negative __len__ result was accepted")
 
 
 class Introspection(object):
@@ -707,3 +1230,163 @@ assert "ABC1".isupper() and not "ABc".isupper()
 assert "Hello World".istitle() and not "Hello world".istitle()
 assert "-42".zfill(5) == "-0042"
 assert u"a\u20acb".find(u"\u20ac") == 1
+
+
+class OverriddenInt(int):
+    def __add__(self, other):
+        return "int-add"
+
+    def __radd__(self, other):
+        return "int-radd"
+
+    def __mul__(self, other):
+        return "int-mul"
+
+    def __nonzero__(self):
+        return False
+
+    def __abs__(self):
+        return "int-abs"
+
+
+class OverriddenFloat(float):
+    def __add__(self, other):
+        return "float-add"
+
+
+class OverriddenComplex(complex):
+    def __add__(self, other):
+        return "complex-add"
+
+
+class OverriddenString(str):
+    def __add__(self, other):
+        return "string-add"
+
+    def __mul__(self, other):
+        return "string-mul"
+
+    def __getitem__(self, key):
+        return "string-item"
+
+    def __len__(self):
+        return 17
+
+
+class OverriddenTuple(tuple):
+    def __add__(self, other):
+        return "tuple-add"
+
+    def __getitem__(self, key):
+        return "tuple-item"
+
+
+class OverriddenList(list):
+    def __add__(self, other):
+        return "list-add"
+
+    def __getitem__(self, key):
+        return "list-item"
+
+    def __setitem__(self, key, value):
+        self.assigned = (key, value)
+
+    def __delitem__(self, key):
+        self.deleted = key
+
+    def __len__(self):
+        return 19
+
+    def __iter__(self):
+        return iter(("list-iter",))
+
+    def __contains__(self, item):
+        return item == "list-contains"
+
+
+class OverriddenDict(dict):
+    def __getitem__(self, key):
+        return "dict-item"
+
+    def __len__(self):
+        return 23
+
+    def __iter__(self):
+        return iter(("dict-iter",))
+
+    def __contains__(self, item):
+        return item == "dict-contains"
+
+
+class NotImplementedList(list):
+    def __init__(self):
+        self.add_calls = 0
+        self.radd_calls = 0
+
+    def __add__(self, other):
+        self.add_calls += 1
+        return NotImplemented
+
+    def __radd__(self, other):
+        self.radd_calls += 1
+        return NotImplemented
+
+
+overridden_int = OverriddenInt(2)
+assert overridden_int + 1 == "int-add"
+assert 1 + overridden_int == "int-radd"
+assert overridden_int * 2 == "int-mul"
+assert bool(overridden_int) is False
+assert abs(overridden_int) == "int-abs"
+assert OverriddenFloat(1.5) + 1 == "float-add"
+assert OverriddenComplex(1 + 2j) + 1 == "complex-add"
+overridden_string = OverriddenString("abc")
+assert overridden_string + "x" == "string-add"
+assert overridden_string * 2 == "string-mul"
+assert overridden_string[0] == "string-item"
+assert len(overridden_string) == 17
+overridden_tuple = OverriddenTuple((1, 2))
+assert overridden_tuple + (3,) == "tuple-add"
+assert overridden_tuple[0] == "tuple-item"
+overridden_list = OverriddenList((1, 2))
+assert overridden_list + [3] == "list-add"
+assert overridden_list[0] == "list-item"
+overridden_list[0] = 7
+assert overridden_list.assigned == (0, 7)
+del overridden_list[0]
+assert overridden_list.deleted == 0
+assert len(overridden_list) == 19
+assert list(iter(overridden_list)) == ["list-iter"]
+assert "list-contains" in overridden_list
+overridden_dict = OverriddenDict(answer=42)
+assert overridden_dict["answer"] == "dict-item"
+assert len(overridden_dict) == 23
+assert list(iter(overridden_dict)) == ["dict-iter"]
+assert "dict-contains" in overridden_dict
+not_implemented_list = NotImplementedList()
+try:
+    not_implemented_list + 1
+    assert False
+except TypeError:
+    pass
+assert not_implemented_list.add_calls == 1
+try:
+    1 + not_implemented_list
+    assert False
+except TypeError:
+    pass
+assert not_implemented_list.radd_calls == 1
+
+assert list.__getslice__([0, 1, 2, 3], 1, 3) == [1, 2]
+legacy_slice_list = [0, 1, 2, 3]
+assert list.__setslice__(legacy_slice_list, 1, 3, [8, 9]) is None
+assert legacy_slice_list == [0, 8, 9, 3]
+assert list.__delslice__(legacy_slice_list, 1, 3) is None
+assert legacy_slice_list == [0, 3]
+assert list(list.__reversed__([1, 2, 3])) == [3, 2, 1]
+assert tuple.__getslice__((0, 1, 2), 1, 3) == (1, 2)
+assert str.__getslice__("abc", 1, 3) == "bc"
+assert unicode.__getslice__(u"abc", 1, 3) == u"bc"
+assert tuple.__getnewargs__((1, 2)) == ((1, 2),)
+assert str.__getnewargs__("abc") == ("abc",)
+assert unicode.__getnewargs__(u"abc") == (u"abc",)

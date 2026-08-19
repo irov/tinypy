@@ -69,7 +69,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         vm, &vm->types[TINYPY_VALUE_UNICODE], &vm->types[TINYPY_VALUE_TYPE], "unicode", 7U,
         offsetof(tinypy_unicode_object_t, utf8), 1U,
         TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE,
-        &vm->types[TINYPY_VALUE_INVALID], NULL, NULL);
+        &vm->types[TINYPY_VALUE_INVALID], NULL, tinypy_internal_unicode_destroy);
     vm->types[TINYPY_VALUE_UNICODE].create = tinypy_internal_unicode_create;
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_LONG], &vm->types[TINYPY_VALUE_TYPE], "long", 4U,
@@ -654,6 +654,9 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     name = tinypy_integer_from_i64(vm, INT64_MAX);
     tinypy_module_add_value(sys_module, "maxint", 6U, name);
     TINYPY_DECREF(name);
+    name = tinypy_integer_from_i64(vm, INT64_C(0x10ffff));
+    tinypy_module_add_value(sys_module, "maxunicode", 10U, name);
+    TINYPY_DECREF(name);
     tinypy_module_add_value(sys_module, "py3kwarning", 11U, &vm->false_object.base);
     TINYPY_DECREF(stderr_value);
     TINYPY_DECREF(stdout_value);
@@ -834,7 +837,10 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     tinypy_internal_string_set_interned(vm->special_delete_key, 1);
 
     __tinypy_internal_initialize_type_dicts(vm);
+    vm->interned_strings = tinypy_dict_new(vm);
     tinypy_internal_initialize_container_types(vm);
+    tinypy_internal_initialize_slice_type(vm);
+    tinypy_internal_initialize_numeric_types(vm);
     tinypy_internal_initialize_string_types(vm);
     tinypy_internal_initialize_representation_types(vm);
     tinypy_internal_initialize_bytearray_methods(vm);
@@ -843,6 +849,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     tinypy_internal_initialize_descriptor_types(vm);
     tinypy_internal_initialize_generator_types(vm);
     tinypy_internal_initialize_set_types(vm);
+    tinypy_internal_initialize_dict_view_types(vm);
     tinypy_internal_initialize_output_type(vm);
     __tinypy_internal_initialize_builtins(vm);
     tinypy_internal_initialize_exceptions(vm);
@@ -986,6 +993,7 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph) {
 
     __tinypy_shutdown_add(graph, vm->modules);
     __tinypy_shutdown_add(graph, vm->builtins);
+    __tinypy_shutdown_add(graph, vm->interned_strings);
     __tinypy_shutdown_add(graph, vm->builtins_key);
     __tinypy_shutdown_add(graph, vm->special_getattribute_key);
     __tinypy_shutdown_add(graph, vm->special_getattr_key);

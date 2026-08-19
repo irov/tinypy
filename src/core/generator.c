@@ -326,6 +326,10 @@ void tinypy_internal_initialize_generator_types(tinypy_vm_t *vm) {
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_GENERATOR], "__iter__", 8U, __tinypy_generator_iter_method);
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ITERATOR], "next", 4U, __tinypy_generator_next_method);
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ITERATOR], "__iter__", 8U, __tinypy_generator_iter_method);
+    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ENUMERATE], "next", 4U, __tinypy_generator_next_method);
+    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ENUMERATE], "__iter__", 8U, __tinypy_generator_iter_method);
+    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_REVERSED], "next", 4U, __tinypy_generator_next_method);
+    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_REVERSED], "__iter__", 8U, __tinypy_generator_iter_method);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_generator_frame(const tinypy_value_t *generator) {

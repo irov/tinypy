@@ -711,6 +711,12 @@ static int32_t __test_string_release_contract(void) {
         vm,
         unicode_bytes,
         sizeof(unicode_bytes));
+    TEST_CHECK(tinypy_string_from_bytes(vm, bytes, SIZE_MAX) == NULL);
+    TEST_CHECK(tinypy_unicode_from_utf8(vm, (const char *)bytes, SIZE_MAX) == NULL);
+    TEST_CHECK(tinypy_long_from_base15_digits(vm, 1, (const uint16_t *)bytes, SIZE_MAX) == NULL);
+    TEST_CHECK(tinypy_tuple_new(vm, SIZE_MAX) == NULL);
+    TEST_CHECK(tinypy_tuple_from_items(vm, NULL, SIZE_MAX) == NULL);
+    TEST_CHECK(tinypy_list_from_items(vm, NULL, SIZE_MAX) == NULL);
     tinypy_retain(string_value);
     tinypy_retain(unicode_value);
 
@@ -1136,7 +1142,7 @@ static int32_t __test_hash_and_equality(void) {
     TEST_CHECK(integer_type_dict != NULL);
     TEST_CHECK(tinypy_typeof(integer_type_dict) == TINYPY_VALUE_DICT);
     type_dict_size = tinypy_dict_size(integer_type_dict);
-    TEST_CHECK(type_dict_size == 0U);
+    TEST_CHECK(type_dict_size != 0U);
 
     TEST_CHECK(tinypy_equal(integer, long_one) == 1);
     TEST_CHECK(tinypy_equal(integer, floating) == 1);

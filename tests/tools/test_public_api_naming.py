@@ -19,11 +19,13 @@ INTERNAL_CORE_UNITS = {
     "constructors",
     "container_methods",
     "cycle_diagnostics",
+    "double_conversion",
     "functools",
     "pool",
     "sre",
     "string_methods",
     "struct",
+    "unicode",
 }
 NON_CALL_EXPRESSION_NAMES = {
     "_Alignof",
@@ -124,6 +126,14 @@ def public_api_text() -> str:
     )
 
 
+def project_paths(root_names, pattern="*"):
+    for root_name in root_names:
+        for path in (ROOT / root_name).rglob(pattern):
+            if "third_party" in path.relative_to(ROOT).parts:
+                continue
+            yield path
+
+
 class PublicApiNamingTests(unittest.TestCase):
     def test_c_prefix_and_versioned_struct_names(self) -> None:
         for header in PUBLIC_HEADERS:
@@ -142,23 +152,21 @@ class PublicApiNamingTests(unittest.TestCase):
         self.assertIn("#include <stddef.h>", types_text)
         self.assertIn("#include <stdint.h>", types_text)
 
-        for root_name in ("include", "src"):
-            for path in (ROOT / root_name).rglob("*"):
-                if path.suffix not in {".c", ".h"}:
-                    continue
-                if path == INCLUDE / "types.h":
-                    continue
-                text = path.read_text(encoding="utf-8")
-                self.assertNotIn("#include <stddef.h>", text, path)
-                self.assertNotIn("#include <stdint.h>", text, path)
+        for path in project_paths(("include", "src")):
+            if path.suffix not in {".c", ".h"}:
+                continue
+            if path == INCLUDE / "types.h":
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("#include <stddef.h>", text, path)
+            self.assertNotIn("#include <stdint.h>", text, path)
 
     def test_unsigned_char_is_not_used(self) -> None:
-        for root_name in FIXED_WIDTH_TYPE_ROOTS:
-            for path in (ROOT / root_name).rglob("*"):
-                if path.suffix not in STATIC_FUNCTION_SUFFIXES:
-                    continue
-                text = path.read_text(encoding="utf-8")
-                self.assertNotRegex(text, r"\bunsigned\s+char\b", path)
+        for path in project_paths(FIXED_WIDTH_TYPE_ROOTS):
+            if path.suffix not in STATIC_FUNCTION_SUFFIXES:
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"\bunsigned\s+char\b", path)
 
     def test_boolean_api_uses_semantic_fixed_width_type(self) -> None:
         types_text = (INCLUDE / "types.h").read_text(encoding="utf-8")
@@ -317,11 +325,10 @@ class PublicApiNamingTests(unittest.TestCase):
         )
         multiline_function_pointer = re.compile(r"\(\*\w+\)\(\s*\n")
 
-        for root_name in ("include", "src"):
-            for path in (ROOT / root_name).rglob("*.h"):
-                text = path.read_text(encoding="utf-8")
-                self.assertNotRegex(text, multiline_prototype, path)
-                self.assertNotRegex(text, multiline_function_pointer, path)
+        for path in project_paths(("include", "src"), "*.h"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotRegex(text, multiline_prototype, path)
+            self.assertNotRegex(text, multiline_function_pointer, path)
 
     def test_enum_and_other_typedef_suffixes(self) -> None:
         declaration = re.compile(
@@ -562,34 +569,32 @@ class PublicApiNamingTests(unittest.TestCase):
         cmake_text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertNotIn("TINYPY_ENABLE_ASSERTS", cmake_text)
 
-        for root_name in ("cli", "include", "src"):
-            for path in (ROOT / root_name).rglob("*"):
-                if path.suffix not in {".c", ".h"}:
-                    continue
-                text = path.read_text(encoding="utf-8")
-                self.assertNotIn("TINYPY_ASSERT", text, path)
-                self.assertNotIn("TINYPY_ENABLE_ASSERTS", text, path)
-                self.assertNotRegex(text, r"\bassert\s*\(", path)
+        for path in project_paths(("cli", "include", "src")):
+            if path.suffix not in {".c", ".h"}:
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("TINYPY_ASSERT", text, path)
+            self.assertNotIn("TINYPY_ENABLE_ASSERTS", text, path)
+            self.assertNotRegex(text, r"\bassert\s*\(", path)
 
     def test_function_call_results_use_local_variables(self) -> None:
         return_statement = re.compile(r"\breturn\s+([^;]+);")
 
-        for root_name in STATIC_FUNCTION_ROOTS:
-            for path in (ROOT / root_name).rglob("*"):
-                if path.suffix not in STATIC_FUNCTION_SUFFIXES:
-                    continue
-                text = path.read_text(encoding="utf-8")
-                masked = mask_c_comments_and_literals(text)
-                for match in return_statement.finditer(masked):
-                    expression = match.group(1).strip()
-                    line = text.count("\n", 0, match.start()) + 1
-                    self.assertFalse(
-                        c_expression_contains_call(expression),
-                        "{}:{}: function call result must use a local variable".format(
-                            path.relative_to(ROOT),
-                            line,
-                        ),
-                    )
+        for path in project_paths(STATIC_FUNCTION_ROOTS):
+            if path.suffix not in STATIC_FUNCTION_SUFFIXES:
+                continue
+            text = path.read_text(encoding="utf-8")
+            masked = mask_c_comments_and_literals(text)
+            for match in return_statement.finditer(masked):
+                expression = match.group(1).strip()
+                line = text.count("\n", 0, match.start()) + 1
+                self.assertFalse(
+                    c_expression_contains_call(expression),
+                    "{}:{}: function call result must use a local variable".format(
+                        path.relative_to(ROOT),
+                        line,
+                    ),
+                )
 
     def test_return_value_locals_do_not_create_scopes(self) -> None:
         artificial_return_scope = re.compile(
@@ -602,27 +607,26 @@ class PublicApiNamingTests(unittest.TestCase):
         pseudo_else_scope = re.compile(r"}[ \t\r\n]*{")
         function_body_scope = re.compile(r"\)[ \t\r\n]*\{[ \t\r\n]*\{")
 
-        for root_name in STATIC_FUNCTION_ROOTS:
-            for path in (ROOT / root_name).rglob("*"):
-                if path.suffix not in STATIC_FUNCTION_SUFFIXES:
+        for path in project_paths(STATIC_FUNCTION_ROOTS):
+            if path.suffix not in STATIC_FUNCTION_SUFFIXES:
+                continue
+            text = path.read_text(encoding="utf-8")
+            masked = mask_c_comments_and_literals(text)
+            for pattern in (
+                artificial_return_scope,
+                pseudo_else_scope,
+                function_body_scope,
+            ):
+                match = pattern.search(masked)
+                if match is None:
                     continue
-                text = path.read_text(encoding="utf-8")
-                masked = mask_c_comments_and_literals(text)
-                for pattern in (
-                    artificial_return_scope,
-                    pseudo_else_scope,
-                    function_body_scope,
-                ):
-                    match = pattern.search(masked)
-                    if match is None:
-                        continue
-                    line = text.count("\n", 0, match.start()) + 1
-                    self.fail(
-                        "{}:{}: return local must not create an extra scope".format(
-                            path.relative_to(ROOT),
-                            line,
-                        )
+                line = text.count("\n", 0, match.start()) + 1
+                self.fail(
+                    "{}:{}: return local must not create an extra scope".format(
+                        path.relative_to(ROOT),
+                        line,
                     )
+                )
 
     def test_boolean_values_use_boolean_constants(self) -> None:
         return_statement = re.compile(r"\breturn\s+([^;]+);")
@@ -638,54 +642,53 @@ class PublicApiNamingTests(unittest.TestCase):
             r"\?\s*[01][uUlL]*\s*:\s*[01][uUlL]*\b"
         )
 
-        for root_name in STATIC_FUNCTION_ROOTS:
-            for path in (ROOT / root_name).rglob("*"):
-                if path.suffix not in STATIC_FUNCTION_SUFFIXES:
-                    continue
-                text = path.read_text(encoding="utf-8")
-                masked = mask_c_comments_and_literals(text)
-                for function_name, body_start, body_end in c_function_body_ranges(
-                    masked, "tinypy_bool_t"
+        for path in project_paths(STATIC_FUNCTION_ROOTS):
+            if path.suffix not in STATIC_FUNCTION_SUFFIXES:
+                continue
+            text = path.read_text(encoding="utf-8")
+            masked = mask_c_comments_and_literals(text)
+            for function_name, body_start, body_end in c_function_body_ranges(
+                masked, "tinypy_bool_t"
+            ):
+                for match in return_statement.finditer(
+                    masked, body_start, body_end
                 ):
-                    for match in return_statement.finditer(
-                        masked, body_start, body_end
-                    ):
-                        expression = match.group(1).strip()
-                        line = text.count("\n", 0, match.start()) + 1
-                        self.assertIsNone(
-                            fixed_width_integer_constant.fullmatch(expression),
-                            "{}:{}: {} must return TINYPY_FALSE/TINYPY_TRUE".format(
-                                path.relative_to(ROOT),
-                                line,
-                                function_name,
-                            ),
-                        )
-                        self.assertIsNone(
-                            raw_integer_constant.fullmatch(expression),
-                            "{}:{}: {} must return TINYPY_FALSE/TINYPY_TRUE".format(
-                                path.relative_to(ROOT),
-                                line,
-                                function_name,
-                            ),
-                        )
-                        self.assertNotRegex(
-                            expression,
-                            fixed_width_integer_ternary,
-                            "{}:{}: {} must return TINYPY_FALSE/TINYPY_TRUE".format(
-                                path.relative_to(ROOT),
-                                line,
-                                function_name,
-                            ),
-                        )
-                        self.assertNotRegex(
-                            expression,
-                            raw_integer_ternary,
-                            "{}:{}: {} must return TINYPY_FALSE/TINYPY_TRUE".format(
-                                path.relative_to(ROOT),
-                                line,
-                                function_name,
-                            ),
-                        )
+                    expression = match.group(1).strip()
+                    line = text.count("\n", 0, match.start()) + 1
+                    self.assertIsNone(
+                        fixed_width_integer_constant.fullmatch(expression),
+                        "{}:{}: {} must return TINYPY_FALSE/TINYPY_TRUE".format(
+                            path.relative_to(ROOT),
+                            line,
+                            function_name,
+                        ),
+                    )
+                    self.assertIsNone(
+                        raw_integer_constant.fullmatch(expression),
+                        "{}:{}: {} must return TINYPY_FALSE/TINYPY_TRUE".format(
+                            path.relative_to(ROOT),
+                            line,
+                            function_name,
+                        ),
+                    )
+                    self.assertNotRegex(
+                        expression,
+                        fixed_width_integer_ternary,
+                        "{}:{}: {} must return TINYPY_FALSE/TINYPY_TRUE".format(
+                            path.relative_to(ROOT),
+                            line,
+                            function_name,
+                        ),
+                    )
+                    self.assertNotRegex(
+                        expression,
+                        raw_integer_ternary,
+                        "{}:{}: {} must return TINYPY_FALSE/TINYPY_TRUE".format(
+                            path.relative_to(ROOT),
+                            line,
+                            function_name,
+                        ),
+                    )
                 for match in boolean_declaration.finditer(masked):
                     variable_name = match.group(1)
                     initializer = match.group(2).strip()
@@ -769,8 +772,7 @@ class PublicApiNamingTests(unittest.TestCase):
         vm_header = (ROOT / "include/tinypy/vm.h").read_text(encoding="utf-8")
         implementation = "\n".join(
             path.read_text(encoding="utf-8")
-            for directory in ("cli", "src", "tests")
-            for path in (ROOT / directory).rglob("*")
+            for path in project_paths(("cli", "src", "tests"))
             if path.suffix in {".c", ".h"}
         )
 
@@ -908,23 +910,22 @@ class PublicApiNamingTests(unittest.TestCase):
             r"^\s*static\s+[^;=()]*?([A-Za-z_]\w*)\s*\(",
             re.MULTILINE,
         )
-        for root_name in STATIC_FUNCTION_ROOTS:
-            for path in (ROOT / root_name).rglob("*"):
-                if path.suffix not in STATIC_FUNCTION_SUFFIXES:
+        for path in project_paths(STATIC_FUNCTION_ROOTS):
+            if path.suffix not in STATIC_FUNCTION_SUFFIXES:
+                continue
+            text = path.read_text(encoding="utf-8")
+            text = re.sub(r"^\s*#define[^\n]*(?:\\\n[^\n]*)*", "", text, flags=re.MULTILINE)
+            for match in declaration.finditer(text):
+                if "##" in match.group(0):
                     continue
-                text = path.read_text(encoding="utf-8")
-                text = re.sub(r"^\s*#define[^\n]*(?:\\\n[^\n]*)*", "", text, flags=re.MULTILINE)
-                for match in declaration.finditer(text):
-                    if "##" in match.group(0):
-                        continue
-                    name = match.group(1)
-                    self.assertTrue(
-                        name.startswith("__"),
-                        "{}: static function {} must start with __".format(
-                            path.relative_to(ROOT),
-                            name,
-                        ),
-                    )
+                name = match.group(1)
+                self.assertTrue(
+                    name.startswith("__"),
+                    "{}: static function {} must start with __".format(
+                        path.relative_to(ROOT),
+                        name,
+                    ),
+                )
 
 
 if __name__ == "__main__":

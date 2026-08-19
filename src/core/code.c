@@ -45,7 +45,7 @@ static void __tinypy_internal_code_intern_constants(tinypy_value_t *value) {
         tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(dict);
 
         for (; iterator != iterator_end; ++iterator) {
-            if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE) {
+            if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
                 __tinypy_internal_code_intern_constants(iterator->key);
             }
         }

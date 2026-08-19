@@ -19,6 +19,7 @@ typedef enum tinypy_compare_operation_e {
 
 int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error);
 int32_t tinypy_compare_bool(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_compare_value(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error);
 int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error);
 
 #endif

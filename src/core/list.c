@@ -24,11 +24,27 @@ void tinypy_internal_list_destroy(tinypy_value_t *value) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_list_swap_contents(tinypy_value_t *left, tinypy_value_t *right) {
+    tinypy_value_t **items = TINYPY_LIST_OBJECT(left)->items;
+    size_t size = TINYPY_SIZED_SIZE(left);
+    size_t allocated = TINYPY_LIST_OBJECT(left)->allocated;
+    uint64_t mutation_version = TINYPY_LIST_OBJECT(left)->mutation_version;
+
+    TINYPY_LIST_OBJECT(left)->items = TINYPY_LIST_OBJECT(right)->items;
+    TINYPY_SIZED_SIZE(left) = TINYPY_SIZED_SIZE(right);
+    TINYPY_LIST_OBJECT(left)->allocated = TINYPY_LIST_OBJECT(right)->allocated;
+    TINYPY_LIST_OBJECT(left)->mutation_version = TINYPY_LIST_OBJECT(right)->mutation_version;
+    TINYPY_LIST_OBJECT(right)->items = items;
+    TINYPY_SIZED_SIZE(right) = size;
+    TINYPY_LIST_OBJECT(right)->allocated = allocated;
+    TINYPY_LIST_OBJECT(right)->mutation_version = mutation_version;
+}
+//////////////////////////////////////////////////////////////////////////
 static inline size_t __tinypy_internal_list_storage_size(size_t capacity) {
     return capacity * sizeof(tinypy_value_t *);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity) {
+void tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity) {
     size_t old_size;
     size_t new_size;
     size_t new_capacity;
@@ -38,7 +54,9 @@ static void __tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list
     if (minimum_capacity <= TINYPY_LIST_OBJECT(list)->allocated) {
         return;
     }
-    (void)__tinypy_internal_list_storage_size(minimum_capacity);
+    if (minimum_capacity > SIZE_MAX / sizeof(tinypy_value_t *)) {
+        return;
+    }
 
     extra = (minimum_capacity >> 3U) + (minimum_capacity < 9U ? 3U : 6U);
     if (minimum_capacity > SIZE_MAX - extra) {
@@ -71,10 +89,37 @@ static void __tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list
     return;
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_list_shrink_to_fit(tinypy_vm_t *vm, tinypy_value_t *list) {
+    tinypy_list_object_t *list_object = TINYPY_LIST_OBJECT(list);
+    size_t size = TINYPY_LIST_SIZE(list);
+    size_t allocated = list_object->allocated;
+
+    if (allocated == size) {
+        return;
+    }
+    if (size == 0U) {
+        if (list_object->items != NULL) {
+            tinypy_internal_vm_deallocate(vm, list_object->items, __tinypy_internal_list_storage_size(allocated));
+            list_object->items = NULL;
+        }
+        list_object->allocated = 0U;
+        return;
+    }
+    list_object->items = (tinypy_value_t **)tinypy_internal_vm_reallocate(
+        vm,
+        list_object->items,
+        __tinypy_internal_list_storage_size(allocated),
+        __tinypy_internal_list_storage_size(size));
+    list_object->allocated = size;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_list_from_items(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size) {
     size_t storage_size;
     size_t index;
 
+    if (size > SIZE_MAX / sizeof(tinypy_value_t *)) {
+        return NULL;
+    }
     storage_size = __tinypy_internal_list_storage_size(size);
 
     tinypy_value_t *result = tinypy_internal_value_allocate(
@@ -135,7 +180,7 @@ void tinypy_list_extend(tinypy_value_t *list, tinypy_value_t *const *items, size
         TINYPY_INCREF(items[index]);
     }
 
-    __tinypy_internal_list_reserve(vm, list, new_size);
+    tinypy_internal_list_reserve(vm, list, new_size);
 
     (void)memcpy(
         TINYPY_LIST_OBJECT(list)->items + TINYPY_SIZED_SIZE(list),
@@ -161,7 +206,7 @@ void tinypy_list_insert(tinypy_value_t *list, size_t index, tinypy_value_t *item
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
 
     TINYPY_INCREF(item);
-    __tinypy_internal_list_reserve(
+    tinypy_internal_list_reserve(
         vm, list, TINYPY_SIZED_SIZE(list) + 1U);
 
     move_count = TINYPY_SIZED_SIZE(list) - index;

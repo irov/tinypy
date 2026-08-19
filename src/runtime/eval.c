@@ -472,20 +472,22 @@ static tinypy_value_t *__tinypy_eval_compare(tinypy_vm_t *vm, tinypy_value_t *le
         tinypy_value_t *return_value_1 = tinypy_bool_from_i32(vm, result);
         return return_value_1;
     }
-    result = tinypy_compare_bool(left, right, (tinypy_compare_operation_e)operation, out_error);
-    if (result < 0) {
-        return NULL;
-    }
-    tinypy_value_t *return_value_2 = tinypy_bool_from_i32(vm, result);
+    tinypy_value_t *return_value_2 = tinypy_compare_value(left, right, (tinypy_compare_operation_e)operation, out_error);
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_exception_class(tinypy_vm_t *vm, tinypy_value_t *value) {
+    if (value == NULL) {
+        return TINYPY_FALSE;
+    }
     tinypy_bool_t return_value_1 = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)value, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_exception_instance(tinypy_vm_t *vm, tinypy_value_t *value) {
+    if (value == NULL) {
+        return TINYPY_FALSE;
+    }
     tinypy_bool_t return_value_1 = tinypy_type_is_subtype(value->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0;
     return return_value_1;
 }
@@ -1138,7 +1140,7 @@ static tinypy_bool_t __tinypy_eval_call_merge_keywords(tinypy_vm_t *vm, tinypy_v
     tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(source);
     tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(source);
     for (; iterator != iterator_end; ++iterator) {
-        if (iterator->state != TINYPY_DICT_ENTRY_ACTIVE) {
+        if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
             continue;
         }
         if (TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING) {
@@ -1345,7 +1347,7 @@ static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_
             size_t parameter_index;
             tinypy_bool_t found = TINYPY_FALSE;
 
-            if (iterator->state != TINYPY_DICT_ENTRY_ACTIVE) {
+            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
                 continue;
             }
             if (TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING) {
@@ -1776,8 +1778,12 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             }
             break;
         case TINYPY_OP_BINARY_POWER:
-        case TINYPY_OP_INPLACE_POWER:
             if (__tinypy_eval_binary(vm, frame, tinypy_power, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
+        case TINYPY_OP_INPLACE_POWER:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_power, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
@@ -1792,50 +1798,82 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             }
             break;
         case TINYPY_OP_BINARY_MODULO:
-        case TINYPY_OP_INPLACE_MODULO:
             if (__tinypy_eval_binary(vm, frame, tinypy_remainder, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
+        case TINYPY_OP_INPLACE_MODULO:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_remainder, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
         case TINYPY_OP_BINARY_FLOOR_DIVIDE:
-        case TINYPY_OP_INPLACE_FLOOR_DIVIDE:
             if (__tinypy_eval_binary(vm, frame, tinypy_floor_divide, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
+        case TINYPY_OP_INPLACE_FLOOR_DIVIDE:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_floor_divide, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
         case TINYPY_OP_BINARY_TRUE_DIVIDE:
-        case TINYPY_OP_INPLACE_TRUE_DIVIDE:
             if (__tinypy_eval_binary(vm, frame, tinypy_true_divide, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
+        case TINYPY_OP_INPLACE_TRUE_DIVIDE:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_true_divide, TINYPY_EVAL_INTEGER_BINARY_NONE, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
         case TINYPY_OP_BINARY_LSHIFT:
-        case TINYPY_OP_INPLACE_LSHIFT:
             if (__tinypy_eval_binary(vm, frame, tinypy_left_shift, TINYPY_EVAL_INTEGER_BINARY_LEFT_SHIFT, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
+        case TINYPY_OP_INPLACE_LSHIFT:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_left_shift, TINYPY_EVAL_INTEGER_BINARY_LEFT_SHIFT, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
         case TINYPY_OP_BINARY_RSHIFT:
-        case TINYPY_OP_INPLACE_RSHIFT:
             if (__tinypy_eval_binary(vm, frame, tinypy_right_shift, TINYPY_EVAL_INTEGER_BINARY_RIGHT_SHIFT, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
+        case TINYPY_OP_INPLACE_RSHIFT:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_right_shift, TINYPY_EVAL_INTEGER_BINARY_RIGHT_SHIFT, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
         case TINYPY_OP_BINARY_AND:
-        case TINYPY_OP_INPLACE_AND:
             if (__tinypy_eval_binary(vm, frame, tinypy_bit_and, TINYPY_EVAL_INTEGER_BINARY_AND, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
+        case TINYPY_OP_INPLACE_AND:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_bit_and, TINYPY_EVAL_INTEGER_BINARY_AND, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
         case TINYPY_OP_BINARY_XOR:
-        case TINYPY_OP_INPLACE_XOR:
             if (__tinypy_eval_binary(vm, frame, tinypy_bit_xor, TINYPY_EVAL_INTEGER_BINARY_XOR, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
+        case TINYPY_OP_INPLACE_XOR:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_bit_xor, TINYPY_EVAL_INTEGER_BINARY_XOR, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
         case TINYPY_OP_BINARY_OR:
-        case TINYPY_OP_INPLACE_OR:
             if (__tinypy_eval_binary(vm, frame, tinypy_bit_or, TINYPY_EVAL_INTEGER_BINARY_OR, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            break;
+        case TINYPY_OP_INPLACE_OR:
+            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_bit_or, TINYPY_EVAL_INTEGER_BINARY_OR, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
@@ -2083,7 +2121,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             tinypy_value_t *attribute_value = __tinypy_eval_pop_owned(frame);
             tinypy_bool_t stored;
 
-            stored = tinypy_internal_object_set_attr_key(object, name, attribute_value, out_error);
+            stored = tinypy_internal_object_set_attr_protocol_key(object, name, attribute_value, out_error);
             TINYPY_DECREF(attribute_value);
             TINYPY_DECREF(object);
             if (stored == 0) {
@@ -2097,7 +2135,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             tinypy_value_t *object = __tinypy_eval_pop_owned(frame);
             tinypy_bool_t deleted;
 
-            deleted = tinypy_internal_object_delete_attr_key(object, name, out_error);
+            deleted = tinypy_internal_object_delete_attr_protocol_key(object, name, out_error);
             TINYPY_DECREF(object);
             if (deleted == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
@@ -2246,30 +2284,80 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
         break;
         case TINYPY_OP_UNPACK_SEQUENCE: {
             tinypy_value_t *sequence = __tinypy_eval_pop_owned(frame);
-            size_t count;
+            tinypy_value_t *iterator;
+            tinypy_value_t **unpacked_items = NULL;
+            tinypy_error_t *iteration_error = NULL;
             size_t index;
 
-            if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_TUPLE) {
-                count = TINYPY_TUPLE_SIZE(sequence);
-            }
-            else if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_LIST) {
-                count = TINYPY_LIST_SIZE(sequence);
-            }
-            else {
-                count = SIZE_MAX;
-            }
-            if (count != argument) {
-                TINYPY_DECREF(sequence);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "unpack sequence has the wrong size", out_error);
+            iterator = tinypy_iter(sequence, out_error);
+            TINYPY_DECREF(sequence);
+            if (iterator == NULL) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
                 break;
             }
-            for (index = count; index != 0U; index -= 1U) {
-                tinypy_value_t *item = TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(sequence, index - 1U) : TINYPY_LIST_GET(sequence, index - 1U);
-                TINYPY_INCREF(item);
-                __tinypy_eval_push_owned(frame, item);
+            if (argument != 0U) {
+                unpacked_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, argument * sizeof(*unpacked_items));
             }
-            TINYPY_DECREF(sequence);
+            for (index = 0U; index < argument; ++index) {
+                unpacked_items[index] = tinypy_next(iterator, &iteration_error);
+                if (unpacked_items[index] == NULL) {
+                    break;
+                }
+            }
+            if (index != argument) {
+                while (index != 0U) {
+                    TINYPY_DECREF(unpacked_items[--index]);
+                }
+                if (argument != 0U) {
+                    tinypy_internal_vm_deallocate(vm, unpacked_items, argument * sizeof(*unpacked_items));
+                }
+                TINYPY_DECREF(iterator);
+                if (iteration_error != NULL) {
+                    if (out_error != NULL) {
+                        *out_error = iteration_error;
+                    }
+                    else {
+                        tinypy_error_release(iteration_error);
+                    }
+                }
+                else {
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "need more than the available values to unpack", out_error);
+                }
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+                break;
+            }
+            tinypy_value_t *extra = tinypy_next(iterator, &iteration_error);
+            TINYPY_DECREF(iterator);
+            if (extra != NULL || iteration_error != NULL) {
+                if (extra != NULL) {
+                    TINYPY_DECREF(extra);
+                }
+                while (index != 0U) {
+                    TINYPY_DECREF(unpacked_items[--index]);
+                }
+                if (argument != 0U) {
+                    tinypy_internal_vm_deallocate(vm, unpacked_items, argument * sizeof(*unpacked_items));
+                }
+                if (iteration_error != NULL) {
+                    if (out_error != NULL) {
+                        *out_error = iteration_error;
+                    }
+                    else {
+                        tinypy_error_release(iteration_error);
+                    }
+                }
+                else {
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "too many values to unpack", out_error);
+                }
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+                break;
+            }
+            for (index = argument; index != 0U; index -= 1U) {
+                __tinypy_eval_push_owned(frame, unpacked_items[index - 1U]);
+            }
+            if (argument != 0U) {
+                tinypy_internal_vm_deallocate(vm, unpacked_items, argument * sizeof(*unpacked_items));
+            }
         }
         break;
         case TINYPY_OP_BUILD_CLASS: {

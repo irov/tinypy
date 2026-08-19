@@ -16,7 +16,7 @@ static void __tinypy_functools_dict_update(tinypy_value_t *target, tinypy_value_
     tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(source);
     tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(source);
     for (; iterator != iterator_end; ++iterator) {
-        if (iterator->state == TINYPY_DICT_ENTRY_ACTIVE) {
+        if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
             tinypy_dict_set(target, iterator->key, iterator->value);
         }
     }
@@ -95,7 +95,7 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_functools_reduce(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t argument_count = TINYPY_TUPLE_SIZE(args);
     tinypy_value_t *accumulator;
@@ -177,7 +177,7 @@ static tinypy_value_t *__tinypy_functools_reduce(tinypy_value_t *function, tinyp
 void tinypy_internal_initialize_functools_module(tinypy_vm_t *vm) {
     tinypy_value_t *module = tinypy_module_new(vm, "_functools", 10U);
     tinypy_value_t *name = tinypy_string_from_bytes(vm, "_functools", 10U);
-    tinypy_value_t *reduce = tinypy_native_function_new(vm, "reduce", 6U, __tinypy_functools_reduce, NULL, NULL);
+    tinypy_value_t *reduce = tinypy_native_function_new(vm, "reduce", 6U, tinypy_internal_functools_reduce, NULL, NULL);
 
     tinypy_module_add_value(module, "__name__", 8U, name);
     tinypy_module_add_value(module, "partial", 7U, &vm->types[TINYPY_VALUE_PARTIAL].base.base);

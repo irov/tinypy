@@ -14,6 +14,57 @@ static void __tinypy_internal_type_error(tinypy_vm_t *vm, const char *message, t
 }
 
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_type_has_mutable_builtin_layout(tinypy_value_type_e kind) {
+    return kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_DICT || kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_BYTEARRAY ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_type_has_container_builtin_layout(tinypy_value_type_e kind) {
+    tinypy_bool_t return_value_1 = __tinypy_internal_type_has_mutable_builtin_layout(kind) != 0 || kind == TINYPY_VALUE_FROZENSET ? TINYPY_TRUE : TINYPY_FALSE;
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_type_has_fixed_immutable_builtin_layout(tinypy_value_type_e kind) {
+    return kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_type_has_variable_immutable_builtin_layout(tinypy_value_type_e kind) {
+    return kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_LONG ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_builtin_subclass_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    switch (value->type->layout_kind) {
+    case TINYPY_VALUE_LIST:
+        tinypy_internal_list_release_references(value, visit, user_data);
+        break;
+    case TINYPY_VALUE_DICT:
+        tinypy_internal_dict_release_references(value, visit, user_data);
+        break;
+    case TINYPY_VALUE_SET:
+    case TINYPY_VALUE_FROZENSET:
+        tinypy_internal_set_release_references(value, visit, user_data);
+        break;
+    default:
+        break;
+    }
+    tinypy_internal_instance_release_references(value, visit, user_data);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_builtin_subclass_destroy(tinypy_value_t *value) {
+    switch (value->type->layout_kind) {
+    case TINYPY_VALUE_LIST:
+        tinypy_internal_list_destroy(value);
+        break;
+    case TINYPY_VALUE_DICT:
+        tinypy_internal_dict_destroy(value);
+        break;
+    case TINYPY_VALUE_BYTEARRAY:
+        tinypy_internal_bytearray_destroy(value);
+        break;
+    default:
+        break;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_internal_type_mro_size_raw(const tinypy_type_t *type) {
     size_t count = 0U;
 
@@ -549,6 +600,7 @@ static tinypy_value_t *__tinypy_internal_type_parse_slots(tinypy_vm_t *vm, const
 static const tinypy_type_t *__tinypy_internal_select_layout_base(tinypy_vm_t *vm, const tinypy_type_t *const *bases, size_t base_count, tinypy_error_t **out_error) {
     const tinypy_type_t *layout_base = bases[0];
     const tinypy_type_t *native_base = NULL;
+    tinypy_value_type_e builtin_layout_kind = TINYPY_VALUE_INVALID;
     size_t index;
 
     for (index = 0U; index < base_count; ++index) {
@@ -571,9 +623,30 @@ static const tinypy_type_t *__tinypy_internal_select_layout_base(tinypy_vm_t *vm
     }
     for (index = 0U; index < base_count; ++index) {
         const tinypy_type_t *candidate = bases[index];
+        tinypy_value_type_e candidate_kind = candidate->layout_kind;
+
+        if (candidate_kind == TINYPY_VALUE_INVALID || candidate_kind == TINYPY_VALUE_INSTANCE) {
+            continue;
+        }
+        if (builtin_layout_kind == TINYPY_VALUE_INVALID) {
+            builtin_layout_kind = candidate_kind;
+            layout_base = candidate;
+            continue;
+        }
+        if (candidate_kind != builtin_layout_kind) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have incompatible instance layouts", out_error);
+            return NULL;
+        }
+    }
+    for (index = 0U; index < base_count; ++index) {
+        const tinypy_type_t *candidate = bases[index];
 
         if (candidate->slot_count == 0U || candidate == layout_base) {
             continue;
+        }
+        if (builtin_layout_kind != TINYPY_VALUE_INVALID && candidate->layout_kind == TINYPY_VALUE_INSTANCE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have incompatible instance layouts", out_error);
+            return NULL;
         }
         if (layout_base->slot_count == 0U) {
             layout_base = candidate;
@@ -704,6 +777,34 @@ tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_si
         type->dict_offset = layout_base->dict_offset;
         type->weakref_offset = layout_base->weakref_offset;
     }
+    else if (__tinypy_internal_type_has_container_builtin_layout(instance_kind) != 0 || __tinypy_internal_type_has_fixed_immutable_builtin_layout(instance_kind) != 0) {
+        const tinypy_type_t *builtin_layout = &vm->types[instance_kind];
+
+        type->slots_offset = builtin_layout->basic_size;
+        type->basic_size = type->slots_offset + type->slot_count * sizeof(tinypy_value_t *);
+        if (type->has_instance_dict != 0) {
+            type->dict_offset = type->basic_size;
+            type->basic_size += sizeof(tinypy_value_t *);
+        }
+        if (layout_base->weakref_offset != 0U || slots_declared == 0 || weakref_slot != 0) {
+            type->weakref_offset = type->basic_size;
+            type->basic_size += sizeof(tinypy_value_t *);
+        }
+    }
+    else if (__tinypy_internal_type_has_variable_immutable_builtin_layout(instance_kind) != 0) {
+        const tinypy_type_t *builtin_layout = &vm->types[instance_kind];
+
+        type->slots_offset = builtin_layout->basic_size;
+        type->basic_size = builtin_layout->basic_size + type->slot_count * sizeof(tinypy_value_t *);
+        if (type->has_instance_dict != 0) {
+            type->dict_offset = 1U;
+            type->basic_size += sizeof(tinypy_value_t *);
+        }
+        if (layout_base->weakref_offset != 0U || slots_declared == 0 || weakref_slot != 0) {
+            type->weakref_offset = 1U;
+            type->basic_size += sizeof(tinypy_value_t *);
+        }
+    }
     else {
         type->slots_offset = offsetof(tinypy_instance_object_t, slots);
         type->basic_size = type->slots_offset + type->slot_count * sizeof(tinypy_value_t *);
@@ -734,10 +835,10 @@ tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_si
     type->descriptor_set = layout_base->descriptor_set;
     type->release_references = instance_kind == TINYPY_VALUE_TYPE
                                    ? tinypy_internal_type_release_references
-                                   : (instance_kind == TINYPY_VALUE_WEAKREF ? tinypy_internal_weakref_release_references : (instance_kind == TINYPY_VALUE_TUPLE ? tinypy_internal_tuple_subclass_release_references : (instance_kind == TINYPY_VALUE_NATIVE_INSTANCE ? tinypy_internal_native_instance_release_references : tinypy_internal_instance_release_references)));
+                                   : (instance_kind == TINYPY_VALUE_WEAKREF ? tinypy_internal_weakref_release_references : (instance_kind == TINYPY_VALUE_TUPLE ? tinypy_internal_tuple_subclass_release_references : (instance_kind == TINYPY_VALUE_NATIVE_INSTANCE ? tinypy_internal_native_instance_release_references : (__tinypy_internal_type_has_container_builtin_layout(instance_kind) != 0 ? __tinypy_internal_builtin_subclass_release_references : tinypy_internal_instance_release_references))));
     type->destroy = instance_kind == TINYPY_VALUE_TYPE
                         ? tinypy_internal_type_destroy
-                        : (instance_kind == TINYPY_VALUE_WEAKREF ? tinypy_internal_weakref_destroy : (instance_kind == TINYPY_VALUE_TUPLE ? tinypy_internal_tuple_subclass_destroy : (instance_kind == TINYPY_VALUE_NATIVE_INSTANCE ? tinypy_internal_native_instance_destroy : NULL)));
+                        : (instance_kind == TINYPY_VALUE_WEAKREF ? tinypy_internal_weakref_destroy : (instance_kind == TINYPY_VALUE_TUPLE ? tinypy_internal_tuple_subclass_destroy : (instance_kind == TINYPY_VALUE_NATIVE_INSTANCE ? tinypy_internal_native_instance_destroy : (__tinypy_internal_type_has_container_builtin_layout(instance_kind) != 0 ? __tinypy_internal_builtin_subclass_destroy : (instance_kind == TINYPY_VALUE_UNICODE ? tinypy_internal_unicode_destroy : NULL)))));
 
     name_object = tinypy_string_from_bytes(vm, name, name_size);
     type->name = (const char *)TINYPY_STRING_OBJECT(name_object)->bytes;
@@ -910,10 +1011,22 @@ tinypy_value_t **tinypy_internal_object_dict_slot(tinypy_value_t *value) {
     if (value->type->dict_offset == 0U) {
         return NULL;
     }
+    if (__tinypy_internal_type_has_variable_immutable_builtin_layout(TINYPY_VALUE_KIND(value)) != 0) {
+        size_t payload_size = tinypy_internal_variable_builtin_payload_size(value);
+        size_t aligned_payload = (payload_size + sizeof(tinypy_value_t *) - 1U) & ~(sizeof(tinypy_value_t *) - 1U);
+
+        return (tinypy_value_t **)((uint8_t *)value + aligned_payload) + value->type->slot_count;
+    }
     return (tinypy_value_t **)((uint8_t *)value + value->type->dict_offset);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t **tinypy_internal_object_member_slot(tinypy_value_t *value, size_t index) {
+    if (__tinypy_internal_type_has_variable_immutable_builtin_layout(TINYPY_VALUE_KIND(value)) != 0) {
+        size_t payload_size = tinypy_internal_variable_builtin_payload_size(value);
+        size_t aligned_payload = (payload_size + sizeof(tinypy_value_t *) - 1U) & ~(sizeof(tinypy_value_t *) - 1U);
+
+        return (tinypy_value_t **)((uint8_t *)value + aligned_payload) + index;
+    }
     return (tinypy_value_t **)((uint8_t *)value + value->type->slots_offset) + index;
 }
 //////////////////////////////////////////////////////////////////////////

@@ -214,6 +214,9 @@ void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size) {
     uint32_t size_class;
     size_t block_size;
 
+    if (size == 0U) {
+        size = 1U;
+    }
     if (size > TINYPY_INTERNAL_POOL_SMALL_REQUEST) {
         void *return_value_1 = __tinypy_pool_raw_allocate(vm, size, TINYPY_INTERNAL_ALIGNMENT);
         return return_value_1;

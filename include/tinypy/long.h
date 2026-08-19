@@ -6,7 +6,8 @@
 /* Long values use canonical sign-and-magnitude base-2^15 digits internally.
  * Digits are least-significant first, matching the digit payload of CPython
  * 2.7 marshal long objects. sign must be -1, 0 or 1. Canonical zero is the
- * sole combination sign == 0 and digit_count == 0. */
+ * sole combination sign == 0 and digit_count == 0. The digit constructor
+ * returns NULL when digit_count cannot be represented by the allocation. */
 tinypy_value_t *tinypy_long_from_i64(tinypy_vm_t *vm, int64_t value);
 tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int32_t sign, const uint16_t *digits, size_t digit_count);
 

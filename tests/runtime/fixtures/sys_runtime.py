@@ -2,6 +2,7 @@ import sys
 
 original_limit = sys.getrecursionlimit()
 assert original_limit == 1000
+assert sys.maxunicode == 0x10ffff
 
 try:
     sys.setrecursionlimit(0)

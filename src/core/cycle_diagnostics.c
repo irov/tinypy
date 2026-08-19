@@ -641,7 +641,7 @@ static const tinypy_cycle_diagnostics_edge_t *__tinypy_debug_cycle_reference_dia
         size_t current_index = 0U;
 
         for (; entry != entry_end; ++entry) {
-            if (entry->state != TINYPY_DICT_ENTRY_ACTIVE) {
+            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
                 continue;
             }
             if (current_index == active_index) {
