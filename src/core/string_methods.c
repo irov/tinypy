@@ -806,10 +806,12 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
                 }
                 position = position * 10U + digit;
             }
-            if (sizeof(size_t) > sizeof(int64_t) && position > (size_t)INT64_MAX) {
+#if SIZE_MAX > INT64_MAX
+            if (position > (size_t)INT64_MAX) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "too many decimal digits in format string", out_error);
                 return NULL;
             }
+#endif
             if (TINYPY_TUPLE_SIZE(args) <= 1U || position >= TINYPY_TUPLE_SIZE(args) - 1U) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "format positional argument is missing", out_error);
                 return NULL;

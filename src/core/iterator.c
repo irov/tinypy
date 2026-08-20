@@ -678,6 +678,10 @@ static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
     size_t size;
 
+    if (tinypy_internal_memoryview_check(sequence) != 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument to reversed() must be a sequence", out_error);
+        return NULL;
+    }
     if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_LIST || TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_TUPLE) {
         size = TINYPY_SIZED_SIZE(sequence);
     }
@@ -873,11 +877,11 @@ void tinypy_internal_initialize_iterator_types(tinypy_vm_t *vm) {
     __tinypy_iterator_type_set(vm, xrange_type, "__repr__", 8U, __tinypy_xrange_repr_method);
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {
     tinypy_value_type_e kind;
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (tinypy_internal_object_has_special_override(value, "__iter__", 8U) != 0) {
+    if (dispatch_special != 0 && tinypy_internal_object_has_special_override(value, "__iter__", 8U) != 0) {
         tinypy_value_t *method = tinypy_internal_object_get_special(value, "__iter__", 8U, out_error);
         tinypy_value_t *args;
         tinypy_value_t *result;
@@ -906,7 +910,7 @@ tinypy_value_t *tinypy_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
         tinypy_value_t *return_value_2 = __tinypy_internal_iterator_new(value);
         return return_value_2;
     }
-    if (tinypy_internal_object_has_special(value, "__iter__", 8U) != 0) {
+    if (dispatch_special != 0 && tinypy_internal_object_has_special(value, "__iter__", 8U) != 0) {
         tinypy_value_t *method = tinypy_internal_object_get_special(value, "__iter__", 8U, out_error);
         tinypy_value_t *args;
         tinypy_value_t *result;
@@ -926,7 +930,7 @@ tinypy_value_t *tinypy_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
         }
         return result;
     }
-    if (tinypy_internal_object_has_special(value, "__getitem__", 11U) != 0) {
+    if (dispatch_special != 0 && tinypy_internal_object_has_special(value, "__getitem__", 11U) != 0) {
         tinypy_value_t *iterator = __tinypy_internal_iterator_new(value);
 
         TINYPY_ITERATOR_OBJECT(iterator)->mode = INT32_C(4);
@@ -935,6 +939,18 @@ tinypy_value_t *tinypy_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object is not iterable", out_error);
     return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_iter_builtin(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_iter(value, TINYPY_FALSE, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_iter(value, TINYPY_TRUE, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_next(tinypy_value_t *iterator, tinypy_error_t **out_error) {

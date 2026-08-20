@@ -2060,6 +2060,20 @@ static void __tinypy_builtin_dir_add_name(tinypy_vm_t *vm, tinypy_value_t *names
     TINYPY_DECREF(key);
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_builtin_dir_sort(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_error_t **out_error) {
+    tinypy_value_t *sort_function = tinypy_type_get_attr(&vm->types[TINYPY_VALUE_LIST], "sort", 4U);
+    tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &result, 1U);
+    tinypy_value_t *sort_result = tinypy_call(sort_function, arguments, NULL, out_error);
+
+    TINYPY_DECREF(arguments);
+    if (sort_result == NULL) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    TINYPY_DECREF(sort_result);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_dict_entry_t *iterator;
@@ -2068,6 +2082,34 @@ static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_val
     (void)user_data;
     if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 0U, 1U, out_error) == 0) {
         return NULL;
+    }
+    if (TINYPY_TUPLE_SIZE(args) == 1U) {
+        tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
+
+        if (tinypy_internal_object_has_special(value, "__dir__", 7U) != 0) {
+            tinypy_value_t *method = tinypy_internal_object_get_special(value, "__dir__", 7U, out_error);
+            tinypy_value_t *empty;
+            tinypy_value_t *result;
+
+            if (method == NULL) {
+                return NULL;
+            }
+            empty = tinypy_tuple_from_items(vm, NULL, 0U);
+            result = tinypy_call(method, empty, NULL, out_error);
+            TINYPY_DECREF(empty);
+            TINYPY_DECREF(method);
+            if (result == NULL) {
+                return NULL;
+            }
+            if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_LIST) {
+                TINYPY_DECREF(result);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__dir__() must return a list", out_error);
+                return NULL;
+            }
+            tinypy_value_t *sorted = __tinypy_builtin_dir_sort(vm, result, out_error);
+
+            return sorted;
+        }
     }
     tinypy_value_t *names = tinypy_dict_new(vm);
     if (TINYPY_TUPLE_SIZE(args) == 0U) {
@@ -2079,14 +2121,14 @@ static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_val
         tinypy_type_t *type = value->type;
         size_t mro_index;
 
-        if (kind == TINYPY_VALUE_INSTANCE) {
+        if (kind != TINYPY_VALUE_MODULE && kind != TINYPY_VALUE_TYPE) {
             tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(value);
 
             if (dict_slot != NULL && *dict_slot != NULL) {
                 __tinypy_builtin_dir_add_dict(names, *dict_slot);
             }
         }
-        else if (kind == TINYPY_VALUE_MODULE) {
+        if (kind == TINYPY_VALUE_MODULE) {
             tinypy_value_t *module_dict = tinypy_module_dict(value);
             __tinypy_builtin_dir_add_dict(names, module_dict);
         }
@@ -2119,11 +2161,13 @@ static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_val
         else if (kind == TINYPY_VALUE_FUNCTION && TINYPY_FUNCTION_OBJECT(value)->dict != NULL) {
             __tinypy_builtin_dir_add_dict(names, TINYPY_FUNCTION_OBJECT(value)->dict);
         }
-        for (mro_index = 0U; mro_index < tinypy_type_mro_size(type); ++mro_index) {
-            const tinypy_type_t *mro_type = tinypy_type_mro_at(type, mro_index);
+        if (kind != TINYPY_VALUE_MODULE && kind != TINYPY_VALUE_TYPE) {
+            for (mro_index = 0U; mro_index < tinypy_type_mro_size(type); ++mro_index) {
+                const tinypy_type_t *mro_type = tinypy_type_mro_at(type, mro_index);
 
-            const tinypy_value_t *type_dict = tinypy_type_dict(mro_type);
-            __tinypy_builtin_dir_add_dict(names, (tinypy_value_t *)type_dict);
+                const tinypy_value_t *type_dict = tinypy_type_dict(mro_type);
+                __tinypy_builtin_dir_add_dict(names, (tinypy_value_t *)type_dict);
+            }
         }
     }
     tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
@@ -2134,26 +2178,10 @@ static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_val
             tinypy_list_append(result, iterator->key);
         }
     }
-    TINYPY_DECREF(names); {
-        tinypy_value_t *sort_method = tinypy_object_get_attr(result, "sort", 4U, out_error);
-        tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
-        tinypy_value_t *sort_result;
+    TINYPY_DECREF(names);
+    tinypy_value_t *sorted = __tinypy_builtin_dir_sort(vm, result, out_error);
 
-        if (sort_method == NULL) {
-            TINYPY_DECREF(empty);
-            TINYPY_DECREF(result);
-            return NULL;
-        }
-        sort_result = tinypy_call(sort_method, empty, NULL, out_error);
-        TINYPY_DECREF(empty);
-        TINYPY_DECREF(sort_method);
-        if (sort_result == NULL) {
-            TINYPY_DECREF(result);
-            return NULL;
-        }
-        TINYPY_DECREF(sort_result);
-    }
-    return result;
+    return sorted;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_import(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

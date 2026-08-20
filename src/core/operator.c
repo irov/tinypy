@@ -2015,17 +2015,12 @@ tinypy_value_t *tinypy_divmod(tinypy_value_t *left, tinypy_value_t *right, tinyp
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_value_type_e left_kind;
     tinypy_value_type_e right_kind;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_bool_t handled;
-    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, "__pow__", 7U, "__rpow__", 8U, &handled, out_error);
-    if (handled != 0) {
-        return special;
-    }
     left_kind = TINYPY_VALUE_KIND(left);
     right_kind = TINYPY_VALUE_KIND(right);
     if (__tinypy_operator_is_number(left_kind) == 0 || __tinypy_operator_is_number(right_kind) == 0) {
@@ -2207,6 +2202,20 @@ tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy
         }
     }
     TINYPY_DECREF(base);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_bool_t handled;
+    tinypy_value_t *special;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    special = __tinypy_operator_special_binary(left, right, "__pow__", 7U, "__rpow__", 8U, &handled, out_error);
+    if (handled != 0) {
+        return special;
+    }
+    tinypy_value_t *result = __tinypy_operator_power_builtin(left, right, out_error);
+
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2488,4 +2497,296 @@ tinypy_value_t *tinypy_bit_or(tinypy_value_t *left, tinypy_value_t *right, tinyp
     }
     tinypy_value_t *return_value_2 = __tinypy_operator_integer_bitwise(vm, left, right, 2, out_error);
     return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_multiply_builtin(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
+    tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
+    size_t repeat_count;
+
+    if (left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE || left_kind == TINYPY_VALUE_TUPLE || left_kind == TINYPY_VALUE_LIST) {
+        int32_t repeat = __tinypy_operator_repeat_count(right, &repeat_count, out_error);
+
+        if (repeat < 0) {
+            return NULL;
+        }
+        if (repeat != 0) {
+            tinypy_value_t *result = __tinypy_operator_repeat(vm, left, repeat_count, out_error);
+
+            return result;
+        }
+    }
+    if (right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE || right_kind == TINYPY_VALUE_TUPLE || right_kind == TINYPY_VALUE_LIST) {
+        int32_t repeat = __tinypy_operator_repeat_count(left, &repeat_count, out_error);
+
+        if (repeat < 0) {
+            return NULL;
+        }
+        if (repeat != 0) {
+            tinypy_value_t *result = __tinypy_operator_repeat(vm, right, repeat_count, out_error);
+
+            return result;
+        }
+    }
+    if (__tinypy_operator_is_number(left_kind) == 0 || __tinypy_operator_is_number(right_kind) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unsupported multiply operands", out_error);
+        return NULL;
+    }
+    if (left_kind == TINYPY_VALUE_COMPLEX || right_kind == TINYPY_VALUE_COMPLEX) {
+        double ar;
+        double ai;
+        double br;
+        double bi;
+
+        if (__tinypy_operator_as_complex(left, &ar, &ai, out_error) == 0 || __tinypy_operator_as_complex(right, &br, &bi, out_error) == 0) {
+            return NULL;
+        }
+        tinypy_value_t *result = tinypy_complex_from_doubles(vm, ar * br - ai * bi, ar * bi + ai * br);
+
+        return result;
+    }
+    if (left_kind == TINYPY_VALUE_FLOAT || right_kind == TINYPY_VALUE_FLOAT) {
+        double left_value;
+        double right_value;
+
+        if (__tinypy_operator_as_double(left, &left_value, out_error) == 0 || __tinypy_operator_as_double(right, &right_value, out_error) == 0) {
+            return NULL;
+        }
+        tinypy_value_t *result = tinypy_float_from_double(vm, left_value * right_value);
+
+        return result;
+    }
+    if (left_kind != TINYPY_VALUE_LONG && right_kind != TINYPY_VALUE_LONG) {
+        int64_t value;
+
+        if (__tinypy_operator_multiply_overflow(TINYPY_INTEGER_VALUE(left), TINYPY_INTEGER_VALUE(right), &value) == 0) {
+            tinypy_value_t *result = tinypy_integer_from_i64(vm, value);
+
+            return result;
+        }
+    }
+    tinypy_integer_view_t left_view;
+    tinypy_integer_view_t right_view;
+
+    __tinypy_operator_integer_view(left, &left_view);
+    __tinypy_operator_integer_view(right, &right_view);
+    tinypy_value_t *result = __tinypy_operator_long_multiply_views(vm, &left_view, &right_view);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_operator_builtin(tinypy_value_t *left, tinypy_value_t *right, int32_t mode, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
+    tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
+    tinypy_value_t *shared_result;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    switch (mode) {
+    case 0:
+        if ((left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE) && (right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE)) {
+            tinypy_value_t *result = __tinypy_operator_concat_text(vm, left, right, left_kind == TINYPY_VALUE_UNICODE || right_kind == TINYPY_VALUE_UNICODE, out_error);
+
+            return result;
+        }
+        if ((left_kind == TINYPY_VALUE_TUPLE || left_kind == TINYPY_VALUE_LIST) && left_kind == right_kind) {
+            tinypy_value_t *result = __tinypy_operator_concat_sequence(vm, left, right, out_error);
+
+            return result;
+        }
+        shared_result = __tinypy_operator_numeric_add(vm, left, right, 0, out_error);
+
+        return shared_result;
+    case 1:
+        if (left_kind == TINYPY_VALUE_SET || left_kind == TINYPY_VALUE_FROZENSET) {
+            tinypy_value_t *result = tinypy_internal_set_binary(left, right, INT32_C(3), out_error);
+
+            return result;
+        }
+        shared_result = __tinypy_operator_numeric_add(vm, left, right, 1, out_error);
+
+        return shared_result;
+    case 2:
+        shared_result = __tinypy_operator_multiply_builtin(left, right, out_error);
+        return shared_result;
+    case 3:
+        shared_result = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_CLASSIC, out_error);
+        return shared_result;
+    case 4:
+        shared_result = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_FLOOR, out_error);
+        return shared_result;
+    case 5:
+        shared_result = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_TRUE, out_error);
+        return shared_result;
+    case 6:
+        if (left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE) {
+            tinypy_value_t *result = tinypy_internal_string_percent(left, right, out_error);
+
+            return result;
+        }
+        shared_result = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_REMAINDER, out_error);
+        return shared_result;
+    case 7: {
+        tinypy_value_t *quotient;
+        tinypy_value_t *remainder;
+        tinypy_value_t *items[2];
+        tinypy_value_t *result;
+
+        if (__tinypy_operator_is_integer(left_kind) != 0 && __tinypy_operator_is_integer(right_kind) != 0 && (left_kind == TINYPY_VALUE_LONG || right_kind == TINYPY_VALUE_LONG)) {
+            tinypy_integer_view_t left_view;
+            tinypy_integer_view_t right_view;
+
+            __tinypy_operator_integer_view(left, &left_view);
+            __tinypy_operator_integer_view(right, &right_view);
+            tinypy_value_t *long_result = __tinypy_operator_long_divide_views(vm, &left_view, &right_view, TINYPY_OPERATOR_LONG_DIVISION_PAIR, out_error);
+
+            return long_result;
+        }
+        quotient = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_FLOOR, out_error);
+        if (quotient == NULL) {
+            return NULL;
+        }
+        remainder = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_REMAINDER, out_error);
+        if (remainder == NULL) {
+            TINYPY_DECREF(quotient);
+            return NULL;
+        }
+        items[0] = quotient;
+        items[1] = remainder;
+        result = tinypy_tuple_from_items(vm, items, 2U);
+        TINYPY_DECREF(remainder);
+        TINYPY_DECREF(quotient);
+        return result;
+    }
+    case 8:
+        shared_result = __tinypy_operator_power_builtin(left, right, out_error);
+        return shared_result;
+    case 9:
+    case 10: {
+        size_t shift;
+
+        if (__tinypy_operator_is_integer(left_kind) == 0 || __tinypy_operator_is_integer(right_kind) == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "shift operands must be integers", out_error);
+            return NULL;
+        }
+        if (__tinypy_operator_shift_count(vm, right, &shift, out_error) == 0) {
+            return NULL;
+        }
+        if (mode == 9) {
+            tinypy_value_t *result = __tinypy_operator_integer_left_shift(vm, left, shift, left_kind == TINYPY_VALUE_LONG || right_kind == TINYPY_VALUE_LONG, out_error);
+
+            return result;
+        }
+        tinypy_value_t *result = __tinypy_operator_integer_right_shift(vm, left, shift, left_kind == TINYPY_VALUE_LONG || right_kind == TINYPY_VALUE_LONG);
+
+        return result;
+    }
+    case 11:
+    case 12:
+    default:
+        if (left_kind == TINYPY_VALUE_SET || left_kind == TINYPY_VALUE_FROZENSET) {
+            tinypy_value_t *result = tinypy_internal_set_binary(left, right, mode == 11 ? INT32_C(0) : (mode == 12 ? INT32_C(1) : INT32_C(2)), out_error);
+
+            return result;
+        }
+        shared_result = __tinypy_operator_integer_bitwise(vm, left, right, mode == 11 ? 0 : (mode == 12 ? 1 : 2), out_error);
+
+        return shared_result;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_unary_builtin(tinypy_value_t *value, int32_t mode, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (__tinypy_operator_is_number(kind) == 0 || (mode == 2 && __tinypy_operator_is_integer(kind) == 0)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "builtin numeric descriptor requires a numeric operand", out_error);
+        return NULL;
+    }
+    if (mode == 0) {
+        if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
+            tinypy_value_t *result = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(value));
+
+            return result;
+        }
+        if (kind == TINYPY_VALUE_LONG) {
+            tinypy_value_t *result = tinypy_long_from_base15_digits(vm, TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value));
+
+            return result;
+        }
+        if (kind == TINYPY_VALUE_FLOAT) {
+            tinypy_value_t *result = tinypy_float_from_double(vm, TINYPY_FLOAT_OBJECT(value)->value);
+
+            return result;
+        }
+        tinypy_value_t *result = tinypy_complex_from_doubles(vm, TINYPY_COMPLEX_OBJECT(value)->real, TINYPY_COMPLEX_OBJECT(value)->imaginary);
+
+        return result;
+    }
+    if (mode == 1) {
+        if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
+            int64_t integer = TINYPY_INTEGER_VALUE(value);
+
+            if (integer != INT64_MIN) {
+                tinypy_value_t *result = tinypy_integer_from_i64(vm, -integer);
+
+                return result;
+            }
+        }
+        if (__tinypy_operator_is_integer(kind) != 0) {
+            tinypy_integer_view_t view;
+
+            __tinypy_operator_integer_view(value, &view);
+            tinypy_value_t *result = tinypy_long_from_base15_digits(vm, -view.sign, view.digits, view.count);
+
+            return result;
+        }
+        if (kind == TINYPY_VALUE_FLOAT) {
+            tinypy_value_t *result = tinypy_float_from_double(vm, -TINYPY_FLOAT_OBJECT(value)->value);
+
+            return result;
+        }
+        tinypy_value_t *result = tinypy_complex_from_doubles(vm, -TINYPY_COMPLEX_OBJECT(value)->real, -TINYPY_COMPLEX_OBJECT(value)->imaginary);
+
+        return result;
+    }
+    if (mode == 2) {
+        if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
+            tinypy_value_t *result = tinypy_integer_from_i64(vm, ~TINYPY_INTEGER_VALUE(value));
+
+            return result;
+        }
+        tinypy_value_t *negative = tinypy_internal_unary_builtin(value, 1, out_error);
+        tinypy_value_t *one;
+        tinypy_value_t *result;
+
+        if (negative == NULL) {
+            return NULL;
+        }
+        one = tinypy_integer_from_i64(vm, 1);
+        result = __tinypy_operator_numeric_add(vm, negative, one, 1, out_error);
+        TINYPY_DECREF(one);
+        TINYPY_DECREF(negative);
+        return result;
+    }
+    if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
+        tinypy_value_t *result = TINYPY_INTEGER_VALUE(value) < 0 ? tinypy_internal_unary_builtin(value, 1, out_error) : tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(value));
+
+        return result;
+    }
+    if (kind == TINYPY_VALUE_LONG) {
+        tinypy_value_t *result = TINYPY_LONG_SIGN(value) < 0 ? tinypy_internal_unary_builtin(value, 1, out_error) : tinypy_long_from_base15_digits(vm, TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value));
+
+        return result;
+    }
+    if (kind == TINYPY_VALUE_FLOAT) {
+        tinypy_value_t *result = tinypy_float_from_double(vm, fabs(TINYPY_FLOAT_OBJECT(value)->value));
+
+        return result;
+    }
+    tinypy_value_t *result = tinypy_float_from_double(vm, hypot(TINYPY_COMPLEX_OBJECT(value)->real, TINYPY_COMPLEX_OBJECT(value)->imaginary));
+
+    return result;
 }

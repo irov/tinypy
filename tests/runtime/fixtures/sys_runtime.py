@@ -19,5 +19,16 @@ except TypeError:
 sys.setrecursionlimit(20)
 assert sys.getrecursionlimit() == 20
 
+
+def recursive_call():
+    recursive_call()
+
+
+try:
+    recursive_call()
+    assert False, "recursion limit was not enforced"
+except RuntimeError:
+    pass
+
 sys.setrecursionlimit(original_limit)
 assert sys.getrecursionlimit() == original_limit

@@ -607,10 +607,7 @@ const uint8_t *tinypy_internal_memoryview_view(const tinypy_value_t *value, size
     const uint8_t *bytes;
     size_t owner_size;
 
-    if (tinypy_internal_memoryview_check(payload->owner) != 0) {
-        bytes = tinypy_internal_memoryview_view(payload->owner, &owner_size);
-    }
-    else if (TINYPY_VALUE_KIND(payload->owner) == TINYPY_VALUE_STRING) {
+    if (TINYPY_VALUE_KIND(payload->owner) == TINYPY_VALUE_STRING) {
         bytes = (const uint8_t *)tinypy_string_view(payload->owner, &owner_size);
     }
     else if (TINYPY_VALUE_KIND(payload->owner) == TINYPY_VALUE_BYTEARRAY) {
@@ -632,12 +629,7 @@ static tinypy_value_t *__tinypy_memoryview_writable_owner(tinypy_value_t *value,
     tinypy_internal_memoryview_payload_t *payload = __tinypy_memoryview_payload(value);
     tinypy_value_t *owner = payload->owner;
 
-    *out_offset += payload->offset;
-    if (tinypy_internal_memoryview_check(owner) != 0) {
-        tinypy_value_t *result = __tinypy_memoryview_writable_owner(owner, out_offset);
-
-        return result;
-    }
+    *out_offset = payload->offset;
     tinypy_value_t *result = TINYPY_VALUE_KIND(owner) == TINYPY_VALUE_BYTEARRAY ? owner : NULL;
 
     return result;
@@ -665,6 +657,17 @@ static tinypy_value_t *__tinypy_memoryview_instance(tinypy_type_t *type, tinypy_
     tinypy_internal_memoryview_payload_t *payload = __tinypy_memoryview_payload(result);
     tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(result);
 
+    if (tinypy_internal_memoryview_check(owner) != 0) {
+        const tinypy_internal_memoryview_payload_t *source = __tinypy_memoryview_const_payload(owner);
+        size_t available = offset < source->size ? source->size - offset : 0U;
+
+        owner = source->owner;
+        offset = source->offset + (offset < source->size ? offset : source->size);
+        if (size > available) {
+            size = available;
+        }
+        readonly = source->readonly != 0 ? TINYPY_TRUE : readonly;
+    }
     payload->owner = owner;
     payload->offset = offset;
     payload->size = size;
@@ -733,6 +736,42 @@ static void __tinypy_memoryview_finalize(tinypy_value_t *instance, void *payload
     }
     TINYPY_DECREF(payload->owner);
     payload->owner = NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_memoryview_repr(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    static const char prefix[] = "<memory at 0x";
+    static const char digits[] = "0123456789abcdef";
+    char bytes[sizeof(prefix) - 1U + sizeof(uintptr_t) * 2U + 1U];
+    uintptr_t address = (uintptr_t)instance;
+    size_t position = sizeof(prefix) - 1U;
+    size_t digit_count = 1U;
+    uintptr_t remaining = address;
+    size_t index;
+
+    (void)payload;
+    (void)user_data;
+    TINYPY_CLEAR_ERROR(out_error);
+    (void)memcpy(bytes, prefix, sizeof(prefix) - 1U);
+    while (remaining >= (uintptr_t)16U) {
+        digit_count += 1U;
+        remaining /= (uintptr_t)16U;
+    }
+    for (index = digit_count; index != 0U; index -= 1U) {
+        bytes[position + index - 1U] = digits[address & (uintptr_t)15U];
+        address >>= 4U;
+    }
+    position += digit_count;
+    bytes[position++] = '>';
+    tinypy_value_t *result = tinypy_string_from_bytes(TINYPY_VALUE_VM(instance), bytes, position);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_hash_t __tinypy_memoryview_hash(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    (void)payload;
+    (void)user_data;
+    tinypy_internal_make_vm_error(TINYPY_VALUE_VM(instance), TINYPY_ERROR_TYPE, "memoryview objects are unhashable", out_error);
+    return (tinypy_hash_t)0;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_memoryview_not_implemented(tinypy_vm_t *vm, tinypy_error_t **out_error) {
@@ -948,6 +987,22 @@ static tinypy_value_t *__tinypy_memoryview_set_method(tinypy_value_t *function, 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_memoryview_delete_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_memoryview_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    if (__tinypy_memoryview_set(self, __tinypy_memoryview_payload(self), TINYPY_TUPLE_GET(args, 1U), NULL, NULL, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_none_get(vm);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_memoryview_tobytes_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -1041,6 +1096,8 @@ void tinypy_internal_initialize_memoryview_type(tinypy_vm_t *vm) {
     tinypy_native_type_spec_init(&spec);
     spec.payload_size = sizeof(tinypy_internal_memoryview_payload_t);
     spec.finalize = __tinypy_memoryview_finalize;
+    spec.repr = __tinypy_memoryview_repr;
+    spec.hash = __tinypy_memoryview_hash;
     spec.compare = __tinypy_memoryview_compare;
     spec.mapping_get = __tinypy_memoryview_get;
     spec.mapping_set = __tinypy_memoryview_set;
@@ -1051,8 +1108,8 @@ void tinypy_internal_initialize_memoryview_type(tinypy_vm_t *vm) {
     __tinypy_memoryview_register_method(vm, "__len__", 7U, __tinypy_memoryview_len_method);
     __tinypy_memoryview_register_method(vm, "__getitem__", 11U, __tinypy_memoryview_get_method);
     __tinypy_memoryview_register_method(vm, "__setitem__", 11U, __tinypy_memoryview_set_method);
+    __tinypy_memoryview_register_method(vm, "__delitem__", 11U, __tinypy_memoryview_delete_method);
     __tinypy_memoryview_register_method(vm, "tobytes", 7U, __tinypy_memoryview_tobytes_method);
-    __tinypy_memoryview_register_method(vm, "tostring", 8U, __tinypy_memoryview_tobytes_method);
     __tinypy_memoryview_register_method(vm, "tolist", 6U, __tinypy_memoryview_tolist_method);
     __tinypy_memoryview_register_property(vm, "format", 6U, 0);
     __tinypy_memoryview_register_property(vm, "itemsize", 8U, 1);

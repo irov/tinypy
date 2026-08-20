@@ -83,10 +83,12 @@ static tinypy_value_t *__tinypy_numeric_bit_length_method(tinypy_value_t *functi
             bits += 1U;
         }
     }
+#if SIZE_MAX > INT64_MAX
     if (bits > (size_t)INT64_MAX) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bit length is too large", out_error);
         return NULL;
     }
+#endif
     tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, (int64_t)bits);
     return return_value_1;
 }

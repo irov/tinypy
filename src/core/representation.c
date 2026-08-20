@@ -8,6 +8,7 @@
 
 typedef struct tinypy_representation_builder_t {
     tinypy_vm_t *vm;
+    tinypy_value_t *root;
     uint8_t *bytes;
     size_t size;
     size_t capacity;
@@ -15,6 +16,7 @@ typedef struct tinypy_representation_builder_t {
     size_t active_count;
     size_t active_capacity;
     tinypy_bool_t failed;
+    tinypy_bool_t skip_root_special;
 } tinypy_representation_builder_t;
 
 //////////////////////////////////////////////////////////////////////////
@@ -667,7 +669,7 @@ static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder
     size_t special_name_size = raw != 0 ? 7U : 8U;
     tinypy_unary_slot_t representation_slot = raw != 0 ? value->type->string : value->type->repr;
 
-    if ((value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override(value, special_name, special_name_size) != 0) {
+    if ((builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override(value, special_name, special_name_size) != 0) {
         tinypy_value_t *custom = __tinypy_representation_custom(value, special_name, special_name_size, out_error);
 
         if (custom == NULL) {
@@ -836,11 +838,13 @@ static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tinypy_bool_t raw, tinypy_bool_t skip_root_special, tinypy_error_t **out_error) {
     tinypy_representation_builder_t builder;
 
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = TINYPY_VALUE_VM(value);
+    builder.root = value;
+    builder.skip_root_special = skip_root_special;
     TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_representation_value(&builder, value, raw, out_error) == 0 || builder.failed != 0) {
         if (builder.failed != 0 && (out_error == NULL || *out_error == NULL)) {
@@ -886,13 +890,25 @@ static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *va
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_object_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = __tinypy_representation_build(value, INT32_C(0), out_error);
+    tinypy_value_t *return_value_1 = __tinypy_representation_build(value, INT32_C(0), TINYPY_FALSE, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_object_str(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = __tinypy_representation_build(value, INT32_C(1), out_error);
+    tinypy_value_t *return_value_1 = __tinypy_representation_build(value, INT32_C(1), TINYPY_FALSE, out_error);
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_object_repr_builtin(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_representation_build(value, TINYPY_FALSE, TINYPY_TRUE, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_object_str_builtin(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_representation_build(value, TINYPY_TRUE, TINYPY_TRUE, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -958,10 +974,12 @@ static tinypy_value_t *__tinypy_object_sizeof_method(tinypy_value_t *function, t
         return NULL;
     }
     size_t size = tinypy_internal_value_allocation_size(TINYPY_TUPLE_GET(args, 0U));
+#if SIZE_MAX > INT64_MAX
     if (size > (size_t)INT64_MAX) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "object size is too large", out_error);
         return NULL;
     }
+#endif
     tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)size);
 
     return result;

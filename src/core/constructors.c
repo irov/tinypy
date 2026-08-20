@@ -1108,12 +1108,12 @@ tinypy_value_t *tinypy_internal_list_create(tinypy_type_t *type, tinypy_value_t 
         return return_value_1;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LIST) {
+    if (value->type == &vm->types[TINYPY_VALUE_LIST]) {
         size_t list_size = TINYPY_LIST_SIZE(value);
         tinypy_value_t *return_value_2 = tinypy_list_from_items(vm, TINYPY_LIST_OBJECT(value)->items, list_size);
         return return_value_2;
     }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE) {
+    if (value->type == &vm->types[TINYPY_VALUE_TUPLE]) {
         tinypy_value_t *const *tuple_items = tinypy_internal_tuple_items(value);
         size_t tuple_size = TINYPY_TUPLE_SIZE(value);
         tinypy_value_t *return_value_3 = tinypy_list_from_items(vm, tuple_items, tuple_size);
@@ -1139,7 +1139,7 @@ tinypy_value_t *tinypy_internal_tuple_create(tinypy_type_t *type, tinypy_value_t
         TINYPY_INCREF(value);
         return value;
     }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE) {
+    if (value->type == &vm->types[TINYPY_VALUE_TUPLE]) {
         tinypy_value_t *selected_value_2;
         if (type == &vm->types[TINYPY_VALUE_TUPLE]) {
             tinypy_value_t *const *tuple_items = tinypy_internal_tuple_items(value);
@@ -1153,7 +1153,7 @@ tinypy_value_t *tinypy_internal_tuple_create(tinypy_type_t *type, tinypy_value_t
         }
         return selected_value_2;
     }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LIST) {
+    if (value->type == &vm->types[TINYPY_VALUE_LIST]) {
         tinypy_value_t *selected_value_3;
         if (type == &vm->types[TINYPY_VALUE_TUPLE]) {
             size_t list_size = TINYPY_LIST_SIZE(value);

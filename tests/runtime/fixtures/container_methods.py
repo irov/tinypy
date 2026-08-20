@@ -1514,6 +1514,12 @@ class OverriddenInt(int):
     def __abs__(self):
         return "int-abs"
 
+    def __neg__(self):
+        return "int-neg"
+
+    def __repr__(self):
+        return "int-repr"
+
 
 class OverriddenFloat(float):
     def __add__(self, other):
@@ -1568,6 +1574,9 @@ class OverriddenList(list):
 
     def __contains__(self, item):
         return item == "list-contains"
+
+    def __repr__(self):
+        return "list-repr"
 
 
 class OverriddenDict(dict):
@@ -1643,6 +1652,68 @@ except TypeError:
     pass
 assert not_implemented_list.radd_calls == 1
 
+# Explicit builtin descriptors must operate on the builtin payload without
+# dispatching back into overrides on a subclass.
+assert int.__add__(overridden_int, 1) == 3
+assert int.__radd__(overridden_int, 1) == 3
+assert int.__neg__(overridden_int) == -2
+assert int.__nonzero__(overridden_int) is True
+assert int.__repr__(overridden_int) == "2"
+base_dispatch_list = OverriddenList((1, 2))
+assert list.__getitem__(base_dispatch_list, 0) == 1
+assert list(list.__iter__(base_dispatch_list)) == [1, 2]
+assert list.__contains__(base_dispatch_list, 1) is True
+assert list.__add__(base_dispatch_list, [3]) == [1, 2, 3]
+assert list.__repr__(base_dispatch_list) == "[1, 2]"
+assert list.__setitem__(base_dispatch_list, 0, 7) is None
+assert list.__getitem__(base_dispatch_list, 0) == 7
+assert not hasattr(base_dispatch_list, "assigned")
+assert list.__delitem__(base_dispatch_list, 0) is None
+assert list(list.__iter__(base_dispatch_list)) == [2]
+assert list(base_dispatch_list) == ["list-iter"]
+assert tuple(base_dispatch_list) == ("list-iter",)
+assert not hasattr(base_dispatch_list, "deleted")
+assert dict.__getitem__(overridden_dict, "answer") == 42
+assert dict.__contains__(overridden_dict, "answer") is True
+assert list(dict.__iter__(overridden_dict)) == ["answer"]
+
+
+class IteratingTuple(tuple):
+    def __iter__(self):
+        return iter(("tuple-iter",))
+
+
+iterating_tuple = IteratingTuple((1, 2))
+assert list(iterating_tuple) == ["tuple-iter"]
+assert tuple(iterating_tuple) == ("tuple-iter",)
+
+
+class MissingDict(dict):
+    def __missing__(self, key):
+        return "missing:" + key
+
+
+missing_dict = MissingDict()
+assert missing_dict["first"] == "missing:first"
+assert dict.__getitem__(missing_dict, "second") == "missing:second"
+assert missing_dict.get("third") is None
+
+
+class RecordingFromKeysDict(dict):
+    def __init__(self):
+        dict.__init__(self)
+        self.assignments = []
+
+    def __setitem__(self, key, value):
+        self.assignments.append((key, value))
+        dict.__setitem__(self, key, value)
+
+
+recording_fromkeys = RecordingFromKeysDict.fromkeys(("a", "b"), 3)
+assert type(recording_fromkeys) is RecordingFromKeysDict
+assert recording_fromkeys.assignments == [("a", 3), ("b", 3)]
+assert dict(recording_fromkeys) == {"a": 3, "b": 3}
+
 assert list.__getslice__([0, 1, 2, 3], 1, 3) == [1, 2]
 legacy_slice_list = [0, 1, 2, 3]
 assert list.__setslice__(legacy_slice_list, 1, 3, [8, 9]) is None
@@ -1656,3 +1727,23 @@ assert unicode.__getslice__(u"abc", 1, 3) == u"bc"
 assert tuple.__getnewargs__((1, 2)) == ((1, 2),)
 assert str.__getnewargs__("abc") == ("abc",)
 assert unicode.__getnewargs__(u"abc") == (u"abc",)
+
+
+class CustomDir(object):
+    def __dir__(self):
+        return ["z", "a"]
+
+
+class InvalidDir(object):
+    def __dir__(self):
+        return ("not", "a", "list")
+
+
+assert dir(CustomDir()) == ["a", "z"]
+try:
+    dir(InvalidDir())
+    assert False, "dir() accepted a non-list result"
+except TypeError:
+    pass
+assert "mro" not in dir(str)
+assert "__call__" not in dir(str)

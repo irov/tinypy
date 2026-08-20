@@ -69,7 +69,7 @@ assert readonly_memory[0] == "a"
 assert readonly_memory[-1] == "d"
 assert readonly_memory[1:3].tobytes() == "bc"
 assert readonly_memory.tobytes() == "abcd"
-assert readonly_memory.tostring() == "abcd"
+assert not hasattr(readonly_memory, "tostring")
 assert readonly_memory.tolist() == [97, 98, 99, 100]
 assert readonly_memory.format == "B"
 assert readonly_memory.itemsize == 1L
@@ -79,6 +79,27 @@ assert readonly_memory.shape == (4L,)
 assert readonly_memory.strides == (1L,)
 assert readonly_memory.suboffsets is None
 assert readonly_memory == "abcd"
+assert repr(readonly_memory).startswith("<memory at 0x")
+assert repr(readonly_memory).endswith(">")
+try:
+    hash(readonly_memory)
+except TypeError:
+    pass
+else:
+    raise AssertionError("memoryview was hashable")
+assert hasattr(readonly_memory, "__delitem__")
+try:
+    readonly_memory.__delitem__(0)
+except TypeError:
+    pass
+else:
+    raise AssertionError("memoryview accepted deletion")
+try:
+    reversed(readonly_memory)
+except TypeError:
+    pass
+else:
+    raise AssertionError("memoryview was accepted by reversed()")
 try:
     readonly_memory[0] = "z"
 except TypeError:
@@ -125,6 +146,18 @@ del child_memory
 del writable_memory
 writable_owner.append(33)
 assert str(writable_owner) == "a12Y!"
+
+# Nested views retain the root exporter directly. Access and cleanup therefore
+# stay constant-depth even when many live slices share the same bytearray.
+deep_owner = bytearray("depth")
+deep_views = [memoryview(deep_owner)]
+for deep_index in xrange(512):
+    deep_views.append(memoryview(deep_views[-1])[0:])
+deep_views[-1][0] = "D"
+assert str(deep_owner) == "Depth"
+del deep_views
+deep_owner.append(33)
+assert str(deep_owner) == "Depth!"
 
 # Keep a dynamically owned view alive through VM shutdown to cover graph
 # traversal of the native payload owner.

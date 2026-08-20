@@ -1512,6 +1512,10 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
         frame = TINYPY_FRAME_OBJECT(frame_value);
         code = frame->code;
         vm = TINYPY_VALUE_VM(code);
+        if (vm->evaluation_depth >= vm->recursion_limit) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "maximum recursion depth exceeded", out_error);
+            return NULL;
+        }
         if (TINYPY_CODE_OBJECT(code)->bytecode_verified == 0 && __tinypy_eval_verify_code(vm, TINYPY_CODE_OBJECT(code), out_error) == 0) {
             return NULL;
         }
@@ -1548,6 +1552,10 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
     }
     else {
         vm = TINYPY_VALUE_VM(code);
+        if (vm->evaluation_depth >= vm->recursion_limit) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "maximum recursion depth exceeded", out_error);
+            return NULL;
+        }
         if (TINYPY_CODE_OBJECT(code)->bytecode_verified == 0 && __tinypy_eval_verify_code(vm, TINYPY_CODE_OBJECT(code), out_error) == 0) {
             return NULL;
         }

@@ -68,7 +68,7 @@ static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver,
 static tinypy_bool_t __tinypy_comparison_equal_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t identity_implies_equal, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
 
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
+static int32_t __tinypy_truth(tinypy_value_t *value, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {
     int32_t function_result;
     tinypy_value_type_e kind;
     tinypy_bool_t exact_builtin;
@@ -80,7 +80,7 @@ int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
     if (exact_builtin != 0) {
         goto builtin_truth;
     }
-    if (tinypy_internal_object_has_special_override(value, "__nonzero__", 11U) != 0) {
+    if (dispatch_special != 0 && tinypy_internal_object_has_special_override(value, "__nonzero__", 11U) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_no_args(value, "__nonzero__", 11U, out_error);
         int32_t truth;
 
@@ -96,7 +96,7 @@ int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
         TINYPY_DECREF(result);
         return truth;
     }
-    if (tinypy_internal_object_has_special_override(value, "__len__", 7U) != 0) {
+    if (dispatch_special != 0 && tinypy_internal_object_has_special_override(value, "__len__", 7U) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_no_args(value, "__len__", 7U, out_error);
         int32_t truth;
 
@@ -185,7 +185,7 @@ builtin_truth:
     if (exact_builtin != 0) {
         return INT32_C(1);
     }
-    if (tinypy_internal_object_has_special(value, "__nonzero__", 11U) != 0) {
+    if (dispatch_special != 0 && tinypy_internal_object_has_special(value, "__nonzero__", 11U) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_no_args(value, "__nonzero__", 11U, out_error);
         int32_t truth;
 
@@ -201,7 +201,7 @@ builtin_truth:
         TINYPY_DECREF(result);
         return truth;
     }
-    if (tinypy_internal_object_has_special(value, "__len__", 7U) != 0) {
+    if (dispatch_special != 0 && tinypy_internal_object_has_special(value, "__len__", 7U) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_no_args(value, "__len__", 7U, out_error);
         int32_t truth;
 
@@ -233,6 +233,18 @@ builtin_truth:
         return truth;
     }
     return INT32_C(1);
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_internal_truth_builtin(tinypy_value_t *value, tinypy_error_t **out_error) {
+    int32_t result = __tinypy_truth(value, TINYPY_FALSE, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
+    int32_t result = __tinypy_truth(value, TINYPY_TRUE, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_comparison_type_name_order(const tinypy_type_t *left, const tinypy_type_t *right) {
@@ -733,12 +745,12 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error) {
+static int32_t __tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {
     tinypy_value_type_e kind;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     TINYPY_CLEAR_ERROR(out_error);
-    if (tinypy_internal_object_has_special_override(container, "__contains__", 12U) != 0) {
+    if (dispatch_special != 0 && tinypy_internal_object_has_special_override(container, "__contains__", 12U) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_binary(container, "__contains__", 12U, item, out_error);
         int32_t truth;
 
@@ -833,7 +845,7 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
         }
         return 0;
     }
-    if (tinypy_internal_object_has_special(container, "__contains__", 12U) != 0) {
+    if (dispatch_special != 0 && tinypy_internal_object_has_special(container, "__contains__", 12U) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_binary(container, "__contains__", 12U, item, out_error);
         int32_t truth;
 
@@ -843,6 +855,10 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
         truth = tinypy_truth(result, out_error);
         TINYPY_DECREF(result);
         return truth;
+    }
+    if (dispatch_special == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not support containment", out_error);
+        return -1;
     }
     tinypy_error_t *iteration_error = NULL;
     tinypy_value_t *iterator = tinypy_iter(container, &iteration_error);
@@ -887,6 +903,18 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
         return -1;
     }
     return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_internal_contains_builtin(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error) {
+    int32_t result = __tinypy_contains(container, item, TINYPY_FALSE, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error) {
+    int32_t result = __tinypy_contains(container, item, TINYPY_TRUE, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver, const char *name, size_t name_size, tinypy_value_t *argument, tinypy_error_t **out_error) {

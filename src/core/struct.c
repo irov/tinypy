@@ -64,9 +64,9 @@ static tinypy_bool_t __tinypy_struct_parse_format_uncached(tinypy_vm_t *vm, tiny
     out_format->byte_order = TINYPY_STRUCT_NATIVE_ENDIAN;
     out_format->item_count = 0U;
     out_format->byte_size = 0U;
-    if (sizeof(size_t) > sizeof(int64_t)) {
-        size_limit = (size_t)INT64_MAX;
-    }
+#if SIZE_MAX > INT64_MAX
+    size_limit = (size_t)INT64_MAX;
+#endif
     if (index < size) {
         uint8_t prefix = bytes[index];
 
