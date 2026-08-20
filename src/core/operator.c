@@ -1035,7 +1035,7 @@ static tinypy_bool_t __tinypy_operator_integer_exponent(tinypy_vm_t *vm, tinypy_
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_call_unary_special(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
-    tinypy_value_t *method = tinypy_object_get_attr(value, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(value, name, name_size, out_error);
 
     if (method == NULL) {
         return NULL;
@@ -1163,7 +1163,7 @@ tinypy_value_t *tinypy_invert(tinypy_value_t *value, tinypy_error_t **out_error)
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_call_special(tinypy_value_t *receiver, const char *name, size_t name_size, tinypy_value_t *argument, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
-    tinypy_value_t *method = tinypy_object_get_attr(receiver, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(receiver, name, name_size, out_error);
 
     if (method == NULL) {
         return NULL;
@@ -1386,7 +1386,7 @@ static int32_t __tinypy_operator_repeat_count(tinypy_value_t *value, size_t *out
         if (tinypy_internal_object_has_special(value, "__index__", 9U) == 0) {
             return 0;
         }
-        method = tinypy_object_get_attr(value, "__index__", 9U, out_error);
+        method = tinypy_internal_object_get_special(value, "__index__", 9U, out_error);
         if (method == NULL) {
             return -1;
         }

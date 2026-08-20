@@ -185,7 +185,7 @@ static tinypy_bool_t __tinypy_string_integer(tinypy_vm_t *vm, tinypy_value_t *va
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_percent_append_integer(tinypy_vm_t *vm, tinypy_string_builder_t *builder, tinypy_value_t *value, uint8_t conversion, int32_t alternate, int32_t plus, int32_t space, int64_t precision, tinypy_bool_t new_format, size_t *out_prefix_size, tinypy_error_t **out_error);
-static tinypy_bool_t __tinypy_percent_append_float(tinypy_vm_t *vm, tinypy_string_builder_t *builder, tinypy_value_t *value, uint8_t conversion, int32_t alternate, int32_t plus, int32_t space, int64_t precision, size_t *out_prefix_size, tinypy_error_t **out_error);
+static tinypy_bool_t __tinypy_percent_append_float(tinypy_vm_t *vm, tinypy_string_builder_t *builder, tinypy_value_t *value, uint8_t conversion, int32_t alternate, int32_t plus, int32_t space, int64_t precision, tinypy_bool_t long_overflow_type_error, size_t *out_prefix_size, tinypy_error_t **out_error);
 static tinypy_bool_t __tinypy_percent_append_double(tinypy_vm_t *vm, tinypy_string_builder_t *builder, double number, uint8_t conversion, int32_t alternate, int32_t plus, int32_t space, int64_t precision, size_t *out_prefix_size, tinypy_error_t **out_error);
 static void __tinypy_string_format_group_digits(tinypy_string_builder_t *field, size_t prefix_size);
 static size_t __tinypy_string_utf8_width(uint8_t first);
@@ -402,7 +402,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
     field.vm = vm;
     output.vm = vm;
     if (allow_special != 0 && conversion == 0 && direct_builtin == 0 && tinypy_internal_object_has_special(value, "__format__", 10U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__format__", 10U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__format__", 10U, out_error);
         tinypy_value_t *format_spec;
         tinypy_value_t *arguments;
         tinypy_value_t *result;
@@ -653,7 +653,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "alternate form is not allowed in float format", out_error);
             return NULL;
         }
-        if (__tinypy_percent_append_float(vm, &field, value, float_type, alternate, plus, space, float_precision, &prefix_size, out_error) == 0) {
+        if (__tinypy_percent_append_float(vm, &field, value, float_type, alternate, plus, space, float_precision, TINYPY_FALSE, &prefix_size, out_error) == 0) {
             __tinypy_string_builder_discard(&field);
             return NULL;
         }
@@ -3416,7 +3416,7 @@ static tinypy_bool_t __tinypy_percent_append_double(tinypy_vm_t *vm, tinypy_stri
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_percent_append_float(tinypy_vm_t *vm, tinypy_string_builder_t *builder, tinypy_value_t *value, uint8_t conversion, int32_t alternate, int32_t plus, int32_t space, int64_t precision_value, size_t *out_prefix_size, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_percent_append_float(tinypy_vm_t *vm, tinypy_string_builder_t *builder, tinypy_value_t *value, uint8_t conversion, int32_t alternate, int32_t plus, int32_t space, int64_t precision_value, tinypy_bool_t long_overflow_type_error, size_t *out_prefix_size, tinypy_error_t **out_error) {
     double number;
 
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_FLOAT) {
@@ -3427,6 +3427,14 @@ static tinypy_bool_t __tinypy_percent_append_float(tinypy_vm_t *vm, tinypy_strin
     }
     else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG) {
         if (tinypy_internal_long_as_double(value, &number, out_error) == 0) {
+            if (long_overflow_type_error != 0) {
+                if (out_error != NULL && *out_error != NULL) {
+                    tinypy_error_release(*out_error);
+                    *out_error = NULL;
+                }
+                tinypy_internal_exception_clear_raised(vm);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "float format requires a number", out_error);
+            }
             return TINYPY_FALSE;
         }
     }
@@ -3782,7 +3790,7 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
             }
         }
         else if (conversion == (uint8_t)'e' || conversion == (uint8_t)'E' || conversion == (uint8_t)'f' || conversion == (uint8_t)'F' || conversion == (uint8_t)'g' || conversion == (uint8_t)'G') {
-            if (__tinypy_percent_append_float(vm, &field, value, conversion, alternate, plus, space, precision, &prefix_size, out_error) == 0) {
+            if (__tinypy_percent_append_float(vm, &field, value, conversion, alternate, plus, space, precision, unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, &prefix_size, out_error) == 0) {
                 TINYPY_DECREF(value);
                 __tinypy_string_builder_discard(&field);
                 __tinypy_string_builder_discard(&output);
@@ -3819,6 +3827,298 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_string_formatter_decimal(tinypy_vm_t *vm, tinypy_value_t *text, size_t begin, size_t end, tinypy_error_t **out_error) {
+    tinypy_value_t *digits = __tinypy_string_from_span(vm, text, begin, end);
+    tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &digits, 1U);
+    tinypy_value_t *result = tinypy_internal_long_create(&vm->types[TINYPY_VALUE_LONG], arguments, NULL, out_error);
+
+    TINYPY_DECREF(arguments);
+    TINYPY_DECREF(digits);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_string_formatter_is_decimal(const uint8_t *bytes, size_t begin, size_t end) {
+    size_t offset;
+
+    if (begin == end) {
+        return TINYPY_FALSE;
+    }
+    for (offset = begin; offset < end; ++offset) {
+        if (bytes[offset] < (uint8_t)'0' || bytes[offset] > (uint8_t)'9') {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_string_formatter_record(tinypy_vm_t *vm, tinypy_value_t *literal, tinypy_value_t *field, tinypy_value_t *spec, tinypy_value_t *conversion) {
+    tinypy_value_t *items[4] = {
+        literal,
+        field != NULL ? field : &vm->none_object.base,
+        spec != NULL ? spec : &vm->none_object.base,
+        conversion != NULL ? conversion : &vm->none_object.base
+    };
+    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, 4U);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_string_formatter_parser_next(tinypy_iterator_object_t *iterator, tinypy_error_t **out_error) {
+    tinypy_value_t *text = iterator->iterable;
+    const uint8_t *bytes;
+    size_t size;
+    size_t offset = iterator->index;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(text);
+    bytes = TINYPY_TEXT_BYTES(text);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
+    if (offset >= size) {
+        tinypy_internal_iterator_clear(iterator);
+        return NULL;
+    }
+    size_t literal_begin = offset;
+    size_t brace = offset;
+
+    while (brace < size && bytes[brace] != (uint8_t)'{' && bytes[brace] != (uint8_t)'}') {
+        brace += 1U;
+    }
+    if (brace == size) {
+        tinypy_value_t *literal = __tinypy_string_from_span(vm, text, literal_begin, size);
+        tinypy_value_t *record = __tinypy_string_formatter_record(vm, literal, NULL, NULL, NULL);
+
+        TINYPY_DECREF(literal);
+        iterator->index = size;
+        return record;
+    }
+    if (brace + 1U < size && bytes[brace + 1U] == bytes[brace]) {
+        tinypy_value_t *literal = __tinypy_string_from_span(vm, text, literal_begin, brace + 1U);
+        tinypy_value_t *record = __tinypy_string_formatter_record(vm, literal, NULL, NULL, NULL);
+
+        TINYPY_DECREF(literal);
+        iterator->index = brace + 2U;
+        return record;
+    }
+    if (bytes[brace] == (uint8_t)'}') {
+        tinypy_internal_iterator_clear(iterator);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "single '}' encountered in format string", out_error);
+        return NULL;
+    }
+    size_t end = brace + 1U;
+    size_t depth = 1U;
+
+    while (end < size && depth != 0U) {
+        if (bytes[end] == (uint8_t)'{') {
+            depth += 1U;
+        }
+        else if (bytes[end] == (uint8_t)'}') {
+            depth -= 1U;
+            if (depth == 0U) {
+                break;
+            }
+        }
+        end += 1U;
+    }
+    if (depth != 0U) {
+        tinypy_internal_iterator_clear(iterator);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unmatched '{' in format string", out_error);
+        return NULL;
+    }
+    size_t field_end = brace + 1U;
+
+    while (field_end < end && bytes[field_end] != (uint8_t)'!' && bytes[field_end] != (uint8_t)':') {
+        field_end += 1U;
+    }
+    size_t spec_begin = end;
+    tinypy_value_t *conversion = NULL;
+
+    if (field_end < end && bytes[field_end] == (uint8_t)'!') {
+        size_t conversion_begin = field_end + 1U;
+
+        if (conversion_begin >= end) {
+            tinypy_internal_iterator_clear(iterator);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "end of format while looking for conversion specifier", out_error);
+            return NULL;
+        }
+        conversion = __tinypy_string_from_span(vm, text, conversion_begin, conversion_begin + 1U);
+        spec_begin = conversion_begin + 1U;
+        if (spec_begin < end && bytes[spec_begin] == (uint8_t)':') {
+            spec_begin += 1U;
+        }
+        else if (spec_begin != end) {
+            TINYPY_DECREF(conversion);
+            tinypy_internal_iterator_clear(iterator);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "expected ':' after format specifier", out_error);
+            return NULL;
+        }
+    }
+    else if (field_end < end) {
+        spec_begin = field_end + 1U;
+    }
+    tinypy_value_t *literal = __tinypy_string_from_span(vm, text, literal_begin, brace);
+    tinypy_value_t *field = __tinypy_string_from_span(vm, text, brace + 1U, field_end);
+    tinypy_value_t *spec = __tinypy_string_from_span(vm, text, spec_begin, end);
+    tinypy_value_t *record = __tinypy_string_formatter_record(vm, literal, field, spec, conversion);
+
+    TINYPY_DECREF(spec);
+    TINYPY_DECREF(field);
+    TINYPY_DECREF(literal);
+    if (conversion != NULL) {
+        TINYPY_DECREF(conversion);
+    }
+    iterator->index = end + 1U;
+    return record;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_string_formatter_parser_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_string_method_arguments(vm, args, kwargs, 1U, 1U, INT32_C(0), out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *text = TINYPY_TUPLE_GET(args, 0U);
+    if (__tinypy_string_require_text(vm, text, "formatter parser requires a string", out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_internal_formatter_iterator_new(text, INT32_C(6));
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_string_formatter_path_component(tinypy_vm_t *vm, tinypy_bool_t attribute, tinypy_value_t *value) {
+    tinypy_value_t *flag = tinypy_bool_from_i32(vm, attribute);
+    tinypy_value_t *items[2] = {flag, value};
+    tinypy_value_t *component = tinypy_tuple_from_items(vm, items, 2U);
+
+    TINYPY_DECREF(flag);
+    return component;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_string_formatter_field_next(tinypy_iterator_object_t *iterator, tinypy_error_t **out_error) {
+    tinypy_value_t *text = iterator->iterable;
+    const uint8_t *bytes;
+    size_t size;
+    size_t offset = iterator->index;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(text);
+    bytes = TINYPY_TEXT_BYTES(text);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
+    if (offset >= size) {
+        tinypy_internal_iterator_clear(iterator);
+        return NULL;
+    }
+    tinypy_bool_t attribute;
+    size_t begin;
+    size_t end;
+    tinypy_value_t *component_value;
+
+    if (bytes[offset] == (uint8_t)'.') {
+        attribute = TINYPY_TRUE;
+        begin = ++offset;
+        while (offset < size && bytes[offset] != (uint8_t)'.' && bytes[offset] != (uint8_t)'[') {
+            offset += 1U;
+        }
+        end = offset;
+        if (begin == end) {
+            goto empty_attribute;
+        }
+        component_value = __tinypy_string_from_span(vm, text, begin, end);
+    }
+    else if (bytes[offset] == (uint8_t)'[') {
+        attribute = TINYPY_FALSE;
+        begin = ++offset;
+        while (offset < size && bytes[offset] != (uint8_t)']') {
+            offset += 1U;
+        }
+        if (offset == size) {
+            tinypy_internal_iterator_clear(iterator);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "missing ']' in format string", out_error);
+            return NULL;
+        }
+        end = offset++;
+        if (begin == end) {
+            goto empty_attribute;
+        }
+        if (__tinypy_string_formatter_is_decimal(bytes, begin, end) != 0) {
+            component_value = __tinypy_string_formatter_decimal(vm, text, begin, end, out_error);
+            if (component_value == NULL) {
+                tinypy_internal_iterator_clear(iterator);
+                return NULL;
+            }
+        }
+        else {
+            component_value = __tinypy_string_from_span(vm, text, begin, end);
+        }
+        if (offset < size && bytes[offset] != (uint8_t)'.' && bytes[offset] != (uint8_t)'[') {
+            TINYPY_DECREF(component_value);
+            tinypy_internal_iterator_clear(iterator);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "only '.' or '[' may follow ']' in format field specifier", out_error);
+            return NULL;
+        }
+    }
+    else {
+        tinypy_internal_iterator_clear(iterator);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "invalid format field", out_error);
+        return NULL;
+    }
+    tinypy_value_t *component = __tinypy_string_formatter_path_component(vm, attribute, component_value);
+
+    TINYPY_DECREF(component_value);
+    iterator->index = offset;
+    return component;
+
+empty_attribute:
+    tinypy_internal_iterator_clear(iterator);
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "empty attribute in format string", out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_string_formatter_field_name_split_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *head;
+    const uint8_t *bytes;
+    size_t size;
+    size_t offset = 0U;
+
+    (void)user_data;
+    if (__tinypy_string_method_arguments(vm, args, kwargs, 1U, 1U, INT32_C(0), out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *text = TINYPY_TUPLE_GET(args, 0U);
+    if (__tinypy_string_require_text(vm, text, "formatter field splitter requires a string", out_error) == 0) {
+        return NULL;
+    }
+    bytes = TINYPY_TEXT_BYTES(text);
+    size = TINYPY_TEXT_BYTE_SIZE(text);
+    while (offset < size && bytes[offset] != (uint8_t)'.' && bytes[offset] != (uint8_t)'[') {
+        offset += 1U;
+    }
+    if (__tinypy_string_formatter_is_decimal(bytes, 0U, offset) != 0) {
+        head = __tinypy_string_formatter_decimal(vm, text, 0U, offset, out_error);
+        if (head == NULL) {
+            return NULL;
+        }
+    }
+    else {
+        head = __tinypy_string_from_span(vm, text, 0U, offset);
+    }
+    tinypy_value_t *path_iterator = tinypy_internal_formatter_iterator_new(text, INT32_C(7));
+    tinypy_value_t *items[2] = {head, path_iterator};
+    tinypy_value_t *result;
+
+    TINYPY_ITERATOR_OBJECT(path_iterator)->index = offset;
+    result = tinypy_tuple_from_items(vm, items, 2U);
+    TINYPY_DECREF(path_iterator);
+    TINYPY_DECREF(head);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_string_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
     tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
     tinypy_value_t *key = tinypy_string_from_bytes(type->vm, name, name_size);
@@ -3833,6 +4133,8 @@ void tinypy_internal_initialize_string_types(tinypy_vm_t *vm) {
     size_t index;
 
     for (index = 0U; index < 2U; ++index) {
+        __tinypy_string_add_method(types[index], "_formatter_parser", 17U, __tinypy_string_formatter_parser_method, NULL);
+        __tinypy_string_add_method(types[index], "_formatter_field_name_split", 27U, __tinypy_string_formatter_field_name_split_method, NULL);
         __tinypy_string_add_method(types[index], "format", 6U, __tinypy_string_format_method, NULL);
         __tinypy_string_add_method(types[index], "center", 6U, __tinypy_string_align_method, NULL);
         __tinypy_string_add_method(types[index], "ljust", 5U, __tinypy_string_align_method, (void *)(intptr_t)-1);

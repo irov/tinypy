@@ -133,6 +133,71 @@ static tinypy_value_t *__tinypy_builtin_call_items(tinypy_vm_t *vm, tinypy_value
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_builtin_apply_sequence(tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_XRANGE) {
+        return TINYPY_TRUE;
+    }
+    if (kind == TINYPY_VALUE_DICT || kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t result = tinypy_internal_object_has_special(value, "__getitem__", 11U);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_builtin_apply(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    size_t count = TINYPY_TUPLE_SIZE(args);
+    tinypy_value_t *call_args = NULL;
+    tinypy_value_t *call_kwargs = NULL;
+    tinypy_value_t *owned_args = NULL;
+
+    (void)user_data;
+    if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 3U, out_error) == 0) {
+        return NULL;
+    }
+    if (count >= 2U) {
+        call_args = TINYPY_TUPLE_GET(args, 1U);
+        if (TINYPY_VALUE_KIND(call_args) != TINYPY_VALUE_TUPLE) {
+            tinypy_value_t *constructor_args;
+
+            if (__tinypy_builtin_apply_sequence(call_args) == 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "apply() arg 2 must be a sequence", out_error);
+                return NULL;
+            }
+            constructor_args = tinypy_tuple_from_items(vm, &call_args, 1U);
+            owned_args = tinypy_internal_tuple_create(&vm->types[TINYPY_VALUE_TUPLE], constructor_args, NULL, out_error);
+            TINYPY_DECREF(constructor_args);
+            if (owned_args == NULL) {
+                return NULL;
+            }
+            call_args = owned_args;
+        }
+    }
+    else {
+        owned_args = tinypy_tuple_from_items(vm, NULL, 0U);
+        call_args = owned_args;
+    }
+    if (count == 3U) {
+        call_kwargs = TINYPY_TUPLE_GET(args, 2U);
+        if (TINYPY_VALUE_KIND(call_kwargs) != TINYPY_VALUE_DICT) {
+            if (owned_args != NULL) {
+                TINYPY_DECREF(owned_args);
+            }
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "apply() arg 3 must be a dictionary", out_error);
+            return NULL;
+        }
+    }
+    tinypy_value_t *result = tinypy_call(TINYPY_TUPLE_GET(args, 0U), call_args, call_kwargs, out_error);
+
+    if (owned_args != NULL) {
+        TINYPY_DECREF(owned_args);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t size;
@@ -143,7 +208,7 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
     if (tinypy_internal_object_has_special_override(value, "__len__", 7U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__len__", 7U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__len__", 7U, out_error);
         tinypy_value_t *empty;
         tinypy_value_t *result;
         int64_t length;
@@ -212,7 +277,7 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
             return return_value_1;
         }
         tinypy_error_t *attribute_error = NULL;
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__len__", 7U, &attribute_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__len__", 7U, &attribute_error);
         tinypy_value_t *empty;
         tinypy_value_t *result;
 
@@ -288,7 +353,7 @@ static int32_t __tinypy_builtin_metaclass_check(tinypy_value_t *object, tinypy_v
     if (TINYPY_VALUE_KIND(classinfo) != TINYPY_VALUE_TYPE || tinypy_internal_object_has_special(classinfo, name, name_size) == 0) {
         return 0;
     }
-    tinypy_value_t *method = tinypy_object_get_attr(classinfo, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(classinfo, name, name_size, out_error);
     if (method == NULL) {
         return -1;
     }
@@ -616,73 +681,6 @@ static tinypy_value_t *__tinypy_builtin_range(tinypy_value_t *function, tinypy_v
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_builtin_xrange(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    size_t argument_count;
-    int64_t start;
-    int64_t stop;
-    int64_t step;
-    uint64_t distance;
-    uint64_t step_magnitude;
-    uint64_t length;
-
-    (void)user_data;
-    if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 3U, out_error) == 0) {
-        return NULL;
-    }
-    argument_count = TINYPY_TUPLE_SIZE(args);
-    if (argument_count == 1U) {
-        start = 0;
-        tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 0U);
-        if (__tinypy_builtin_integer_as_i64(vm, item_3, &stop, out_error) == 0) {
-            return NULL;
-        }
-        step = 1;
-    }
-    else {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        if (__tinypy_builtin_integer_as_i64(vm, item, &start, out_error) == 0) {
-            return NULL;
-        }
-        tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
-        if (__tinypy_builtin_integer_as_i64(vm, item_2, &stop, out_error) == 0) {
-            return NULL;
-        }
-        if (argument_count == 3U) {
-            tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 2U);
-            if (__tinypy_builtin_integer_as_i64(vm, item_3, &step, out_error) == 0) {
-                return NULL;
-            }
-        }
-        else {
-            step = 1;
-        }
-    }
-    if (step == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "xrange step cannot be zero", out_error);
-        return NULL;
-    }
-    if ((step > 0 && start >= stop) || (step < 0 && start <= stop)) {
-        tinypy_value_t *return_value_1 = tinypy_internal_xrange_new(vm, start, step, 0U);
-        return return_value_1;
-    }
-    if (step > 0) {
-        distance = (uint64_t)stop - (uint64_t)start;
-        step_magnitude = (uint64_t)step;
-    }
-    else {
-        distance = (uint64_t)start - (uint64_t)stop;
-        step_magnitude = (uint64_t)(-(step + INT64_C(1))) + UINT64_C(1);
-    }
-    length = (distance - UINT64_C(1)) / step_magnitude + UINT64_C(1);
-    if (length > (uint64_t)SIZE_MAX) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "xrange has too many items", out_error);
-        return NULL;
-    }
-    tinypy_value_t *return_value_2 = tinypy_internal_xrange_new(vm, start, step, (size_t)length);
-    return return_value_2;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_sorted(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_error_t *iteration_error = NULL;
@@ -784,32 +782,6 @@ static tinypy_value_t *__tinypy_builtin_all_any(tinypy_value_t *function, tinypy
     }
     tinypy_value_t *return_value_2 = tinypy_bool_from_i32(vm, want_all != 0);
     return return_value_2;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_builtin_enumerate(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    static const char *const parameter_names[] = {"sequence", "start"};
-    static const size_t parameter_name_sizes[] = {8U, 5U};
-    tinypy_value_t *arguments[2];
-    tinypy_value_t *counter;
-    tinypy_value_t *result;
-
-    (void)user_data;
-    if (__tinypy_builtin_named_arguments(vm, args, kwargs, parameter_names, parameter_name_sizes, 2U, 1U, arguments, out_error) == 0) {
-        return NULL;
-    }
-    if (arguments[1] == NULL) {
-        counter = tinypy_integer_from_i64(vm, INT64_C(0));
-    }
-    else {
-        counter = tinypy_internal_index_value(arguments[1], out_error);
-        if (counter == NULL) {
-            return NULL;
-        }
-    }
-    result = tinypy_internal_enumerate_new(arguments[0], counter, out_error);
-    TINYPY_DECREF(counter);
-    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_divmod(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1411,32 +1383,6 @@ static tinypy_value_t *__tinypy_builtin_min_max(tinypy_value_t *function, tinypy
     return best;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_builtin_reversed(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    (void)user_data;
-    if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 1U, out_error) == 0) {
-        return NULL;
-    }
-    tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-    if (tinypy_internal_object_has_special(item, "__reversed__", 12U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(item, "__reversed__", 12U, out_error);
-        tinypy_value_t *empty;
-        tinypy_value_t *result;
-
-        if (method == NULL) {
-            return NULL;
-        }
-        empty = tinypy_tuple_from_items(vm, NULL, 0U);
-        result = tinypy_call(method, empty, NULL, out_error);
-        TINYPY_DECREF(empty);
-        TINYPY_DECREF(method);
-        return result;
-    }
-    tinypy_value_t *return_value_1 = tinypy_internal_reversed_new(item, out_error);
-    return return_value_1;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_chr_common(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     int64_t value;
@@ -1491,6 +1437,83 @@ static tinypy_value_t *__tinypy_builtin_chr_common(tinypy_value_t *function, tin
     }
     tinypy_value_t *return_value_2 = tinypy_unicode_from_utf8(vm, utf8, size);
     return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_builtin_coerce_one(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t reverse, tinypy_value_t **out_result, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_value_t *method;
+    tinypy_value_t *arguments;
+    tinypy_value_t *result;
+
+    if (tinypy_internal_object_has_special(left, "__coerce__", 10U) == 0) {
+        return INT32_C(0);
+    }
+    method = tinypy_internal_object_get_special(left, "__coerce__", 10U, out_error);
+    if (method == NULL) {
+        return -INT32_C(1);
+    }
+    arguments = tinypy_tuple_from_items(vm, &right, 1U);
+    result = tinypy_call(method, arguments, NULL, out_error);
+    TINYPY_DECREF(arguments);
+    TINYPY_DECREF(method);
+    if (result == NULL) {
+        return -INT32_C(1);
+    }
+    if (result == &vm->not_implemented_object.base || (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_OLD_INSTANCE && TINYPY_VALUE_KIND(result) == TINYPY_VALUE_NONE)) {
+        TINYPY_DECREF(result);
+        return INT32_C(0);
+    }
+    if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_TUPLE || TINYPY_TUPLE_SIZE(result) != 2U) {
+        TINYPY_DECREF(result);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__coerce__ must return a 2-tuple or NotImplemented", out_error);
+        return -INT32_C(1);
+    }
+    if (reverse != 0) {
+        tinypy_value_t *items[2] = {TINYPY_TUPLE_GET(result, 1U), TINYPY_TUPLE_GET(result, 0U)};
+        tinypy_value_t *ordered = tinypy_tuple_from_items(vm, items, 2U);
+
+        TINYPY_DECREF(result);
+        result = ordered;
+    }
+    *out_result = result;
+    return INT32_C(1);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_builtin_coerce(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *left;
+    tinypy_value_t *right;
+    tinypy_value_t *result;
+    int32_t status;
+
+    (void)user_data;
+    if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 2U, 2U, out_error) == 0) {
+        return NULL;
+    }
+    left = TINYPY_TUPLE_GET(args, 0U);
+    right = TINYPY_TUPLE_GET(args, 1U);
+    status = __tinypy_builtin_coerce_one(left, right, TINYPY_FALSE, &result, out_error);
+    if (status > 0) {
+        return result;
+    }
+    if (status < 0) {
+        return NULL;
+    }
+    status = __tinypy_builtin_coerce_one(right, left, TINYPY_TRUE, &result, out_error);
+    if (status > 0) {
+        return result;
+    }
+    if (status < 0) {
+        return NULL;
+    }
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
+    if (left->type == right->type && (left->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U && kind != TINYPY_VALUE_OLD_INSTANCE && kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE && kind != TINYPY_VALUE_SET && kind != TINYPY_VALUE_FROZENSET) {
+        tinypy_value_t *items[2] = {left, right};
+        tinypy_value_t *return_value_1 = tinypy_tuple_from_items(vm, items, 2U);
+        return return_value_1;
+    }
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "number coercion failed", out_error);
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_cmp(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1947,7 +1970,7 @@ static tinypy_value_t *__tinypy_builtin_round(tinypy_value_t *function, tinypy_v
         }
     }
     else if (tinypy_internal_object_has_special(value, "__float__", 9U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__float__", 9U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__float__", 9U, out_error);
         tinypy_value_t *empty_args;
         tinypy_value_t *converted;
 
@@ -2030,6 +2053,13 @@ static void __tinypy_builtin_dir_add_dict(tinypy_value_t *names, tinypy_value_t 
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_builtin_dir_add_name(tinypy_vm_t *vm, tinypy_value_t *names, const char *name, size_t name_size) {
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
+
+    tinypy_dict_set(names, key, &vm->none_object.base);
+    TINYPY_DECREF(key);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_dict_entry_t *iterator;
@@ -2049,15 +2079,42 @@ static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_val
         tinypy_type_t *type = value->type;
         size_t mro_index;
 
-        if (kind == TINYPY_VALUE_INSTANCE && TINYPY_INSTANCE_OBJECT(value)->dict != NULL) {
-            __tinypy_builtin_dir_add_dict(names, TINYPY_INSTANCE_OBJECT(value)->dict);
+        if (kind == TINYPY_VALUE_INSTANCE) {
+            tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(value);
+
+            if (dict_slot != NULL && *dict_slot != NULL) {
+                __tinypy_builtin_dir_add_dict(names, *dict_slot);
+            }
         }
         else if (kind == TINYPY_VALUE_MODULE) {
             tinypy_value_t *module_dict = tinypy_module_dict(value);
             __tinypy_builtin_dir_add_dict(names, module_dict);
         }
         else if (kind == TINYPY_VALUE_TYPE) {
-            __tinypy_builtin_dir_add_dict(names, ((tinypy_type_t *)value)->dict);
+            tinypy_type_t *represented_type = (tinypy_type_t *)value;
+
+            for (mro_index = 0U; mro_index < tinypy_type_mro_size(represented_type); ++mro_index) {
+                const tinypy_type_t *mro_type = tinypy_type_mro_at(represented_type, mro_index);
+                const tinypy_value_t *type_dict = tinypy_type_dict(mro_type);
+
+                __tinypy_builtin_dir_add_dict(names, (tinypy_value_t *)type_dict);
+            }
+            if (represented_type == &vm->types[TINYPY_VALUE_TYPE]) {
+                static const struct {
+                    const char *name;
+                    size_t size;
+                } type_metadata[] = {
+                    {"__abstractmethods__", 19U}, {"__base__", 8U}, {"__bases__", 9U},
+                    {"__basicsize__", 13U}, {"__dict__", 8U}, {"__dictoffset__", 14U},
+                    {"__flags__", 9U}, {"__itemsize__", 12U}, {"__module__", 10U},
+                    {"__mro__", 7U}, {"__name__", 8U}, {"__weakrefoffset__", 17U}
+                };
+                size_t metadata_index;
+
+                for (metadata_index = 0U; metadata_index < sizeof(type_metadata) / sizeof(type_metadata[0]); ++metadata_index) {
+                    __tinypy_builtin_dir_add_name(vm, names, type_metadata[metadata_index].name, type_metadata[metadata_index].size);
+                }
+            }
         }
         else if (kind == TINYPY_VALUE_FUNCTION && TINYPY_FUNCTION_OBJECT(value)->dict != NULL) {
             __tinypy_builtin_dir_add_dict(names, TINYPY_FUNCTION_OBJECT(value)->dict);
@@ -2185,6 +2242,18 @@ static tinypy_value_t *__tinypy_builtin_import(tinypy_value_t *function, tinypy_
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_builtin_reload(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_internal_reload_module(TINYPY_TUPLE_GET(args, 0U), out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_abs(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_type_e kind;
@@ -2195,7 +2264,7 @@ static tinypy_value_t *__tinypy_builtin_abs(tinypy_value_t *function, tinypy_val
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
     if (tinypy_internal_object_has_special_override(value, "__abs__", 7U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__abs__", 7U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__abs__", 7U, out_error);
         tinypy_value_t *empty;
         tinypy_value_t *result;
 
@@ -2244,7 +2313,7 @@ static tinypy_value_t *__tinypy_builtin_abs(tinypy_value_t *function, tinypy_val
         return return_value_6;
     }
     if (tinypy_internal_object_has_special(value, "__abs__", 7U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__abs__", 7U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__abs__", 7U, out_error);
         tinypy_value_t *empty;
         tinypy_value_t *result;
 
@@ -2337,7 +2406,7 @@ static tinypy_value_t *__tinypy_builtin_format(tinypy_value_t *function, tinypy_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_call_no_arguments(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *method = tinypy_object_get_attr(value, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(value, name, name_size, out_error);
 
     if (method == NULL) {
         return NULL;
@@ -2664,6 +2733,7 @@ static void __tinypy_builtin_register(tinypy_vm_t *vm, const char *name, size_t 
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_builtin_functions(tinypy_vm_t *vm) {
+    __tinypy_builtin_register(vm, "apply", 5U, __tinypy_builtin_apply);
     __tinypy_builtin_register(vm, "len", 3U, __tinypy_builtin_len);
     __tinypy_builtin_register(vm, "id", 2U, __tinypy_builtin_id);
     __tinypy_builtin_register(vm, "isinstance", 10U, __tinypy_builtin_isinstance);
@@ -2679,7 +2749,6 @@ void tinypy_internal_initialize_builtin_functions(tinypy_vm_t *vm) {
     __tinypy_builtin_register(vm, "sorted", 6U, __tinypy_builtin_sorted);
     __tinypy_builtin_register_with_user_data(vm, "all", 3U, __tinypy_builtin_all_any, (void *)(intptr_t)1);
     __tinypy_builtin_register(vm, "any", 3U, __tinypy_builtin_all_any);
-    __tinypy_builtin_register(vm, "enumerate", 9U, __tinypy_builtin_enumerate);
     __tinypy_builtin_register(vm, "divmod", 6U, __tinypy_builtin_divmod);
     __tinypy_builtin_register(vm, "filter", 6U, __tinypy_builtin_filter);
     __tinypy_builtin_register(vm, "map", 3U, __tinypy_builtin_map);
@@ -2687,18 +2756,18 @@ void tinypy_internal_initialize_builtin_functions(tinypy_vm_t *vm) {
     __tinypy_builtin_register(vm, "sum", 3U, __tinypy_builtin_sum);
     __tinypy_builtin_register_with_user_data(vm, "max", 3U, __tinypy_builtin_min_max, (void *)(intptr_t)1);
     __tinypy_builtin_register(vm, "min", 3U, __tinypy_builtin_min_max);
-    __tinypy_builtin_register(vm, "reversed", 8U, __tinypy_builtin_reversed);
     __tinypy_builtin_register(vm, "chr", 3U, __tinypy_builtin_chr_common);
     __tinypy_builtin_register_with_user_data(vm, "unichr", 6U, __tinypy_builtin_chr_common, (void *)(intptr_t)1);
     __tinypy_builtin_register(vm, "cmp", 3U, __tinypy_builtin_cmp);
+    __tinypy_builtin_register(vm, "coerce", 6U, __tinypy_builtin_coerce);
     __tinypy_builtin_register(vm, "hash", 4U, __tinypy_builtin_hash);
     __tinypy_builtin_register(vm, "pow", 3U, __tinypy_builtin_pow);
     __tinypy_builtin_register(vm, "round", 5U, __tinypy_builtin_round);
     __tinypy_builtin_register_with_user_data(vm, "globals", 7U, __tinypy_builtin_frame_dict, (void *)(intptr_t)1);
     __tinypy_builtin_register(vm, "locals", 6U, __tinypy_builtin_frame_dict);
-    __tinypy_builtin_register(vm, "xrange", 6U, __tinypy_builtin_xrange);
     __tinypy_builtin_register(vm, "dir", 3U, __tinypy_builtin_dir);
     __tinypy_builtin_register(vm, "__import__", 10U, __tinypy_builtin_import);
+    __tinypy_builtin_register(vm, "reload", 6U, __tinypy_builtin_reload);
     __tinypy_builtin_register(vm, "abs", 3U, __tinypy_builtin_abs);
     __tinypy_builtin_register(vm, "ord", 3U, __tinypy_builtin_ord);
     __tinypy_builtin_register(vm, "format", 6U, __tinypy_builtin_format);

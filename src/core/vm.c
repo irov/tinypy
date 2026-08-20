@@ -231,17 +231,19 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_ENUMERATE], &vm->types[TINYPY_VALUE_TYPE], "enumerate", 9U,
         sizeof(tinypy_enumerate_object_t), 0U,
-        0U, &vm->types[TINYPY_VALUE_INSTANCE],
+        TINYPY_TYPE_FLAG_BASE_TYPE, &vm->types[TINYPY_VALUE_INSTANCE],
         tinypy_internal_enumerate_release_references, NULL);
     vm->types[TINYPY_VALUE_ENUMERATE].iter = tinypy_internal_enumerate_iter;
     vm->types[TINYPY_VALUE_ENUMERATE].next = tinypy_internal_enumerate_next;
+    vm->types[TINYPY_VALUE_ENUMERATE].create = tinypy_internal_enumerate_create;
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_REVERSED], &vm->types[TINYPY_VALUE_TYPE], "reversed", 8U,
         sizeof(tinypy_reversed_object_t), 0U,
-        0U, &vm->types[TINYPY_VALUE_INSTANCE],
+        TINYPY_TYPE_FLAG_BASE_TYPE, &vm->types[TINYPY_VALUE_INSTANCE],
         tinypy_internal_reversed_release_references, NULL);
     vm->types[TINYPY_VALUE_REVERSED].iter = tinypy_internal_reversed_iter;
     vm->types[TINYPY_VALUE_REVERSED].next = tinypy_internal_reversed_next;
+    vm->types[TINYPY_VALUE_REVERSED].create = tinypy_internal_reversed_create;
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_BUFFER], &vm->types[TINYPY_VALUE_TYPE], "buffer", 6U,
         sizeof(tinypy_buffer_object_t), 0U,
@@ -435,6 +437,46 @@ static void __tinypy_internal_initialize_type_dicts(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_initialize_type_docs(tinypy_vm_t *vm) {
+    static const struct {
+        tinypy_value_type_e kind;
+        const char *doc;
+    } docs[] = {
+        {TINYPY_VALUE_INSTANCE, "The most base type"},
+        {TINYPY_VALUE_TYPE, "type(object) -> the object's type; type(name, bases, dict) -> a new type"},
+        {TINYPY_VALUE_BOOL, "bool(x) -> bool"},
+        {TINYPY_VALUE_INTEGER, "int(x=0) -> int or long"},
+        {TINYPY_VALUE_LONG, "long(x=0) -> long"},
+        {TINYPY_VALUE_FLOAT, "float(x) -> floating point number"},
+        {TINYPY_VALUE_COMPLEX, "complex(real[, imag]) -> complex number"},
+        {TINYPY_VALUE_STRING, "str(object='') -> string"},
+        {TINYPY_VALUE_UNICODE, "unicode(string[, encoding[, errors]]) -> object"},
+        {TINYPY_VALUE_TUPLE, "tuple() -> empty tuple; tuple(iterable) -> tuple initialized from iterable"},
+        {TINYPY_VALUE_LIST, "list() -> new empty list; list(iterable) -> new list initialized from iterable"},
+        {TINYPY_VALUE_DICT, "dict() -> new empty dictionary"},
+        {TINYPY_VALUE_SET, "set() -> new empty set object"},
+        {TINYPY_VALUE_FROZENSET, "frozenset() -> empty frozenset object"},
+        {TINYPY_VALUE_BUFFER, "buffer(object[, offset[, size]]) -> read-only buffer"},
+        {TINYPY_VALUE_BYTEARRAY, "bytearray(iterable_of_ints) -> bytearray"},
+        {TINYPY_VALUE_XRANGE, "xrange(stop) -> xrange object"},
+        {TINYPY_VALUE_ENUMERATE, "enumerate(sequence[, start=0]) -> iterator for index, value pairs"},
+        {TINYPY_VALUE_REVERSED, "reversed(sequence) -> reverse iterator"},
+        {TINYPY_VALUE_SLICE, "slice(stop); slice(start, stop[, step])"}
+    };
+    size_t index;
+
+    for (index = 0U; index < TINYPY_BUILTIN_TYPE_COUNT; ++index) {
+        tinypy_type_set_attr(&vm->types[index], "__doc__", 7U, &vm->none_object.base);
+    }
+    for (index = 0U; index < sizeof(docs) / sizeof(docs[0]); ++index) {
+        size_t doc_size = strlen(docs[index].doc);
+        tinypy_value_t *doc = tinypy_string_from_bytes(vm, docs[index].doc, doc_size);
+
+        tinypy_type_set_attr(&vm->types[docs[index].kind], "__doc__", 7U, doc);
+        TINYPY_DECREF(doc);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_builtin_set(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *value) {
     tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
 
@@ -477,11 +519,13 @@ static void __tinypy_internal_initialize_builtins(tinypy_vm_t *vm) {
     __tinypy_internal_builtin_set(vm, "property", 8U, &vm->types[TINYPY_VALUE_PROPERTY].base.base);
     __tinypy_internal_builtin_set(vm, "super", 5U, &vm->types[TINYPY_VALUE_SUPER].base.base);
     __tinypy_internal_builtin_set(vm, "buffer", 6U, &vm->types[TINYPY_VALUE_BUFFER].base.base);
+    __tinypy_internal_builtin_set(vm, "memoryview", 10U, &vm->memoryview_type->base.base);
     __tinypy_internal_builtin_set(vm, "bytearray", 9U, &vm->types[TINYPY_VALUE_BYTEARRAY].base.base);
     __tinypy_internal_builtin_set(vm, "file", 4U, &vm->types[TINYPY_VALUE_FILE].base.base);
     TINYPY_DECREF(false_value);
     TINYPY_DECREF(true_value);
     TINYPY_DECREF(none_value);
+    TINYPY_DECREF(&vm->memoryview_type->base.base);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_register_module(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *module) {
@@ -837,6 +881,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     tinypy_internal_string_set_interned(vm->special_delete_key, 1);
 
     __tinypy_internal_initialize_type_dicts(vm);
+    __tinypy_internal_initialize_type_docs(vm);
     vm->interned_strings = tinypy_dict_new(vm);
     tinypy_internal_initialize_container_types(vm);
     tinypy_internal_initialize_slice_type(vm);
@@ -847,6 +892,9 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     tinypy_internal_initialize_weakref_type(vm);
     tinypy_internal_initialize_constructor_types(vm);
     tinypy_internal_initialize_descriptor_types(vm);
+    tinypy_internal_initialize_iterator_types(vm);
+    tinypy_internal_initialize_buffer_type(vm);
+    tinypy_internal_initialize_memoryview_type(vm);
     tinypy_internal_initialize_generator_types(vm);
     tinypy_internal_initialize_set_types(vm);
     tinypy_internal_initialize_dict_view_types(vm);
@@ -855,6 +903,8 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     tinypy_internal_initialize_exceptions(vm);
     tinypy_internal_initialize_builtin_functions(vm);
     __tinypy_internal_builtin_set(vm, "xrange", 6U, &vm->types[TINYPY_VALUE_XRANGE].base.base);
+    __tinypy_internal_builtin_set(vm, "enumerate", 9U, &vm->types[TINYPY_VALUE_ENUMERATE].base.base);
+    __tinypy_internal_builtin_set(vm, "reversed", 8U, &vm->types[TINYPY_VALUE_REVERSED].base.base);
     __tinypy_internal_initialize_modules(vm);
 
     return vm;
@@ -1114,6 +1164,7 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     tinypy_shutdown_graph_t graph;
     size_t type_index;
 
+    vm->state = TINYPY_VM_STATE_DESTROYING;
     tinypy_internal_type_lookup_cache_finalize(vm);
     tinypy_internal_integer_free_list_finalize(vm);
     tinypy_internal_frame_free_list_finalize(vm);
@@ -1122,7 +1173,6 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     graph.vm = vm;
     __tinypy_shutdown_collect(&graph);
     __tinypy_shutdown_destroy_graph(&graph);
-    vm->state = TINYPY_VM_STATE_DESTROYING;
     for (type_index = 0U;
          type_index < TINYPY_BUILTIN_TYPE_COUNT;
          ++type_index) {

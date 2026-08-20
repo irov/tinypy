@@ -65,16 +65,73 @@ assert dict.__contains__(direct_dict, "a")
 dict.__delitem__(direct_dict, "a")
 assert direct_dict == {"b": 2}
 assert dict.__hash__ is None
+assert {}.__cmp__({}) == 0
+assert {"a": 1}.__cmp__({"a": 2}) == -1
+assert {"a": 2}.__cmp__({"a": 1}) == 1
+try:
+    {}.__cmp__([])
+except TypeError:
+    pass
+else:
+    raise AssertionError("dict.__cmp__ accepted a non-dict argument")
+for set_value in (set(), frozenset()):
+    try:
+        set_value.__cmp__(set())
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("set.__cmp__ returned an ordering")
 
 assert str.__getitem__("abc", 1) == "b"
 assert str.__contains__("abc", "b")
 assert str.__add__("a", "b") == "ab"
 assert str.__mul__("ab", 2) == "abab"
 assert str.__mod__("%s", "x") == "x"
+assert str.__rmod__("x", "%s") == "x"
 assert str.__hash__("abc") == hash("abc")
 assert str.__format__("x", ">3") == "  x"
 assert unicode.__hash__(u"abc") == hash(u"abc")
 assert unicode.__format__(u"x", u">3") == u"  x"
+assert list("a{{b}}c{0!r:>10}d"._formatter_parser()) == [
+    ("a{", None, None, None),
+    ("b}", None, None, None),
+    ("c", "0", ">10", "r"),
+    ("d", None, None, None),
+]
+assert list(u"{0:{1}}"._formatter_parser()) == [(u"", u"0", u"{1}", None)]
+formatter_head, formatter_path = "name[2][key].value"._formatter_field_name_split()
+assert formatter_head == "name"
+assert list(formatter_path) == [(False, 2L), (False, "key"), (True, "value")]
+formatter_head, formatter_path = u"01.name"._formatter_field_name_split()
+assert formatter_head == 1L
+assert list(formatter_path) == [(True, u"name")]
+formatter_head, invalid_formatter_path = "name[]"._formatter_field_name_split()
+assert formatter_head == "name"
+try:
+    next(invalid_formatter_path)
+except ValueError:
+    pass
+else:
+    raise AssertionError("formatter field splitter accepted an empty item")
+try:
+    next(invalid_formatter_path)
+except StopIteration:
+    pass
+else:
+    raise AssertionError("formatter field splitter resumed after an error")
+invalid_formatter_parser = "{"._formatter_parser()
+try:
+    next(invalid_formatter_parser)
+except ValueError:
+    pass
+else:
+    raise AssertionError("formatter parser accepted an unmatched brace")
+try:
+    next(invalid_formatter_parser)
+except StopIteration:
+    pass
+else:
+    raise AssertionError("formatter parser resumed after an error")
 assert int.__add__(2, 3) == 5
 assert int.__rsub__(2, 10) == 8
 assert long.__lshift__(1L, 5) == 32L
@@ -86,6 +143,29 @@ assert float.__hash__(1.5) == hash(1.5)
 assert complex.__hash__(1 + 2j) == hash(1 + 2j)
 assert int.__format__(15, "04x") == "000f"
 assert float.__format__(1.5, ".1f") == "1.5"
+assert (2).__cmp__(3) == -1
+assert (3L).__cmp__(2L) == 1
+try:
+    (2).__cmp__(3L)
+except TypeError:
+    pass
+else:
+    raise AssertionError("int.__cmp__ accepted a long argument")
+assert (2).__coerce__(3) == (2, 3)
+assert (2).__coerce__(3L) is NotImplemented
+assert (3L).__coerce__(2) == (3L, 2L)
+assert (2.5).__coerce__(3) == (2.5, 3.0)
+assert (1 + 2j).__coerce__(3.0) == (1 + 2j, 3 + 0j)
+assert (2).__getnewargs__() == (2,)
+assert (3L).__getnewargs__() == (3L,)
+assert (2.5).__getnewargs__() == (2.5,)
+assert (1 + 2j).__getnewargs__() == (1.0, 2.0)
+assert object().__class__ is object
+assert "__class__" in dir(object())
+assert object().__sizeof__() > 0
+assert (1L).__sizeof__() > 0
+assert isinstance(str.__doc__, str)
+assert isinstance(dict.__doc__, str)
 
 
 class InplaceProtocol(object):
@@ -638,6 +718,41 @@ else:
 assert sum_events == ["iter"]
 
 assert list(reversed([1, 2, 3])) == [3, 2, 1]
+assert type(enumerate) is type
+assert isinstance(enumerate([]), enumerate)
+assert type(reversed) is type
+
+
+class EnumerateSubtype(enumerate):
+    pass
+
+
+enumerate_subtype = EnumerateSubtype(["value"])
+enumerate_subtype.marker = 7
+assert type(enumerate_subtype) is EnumerateSubtype
+assert enumerate_subtype.next() == (0, "value")
+assert enumerate_subtype.marker == 7
+
+
+class ReversedSubtype(reversed):
+    pass
+
+
+class ReversedSubtypeSequence(object):
+    def __len__(self):
+        return 1
+
+    def __getitem__(self, index):
+        if index == 0:
+            return "value"
+        raise IndexError
+
+
+reversed_subtype = ReversedSubtype(ReversedSubtypeSequence())
+reversed_subtype.marker = 8
+assert type(reversed_subtype) is ReversedSubtype
+assert reversed_subtype.next() == "value"
+assert reversed_subtype.marker == 8
 
 
 class ReverseProtocol(object):
@@ -704,6 +819,15 @@ assert list(reversed(xrange(-9223372036854775808L, 9223372036854775807L, 9223372
     -1,
     -9223372036854775808L,
 ]
+extreme_range = xrange(-9223372036854775808L, 9223372036854775807L, 9223372036854775807L)
+assert extreme_range[2] == 9223372036854775806L
+assert repr(extreme_range) == "xrange(-9223372036854775808, 9223372036854775807, 9223372036854775807)"
+try:
+    xrange(-9223372036854775808L, 9223372036854775807L)
+except OverflowError:
+    pass
+else:
+    raise AssertionError("xrange accepted a length larger than Py_ssize_t")
 
 call_values = [1, 2, 3, 4]
 
@@ -760,7 +884,49 @@ class RoundFloat(object):
         return 1.25
 
 
-assert round(RoundFloat(), 1) == 1.3
+round_float = RoundFloat()
+round_float.__float__ = lambda: 9.75
+assert round(round_float, 1) == 1.3
+assert apply(lambda: 7) == 7
+assert apply(lambda *values: values, [1, 2]) == (1, 2)
+assert apply(lambda value=0: value, (), {"value": 42}) == 42
+try:
+    apply(lambda *values: values, iter([1, 2]))
+except TypeError:
+    pass
+else:
+    raise AssertionError("apply accepted a non-sequence iterator")
+try:
+    apply(lambda: None, (), [])
+except TypeError:
+    pass
+else:
+    raise AssertionError("apply accepted non-dictionary keywords")
+assert coerce(True, 2) == (True, 2)
+assert coerce(1, 2L) == (1L, 2L)
+assert coerce(1L, 2.5) == (1.0, 2.5)
+assert coerce(1, 2j) == (1 + 0j, 2j)
+assert coerce([], []) == ([], [])
+
+
+class LeftCoercion(object):
+    def __coerce__(self, other):
+        return "left", other
+
+
+class RightCoercion(object):
+    def __coerce__(self, other):
+        return "right", other
+
+
+assert coerce(LeftCoercion(), 3) == ("left", 3)
+assert coerce(3, RightCoercion()) == (3, "right")
+try:
+    coerce("a", "b")
+except TypeError:
+    pass
+else:
+    raise AssertionError("coerce accepted incompatible values")
 assert globals() is locals()
 assert list(xrange(1, 5, 2)) == [1, 3]
 range_value = xrange(2, 10, 2)
@@ -768,15 +934,106 @@ assert type(range_value).__name__ == "xrange"
 assert len(range_value) == 4 and bool(range_value)
 assert range_value[-1] == 8
 assert repr(range_value) == "xrange(2, 10, 2)"
+assert range_value.__len__() == 4
+assert range_value.__getitem__(-1) == 8
+assert list(range_value.__iter__()) == [2, 4, 6, 8]
+assert list(range_value.__reversed__()) == [8, 6, 4, 2]
+assert range_value.__repr__() == repr(range_value)
+assert range_value.__str__() == str(range_value)
+try:
+    xrange.__len__(1)
+except TypeError:
+    pass
+else:
+    raise AssertionError("xrange method accepted a non-xrange object")
 assert list(range_value) == [2, 4, 6, 8]
 assert list(range_value) == [2, 4, 6, 8]
 enumerated = enumerate(["a", "b"], 3)
 assert type(enumerated).__name__ == "enumerate"
+assert enumerated.__repr__() == repr(enumerated)
+assert enumerated.__str__() == str(enumerated)
 assert enumerated.next() == (3, "a")
 assert list(enumerated) == [(4, "b")]
 reverse_iterator = reversed([1, 2, 3])
+assert reverse_iterator.__repr__() == repr(reverse_iterator)
+assert reverse_iterator.__str__() == str(reverse_iterator)
+assert reverse_iterator.__length_hint__() == 3
 assert reverse_iterator.next() == 3
+assert reverse_iterator.__length_hint__() == 2
 assert list(reverse_iterator) == [2, 1]
+assert reverse_iterator.__length_hint__() == 0
+
+forward_iterator = iter([1, 2, 3])
+assert forward_iterator.__length_hint__() == 3
+assert next(forward_iterator) == 1
+assert forward_iterator.__length_hint__() == 2
+assert list(forward_iterator) == [2, 3]
+assert forward_iterator.__length_hint__() == 0
+
+shrinking_length_source = [1, 2, 3]
+shrinking_length_iterator = iter(shrinking_length_source)
+assert next(shrinking_length_iterator) == 1
+del shrinking_length_source[:]
+assert shrinking_length_iterator.__length_hint__() == 0
+
+from _weakref import ref
+
+
+class IteratorLifetimeTarget(object):
+    pass
+
+
+held_value = IteratorLifetimeTarget()
+held_value_reference = ref(held_value)
+held_value_iterator = iter([held_value])
+del held_value
+list(held_value_iterator)
+assert held_value_reference() is None
+
+
+class FallbackIteratorSource(object):
+    def __getitem__(self, index):
+        if index == 0:
+            return 1
+        raise IndexError
+
+
+fallback_source = FallbackIteratorSource()
+fallback_source_reference = ref(fallback_source)
+fallback_iterator = iter(fallback_source)
+del fallback_source
+assert list(fallback_iterator) == [1]
+assert fallback_source_reference() is None
+
+reversed_source = IteratorLifetimeTarget()
+reversed_source.items = [1]
+reversed_source.__class__.__len__ = lambda self: len(self.items)
+reversed_source.__class__.__getitem__ = lambda self, index: self.items[index]
+reversed_source_reference = ref(reversed_source)
+reversed_iterator_lifetime = reversed(reversed_source)
+del reversed_source
+assert list(reversed_iterator_lifetime) == [1]
+assert reversed_source_reference() is None
+
+
+class CallableIteratorSource(object):
+    def __init__(self, sentinel):
+        self.sentinel = sentinel
+
+    def __call__(self):
+        return self.sentinel
+
+
+callable_sentinel = IteratorLifetimeTarget()
+callable_source = CallableIteratorSource(callable_sentinel)
+callable_sentinel_reference = ref(callable_sentinel)
+callable_source_reference = ref(callable_source)
+callable_iterator_lifetime = iter(callable_source, callable_sentinel)
+del callable_sentinel
+del callable_source
+assert list(callable_iterator_lifetime) == []
+assert callable_source_reference() is None
+assert callable_sentinel_reference() is None
 
 
 class LongLength(object):
@@ -839,9 +1096,18 @@ assert repr(NotImplemented) == "NotImplemented"
 assert isinstance("text", basestring)
 assert isinstance(u"text", basestring)
 assert bytes is str
+plain_object = object()
+assert plain_object.__repr__() == repr(plain_object)
+assert plain_object.__str__() == str(plain_object)
+assert slice(None).__str__() == str(slice(None))
+assert set([1]).__str__() == str(set([1]))
+assert frozenset([1]).__str__() == str(frozenset([1]))
 assert "value" in dir(instance)
 assert "method" in dir(Introspection)
+assert "bit_length" in dir(bool)
 assert "Introspection" in dir()
+for dir_object_index in xrange(1000):
+    assert "__repr__" in dir(object())
 
 
 class ProtocolObject(object):

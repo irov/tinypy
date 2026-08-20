@@ -88,7 +88,7 @@ static tinypy_value_t *__tinypy_constructor_call_conversion(tinypy_value_t *valu
         return NULL;
     }
     *out_handled = TINYPY_TRUE;
-    method = tinypy_object_get_attr(value, name, name_size, out_error);
+    method = tinypy_internal_object_get_special(value, name, name_size, out_error);
     if (method == NULL) {
         return NULL;
     }
@@ -1357,6 +1357,10 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
             tinypy_internal_set_swap_contents(self, initialized);
             break;
         case TINYPY_VALUE_BYTEARRAY:
+            if (tinypy_internal_bytearray_resize_allowed(self, TINYPY_SIZED_SIZE(initialized), out_error) == 0) {
+                TINYPY_DECREF(initialized);
+                return NULL;
+            }
             tinypy_internal_bytearray_swap_contents(self, initialized);
             break;
         default:
@@ -1752,6 +1756,81 @@ static tinypy_value_t *__tinypy_constructor_frozenset_new_method(tinypy_value_t 
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_type_call_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_constructor_argument_count(vm, args, 1U, SIZE_MAX, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type.__call__ requires a type", out_error);
+        return NULL;
+    }
+    tinypy_value_t *call_args = __tinypy_constructor_tail_arguments(vm, args);
+    tinypy_value_t *result = tinypy_call(class_value, call_args, kwargs, out_error);
+
+    TINYPY_DECREF(call_args);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_type_instancecheck_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_argument_count(vm, args, 2U, 2U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type.__instancecheck__ requires a type", out_error);
+        return NULL;
+    }
+    tinypy_value_t *instance = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_t *result = tinypy_bool_from_i32(vm, tinypy_type_is_subtype(instance->type, (tinypy_type_t *)class_value));
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_type_subclasscheck_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_argument_count(vm, args, 2U, 2U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *subclass_value = TINYPY_TUPLE_GET(args, 1U);
+    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE || TINYPY_VALUE_KIND(subclass_value) != TINYPY_VALUE_TYPE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type.__subclasscheck__ requires two types", out_error);
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_bool_from_i32(vm, tinypy_type_is_subtype((tinypy_type_t *)subclass_value, (tinypy_type_t *)class_value));
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_type_compare_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_argument_count(vm, args, 2U, 2U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
+    if (TINYPY_VALUE_KIND(left) != TINYPY_VALUE_TYPE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type comparison requires a type", out_error);
+        return NULL;
+    }
+    if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_TYPE) {
+        tinypy_value_t *result = tinypy_not_implemented_get(vm);
+
+        return result;
+    }
+    tinypy_value_t *result = tinypy_internal_compare_builtin_value(left, right, (tinypy_compare_operation_e)(intptr_t)user_data, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_type_mro_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -1800,6 +1879,13 @@ static void __tinypy_constructor_add_method(tinypy_type_t *type, const char *nam
     TINYPY_DECREF(function);
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_constructor_add_type_comparison(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_compare_operation_e operation) {
+    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, __tinypy_constructor_type_compare_method, (void *)(intptr_t)operation, NULL);
+
+    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_TYPE], name, name_size, function);
+    TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_constructor_add_class_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
     tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, NULL, NULL);
     tinypy_value_t *attribute = tinypy_class_method_new(function);
@@ -1841,6 +1927,15 @@ static void __tinypy_constructor_add_immutable_new(tinypy_vm_t *vm, tinypy_value
 void tinypy_internal_initialize_constructor_types(tinypy_vm_t *vm) {
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__new__", 7U, __tinypy_constructor_type_new_method, INT32_C(1));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__init__", 8U, __tinypy_constructor_type_init_method, INT32_C(0));
+    __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__call__", 8U, __tinypy_constructor_type_call_method, INT32_C(0));
+    __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__instancecheck__", 17U, __tinypy_constructor_type_instancecheck_method, INT32_C(0));
+    __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__subclasscheck__", 17U, __tinypy_constructor_type_subclasscheck_method, INT32_C(0));
+    __tinypy_constructor_add_type_comparison(vm, "__lt__", 6U, TINYPY_COMPARE_LESS);
+    __tinypy_constructor_add_type_comparison(vm, "__le__", 6U, TINYPY_COMPARE_LESS_EQUAL);
+    __tinypy_constructor_add_type_comparison(vm, "__eq__", 6U, TINYPY_COMPARE_EQUAL);
+    __tinypy_constructor_add_type_comparison(vm, "__ne__", 6U, TINYPY_COMPARE_NOT_EQUAL);
+    __tinypy_constructor_add_type_comparison(vm, "__gt__", 6U, TINYPY_COMPARE_GREATER);
+    __tinypy_constructor_add_type_comparison(vm, "__ge__", 6U, TINYPY_COMPARE_GREATER_EQUAL);
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "mro", 3U, __tinypy_constructor_type_mro_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__subclasses__", 14U, __tinypy_constructor_type_subclasses_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_INSTANCE], "__new__", 7U, __tinypy_constructor_object_new_method, INT32_C(1));
@@ -1862,4 +1957,6 @@ void tinypy_internal_initialize_constructor_types(tinypy_vm_t *vm) {
     __tinypy_constructor_add_immutable_new(vm, TINYPY_VALUE_COMPLEX);
     __tinypy_constructor_add_immutable_new(vm, TINYPY_VALUE_STRING);
     __tinypy_constructor_add_immutable_new(vm, TINYPY_VALUE_UNICODE);
+    __tinypy_constructor_add_immutable_new(vm, TINYPY_VALUE_ENUMERATE);
+    __tinypy_constructor_add_immutable_new(vm, TINYPY_VALUE_REVERSED);
 }

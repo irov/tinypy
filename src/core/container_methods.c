@@ -466,7 +466,7 @@ static tinypy_value_t *__tinypy_container_call_items(tinypy_vm_t *vm, tinypy_val
         }
     }
     if (tinypy_internal_object_has_special(callable, "__call__", 8U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(callable, "__call__", 8U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(callable, "__call__", 8U, out_error);
 
         if (method == NULL) {
             return NULL;
@@ -1353,6 +1353,50 @@ static tinypy_value_t *__tinypy_container_compare_method(tinypy_value_t *functio
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_container_cmp_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_type_e expected = (tinypy_value_type_e)(intptr_t)user_data;
+    tinypy_value_t *left;
+    tinypy_value_t *right;
+    int32_t equal;
+    int32_t less;
+
+    if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 2U, 2U, out_error) == 0) {
+        return NULL;
+    }
+    left = TINYPY_TUPLE_GET(args, 0U);
+    right = TINYPY_TUPLE_GET(args, 1U);
+    if (expected == TINYPY_VALUE_DICT) {
+        if (TINYPY_VALUE_KIND(left) != TINYPY_VALUE_DICT || TINYPY_VALUE_KIND(right) != TINYPY_VALUE_DICT) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "dict comparison requires two dictionaries", out_error);
+            return NULL;
+        }
+        equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
+        if (equal < 0) {
+            return NULL;
+        }
+        if (equal != 0) {
+            tinypy_value_t *result = tinypy_integer_from_i64(vm, INT64_C(0));
+
+            return result;
+        }
+        less = tinypy_compare_bool(left, right, TINYPY_COMPARE_LESS, out_error);
+        if (less < 0) {
+            return NULL;
+        }
+        tinypy_value_t *result = tinypy_integer_from_i64(vm, less != 0 ? INT64_C(-1) : INT64_C(1));
+
+        return result;
+    }
+    if ((TINYPY_VALUE_KIND(left) != TINYPY_VALUE_SET && TINYPY_VALUE_KIND(left) != TINYPY_VALUE_FROZENSET) ||
+        (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_SET && TINYPY_VALUE_KIND(right) != TINYPY_VALUE_FROZENSET)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "set comparison requires two sets", out_error);
+        return NULL;
+    }
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot compare sets using cmp()", out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_container_unary_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     intptr_t mode = (intptr_t)user_data;
@@ -1644,6 +1688,7 @@ static void __tinypy_container_add_sequence_arithmetic(tinypy_type_t *type, tiny
     __tinypy_container_add_method(type, "__rmul__", 8U, __tinypy_container_binary_method, (void *)(intptr_t)102);
     if (modulo != 0) {
         __tinypy_container_add_method(type, "__mod__", 7U, __tinypy_container_binary_method, (void *)(intptr_t)6);
+        __tinypy_container_add_method(type, "__rmod__", 8U, __tinypy_container_binary_method, (void *)(intptr_t)106);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1751,6 +1796,7 @@ void tinypy_internal_initialize_container_types(tinypy_vm_t *vm) {
     __tinypy_container_add_method(&vm->types[TINYPY_VALUE_DICT], "__len__", 7U, __tinypy_container_len_method, NULL);
     __tinypy_container_add_method(&vm->types[TINYPY_VALUE_DICT], "__getitem__", 11U, __tinypy_container_getitem_method, NULL);
     __tinypy_container_add_method(&vm->types[TINYPY_VALUE_DICT], "__repr__", 8U, __tinypy_container_repr_method, NULL);
+    __tinypy_container_add_method(&vm->types[TINYPY_VALUE_DICT], "__cmp__", 7U, __tinypy_container_cmp_method, (void *)(intptr_t)TINYPY_VALUE_DICT);
     __tinypy_container_add_sequence_protocol(&vm->types[TINYPY_VALUE_TUPLE], TINYPY_FALSE);
     __tinypy_container_add_sequence_arithmetic(&vm->types[TINYPY_VALUE_TUPLE], TINYPY_FALSE);
     __tinypy_container_add_sequence_protocol(&vm->types[TINYPY_VALUE_LIST], TINYPY_TRUE);
@@ -1771,6 +1817,8 @@ void tinypy_internal_initialize_container_types(tinypy_vm_t *vm) {
     __tinypy_container_add_sequence_protocol(&vm->types[TINYPY_VALUE_DICT], TINYPY_TRUE);
     __tinypy_container_add_comparisons(&vm->types[TINYPY_VALUE_SET]);
     __tinypy_container_add_comparisons(&vm->types[TINYPY_VALUE_FROZENSET]);
+    __tinypy_container_add_method(&vm->types[TINYPY_VALUE_SET], "__cmp__", 7U, __tinypy_container_cmp_method, (void *)(intptr_t)TINYPY_VALUE_SET);
+    __tinypy_container_add_method(&vm->types[TINYPY_VALUE_FROZENSET], "__cmp__", 7U, __tinypy_container_cmp_method, (void *)(intptr_t)TINYPY_VALUE_FROZENSET);
     __tinypy_container_add_numeric_protocol(&vm->types[TINYPY_VALUE_INTEGER], TINYPY_TRUE);
     __tinypy_container_add_numeric_protocol(&vm->types[TINYPY_VALUE_LONG], TINYPY_TRUE);
     __tinypy_container_add_numeric_protocol(&vm->types[TINYPY_VALUE_FLOAT], TINYPY_FALSE);

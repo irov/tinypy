@@ -49,3 +49,11 @@ if nonsuppress_result != 42 or nonsuppress_context.exited != 1 or not nonsuppres
     raise AssertionError("exception propagation failed")
 if return_result != 42 or return_context.exited != 1:
     raise AssertionError("return cleanup failed")
+
+shadowed_context = Context(False)
+shadowed_context.__enter__ = lambda: -1
+shadowed_context.__exit__ = lambda *arguments: True
+with shadowed_context as shadowed_value:
+    pass
+if shadowed_value != 40 or shadowed_context.entered != 1 or shadowed_context.exited != 1:
+    raise AssertionError("context manager protocol used instance attributes")

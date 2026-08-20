@@ -18,7 +18,7 @@ tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_
         return value;
     }
     if (tinypy_internal_object_has_special(value, "__index__", 9U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__index__", 9U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__index__", 9U, out_error);
         tinypy_value_t *args;
         tinypy_value_t *converted;
 
@@ -89,7 +89,7 @@ tinypy_bool_t tinypy_internal_index_as_i64(tinypy_value_t *value, int64_t *out_i
         return TINYPY_TRUE;
     }
     if (tinypy_internal_object_has_special(value, "__index__", 9U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__index__", 9U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__index__", 9U, out_error);
         tinypy_value_t *args;
 
         if (method == NULL) {
@@ -227,7 +227,7 @@ static tinypy_bool_t __tinypy_item_normalize_index(tinypy_vm_t *vm, tinypy_value
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_item_call_method(tinypy_value_t *container, const char *name, size_t name_size, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    tinypy_value_t *method = tinypy_object_get_attr(container, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(container, name, name_size, out_error);
 
     if (method == NULL) {
         return NULL;
@@ -609,7 +609,7 @@ tinypy_value_t *tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, 
         if (__tinypy_item_normalize_index(vm, key, range->length, &index, out_error) == 0) {
             return NULL;
         }
-        tinypy_value_t *return_value_9 = tinypy_integer_from_i64(vm, range->start + (int64_t)index * range->step);
+        tinypy_value_t *return_value_9 = tinypy_integer_from_i64(vm, tinypy_internal_xrange_item_value(range, index));
         return return_value_9;
     }
     if (tinypy_internal_object_has_special(container, "__getitem__", 11U) != 0) {

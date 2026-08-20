@@ -2714,7 +2714,7 @@ static tinypy_value_t *__test_module_finder_load(tinypy_value_t *function, tinyp
         tinypy_release(module);
         return NULL;
     }
-    tinypy_value_t *answer = tinypy_integer_from_i64(state->vm, 42);
+    tinypy_value_t *answer = tinypy_integer_from_i64(state->vm, (int64_t)(41U + state->load_count));
 
     tinypy_module_add_value(module, "answer", 6U, answer);
     tinypy_release(answer);
@@ -2733,6 +2733,11 @@ static int32_t __test_module_finder(void) {
     tinypy_value_t *module;
     tinypy_value_t *answer;
     tinypy_value_t *key;
+    tinypy_value_t *cached_module;
+    tinypy_value_t *reload_function;
+    tinypy_value_t *reload_args;
+    tinypy_value_t *reload_result;
+    tinypy_value_t *stale;
     tinypy_error_t *error = NULL;
 
     (void)memset(&allocator_state, 0, sizeof(allocator_state));
@@ -2758,11 +2763,33 @@ static int32_t __test_module_finder(void) {
     TEST_CHECK(error == NULL);
     answer = tinypy_module_get_value(module, "answer", 6U);
     TEST_CHECK(answer != NULL && tinypy_integer_as_i64(answer) == 42);
-    tinypy_release(module);
-    module = tinypy_import_module(vm, "finder_sample", 13U, NULL, NULL, 0, &error);
-    TEST_CHECK(module != NULL);
-    tinypy_release(module);
+    cached_module = tinypy_import_module(vm, "finder_sample", 13U, NULL, NULL, 0, &error);
+    TEST_CHECK(cached_module == module);
+    tinypy_release(cached_module);
     TEST_CHECK(finder_state.find_count == 1U && finder_state.load_count == 1U);
+    stale = tinypy_integer_from_i64(vm, INT64_C(7));
+    tinypy_module_add_value(module, "stale", 5U, stale);
+    tinypy_release(stale);
+    key = tinypy_string_from_bytes(vm, "reload", 6U);
+    reload_function = tinypy_dict_get(tinypy_vm_builtins(vm), key);
+    tinypy_retain(reload_function);
+    tinypy_release(key);
+    TEST_CHECK(reload_function != NULL && error == NULL);
+    reload_args = tinypy_tuple_from_items(vm, &module, 1U);
+    reload_result = tinypy_call(reload_function, reload_args, NULL, &error);
+    tinypy_release(reload_args);
+    tinypy_release(reload_function);
+    TEST_CHECK(reload_result == module && error == NULL);
+    tinypy_release(reload_result);
+    answer = tinypy_module_get_value(module, "answer", 6U);
+    TEST_CHECK(answer != NULL && tinypy_integer_as_i64(answer) == 43);
+    stale = tinypy_module_get_value(module, "stale", 5U);
+    TEST_CHECK(stale != NULL && tinypy_integer_as_i64(stale) == 7);
+    key = tinypy_string_from_bytes(vm, "finder_sample", 13U);
+    TEST_CHECK(tinypy_dict_get_optional(tinypy_vm_modules(vm), key) == module);
+    tinypy_release(key);
+    TEST_CHECK(finder_state.find_count == 2U && finder_state.load_count == 2U);
+    tinypy_release(module);
 
     module = tinypy_import_module(vm, "finder_broken", 13U, NULL, NULL, 0, &error);
     TEST_CHECK(module == NULL);
@@ -2773,7 +2800,7 @@ static int32_t __test_module_finder(void) {
     key = tinypy_string_from_bytes(vm, "finder_broken", 13U);
     TEST_CHECK(tinypy_dict_contains(tinypy_vm_modules(vm), key) == 0);
     tinypy_release(key);
-    TEST_CHECK(finder_state.find_count == 2U && finder_state.load_count == 2U);
+    TEST_CHECK(finder_state.find_count == 3U && finder_state.load_count == 3U);
 
     tinypy_vm_set_module_finder(vm, NULL);
     TEST_CHECK(tinypy_vm_module_finder(vm) == NULL);

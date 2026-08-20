@@ -74,10 +74,11 @@ tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
         }
         return soft_space > 0 ? TINYPY_TRUE : TINYPY_FALSE;
     }
-    if (kind == TINYPY_VALUE_INSTANCE && TINYPY_INSTANCE_OBJECT(target)->dict != NULL) {
+    if (kind == TINYPY_VALUE_INSTANCE) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
+        tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(target);
         tinypy_value_t *key = tinypy_string_from_bytes(vm, "softspace", 9U);
-        tinypy_value_t *value = tinypy_dict_get_optional(TINYPY_INSTANCE_OBJECT(target)->dict, key);
+        tinypy_value_t *value = dict_slot != NULL && *dict_slot != NULL ? tinypy_dict_get_optional(*dict_slot, key) : NULL;
         tinypy_bool_t soft_space = TINYPY_FALSE;
 
         if (value != NULL) {
@@ -111,10 +112,14 @@ void tinypy_internal_output_set_soft_space(tinypy_value_t *target, tinypy_bool_t
     }
     else if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_INSTANCE) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-        tinypy_value_t *value = tinypy_bool_from_i32(vm, soft_space);
+        tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(target);
 
-        tinypy_instance_set_attr(target, "softspace", 9U, value);
-        TINYPY_DECREF(value);
+        if (dict_slot != NULL) {
+            tinypy_value_t *value = tinypy_bool_from_i32(vm, soft_space);
+
+            tinypy_instance_set_attr(target, "softspace", 9U, value);
+            TINYPY_DECREF(value);
+        }
     }
 }
 //////////////////////////////////////////////////////////////////////////

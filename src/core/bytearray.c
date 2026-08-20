@@ -4,6 +4,14 @@
 
 #include <string.h>
 
+tinypy_bool_t tinypy_internal_bytearray_resize_allowed(tinypy_value_t *value, size_t size, tinypy_error_t **out_error) {
+    if (size != TINYPY_SIZED_SIZE(value) && TINYPY_BYTEARRAY_OBJECT(value)->exports != 0U) {
+        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_BUFFER, "Existing exports of data: object cannot be re-sized", out_error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_bytearray_reserve(tinypy_value_t *value, size_t minimum) {
     tinypy_bytearray_object_t *bytearray = TINYPY_BYTEARRAY_OBJECT(value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
@@ -43,6 +51,10 @@ tinypy_bool_t tinypy_internal_bytes_view(const tinypy_value_t *value, const uint
         *out_bytes = (const uint8_t *)tinypy_buffer_view(value, out_size);
         return TINYPY_TRUE;
     default:
+        if (tinypy_internal_memoryview_check(value) != 0) {
+            *out_bytes = tinypy_internal_memoryview_view(value, out_size);
+            return TINYPY_TRUE;
+        }
         return TINYPY_FALSE;
     }
 }
@@ -422,11 +434,20 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
                 return TINYPY_FALSE;
             }
+            if (slice.step == 1 && tinypy_internal_bytearray_resize_allowed(value, size - slice.length + replacement_size, out_error) == 0) {
+                if (replacement != NULL) {
+                    tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
+                }
+                return TINYPY_FALSE;
+            }
             __tinypy_bytearray_replace_slice(value, &slice, replacement, replacement_size);
             if (replacement != NULL) {
                 tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
             }
             return TINYPY_TRUE;
+        }
+        if (slice.length != 0U && tinypy_internal_bytearray_resize_allowed(value, size - slice.length, out_error) == 0) {
+            return TINYPY_FALSE;
         }
         if (slice.step == 1) {
             __tinypy_bytearray_replace_slice(value, &slice, NULL, 0U);
@@ -448,6 +469,9 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
         return TINYPY_FALSE;
     }
     if (item == NULL) {
+        if (tinypy_internal_bytearray_resize_allowed(value, size - 1U, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
         __tinypy_bytearray_delete_index(value, index);
         return TINYPY_TRUE;
     }
@@ -586,10 +610,6 @@ static tinypy_value_t *__tinypy_bytearray_inplace_add_method(tinypy_value_t *fun
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
-    if (left == right) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_BUFFER, "Existing exports of data: object cannot be re-sized", out_error);
-        return NULL;
-    }
     if (tinypy_internal_bytes_view(right, &right_bytes, &right_size) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot concatenate bytearray with this value", out_error);
         return NULL;
@@ -599,8 +619,14 @@ static tinypy_value_t *__tinypy_bytearray_inplace_add_method(tinypy_value_t *fun
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
         return NULL;
     }
+    if (tinypy_internal_bytearray_resize_allowed(left, left_size + right_size, out_error) == 0) {
+        return NULL;
+    }
     __tinypy_bytearray_reserve(left, left_size + right_size);
     uint8_t *left_bytes = TINYPY_BYTEARRAY_OBJECT(left)->bytes;
+    if (left == right) {
+        right_bytes = left_bytes;
+    }
     if (right_size != 0U) {
         (void)memcpy(left_bytes + left_size, right_bytes, right_size);
     }
@@ -623,6 +649,9 @@ static tinypy_value_t *__tinypy_bytearray_inplace_multiply_method(tinypy_value_t
     }
     size_t unit_size = TINYPY_SIZED_SIZE(value);
     if (count <= 0) {
+        if (tinypy_internal_bytearray_resize_allowed(value, 0U, out_error) == 0) {
+            return NULL;
+        }
         TINYPY_SIZED_SIZE(value) = 0U;
     }
     else if (count > 1 && unit_size != 0U) {
@@ -631,6 +660,9 @@ static tinypy_value_t *__tinypy_bytearray_inplace_multiply_method(tinypy_value_t
             return NULL;
         }
         size_t total_size = unit_size * (size_t)count;
+        if (tinypy_internal_bytearray_resize_allowed(value, total_size, out_error) == 0) {
+            return NULL;
+        }
         __tinypy_bytearray_reserve(value, total_size);
         uint8_t *bytes = TINYPY_BYTEARRAY_OBJECT(value)->bytes;
         size_t copied = unit_size;
@@ -665,6 +697,9 @@ static tinypy_value_t *__tinypy_bytearray_append_method(tinypy_value_t *function
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
         return NULL;
     }
+    if (tinypy_internal_bytearray_resize_allowed(value, size + 1U, out_error) == 0) {
+        return NULL;
+    }
     __tinypy_bytearray_reserve(value, size + 1U);
     TINYPY_BYTEARRAY_OBJECT(value)->bytes[size] = byte;
     TINYPY_SIZED_SIZE(value) += 1;
@@ -693,6 +728,12 @@ static tinypy_value_t *__tinypy_bytearray_extend_method(tinypy_value_t *function
             tinypy_internal_vm_deallocate(vm, extension, extension_size);
         }
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
+        return NULL;
+    }
+    if (tinypy_internal_bytearray_resize_allowed(value, size + extension_size, out_error) == 0) {
+        if (extension != NULL) {
+            tinypy_internal_vm_deallocate(vm, extension, extension_size);
+        }
         return NULL;
     }
     __tinypy_bytearray_reserve(value, size + extension_size);
@@ -1017,6 +1058,9 @@ static tinypy_value_t *__tinypy_bytearray_insert_method(tinypy_value_t *function
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
         return NULL;
     }
+    if (tinypy_internal_bytearray_resize_allowed(value, size + 1U, out_error) == 0) {
+        return NULL;
+    }
     if (index < 0) {
         index = index < -(int64_t)size ? 0 : index + (int64_t)size;
     }
@@ -1060,6 +1104,9 @@ static tinypy_value_t *__tinypy_bytearray_pop_method(tinypy_value_t *function, t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "pop index out of range", out_error);
         return NULL;
     }
+    if (tinypy_internal_bytearray_resize_allowed(value, size - 1U, out_error) == 0) {
+        return NULL;
+    }
     uint8_t byte = TINYPY_BYTEARRAY_OBJECT(value)->bytes[(size_t)index];
     __tinypy_bytearray_delete_index(value, (size_t)index);
     tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, byte);
@@ -1078,6 +1125,9 @@ static tinypy_value_t *__tinypy_bytearray_remove_method(tinypy_value_t *function
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
     for (index = 0U; index < TINYPY_SIZED_SIZE(value); ++index) {
         if (TINYPY_BYTEARRAY_OBJECT(value)->bytes[index] == byte) {
+            if (tinypy_internal_bytearray_resize_allowed(value, TINYPY_SIZED_SIZE(value) - 1U, out_error) == 0) {
+                return NULL;
+            }
             __tinypy_bytearray_delete_index(value, index);
             tinypy_value_t *return_value_1 = tinypy_none_get(vm);
             return return_value_1;
@@ -1136,7 +1186,7 @@ static int32_t __tinypy_bytearray_hex_digit(uint8_t byte) {
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_bytearray_hex_space(uint8_t byte) {
-    return byte == (uint8_t)' ' || byte == (uint8_t)'\t' || byte == (uint8_t)'\n' || byte == (uint8_t)'\r' || byte == (uint8_t)'\v' || byte == (uint8_t)'\f' ? TINYPY_TRUE : TINYPY_FALSE;
+    return byte == (uint8_t)' ' ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_fromhex_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

@@ -313,7 +313,6 @@ for overflowing_float_conversion in (
     lambda: complex(10L ** 10000),
     lambda: (10L ** 10000) + 0.0,
     lambda: round(10L ** 10000),
-    lambda: "%f" % (10L ** 10000),
 ):
     try:
         overflowing_float_conversion()
@@ -321,6 +320,20 @@ for overflowing_float_conversion in (
         pass
     else:
         raise AssertionError("huge long converted to infinity instead of raising OverflowError")
+
+try:
+    "%f" % (10L ** 10000)
+except TypeError:
+    pass
+else:
+    raise AssertionError("byte string float formatting accepted a huge long")
+
+try:
+    u"%f" % (10L ** 10000)
+except OverflowError:
+    pass
+else:
+    raise AssertionError("unicode float formatting accepted a huge long")
 
 
 class RealComplexConversion(object):
@@ -455,3 +468,79 @@ assert object.__getattribute__(object_protocol_target, "deleted") == "normal"
 assert object.__hash__(object_protocol_target) == hash(object_protocol_target)
 assert object.__format__(object_protocol_target, "s") == str(object_protocol_target)
 assert object.__subclasshook__(int) is NotImplemented
+
+
+def cached_attribute_store(target, value):
+    target.cached = value
+
+
+class CachedAttributeStore(object):
+    pass
+
+
+cached_attribute_target = CachedAttributeStore()
+cached_attribute_store(cached_attribute_target, 1)
+cached_attribute_store(cached_attribute_target, 2)
+
+
+def cached_attribute_setattr(self, name, value):
+    object.__setattr__(self, "redirected_" + name, value)
+
+
+CachedAttributeStore.__setattr__ = cached_attribute_setattr
+cached_attribute_store(cached_attribute_target, 3)
+assert cached_attribute_target.cached == 2
+assert cached_attribute_target.redirected_cached == 3
+
+
+class CachedAttributeLoad(object):
+    shared = 10
+
+
+def cached_attribute_load(target):
+    return target.value, target.shared
+
+
+cached_load_target = CachedAttributeLoad()
+cached_load_target.value = 1
+assert cached_attribute_load(cached_load_target) == (1, 10)
+assert cached_attribute_load(cached_load_target) == (1, 10)
+cached_load_target.value = 2
+CachedAttributeLoad.shared = 20
+assert cached_attribute_load(cached_load_target) == (2, 20)
+
+
+class CachedLoadDescriptor(object):
+    def __get__(self, target, owner):
+        return target.value + 100
+
+
+CachedAttributeLoad.shared = CachedLoadDescriptor()
+assert cached_attribute_load(cached_load_target) == (2, 102)
+
+
+class CachedAttributeDescriptor(object):
+    def __set__(self, target, value):
+        object.__setattr__(target, "descriptor_value", value)
+
+
+CachedAttributeStore.__setattr__ = object.__setattr__
+CachedAttributeStore.cached = CachedAttributeDescriptor()
+cached_attribute_store(cached_attribute_target, 4)
+assert cached_attribute_target.descriptor_value == 4
+
+assert type.__call__(int) == 0
+assert int.__call__("42") == 42
+assert type.__instancecheck__(int, 42)
+assert not type.__instancecheck__(str, 42)
+assert type.__subclasscheck__(int, bool)
+assert not type.__subclasscheck__(bool, int)
+assert type.__eq__(int, int)
+assert type.__ne__(int, str)
+assert type.__eq__(int, 42) is NotImplemented
+assert int.__module__ == "__builtin__"
+assert int.__basicsize__ > 0
+assert int.__itemsize__ >= 0
+assert int.__dictoffset__ >= 0
+assert int.__weakrefoffset__ >= 0
+assert "__basicsize__" in dir(type)

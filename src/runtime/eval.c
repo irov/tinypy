@@ -221,7 +221,7 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         tinypy_value_t *return_value_5 = tinypy_internal_object_get_attr_key(object, name, out_error);
         return return_value_5;
     }
-    if (tinypy_internal_type_lookup_key(vm, object->type, vm->special_getattribute_key) != NULL || tinypy_internal_type_lookup_key(vm, object->type, vm->special_getattr_key) != NULL) {
+    if (tinypy_internal_object_has_special_override_key(object, vm->special_getattribute_key) != 0 || tinypy_internal_object_has_special_override_key(object, vm->special_getattr_key) != 0) {
         tinypy_value_t *return_value_6 = tinypy_internal_object_get_attr_key(object, name, out_error);
         return return_value_6;
     }
@@ -261,6 +261,46 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
     }
     tinypy_value_t *return_value_9 = tinypy_internal_object_get_attr_key(object, name, out_error);
     return return_value_9;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_value_t *object, tinypy_value_t *name, size_t name_index, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_attribute_store_cache_entry_t *cache;
+    tinypy_value_t **dict_slot;
+
+    if (TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE || object->type->set_attribute != NULL || object->type->has_instance_dict == 0) {
+        tinypy_bool_t return_value_1 = tinypy_internal_object_set_attr_protocol_key(object, name, value, out_error);
+        return return_value_1;
+    }
+    cache = &TINYPY_CODE_OBJECT(code)->attribute_store_cache[name_index & (TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE - 1U)];
+    if (cache->epoch == vm->type_lookup_cache_epoch && cache->name_index == name_index && cache->type == object->type && cache->direct_instance_dict != 0) {
+        TINYPY_CLEAR_ERROR(out_error);
+        dict_slot = tinypy_internal_object_dict_slot(object);
+        if (*dict_slot == NULL) {
+            *dict_slot = tinypy_dict_new(vm);
+        }
+        tinypy_dict_set(*dict_slot, name, value);
+        return TINYPY_TRUE;
+    }
+    cache->epoch = vm->type_lookup_cache_epoch;
+    cache->name_index = name_index;
+    cache->type = object->type;
+    cache->direct_instance_dict = TINYPY_FALSE;
+    if (tinypy_internal_object_has_special_override(object, "__setattr__", 11U) == 0) {
+        tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, object->type, name);
+
+        if (descriptor == NULL || tinypy_internal_descriptor_is_data(vm, descriptor) == 0) {
+            cache->direct_instance_dict = TINYPY_TRUE;
+            TINYPY_CLEAR_ERROR(out_error);
+            dict_slot = tinypy_internal_object_dict_slot(object);
+            if (*dict_slot == NULL) {
+                *dict_slot = tinypy_dict_new(vm);
+            }
+            tinypy_dict_set(*dict_slot, name, value);
+            return TINYPY_TRUE;
+        }
+    }
+    tinypy_bool_t return_value_2 = tinypy_internal_object_set_attr_protocol_key(object, name, value, out_error);
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_eval_unwind_stack(tinypy_frame_object_t *frame, size_t depth) {
@@ -622,14 +662,14 @@ static tinypy_eval_reason_e __tinypy_eval_end_finally(tinypy_vm_t *vm, tinypy_fr
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_setup_with(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t handler, tinypy_error_t **out_error) {
     tinypy_value_t *context = __tinypy_eval_pop_owned(frame);
-    tinypy_value_t *exit_method = tinypy_object_get_attr(context, "__exit__", 8U, out_error);
+    tinypy_value_t *exit_method = tinypy_internal_object_get_special(context, "__exit__", 8U, out_error);
     tinypy_value_t *enter_result;
 
     if (exit_method == NULL) {
         TINYPY_DECREF(context);
         return TINYPY_FALSE;
     }
-    tinypy_value_t *enter_method = tinypy_object_get_attr(context, "__enter__", 9U, out_error);
+    tinypy_value_t *enter_method = tinypy_internal_object_get_special(context, "__enter__", 9U, out_error);
     TINYPY_DECREF(context);
     if (enter_method == NULL) {
         TINYPY_DECREF(exit_method);
@@ -2121,7 +2161,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             tinypy_value_t *attribute_value = __tinypy_eval_pop_owned(frame);
             tinypy_bool_t stored;
 
-            stored = tinypy_internal_object_set_attr_protocol_key(object, name, attribute_value, out_error);
+            stored = __tinypy_eval_store_attr(vm, code, object, name, argument, attribute_value, out_error);
             TINYPY_DECREF(attribute_value);
             TINYPY_DECREF(object);
             if (stored == 0) {

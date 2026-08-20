@@ -2,6 +2,24 @@
 
 #include "internal.h"
 
+static tinypy_value_t *__tinypy_enumerate_new(tinypy_type_t *type, tinypy_value_t *iterable, tinypy_value_t *start, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t *sequence, tinypy_error_t **out_error);
+
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_iterator_clear(tinypy_iterator_object_t *iterator) {
+    tinypy_value_t *iterable = iterator->iterable;
+    tinypy_value_t *sentinel = iterator->sentinel;
+
+    iterator->iterable = NULL;
+    iterator->sentinel = NULL;
+    iterator->mode = INT32_C(-1);
+    if (iterable != NULL) {
+        TINYPY_DECREF(iterable);
+    }
+    if (sentinel != NULL) {
+        TINYPY_DECREF(sentinel);
+    }
+}
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_iterator_new(tinypy_value_t *iterable) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(iterable);
@@ -37,10 +55,19 @@ tinypy_value_t *tinypy_internal_dict_iterator_new(tinypy_value_t *dict, int32_t 
     return &iterator->base;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_formatter_iterator_new(tinypy_value_t *text, int32_t mode) {
+    tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(__tinypy_internal_iterator_new(text));
+
+    iterator->mode = mode;
+    return &iterator->base;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_iterator_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(value);
 
-    visit(iterator->iterable, user_data);
+    if (iterator->iterable != NULL) {
+        visit(iterator->iterable, user_data);
+    }
     if (iterator->sentinel != NULL) {
         visit(iterator->sentinel, user_data);
     }
@@ -57,6 +84,7 @@ static tinypy_value_t *__tinypy_internal_iterator_next_sequence(tinypy_iterator_
     size_t size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(iterator->iterable) : TINYPY_LIST_SIZE(iterator->iterable);
 
     if (iterator->index >= size) {
+        tinypy_internal_iterator_clear(iterator);
         return NULL;
     }
     tinypy_value_t *item = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(iterator->iterable, iterator->index) : TINYPY_LIST_GET(iterator->iterable, iterator->index);
@@ -72,7 +100,8 @@ static tinypy_value_t *__tinypy_internal_iterator_next_string(tinypy_iterator_ob
     bytes = TINYPY_VALUE_KIND(iterator->iterable) == TINYPY_VALUE_BUFFER
                 ? (const uint8_t *)tinypy_buffer_view(iterator->iterable, &size)
                 : (const uint8_t *)tinypy_string_view(iterator->iterable, &size);
-    if (iterator->index == size) {
+    if (iterator->index >= size) {
+        tinypy_internal_iterator_clear(iterator);
         return NULL;
     }
     iterator->index += 1U;
@@ -89,7 +118,8 @@ static tinypy_value_t *__tinypy_internal_iterator_next_unicode(tinypy_iterator_o
     size_t scalar_size;
 
     utf8 = tinypy_unicode_utf8_view(iterator->iterable, &byte_size, &code_point_count);
-    if (iterator->index == code_point_count) {
+    if (iterator->index >= code_point_count) {
+        tinypy_internal_iterator_clear(iterator);
         return NULL;
     }
     byte_index = iterator->table_position;
@@ -107,7 +137,8 @@ static tinypy_value_t *__tinypy_internal_iterator_next_bytearray(tinypy_iterator
     size_t size;
     const uint8_t *bytes = (const uint8_t *)tinypy_bytearray_view(iterator->iterable, &size);
 
-    if (iterator->index == size) {
+    if (iterator->index >= size) {
+        tinypy_internal_iterator_clear(iterator);
         return NULL;
     }
     iterator->index += 1U;
@@ -147,22 +178,24 @@ static tinypy_value_t *__tinypy_internal_iterator_next_dict(tinypy_iterator_obje
             return entry->key;
         }
     }
+    tinypy_internal_iterator_clear(iterator);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_t * function_result;
     tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(value);
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(iterator->iterable);
+    tinypy_value_type_e kind;
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (iterator->mode == INT32_C(-1)) {
+    if (iterator->mode == INT32_C(-1) || (iterator->mode != INT32_C(3) && iterator->iterable == NULL)) {
         return NULL;
     }
     if (iterator->mode == INT32_C(3)) {
         tinypy_value_t *result;
 
         if (iterator->remaining == 0U) {
+            iterator->mode = INT32_C(-1);
             return NULL;
         }
         tinypy_vm_t *vm_2 = TINYPY_VALUE_VM(value);
@@ -185,13 +218,13 @@ tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_erro
             return result;
         }
         if (tinypy_internal_exception_consume_stop_iteration(vm, &item_error) != 0 || (vm->raised_value != NULL && tinypy_type_is_subtype(vm->raised_value->type, vm->exception_types[TINYPY_EXCEPTION_INDEX_ERROR]) != 0)) {
-            iterator->mode = INT32_C(-1);
             if (item_error != NULL) {
                 tinypy_error_release(item_error);
             }
             if (vm->raised_value != NULL) {
                 tinypy_internal_exception_clear_raised(vm);
             }
+            tinypy_internal_iterator_clear(iterator);
             return NULL;
         }
         if (out_error != NULL) {
@@ -212,7 +245,7 @@ tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_erro
         TINYPY_DECREF(args);
         if (result == NULL) {
             if (tinypy_internal_exception_consume_stop_iteration(vm, &call_error) != 0) {
-                iterator->mode = INT32_C(-1);
+                tinypy_internal_iterator_clear(iterator);
                 return NULL;
             }
             if (out_error != NULL) {
@@ -230,11 +263,20 @@ tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_erro
         }
         if (equal != 0) {
             TINYPY_DECREF(result);
-            iterator->mode = INT32_C(-1);
+            tinypy_internal_iterator_clear(iterator);
             return NULL;
         }
         return result;
     }
+    if (iterator->mode == INT32_C(6)) {
+        function_result = tinypy_internal_string_formatter_parser_next(iterator, out_error);
+        return function_result;
+    }
+    if (iterator->mode == INT32_C(7)) {
+        function_result = tinypy_internal_string_formatter_field_next(iterator, out_error);
+        return function_result;
+    }
+    kind = TINYPY_VALUE_KIND(iterator->iterable);
     switch (kind) {
     case TINYPY_VALUE_TUPLE:
     case TINYPY_VALUE_LIST:
@@ -267,6 +309,49 @@ tinypy_value_t *tinypy_internal_xrange_new(tinypy_vm_t *vm, int64_t start, int64
     return &range->base;
 }
 //////////////////////////////////////////////////////////////////////////
+int64_t tinypy_internal_xrange_item_value(const tinypy_xrange_object_t *range, size_t index) {
+    uint64_t bits = (uint64_t)range->start + (uint64_t)range->step * (uint64_t)index;
+    uint64_t magnitude;
+
+    if (bits <= (uint64_t)INT64_MAX) {
+        return (int64_t)bits;
+    }
+    magnitude = (~bits) + UINT64_C(1);
+    return magnitude == (uint64_t)INT64_MAX + UINT64_C(1) ? INT64_MIN : -(int64_t)magnitude;
+}
+//////////////////////////////////////////////////////////////////////////
+int64_t tinypy_internal_xrange_stop_value(const tinypy_xrange_object_t *range) {
+    int64_t last;
+
+    if (range->length == 0U) {
+        return range->start;
+    }
+    last = tinypy_internal_xrange_item_value(range, range->length - 1U);
+    if (range->step > 0 && last > INT64_MAX - range->step) {
+        return INT64_MAX;
+    }
+    if (range->step < 0 && last < INT64_MIN - range->step) {
+        return INT64_MIN;
+    }
+    return last + range->step;
+}
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_internal_iterator_size_hint(const tinypy_iterator_object_t *iterator) {
+    size_t size;
+
+    if (iterator->mode == INT32_C(-1)) {
+        return 0U;
+    }
+    if (iterator->mode == INT32_C(3)) {
+        return iterator->remaining;
+    }
+    if (iterator->mode == INT32_C(5) || iterator->mode == INT32_C(6) || iterator->mode == INT32_C(7) || iterator->iterable == NULL) {
+        return 0U;
+    }
+    size = tinypy_internal_iterable_size_hint(iterator->iterable);
+    return iterator->index < size ? size - iterator->index : 0U;
+}
+//////////////////////////////////////////////////////////////////////////
 size_t tinypy_internal_iterable_size_hint(const tinypy_value_t *value) {
     size_t size;
 
@@ -287,6 +372,18 @@ size_t tinypy_internal_iterable_size_hint(const tinypy_value_t *value) {
         break;
     case TINYPY_VALUE_XRANGE:
         size = TINYPY_XRANGE_OBJECT(value)->length;
+        break;
+    case TINYPY_VALUE_BUFFER:
+        (void)tinypy_buffer_view(value, &size);
+        break;
+    case TINYPY_VALUE_ITERATOR:
+        size = tinypy_internal_iterator_size_hint(TINYPY_ITERATOR_OBJECT((tinypy_value_t *)value));
+        break;
+    case TINYPY_VALUE_ENUMERATE:
+        size = tinypy_internal_iterable_size_hint(TINYPY_ENUMERATE_OBJECT((tinypy_value_t *)value)->iterator);
+        break;
+    case TINYPY_VALUE_REVERSED:
+        size = TINYPY_REVERSED_OBJECT((tinypy_value_t *)value)->index;
         break;
     default:
         size = 0U;
@@ -359,12 +456,91 @@ tinypy_value_t *tinypy_internal_xrange_create(tinypy_type_t *type, tinypy_value_
         step_magnitude = (uint64_t)(-(step + INT64_C(1))) + UINT64_C(1);
     }
     length = (distance - UINT64_C(1)) / step_magnitude + UINT64_C(1);
-    if (length > (uint64_t)SIZE_MAX) {
+    if (length > (uint64_t)PTRDIFF_MAX) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "xrange has too many items", out_error);
         return NULL;
     }
     tinypy_value_t *return_value_2 = tinypy_internal_xrange_new(vm, start, step, (size_t)length);
     return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = type->vm;
+    size_t positional_count = TINYPY_TUPLE_SIZE(args);
+    size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
+    size_t recognized_keyword_count = 0U;
+    tinypy_value_t *iterable = positional_count >= 1U ? TINYPY_TUPLE_GET(args, 0U) : NULL;
+    tinypy_value_t *start = positional_count >= 2U ? TINYPY_TUPLE_GET(args, 1U) : NULL;
+
+    if (positional_count > 2U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received too many positional arguments", out_error);
+        return NULL;
+    }
+    if (keyword_count != 0U) {
+        tinypy_value_t *sequence_key = tinypy_string_from_bytes(vm, "sequence", 8U);
+        tinypy_value_t *start_key = tinypy_string_from_bytes(vm, "start", 5U);
+        tinypy_value_t *sequence_keyword = tinypy_dict_get_optional(kwargs, sequence_key);
+        tinypy_value_t *start_keyword = tinypy_dict_get_optional(kwargs, start_key);
+
+        TINYPY_DECREF(start_key);
+        TINYPY_DECREF(sequence_key);
+        if (sequence_keyword != NULL) {
+            recognized_keyword_count += 1U;
+            if (iterable != NULL) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received multiple values for sequence", out_error);
+                return NULL;
+            }
+            iterable = sequence_keyword;
+        }
+        if (start_keyword != NULL) {
+            recognized_keyword_count += 1U;
+            if (start != NULL) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received multiple values for start", out_error);
+                return NULL;
+            }
+            start = start_keyword;
+        }
+        if (recognized_keyword_count != keyword_count) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received an unexpected keyword argument", out_error);
+            return NULL;
+        }
+    }
+    if (iterable == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate is missing the sequence argument", out_error);
+        return NULL;
+    }
+    tinypy_value_t *counter = start != NULL ? tinypy_internal_index_value(start, out_error) : tinypy_integer_from_i64(vm, INT64_C(0));
+
+    if (counter == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *result = __tinypy_enumerate_new(type, iterable, counter, out_error);
+    TINYPY_DECREF(counter);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_reversed_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = type->vm;
+
+    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reversed received invalid arguments", out_error);
+        return NULL;
+    }
+    tinypy_value_t *sequence = TINYPY_TUPLE_GET(args, 0U);
+    if (tinypy_internal_object_has_special(sequence, "__reversed__", 12U) != 0) {
+        tinypy_value_t *method = tinypy_internal_object_get_special(sequence, "__reversed__", 12U, out_error);
+
+        if (method == NULL) {
+            return NULL;
+        }
+        tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
+        tinypy_value_t *result = tinypy_call(method, empty, NULL, out_error);
+        TINYPY_DECREF(empty);
+        TINYPY_DECREF(method);
+        return result;
+    }
+    tinypy_value_t *return_value = __tinypy_reversed_new(type, sequence, out_error);
+    return return_value;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_xrange_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -374,21 +550,29 @@ tinypy_value_t *tinypy_internal_xrange_iter(tinypy_value_t *value, tinypy_error_
     iterator->current = TINYPY_XRANGE_OBJECT(value)->start;
     iterator->step = TINYPY_XRANGE_OBJECT(value)->step;
     iterator->remaining = TINYPY_XRANGE_OBJECT(value)->length;
+    TINYPY_DECREF(iterator->iterable);
+    iterator->iterable = NULL;
     return &iterator->base;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_enumerate_new(tinypy_value_t *iterable, tinypy_value_t *start, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_enumerate_new(tinypy_type_t *type, tinypy_value_t *iterable, tinypy_value_t *start, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(iterable);
     tinypy_value_t *iterator = tinypy_iter(iterable, out_error);
 
     if (iterator == NULL) {
         return NULL;
     }
-    tinypy_enumerate_object_t *enumerate = (tinypy_enumerate_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_ENUMERATE, sizeof(*enumerate));
+    tinypy_enumerate_object_t *enumerate = (tinypy_enumerate_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
     enumerate->iterator = iterator;
     enumerate->index = start;
     TINYPY_INCREF(start);
     return &enumerate->base;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_enumerate_new(tinypy_value_t *iterable, tinypy_value_t *start, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(iterable);
+    tinypy_value_t *return_value = __tinypy_enumerate_new(&vm->types[TINYPY_VALUE_ENUMERATE], iterable, start, out_error);
+    return return_value;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_enumerate_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
@@ -411,10 +595,17 @@ tinypy_value_t *tinypy_internal_enumerate_next(tinypy_value_t *value, tinypy_err
         return NULL;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *one = tinypy_integer_from_i64(vm, INT64_C(1));
-    tinypy_value_t *next_index = tinypy_add(enumerate->index, one, out_error);
+    tinypy_value_t *next_index;
 
-    TINYPY_DECREF(one);
+    if (TINYPY_VALUE_KIND(enumerate->index) == TINYPY_VALUE_INTEGER && TINYPY_INTEGER_VALUE(enumerate->index) != INT64_MAX) {
+        next_index = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(enumerate->index) + INT64_C(1));
+    }
+    else {
+        tinypy_value_t *one = tinypy_integer_from_i64(vm, INT64_C(1));
+
+        next_index = tinypy_add(enumerate->index, one, out_error);
+        TINYPY_DECREF(one);
+    }
     if (next_index == NULL) {
         TINYPY_DECREF(item);
         return NULL;
@@ -452,7 +643,7 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, s
         return TINYPY_TRUE;
     }
     if (tinypy_internal_object_has_special(sequence, "__len__", 7U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(sequence, "__len__", 7U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(sequence, "__len__", 7U, out_error);
         tinypy_value_t *empty;
         tinypy_value_t *length_value;
         int64_t length;
@@ -483,7 +674,7 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, s
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_reversed_new(tinypy_value_t *sequence, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t *sequence, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
     size_t size;
 
@@ -502,15 +693,25 @@ tinypy_value_t *tinypy_internal_reversed_new(tinypy_value_t *sequence, tinypy_er
     else if (__tinypy_reversed_sequence_size(sequence, &size, out_error) == 0) {
         return NULL;
     }
-    tinypy_reversed_object_t *reversed = (tinypy_reversed_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_REVERSED, sizeof(*reversed));
+    tinypy_reversed_object_t *reversed = (tinypy_reversed_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
     reversed->sequence = sequence;
     reversed->index = size;
     TINYPY_INCREF(sequence);
     return &reversed->base;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_reversed_new(tinypy_value_t *sequence, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
+    tinypy_value_t *return_value = __tinypy_reversed_new(&vm->types[TINYPY_VALUE_REVERSED], sequence, out_error);
+    return return_value;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_reversed_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
-    visit(TINYPY_REVERSED_OBJECT(value)->sequence, user_data);
+    tinypy_value_t *sequence = TINYPY_REVERSED_OBJECT(value)->sequence;
+
+    if (sequence != NULL) {
+        visit(sequence, user_data);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_reversed_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -519,21 +720,29 @@ tinypy_value_t *tinypy_internal_reversed_iter(tinypy_value_t *value, tinypy_erro
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
-static int64_t __tinypy_reversed_xrange_item(const tinypy_xrange_object_t *range, size_t index) {
-    uint64_t bits = (uint64_t)range->start + (uint64_t)range->step * (uint64_t)index;
-    uint64_t magnitude;
+size_t tinypy_internal_reversed_size_hint(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_reversed_object_t *reversed = TINYPY_REVERSED_OBJECT(value);
+    size_t size;
 
-    if (bits <= (uint64_t)INT64_MAX) {
-        return (int64_t)bits;
+    TINYPY_CLEAR_ERROR(out_error);
+    if (reversed->sequence == NULL) {
+        return 0U;
     }
-    magnitude = (~bits) + UINT64_C(1);
-    return magnitude == (uint64_t)INT64_MAX + UINT64_C(1) ? INT64_MIN : -(int64_t)magnitude;
+    if (__tinypy_reversed_sequence_size(reversed->sequence, &size, out_error) == 0) {
+        return 0U;
+    }
+    return size < reversed->index ? 0U : reversed->index;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_reversed_object_t *reversed = TINYPY_REVERSED_OBJECT(value);
 
+    if (reversed->sequence == NULL) {
+        return NULL;
+    }
     if (reversed->index == 0U) {
+        TINYPY_DECREF(reversed->sequence);
+        reversed->sequence = NULL;
         return NULL;
     }
     reversed->index -= 1U;
@@ -541,7 +750,7 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
         tinypy_xrange_object_t *range = TINYPY_XRANGE_OBJECT(reversed->sequence);
 
         tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-        tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, __tinypy_reversed_xrange_item(range, reversed->index));
+        tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, tinypy_internal_xrange_item_value(range, reversed->index));
         return return_value_1;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
@@ -557,6 +766,8 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
         if (vm->raised_value != NULL) {
             tinypy_internal_exception_clear_raised(vm);
         }
+        TINYPY_DECREF(reversed->sequence);
+        reversed->sequence = NULL;
         return NULL;
     }
     if (result == NULL) {
@@ -570,12 +781,104 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_iterator_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
+    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != count) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "iterator method received invalid arguments", out_error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_xrange_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
+    if (__tinypy_iterator_method_arguments(vm, args, kwargs, count, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_XRANGE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "xrange method requires an xrange object", out_error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_xrange_iter_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *return_value = tinypy_internal_xrange_iter(TINYPY_TUPLE_GET(args, 0U), out_error);
+    return return_value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_xrange_getitem_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *return_value = tinypy_get_item(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), out_error);
+    return return_value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_xrange_len_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *return_value = tinypy_integer_from_i64(vm, (int64_t)TINYPY_XRANGE_OBJECT(self)->length);
+    return return_value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_xrange_reversed_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *return_value = tinypy_internal_reversed_new(TINYPY_TUPLE_GET(args, 0U), out_error);
+    return return_value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_xrange_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *return_value = tinypy_object_repr(TINYPY_TUPLE_GET(args, 0U), out_error);
+    return return_value;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_iterator_type_set(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
+    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
+
+    tinypy_type_set_attr(type, name, name_size, function);
+    TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_initialize_iterator_types(tinypy_vm_t *vm) {
+    tinypy_type_t *xrange_type = &vm->types[TINYPY_VALUE_XRANGE];
+
+    __tinypy_iterator_type_set(vm, xrange_type, "__iter__", 8U, __tinypy_xrange_iter_method);
+    __tinypy_iterator_type_set(vm, xrange_type, "__getitem__", 11U, __tinypy_xrange_getitem_method);
+    __tinypy_iterator_type_set(vm, xrange_type, "__len__", 7U, __tinypy_xrange_len_method);
+    __tinypy_iterator_type_set(vm, xrange_type, "__reversed__", 12U, __tinypy_xrange_reversed_method);
+    __tinypy_iterator_type_set(vm, xrange_type, "__repr__", 8U, __tinypy_xrange_repr_method);
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_type_e kind;
 
     TINYPY_CLEAR_ERROR(out_error);
     if (tinypy_internal_object_has_special_override(value, "__iter__", 8U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__iter__", 8U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__iter__", 8U, out_error);
         tinypy_value_t *args;
         tinypy_value_t *result;
 
@@ -604,7 +907,7 @@ tinypy_value_t *tinypy_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
         return return_value_2;
     }
     if (tinypy_internal_object_has_special(value, "__iter__", 8U) != 0) {
-        tinypy_value_t *method = tinypy_object_get_attr(value, "__iter__", 8U, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__iter__", 8U, out_error);
         tinypy_value_t *args;
         tinypy_value_t *result;
 
@@ -638,7 +941,7 @@ tinypy_value_t *tinypy_next(tinypy_value_t *iterator, tinypy_error_t **out_error
     TINYPY_CLEAR_ERROR(out_error);
     if (iterator->type->next == NULL) {
         if (tinypy_internal_object_has_special(iterator, "next", 4U) != 0) {
-            tinypy_value_t *method = tinypy_object_get_attr(iterator, "next", 4U, out_error);
+            tinypy_value_t *method = tinypy_internal_object_get_special(iterator, "next", 4U, out_error);
             tinypy_value_t *args;
             tinypy_value_t *result;
 

@@ -52,7 +52,7 @@ static tinypy_bool_t __tinypy_comparison_is_exact_builtin(const tinypy_value_t *
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_comparison_call_no_args(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *method = tinypy_object_get_attr(value, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(value, name, name_size, out_error);
 
     if (method == NULL) {
         return NULL;
@@ -71,9 +71,15 @@ static tinypy_bool_t __tinypy_comparison_equal_checked(tinypy_value_t *left, tin
 int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
     int32_t function_result;
     tinypy_value_type_e kind;
+    tinypy_bool_t exact_builtin;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     TINYPY_CLEAR_ERROR(out_error);
+    kind = TINYPY_VALUE_KIND(value);
+    exact_builtin = (size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && value->type == &vm->types[kind] ? TINYPY_TRUE : TINYPY_FALSE;
+    if (exact_builtin != 0) {
+        goto builtin_truth;
+    }
     if (tinypy_internal_object_has_special_override(value, "__nonzero__", 11U) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_no_args(value, "__nonzero__", 11U, out_error);
         int32_t truth;
@@ -121,7 +127,7 @@ int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
         TINYPY_DECREF(result);
         return truth;
     }
-    kind = TINYPY_VALUE_KIND(value);
+builtin_truth:
     switch (kind) {
     case TINYPY_VALUE_NONE:
         return INT32_C(0);
@@ -175,6 +181,9 @@ int32_t tinypy_truth(tinypy_value_t *value, tinypy_error_t **out_error) {
     if (value->type->number_slots != NULL && value->type->number_slots->nonzero != NULL) {
         int32_t return_value_1 = value->type->number_slots->nonzero(value, out_error);
         return return_value_1;
+    }
+    if (exact_builtin != 0) {
+        return INT32_C(1);
     }
     if (tinypy_internal_object_has_special(value, "__nonzero__", 11U) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_no_args(value, "__nonzero__", 11U, out_error);
@@ -882,7 +891,7 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver, const char *name, size_t name_size, tinypy_value_t *argument, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
-    tinypy_value_t *method = tinypy_object_get_attr(receiver, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(receiver, name, name_size, out_error);
 
     if (method == NULL) {
         return NULL;

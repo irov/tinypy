@@ -309,6 +309,42 @@ static tinypy_value_t *__tinypy_generator_iter_method(tinypy_value_t *function, 
     return self;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_reversed_length_hint_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(self) != TINYPY_VALUE_REVERSED) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__length_hint__ requires a reversed object", out_error);
+        return NULL;
+    }
+    size_t hint = tinypy_internal_reversed_size_hint(self, out_error);
+    if (out_error != NULL && *out_error != NULL) {
+        return NULL;
+    }
+    tinypy_value_t *return_value = tinypy_integer_from_i64(vm, (int64_t)hint);
+    return return_value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_iterator_length_hint_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(self) != TINYPY_VALUE_ITERATOR) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__length_hint__ requires an iterator", out_error);
+        return NULL;
+    }
+    tinypy_value_t *return_value = tinypy_integer_from_i64(vm, (int64_t)tinypy_internal_iterator_size_hint(TINYPY_ITERATOR_OBJECT(self)));
+    return return_value;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_generator_type_set(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
     tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
     tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
@@ -326,10 +362,12 @@ void tinypy_internal_initialize_generator_types(tinypy_vm_t *vm) {
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_GENERATOR], "__iter__", 8U, __tinypy_generator_iter_method);
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ITERATOR], "next", 4U, __tinypy_generator_next_method);
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ITERATOR], "__iter__", 8U, __tinypy_generator_iter_method);
+    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ITERATOR], "__length_hint__", 15U, __tinypy_iterator_length_hint_method);
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ENUMERATE], "next", 4U, __tinypy_generator_next_method);
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ENUMERATE], "__iter__", 8U, __tinypy_generator_iter_method);
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_REVERSED], "next", 4U, __tinypy_generator_next_method);
     __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_REVERSED], "__iter__", 8U, __tinypy_generator_iter_method);
+    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_REVERSED], "__length_hint__", 15U, __tinypy_reversed_length_hint_method);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_generator_frame(const tinypy_value_t *generator) {

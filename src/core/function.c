@@ -82,23 +82,34 @@ tinypy_value_t *tinypy_internal_function_call(tinypy_value_t *callable, tinypy_v
 tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     TINYPY_CLEAR_ERROR(out_error);
-    if (callable->type->call == NULL) {
-        if (tinypy_internal_object_has_special(callable, "__call__", 8U) != 0) {
-            tinypy_value_t *method = tinypy_object_get_attr(callable, "__call__", 8U, out_error);
-            tinypy_value_t *result;
+    if ((callable->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override(callable, "__call__", 8U) != 0) {
+        tinypy_value_t *method = tinypy_internal_object_get_special(callable, "__call__", 8U, out_error);
+        tinypy_value_t *result;
 
-            if (method == NULL) {
-                return NULL;
-            }
-            result = tinypy_call(method, args, kwargs, out_error);
-            TINYPY_DECREF(method);
-            return result;
+        if (method == NULL) {
+            return NULL;
         }
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object is not callable", out_error);
-        return NULL;
+        result = tinypy_call(method, args, kwargs, out_error);
+        TINYPY_DECREF(method);
+        return result;
     }
-    tinypy_value_t *return_value_1 = callable->type->call(callable, args, kwargs, out_error);
-    return return_value_1;
+    if (callable->type->call != NULL) {
+        tinypy_value_t *return_value_1 = callable->type->call(callable, args, kwargs, out_error);
+        return return_value_1;
+    }
+    if (tinypy_internal_object_has_special(callable, "__call__", 8U) != 0) {
+        tinypy_value_t *method = tinypy_internal_object_get_special(callable, "__call__", 8U, out_error);
+        tinypy_value_t *result;
+
+        if (method == NULL) {
+            return NULL;
+        }
+        result = tinypy_call(method, args, kwargs, out_error);
+        TINYPY_DECREF(method);
+        return result;
+    }
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object is not callable", out_error);
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_code(const tinypy_value_t *function) {

@@ -233,7 +233,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     }
     value->ref = 1;
     tinypy_internal_exception_preserve_begin(vm, &exception_state);
-    tinypy_value_t *method = tinypy_object_get_attr(value, "__del__", 7U, &error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(value, "__del__", 7U, &error);
     if (method != NULL) {
         args = tinypy_tuple_from_items(vm, NULL, 0U);
         result = tinypy_call(method, args, NULL, &error);

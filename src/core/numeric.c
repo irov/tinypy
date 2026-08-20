@@ -154,6 +154,146 @@ static tinypy_value_t *__tinypy_numeric_conjugate_method(tinypy_value_t *functio
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_numeric_getnewargs_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *items[2];
+    size_t item_count = 1U;
+    tinypy_value_type_e kind;
+
+    (void)user_data;
+    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
+    kind = TINYPY_VALUE_KIND(value);
+    if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
+        items[0] = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(value));
+    }
+    else if (kind == TINYPY_VALUE_LONG) {
+        tinypy_value_t *conversion_args = tinypy_tuple_from_items(vm, &value, 1U);
+
+        items[0] = tinypy_internal_long_create(&vm->types[TINYPY_VALUE_LONG], conversion_args, NULL, out_error);
+        TINYPY_DECREF(conversion_args);
+    }
+    else if (kind == TINYPY_VALUE_FLOAT) {
+        items[0] = tinypy_float_from_double(vm, TINYPY_FLOAT_OBJECT(value)->value);
+    }
+    else if (kind == TINYPY_VALUE_COMPLEX) {
+        items[0] = tinypy_float_from_double(vm, TINYPY_COMPLEX_OBJECT(value)->real);
+        items[1] = tinypy_float_from_double(vm, TINYPY_COMPLEX_OBJECT(value)->imaginary);
+        item_count = 2U;
+    }
+    else {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__getnewargs__ requires a numeric object", out_error);
+        return NULL;
+    }
+    if (items[0] == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, item_count);
+    if (item_count == 2U) {
+        TINYPY_DECREF(items[1]);
+    }
+    TINYPY_DECREF(items[0]);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_numeric_cmp_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_type_e expected = (tinypy_value_type_e)(intptr_t)user_data;
+    int32_t equal;
+    int32_t less;
+
+    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_bool_t left_valid = expected == TINYPY_VALUE_INTEGER ? (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_INTEGER) : TINYPY_VALUE_KIND(left) == expected;
+    tinypy_bool_t right_valid = expected == TINYPY_VALUE_INTEGER ? (TINYPY_VALUE_KIND(right) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_INTEGER) : TINYPY_VALUE_KIND(right) == expected;
+
+    if (left_valid == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "numeric comparison descriptor received an incompatible object", out_error);
+        return NULL;
+    }
+    if (right_valid == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "numeric comparison descriptor received an incompatible argument", out_error);
+        return NULL;
+    }
+    equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
+    if (equal < 0) {
+        return NULL;
+    }
+    if (equal != 0) {
+        tinypy_value_t *result = tinypy_integer_from_i64(vm, INT64_C(0));
+
+        return result;
+    }
+    less = tinypy_compare_bool(left, right, TINYPY_COMPARE_LESS, out_error);
+    if (less < 0) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, less != 0 ? INT64_C(-1) : INT64_C(1));
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_numeric_coerce_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_type_e target = (tinypy_value_type_e)(intptr_t)user_data;
+    tinypy_value_t *converted = NULL;
+    tinypy_bool_t compatible = TINYPY_FALSE;
+
+    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *other = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_type_e self_kind = TINYPY_VALUE_KIND(self);
+    tinypy_value_type_e other_kind = TINYPY_VALUE_KIND(other);
+    tinypy_bool_t self_valid = target == TINYPY_VALUE_INTEGER ? (self_kind == TINYPY_VALUE_BOOL || self_kind == TINYPY_VALUE_INTEGER) : self_kind == target;
+
+    if (self_valid == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "numeric coercion descriptor received an incompatible object", out_error);
+        return NULL;
+    }
+    if (target == TINYPY_VALUE_INTEGER) {
+        compatible = other_kind == TINYPY_VALUE_BOOL || other_kind == TINYPY_VALUE_INTEGER;
+    }
+    else if (target == TINYPY_VALUE_LONG) {
+        compatible = other_kind == TINYPY_VALUE_BOOL || other_kind == TINYPY_VALUE_INTEGER || other_kind == TINYPY_VALUE_LONG;
+    }
+    else if (target == TINYPY_VALUE_FLOAT) {
+        compatible = other_kind == TINYPY_VALUE_BOOL || other_kind == TINYPY_VALUE_INTEGER || other_kind == TINYPY_VALUE_LONG || other_kind == TINYPY_VALUE_FLOAT;
+    }
+    else if (target == TINYPY_VALUE_COMPLEX) {
+        compatible = other_kind == TINYPY_VALUE_BOOL || other_kind == TINYPY_VALUE_INTEGER || other_kind == TINYPY_VALUE_LONG || other_kind == TINYPY_VALUE_FLOAT || other_kind == TINYPY_VALUE_COMPLEX;
+    }
+    if (compatible == 0) {
+        tinypy_value_t *result = &vm->not_implemented_object.base;
+        TINYPY_INCREF(result);
+        return result;
+    }
+    if (other_kind == target || (target == TINYPY_VALUE_INTEGER && (other_kind == TINYPY_VALUE_BOOL || other_kind == TINYPY_VALUE_INTEGER))) {
+        converted = other;
+        TINYPY_INCREF(converted);
+    }
+    else {
+        tinypy_value_t *conversion_args = tinypy_tuple_from_items(vm, &other, 1U);
+        tinypy_type_t *target_type = &vm->types[target];
+
+        converted = target_type->create(target_type, conversion_args, NULL, out_error);
+        TINYPY_DECREF(conversion_args);
+        if (converted == NULL) {
+            return NULL;
+        }
+    }
+    tinypy_value_t *items[2] = {self, converted};
+    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, 2U);
+    TINYPY_DECREF(converted);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_float_is_integer_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -510,6 +650,9 @@ void tinypy_internal_initialize_numeric_types(tinypy_vm_t *vm) {
         __tinypy_numeric_add_method(integer_types[index], "__trunc__", 9U, __tinypy_numeric_trunc_method, NULL);
         __tinypy_numeric_add_method(integer_types[index], "__hex__", 7U, __tinypy_numeric_integer_base_method, (void *)(intptr_t)16);
         __tinypy_numeric_add_method(integer_types[index], "__oct__", 7U, __tinypy_numeric_integer_base_method, (void *)(intptr_t)8);
+        __tinypy_numeric_add_method(integer_types[index], "__getnewargs__", 14U, __tinypy_numeric_getnewargs_method, NULL);
+        __tinypy_numeric_add_method(integer_types[index], "__cmp__", 7U, __tinypy_numeric_cmp_method, (void *)(intptr_t)(index == 0U ? TINYPY_VALUE_INTEGER : TINYPY_VALUE_LONG));
+        __tinypy_numeric_add_method(integer_types[index], "__coerce__", 10U, __tinypy_numeric_coerce_method, (void *)(intptr_t)(index == 0U ? TINYPY_VALUE_INTEGER : TINYPY_VALUE_LONG));
         __tinypy_numeric_add_property(integer_types[index], "real", 4U, 0);
         __tinypy_numeric_add_property(integer_types[index], "imag", 4U, 1);
         __tinypy_numeric_add_property(integer_types[index], "numerator", 9U, 2);
@@ -520,12 +663,16 @@ void tinypy_internal_initialize_numeric_types(tinypy_vm_t *vm) {
     __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "as_integer_ratio", 16U, __tinypy_float_as_integer_ratio_method, NULL);
     __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "hex", 3U, __tinypy_float_hex_method, NULL);
     __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "__trunc__", 9U, __tinypy_numeric_trunc_method, NULL);
+    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "__getnewargs__", 14U, __tinypy_numeric_getnewargs_method, NULL);
+    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "__coerce__", 10U, __tinypy_numeric_coerce_method, (void *)(intptr_t)TINYPY_VALUE_FLOAT);
     __tinypy_numeric_add_class_method(&vm->types[TINYPY_VALUE_FLOAT], "fromhex", 7U, __tinypy_float_fromhex_method);
     __tinypy_numeric_add_class_method(&vm->types[TINYPY_VALUE_FLOAT], "__getformat__", 13U, __tinypy_float_getformat_method);
     __tinypy_numeric_add_class_method(&vm->types[TINYPY_VALUE_FLOAT], "__setformat__", 13U, __tinypy_float_setformat_method);
     __tinypy_numeric_add_property(&vm->types[TINYPY_VALUE_FLOAT], "real", 4U, 0);
     __tinypy_numeric_add_property(&vm->types[TINYPY_VALUE_FLOAT], "imag", 4U, 1);
     __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_COMPLEX], "conjugate", 9U, __tinypy_numeric_conjugate_method, NULL);
+    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_COMPLEX], "__getnewargs__", 14U, __tinypy_numeric_getnewargs_method, NULL);
+    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_COMPLEX], "__coerce__", 10U, __tinypy_numeric_coerce_method, (void *)(intptr_t)TINYPY_VALUE_COMPLEX);
     __tinypy_numeric_add_property(&vm->types[TINYPY_VALUE_COMPLEX], "real", 4U, 0);
     __tinypy_numeric_add_property(&vm->types[TINYPY_VALUE_COMPLEX], "imag", 4U, 1);
 }

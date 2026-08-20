@@ -623,7 +623,7 @@ static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, con
     if (attribute == NULL) {
         return NULL;
     }
-    tinypy_value_t *method = tinypy_object_get_attr(value, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(value, name, name_size, out_error);
     if (method == NULL) {
         return NULL;
     }
@@ -663,8 +663,20 @@ static tinypy_bool_t __tinypy_representation_append_text(tinypy_representation_b
 static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error) {
     tinypy_bool_t function_result;
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    const char *special_name = raw != 0 ? "__str__" : "__repr__";
+    size_t special_name_size = raw != 0 ? 7U : 8U;
     tinypy_unary_slot_t representation_slot = raw != 0 ? value->type->string : value->type->repr;
 
+    if ((value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override(value, special_name, special_name_size) != 0) {
+        tinypy_value_t *custom = __tinypy_representation_custom(value, special_name, special_name_size, out_error);
+
+        if (custom == NULL) {
+            return TINYPY_FALSE;
+        }
+        tinypy_bool_t appended = __tinypy_representation_append_text(builder, custom, raw, out_error);
+        TINYPY_DECREF(custom);
+        return appended;
+    }
     if (representation_slot != NULL) {
         tinypy_value_t *representation = representation_slot(value, out_error);
 
@@ -785,7 +797,7 @@ static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder
         return TINYPY_TRUE;
     case TINYPY_VALUE_XRANGE: {
         tinypy_xrange_object_t *range = TINYPY_XRANGE_OBJECT(value);
-        int64_t stop = range->start + (int64_t)range->length * range->step;
+        int64_t stop = tinypy_internal_xrange_stop_value(range);
 
         __tinypy_representation_append(builder, "xrange(", 7U);
         if (range->start == 0 && range->step == 1) {
@@ -804,7 +816,7 @@ static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder
         return TINYPY_TRUE;
     }
     default: {
-        tinypy_value_t *custom = __tinypy_representation_custom(value, raw != 0 ? "__str__" : "__repr__", raw != 0 ? 7U : 8U, out_error);
+        tinypy_value_t *custom = __tinypy_representation_custom(value, special_name, special_name_size, out_error);
 
         if (custom != NULL) {
             tinypy_bool_t appended = __tinypy_representation_append_text(builder, custom, raw, out_error);
@@ -852,6 +864,27 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tiny
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_representation_builder_t builder;
+
+    (void)memset(&builder, 0, sizeof(builder));
+    builder.vm = TINYPY_VALUE_VM(value);
+    TINYPY_CLEAR_ERROR(out_error);
+    __tinypy_representation_append_character(&builder, (uint8_t)'<');
+    __tinypy_representation_append(&builder, value->type->name, value->type->name_size);
+    __tinypy_representation_append(&builder, " object at ", 11U);
+    __tinypy_representation_pointer(&builder, value);
+    __tinypy_representation_append_character(&builder, (uint8_t)'>');
+    if (builder.failed != 0) {
+        tinypy_internal_vm_deallocate(builder.vm, builder.bytes, builder.capacity);
+        tinypy_internal_make_vm_error(builder.vm, TINYPY_ERROR_OVERFLOW, "representation is too large", out_error);
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_string_from_bytes(builder.vm, builder.bytes, builder.size);
+    tinypy_internal_vm_deallocate(builder.vm, builder.bytes, builder.capacity);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_object_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_t *return_value_1 = __tinypy_representation_build(value, INT32_C(0), out_error);
     return return_value_1;
@@ -886,6 +919,54 @@ static tinypy_value_t *__tinypy_representation_method(tinypy_value_t *function, 
     return selected_value;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_object_representation_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object representation method received invalid arguments", out_error);
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    if (user_data != NULL) {
+        tinypy_value_t *return_value_1 = tinypy_object_repr(self, out_error);
+        return return_value_1;
+    }
+    tinypy_value_t *return_value_2 = __tinypy_representation_default_object(self, out_error);
+    return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_object_class_property(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ descriptor received invalid arguments", out_error);
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *result = &self->type->base.base;
+    TINYPY_INCREF(result);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_object_sizeof_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__sizeof__ received invalid arguments", out_error);
+        return NULL;
+    }
+    size_t size = tinypy_internal_value_allocation_size(TINYPY_TUPLE_GET(args, 0U));
+    if (size > (size_t)INT64_MAX) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "object size is too large", out_error);
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)size);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
     tinypy_value_t *repr_function = tinypy_native_function_new(vm, "__repr__", 8U, __tinypy_representation_method, NULL, NULL);
     tinypy_value_t *str_function = tinypy_native_function_new(vm, "__str__", 7U, __tinypy_representation_method, (void *)(intptr_t)1, NULL);
@@ -894,6 +975,22 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
 
     tinypy_dict_set(vm->types[TINYPY_VALUE_FLOAT].dict, repr_key, repr_function);
     tinypy_dict_set(vm->types[TINYPY_VALUE_FLOAT].dict, str_key, str_function);
+    tinypy_value_t *object_repr_function = tinypy_native_function_new(vm, "__repr__", 8U, __tinypy_object_representation_method, NULL, NULL);
+    tinypy_value_t *object_str_function = tinypy_native_function_new(vm, "__str__", 7U, __tinypy_object_representation_method, (void *)(intptr_t)1, NULL);
+
+    tinypy_dict_set(vm->types[TINYPY_VALUE_INSTANCE].dict, repr_key, object_repr_function);
+    tinypy_dict_set(vm->types[TINYPY_VALUE_INSTANCE].dict, str_key, object_str_function);
+    tinypy_value_t *class_getter = tinypy_native_function_new(vm, "__class__", 9U, __tinypy_object_class_property, NULL, NULL);
+    tinypy_value_t *class_property = tinypy_property_new(vm, class_getter, NULL, NULL, NULL);
+    tinypy_value_t *sizeof_function = tinypy_native_function_new(vm, "__sizeof__", 10U, __tinypy_object_sizeof_method, NULL, NULL);
+
+    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_INSTANCE], "__class__", 9U, class_property);
+    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_INSTANCE], "__sizeof__", 10U, sizeof_function);
+    TINYPY_DECREF(sizeof_function);
+    TINYPY_DECREF(class_property);
+    TINYPY_DECREF(class_getter);
+    TINYPY_DECREF(object_str_function);
+    TINYPY_DECREF(object_repr_function);
     TINYPY_DECREF(str_key);
     TINYPY_DECREF(repr_key);
     TINYPY_DECREF(str_function);

@@ -33,13 +33,9 @@ joined *= 2
 assert joined is joined_alias and str(joined) == "abcdefabcdef", "inplace multiply identity"
 joined = joined[:6]
 joined_alias = joined
-try:
-    joined += joined
-except BufferError:
-    pass
-else:
-    raise AssertionError("self inplace add did not raise BufferError")
-assert joined is joined_alias and str(joined) == "abcdef", "self inplace add mutation"
+joined += joined
+assert joined is joined_alias and str(joined) == "abcdefabcdef", "self inplace add mutation"
+joined = joined[:6]
 joined.append(103)
 joined.extend([104, 105])
 assert str(joined) == "abcdefghi", "append extend"
@@ -47,7 +43,14 @@ assert joined.find("cde") == 2, "find present"
 assert joined.find("z") == -1, "find absent"
 assert joined.find("a", 1) == -1, "find bound"
 assert joined.find("", 100) == -1, "empty find high bound"
-assert str(bytearray.fromhex("41 42\n43")) == "ABC", "fromhex"
+assert str(bytearray.fromhex("41 42 43")) == "ABC", "fromhex"
+for invalid_hex_space in ("\t", "\n", "\r", "\v", "\f"):
+    try:
+        bytearray.fromhex("41" + invalid_hex_space + "42")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("fromhex accepted non-space ASCII whitespace")
 assert "a" in bytearray("abc"), "string containment"
 assert "ab" in bytearray("abc"), "substring containment"
 assert "" in bytearray("abc"), "empty substring containment"

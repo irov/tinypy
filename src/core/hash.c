@@ -293,7 +293,7 @@ static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinyp
         return INT32_C(0);
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *method = tinypy_object_get_attr(mutable_value, "__hash__", 8U, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special(mutable_value, "__hash__", 8U, out_error);
 
     if (method == NULL) {
         return INT32_C(-1);

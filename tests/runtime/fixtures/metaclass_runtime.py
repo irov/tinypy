@@ -72,3 +72,69 @@ assert not hasattr(descriptor_owner, "plain")
 descriptor_owner.other = 8
 delattr(descriptor_owner, "other")
 assert not hasattr(descriptor_owner, "other")
+
+
+class ProtocolMeta(type):
+    def __getattribute__(cls, name):
+        if name == "intercepted":
+            return 41
+        return type.__getattribute__(cls, name)
+
+    def __getattr__(cls, name):
+        if name == "fallback":
+            return 42
+        raise AttributeError(name)
+
+    def __call__(cls, *args, **kwargs):
+        return args, kwargs
+
+    def __str__(cls):
+        return "protocol-str"
+
+    def __repr__(cls):
+        return "protocol-repr"
+
+
+class ProtocolProduct(object):
+    __metaclass__ = ProtocolMeta
+
+
+assert ProtocolProduct.intercepted == 41
+assert ProtocolProduct.fallback == 42
+assert str(ProtocolProduct) == "protocol-str"
+assert repr(ProtocolProduct) == "protocol-repr"
+assert ProtocolProduct(1, value=2) == ((1,), {"value": 2})
+
+
+class MutableMetadata(object):
+    pass
+
+
+MutableMetadata.__name__ = "RenamedMetadata"
+MutableMetadata.__module__ = "renamed_module"
+assert MutableMetadata.__name__ == "RenamedMetadata"
+assert MutableMetadata.__module__ == "renamed_module"
+for metadata_name, metadata_value in (
+    ("__bases__", (object,)),
+    ("__mro__", (MutableMetadata, object)),
+    ("__flags__", 0),
+    ("__basicsize__", 0),
+):
+    try:
+        setattr(MutableMetadata, metadata_name, metadata_value)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("read-only type metadata was changed")
+try:
+    int.injected = 42
+except TypeError:
+    pass
+else:
+    raise AssertionError("builtin type was mutated")
+try:
+    del MutableMetadata.__module__
+except TypeError:
+    pass
+else:
+    raise AssertionError("required type metadata was deleted")
