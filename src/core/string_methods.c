@@ -2711,8 +2711,8 @@ static tinypy_value_t *__tinypy_string_splitlines_method(tinypy_value_t *functio
     while (offset < size) {
         size_t content_end;
         size_t line_end;
-        uint32_t code_point;
-        size_t width;
+        uint32_t code_point = 0U;
+        size_t width = 0U;
 
         while (offset < size) {
             width = __tinypy_string_next_code_point(text, offset, &code_point);
