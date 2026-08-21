@@ -538,9 +538,98 @@ assert not type.__subclasscheck__(bool, int)
 assert type.__eq__(int, int)
 assert type.__ne__(int, str)
 assert type.__eq__(int, 42) is NotImplemented
+assert type.__repr__(int) == repr(int)
+
+builtin_function_type = type(len)
+assert len.__name__ == "len"
+assert len.__self__ is None
+assert len.__module__ == "__builtin__"
+assert repr(len) == "<built-in function len>"
+assert builtin_function_type.__call__(len, (1, 2, 3)) == 3
+assert builtin_function_type.__repr__(len) == repr(len)
+assert builtin_function_type.__hash__(len) == hash(len)
+assert builtin_function_type.__eq__(len, len)
+assert builtin_function_type.__ne__(len, abs)
+bound_append = [].append
+assert bound_append.__name__ == "append"
+assert bound_append.__self__ is not None
+assert bound_append.__module__ is None
+assert repr(bound_append).startswith("<built-in method append of list object at 0x")
+import copy_reg
+assert copy_reg._reduce_ex.__name__ == "_reduce_ex"
+assert copy_reg._reduce_ex.__module__ == "copy_reg"
 assert int.__module__ == "__builtin__"
 assert int.__basicsize__ > 0
 assert int.__itemsize__ >= 0
 assert int.__dictoffset__ >= 0
 assert int.__weakrefoffset__ >= 0
 assert "__basicsize__" in dir(type)
+
+# Python 2 exposes these constructors directly on the builtin types.  Calling
+# __new__ alone must allocate an uninitialized/empty value and must not run the
+# corresponding __init__ logic.
+assert bool.__new__(bool) is False
+assert bool.__new__(bool, [1]) is True
+assert list.__new__(list, [1, 2]) == []
+assert dict.__new__(dict, [("answer", 42)]) == {}
+assert bytearray.__new__(bytearray, "abc") == bytearray()
+blank_property = property.__new__(property, lambda self: 42)
+blank_classmethod = classmethod.__new__(classmethod, lambda owner: owner)
+blank_staticmethod = staticmethod.__new__(staticmethod, lambda: 42)
+assert blank_property.fget is None
+assert blank_classmethod.__func__ is None
+assert blank_staticmethod.__func__ is None
+
+
+def initialized_descriptor_function(value):
+    return value
+
+
+assert property.__init__(blank_property, initialized_descriptor_function) is None
+assert staticmethod.__init__(blank_staticmethod, initialized_descriptor_function) is None
+assert classmethod.__init__(blank_classmethod, initialized_descriptor_function) is None
+assert blank_property.fget is initialized_descriptor_function
+assert blank_staticmethod.__func__ is initialized_descriptor_function
+assert blank_classmethod.__func__ is initialized_descriptor_function
+assert slice.__new__(slice, 5) == slice(5)
+assert list(xrange.__new__(xrange, 1, 6, 2)) == [1, 3, 5]
+assert str(buffer.__new__(buffer, "abc")) == "abc"
+
+# object.__reduce_ex__ depends on the Python 2 copy_reg helpers.  These are
+# built in because tinypy intentionally has no filesystem stdlib dependency.
+import copy_reg
+
+
+class ReductionTarget(object):
+    pass
+
+
+protocol_zero_reduction = ReductionTarget().__reduce_ex__(0)
+assert protocol_zero_reduction[0] is copy_reg._reconstructor
+assert protocol_zero_reduction[1] == (ReductionTarget, object, None)
+protocol_two_reduction = ReductionTarget().__reduce_ex__(2)
+assert protocol_two_reduction[0] is copy_reg.__newobj__
+assert protocol_two_reduction[1] == (ReductionTarget,)
+assert protocol_two_reduction[2] == {}
+assert copy_reg.__newobj__(list) == []
+for unpicklable_builtin in ([], {}):
+    try:
+        unpicklable_builtin.__reduce_ex__(0)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("protocol 0 accepted a builtin container")
+
+for reducible_builtin in (
+    slice(1, 7, 2),
+    xrange(1, 7, 2),
+    set([1, 2]),
+    frozenset([1, 2]),
+    bytearray("\x00\xffab"),
+):
+    reduction = reducible_builtin.__reduce__()
+    rebuilt = reduction[0](*reduction[1])
+    if isinstance(reducible_builtin, xrange):
+        assert list(rebuilt) == list(reducible_builtin)
+    else:
+        assert rebuilt == reducible_builtin

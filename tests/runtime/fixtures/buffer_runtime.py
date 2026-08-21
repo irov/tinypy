@@ -11,6 +11,7 @@ assert view[1:3] == "cd"
 assert view[::-1] == "edcb"
 assert list(view) == ["b", "c", "d", "e"]
 assert hash(view) == hash("bcde")
+assert view.__hash__() == hash(view)
 assert str(buffer(view, 1, 2)) == "cd"
 assert view.__len__() == 4
 assert view.__getitem__(0) == "b"
@@ -64,6 +65,21 @@ assert bool(Ellipsis) is True
 
 readonly_memory = memoryview("abcd")
 assert type(readonly_memory) is memoryview
+assert not hasattr(readonly_memory, "__builtins__")
+assert not hasattr(readonly_memory, "__dict__")
+assert not hasattr(readonly_memory, "__weakref__")
+assert memoryview.__new__(memoryview, "new").tobytes() == "new"
+import _weakref
+try:
+    _weakref.ref(readonly_memory)
+except TypeError:
+    pass
+else:
+    raise AssertionError("memoryview unexpectedly supported weak references")
+assert memoryview.__eq__(readonly_memory, memoryview("abcd"))
+assert memoryview.__lt__(readonly_memory, memoryview("abce")) is NotImplemented
+for comparison_name in ("__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__"):
+    assert comparison_name in memoryview.__dict__
 assert len(readonly_memory) == 4
 assert readonly_memory[0] == "a"
 assert readonly_memory[-1] == "d"
@@ -81,6 +97,7 @@ assert readonly_memory.suboffsets is None
 assert readonly_memory == "abcd"
 assert repr(readonly_memory).startswith("<memory at 0x")
 assert repr(readonly_memory).endswith(">")
+assert readonly_memory.__repr__() == repr(readonly_memory)
 try:
     hash(readonly_memory)
 except TypeError:

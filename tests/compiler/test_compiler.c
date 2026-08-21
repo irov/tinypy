@@ -51,7 +51,9 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment) {
 
     (void)alignment;
     memory = malloc(size);
-    assert(memory != NULL);
+    if (memory == NULL) {
+        return NULL;
+    }
     state->allocations += 1U;
     state->bytes += size;
     return memory;
@@ -63,7 +65,9 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
 
     (void)alignment;
     resized = realloc(memory, new_size);
-    assert(resized != NULL);
+    if (resized == NULL) {
+        return NULL;
+    }
     state->bytes -= old_size;
     state->bytes += new_size;
     return resized;
@@ -87,7 +91,7 @@ static tinypy_bool_t __test_poll_interrupt(void *user_data) {
     return host->polls >= host->interrupt_after ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_vm_t *__test_vm_create(test_allocator_state_t *state, int32_t optimize_level) {
+static tinypy_vm_t *__test_vm_create_with_limit(test_allocator_state_t *state, int32_t optimize_level, size_t max_heap_bytes) {
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
 
@@ -103,7 +107,13 @@ static tinypy_vm_t *__test_vm_create(test_allocator_state_t *state, int32_t opti
     config.struct_size = (uint32_t)sizeof(config);
     config.allocator = &allocator;
     config.optimize_level = optimize_level;
+    config.max_heap_bytes = max_heap_bytes;
     tinypy_vm_t *return_value_1 = tinypy_vm_create(&config);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_vm_t *__test_vm_create(test_allocator_state_t *state, int32_t optimize_level) {
+    tinypy_vm_t *return_value_1 = __test_vm_create_with_limit(state, optimize_level, 0U);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -382,6 +392,34 @@ static int32_t __test_literal_compatibility(void) {
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_VALUE);
     tinypy_error_release(error);
     tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_huge_constant_shift_is_safe(void) {
+    static const char source[] = "result = 1 << 9223372036854775807\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create_with_limit(&state, 0, 8U * 1024U * 1024U);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *globals;
+    tinypy_value_t *result;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.optimize_level = 1;
+    tinypy_value_t *code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "shift.py", 8U, &options, &error);
+
+    assert(code != NULL);
+    assert(error == NULL);
+    globals = tinypy_dict_new(vm);
+    result = tinypy_exec_code(code, globals, NULL, &error);
+    assert(result == NULL);
+    assert(error != NULL);
+    assert(tinypy_error_kind(error) == ((uint64_t)SIZE_MAX >= (uint64_t)INT64_MAX ? TINYPY_ERROR_MEMORY : TINYPY_ERROR_OVERFLOW));
+    tinypy_error_release(error);
+    tinypy_release(globals);
+    tinypy_release(code);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
@@ -1822,6 +1860,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_literal_compatibility() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_huge_constant_shift_is_safe() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_named_unicode_escapes() != 0) {

@@ -73,7 +73,10 @@ static tinypy_bool_t __tinypy_set_update_iterable(tinypy_value_t *set, tinypy_va
         size_t capacity = TINYPY_DICT_OBJECT(dict)->mask + 1U;
         size_t index;
 
-        tinypy_internal_dict_reserve(TINYPY_VALUE_VM(set), target_dict, source_size > SIZE_MAX - target_size ? SIZE_MAX : target_size + source_size);
+        if (tinypy_internal_dict_reserve_checked(TINYPY_VALUE_VM(set), target_dict, source_size > SIZE_MAX - target_size ? SIZE_MAX : target_size + source_size, out_error) == 0) {
+            TINYPY_DECREF(none);
+            return TINYPY_FALSE;
+        }
 
         for (index = 0U; index < capacity; ++index) {
             tinypy_dict_entry_t *entry = &entries[index];
@@ -303,7 +306,8 @@ void tinypy_internal_set_release_references(tinypy_value_t *value, tinypy_releas
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_set_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = tinypy_iter(TINYPY_SET_OBJECT(value)->dict, out_error);
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_set_iterator_new(value);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -426,26 +430,100 @@ tinypy_hash_t tinypy_internal_frozenset_hash(const tinypy_value_t *value) {
     return set->hash;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_set_binary_contains(tinypy_value_t *value, tinypy_value_t *item, tinypy_bool_t *out_contains, tinypy_error_t **out_error) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    int32_t contains = kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET
+                           ? tinypy_set_contains(value, item, out_error)
+                           : tinypy_internal_dict_view_contains(value, item, out_error);
+
+    if (contains < 0) {
+        return TINYPY_FALSE;
+    }
+    *out_contains = contains != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_set_binary_update_selected(tinypy_value_t *result, tinypy_value_t *source, tinypy_value_t *other, int32_t selection, tinypy_error_t **out_error) {
+    tinypy_value_t *iterator = tinypy_iter(source, out_error);
+    tinypy_error_t *iteration_error = NULL;
+
+    if (iterator == NULL) {
+        return TINYPY_FALSE;
+    }
+    for (;;) {
+        tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
+        tinypy_bool_t selected = TINYPY_TRUE;
+
+        if (item == NULL) {
+            break;
+        }
+        if (selection != 0) {
+            tinypy_bool_t contains;
+
+            if (__tinypy_set_binary_contains(other, item, &contains, out_error) == 0) {
+                TINYPY_DECREF(item);
+                TINYPY_DECREF(iterator);
+                return TINYPY_FALSE;
+            }
+            selected = selection > 0 ? contains : (contains == 0 ? TINYPY_TRUE : TINYPY_FALSE);
+        }
+        if (selected != 0 && tinypy_set_add(result, item, out_error) == 0) {
+            TINYPY_DECREF(item);
+            TINYPY_DECREF(iterator);
+            return TINYPY_FALSE;
+        }
+        TINYPY_DECREF(item);
+    }
+    TINYPY_DECREF(iterator);
+    if (iteration_error != NULL) {
+        if (out_error != NULL) {
+            *out_error = iteration_error;
+        }
+        else {
+            tinypy_error_release(iteration_error);
+        }
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_set_binary_with_view(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_value_t *result = tinypy_set_new(vm);
+    tinypy_bool_t success;
+
+    if (operation == TINYPY_SET_BINARY_AND) {
+        success = __tinypy_set_binary_update_selected(result, left, right, 1, out_error);
+    }
+    else if (operation == TINYPY_SET_BINARY_SUBTRACT) {
+        success = __tinypy_set_binary_update_selected(result, left, right, -1, out_error);
+    }
+    else if (operation == TINYPY_SET_BINARY_OR) {
+        success = __tinypy_set_binary_update_selected(result, left, NULL, 0, out_error) != 0 && __tinypy_set_binary_update_selected(result, right, NULL, 0, out_error) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    else {
+        success = __tinypy_set_binary_update_selected(result, left, right, -1, out_error) != 0 && __tinypy_set_binary_update_selected(result, right, left, -1, out_error) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    if (success == 0) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_set_binary(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (right_kind == TINYPY_VALUE_DICT_KEYS || right_kind == TINYPY_VALUE_DICT_ITEMS) {
-        tinypy_value_t *right_set = tinypy_set_from_iterable(right, TINYPY_FALSE, out_error);
-        tinypy_value_t *result;
-
-        if (right_set == NULL) {
-            return NULL;
-        }
-        result = tinypy_internal_set_binary(left, right_set, operation, out_error);
-        TINYPY_DECREF(right_set);
-        return result;
-    }
-    if ((left_kind != TINYPY_VALUE_SET && left_kind != TINYPY_VALUE_FROZENSET) || (right_kind != TINYPY_VALUE_SET && right_kind != TINYPY_VALUE_FROZENSET)) {
+    if ((left_kind != TINYPY_VALUE_SET && left_kind != TINYPY_VALUE_FROZENSET && left_kind != TINYPY_VALUE_DICT_KEYS && left_kind != TINYPY_VALUE_DICT_ITEMS) || (right_kind != TINYPY_VALUE_SET && right_kind != TINYPY_VALUE_FROZENSET && right_kind != TINYPY_VALUE_DICT_KEYS && right_kind != TINYPY_VALUE_DICT_ITEMS)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "set operation requires set operands", out_error);
         return NULL;
+    }
+    if (left_kind == TINYPY_VALUE_DICT_KEYS || left_kind == TINYPY_VALUE_DICT_ITEMS || right_kind == TINYPY_VALUE_DICT_KEYS || right_kind == TINYPY_VALUE_DICT_ITEMS) {
+        tinypy_value_t *return_value_1 = __tinypy_set_binary_with_view(left, right, operation, out_error);
+        return return_value_1;
     }
     tinypy_value_t *result = __tinypy_set_copy_kind(left, left_kind == TINYPY_VALUE_FROZENSET);
     if (operation == TINYPY_SET_BINARY_AND) {
@@ -1107,16 +1185,22 @@ tinypy_value_t *tinypy_internal_frozenset_create(tinypy_type_t *type, tinypy_val
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_set_type_method_with_user_data(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
     tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, user_data, NULL);
 
-    tinypy_dict_set(type->dict, key, function);
+    tinypy_type_set_attr(type, name, name_size, function);
     TINYPY_DECREF(function);
-    TINYPY_DECREF(key);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_set_type_method(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
     __tinypy_set_type_method_with_user_data(vm, type, name, name_size, callback, NULL);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_set_type_method_descriptor(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
+    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
+
+    tinypy_internal_native_function_set_descriptor_kind(function, TINYPY_NATIVE_DESCRIPTOR_METHOD);
+    tinypy_type_set_attr(type, name, name_size, function);
+    TINYPY_DECREF(function);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_set_register_common_methods(tinypy_vm_t *vm, tinypy_type_t *type) {
@@ -1129,7 +1213,7 @@ static void __tinypy_set_register_common_methods(tinypy_vm_t *vm, tinypy_type_t 
     __tinypy_set_type_method(vm, type, "issuperset", 10U, __tinypy_set_issuperset_method);
     __tinypy_set_type_method(vm, type, "isdisjoint", 10U, __tinypy_set_isdisjoint_method);
     __tinypy_set_type_method(vm, type, "__len__", 7U, __tinypy_set_len_method);
-    __tinypy_set_type_method(vm, type, "__contains__", 12U, __tinypy_set_contains_method);
+    __tinypy_set_type_method_descriptor(vm, type, "__contains__", 12U, __tinypy_set_contains_method);
     __tinypy_set_type_method(vm, type, "__iter__", 8U, __tinypy_set_iter_method);
     __tinypy_set_type_method(vm, type, "__repr__", 8U, __tinypy_set_repr_method);
     __tinypy_set_type_method_with_user_data(vm, type, "__and__", 7U, __tinypy_set_binary_method, (void *)(intptr_t)TINYPY_SET_BINARY_AND);

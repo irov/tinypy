@@ -273,21 +273,22 @@ static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value
         }
     }
     if (length == 0U) {
-        tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, NULL, 0U);
+        tinypy_value_t *return_value_1 = tinypy_internal_string_from_bytes_checked(vm, NULL, 0U, out_error);
         return return_value_1;
     }
-    if (step == 1) {
-        tinypy_value_t *return_value_2 = tinypy_string_from_bytes(vm, bytes + (size_t)start, length);
+    if (step == 1 || length == 1U) {
+        tinypy_value_t *return_value_2 = tinypy_internal_string_from_bytes_checked(vm, bytes + (size_t)start, length, out_error);
         return return_value_2;
     }
-    selected = (uint8_t *)tinypy_internal_vm_allocate(vm, length);
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, length, length, &selected, out_error);
+    if (result == NULL) {
+        return NULL;
+    }
     source = start;
     for (index = 0U; index < length; ++index) {
         selected[index] = bytes[(size_t)source];
         source += step;
     }
-    tinypy_value_t *result = tinypy_string_from_bytes(vm, selected, length);
-    tinypy_internal_vm_deallocate(vm, selected, length);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -362,9 +363,8 @@ static tinypy_value_t *__tinypy_buffer_concat(tinypy_value_t *left, tinypy_value
         return NULL;
     }
     total_size = left_size + right_size;
-    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized(vm, TINYPY_VALUE_STRING, total_size, total_size, &output);
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, total_size, total_size, &output, out_error);
     if (result == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "concatenated buffer is too large", out_error);
         return NULL;
     }
     if (left_size != 0U) {
@@ -403,9 +403,8 @@ static tinypy_value_t *__tinypy_buffer_repeat(tinypy_value_t *buffer, tinypy_val
         return NULL;
     }
     total_size = unit_size * (size_t)count;
-    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized(vm, TINYPY_VALUE_STRING, total_size, total_size, &output);
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, total_size, total_size, &output, out_error);
     if (result == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "repeated buffer is too large", out_error);
         return NULL;
     }
     (void)memcpy(output, bytes, unit_size);
@@ -428,6 +427,22 @@ static tinypy_value_t *__tinypy_buffer_len_method(tinypy_value_t *function, tiny
     }
     ptrdiff_t length = tinypy_internal_buffer_length(TINYPY_TUPLE_GET(args, 0U), out_error);
     tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)length);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_buffer_hash_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_buffer_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_hash_t hash = tinypy_internal_hash_builtin_value(TINYPY_TUPLE_GET(args, 0U), out_error);
+    if (out_error != NULL && *out_error != NULL) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, hash);
 
     return result;
 }
@@ -561,6 +576,7 @@ static void __tinypy_buffer_register_method(tinypy_vm_t *vm, const char *name, s
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_buffer_type(tinypy_vm_t *vm) {
     __tinypy_buffer_register_method(vm, "__len__", 7U, __tinypy_buffer_len_method);
+    __tinypy_buffer_register_method(vm, "__hash__", 8U, __tinypy_buffer_hash_method);
     __tinypy_buffer_register_method(vm, "__getitem__", 11U, __tinypy_buffer_getitem_method);
     __tinypy_buffer_register_method(vm, "__getslice__", 12U, __tinypy_buffer_getslice_method);
     __tinypy_buffer_register_method(vm, "__add__", 7U, __tinypy_buffer_add_method);
@@ -655,7 +671,6 @@ static void __tinypy_memoryview_export(tinypy_value_t *value, int32_t change) {
 static tinypy_value_t *__tinypy_memoryview_instance(tinypy_type_t *type, tinypy_value_t *owner, size_t offset, size_t size, tinypy_bool_t readonly) {
     tinypy_value_t *result = tinypy_native_instance_new(type);
     tinypy_internal_memoryview_payload_t *payload = __tinypy_memoryview_payload(result);
-    tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(result);
 
     if (tinypy_internal_memoryview_check(owner) != 0) {
         const tinypy_internal_memoryview_payload_t *source = __tinypy_memoryview_const_payload(owner);
@@ -673,12 +688,34 @@ static tinypy_value_t *__tinypy_memoryview_instance(tinypy_type_t *type, tinypy_
     payload->size = size;
     payload->readonly = readonly;
     TINYPY_INCREF(owner);
-    *dict_slot = tinypy_dict_new(type->vm);
-    tinypy_dict_set(*dict_slot, type->vm->builtins_key, owner);
     if (readonly == 0) {
         __tinypy_memoryview_export(result, 1);
     }
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_memoryview_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_internal_memoryview_payload_t *payload = __tinypy_memoryview_payload(value);
+    tinypy_value_t *owner = payload->owner;
+
+    tinypy_internal_instance_release_references(value, visit, user_data);
+    if (owner == NULL) {
+        return;
+    }
+    if (payload->readonly == 0) {
+        __tinypy_memoryview_export(value, -1);
+    }
+    payload->owner = NULL;
+    visit(owner, user_data);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_memoryview_traverse_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_internal_memoryview_payload_t *payload = __tinypy_memoryview_payload(value);
+
+    tinypy_internal_instance_release_references(value, visit, user_data);
+    if (payload->owner != NULL) {
+        visit(payload->owner, user_data);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_memoryview_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -958,6 +995,22 @@ static tinypy_value_t *__tinypy_memoryview_len_method(tinypy_value_t *function, 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_memoryview_compare_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    if (__tinypy_memoryview_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    if (tinypy_internal_memoryview_check(self) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "comparison requires a memoryview", out_error);
+        return NULL;
+    }
+    tinypy_value_t *result = __tinypy_memoryview_compare(self, __tinypy_memoryview_payload(self), TINYPY_TUPLE_GET(args, 1U), (tinypy_compare_operation_e)(intptr_t)user_data, NULL, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_memoryview_get_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -1028,12 +1081,33 @@ static tinypy_value_t *__tinypy_memoryview_tolist_method(tinypy_value_t *functio
     const uint8_t *bytes = tinypy_internal_memoryview_view(TINYPY_TUPLE_GET(args, 0U), &size);
     tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
     size_t index;
+
+    if (tinypy_internal_list_reserve_checked(vm, result, size, out_error) == 0) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
     for (index = 0U; index < size; ++index) {
         tinypy_value_t *item = tinypy_integer_from_i64(vm, bytes[index]);
 
-        tinypy_list_append(result, item);
+        if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
+            TINYPY_DECREF(item);
+            TINYPY_DECREF(result);
+            return NULL;
+        }
         TINYPY_DECREF(item);
     }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_memoryview_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (__tinypy_memoryview_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *result = __tinypy_memoryview_repr(self, __tinypy_memoryview_payload(self), NULL, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1092,6 +1166,8 @@ static void __tinypy_memoryview_register_property(tinypy_vm_t *vm, const char *n
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_memoryview_type(tinypy_vm_t *vm) {
     tinypy_native_type_spec_t spec;
+    static const char *const comparison_names[] = {"__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__"};
+    size_t comparison_index;
 
     tinypy_native_type_spec_init(&spec);
     spec.payload_size = sizeof(tinypy_internal_memoryview_payload_t);
@@ -1102,13 +1178,24 @@ void tinypy_internal_initialize_memoryview_type(tinypy_vm_t *vm) {
     spec.mapping_get = __tinypy_memoryview_get;
     spec.mapping_set = __tinypy_memoryview_set;
     spec.mapping_length = __tinypy_memoryview_length;
+    spec.has_instance_dict = TINYPY_FALSE;
+    spec.has_weakrefs = TINYPY_FALSE;
     vm->memoryview_type = tinypy_native_type_new(vm, "memoryview", 10U, NULL, 0U, NULL, &spec, NULL);
     vm->memoryview_type->create = __tinypy_memoryview_create;
-    vm->memoryview_type->has_instance_dict = INT32_C(0);
+    tinypy_internal_constructor_add_builtin_new(vm->memoryview_type);
+    vm->memoryview_type->release_references = __tinypy_memoryview_release_references;
+    vm->memoryview_type->traverse_references = __tinypy_memoryview_traverse_references;
     __tinypy_memoryview_register_method(vm, "__len__", 7U, __tinypy_memoryview_len_method);
     __tinypy_memoryview_register_method(vm, "__getitem__", 11U, __tinypy_memoryview_get_method);
     __tinypy_memoryview_register_method(vm, "__setitem__", 11U, __tinypy_memoryview_set_method);
     __tinypy_memoryview_register_method(vm, "__delitem__", 11U, __tinypy_memoryview_delete_method);
+    __tinypy_memoryview_register_method(vm, "__repr__", 8U, __tinypy_memoryview_repr_method);
+    for (comparison_index = 0U; comparison_index < sizeof(comparison_names) / sizeof(comparison_names[0]); ++comparison_index) {
+        tinypy_value_t *function = tinypy_native_function_new(vm, comparison_names[comparison_index], 6U, __tinypy_memoryview_compare_method, (void *)(intptr_t)comparison_index, NULL);
+
+        tinypy_type_set_attr(vm->memoryview_type, comparison_names[comparison_index], 6U, function);
+        TINYPY_DECREF(function);
+    }
     __tinypy_memoryview_register_method(vm, "tobytes", 7U, __tinypy_memoryview_tobytes_method);
     __tinypy_memoryview_register_method(vm, "tolist", 6U, __tinypy_memoryview_tolist_method);
     __tinypy_memoryview_register_property(vm, "format", 6U, 0);

@@ -259,27 +259,40 @@ static tinypy_value_t *__tinypy_item_unicode_get(tinypy_value_t *container, size
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, const tinypy_internal_slice_indices_t *indices) {
+static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, const tinypy_internal_slice_indices_t *indices, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    tinypy_value_t **items = NULL;
+    tinypy_bool_t tuple = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_TUPLE;
+    tinypy_value_t *result = tuple != 0
+                                 ? tinypy_internal_tuple_new_checked(vm, indices->length, out_error)
+                                 : tinypy_list_from_items(vm, NULL, 0U);
     size_t index;
     int64_t source_index = indices->start;
 
-    if (indices->length != 0U) {
-        items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, indices->length * sizeof(*items));
-        for (index = 0U; index < indices->length; ++index) {
-            items[index] = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(container, (size_t)source_index) : TINYPY_LIST_GET(container, (size_t)source_index);
-            source_index += indices->step;
-        }
+    if (result == NULL) {
+        return NULL;
     }
-    tinypy_value_t *result = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_TUPLE ? tinypy_tuple_from_items(vm, items, indices->length) : tinypy_list_from_items(vm, items, indices->length);
-    if (items != NULL) {
-        tinypy_internal_vm_deallocate(vm, items, indices->length * sizeof(*items));
+    if (tuple == 0 && tinypy_internal_list_reserve_checked(vm, result, indices->length, out_error) == 0) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    for (index = 0U; index < indices->length; ++index) {
+        tinypy_value_t *item = tuple != 0 ? TINYPY_TUPLE_GET(container, (size_t)source_index) : TINYPY_LIST_GET(container, (size_t)source_index);
+
+        if (tuple != 0) {
+            TINYPY_INCREF(item);
+            TINYPY_DECREF(TINYPY_TUPLE_GET(result, index));
+            TINYPY_TUPLE_GET(result, index) = item;
+        }
+        else if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
+            TINYPY_DECREF(result);
+            return NULL;
+        }
+        source_index += indices->step;
     }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_item_string_slice(tinypy_value_t *container, const tinypy_internal_slice_indices_t *indices) {
+static tinypy_value_t *__tinypy_item_string_slice(tinypy_value_t *container, const tinypy_internal_slice_indices_t *indices, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     const uint8_t *bytes;
     uint8_t *selected;
@@ -289,7 +302,7 @@ static tinypy_value_t *__tinypy_item_string_slice(tinypy_value_t *container, con
 
     bytes = (const uint8_t *)tinypy_string_view(container, &byte_size);
     if (indices->length == 0U) {
-        tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, NULL, 0U);
+        tinypy_value_t *return_value_1 = tinypy_internal_string_from_bytes_checked(vm, NULL, 0U, out_error);
         return return_value_1;
     }
     if (indices->step == 1) {
@@ -297,16 +310,21 @@ static tinypy_value_t *__tinypy_item_string_slice(tinypy_value_t *container, con
             TINYPY_INCREF(container);
             return container;
         }
-        tinypy_value_t *return_value_2 = tinypy_string_from_bytes(vm, bytes + (size_t)indices->start, indices->length);
+        tinypy_value_t *return_value_2 = tinypy_internal_string_from_bytes_checked(vm, bytes + (size_t)indices->start, indices->length, out_error);
         return return_value_2;
     }
-    selected = (uint8_t *)tinypy_internal_vm_allocate(vm, indices->length);
+    if (indices->length == 1U) {
+        tinypy_value_t *return_value_3 = tinypy_internal_string_from_bytes_checked(vm, bytes + (size_t)indices->start, 1U, out_error);
+        return return_value_3;
+    }
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, indices->length, indices->length, &selected, out_error);
+    if (result == NULL) {
+        return NULL;
+    }
     for (index = 0U; index < indices->length; ++index) {
         selected[index] = bytes[(size_t)source_index];
         source_index += indices->step;
     }
-    tinypy_value_t *result = tinypy_string_from_bytes(vm, selected, indices->length);
-    tinypy_internal_vm_deallocate(vm, selected, indices->length);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -415,7 +433,12 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, tin
         if (item == NULL) {
             break;
         }
-        tinypy_list_append(items, item);
+        if (tinypy_internal_list_append_checked(items, item, out_error) == 0) {
+            TINYPY_DECREF(item);
+            TINYPY_DECREF(iterator);
+            TINYPY_DECREF(items);
+            return NULL;
+        }
         TINYPY_DECREF(item);
     }
     TINYPY_DECREF(iterator);
@@ -459,7 +482,10 @@ static tinypy_bool_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_v
         }
         for (index = 0U; index < replacement_size; ++index) {
             tinypy_value_t *item_2 = TINYPY_LIST_GET(replacement, index);
-            tinypy_list_insert(list, (size_t)indices.start + index, item_2);
+            if (tinypy_internal_list_insert_checked(list, (size_t)indices.start + index, item_2, out_error) == 0) {
+                TINYPY_DECREF(replacement);
+                return TINYPY_FALSE;
+            }
         }
     }
     else {
@@ -560,11 +586,11 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
             return NULL;
         }
         if (kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_LIST) {
-            tinypy_value_t *return_value_4 = __tinypy_item_sequence_slice(container, &indices);
+            tinypy_value_t *return_value_4 = __tinypy_item_sequence_slice(container, &indices, out_error);
             return return_value_4;
         }
         if (kind == TINYPY_VALUE_STRING) {
-            tinypy_value_t *return_value_5 = __tinypy_item_string_slice(container, &indices);
+            tinypy_value_t *return_value_5 = __tinypy_item_string_slice(container, &indices, out_error);
             return return_value_5;
         }
         tinypy_value_t *return_value_6 = __tinypy_item_unicode_slice(container, &indices);

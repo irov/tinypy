@@ -57,13 +57,11 @@ tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
     }
     if (kind == TINYPY_VALUE_NATIVE_INSTANCE) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-        tinypy_value_t *key = tinypy_string_from_bytes(vm, "softspace", 9U);
         tinypy_error_t *error = NULL;
         tinypy_value_t *value;
-        int32_t status = tinypy_internal_object_get_optional_attr_key(target, key, &value, &error);
+        int32_t status = tinypy_internal_object_get_optional_attr_key(target, vm->softspace_key, &value, &error);
         int32_t soft_space = 0;
 
-        TINYPY_DECREF(key);
         if (status > 0) {
             soft_space = tinypy_truth(value, &error);
             TINYPY_DECREF(value);
@@ -77,8 +75,7 @@ tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
     if (kind == TINYPY_VALUE_INSTANCE) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
         tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(target);
-        tinypy_value_t *key = tinypy_string_from_bytes(vm, "softspace", 9U);
-        tinypy_value_t *value = dict_slot != NULL && *dict_slot != NULL ? tinypy_dict_get_optional(*dict_slot, key) : NULL;
+        tinypy_value_t *value = dict_slot != NULL && *dict_slot != NULL ? tinypy_dict_get_optional(*dict_slot, vm->softspace_key) : NULL;
         tinypy_bool_t soft_space = TINYPY_FALSE;
 
         if (value != NULL) {
@@ -88,7 +85,6 @@ tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
                 soft_space = TINYPY_INTEGER_VALUE(value) != 0 ? INT32_C(1) : INT32_C(0);
             }
         }
-        TINYPY_DECREF(key);
         return soft_space;
     }
     return TINYPY_FALSE;
@@ -235,12 +231,10 @@ static tinypy_value_t *__tinypy_output_writelines_method(tinypy_value_t *functio
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_output_type_method(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
     tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
 
-    tinypy_dict_set(vm->types[TINYPY_VALUE_OUTPUT_STREAM].dict, key, function);
+    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], name, name_size, function);
     TINYPY_DECREF(function);
-    TINYPY_DECREF(key);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_output_type(tinypy_vm_t *vm) {

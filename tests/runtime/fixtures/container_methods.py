@@ -143,6 +143,12 @@ assert float.__hash__(1.5) == hash(1.5)
 assert complex.__hash__(1 + 2j) == hash(1 + 2j)
 assert int.__format__(15, "04x") == "000f"
 assert float.__format__(1.5, ".1f") == "1.5"
+assert "__eq__" not in int.__dict__
+assert "__lt__" not in long.__dict__
+assert "__eq__" in float.__dict__
+assert "__eq__" in complex.__dict__
+assert "__iter__" not in str.__dict__
+assert "__iter__" not in unicode.__dict__
 assert (2).__cmp__(3) == -1
 assert (3L).__cmp__(2L) == 1
 try:
@@ -166,6 +172,85 @@ assert object().__sizeof__() > 0
 assert (1L).__sizeof__() > 0
 assert isinstance(str.__doc__, str)
 assert isinstance(dict.__doc__, str)
+
+
+class DescriptorSample(object):
+    def method(self):
+        return 42
+
+    @property
+    def answer(self):
+        return 42
+
+
+descriptor_sample = DescriptorSample()
+bound_method = descriptor_sample.method
+assert bound_method.im_func is DescriptorSample.method.im_func
+assert bound_method.__func__ is DescriptorSample.method.im_func
+assert bound_method.im_self is descriptor_sample
+assert bound_method.__self__ is descriptor_sample
+assert bound_method.im_class is DescriptorSample
+assert bound_method.__call__() == 42
+assert bound_method.__repr__() == repr(bound_method)
+assert bound_method.__hash__() == hash(bound_method)
+assert bound_method.__cmp__(bound_method) == 0
+
+
+class EqualMethodOwner(object):
+    def __eq__(self, other):
+        return isinstance(other, EqualMethodOwner)
+
+    def __hash__(self):
+        return 123
+
+    def method(self):
+        return 42
+
+
+equal_method_left = EqualMethodOwner().method
+equal_method_right = EqualMethodOwner().method
+assert equal_method_left == equal_method_right
+assert equal_method_left.__cmp__(equal_method_right) == 0
+assert hash(equal_method_left) == hash(equal_method_right)
+
+
+class UnhashableMethodOwner(object):
+    __hash__ = None
+
+    def method(self):
+        return 42
+
+
+try:
+    hash(UnhashableMethodOwner().method)
+except TypeError:
+    pass
+else:
+    raise AssertionError("bound method must inherit unhashability from self")
+for method_attribute in ("im_func", "__func__", "im_self", "__self__", "im_class"):
+    assert method_attribute in dir(bound_method)
+assert DescriptorSample.__dict__["method"].__get__(descriptor_sample, DescriptorSample)() == 42
+assert DescriptorSample.__dict__["answer"].__get__(descriptor_sample, DescriptorSample) == 42
+try:
+    DescriptorSample.__dict__["answer"].__set__(descriptor_sample, 7)
+except AttributeError:
+    pass
+else:
+    raise AssertionError("read-only property accepted __set__")
+
+descriptor_code = DescriptorSample.method.func_code
+for code_attribute in (
+    "co_argcount", "co_cellvars", "co_code", "co_consts", "co_filename",
+    "co_firstlineno", "co_flags", "co_freevars", "co_lnotab", "co_name",
+    "co_names", "co_nlocals", "co_stacksize", "co_varnames",
+):
+    assert code_attribute in dir(descriptor_code)
+
+assert "__dict__" in DescriptorSample.__dict__
+assert "__weakref__" in DescriptorSample.__dict__
+replacement_dict = {"replacement": 43}
+descriptor_sample.__dict__ = replacement_dict
+assert descriptor_sample.__dict__ is replacement_dict
 
 
 class InplaceProtocol(object):
@@ -585,6 +670,11 @@ class NonBooleanComparison(object):
 assert (NonBooleanComparison() == 1) == 7
 assert (NonBooleanComparison() < 1) == 8
 assert divmod(NonBooleanComparison(), 1) == "custom-divmod"
+minimum_integer = -9223372036854775807 - 1
+minimum_quotient, minimum_remainder = divmod(minimum_integer, -1)
+assert minimum_quotient == 9223372036854775808L and type(minimum_quotient) is long
+assert minimum_remainder == 0L and type(minimum_remainder) is long
+assert type(minimum_integer % -1) is long
 assert 1 // 1.5 == 0.0
 assert repr(0.0 % -1.5) == "-0.0"
 assert (1 + 2j) // 1 == 1 + 0j
@@ -1654,6 +1744,30 @@ assert not_implemented_list.radd_calls == 1
 
 # Explicit builtin descriptors must operate on the builtin payload without
 # dispatching back into overrides on a subclass.
+assert type(list.append).__name__ == "method_descriptor"
+assert list.append.__name__ == "append"
+assert list.append.__objclass__ is list
+assert repr(list.append) == "<method 'append' of 'list' objects>"
+assert type(list.__len__).__name__ == "wrapper_descriptor"
+assert list.__len__.__objclass__ is list
+assert repr(list.__len__) == "<slot wrapper '__len__' of 'list' objects>"
+assert type(set.add).__name__ == "method_descriptor"
+assert set.add.__objclass__ is set
+assert type(str.upper).__name__ == "method_descriptor"
+assert str.upper.__objclass__ is str
+assert type(bytearray.append).__name__ == "method_descriptor"
+assert bytearray.append.__objclass__ is bytearray
+descriptor_target = []
+descriptor_append = list.append.__get__(descriptor_target, list)
+assert type(descriptor_append).__name__ == "builtin_function_or_method"
+assert descriptor_append(3) is None
+assert descriptor_target == [3]
+assert list.append.__get__(None, list) is list.append
+try:
+    list.append.__get__(1, list)
+    assert False
+except TypeError:
+    pass
 assert int.__add__(overridden_int, 1) == 3
 assert int.__radd__(overridden_int, 1) == 3
 assert int.__neg__(overridden_int) == -2
@@ -1747,3 +1861,28 @@ except TypeError:
     pass
 assert "mro" not in dir(str)
 assert "__call__" not in dir(str)
+
+
+class ReprList(list):
+    def __repr__(self):
+        return "CUSTOM_LIST"
+
+
+class ReprTuple(tuple):
+    def __repr__(self):
+        return "CUSTOM_TUPLE"
+
+
+class ReprDict(dict):
+    def __repr__(self):
+        return "CUSTOM_DICT"
+
+
+assert str(ReprList()) == "CUSTOM_LIST"
+assert str(ReprTuple()) == "CUSTOM_TUPLE"
+assert str(ReprDict()) == "CUSTOM_DICT"
+assert "__str__" not in list.__dict__
+assert "__str__" not in tuple.__dict__
+assert "__str__" not in dict.__dict__
+assert "aa"[0] is "aa"[1]
+assert next(iter("bb")) is "bb"[0]

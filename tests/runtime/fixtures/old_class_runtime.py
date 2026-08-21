@@ -146,3 +146,24 @@ assert +protocol == 11
 assert -protocol == -11
 assert ~protocol == 12
 assert abs(protocol) == 13
+
+
+class DirBase:
+    inherited_marker = 1
+
+
+class DirChild(DirBase):
+    local_marker = 2
+
+    def method(self):
+        return 3
+
+
+dir_instance = DirChild()
+dir_instance.instance_marker = 4
+class_names = dir(DirChild)
+instance_names = dir(dir_instance)
+for expected_name in ("inherited_marker", "local_marker", "method", "__dict__", "__bases__", "__name__"):
+    assert expected_name in class_names
+for expected_name in ("inherited_marker", "local_marker", "method", "instance_marker", "__class__", "__dict__"):
+    assert expected_name in instance_names

@@ -19,6 +19,32 @@ static inline size_t __tinypy_internal_long_allocation_size(size_t digit_count) 
     return header_size + digit_count * sizeof(uint16_t);
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_long_allocate_digits(tinypy_vm_t *vm, int32_t sign, size_t digit_count, tinypy_error_t **out_error) {
+    size_t allocation_size = __tinypy_internal_long_allocation_size(digit_count);
+    tinypy_value_t *result;
+
+    if (allocation_size == 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long int is too large", out_error);
+        return NULL;
+    }
+    result = tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_LONG], allocation_size, out_error);
+    if (result == NULL) {
+        return NULL;
+    }
+    TINYPY_LONG_OBJECT(result)->digit_count = digit_count;
+    TINYPY_LONG_OBJECT(result)->sign = sign;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_long_from_base15_digits_checked(tinypy_vm_t *vm, int32_t sign, const uint16_t *digits, size_t digit_count, tinypy_error_t **out_error) {
+    tinypy_value_t *result = tinypy_internal_long_allocate_digits(vm, sign, digit_count, out_error);
+
+    if (result != NULL && digit_count != 0U) {
+        (void)memcpy(TINYPY_LONG_OBJECT(result)->digits, digits, digit_count * sizeof(*digits));
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int32_t sign, const uint16_t *digits, size_t digit_count) {
     size_t allocation_size;
 

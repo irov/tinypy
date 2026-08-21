@@ -1164,7 +1164,12 @@ static tinypy_value_t *__tinypy_sre_pattern_findall(tinypy_value_t *function, ti
             tinypy_internal_vm_deallocate(vm, items, pattern->groups * sizeof(*items));
             TINYPY_DECREF(empty);
         }
-        tinypy_list_append(result, item);
+        if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
+            TINYPY_DECREF(item);
+            TINYPY_DECREF(match_value);
+            TINYPY_DECREF(result);
+            return NULL;
+        }
         TINYPY_DECREF(item);
         pos = match->end == match->start ? match->end + 1U : match->end;
         TINYPY_DECREF(match_value);
@@ -1274,7 +1279,12 @@ static tinypy_value_t *__tinypy_sre_pattern_sub(tinypy_value_t *function, tinypy
         match = TINYPY_SRE_MATCH_OBJECT(match_value);
         if (copied < match->start) {
             piece = __tinypy_sre_text_slice(vm, string, copied, match->start);
-            tinypy_list_append(pieces, piece);
+            if (tinypy_internal_list_append_checked(pieces, piece, out_error) == 0) {
+                TINYPY_DECREF(piece);
+                TINYPY_DECREF(match_value);
+                TINYPY_DECREF(pieces);
+                return NULL;
+            }
             TINYPY_DECREF(piece);
         }
         else if (copied == match->start && copied == match->end && substitutions != 0U) {
@@ -1298,7 +1308,12 @@ static tinypy_value_t *__tinypy_sre_pattern_sub(tinypy_value_t *function, tinypy
             TINYPY_INCREF(piece);
         }
         if (TINYPY_VALUE_KIND(piece) != TINYPY_VALUE_NONE) {
-            tinypy_list_append(pieces, piece);
+            if (tinypy_internal_list_append_checked(pieces, piece, out_error) == 0) {
+                TINYPY_DECREF(piece);
+                TINYPY_DECREF(match_value);
+                TINYPY_DECREF(pieces);
+                return NULL;
+            }
         }
         TINYPY_DECREF(piece);
         copied = match->end;
@@ -1309,7 +1324,11 @@ static tinypy_value_t *__tinypy_sre_pattern_sub(tinypy_value_t *function, tinypy
     if (copied < string_size) {
         tinypy_value_t *tail = __tinypy_sre_text_slice(vm, string, copied, string_size);
 
-        tinypy_list_append(pieces, tail);
+        if (tinypy_internal_list_append_checked(pieces, tail, out_error) == 0) {
+            TINYPY_DECREF(tail);
+            TINYPY_DECREF(pieces);
+            return NULL;
+        }
         TINYPY_DECREF(tail);
     }
     joined = __tinypy_sre_join(vm, pieces, string, out_error);
@@ -1421,10 +1440,8 @@ static tinypy_value_t *__tinypy_sre_getlower(tinypy_value_t *function, tinypy_va
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_sre_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
     tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
-    tinypy_value_t *key = tinypy_string_from_bytes(type->vm, name, name_size);
 
-    tinypy_dict_set(type->dict, key, function);
-    TINYPY_DECREF(key);
+    tinypy_type_set_attr(type, name, name_size, function);
     TINYPY_DECREF(function);
 }
 //////////////////////////////////////////////////////////////////////////

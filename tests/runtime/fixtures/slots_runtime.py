@@ -14,6 +14,17 @@ assert type(Slotted.value).__name__ == "member_descriptor"
 assert slotted.value == 40
 assert slotted.private() == 41
 assert not hasattr(slotted, "__dict__")
+value_descriptor = Slotted.__dict__["value"]
+assert value_descriptor.__name__ == "value"
+assert value_descriptor.__objclass__ is Slotted
+for descriptor_method in ("__get__", "__set__", "__delete__", "__repr__"):
+    assert descriptor_method in type(value_descriptor).__dict__
+assert value_descriptor.__get__(slotted, Slotted) == 40
+assert value_descriptor.__repr__() == repr(value_descriptor)
+assert value_descriptor.__set__(slotted, 40) is None
+assert value_descriptor.__delete__(slotted) is None
+assert not hasattr(slotted, "value")
+assert value_descriptor.__set__(slotted, 40) is None
 
 try:
     slotted.other = 1

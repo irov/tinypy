@@ -85,7 +85,9 @@ static tinypy_value_t *__tinypy_codecs_register(tinypy_value_t *function, tinypy
         return NULL;
     }
     tinypy_value_t *codecs_module_value = __tinypy_codecs_module_value(module, "_search_path", 12U);
-    tinypy_list_append(codecs_module_value, search);
+    if (tinypy_internal_list_append_checked(codecs_module_value, search, out_error) == 0) {
+        return NULL;
+    }
     tinypy_value_t *return_value_1 = tinypy_none_get(vm);
     return return_value_1;
 }

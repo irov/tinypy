@@ -224,6 +224,47 @@ assert property(first_documented_getter).getter(second_documented_getter).__doc_
 assert property(first_documented_getter, doc="explicit doc").getter(second_documented_getter).__doc__ == "explicit doc"
 assert type(staticmethod(42)) is staticmethod
 assert type(classmethod(42)) is classmethod
+
+
+def direct_class_function(owner, value):
+    return owner.__name__, value
+
+
+def direct_static_function(value):
+    return value + 1
+
+
+direct_classmethod = classmethod(direct_class_function)
+direct_staticmethod = staticmethod(direct_static_function)
+assert direct_classmethod.__func__ is direct_class_function
+assert direct_staticmethod.__func__ is direct_static_function
+assert direct_classmethod.__get__(None, DescriptorChild)(42) == ("DescriptorChild", 42)
+assert direct_staticmethod.__get__(None, DescriptorChild) is direct_static_function
+for descriptor, attribute in (
+    (direct_classmethod, "__func__"),
+    (direct_staticmethod, "__func__"),
+):
+    try:
+        setattr(descriptor, attribute, 42)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("descriptor __func__ was writable")
+
+def direct_method_function(self, value):
+    return value + 1
+
+
+method_type = type(direct_method_function.__get__(descriptor_object, DescriptorChild))
+constructed_method = method_type(direct_method_function, descriptor_object)
+assert constructed_method.__func__ is direct_method_function
+assert constructed_method.__self__ is descriptor_object
+assert constructed_method(42) == 43
+direct_constructed_method = method_type.__new__(method_type, direct_method_function, descriptor_object, DescriptorChild)
+assert direct_constructed_method.__func__ is direct_method_function
+assert direct_constructed_method.__self__ is descriptor_object
+assert direct_constructed_method.im_class is DescriptorChild
+assert direct_constructed_method(42) == 43
 noncallable_getter = property().getter(42)
 noncallable_setter = property().setter(42)
 noncallable_deleter = property().deleter(42)

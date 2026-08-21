@@ -257,7 +257,7 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     int32_t cookie_line = 0;
     int32_t bom = 0;
     int32_t ascii = 0;
-    int32_t latin1 = 0;
+    int32_t latin1 = ctx->source_default_latin1 != 0 ? 1 : 0;
     size_t output_capacity;
     uint8_t *output;
     size_t input_index;
@@ -276,6 +276,7 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     if (source_size >= 3U && input[0] == 0xefU && input[1] == 0xbbU && input[2] == 0xbfU) {
         input_offset = 3U;
         bom = 1;
+        latin1 = 0;
     }
     if (__tinypy_compiler_encoding_cookie(input + input_offset, source_size - input_offset, &cookie, &cookie_size, &cookie_line) != 0) {
         if (ctx->source_is_unicode != 0) {
@@ -287,10 +288,14 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         }
         else if (__tinypy_compiler_is_ascii_cookie(cookie, cookie_size) != 0) {
             ascii = 1;
+            latin1 = 0;
         }
-        else if (__tinypy_compiler_is_utf8_cookie(cookie, cookie_size) == 0) {
-            tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SYNTAX, "unknown source encoding", cookie_line, 1, out_error);
-            return TINYPY_FALSE;
+        else {
+            if (__tinypy_compiler_is_utf8_cookie(cookie, cookie_size) == 0) {
+                tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SYNTAX, "unknown source encoding", cookie_line, 1, out_error);
+                return TINYPY_FALSE;
+            }
+            latin1 = 0;
         }
     }
     if (bom != 0 && (latin1 != 0 || ascii != 0)) {

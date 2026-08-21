@@ -38,6 +38,22 @@ tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_object_allocate_checked(tinypy_vm_t *vm, tinypy_type_t *object_type, size_t allocation_size, tinypy_error_t **out_error) {
+    tinypy_value_t *value = (tinypy_value_t *)tinypy_internal_vm_allocate_checked(vm, allocation_size, out_error);
+
+    if (value == NULL) {
+        return NULL;
+    }
+    (void)memset(value, 0, allocation_size);
+    value->ref = 1U;
+    value->type = object_type;
+    TINYPY_INCREF(&object_type->base.base);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    __tinypy_internal_cycle_diagnostics_value_register(vm, value);
+#endif
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
 size_t tinypy_internal_variable_builtin_payload_size(const tinypy_value_t *value) {
     size_t result;
 
@@ -306,17 +322,23 @@ static inline size_t __tinypy_internal_text_allocation_size(tinypy_value_type_e 
     return object_size + byte_size + 1U;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_text_allocate_uninitialized(tinypy_vm_t *vm, tinypy_value_type_e type, size_t byte_size, size_t code_point_count, uint8_t **out_bytes) {
-    size_t allocation_size;
+static tinypy_value_t *__tinypy_internal_text_allocate_uninitialized(tinypy_vm_t *vm, tinypy_value_type_e type, size_t byte_size, size_t code_point_count, uint8_t **out_bytes, tinypy_bool_t checked, tinypy_error_t **out_error) {
+    size_t allocation_size = __tinypy_internal_text_allocation_size(type, byte_size);
     uint8_t *payload;
+    tinypy_value_t *value;
 
-    allocation_size = __tinypy_internal_text_allocation_size(type, byte_size);
     if (allocation_size == 0U) {
+        if (checked != 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "text object is too large", out_error);
+        }
         return NULL;
     }
-
-    tinypy_value_t *value = tinypy_internal_value_allocate(vm, type, allocation_size);
-
+    value = checked != 0
+                ? tinypy_internal_object_allocate_checked(vm, &vm->types[type], allocation_size, out_error)
+                : tinypy_internal_value_allocate(vm, type, allocation_size);
+    if (value == NULL) {
+        return NULL;
+    }
     if (type == TINYPY_VALUE_STRING) {
         TINYPY_SIZED_SIZE(value) = byte_size;
         TINYPY_STRING_OBJECT(value)->interned = byte_size <= 1U ? INT32_C(1) : INT32_C(0);
@@ -330,6 +352,18 @@ tinypy_value_t *tinypy_internal_text_allocate_uninitialized(tinypy_vm_t *vm, tin
     }
     payload[byte_size] = 0U;
     *out_bytes = payload;
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_text_allocate_uninitialized(tinypy_vm_t *vm, tinypy_value_type_e type, size_t byte_size, size_t code_point_count, uint8_t **out_bytes) {
+    tinypy_value_t *value = __tinypy_internal_text_allocate_uninitialized(vm, type, byte_size, code_point_count, out_bytes, TINYPY_FALSE, NULL);
+
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_text_allocate_uninitialized_checked(tinypy_vm_t *vm, tinypy_value_type_e type, size_t byte_size, size_t code_point_count, uint8_t **out_bytes, tinypy_error_t **out_error) {
+    tinypy_value_t *value = __tinypy_internal_text_allocate_uninitialized(vm, type, byte_size, code_point_count, out_bytes, TINYPY_TRUE, out_error);
+
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -433,22 +467,59 @@ tinypy_value_t *tinypy_integer_from_i64(tinypy_vm_t *vm, int64_t value) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size) {
-
+static tinypy_value_t *__tinypy_internal_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_bool_t checked, tinypy_error_t **out_error) {
     if (size == 0U) {
         tinypy_value_t *result = &vm->empty_string_object.base.base;
 
         TINYPY_INCREF(result);
         return result;
     }
+    if (size == 1U) {
+        size_t cache_index = (size_t)*(const uint8_t *)bytes;
+        tinypy_value_t *cached = vm->string_char_cache[cache_index];
 
-    tinypy_value_t *return_value_1 = __tinypy_internal_text_from_bytes(
-        vm,
-        (const uint8_t *)bytes,
-        size,
-        0U,
-        TINYPY_VALUE_STRING);
-    return return_value_1;
+        if (cached != NULL) {
+            TINYPY_INCREF(cached);
+            return cached;
+        }
+        uint8_t *output;
+        tinypy_value_t *result = checked != 0
+                                     ? tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, 1U, 0U, &output, out_error)
+                                     : __tinypy_internal_text_from_bytes(vm, (const uint8_t *)bytes, 1U, 0U, TINYPY_VALUE_STRING);
+
+        if (result == NULL) {
+            return NULL;
+        }
+        if (checked != 0) {
+            output[0] = *(const uint8_t *)bytes;
+        }
+        vm->string_char_cache[cache_index] = result;
+        TINYPY_INCREF(result);
+        return result;
+    }
+    if (checked != 0) {
+        uint8_t *output;
+        tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, size, 0U, &output, out_error);
+
+        if (result != NULL) {
+            (void)memcpy(output, bytes, size);
+        }
+        return result;
+    }
+    tinypy_value_t *result = __tinypy_internal_text_from_bytes(vm, (const uint8_t *)bytes, size, 0U, TINYPY_VALUE_STRING);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size) {
+    tinypy_value_t *result = __tinypy_internal_string_from_bytes(vm, bytes, size, TINYPY_FALSE, NULL);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_string_from_bytes_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_internal_string_from_bytes(vm, bytes, size, TINYPY_TRUE, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size) {

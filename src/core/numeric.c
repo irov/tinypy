@@ -222,19 +222,23 @@ static tinypy_value_t *__tinypy_numeric_cmp_method(tinypy_value_t *function, tin
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "numeric comparison descriptor received an incompatible argument", out_error);
         return NULL;
     }
-    equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
-    if (equal < 0) {
+    tinypy_value_t *comparison = tinypy_internal_compare_builtin_value(left, right, TINYPY_COMPARE_EQUAL, out_error);
+    if (comparison == NULL) {
         return NULL;
     }
+    equal = tinypy_bool_as_i32(comparison);
+    TINYPY_DECREF(comparison);
     if (equal != 0) {
         tinypy_value_t *result = tinypy_integer_from_i64(vm, INT64_C(0));
 
         return result;
     }
-    less = tinypy_compare_bool(left, right, TINYPY_COMPARE_LESS, out_error);
-    if (less < 0) {
+    comparison = tinypy_internal_compare_builtin_value(left, right, TINYPY_COMPARE_LESS, out_error);
+    if (comparison == NULL) {
         return NULL;
     }
+    less = tinypy_bool_as_i32(comparison);
+    TINYPY_DECREF(comparison);
     tinypy_value_t *result = tinypy_integer_from_i64(vm, less != 0 ? INT64_C(-1) : INT64_C(1));
 
     return result;
@@ -572,8 +576,13 @@ static tinypy_value_t *__tinypy_numeric_integer_base_method(tinypy_value_t *func
     tinypy_bool_t octal_zero = base == 8 && size - prefix == 3U && bytes[prefix] == (uint8_t)'0' && bytes[prefix + 1U] == (uint8_t)'o' && bytes[prefix + 2U] == (uint8_t)'0' ? TINYPY_TRUE : TINYPY_FALSE;
     size_t result_size = size + (long_suffix != 0 ? 1U : 0U) - (base == 8 ? 1U : 0U) - (octal_zero != 0 ? 1U : 0U);
     uint8_t *output;
-    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized(vm, TINYPY_VALUE_STRING, result_size, result_size, &output);
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, result_size, result_size, &output, out_error);
     size_t output_index = 0U;
+
+    if (result == NULL) {
+        TINYPY_DECREF(formatted);
+        return NULL;
+    }
 
     if (prefix != 0U) {
         output[output_index++] = (uint8_t)'-';

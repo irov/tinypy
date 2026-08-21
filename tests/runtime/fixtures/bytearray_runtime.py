@@ -91,3 +91,20 @@ assert str(indexed) == "ZA", "index protocol and one-byte strings"
 view = buffer(joined, 2, 3)
 assert str(view) == "cde", "buffer view"
 assert bytearray(view) == bytearray("cde"), "bytearray equality"
+# Python 2 keeps bytearray's identity hash visible to subclasses while the
+# exact mutable builtin remains unhashable.
+try:
+    hash(bytearray("abc"))
+except TypeError:
+    pass
+else:
+    raise AssertionError("bytearray was hashable")
+
+
+class HashableBytearray(bytearray):
+    pass
+
+
+hashable_bytearray = HashableBytearray("abc")
+assert bytearray.__hash__(hashable_bytearray) == object.__hash__(hashable_bytearray)
+assert hash(hashable_bytearray) == object.__hash__(hashable_bytearray)

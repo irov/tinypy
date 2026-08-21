@@ -413,28 +413,25 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
         function_result = tinypy_internal_frozenset_hash(value);
         return function_result;
     case TINYPY_VALUE_WEAKREF: {
-        tinypy_weakref_object_t *weakref = TINYPY_WEAKREF_OBJECT((tinypy_value_t *)value);
-
-        if (weakref->hash_computed == 0) {
-            if (weakref->object == NULL) {
-                tinypy_hash_t return_value_5 = __tinypy_internal_hash_fix((uint64_t)((uintptr_t)value >> 4U));
-                return return_value_5;
-            }
-            tinypy_value_t *previous_raised = TINYPY_VALUE_VM(value)->raised_value;
-            weakref->hash = tinypy_internal_hash_value(weakref->object, out_error);
-            if ((out_error != NULL && *out_error != NULL) || TINYPY_VALUE_VM(value)->raised_value != previous_raised) {
-                return (tinypy_hash_t)0;
-            }
-            weakref->hash_computed = INT32_C(1);
-        }
-        return weakref->hash;
+        tinypy_hash_t return_value_5 = tinypy_internal_weakref_hash((tinypy_value_t *)value, out_error);
+        return return_value_5;
     }
     case TINYPY_VALUE_METHOD: {
         tinypy_method_object_t *method = TINYPY_METHOD_OBJECT((tinypy_value_t *)value);
-        uint64_t function_hash = (uint64_t)((uintptr_t)method->function >> 4U);
-        uint64_t self_hash = method->self != NULL ? (uint64_t)((uintptr_t)method->self >> 4U) : UINT64_C(0);
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+        tinypy_value_t *previous_raised = vm->raised_value;
+        tinypy_hash_t function_hash = tinypy_internal_hash_value(method->function, out_error);
 
-        tinypy_hash_t return_value_6 = __tinypy_internal_hash_fix(function_hash ^ (self_hash * UINT64_C(1000003)));
+        if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
+            return (tinypy_hash_t)0;
+        }
+        tinypy_value_t *self = method->self != NULL ? method->self : &vm->none_object.base;
+        tinypy_hash_t self_hash = tinypy_internal_hash_value(self, out_error);
+
+        if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
+            return (tinypy_hash_t)0;
+        }
+        tinypy_hash_t return_value_6 = __tinypy_internal_hash_fix((uint64_t)function_hash ^ (uint64_t)self_hash);
         return return_value_6;
     }
     case TINYPY_VALUE_LIST:

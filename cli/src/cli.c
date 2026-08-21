@@ -71,8 +71,14 @@ static void *__tinypy_cli_allocate(void *user_data, size_t size, size_t alignmen
     if (alignment < sizeof(void *)) {
         alignment = sizeof(void *);
     }
+    if (size > SIZE_MAX - sizeof(*header) - (alignment - 1U)) {
+        return NULL;
+    }
     allocation_size = sizeof(*header) + size + alignment - 1U;
     base = (uint8_t *)malloc(allocation_size);
+    if (base == NULL) {
+        return NULL;
+    }
     address = ((uintptr_t)(base + sizeof(*header)) + (uintptr_t)alignment - 1U) & ~((uintptr_t)alignment - 1U);
     header = (tinypy_cli_allocation_header_t *)(address - sizeof(*header));
     header->base = base;
@@ -103,6 +109,9 @@ static void __tinypy_cli_deallocate(void *user_data, void *memory, size_t size, 
 static void *__tinypy_cli_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
     void *resized = __tinypy_cli_allocate(user_data, new_size, alignment);
 
+    if (resized == NULL) {
+        return NULL;
+    }
     (void)memcpy(resized, memory, old_size < new_size ? old_size : new_size);
     __tinypy_cli_deallocate(user_data, memory, old_size, alignment);
     return resized;

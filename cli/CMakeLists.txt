@@ -55,6 +55,7 @@ if(BUILD_TESTING)
         struct_runtime
         sys_runtime
         tuple_subclass_runtime
+        type_protocol_runtime
         weakref_runtime
         with_statement
     )

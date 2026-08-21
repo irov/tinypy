@@ -5,6 +5,7 @@
 #define TINYPY_INTERNAL_POOL_ARENA_SIZE (256U * 1024U)
 #define TINYPY_INTERNAL_POOL_SMALL_REQUEST 512U
 #define TINYPY_INTERNAL_POOL_CLASS_COUNT (TINYPY_INTERNAL_POOL_SMALL_REQUEST / TINYPY_INTERNAL_ALIGNMENT)
+#define TINYPY_INTERNAL_POOL_TRANSIENT_CACHE_LIMIT (128U * 1024U)
 
 typedef uint8_t tinypy_pool_block_t;
 
@@ -29,6 +30,11 @@ typedef struct tinypy_pool_arena_t {
     struct tinypy_pool_arena_t *previous_arena;
 } tinypy_pool_arena_t;
 
+typedef struct tinypy_pool_cached_allocation_t {
+    struct tinypy_pool_cached_allocation_t *next;
+    size_t size;
+} tinypy_pool_cached_allocation_t;
+
 typedef struct tinypy_pool_allocator_t {
     tinypy_pool_t used_pools[TINYPY_INTERNAL_POOL_CLASS_COUNT];
     tinypy_pool_arena_t *arenas;
@@ -36,12 +42,18 @@ typedef struct tinypy_pool_allocator_t {
     tinypy_pool_arena_t *usable_arenas;
     uint32_t maximum_arena_count;
     size_t active_arena_count;
+    tinypy_pool_cached_allocation_t *cached_allocations;
+    size_t cached_allocation_bytes;
 } tinypy_pool_allocator_t;
 
 void tinypy_internal_pool_initialize(tinypy_vm_t *vm);
 void tinypy_internal_pool_finalize(tinypy_vm_t *vm);
 void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size);
+void *tinypy_internal_pool_allocate_checked(tinypy_vm_t *vm, size_t size);
 void *tinypy_internal_pool_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size);
+void *tinypy_internal_pool_reallocate_checked(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size);
 void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size);
+void *tinypy_internal_pool_transient_take(tinypy_vm_t *vm, size_t size);
+void tinypy_internal_pool_transient_put(tinypy_vm_t *vm, void *memory, size_t size);
 
 #endif

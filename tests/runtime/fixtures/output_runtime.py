@@ -31,3 +31,4 @@ class CustomRepresentation(object):
 
 
 assert repr(CustomRepresentation()) == "custom-representation"
+assert `CustomRepresentation()` == "custom-representation"

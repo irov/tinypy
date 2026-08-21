@@ -103,8 +103,9 @@ Variable-size objects добавляют signed size и type-specific storage. �
 payload union и allocation prefix отсутствуют.
 
 Вся внешняя память запрашивается только через `tinypy_allocator_t` с размером,
-alignment, allocation tag и user data. Корректный allocation request обязан
-вернуть non-NULL; exhaustion является contract violation.
+alignment и user data. NULL восстанавливается как `MemoryError` только в
+явно fallible операциях с вычисляемым размером; остальные корректные allocation
+requests обязаны вернуть non-NULL.
 
 Runtime allocations размером до 512 bytes обслуживает VM-local pool allocator:
 
@@ -116,10 +117,11 @@ Runtime allocations размером до 512 bytes обслуживает VM-lo
 - allocations больше 512 bytes передаются host allocator напрямую.
 
 Pool state принадлежит конкретной `tinypy_vm_t`; process globals, TLS и locks
-для него не используются. Host видит реальные внешние allocations с tags
-`TINYPY_ALLOC_TAG_POOL_ARENA` и `TINYPY_ALLOC_TAG_POOL_TABLE`, а не каждый
-логический pooled object. `max_heap_bytes` учитывает VM object, arena table,
-полный зарезервированный размер arenas и все прямые allocations.
+для него не используются. Host видит реальные внешние allocations, а не каждый
+логический pooled object. При budget preflight `max_heap_bytes` учитывает VM
+object, arena table, полный зарезервированный размер arenas и все прямые
+allocations. Вычисляемые результаты `long`, text, buffer, list и tuple
+отклоняются с `MemoryError`, если они не помещаются в остаток budget.
 
 Lifetime определяется reference counting. Ациклические объекты уничтожаются
 немедленно. Host обязан освободить owned references и разорвать owning cycles

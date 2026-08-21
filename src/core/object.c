@@ -122,7 +122,7 @@ static tinypy_value_t *__tinypy_object_type_tuple(tinypy_vm_t *vm, tinypy_type_t
 
         items[index] = &item->base.base;
     }
-    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, size);
+    tinypy_value_t *result = mro != 0 ? tinypy_internal_tuple_from_borrowed_items(vm, items, size) : tinypy_tuple_from_items(vm, items, size);
     tinypy_internal_vm_deallocate(vm, items, size * sizeof(*items));
     return result;
 }
@@ -166,15 +166,21 @@ static tinypy_value_t *__tinypy_object_builtin_attribute(tinypy_value_t *value, 
             return return_value_5;
         }
         if (__tinypy_object_name_equal(name, name_size, "__dict__", 8U) != 0) {
-            tinypy_value_t *return_value_6 = __tinypy_object_owned(type->dict);
+            tinypy_value_t *return_value_6 = tinypy_internal_dictproxy_new(vm, type->dict);
             return return_value_6;
         }
         if (__tinypy_object_name_equal(name, name_size, "__bases__", 9U) != 0) {
-            tinypy_value_t *return_value_7 = type->bases != NULL ? __tinypy_object_owned(type->bases) : __tinypy_object_type_tuple(vm, type, INT32_C(0));
+            if (type->bases == NULL) {
+                type->bases = __tinypy_object_type_tuple(vm, type, INT32_C(0));
+            }
+            tinypy_value_t *return_value_7 = __tinypy_object_owned(type->bases);
             return return_value_7;
         }
         if (__tinypy_object_name_equal(name, name_size, "__mro__", 7U) != 0) {
-            tinypy_value_t *return_value_8 = type->mro != NULL ? __tinypy_object_owned(type->mro) : __tinypy_object_type_tuple(vm, type, INT32_C(1));
+            if (type->mro == NULL) {
+                type->mro = __tinypy_object_type_tuple(vm, type, INT32_C(1));
+            }
+            tinypy_value_t *return_value_8 = __tinypy_object_owned(type->mro);
             return return_value_8;
         }
         if (__tinypy_object_name_equal(name, name_size, "__base__", 8U) != 0) {
@@ -448,32 +454,36 @@ static tinypy_value_t *__tinypy_object_builtin_attribute(tinypy_value_t *value, 
             return return_value_58;
         }
         if (__tinypy_object_name_equal(name, name_size, "gi_code", 7U) != 0) {
-            tinypy_value_t *return_value_59 = generator->frame != NULL ? __tinypy_object_owned(TINYPY_FRAME_OBJECT(generator->frame)->code) : tinypy_none_get(vm);
+            tinypy_value_t *return_value_59 = __tinypy_object_owned(generator->code);
             return return_value_59;
         }
         if (__tinypy_object_name_equal(name, name_size, "gi_running", 10U) != 0) {
-            tinypy_value_t *return_value_60 = tinypy_bool_from_i32(vm, generator->running);
+            tinypy_value_t *return_value_60 = tinypy_integer_from_i64(vm, generator->running != 0 ? INT64_C(1) : INT64_C(0));
             return return_value_60;
+        }
+        if (__tinypy_object_name_equal(name, name_size, "__name__", 8U) != 0) {
+            tinypy_value_t *return_value_61 = __tinypy_object_owned(TINYPY_CODE_OBJECT(generator->code)->name);
+            return return_value_61;
         }
     }
     if (kind == TINYPY_VALUE_TRACEBACK) {
         tinypy_traceback_object_t *traceback = TINYPY_TRACEBACK_OBJECT(value);
 
         if (__tinypy_object_name_equal(name, name_size, "tb_next", 7U) != 0) {
-            tinypy_value_t *return_value_61 = __tinypy_object_optional(vm, traceback->next);
-            return return_value_61;
-        }
-        if (__tinypy_object_name_equal(name, name_size, "tb_frame", 8U) != 0) {
-            tinypy_value_t *return_value_62 = __tinypy_object_owned(traceback->frame);
+            tinypy_value_t *return_value_62 = __tinypy_object_optional(vm, traceback->next);
             return return_value_62;
         }
-        if (__tinypy_object_name_equal(name, name_size, "tb_lasti", 8U) != 0) {
-            tinypy_value_t *return_value_63 = tinypy_integer_from_i64(vm, traceback->last_instruction);
+        if (__tinypy_object_name_equal(name, name_size, "tb_frame", 8U) != 0) {
+            tinypy_value_t *return_value_63 = __tinypy_object_owned(traceback->frame);
             return return_value_63;
         }
-        if (__tinypy_object_name_equal(name, name_size, "tb_lineno", 9U) != 0) {
-            tinypy_value_t *return_value_64 = tinypy_integer_from_i64(vm, traceback->line_number);
+        if (__tinypy_object_name_equal(name, name_size, "tb_lasti", 8U) != 0) {
+            tinypy_value_t *return_value_64 = tinypy_integer_from_i64(vm, traceback->last_instruction);
             return return_value_64;
+        }
+        if (__tinypy_object_name_equal(name, name_size, "tb_lineno", 9U) != 0) {
+            tinypy_value_t *return_value_65 = tinypy_integer_from_i64(vm, traceback->line_number);
+            return return_value_65;
         }
     }
     return NULL;
@@ -494,12 +504,105 @@ static tinypy_value_t *__tinypy_object_call_attribute_hook(tinypy_vm_t *vm, tiny
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_object_has_special(tinypy_value_t *value, const char *name, size_t name_size) {
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
-        tinypy_bool_t return_value_1 = tinypy_internal_old_instance_has_special(value, name, name_size);
+static tinypy_value_t *__tinypy_object_cached_special_key(tinypy_vm_t *vm, const char *name, size_t name_size) {
+    if (name_size == 7U) {
+        if (memcmp(name, "__len__", 7U) == 0) {
+            return vm->special_length_key;
+        }
+        if (memcmp(name, "__str__", 7U) == 0) {
+            return vm->special_str_key;
+        }
+        if (memcmp(name, "__new__", 7U) == 0) {
+            return vm->special_new_key;
+        }
+    }
+    else if (name_size == 8U) {
+        if (memcmp(name, "__call__", 8U) == 0) {
+            return vm->special_call_key;
+        }
+        if (memcmp(name, "__iter__", 8U) == 0) {
+            return vm->special_iter_key;
+        }
+        if (memcmp(name, "__hash__", 8U) == 0) {
+            return vm->special_hash_key;
+        }
+        if (memcmp(name, "__repr__", 8U) == 0) {
+            return vm->special_repr_key;
+        }
+        if (memcmp(name, "__exit__", 8U) == 0) {
+            return vm->special_exit_key;
+        }
+        if (memcmp(name, "__init__", 8U) == 0) {
+            return vm->special_init_key;
+        }
+        if (memcmp(name, "__name__", 8U) == 0) {
+            return vm->special_name_key;
+        }
+    }
+    else if (name_size == 9U) {
+        if (memcmp(name, "__index__", 9U) == 0) {
+            return vm->special_index_key;
+        }
+        if (memcmp(name, "__enter__", 9U) == 0) {
+            return vm->special_enter_key;
+        }
+    }
+    else if (name_size == 10U && memcmp(name, "__format__", 10U) == 0) {
+        return vm->special_format_key;
+    }
+    else if (name_size == 11U) {
+        if (memcmp(name, "__getitem__", 11U) == 0) {
+            return vm->special_getitem_key;
+        }
+        if (memcmp(name, "__nonzero__", 11U) == 0) {
+            return vm->special_nonzero_key;
+        }
+        if (memcmp(name, "__setitem__", 11U) == 0) {
+            return vm->special_setitem_key;
+        }
+        if (memcmp(name, "__delitem__", 11U) == 0) {
+            return vm->special_delitem_key;
+        }
+    }
+    else if (name_size == 12U && memcmp(name, "__contains__", 12U) == 0) {
+        return vm->special_contains_key;
+    }
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_object_old_instance_has_special_cached(tinypy_value_t *value, const char *name, size_t name_size) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *key = __tinypy_object_cached_special_key(vm, name, name_size);
+
+    if (key != NULL) {
+        tinypy_bool_t return_value_1 = tinypy_internal_class_lookup_key(vm, TINYPY_OLD_INSTANCE_OBJECT(value)->class_object, key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
         return return_value_1;
     }
-    tinypy_bool_t return_value_2 = tinypy_type_get_attr(value->type, name, name_size) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t return_value_2 = tinypy_internal_old_instance_has_special(value, name, name_size);
+    return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_object_lookup_special_name(tinypy_vm_t *vm, const tinypy_type_t *type, const char *name, size_t name_size) {
+    tinypy_value_t *key = __tinypy_object_cached_special_key(vm, name, name_size);
+    tinypy_bool_t owned = TINYPY_FALSE;
+
+    if (key == NULL) {
+        key = tinypy_string_from_bytes(vm, name, name_size);
+        owned = TINYPY_TRUE;
+    }
+    tinypy_value_t *result = tinypy_internal_type_lookup_key(vm, type, key);
+    if (owned != 0) {
+        TINYPY_DECREF(key);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_object_has_special(tinypy_value_t *value, const char *name, size_t name_size) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_bool_t return_value_1 = __tinypy_object_old_instance_has_special_cached(value, name, name_size);
+        return return_value_1;
+    }
+    tinypy_bool_t return_value_2 = __tinypy_object_lookup_special_name(TINYPY_VALUE_VM(value), value->type, name, name_size) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -510,7 +613,7 @@ tinypy_bool_t tinypy_internal_object_has_special_override(tinypy_value_t *value,
     tinypy_value_type_e kind;
 
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
-        tinypy_bool_t return_value_1 = tinypy_internal_old_instance_has_special(value, name, name_size);
+        tinypy_bool_t return_value_1 = __tinypy_object_old_instance_has_special_cached(value, name, name_size);
         return return_value_1;
     }
     vm = TINYPY_VALUE_VM(value);
@@ -518,17 +621,17 @@ tinypy_bool_t tinypy_internal_object_has_special_override(tinypy_value_t *value,
     if ((size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && value->type == &vm->types[kind]) {
         return TINYPY_FALSE;
     }
-    attribute = tinypy_type_get_attr(value->type, name, name_size);
+    attribute = __tinypy_object_lookup_special_name(vm, value->type, name, name_size);
     if (attribute == NULL) {
         return TINYPY_FALSE;
     }
     if ((size_t)kind < TINYPY_BUILTIN_TYPE_COUNT) {
         tinypy_type_t *builtin_type = &vm->types[kind];
 
-        builtin_attribute = tinypy_type_get_attr(builtin_type, name, name_size);
+        builtin_attribute = __tinypy_object_lookup_special_name(vm, builtin_type, name, name_size);
     }
     else if (kind == TINYPY_VALUE_NATIVE_INSTANCE) {
-        builtin_attribute = tinypy_type_get_attr(&vm->types[TINYPY_VALUE_INSTANCE], name, name_size);
+        builtin_attribute = __tinypy_object_lookup_special_name(vm, &vm->types[TINYPY_VALUE_INSTANCE], name, name_size);
     }
     return attribute != builtin_attribute ? TINYPY_TRUE : TINYPY_FALSE;
 }
@@ -628,10 +731,17 @@ tinypy_value_t *tinypy_internal_object_get_special_key(tinypy_value_t *value, ti
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_get_special(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
-    tinypy_value_t *result = tinypy_internal_object_get_special_key(value, key, out_error);
+    tinypy_value_t *key = __tinypy_object_cached_special_key(vm, name, name_size);
+    tinypy_bool_t owned = TINYPY_FALSE;
 
-    TINYPY_DECREF(key);
+    if (key == NULL) {
+        key = tinypy_string_from_bytes(vm, name, name_size);
+        owned = TINYPY_TRUE;
+    }
+    tinypy_value_t *result = tinypy_internal_object_get_special_key(value, key, out_error);
+    if (owned != 0) {
+        TINYPY_DECREF(key);
+    }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

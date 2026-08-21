@@ -253,7 +253,7 @@ static size_t __tinypy_internal_dict_clean_index(const tinypy_value_t *dict, tin
     return index;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_dict_resize(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_capacity) {
+static tinypy_bool_t __tinypy_internal_dict_resize(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_capacity, tinypy_bool_t checked, tinypy_error_t **out_error) {
     tinypy_dict_entry_t *old_entries = TINYPY_DICT_OBJECT(dict)->table;
     size_t old_capacity = TINYPY_DICT_CAPACITY(dict);
     size_t new_capacity = TINYPY_DICT_INITIAL_CAPACITY;
@@ -262,12 +262,28 @@ static void __tinypy_internal_dict_resize(tinypy_vm_t *vm, tinypy_value_t *dict,
     tinypy_dict_entry_t *iterator_end;
 
     while (new_capacity < minimum_capacity) {
+        if (new_capacity > SIZE_MAX / 2U) {
+            if (checked != 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "dictionary is too large", out_error);
+            }
+            return TINYPY_FALSE;
+        }
         new_capacity *= 2U;
+    }
+    if (new_capacity > SIZE_MAX / sizeof(tinypy_dict_entry_t)) {
+        if (checked != 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "dictionary is too large", out_error);
+        }
+        return TINYPY_FALSE;
     }
     new_size = __tinypy_internal_dict_table_size(new_capacity);
 
-    tinypy_dict_entry_t *new_entries = (tinypy_dict_entry_t *)tinypy_internal_vm_allocate(
-        vm, new_size);
+    tinypy_dict_entry_t *new_entries = checked != 0
+                                           ? (tinypy_dict_entry_t *)tinypy_internal_vm_allocate_checked(vm, new_size, out_error)
+                                           : (tinypy_dict_entry_t *)tinypy_internal_vm_allocate(vm, new_size);
+    if (new_entries == NULL) {
+        return TINYPY_FALSE;
+    }
     (void)memset(new_entries, 0, new_size);
 
     tinypy_dict_entry_t *iterator = old_entries;
@@ -292,7 +308,7 @@ static void __tinypy_internal_dict_resize(tinypy_vm_t *vm, tinypy_value_t *dict,
     TINYPY_DICT_OBJECT(dict)->table = new_entries;
     TINYPY_DICT_OBJECT(dict)->mask = new_capacity - 1U;
     TINYPY_DICT_OBJECT(dict)->fill = TINYPY_DICT_OBJECT(dict)->used;
-    return;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_internal_dict_needs_resize(const tinypy_value_t *dict) {
@@ -302,19 +318,33 @@ static tinypy_bool_t __tinypy_internal_dict_needs_resize(const tinypy_value_t *d
     return fill >= capacity - capacity / 3U;
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_dict_reserve(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_used) {
+static tinypy_bool_t __tinypy_internal_dict_reserve(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_used, tinypy_bool_t checked, tinypy_error_t **out_error) {
     size_t current_capacity = TINYPY_DICT_CAPACITY(dict);
     size_t capacity = current_capacity;
 
     while (minimum_used >= capacity - capacity / 3U) {
         if (capacity > SIZE_MAX / 2U) {
-            return;
+            if (checked != 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "dictionary is too large", out_error);
+            }
+            return TINYPY_FALSE;
         }
         capacity *= 2U;
     }
     if (capacity > current_capacity) {
-        __tinypy_internal_dict_resize(vm, dict, capacity);
+        tinypy_bool_t return_value_1 = __tinypy_internal_dict_resize(vm, dict, capacity, checked, out_error);
+        return return_value_1;
     }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_dict_reserve(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_used) {
+    (void)__tinypy_internal_dict_reserve(vm, dict, minimum_used, TINYPY_FALSE, NULL);
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_dict_reserve_checked(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_used, tinypy_error_t **out_error) {
+    tinypy_bool_t return_value_1 = __tinypy_internal_dict_reserve(vm, dict, minimum_used, TINYPY_TRUE, out_error);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_dict_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
@@ -575,7 +605,12 @@ tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_valu
 
     if (__tinypy_internal_dict_needs_resize(dict)) {
         size_t minimum = TINYPY_DICT_CAPACITY(dict) * 2U;
-        __tinypy_internal_dict_resize(vm, dict, minimum);
+        if (minimum < TINYPY_DICT_CAPACITY(dict) || __tinypy_internal_dict_resize(vm, dict, minimum, TINYPY_TRUE, out_error) == 0) {
+            if (minimum < TINYPY_DICT_CAPACITY(dict)) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "dictionary is too large", out_error);
+            }
+            return TINYPY_FALSE;
+        }
         lookup.index = __tinypy_internal_dict_clean_index(dict, hash);
     }
 
@@ -685,7 +720,10 @@ static tinypy_bool_t __tinypy_internal_dict_update_mapping(tinypy_value_t *targe
     }
     size_t hint = tinypy_internal_iterable_size_hint(keys);
     size_t used = TINYPY_DICT_SIZE(target);
-    tinypy_internal_dict_reserve(vm, target, hint > SIZE_MAX - used ? SIZE_MAX : used + hint);
+    if (tinypy_internal_dict_reserve_checked(vm, target, hint > SIZE_MAX - used ? SIZE_MAX : used + hint, out_error) == 0) {
+        TINYPY_DECREF(keys);
+        return TINYPY_FALSE;
+    }
 
     tinypy_value_t *iterator = tinypy_iter(keys, out_error);
     tinypy_error_t *iteration_error = NULL;
@@ -728,7 +766,9 @@ tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_va
     if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_DICT) {
         size_t used = TINYPY_DICT_SIZE(target);
         size_t source_size = TINYPY_DICT_SIZE(source);
-        tinypy_internal_dict_reserve(vm, target, source_size > SIZE_MAX - used ? SIZE_MAX : used + source_size);
+        if (tinypy_internal_dict_reserve_checked(vm, target, source_size > SIZE_MAX - used ? SIZE_MAX : used + source_size, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
         tinypy_dict_entry_t *entries = TINYPY_DICT_ITERATOR_BEGIN(source);
         size_t capacity = TINYPY_DICT_OBJECT(source)->mask + 1U;
         size_t index;
@@ -758,10 +798,8 @@ tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_va
         return TINYPY_TRUE;
     }
 
-    tinypy_value_t *keys_name = tinypy_string_from_bytes(vm, "keys", 4U);
     tinypy_value_t *keys_method = NULL;
-    int32_t mapping_status = tinypy_internal_object_get_optional_attr_key(source, keys_name, &keys_method, out_error);
-    TINYPY_DECREF(keys_name);
+    int32_t mapping_status = tinypy_internal_object_get_optional_attr_key(source, vm->keys_key, &keys_method, out_error);
     if (mapping_status < 0) {
         return TINYPY_FALSE;
     }
@@ -773,7 +811,9 @@ tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_va
 
     size_t hint = tinypy_internal_iterable_size_hint(source);
     size_t used = TINYPY_DICT_SIZE(target);
-    tinypy_internal_dict_reserve(vm, target, hint > SIZE_MAX - used ? SIZE_MAX : used + hint);
+    if (tinypy_internal_dict_reserve_checked(vm, target, hint > SIZE_MAX - used ? SIZE_MAX : used + hint, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
     tinypy_value_t *iterator = tinypy_iter(source, out_error);
     tinypy_error_t *iteration_error = NULL;
 

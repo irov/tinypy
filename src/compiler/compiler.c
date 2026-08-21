@@ -305,7 +305,7 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
     return (tinypy_value_t *)code;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, tinypy_bool_t source_is_unicode, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, tinypy_bool_t source_is_unicode, tinypy_bool_t source_default_latin1, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
     tinypy_compile_ctx_t ctx;
     tinypy_value_t *code = NULL;
 
@@ -316,6 +316,7 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
     ctx.logical_filename = logical_filename;
     ctx.filename_size = filename_size;
     ctx.source_is_unicode = source_is_unicode;
+    ctx.source_default_latin1 = source_default_latin1;
     ctx.out_error = out_error;
     if (options->limits != NULL) {
         ctx.limits = *options->limits;
@@ -334,7 +335,7 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, 0, logical_filename, filename_size, options, out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, TINYPY_FALSE, TINYPY_FALSE, logical_filename, filename_size, options, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

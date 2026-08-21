@@ -23,14 +23,27 @@ static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allo
     if (out_error == NULL) {
         return;
     }
+    *out_error = NULL;
 
     message_size = __tinypy_internal_string_length(message);
+    if (message_size > SIZE_MAX - sizeof(tinypy_error_t) - 1U) {
+        return;
+    }
     allocation_size = sizeof(tinypy_error_t) + message_size + 1U;
+    if (filename_size > SIZE_MAX - allocation_size - 1U) {
+        return;
+    }
     allocation_size += filename_size + 1U;
+    if (source_line_size > SIZE_MAX - allocation_size - 1U) {
+        return;
+    }
     allocation_size += source_line_size + 1U;
 
     tinypy_error_t *error = (tinypy_error_t *)allocator->allocate(allocator->user_data, allocation_size, TINYPY_INTERNAL_ALIGNMENT);
 
+    if (error == NULL) {
+        return;
+    }
     error->allocator = *allocator;
     error->kind = error_kind;
     error->allocation_size = allocation_size;
@@ -85,7 +98,11 @@ static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, con
     args_items[0] = message_value;
     args_items[1] = location;
     args = tinypy_tuple_from_items(vm, args_items, 2U);
-    tinypy_instance_set_attr(exception, "args", 4U, args);
+    tinypy_error_t *attribute_error = NULL;
+    (void)tinypy_object_set_attr(exception, "args", 4U, args, &attribute_error);
+    if (attribute_error != NULL) {
+        tinypy_error_release(attribute_error);
+    }
     tinypy_instance_set_attr(exception, "filename", 8U, filename_value);
     tinypy_instance_set_attr(exception, "lineno", 6U, line_value);
     tinypy_instance_set_attr(exception, "offset", 6U, offset_value);
@@ -168,6 +185,8 @@ const char *tinypy_error_kind_name(tinypy_error_kind_e error_kind) {
         return "unicode encode error";
     case TINYPY_ERROR_BUFFER:
         return "buffer error";
+    case TINYPY_ERROR_MEMORY:
+        return "memory error";
     default:
         return "unknown error kind";
     }

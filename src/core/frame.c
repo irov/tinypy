@@ -130,6 +130,10 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
         TINYPY_DECREF(frame->locals);
         frame->locals = NULL;
     }
+    if (frame->trace != NULL) {
+        TINYPY_DECREF(frame->trace);
+        frame->trace = NULL;
+    }
     if (vm->frame_free_count < TINYPY_FRAME_FREE_LIST_MAX) {
         tinypy_internal_frame_free_list_push(vm, &frame->base.base);
     }
@@ -222,6 +226,7 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
     else {
         frame->locals = globals;
     }
+    frame->trace = NULL;
     frame->previous_handled_type = vm->handled_type;
     frame->previous_handled_value = vm->handled_value;
     frame->previous_handled_traceback = vm->handled_traceback;
@@ -277,6 +282,9 @@ void tinypy_internal_frame_release_references(tinypy_value_t *value, tinypy_rele
     visit(frame->globals, user_data);
     if (frame->locals != NULL) {
         visit(frame->locals, user_data);
+    }
+    if (frame->trace != NULL) {
+        visit(frame->trace, user_data);
     }
     if (frame->previous_handled_type != NULL) {
         visit(frame->previous_handled_type, user_data);

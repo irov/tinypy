@@ -5,6 +5,12 @@ def values():
 
 
 generator = values()
+assert generator.__name__ == "values"
+assert generator.__repr__() == repr(generator)
+assert generator.gi_code is values.func_code
+assert type(generator.gi_running) is int and generator.gi_running == 0
+for generator_attribute in ("__name__", "gi_code", "gi_frame", "gi_running"):
+    assert generator_attribute in dir(generator)
 first = next(generator)
 second = next(generator)
 third = next(generator)
@@ -12,6 +18,9 @@ try:
     next(generator)
 except StopIteration:
     exhausted = True
+assert generator.gi_code is values.func_code
+assert generator.gi_frame is None
+assert generator.gi_running == 0
 
 comprehension = [value * 2 for value in values()]
 

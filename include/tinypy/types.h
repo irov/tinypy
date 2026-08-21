@@ -52,7 +52,8 @@ typedef enum tinypy_error_kind_e {
     TINYPY_ERROR_META = 20,
     TINYPY_ERROR_UNICODE_DECODE = 21,
     TINYPY_ERROR_UNICODE_ENCODE = 22,
-    TINYPY_ERROR_BUFFER = 23
+    TINYPY_ERROR_BUFFER = 23,
+    TINYPY_ERROR_MEMORY = 24
 } tinypy_error_kind_e;
 //////////////////////////////////////////////////////////////////////////
 /* Unless a parameter is explicitly documented as optional, pointer validity
@@ -61,9 +62,9 @@ typedef enum tinypy_error_kind_e {
  * contracts is undefined behavior.
  * Direct typed accessors never convert a wrong kind, index or scalar range
  * into a status. Pointer-returning operations use NULL for semantic failure
- * and may provide an explicit tinypy_error_t. A host allocator must return
- * non-NULL for every valid non-zero allocation request; exhaustion is a
- * contract violation, not a recoverable status. */
+ * and may provide an explicit tinypy_error_t. NULL from a host allocator is
+ * recoverable only on explicitly checked variable-size language operations;
+ * all other valid non-zero allocation requests must return non-NULL. */
 
 typedef enum tinypy_value_type_e {
     TINYPY_VALUE_INVALID = 0,

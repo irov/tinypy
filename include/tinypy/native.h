@@ -59,6 +59,10 @@ struct tinypy_native_type_spec_t {
     tinypy_native_binary_t reflected_subtract;
     tinypy_native_binary_t reflected_multiply;
     tinypy_native_binary_t reflected_divide;
+    /* Appended layout switches keep older struct_size-based callers binary
+     * compatible. tinypy_native_type_spec_init enables both by default. */
+    tinypy_bool_t has_instance_dict;
+    tinypy_bool_t has_weakrefs;
 };
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize);

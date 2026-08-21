@@ -44,7 +44,7 @@ static inline size_t __tinypy_internal_list_storage_size(size_t capacity) {
     return capacity * sizeof(tinypy_value_t *);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity) {
+static tinypy_bool_t __tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity, tinypy_bool_t checked, tinypy_error_t **out_error) {
     size_t old_size;
     size_t new_size;
     size_t new_capacity;
@@ -52,10 +52,13 @@ void tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t 
     tinypy_value_t **items;
 
     if (minimum_capacity <= TINYPY_LIST_OBJECT(list)->allocated) {
-        return;
+        return TINYPY_TRUE;
     }
     if (minimum_capacity > SIZE_MAX / sizeof(tinypy_value_t *)) {
-        return;
+        if (checked != 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "list is too large", out_error);
+        }
+        return TINYPY_FALSE;
     }
 
     extra = (minimum_capacity >> 3U) + (minimum_capacity < 9U ? 3U : 6U);
@@ -71,22 +74,33 @@ void tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t 
     new_size = __tinypy_internal_list_storage_size(new_capacity);
 
     if (TINYPY_LIST_OBJECT(list)->items == NULL) {
-        items = (tinypy_value_t **)tinypy_internal_vm_allocate(
-            vm,
-            new_size);
+        items = checked != 0
+                    ? (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, new_size, out_error)
+                    : (tinypy_value_t **)tinypy_internal_vm_allocate(vm, new_size);
     }
     else {
         old_size = __tinypy_internal_list_storage_size(
             TINYPY_LIST_OBJECT(list)->allocated);
-        items = (tinypy_value_t **)tinypy_internal_vm_reallocate(
-            vm,
-            TINYPY_LIST_OBJECT(list)->items,
-            old_size,
-            new_size);
+        items = checked != 0
+                    ? (tinypy_value_t **)tinypy_internal_vm_reallocate_checked(vm, TINYPY_LIST_OBJECT(list)->items, old_size, new_size, out_error)
+                    : (tinypy_value_t **)tinypy_internal_vm_reallocate(vm, TINYPY_LIST_OBJECT(list)->items, old_size, new_size);
+    }
+    if (items == NULL) {
+        return TINYPY_FALSE;
     }
     TINYPY_LIST_OBJECT(list)->items = items;
     TINYPY_LIST_OBJECT(list)->allocated = new_capacity;
-    return;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity) {
+    (void)__tinypy_internal_list_reserve(vm, list, minimum_capacity, TINYPY_FALSE, NULL);
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_list_reserve_checked(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity, tinypy_error_t **out_error) {
+    tinypy_bool_t result = __tinypy_internal_list_reserve(vm, list, minimum_capacity, TINYPY_TRUE, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_list_shrink_to_fit(tinypy_vm_t *vm, tinypy_value_t *list) {
@@ -164,23 +178,51 @@ uint64_t tinypy_list_version(const tinypy_value_t *value) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_list_extend(tinypy_value_t *list, tinypy_value_t *const *items, size_t item_count) {
+static tinypy_bool_t __tinypy_list_extend(tinypy_value_t *list, tinypy_value_t *const *items, size_t item_count, tinypy_bool_t checked, tinypy_error_t **out_error) {
     size_t old_size;
     size_t new_size;
     size_t index;
+    size_t source_offset = SIZE_MAX;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
     if (item_count == 0U) {
-        return;
+        return TINYPY_TRUE;
     }
     old_size = TINYPY_SIZED_SIZE(list);
+    if (item_count > SIZE_MAX - old_size || old_size + item_count > SIZE_MAX / sizeof(tinypy_value_t *)) {
+        if (checked != 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "list is too large", out_error);
+        }
+        return TINYPY_FALSE;
+    }
     new_size = old_size + item_count;
+
+    if (TINYPY_LIST_OBJECT(list)->items != NULL) {
+        uintptr_t storage_address = (uintptr_t)TINYPY_LIST_OBJECT(list)->items;
+        uintptr_t source_address = (uintptr_t)items;
+        size_t storage_size = TINYPY_LIST_OBJECT(list)->allocated * sizeof(tinypy_value_t *);
+        size_t source_size = item_count * sizeof(tinypy_value_t *);
+
+        if (source_address >= storage_address && source_address - storage_address <= storage_size && source_size <= storage_size - (source_address - storage_address)) {
+            source_offset = (source_address - storage_address) / sizeof(tinypy_value_t *);
+        }
+    }
 
     for (index = 0U; index < item_count; ++index) {
         TINYPY_INCREF(items[index]);
     }
 
-    tinypy_internal_list_reserve(vm, list, new_size);
+    if ((checked != 0
+             ? tinypy_internal_list_reserve_checked(vm, list, new_size, out_error)
+             : (__tinypy_internal_list_reserve(vm, list, new_size, TINYPY_FALSE, NULL))) == 0) {
+        for (index = 0U; index < item_count; ++index) {
+            TINYPY_DECREF(items[index]);
+        }
+        return TINYPY_FALSE;
+    }
+    if (source_offset != SIZE_MAX) {
+        items = TINYPY_LIST_OBJECT(list)->items + source_offset;
+    }
 
     (void)memcpy(
         TINYPY_LIST_OBJECT(list)->items + TINYPY_SIZED_SIZE(list),
@@ -191,6 +233,17 @@ void tinypy_list_extend(tinypy_value_t *list, tinypy_value_t *const *items, size
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_extend(vm, list, old_size, items, item_count);
 #endif
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_list_extend(tinypy_value_t *list, tinypy_value_t *const *items, size_t item_count) {
+    (void)__tinypy_list_extend(list, items, item_count, TINYPY_FALSE, NULL);
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_list_extend_checked(tinypy_value_t *list, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
+    tinypy_bool_t result = __tinypy_list_extend(list, items, item_count, TINYPY_TRUE, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_list_append(tinypy_value_t *list, tinypy_value_t *item) {
@@ -200,14 +253,29 @@ void tinypy_list_append(tinypy_value_t *list, tinypy_value_t *item) {
     tinypy_list_extend(list, items, 1U);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_list_insert(tinypy_value_t *list, size_t index, tinypy_value_t *item) {
+tinypy_bool_t tinypy_internal_list_append_checked(tinypy_value_t *list, tinypy_value_t *item, tinypy_error_t **out_error) {
+    tinypy_value_t *items[1];
+
+    items[0] = item;
+    tinypy_bool_t return_value_1 = tinypy_internal_list_extend_checked(list, items, 1U, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_list_insert(tinypy_value_t *list, size_t index, tinypy_value_t *item, tinypy_bool_t checked, tinypy_error_t **out_error) {
     size_t move_count;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
 
+    if (TINYPY_SIZED_SIZE(list) == SIZE_MAX ||
+        (checked != 0
+             ? tinypy_internal_list_reserve_checked(vm, list, TINYPY_SIZED_SIZE(list) + 1U, out_error)
+             : __tinypy_internal_list_reserve(vm, list, TINYPY_SIZED_SIZE(list) + 1U, TINYPY_FALSE, NULL)) == 0) {
+        if (checked != 0 && (out_error == NULL || *out_error == NULL)) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "list is too large", out_error);
+        }
+        return TINYPY_FALSE;
+    }
     TINYPY_INCREF(item);
-    tinypy_internal_list_reserve(
-        vm, list, TINYPY_SIZED_SIZE(list) + 1U);
 
     move_count = TINYPY_SIZED_SIZE(list) - index;
     if (move_count != 0U) {
@@ -222,6 +290,17 @@ void tinypy_list_insert(tinypy_value_t *list, size_t index, tinypy_value_t *item
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_insert(vm, list, index, item);
 #endif
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_list_insert(tinypy_value_t *list, size_t index, tinypy_value_t *item) {
+    (void)__tinypy_list_insert(list, index, item, TINYPY_FALSE, NULL);
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_list_insert_checked(tinypy_value_t *list, size_t index, tinypy_value_t *item, tinypy_error_t **out_error) {
+    tinypy_bool_t result = __tinypy_list_insert(list, index, item, TINYPY_TRUE, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_list_set(tinypy_value_t *list, size_t index, tinypy_value_t *item) {

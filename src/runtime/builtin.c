@@ -112,7 +112,10 @@ static tinypy_value_t *__tinypy_builtin_call_items(tinypy_vm_t *vm, tinypy_value
             size_t index;
 
             if (bound_count > sizeof(local_items) / sizeof(local_items[0])) {
-                bound_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, bound_count * sizeof(*bound_items));
+                bound_items = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, bound_count * sizeof(*bound_items), out_error);
+                if (bound_items == NULL) {
+                    return NULL;
+                }
             }
             bound_items[0] = method->self;
             for (index = 0U; index < item_count; ++index) {
@@ -629,6 +632,10 @@ static tinypy_value_t *__tinypy_builtin_range(tinypy_value_t *function, tinypy_v
     int64_t stop;
     int64_t step;
     int64_t current;
+    uint64_t distance;
+    uint64_t step_magnitude;
+    uint64_t length;
+    size_t index;
 
     (void)user_data;
     if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(vm, args, 1U, 3U, out_error) == 0) {
@@ -666,17 +673,43 @@ static tinypy_value_t *__tinypy_builtin_range(tinypy_value_t *function, tinypy_v
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "range step cannot be zero", out_error);
         return NULL;
     }
+    if ((step > 0 && start >= stop) || (step < 0 && start <= stop)) {
+        length = UINT64_C(0);
+    }
+    else {
+        if (step > 0) {
+            distance = (uint64_t)stop - (uint64_t)start;
+            step_magnitude = (uint64_t)step;
+        }
+        else {
+            distance = (uint64_t)start - (uint64_t)stop;
+            step_magnitude = (uint64_t)(-(step + INT64_C(1))) + UINT64_C(1);
+        }
+        length = (distance - UINT64_C(1)) / step_magnitude + UINT64_C(1);
+    }
+    if (length > (uint64_t)PTRDIFF_MAX || length > (uint64_t)SIZE_MAX) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "range has too many items", out_error);
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
+
+    if (tinypy_internal_list_reserve_checked(vm, result, (size_t)length, out_error) == 0) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
     current = start;
-    while ((step > 0 && current < stop) || (step < 0 && current > stop)) {
+    for (index = 0U; index < (size_t)length; ++index) {
         tinypy_value_t *item = tinypy_integer_from_i64(vm, current);
 
-        tinypy_list_append(result, item);
-        TINYPY_DECREF(item);
-        if ((step > 0 && current > INT64_MAX - step) || (step < 0 && current < INT64_MIN - step)) {
-            break;
+        if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
+            TINYPY_DECREF(item);
+            TINYPY_DECREF(result);
+            return NULL;
         }
-        current += step;
+        TINYPY_DECREF(item);
+        if (index + 1U < (size_t)length) {
+            current += step;
+        }
     }
     return result;
 }
@@ -699,13 +732,23 @@ static tinypy_value_t *__tinypy_builtin_sorted(tinypy_value_t *function, tinypy_
         return NULL;
     }
     tinypy_value_t *list = tinypy_list_from_items(vm, NULL, 0U);
+    if (tinypy_internal_list_reserve_checked(vm, list, tinypy_internal_iterable_size_hint(item_2), out_error) == 0) {
+        TINYPY_DECREF(list);
+        TINYPY_DECREF(iterator);
+        return NULL;
+    }
     for (;;) {
         tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
 
         if (item == NULL) {
             break;
         }
-        tinypy_list_append(list, item);
+        if (tinypy_internal_list_append_checked(list, item, out_error) == 0) {
+            TINYPY_DECREF(item);
+            TINYPY_DECREF(list);
+            TINYPY_DECREF(iterator);
+            return NULL;
+        }
         TINYPY_DECREF(item);
     }
     TINYPY_DECREF(iterator);
@@ -801,15 +844,18 @@ static tinypy_value_t *__tinypy_builtin_filter_text(tinypy_vm_t *vm, tinypy_valu
     tinypy_bool_t unicode = TINYPY_VALUE_KIND(input) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
 
     if (TINYPY_VALUE_KIND(predicate) == TINYPY_VALUE_NONE) {
-        tinypy_value_t *return_value_1 = unicode != 0
-            ? tinypy_unicode_from_utf8(vm, (const char *)bytes, byte_size)
-            : tinypy_string_from_bytes(vm, bytes, byte_size);
-        return return_value_1;
+        TINYPY_INCREF(input);
+        return input;
     }
 
-    uint8_t *output = byte_size != 0U ? (uint8_t *)tinypy_internal_vm_allocate(vm, byte_size) : NULL;
+    uint8_t *output = byte_size != 0U ? (uint8_t *)tinypy_internal_vm_allocate_checked(vm, byte_size, out_error) : NULL;
     size_t input_offset = 0U;
     size_t output_size = 0U;
+    size_t output_code_points = 0U;
+
+    if (byte_size != 0U && output == NULL) {
+        return NULL;
+    }
 
     while (input_offset < byte_size) {
         size_t character_size;
@@ -846,12 +892,23 @@ static tinypy_value_t *__tinypy_builtin_filter_text(tinypy_vm_t *vm, tinypy_valu
         if (truth != 0) {
             (void)memcpy(output + output_size, bytes + input_offset, character_size);
             output_size += character_size;
+            output_code_points += 1U;
         }
         input_offset += character_size;
     }
-    tinypy_value_t *result = unicode != 0
-        ? tinypy_unicode_from_utf8(vm, (const char *)output, output_size)
-        : tinypy_string_from_bytes(vm, output, output_size);
+    tinypy_value_t *result;
+
+    if (unicode != 0) {
+        uint8_t *result_bytes;
+
+        result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_UNICODE, output_size, output_code_points, &result_bytes, out_error);
+        if (result != NULL && output_size != 0U) {
+            (void)memcpy(result_bytes, output, output_size);
+        }
+    }
+    else {
+        result = tinypy_internal_string_from_bytes_checked(vm, output, output_size, out_error);
+    }
     if (output != NULL) {
         tinypy_internal_vm_deallocate(vm, output, byte_size);
     }
@@ -882,7 +939,11 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
         return NULL;
     }
     selected = tinypy_list_from_items(vm, NULL, 0U);
-    tinypy_internal_list_reserve(vm, selected, tinypy_internal_iterable_size_hint(input));
+    if (tinypy_internal_list_reserve_checked(vm, selected, tinypy_internal_iterable_size_hint(input), out_error) == 0) {
+        TINYPY_DECREF(selected);
+        TINYPY_DECREF(input_iterator);
+        return NULL;
+    }
     for (;;) {
         tinypy_value_t *item = tinypy_next(input_iterator, &iteration_error);
         int32_t truth;
@@ -912,7 +973,12 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
             return NULL;
         }
         if (truth != 0) {
-            tinypy_list_append(selected, item);
+            if (tinypy_internal_list_append_checked(selected, item, out_error) == 0) {
+                TINYPY_DECREF(item);
+                TINYPY_DECREF(selected);
+                TINYPY_DECREF(input_iterator);
+                return NULL;
+            }
         }
         TINYPY_DECREF(item);
     }
@@ -955,7 +1021,11 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
             return NULL;
         }
         if (total != 0U) {
-            buffer = (uint8_t *)tinypy_internal_vm_allocate(vm, total);
+            buffer = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, total, out_error);
+            if (buffer == NULL) {
+                TINYPY_DECREF(selected);
+                return NULL;
+            }
         }
         iterator = TINYPY_LIST_ITERATOR_BEGIN(selected);
         iterator_end = TINYPY_LIST_ITERATOR_END(selected);
@@ -968,7 +1038,17 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
             }
             output += size;
         }
-        result = TINYPY_VALUE_KIND(input) == TINYPY_VALUE_UNICODE ? tinypy_unicode_from_utf8(vm, (const char *)buffer, total) : tinypy_string_from_bytes(vm, buffer, total);
+        if (TINYPY_VALUE_KIND(input) == TINYPY_VALUE_UNICODE) {
+            uint8_t *result_bytes;
+
+            result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_UNICODE, total, TINYPY_LIST_SIZE(selected), &result_bytes, out_error);
+            if (result != NULL && total != 0U) {
+                (void)memcpy(result_bytes, buffer, total);
+            }
+        }
+        else {
+            result = tinypy_internal_string_from_bytes_checked(vm, buffer, total, out_error);
+        }
         if (total != 0U) {
             tinypy_internal_vm_deallocate(vm, buffer, total);
         }
@@ -1000,10 +1080,19 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
     }
     tinypy_value_t *callable = TINYPY_TUPLE_GET(args, 0U);
     iterable_count = TINYPY_TUPLE_SIZE(args) - 1U;
-    tinypy_value_t **iterators = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*iterators));
-    tinypy_value_t **call_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*call_items));
-    uint8_t *exhausted = (uint8_t *)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*exhausted));
-    uint8_t *yielded = (uint8_t *)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*yielded));
+    if (iterable_count > SIZE_MAX / (2U * sizeof(tinypy_value_t *) + 2U * sizeof(uint8_t))) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "map temporary storage is too large", out_error);
+        return NULL;
+    }
+    size_t scratch_size = iterable_count * (2U * sizeof(tinypy_value_t *) + 2U * sizeof(uint8_t));
+    uint8_t *scratch = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
+    if (scratch == NULL) {
+        return NULL;
+    }
+    tinypy_value_t **iterators = (tinypy_value_t **)scratch;
+    tinypy_value_t **call_items = iterators + iterable_count;
+    uint8_t *exhausted = (uint8_t *)(call_items + iterable_count);
+    uint8_t *yielded = exhausted + iterable_count;
 
     (void)memset(exhausted, 0, iterable_count * sizeof(*exhausted));
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
@@ -1018,15 +1107,16 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
             while (iterable_index != 0U) {
                 TINYPY_DECREF(iterators[--iterable_index]);
             }
-            tinypy_internal_vm_deallocate(vm, yielded, iterable_count * sizeof(*yielded));
-            tinypy_internal_vm_deallocate(vm, exhausted, iterable_count * sizeof(*exhausted));
-            tinypy_internal_vm_deallocate(vm, call_items, iterable_count * sizeof(*call_items));
-            tinypy_internal_vm_deallocate(vm, iterators, iterable_count * sizeof(*iterators));
+            tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
             return NULL;
         }
     }
     result = tinypy_list_from_items(vm, NULL, 0U);
-    tinypy_internal_list_reserve(vm, result, result_hint);
+    if (tinypy_internal_list_reserve_checked(vm, result, result_hint, out_error) == 0) {
+        TINYPY_DECREF(result);
+        result = NULL;
+        goto map_cleanup;
+    }
     for (;;) {
         tinypy_bool_t have_item = TINYPY_FALSE;
         tinypy_value_t *mapped;
@@ -1075,7 +1165,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
                 TINYPY_INCREF(mapped);
             }
             else {
-                mapped = tinypy_tuple_from_items(vm, call_items, iterable_count);
+                mapped = tinypy_internal_tuple_from_items_checked(vm, call_items, iterable_count, out_error);
             }
         }
         else {
@@ -1091,17 +1181,19 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
             result = NULL;
             break;
         }
-        tinypy_list_append(result, mapped);
+        if (tinypy_internal_list_append_checked(result, mapped, out_error) == 0) {
+            TINYPY_DECREF(mapped);
+            TINYPY_DECREF(result);
+            result = NULL;
+            break;
+        }
         TINYPY_DECREF(mapped);
     }
 map_cleanup:
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
         TINYPY_DECREF(iterators[iterable_index]);
     }
-    tinypy_internal_vm_deallocate(vm, yielded, iterable_count * sizeof(*yielded));
-    tinypy_internal_vm_deallocate(vm, exhausted, iterable_count * sizeof(*exhausted));
-    tinypy_internal_vm_deallocate(vm, call_items, iterable_count * sizeof(*call_items));
-    tinypy_internal_vm_deallocate(vm, iterators, iterable_count * sizeof(*iterators));
+    tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1119,8 +1211,17 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
         tinypy_value_t *return_value_1 = tinypy_list_from_items(vm, NULL, 0U);
         return return_value_1;
     }
-    tinypy_value_t **iterators = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*iterators));
-    tinypy_value_t **tuple_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, iterable_count * sizeof(*tuple_items));
+    if (iterable_count > SIZE_MAX / (2U * sizeof(tinypy_value_t *))) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "zip temporary storage is too large", out_error);
+        return NULL;
+    }
+    size_t scratch_size = iterable_count * 2U * sizeof(tinypy_value_t *);
+    tinypy_value_t **scratch = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
+    if (scratch == NULL) {
+        return NULL;
+    }
+    tinypy_value_t **iterators = scratch;
+    tinypy_value_t **tuple_items = iterators + iterable_count;
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, iterable_index);
         size_t hint = tinypy_internal_iterable_size_hint(item);
@@ -1133,13 +1234,16 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
             while (iterable_index != 0U) {
                 TINYPY_DECREF(iterators[--iterable_index]);
             }
-            tinypy_internal_vm_deallocate(vm, tuple_items, iterable_count * sizeof(*tuple_items));
-            tinypy_internal_vm_deallocate(vm, iterators, iterable_count * sizeof(*iterators));
+            tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
             return NULL;
         }
     }
     tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
-    tinypy_internal_list_reserve(vm, result, result_hint);
+    if (tinypy_internal_list_reserve_checked(vm, result, result_hint, out_error) == 0) {
+        TINYPY_DECREF(result);
+        result = NULL;
+        goto zip_cleanup;
+    }
     for (;;) {
         tinypy_value_t *tuple;
 
@@ -1166,19 +1270,28 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
                 goto zip_cleanup;
             }
         }
-        tuple = tinypy_tuple_from_items(vm, tuple_items, iterable_count);
+        tuple = tinypy_internal_tuple_from_items_checked(vm, tuple_items, iterable_count, out_error);
         for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
             TINYPY_DECREF(tuple_items[iterable_index]);
         }
-        tinypy_list_append(result, tuple);
+        if (tuple == NULL) {
+            TINYPY_DECREF(result);
+            result = NULL;
+            goto zip_cleanup;
+        }
+        if (tinypy_internal_list_append_checked(result, tuple, out_error) == 0) {
+            TINYPY_DECREF(tuple);
+            TINYPY_DECREF(result);
+            result = NULL;
+            goto zip_cleanup;
+        }
         TINYPY_DECREF(tuple);
     }
 zip_cleanup:
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
         TINYPY_DECREF(iterators[iterable_index]);
     }
-    tinypy_internal_vm_deallocate(vm, tuple_items, iterable_count * sizeof(*tuple_items));
-    tinypy_internal_vm_deallocate(vm, iterators, iterable_count * sizeof(*iterators));
+    tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1283,15 +1396,11 @@ static tinypy_value_t *__tinypy_builtin_min_max(tinypy_value_t *function, tinypy
         return NULL;
     }
     if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
-        tinypy_value_t *key = tinypy_string_from_bytes(vm, "key", 3U);
-
-        key_function = TINYPY_DICT_SIZE(kwargs) == 1U ? tinypy_dict_get_optional(kwargs, key) : NULL;
+        key_function = TINYPY_DICT_SIZE(kwargs) == 1U ? tinypy_dict_get_optional(kwargs, vm->key_key) : NULL;
         if (key_function == NULL) {
-            TINYPY_DECREF(key);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "min/max received an unexpected keyword", out_error);
             return NULL;
         }
-        TINYPY_DECREF(key);
     }
     tinypy_value_t *source = TINYPY_TUPLE_SIZE(args) == 1U ? TINYPY_TUPLE_GET(args, 0U) : args;
     iterator = tinypy_iter(source, out_error);
@@ -2060,6 +2169,19 @@ static void __tinypy_builtin_dir_add_name(tinypy_vm_t *vm, tinypy_value_t *names
     TINYPY_DECREF(key);
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_builtin_dir_add_class(tinypy_value_t *names, tinypy_value_t *class_value) {
+    tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
+    tinypy_value_t *const *iterator;
+    tinypy_value_t *const *iterator_end;
+
+    __tinypy_builtin_dir_add_dict(names, class_object->dict);
+    iterator = TINYPY_TUPLE_ITERATOR_BEGIN(class_object->bases);
+    iterator_end = TINYPY_TUPLE_ITERATOR_END(class_object->bases);
+    for (; iterator != iterator_end; ++iterator) {
+        __tinypy_builtin_dir_add_class(names, *iterator);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_dir_sort(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_error_t **out_error) {
     tinypy_value_t *sort_function = tinypy_type_get_attr(&vm->types[TINYPY_VALUE_LIST], "sort", 4U);
     tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &result, 1U);
@@ -2132,6 +2254,20 @@ static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_val
             tinypy_value_t *module_dict = tinypy_module_dict(value);
             __tinypy_builtin_dir_add_dict(names, module_dict);
         }
+        else if (kind == TINYPY_VALUE_CLASS) {
+            __tinypy_builtin_dir_add_class(names, value);
+            __tinypy_builtin_dir_add_name(vm, names, "__name__", 8U);
+            __tinypy_builtin_dir_add_name(vm, names, "__bases__", 9U);
+            __tinypy_builtin_dir_add_name(vm, names, "__dict__", 8U);
+        }
+        else if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+            tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(value);
+
+            __tinypy_builtin_dir_add_dict(names, instance->dict);
+            __tinypy_builtin_dir_add_class(names, instance->class_object);
+            __tinypy_builtin_dir_add_name(vm, names, "__class__", 9U);
+            __tinypy_builtin_dir_add_name(vm, names, "__dict__", 8U);
+        }
         else if (kind == TINYPY_VALUE_TYPE) {
             tinypy_type_t *represented_type = (tinypy_type_t *)value;
 
@@ -2171,11 +2307,20 @@ static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_val
         }
     }
     tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
+    if (tinypy_internal_list_reserve_checked(vm, result, TINYPY_DICT_SIZE(names), out_error) == 0) {
+        TINYPY_DECREF(result);
+        TINYPY_DECREF(names);
+        return NULL;
+    }
     iterator = TINYPY_DICT_ITERATOR_BEGIN(names);
     iterator_end = TINYPY_DICT_ITERATOR_END(names);
     for (; iterator != iterator_end; ++iterator) {
         if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-            tinypy_list_append(result, iterator->key);
+            if (tinypy_internal_list_append_checked(result, iterator->key, out_error) == 0) {
+                TINYPY_DECREF(result);
+                TINYPY_DECREF(names);
+                return NULL;
+            }
         }
     }
     TINYPY_DECREF(names);
@@ -2493,8 +2638,14 @@ static tinypy_value_t *__tinypy_builtin_base_repr(tinypy_value_t *function, tiny
     size_t prefix = size >= 3U && bytes[0] == (uint8_t)'-' ? 1U : 0U;
     tinypy_bool_t octal_zero = base == 8 && size - prefix == 3U && bytes[prefix] == (uint8_t)'0' && bytes[prefix + 1U] == (uint8_t)'o' && bytes[prefix + 2U] == (uint8_t)'0' ? TINYPY_TRUE : TINYPY_FALSE;
     size_t output_size = size + (long_suffix != 0 ? 1U : 0U) - (base == 8 ? 1U : 0U) - (octal_zero != 0 ? 1U : 0U);
-    uint8_t *output = (uint8_t *)tinypy_internal_vm_allocate(vm, output_size);
+    uint8_t *output;
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, output_size, output_size, &output, out_error);
     size_t output_index = 0U;
+
+    if (result == NULL) {
+        TINYPY_DECREF(formatted);
+        return NULL;
+    }
 
     if (prefix != 0U) {
         output[output_index++] = (uint8_t)'-';
@@ -2513,8 +2664,6 @@ static tinypy_value_t *__tinypy_builtin_base_repr(tinypy_value_t *function, tiny
     if (long_suffix != 0) {
         output[output_index++] = (uint8_t)'L';
     }
-    tinypy_value_t *result = tinypy_string_from_bytes(vm, output, output_index);
-    tinypy_internal_vm_deallocate(vm, output, output_size);
     TINYPY_DECREF(formatted);
     return result;
 }
@@ -2666,7 +2815,7 @@ static tinypy_value_t *__tinypy_builtin_compile(tinypy_value_t *function, tinypy
     }
     options.flags = (uint32_t)flags;
     options.dont_inherit = dont_inherit != 0 ? 1 : 0;
-    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, source_is_unicode, filename, filename_size, &options, out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, filename, filename_size, &options, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2738,7 +2887,7 @@ static tinypy_value_t *__tinypy_builtin_eval(tinypy_value_t *function, tinypy_va
         options.optimize_level = vm->optimize_level;
     }
     options.dont_inherit = 0;
-    code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, "<string>", 8U, &options, out_error);
+    code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, "<string>", 8U, &options, out_error);
     if (code == NULL) {
         return NULL;
     }

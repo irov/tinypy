@@ -389,10 +389,7 @@ static tinypy_value_t *__tinypy_eval_lookup_name(tinypy_vm_t *vm, tinypy_frame_o
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_default_output(tinypy_vm_t *vm, const char *name, size_t name_size) {
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, "sys", 3U);
-
-    tinypy_value_t *module = tinypy_dict_get(vm->modules, key);
-    TINYPY_DECREF(key);
+    tinypy_value_t *module = tinypy_dict_get(vm->modules, vm->sys_key);
     tinypy_value_t *target = tinypy_module_get_value(module, name, name_size);
     TINYPY_INCREF(target);
     return target;
@@ -1099,7 +1096,10 @@ static tinypy_bool_t __tinypy_eval_verify_code(tinypy_vm_t *vm, tinypy_code_obje
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, tinypy_bytecode_verify_status_name(status), out_error);
         return TINYPY_FALSE;
     }
-    scratch = tinypy_internal_vm_allocate(vm, scratch_size);
+    scratch = tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
+    if (scratch == NULL) {
+        return TINYPY_FALSE;
+    }
     status = tinypy_bytecode_verify(bytecode, bytecode_size, &metadata, NULL, scratch, scratch_size, &result);
     tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
     if (status != TINYPY_BYTECODE_VERIFY_OK) {
@@ -1156,7 +1156,11 @@ static tinypy_bool_t __tinypy_eval_call_append_iterable(tinypy_value_t *argument
         if (item == NULL) {
             break;
         }
-        tinypy_list_append(arguments, item);
+        if (tinypy_internal_list_append_checked(arguments, item, out_error) == 0) {
+            TINYPY_DECREF(item);
+            TINYPY_DECREF(iterator);
+            return TINYPY_FALSE;
+        }
         TINYPY_DECREF(item);
     }
     TINYPY_DECREF(iterator);
@@ -1286,7 +1290,6 @@ static tinypy_value_t *__tinypy_eval_build_class(tinypy_vm_t *vm, tinypy_frame_o
     tinypy_value_t *class_argument_items[3];
     size_t base_count;
     size_t index;
-    tinypy_value_t *metaclass_key;
     size_t name_size;
     const char *name_bytes;
 
@@ -1295,15 +1298,13 @@ static tinypy_value_t *__tinypy_eval_build_class(tinypy_vm_t *vm, tinypy_frame_o
         return NULL;
     }
     base_count = TINYPY_TUPLE_SIZE(bases);
-    metaclass_key = tinypy_string_from_bytes(vm, "__metaclass__", 13U);
-    metaclass = tinypy_dict_get_optional(namespace_dict, metaclass_key);
+    metaclass = tinypy_dict_get_optional(namespace_dict, vm->metaclass_key);
     if (metaclass == NULL) {
-        metaclass = tinypy_dict_get_optional(frame->globals, metaclass_key);
+        metaclass = tinypy_dict_get_optional(frame->globals, vm->metaclass_key);
     }
     if (metaclass != NULL) {
         TINYPY_INCREF(metaclass);
     }
-    TINYPY_DECREF(metaclass_key);
     tinypy_bool_t condition = metaclass == NULL;
     if (condition != 0) {
         tinypy_bool_t condition_2 = base_count == 0U;
@@ -1616,6 +1617,34 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             TINYPY_DECREF(value);
             break;
         }
+        case TINYPY_OP_PRINT_EXPR: {
+            tinypy_value_t *item = __tinypy_eval_pop_owned(frame);
+            tinypy_value_t *sys_module = tinypy_dict_get(vm->modules, vm->sys_key);
+            tinypy_value_t *displayhook = tinypy_module_get_value(sys_module, "displayhook", 11U);
+            tinypy_value_t *display_args = NULL;
+            tinypy_value_t *display_result = NULL;
+
+            if (displayhook == NULL) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "lost sys.displayhook", out_error);
+            }
+            else {
+                TINYPY_INCREF(displayhook);
+                display_args = tinypy_internal_tuple_from_items_checked(vm, &item, 1U, out_error);
+                if (display_args != NULL) {
+                    display_result = tinypy_call(displayhook, display_args, NULL, out_error);
+                    TINYPY_DECREF(display_args);
+                }
+                TINYPY_DECREF(displayhook);
+            }
+            TINYPY_DECREF(item);
+            if (display_result == NULL) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            else {
+                TINYPY_DECREF(display_result);
+            }
+        }
+        break;
         case TINYPY_OP_PRINT_ITEM: {
             tinypy_value_t *item = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *target = __tinypy_eval_default_output(vm, "stdout", 6U);
@@ -1700,7 +1729,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
                     options.optimize_level = vm->optimize_level;
                 }
                 options.dont_inherit = 0;
-                execution_code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, filename, filename_size, &options, out_error);
+                execution_code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, filename, filename_size, &options, out_error);
                 if (execution_code != NULL) {
                     execution_result = tinypy_exec_code(execution_code, execution_globals, execution_locals, out_error);
                     TINYPY_DECREF(execution_code);
@@ -1769,6 +1798,19 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             else {
                 tinypy_value_t *bool_from_i32 = tinypy_bool_from_i32(vm, truth == 0);
                 __tinypy_eval_push_owned(frame, bool_from_i32);
+            }
+        }
+        break;
+        case TINYPY_OP_UNARY_CONVERT: {
+            tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
+            tinypy_value_t *representation = tinypy_object_repr(value, out_error);
+
+            TINYPY_DECREF(value);
+            if (representation == NULL) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            else {
+                __tinypy_eval_push_owned(frame, representation);
             }
         }
         break;
@@ -2305,7 +2347,9 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             tinypy_value_t *item = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *list = __tinypy_eval_peek(frame, argument);
 
-            tinypy_list_append(list, item);
+            if (tinypy_internal_list_append_checked(list, item, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
             TINYPY_DECREF(item);
         }
         break;
@@ -2344,7 +2388,18 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
                 break;
             }
             if (argument != 0U) {
-                unpacked_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, argument * sizeof(*unpacked_items));
+                if (argument > SIZE_MAX / sizeof(*unpacked_items)) {
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "unpack temporary storage is too large", out_error);
+                    TINYPY_DECREF(iterator);
+                    reason = TINYPY_EVAL_REASON_EXCEPTION;
+                    break;
+                }
+                unpacked_items = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, (size_t)argument * sizeof(*unpacked_items), out_error);
+                if (unpacked_items == NULL) {
+                    TINYPY_DECREF(iterator);
+                    reason = TINYPY_EVAL_REASON_EXCEPTION;
+                    break;
+                }
             }
             for (index = 0U; index < argument; ++index) {
                 unpacked_items[index] = tinypy_next(iterator, &iteration_error);

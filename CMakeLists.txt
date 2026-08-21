@@ -63,6 +63,7 @@ add_library(tinypy STATIC
     src/compiler/frontend/optimizer.c
     src/compiler/generated/grammar.c
     src/core/dict.c
+    src/core/dictproxy.c
     src/core/dict_view.c
     src/core/buffer.c
     src/core/bytearray.c
@@ -235,6 +236,7 @@ if(BUILD_TESTING)
     add_test(NAME runtime_eval_frame COMMAND tinypy_core_tests eval_frame)
     add_test(NAME runtime_function_call COMMAND tinypy_core_tests function_call)
     add_test(NAME runtime_operator_numeric COMMAND tinypy_core_tests operator_numeric)
+    add_test(NAME runtime_container_heap_limits COMMAND tinypy_core_tests container_heap_limits)
     add_test(NAME core_native_embedding COMMAND tinypy_core_tests native_embedding)
     add_test(NAME runtime_module_finder COMMAND tinypy_core_tests module_finder)
     add_test(NAME core_cycle_diagnostics COMMAND tinypy_core_tests cycle_diagnostics)

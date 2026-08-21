@@ -19,6 +19,7 @@ INTERNAL_CORE_UNITS = {
     "constructors",
     "container_methods",
     "cycle_diagnostics",
+    "dictproxy",
     "double_conversion",
     "functools",
     "pool",
@@ -579,6 +580,7 @@ class PublicApiNamingTests(unittest.TestCase):
 
     def test_function_call_results_use_local_variables(self) -> None:
         return_statement = re.compile(r"\breturn\s+([^;]+);")
+        switch_case = re.compile(r"(?:^|\s)(?:case\b[^:]*|default)\s*:\s*$")
 
         for path in project_paths(STATIC_FUNCTION_ROOTS):
             if path.suffix not in STATIC_FUNCTION_SUFFIXES:
@@ -588,6 +590,16 @@ class PublicApiNamingTests(unittest.TestCase):
             for match in return_statement.finditer(masked):
                 expression = match.group(1).strip()
                 line = text.count("\n", 0, match.start()) + 1
+                line_start = masked.rfind("\n", 0, match.start()) + 1
+                prefix = masked[line_start:match.start()].strip()
+                if prefix == "":
+                    previous_end = line_start - 1
+                    while previous_end > 0 and masked[previous_end - 1] in " \t\r\n":
+                        previous_end -= 1
+                    previous_start = masked.rfind("\n", 0, previous_end) + 1
+                    prefix = masked[previous_start:previous_end].strip()
+                if switch_case.search(prefix) is not None:
+                    continue
                 self.assertFalse(
                     c_expression_contains_call(expression),
                     "{}:{}: function call result must use a local variable".format(

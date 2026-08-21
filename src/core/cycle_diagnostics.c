@@ -691,10 +691,10 @@ static void __tinypy_debug_cycle_visit_owning_references(tinypy_value_t *value, 
 
     context->diagnostics_references = 0;
     visit(&type->base.base, user_data);
-    if (type->release_references != NULL) {
+    if (type->traverse_references != NULL) {
         context->diagnostics_references = 1;
         context->reference_index = 0U;
-        type->release_references(value, visit, user_data);
+        type->traverse_references(value, visit, user_data);
     }
 }
 //////////////////////////////////////////////////////////////////////////

@@ -65,6 +65,7 @@ typedef struct tinypy_compile_ctx_t {
     size_t source_map_entries;
     uint32_t preprocessor_future_flags;
     tinypy_bool_t source_is_unicode;
+    tinypy_bool_t source_default_latin1;
     tinypy_bool_t source_is_latin1;
     tinypy_bool_t failed;
     tinypy_error_t **out_error;
