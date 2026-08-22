@@ -33,8 +33,16 @@ joined *= 2
 assert joined is joined_alias and str(joined) == "abcdefabcdef", "inplace multiply identity"
 joined = joined[:6]
 joined_alias = joined
-joined += joined
-assert joined is joined_alias and str(joined) == "abcdefabcdef", "self inplace add mutation"
+try:
+    joined += joined
+except BufferError:
+    pass
+else:
+    raise AssertionError("non-empty self inplace add did not preserve its export")
+assert joined is joined_alias and str(joined) == "abcdef", "failed self inplace add mutation"
+empty_alias = empty
+empty += empty
+assert empty is empty_alias and len(empty) == 0, "empty self inplace add"
 joined = joined[:6]
 joined.append(103)
 joined.extend([104, 105])

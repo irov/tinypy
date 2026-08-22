@@ -15,8 +15,29 @@ tinypy_value_t *tinypy_internal_output_stream_new(tinypy_vm_t *vm, tinypy_output
     return &stream->base;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_output_call_write(tinypy_value_t *target, tinypy_value_t *text, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
+    tinypy_value_t *write_method = tinypy_object_get_attr(target, "write", 5U, out_error);
+    tinypy_value_t *args;
+    tinypy_value_t *result;
+
+    if (write_method == NULL) {
+        return TINYPY_FALSE;
+    }
+    args = tinypy_tuple_from_items(vm, &text, 1U);
+    result = tinypy_call(write_method, args, NULL, out_error);
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(write_method);
+    if (result == NULL) {
+        return TINYPY_FALSE;
+    }
+    TINYPY_DECREF(result);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_output_write(tinypy_value_t *target, const void *bytes, size_t size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
+
     TINYPY_CLEAR_ERROR(out_error);
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_OUTPUT_STREAM) {
         tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(target)->channel, bytes, size);
@@ -26,24 +47,42 @@ tinypy_bool_t tinypy_internal_output_write(tinypy_value_t *target, const void *b
         tinypy_output_emit(vm, TINYPY_OUTPUT_STDOUT, bytes, size);
         return TINYPY_TRUE;
     }
-    tinypy_value_t *write_method = tinypy_object_get_attr(target, "write", 5U, out_error);
-    tinypy_value_t *text;
-    tinypy_value_t *args;
-    tinypy_value_t *result;
+    tinypy_value_t *text = tinypy_string_from_bytes(vm, bytes, size);
+    tinypy_bool_t result = __tinypy_internal_output_call_write(target, text, out_error);
 
-    if (write_method == NULL) {
-        return TINYPY_FALSE;
-    }
-    text = tinypy_string_from_bytes(vm, bytes, size);
-    args = tinypy_tuple_from_items(vm, &text, 1U);
-    result = tinypy_call(write_method, args, NULL, out_error);
-    TINYPY_DECREF(args);
     TINYPY_DECREF(text);
-    TINYPY_DECREF(write_method);
-    if (result == NULL) {
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_output_write_value(tinypy_value_t *target, tinypy_value_t *text, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
+    tinypy_value_type_e target_kind = TINYPY_VALUE_KIND(target);
+    tinypy_value_type_e text_kind = TINYPY_VALUE_KIND(text);
+    const void *bytes;
+    size_t size;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (text_kind != TINYPY_VALUE_STRING && text_kind != TINYPY_VALUE_UNICODE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "output write requires a string", out_error);
         return TINYPY_FALSE;
     }
-    TINYPY_DECREF(result);
+    if (target_kind != TINYPY_VALUE_OUTPUT_STREAM && target_kind != TINYPY_VALUE_NONE) {
+        tinypy_bool_t return_value_1 = __tinypy_internal_output_call_write(target, text, out_error);
+        return return_value_1;
+    }
+    if (text_kind == TINYPY_VALUE_STRING) {
+        bytes = tinypy_string_view(text, &size);
+    }
+    else {
+        size_t code_points;
+
+        bytes = tinypy_unicode_utf8_view(text, &size, &code_points);
+    }
+    if (target_kind == TINYPY_VALUE_OUTPUT_STREAM) {
+        tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(target)->channel, bytes, size);
+        return TINYPY_TRUE;
+    }
+    tinypy_output_emit(vm, TINYPY_OUTPUT_STDOUT, bytes, size);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////

@@ -47,6 +47,45 @@ def collect(a, b=0, c=0):
     return a + b + c
 
 
+assert collect(c=3, a=1, b=2) == 6
+
+
+class KeywordCallTarget(object):
+    def collect(self, a, b=0, c=0):
+        return a + b + c
+
+
+assert KeywordCallTarget().collect(c=3, a=1, b=2) == 6
+
+
+def collect_extra(a, **kwargs):
+    return a + kwargs["b"] + kwargs["c"]
+
+
+assert collect_extra(c=3, a=1, b=2) == 6
+
+
+def keyword_generator(a, b=0):
+    yield a + b
+
+
+assert next(keyword_generator(b=2, a=40)) == 42
+
+try:
+    collect(1, a=2)
+except TypeError:
+    pass
+else:
+    raise AssertionError("duplicate positional and keyword argument was accepted")
+
+try:
+    collect(unexpected=1)
+except TypeError:
+    pass
+else:
+    raise AssertionError("unexpected keyword argument was accepted")
+
+
 call_var_result = collect(1, *(2,))
 call_kw_result = collect(1, **{"c": 4})
 call_var_kw_result = collect(1, *(2,), **{"c": 3})
@@ -210,6 +249,52 @@ class CallablePropertyOwner(object):
 
 assert CallablePropertyOwner().value == 42
 assert CallablePropertyOwner.value.__doc__ == "callable getter doc"
+
+
+class PropertySubclass(property):
+    pass
+
+
+def property_subclass_getter(self):
+    "property subclass getter"
+    return 41
+
+
+property_subclass = PropertySubclass(property_subclass_getter)
+property_subclass = property_subclass.setter(lambda self, value: None)
+assert type(property_subclass) is PropertySubclass
+assert property_subclass.fget is property_subclass_getter
+assert property_subclass.fset is not None
+assert property_subclass.__doc__ == "property subclass getter"
+property_subclass.extra = 42
+assert property_subclass.extra == 42
+
+
+class StaticMethodSubclass(staticmethod):
+    pass
+
+
+staticmethod_subclass = StaticMethodSubclass(lambda: 42)
+staticmethod_subclass.extra = 41
+assert staticmethod_subclass.__func__() == 42
+assert staticmethod_subclass.__get__(None, object)() == 42
+assert staticmethod_subclass.extra == 41
+
+
+class ClassMethodSubclass(classmethod):
+    pass
+
+
+classmethod_subclass = ClassMethodSubclass(lambda cls: cls.__name__)
+classmethod_subclass.extra = 40
+
+
+class ClassMethodSubclassOwner(object):
+    value = classmethod_subclass
+
+
+assert classmethod_subclass.__get__(None, ClassMethodSubclassOwner)() == "ClassMethodSubclassOwner"
+assert classmethod_subclass.extra == 40
 
 
 def first_documented_getter(self):

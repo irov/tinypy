@@ -31,6 +31,7 @@ typedef enum tinypy_eval_integer_binary_e
 } tinypy_eval_integer_binary_e;
 
 static tinypy_bool_t __tinypy_eval_push_block(tinypy_frame_object_t *frame, int32_t type, size_t handler);
+static tinypy_value_t *__tinypy_eval_function_items_keywords(tinypy_value_t *function_value, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_error_t **out_error);
 
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_eval_stack_depth(const tinypy_frame_object_t *frame) {
@@ -182,7 +183,7 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
     }
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_attribute_lookup_cache_entry_t *cache = &TINYPY_CODE_OBJECT(code)->attribute_cache[name_index & (TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE - 1U)];
-    if (cache->epoch == vm->type_lookup_cache_epoch && cache->name_index == name_index && cache->type == object->type) {
+    if (cache->epoch == object->type->version_tag && cache->name_index == name_index && cache->type == object->type) {
         if (cache->data_descriptor != 0) {
             tinypy_value_t *return_value_3 = tinypy_internal_descriptor_get_value(vm, cache->attribute, object, object->type, out_error);
             return return_value_3;
@@ -230,7 +231,7 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         cache->dict_key = NULL;
     }
     attribute = tinypy_internal_type_lookup_key(vm, object->type, name);
-    cache->epoch = vm->type_lookup_cache_epoch;
+    cache->epoch = object->type->version_tag;
     cache->name_index = name_index;
     cache->type = object->type;
     cache->attribute = attribute;
@@ -272,7 +273,7 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
         return return_value_1;
     }
     cache = &TINYPY_CODE_OBJECT(code)->attribute_store_cache[name_index & (TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE - 1U)];
-    if (cache->epoch == vm->type_lookup_cache_epoch && cache->name_index == name_index && cache->type == object->type && cache->direct_instance_dict != 0) {
+    if (cache->epoch == object->type->version_tag && cache->name_index == name_index && cache->type == object->type && cache->direct_instance_dict != 0) {
         TINYPY_CLEAR_ERROR(out_error);
         dict_slot = tinypy_internal_object_dict_slot(object);
         if (*dict_slot == NULL) {
@@ -281,7 +282,7 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
         tinypy_dict_set(*dict_slot, name, value);
         return TINYPY_TRUE;
     }
-    cache->epoch = vm->type_lookup_cache_epoch;
+    cache->epoch = object->type->version_tag;
     cache->name_index = name_index;
     cache->type = object->type;
     cache->direct_instance_dict = TINYPY_FALSE;
@@ -400,12 +401,20 @@ static tinypy_bool_t __tinypy_eval_print_whitespace(uint8_t character) {
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_print_item(tinypy_value_t *target, tinypy_value_t *item, tinypy_error_t **out_error) {
-    tinypy_value_t *text = tinypy_object_str(item, out_error);
+    tinypy_value_type_e item_kind = TINYPY_VALUE_KIND(item);
+    tinypy_value_t *text;
     const uint8_t *bytes;
     size_t size;
 
-    if (text == NULL) {
-        return TINYPY_FALSE;
+    if (item_kind == TINYPY_VALUE_STRING || item_kind == TINYPY_VALUE_UNICODE) {
+        text = item;
+        TINYPY_INCREF(text);
+    }
+    else {
+        text = tinypy_object_str(item, out_error);
+        if (text == NULL) {
+            return TINYPY_FALSE;
+        }
     }
     bytes = TINYPY_TEXT_BYTES(text);
     size = TINYPY_TEXT_BYTE_SIZE(text);
@@ -415,7 +424,7 @@ static tinypy_bool_t __tinypy_eval_print_item(tinypy_value_t *target, tinypy_val
             return TINYPY_FALSE;
         }
     }
-    if (tinypy_internal_output_write(target, bytes, size, out_error) == 0) {
+    if (tinypy_internal_output_write_value(target, text, out_error) == 0) {
         TINYPY_DECREF(text);
         return TINYPY_FALSE;
     }
@@ -1235,7 +1244,8 @@ static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_ob
     else if (direct_function == 0 && direct_bound_function == 0) {
         args = tinypy_tuple_from_items(vm, first + 1U, positional_count);
     }
-    if (keyword_count != 0U || has_var_keywords != 0) {
+    if ((keyword_count != 0U || has_var_keywords != 0)
+        && ((direct_function == 0 && direct_bound_function == 0) || has_var_keywords != 0)) {
         kwargs = tinypy_dict_new(vm);
         for (index = 0U; index < keyword_count; ++index) {
             tinypy_value_t *key = first[1U + positional_count + index * 2U];
@@ -1258,14 +1268,17 @@ static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_ob
         }
     }
     if (direct_function != 0) {
-        result = tinypy_internal_eval_function_items(first[0], first + 1U, positional_count, kwargs, out_error);
+        tinypy_value_t *const *keyword_items = first + 1U + positional_count;
+
+        result = __tinypy_eval_function_items_keywords(first[0], first + 1U, positional_count, kwargs, kwargs == NULL ? keyword_items : NULL, kwargs == NULL ? keyword_count : 0U, out_error);
     }
     else if (direct_bound_function != 0) {
         tinypy_value_t *bound_method = first[0];
         tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(first[0]);
+        tinypy_value_t *const *keyword_items = first + 1U + positional_count;
 
         first[0] = method->self;
-        result = tinypy_internal_eval_function_items(method->function, first, positional_count + 1U, kwargs, out_error);
+        result = __tinypy_eval_function_items_keywords(method->function, first, positional_count + 1U, kwargs, kwargs == NULL ? keyword_items : NULL, kwargs == NULL ? keyword_count : 0U, out_error);
         first[0] = bound_method;
     }
     else {
@@ -1350,7 +1363,56 @@ static tinypy_value_t *__tinypy_eval_build_class(tinypy_vm_t *vm, tinypy_frame_o
     return class_value;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_eval_parameter_indices(tinypy_vm_t *vm, tinypy_value_t *code) {
+    tinypy_code_object_t *code_object = TINYPY_CODE_OBJECT(code);
+    size_t arg_count = (size_t)TINYPY_CODE_ARG_COUNT(code);
+    size_t index;
+
+    if (code_object->parameter_indices != NULL) {
+        return code_object->parameter_indices;
+    }
+    code_object->parameter_indices = tinypy_dict_new(vm);
+    for (index = 0U; index < arg_count; ++index) {
+        tinypy_value_t *parameter_index = tinypy_integer_from_i64(vm, (int64_t)index);
+
+        tinypy_dict_set(code_object->parameter_indices, TINYPY_TUPLE_GET(TINYPY_CODE_VARNAMES(code), index), parameter_index);
+        TINYPY_DECREF(parameter_index);
+    }
+    return code_object->parameter_indices;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_eval_bind_keyword(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_function_object_t *function, tinypy_value_t *extra_keywords, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *parameter_index_value;
+
+    if (TINYPY_VALUE_KIND(key) != TINYPY_VALUE_STRING) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keyword name is not a string", out_error);
+        return TINYPY_FALSE;
+    }
+    parameter_index_value = tinypy_dict_get_optional(__tinypy_eval_parameter_indices(vm, function->code), key);
+    if (parameter_index_value != NULL) {
+        size_t parameter_index = (size_t)TINYPY_INTEGER_VALUE(parameter_index_value);
+
+        if (frame->locals_plus[parameter_index] != NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function received multiple values for one argument", out_error);
+            return TINYPY_FALSE;
+        }
+        frame->locals_plus[parameter_index] = value;
+        TINYPY_INCREF(value);
+        return TINYPY_TRUE;
+    }
+    if (extra_keywords != NULL) {
+        if (tinypy_dict_contains(extra_keywords, key) != 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function received duplicate keyword arguments", out_error);
+            return TINYPY_FALSE;
+        }
+        tinypy_dict_set(extra_keywords, key, value);
+        return TINYPY_TRUE;
+    }
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function received an unexpected keyword argument", out_error);
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_error_t **out_error) {
     size_t arg_count = (size_t)TINYPY_CODE_ARG_COUNT(function->code);
     size_t positional_count = item_count;
     size_t default_count = function->defaults != NULL ? TINYPY_TUPLE_SIZE(function->defaults) : 0U;
@@ -1385,39 +1447,17 @@ static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_
         tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(kwargs);
 
         for (; iterator != iterator_end; ++iterator) {
-            size_t parameter_index;
-            tinypy_bool_t found = TINYPY_FALSE;
-
             if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
                 continue;
             }
-            if (TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keyword name is not a string", out_error);
+            if (__tinypy_eval_bind_keyword(vm, frame, function, extra_keywords, iterator->key, iterator->value, out_error) == 0) {
                 return TINYPY_FALSE;
             }
-            for (parameter_index = 0U; parameter_index < arg_count; ++parameter_index) {
-                tinypy_value_t *code_varnames = TINYPY_CODE_VARNAMES(function->code);
-                tinypy_value_t *item = TINYPY_TUPLE_GET(code_varnames, parameter_index);
-                if (tinypy_equal(iterator->key, item) != 0) {
-                    found = 1;
-                    break;
-                }
-            }
-            if (found != 0) {
-                if (frame->locals_plus[parameter_index] != NULL) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function received multiple values for one argument", out_error);
-                    return TINYPY_FALSE;
-                }
-                frame->locals_plus[parameter_index] = iterator->value;
-                TINYPY_INCREF(iterator->value);
-            }
-            else if (extra_keywords != NULL) {
-                tinypy_dict_set(extra_keywords, iterator->key, iterator->value);
-            }
-            else {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function received an unexpected keyword argument", out_error);
-                return TINYPY_FALSE;
-            }
+        }
+    }
+    for (index = 0U; index < keyword_count; ++index) {
+        if (__tinypy_eval_bind_keyword(vm, frame, function, extra_keywords, keyword_items[index * 2U], keyword_items[index * 2U + 1U], out_error) == 0) {
+            return TINYPY_FALSE;
         }
     }
 
@@ -1435,11 +1475,11 @@ static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_eval_bind_exact_positional(tinypy_frame_object_t *frame, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs) {
+static tinypy_bool_t __tinypy_eval_bind_exact_positional(tinypy_frame_object_t *frame, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, size_t keyword_count) {
     size_t arg_count = (size_t)TINYPY_CODE_ARG_COUNT(function->code);
     size_t index;
 
-    if (item_count != arg_count || kwargs != NULL || (TINYPY_CODE_FLAGS(function->code) & (TINYPY_CODE_VARARGS | TINYPY_CODE_VAR_KEYWORDS)) != 0) {
+    if (item_count != arg_count || kwargs != NULL || keyword_count != 0U || (TINYPY_CODE_FLAGS(function->code) & (TINYPY_CODE_VARARGS | TINYPY_CODE_VAR_KEYWORDS)) != 0) {
         return TINYPY_FALSE;
     }
     for (index = 0U; index < arg_count; ++index) {
@@ -1494,7 +1534,7 @@ static void __tinypy_eval_initialize_cells(tinypy_vm_t *vm, tinypy_frame_object_
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error) {
     tinypy_vm_t *vm;
     tinypy_value_t *frame_value;
     tinypy_frame_object_t *frame;
@@ -1564,7 +1604,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
         frame_value = function != NULL ? tinypy_internal_frame_new_function(code, globals) : tinypy_frame_new(code, globals, locals);
         frame = TINYPY_FRAME_OBJECT(frame_value);
         if (function != NULL) {
-            if (__tinypy_eval_bind_exact_positional(frame, function, items, item_count, kwargs) == 0 && __tinypy_eval_bind_arguments(vm, frame, function, items, item_count, kwargs, out_error) == 0) {
+            if (__tinypy_eval_bind_exact_positional(frame, function, items, item_count, kwargs, keyword_count) == 0 && __tinypy_eval_bind_arguments(vm, frame, function, items, item_count, kwargs, keyword_items, keyword_count, out_error) == 0) {
                 TINYPY_DECREF(frame_value);
                 return NULL;
             }
@@ -1701,7 +1741,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exec globals and locals must be dictionaries", out_error);
             }
             else if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_CODE) {
-                execution_result = __tinypy_eval_code_bound(source, execution_globals, execution_locals, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, NULL, out_error);
+                execution_result = __tinypy_eval_code_bound(source, execution_globals, execution_locals, NULL, NULL, 0U, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, out_error);
             }
             else if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(source) == TINYPY_VALUE_UNICODE) {
                 tinypy_compile_options_t options;
@@ -2727,7 +2767,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
 tinypy_value_t *tinypy_eval_code(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
     tinypy_internal_exception_clear_raised(vm);
-    tinypy_value_t *return_value_1 = __tinypy_eval_code_bound(code, globals, locals, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, NULL, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_eval_code_bound(code, globals, locals, NULL, NULL, 0U, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2748,6 +2788,11 @@ tinypy_value_t *tinypy_internal_eval_function(tinypy_value_t *function_value, ti
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_eval_function_items(tinypy_value_t *function_value, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_value_t *return_value_1 = __tinypy_eval_function_items_keywords(function_value, items, item_count, kwargs, NULL, 0U, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_eval_function_items_keywords(tinypy_value_t *function_value, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_error_t **out_error) {
     tinypy_value_t *result;
 
     tinypy_function_object_t *function = TINYPY_FUNCTION_OBJECT(function_value);
@@ -2756,7 +2801,7 @@ tinypy_value_t *tinypy_internal_eval_function_items(tinypy_value_t *function_val
         tinypy_value_t *frame_value = tinypy_internal_frame_new_function(function->code, function->globals);
         tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT(frame_value);
 
-        if (__tinypy_eval_bind_exact_positional(frame, function, items, item_count, kwargs) == 0 && __tinypy_eval_bind_arguments(vm, frame, function, items, item_count, kwargs, out_error) == 0) {
+        if (__tinypy_eval_bind_exact_positional(frame, function, items, item_count, kwargs, keyword_count) == 0 && __tinypy_eval_bind_arguments(vm, frame, function, items, item_count, kwargs, keyword_items, keyword_count, out_error) == 0) {
             TINYPY_DECREF(frame_value);
             return NULL;
         }
@@ -2783,12 +2828,12 @@ tinypy_value_t *tinypy_internal_eval_function_items(tinypy_value_t *function_val
         TINYPY_DECREF(frame_value);
     }
     else {
-        result = __tinypy_eval_code_bound(function->code, function->globals, NULL, function, items, item_count, kwargs, NULL, NULL, NULL, NULL, NULL, out_error);
+        result = __tinypy_eval_code_bound(function->code, function->globals, NULL, function, items, item_count, kwargs, keyword_items, keyword_count, NULL, NULL, NULL, NULL, NULL, out_error);
     }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_eval_generator_resume(tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = __tinypy_eval_code_bound(NULL, NULL, NULL, NULL, NULL, 0U, NULL, generator, send_value, throw_value, throw_traceback, out_yielded, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_eval_code_bound(NULL, NULL, NULL, NULL, NULL, 0U, NULL, NULL, 0U, generator, send_value, throw_value, throw_traceback, out_yielded, out_error);
     return return_value_1;
 }

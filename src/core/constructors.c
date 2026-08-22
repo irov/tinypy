@@ -43,6 +43,88 @@ static tinypy_bool_t __tinypy_constructor_has_immutable_builtin_layout(tinypy_va
     return kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_constructor_abstract_error(tinypy_type_t *type, tinypy_error_t **out_error) {
+    static const char prefix[] = "Can't instantiate abstract class ";
+    static const char suffix[] = " with abstract methods ";
+    tinypy_vm_t *vm = type->vm;
+    size_t prefix_size = sizeof(prefix) - 1U;
+    size_t suffix_size = sizeof(suffix) - 1U;
+    tinypy_value_t *abstract_methods;
+    tinypy_value_t *arguments;
+    tinypy_value_t *names;
+    tinypy_value_t *sort_method;
+    tinypy_value_t *sort_result;
+    tinypy_value_t *separator;
+    tinypy_value_t *join_method;
+    tinypy_value_t *joined;
+    const uint8_t *joined_bytes;
+    size_t joined_size;
+    size_t message_size;
+    char *message;
+
+    abstract_methods = tinypy_object_get_attr(&type->base.base, "__abstractmethods__", 19U, out_error);
+    if (abstract_methods == NULL) {
+        return;
+    }
+    arguments = tinypy_tuple_from_items(vm, &abstract_methods, 1U);
+    names = tinypy_internal_list_create(&vm->types[TINYPY_VALUE_LIST], arguments, NULL, out_error);
+    TINYPY_DECREF(arguments);
+    TINYPY_DECREF(abstract_methods);
+    if (names == NULL) {
+        return;
+    }
+    sort_method = tinypy_object_get_attr(names, "sort", 4U, out_error);
+    if (sort_method == NULL) {
+        TINYPY_DECREF(names);
+        return;
+    }
+    arguments = tinypy_tuple_from_items(vm, NULL, 0U);
+    sort_result = tinypy_call(sort_method, arguments, NULL, out_error);
+    TINYPY_DECREF(arguments);
+    TINYPY_DECREF(sort_method);
+    if (sort_result == NULL) {
+        TINYPY_DECREF(names);
+        return;
+    }
+    TINYPY_DECREF(sort_result);
+    separator = tinypy_string_from_bytes(vm, ", ", 2U);
+    join_method = tinypy_object_get_attr(separator, "join", 4U, out_error);
+    TINYPY_DECREF(separator);
+    if (join_method == NULL) {
+        TINYPY_DECREF(names);
+        return;
+    }
+    arguments = tinypy_tuple_from_items(vm, &names, 1U);
+    joined = tinypy_call(join_method, arguments, NULL, out_error);
+    TINYPY_DECREF(arguments);
+    TINYPY_DECREF(join_method);
+    TINYPY_DECREF(names);
+    if (joined == NULL) {
+        return;
+    }
+    joined_bytes = TINYPY_TEXT_BYTES(joined);
+    joined_size = TINYPY_TEXT_BYTE_SIZE(joined);
+    if (type->name_size > SIZE_MAX - prefix_size - suffix_size - 1U || joined_size > SIZE_MAX - prefix_size - type->name_size - suffix_size - 1U) {
+        TINYPY_DECREF(joined);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Can't instantiate abstract class", out_error);
+        return;
+    }
+    message_size = prefix_size + type->name_size + suffix_size + joined_size;
+    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U);
+    (void)memcpy(message, prefix, prefix_size);
+    if (type->name_size != 0U) {
+        (void)memcpy(message + prefix_size, type->name, type->name_size);
+    }
+    (void)memcpy(message + prefix_size + type->name_size, suffix, suffix_size);
+    if (joined_size != 0U) {
+        (void)memcpy(message + prefix_size + type->name_size + suffix_size, joined_bytes, joined_size);
+    }
+    message[message_size] = '\0';
+    TINYPY_DECREF(joined);
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, message, out_error);
+    tinypy_internal_vm_deallocate(vm, message, message_size + 1U);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_tail_arguments(tinypy_vm_t *vm, tinypy_value_t *args) {
     size_t size = TINYPY_TUPLE_SIZE(args);
 
@@ -1302,6 +1384,10 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ cannot create this type", out_error);
         return NULL;
     }
+    if ((class_type->flags & TINYPY_TYPE_FLAG_ABSTRACT) != 0U) {
+        __tinypy_constructor_abstract_error(class_type, out_error);
+        return NULL;
+    }
     tinypy_value_type_e layout_kind = class_type->layout_kind;
     if (__tinypy_constructor_has_immutable_builtin_layout(layout_kind) != 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ cannot create immutable builtin instances", out_error);
@@ -1337,6 +1423,23 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
         }
     }
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_basestring_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)args;
+    (void)kwargs;
+    (void)user_data;
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "The basestring type cannot be instantiated", out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_basestring_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    (void)args;
+    (void)kwargs;
+    tinypy_internal_make_vm_error(type->vm, TINYPY_ERROR_TYPE, "The basestring type cannot be instantiated", out_error);
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -2297,6 +2400,7 @@ void tinypy_internal_initialize_copy_reg_module(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_constructor_types(tinypy_vm_t *vm) {
+    vm->types[TINYPY_VALUE_INVALID].create = __tinypy_constructor_basestring_create;
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__new__", 7U, __tinypy_constructor_type_new_method, INT32_C(1));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__init__", 8U, __tinypy_constructor_type_init_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__call__", 8U, __tinypy_constructor_type_call_method, INT32_C(0));
@@ -2311,6 +2415,7 @@ void tinypy_internal_initialize_constructor_types(tinypy_vm_t *vm) {
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "mro", 3U, __tinypy_constructor_type_mro_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_TYPE], "__subclasses__", 14U, __tinypy_constructor_type_subclasses_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_INSTANCE], "__new__", 7U, __tinypy_constructor_object_new_method, INT32_C(1));
+    __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_INVALID], "__new__", 7U, __tinypy_constructor_basestring_new_method, INT32_C(1));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_INSTANCE], "__init__", 8U, __tinypy_constructor_object_init_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_INSTANCE], "__getattribute__", 16U, __tinypy_constructor_object_getattribute_method, INT32_C(0));
     __tinypy_constructor_add_method(&vm->types[TINYPY_VALUE_INSTANCE], "__setattr__", 11U, __tinypy_constructor_object_setattr_method, INT32_C(0));

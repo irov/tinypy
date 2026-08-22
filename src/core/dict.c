@@ -108,6 +108,28 @@ restart:
             tinypy_value_t *stored_key = entry->key;
             tinypy_bool_t equal;
 
+            if (stored_key == key) {
+                out_lookup->index = index;
+                out_lookup->found = 1;
+                return TINYPY_TRUE;
+            }
+            if (stored_key->type == key->type
+                && (stored_key->type == &vm->types[TINYPY_VALUE_INTEGER]
+                    || stored_key->type == &vm->types[TINYPY_VALUE_BOOL]
+                    || stored_key->type == &vm->types[TINYPY_VALUE_STRING]
+                    || stored_key->type == &vm->types[TINYPY_VALUE_UNICODE])) {
+                if (__tinypy_internal_dict_keys_equal(vm, stored_key, key, &equal, out_error) == 0) {
+                    return TINYPY_FALSE;
+                }
+                if (equal != 0) {
+                    out_lookup->index = index;
+                    out_lookup->found = 1;
+                    return TINYPY_TRUE;
+                }
+                index = __tinypy_internal_dict_probe_next(index, perturb, mask);
+                perturb >>= TINYPY_DICT_PERTURB_SHIFT;
+                continue;
+            }
             TINYPY_INCREF(stored_key);
             tinypy_bool_t compared = __tinypy_internal_dict_keys_equal(vm, stored_key, key, &equal, out_error);
             TINYPY_DECREF(stored_key);
@@ -390,6 +412,7 @@ void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *ri
     tinypy_dict_entry_t *table = left_dict->table;
     uint64_t mutation_version = left_dict->mutation_version;
     tinypy_bool_t type_dictionary = left_dict->type_dictionary;
+    tinypy_type_t *type_owner = left_dict->type_owner;
 
     if (left_small != 0) {
         (void)memcpy(left_small_table, left_dict->small_table, sizeof(left_small_table));
@@ -402,6 +425,7 @@ void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *ri
     left_dict->mask = right_dict->mask;
     left_dict->mutation_version = right_dict->mutation_version;
     left_dict->type_dictionary = right_dict->type_dictionary;
+    left_dict->type_owner = right_dict->type_owner;
     if (right_small != 0) {
         (void)memcpy(left_dict->small_table, right_small_table, sizeof(right_small_table));
         left_dict->table = left_dict->small_table;
@@ -414,6 +438,7 @@ void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *ri
     right_dict->mask = mask;
     right_dict->mutation_version = mutation_version;
     right_dict->type_dictionary = type_dictionary;
+    right_dict->type_owner = type_owner;
     if (left_small != 0) {
         (void)memcpy(right_dict->small_table, left_small_table, sizeof(left_small_table));
         right_dict->table = right_dict->small_table;
@@ -587,7 +612,7 @@ tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_valu
         return TINYPY_FALSE;
     }
     if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-        tinypy_internal_type_lookup_cache_invalidate(vm);
+        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
     }
 
     if (lookup.found != 0) {
@@ -880,7 +905,7 @@ tinypy_bool_t tinypy_internal_dict_delete_index(tinypy_vm_t *vm, tinypy_value_t 
         return TINYPY_FALSE;
     }
     if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-        tinypy_internal_type_lookup_cache_invalidate(vm);
+        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
     }
     owned_key = entry->key;
     owned_value = entry->value;
@@ -926,7 +951,7 @@ void tinypy_dict_clear(tinypy_value_t *dict) {
         return;
     }
     if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-        tinypy_internal_type_lookup_cache_invalidate(vm);
+        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
     }
 
     entries = TINYPY_DICT_OBJECT(dict)->table;

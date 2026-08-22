@@ -103,6 +103,7 @@ static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, con
     if (attribute_error != NULL) {
         tinypy_error_release(attribute_error);
     }
+    tinypy_instance_set_attr(exception, "msg", 3U, message_value);
     tinypy_instance_set_attr(exception, "filename", 8U, filename_value);
     tinypy_instance_set_attr(exception, "lineno", 6U, line_value);
     tinypy_instance_set_attr(exception, "offset", 6U, offset_value);

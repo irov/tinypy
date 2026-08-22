@@ -362,7 +362,12 @@ assert [0, 1, 2, 3][index_value] == 2
 assert [0, 1, 2, 3][:index_value] == [0, 1]
 assert "a" * index_value == "aa"
 assert "banana".find("na", index_value) == 2
-assert "a" * -(1L << 100) == ""
+try:
+    "a" * -(1L << 100)
+except OverflowError:
+    pass
+else:
+    raise AssertionError("huge negative repeat did not overflow")
 
 
 class HugeNegativeIndex(object):
@@ -370,7 +375,12 @@ class HugeNegativeIndex(object):
         return -(1L << 100)
 
 
-assert [] * HugeNegativeIndex() == []
+try:
+    [] * HugeNegativeIndex()
+except OverflowError:
+    pass
+else:
+    raise AssertionError("huge negative __index__ repeat did not overflow")
 try:
     [] * (1L << 100)
 except OverflowError:
@@ -421,6 +431,47 @@ assert (3).__hex__() == "0x3"
 assert (3L).__hex__() == "0x3L"
 assert (3).__oct__() == "03"
 assert (3L).__oct__() == "03L"
+
+
+class IndexOnlyForBaseRepresentation(object):
+    def __index__(self):
+        return 3
+
+
+try:
+    hex(IndexOnlyForBaseRepresentation())
+except TypeError:
+    pass
+else:
+    raise AssertionError("hex() incorrectly accepted __index__")
+
+try:
+    oct(IndexOnlyForBaseRepresentation())
+except TypeError:
+    pass
+else:
+    raise AssertionError("oct() incorrectly accepted __index__")
+
+assert bin(IndexOnlyForBaseRepresentation()) == "0b11"
+
+try:
+    basestring()
+except TypeError:
+    pass
+else:
+    raise AssertionError("basestring was instantiable")
+
+
+class BaseStringSubclass(basestring):
+    pass
+
+
+try:
+    BaseStringSubclass()
+except TypeError:
+    pass
+else:
+    raise AssertionError("basestring subclass inherited an instantiable constructor")
 assert float.__getformat__("double").startswith("IEEE, ")
 assert float.__getformat__("float").startswith("IEEE, ")
 assert float.__setformat__("double", "unknown") is None

@@ -1181,6 +1181,10 @@ void tinypy_internal_initialize_memoryview_type(tinypy_vm_t *vm) {
     spec.has_instance_dict = TINYPY_FALSE;
     spec.has_weakrefs = TINYPY_FALSE;
     vm->memoryview_type = tinypy_native_type_new(vm, "memoryview", 10U, NULL, 0U, NULL, &spec, NULL);
+    tinypy_value_t *doc = tinypy_string_from_bytes(vm, "memoryview(object)\n\nCreate a new memoryview object which references the given object.", 85U);
+
+    tinypy_type_set_attr(vm->memoryview_type, "__doc__", 7U, doc);
+    TINYPY_DECREF(doc);
     vm->memoryview_type->create = __tinypy_memoryview_create;
     tinypy_internal_constructor_add_builtin_new(vm->memoryview_type);
     vm->memoryview_type->release_references = __tinypy_memoryview_release_references;

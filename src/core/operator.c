@@ -1583,10 +1583,6 @@ static int32_t __tinypy_operator_repeat_count(tinypy_value_t *value, size_t *out
         TINYPY_DECREF(converted);
         return result;
     }
-    if (kind == TINYPY_VALUE_LONG && TINYPY_LONG_SIGN(value) <= 0) {
-        *out_count = 0U;
-        return 1;
-    }
     if (tinypy_internal_index_as_i64(value, &count, TINYPY_FALSE, out_error) == 0) {
         return -1;
     }

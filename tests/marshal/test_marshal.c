@@ -576,6 +576,32 @@ static int32_t __test_malformed_values(void) {
     return 1;
 }
 
+static int32_t __test_surrogate_unicode(void) {
+    static const uint8_t surrogate_utf8[] = {UINT8_C(0xed), UINT8_C(0xa0), UINT8_C(0xb4)};
+    test_writer_t writer;
+    test_allocator_state_t state;
+    tinypy_marshal_document_t *document = NULL;
+    tinypy_marshal_error_t error;
+    const tinypy_marshal_object_t *root;
+    const char *utf8;
+    size_t size;
+    size_t points;
+
+    (void)memset(&writer, 0, sizeof(writer));
+    __writer_byte(&writer, (uint8_t)'u');
+    __writer_i32(&writer, (int32_t)sizeof(surrogate_utf8));
+    __writer_data(&writer, surrogate_utf8, sizeof(surrogate_utf8));
+    __test_state_init(&state);
+    TEST_CHECK(__read_writer(&writer, &state, NULL, &document, &error) == TINYPY_MARSHAL_OK);
+    root = tinypy_marshal_document_root(document);
+    tinypy_marshal_unicode_view(root, &utf8, &size, &points);
+    TEST_CHECK(size == sizeof(surrogate_utf8) && points == 1U);
+    TEST_CHECK(memcmp(utf8, surrogate_utf8, sizeof(surrogate_utf8)) == 0);
+    tinypy_marshal_document_destroy(document);
+    TEST_CHECK(state.live_allocations == 0U);
+    return 1;
+}
+
 static int32_t __test_argument_and_abi_errors(void) {
     static const uint8_t none_object[] = {(uint8_t)'N'};
     test_allocator_state_t state;
@@ -737,7 +763,8 @@ typedef struct test_case_t {
 int main(void) {
     static const test_case_t tests[] = { {"nested_code_and_interns", __test_nested_code_and_interns},
         {"all_wire_types", __test_all_wire_types}, {"truncation_and_offsets", __test_truncation_and_offsets},
-        {"malformed_values", __test_malformed_values}, {"argument_and_abi_errors", __test_argument_and_abi_errors},
+        {"malformed_values", __test_malformed_values}, {"surrogate_unicode", __test_surrogate_unicode},
+        {"argument_and_abi_errors", __test_argument_and_abi_errors},
         {"limits", __test_limits}, {"writer_limits_and_structured_errors", __test_writer_limits_and_structured_errors},
     };
     size_t index;

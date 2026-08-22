@@ -163,7 +163,11 @@ dir_instance = DirChild()
 dir_instance.instance_marker = 4
 class_names = dir(DirChild)
 instance_names = dir(dir_instance)
-for expected_name in ("inherited_marker", "local_marker", "method", "__dict__", "__bases__", "__name__"):
+for expected_name in ("inherited_marker", "local_marker", "method"):
     assert expected_name in class_names
-for expected_name in ("inherited_marker", "local_marker", "method", "instance_marker", "__class__", "__dict__"):
+for unexpected_name in ("__dict__", "__bases__", "__name__"):
+    assert unexpected_name not in class_names
+for expected_name in ("inherited_marker", "local_marker", "method", "instance_marker"):
     assert expected_name in instance_names
+for unexpected_name in ("__class__", "__dict__"):
+    assert unexpected_name not in instance_names

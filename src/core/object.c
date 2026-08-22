@@ -33,6 +33,7 @@ static tinypy_bool_t __tinypy_object_type_metadata_read_only(const char *name, s
         "__dictoffset__",
         "__weakrefoffset__",
         "__dict__",
+        "__doc__",
         "__class__"
     };
     size_t index;
@@ -106,6 +107,63 @@ static tinypy_value_t *__tinypy_object_owned(tinypy_value_t *value) {
 static tinypy_value_t *__tinypy_object_optional(tinypy_vm_t *vm, tinypy_value_t *value) {
     tinypy_value_t *return_value_1 = value != NULL ? __tinypy_object_owned(value) : tinypy_none_get(vm);
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static uint64_t __tinypy_object_type_flags(tinypy_vm_t *vm, const tinypy_type_t *type) {
+    uint64_t flags = UINT64_C(0x1eb) | (UINT64_C(1) << 12U) | (UINT64_C(1) << 17U) | (UINT64_C(1) << 18U) | (UINT64_C(1) << 19U);
+
+    if ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U) {
+        flags |= UINT64_C(1) << 9U;
+    }
+    if ((type->flags & TINYPY_TYPE_FLAG_BASE_TYPE) != 0U) {
+        flags |= UINT64_C(1) << 10U;
+    }
+    if ((type->flags & TINYPY_TYPE_FLAG_ABSTRACT) != 0U) {
+        flags |= UINT64_C(1) << 20U;
+    }
+    if (type->release_references != NULL) {
+        flags |= UINT64_C(1) << 14U;
+    }
+    if (type->weakref_offset != 0U) {
+        flags |= UINT64_C(1) << 6U;
+    }
+    if (type->iter != NULL || type->next != NULL) {
+        flags |= UINT64_C(1) << 7U;
+    }
+    if (type->number_slots != NULL || type->layout_kind == TINYPY_VALUE_BOOL || type->layout_kind == TINYPY_VALUE_INTEGER || type->layout_kind == TINYPY_VALUE_LONG || type->layout_kind == TINYPY_VALUE_FLOAT || type->layout_kind == TINYPY_VALUE_COMPLEX || tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_STRING]) != 0 || tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_UNICODE]) != 0 || tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_SET]) != 0 || tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_FROZENSET]) != 0) {
+        flags |= UINT64_C(1) << 4U;
+    }
+    if (type->layout_kind == TINYPY_VALUE_STRING || type->layout_kind == TINYPY_VALUE_BYTEARRAY || type->layout_kind == TINYPY_VALUE_BUFFER || type == vm->memoryview_type) {
+        flags |= UINT64_C(1) << 21U;
+    }
+    if (tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_INTEGER]) != 0) {
+        flags |= UINT64_C(1) << 23U;
+    }
+    if (tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_LONG]) != 0) {
+        flags |= UINT64_C(1) << 24U;
+    }
+    if (tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_LIST]) != 0) {
+        flags |= UINT64_C(1) << 25U;
+    }
+    if (tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_TUPLE]) != 0) {
+        flags |= UINT64_C(1) << 26U;
+    }
+    if (tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_STRING]) != 0) {
+        flags |= UINT64_C(1) << 27U;
+    }
+    if (tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_UNICODE]) != 0) {
+        flags |= UINT64_C(1) << 28U;
+    }
+    if (tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_DICT]) != 0) {
+        flags |= UINT64_C(1) << 29U;
+    }
+    if (vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0) {
+        flags |= UINT64_C(1) << 30U;
+    }
+    if (tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_TYPE]) != 0) {
+        flags |= UINT64_C(1) << 31U;
+    }
+    return flags;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_type_tuple(tinypy_vm_t *vm, tinypy_type_t *type, int32_t mro) {
@@ -188,7 +246,8 @@ static tinypy_value_t *__tinypy_object_builtin_attribute(tinypy_value_t *value, 
             return return_value_9;
         }
         if (__tinypy_object_name_equal(name, name_size, "__flags__", 9U) != 0) {
-            tinypy_value_t *return_value_10 = tinypy_integer_from_i64(vm, (type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U ? INT64_C(512) : INT64_C(0));
+            uint64_t flags = __tinypy_object_type_flags(vm, type);
+            tinypy_value_t *return_value_10 = tinypy_long_from_i64(vm, (int64_t)flags);
             return return_value_10;
         }
         if (__tinypy_object_name_equal(name, name_size, "__basicsize__", 13U) != 0) {
@@ -221,6 +280,14 @@ static tinypy_value_t *__tinypy_object_builtin_attribute(tinypy_value_t *value, 
             }
             tinypy_value_t *result = tinypy_string_from_bytes(vm, "__builtin__", 11U);
 
+            return result;
+        }
+        if (__tinypy_object_name_equal(name, name_size, "__doc__", 7U) != 0) {
+            tinypy_value_t *key = tinypy_string_from_bytes(vm, "__doc__", 7U);
+            tinypy_value_t *doc = tinypy_internal_dict_get_optional(vm, type->dict, key);
+
+            TINYPY_DECREF(key);
+            tinypy_value_t *result = __tinypy_object_optional(vm, doc);
             return result;
         }
     }
@@ -1068,20 +1135,13 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
             return TINYPY_FALSE;
         }
         if (__tinypy_object_key_text(key, &name, &name_size) != 0) {
+            if (__tinypy_object_name_equal(name, name_size, "__bases__", 9U) != 0) {
+                tinypy_bool_t return_value_3 = tinypy_internal_type_set_bases(type, attribute_value, out_error);
+                return return_value_3;
+            }
             if (__tinypy_object_name_equal(name, name_size, "__name__", 8U) != 0) {
-                if (TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_STRING) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type __name__ must be a string", out_error);
-                    return TINYPY_FALSE;
-                }
-                TINYPY_INCREF(attribute_value);
-                if (type->name_object != NULL) {
-                    TINYPY_DECREF(type->name_object);
-                }
-                type->name_object = attribute_value;
-                type->name = (const char *)TINYPY_TEXT_BYTES(attribute_value);
-                type->name_size = TINYPY_TEXT_BYTE_SIZE(attribute_value);
-                type->version_tag += UINT64_C(1);
-                return TINYPY_TRUE;
+                tinypy_bool_t return_value_4 = tinypy_internal_type_set_name(type, attribute_value, out_error);
+                return return_value_4;
             }
             if (__tinypy_object_type_metadata_read_only(name, name_size) != 0) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type metadata is read-only", out_error);
@@ -1198,9 +1258,6 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
     if (tinypy_internal_dict_delete_optional(vm, dict, key) == 0) {
         __tinypy_object_make_attribute_error_key(value, key, out_error);
         return TINYPY_FALSE;
-    }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE) {
-        ((tinypy_type_t *)value)->version_tag += UINT64_C(1);
     }
     return TINYPY_TRUE;
 }

@@ -90,6 +90,7 @@ tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t 
     code->name = name;
     code->first_line_number = first_line_number;
     code->lnotab = lnotab;
+    code->parameter_indices = NULL;
     code->compile_environment = NULL;
 
     TINYPY_INCREF(bytecode);
@@ -118,6 +119,9 @@ void tinypy_internal_code_release_references(tinypy_value_t *value, tinypy_relea
     visit(code->filename, user_data);
     visit(code->name, user_data);
     visit(code->lnotab, user_data);
+    if (code->parameter_indices != NULL) {
+        visit(code->parameter_indices, user_data);
+    }
     for (index = 0U; index < TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE; ++index) {
         if (code->attribute_cache[index].dict_key != NULL) {
             visit(code->attribute_cache[index].dict_key, user_data);

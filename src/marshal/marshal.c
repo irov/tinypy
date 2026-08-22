@@ -435,7 +435,9 @@ static tinypy_bool_t __tinypy_marshal_utf8_validate(const uint8_t *bytes, size_t
             }
         }
 
-        if ((continuation_count == 2U && code_point < UINT32_C(0x800)) || (continuation_count == 3U && code_point < UINT32_C(0x10000)) || (code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdfff)) || code_point > UINT32_C(0x10ffff)) {
+        /* Python 2 unicode can contain lone UTF-16 surrogate code units and
+         * its marshal format writes them as their three-byte UTF-8 form. */
+        if ((continuation_count == 2U && code_point < UINT32_C(0x800)) || (continuation_count == 3U && code_point < UINT32_C(0x10000)) || code_point > UINT32_C(0x10ffff)) {
             return TINYPY_FALSE;
         }
 

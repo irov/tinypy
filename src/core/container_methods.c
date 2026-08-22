@@ -1809,6 +1809,25 @@ static void __tinypy_container_add_numeric_protocol(tinypy_type_t *type, tinypy_
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_container_add_bool_protocol(tinypy_type_t *type) {
+    static const struct {
+        const char *name;
+        size_t size;
+        intptr_t mode;
+    } operations[] = {
+        {"__and__", 7U, 11}, {"__rand__", 8U, 111},
+        {"__xor__", 7U, 12}, {"__rxor__", 8U, 112},
+        {"__or__", 6U, 13}, {"__ror__", 7U, 113}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(operations) / sizeof(operations[0]); ++index) {
+        __tinypy_container_add_method(type, operations[index].name, operations[index].size, __tinypy_container_binary_method, (void *)operations[index].mode);
+    }
+    __tinypy_container_add_method(type, "__repr__", 8U, __tinypy_container_repr_method, NULL);
+    __tinypy_container_add_method(type, "__str__", 7U, __tinypy_container_str_method, NULL);
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_container_types(tinypy_vm_t *vm) {
     __tinypy_container_add_method(&vm->types[TINYPY_VALUE_TUPLE], "count", 5U, __tinypy_sequence_count_method, NULL);
     __tinypy_container_add_method(&vm->types[TINYPY_VALUE_TUPLE], "index", 5U, __tinypy_sequence_index_method, NULL);
@@ -1883,6 +1902,7 @@ void tinypy_internal_initialize_container_types(tinypy_vm_t *vm) {
     __tinypy_container_add_method(&vm->types[TINYPY_VALUE_SET], "__cmp__", 7U, __tinypy_container_cmp_method, (void *)(intptr_t)TINYPY_VALUE_SET);
     __tinypy_container_add_method(&vm->types[TINYPY_VALUE_FROZENSET], "__cmp__", 7U, __tinypy_container_cmp_method, (void *)(intptr_t)TINYPY_VALUE_FROZENSET);
     __tinypy_container_add_numeric_protocol(&vm->types[TINYPY_VALUE_INTEGER], TINYPY_TRUE, TINYPY_FALSE);
+    __tinypy_container_add_bool_protocol(&vm->types[TINYPY_VALUE_BOOL]);
     __tinypy_container_add_numeric_protocol(&vm->types[TINYPY_VALUE_LONG], TINYPY_TRUE, TINYPY_FALSE);
     __tinypy_container_add_numeric_protocol(&vm->types[TINYPY_VALUE_FLOAT], TINYPY_FALSE, TINYPY_TRUE);
     __tinypy_container_add_numeric_protocol(&vm->types[TINYPY_VALUE_COMPLEX], TINYPY_FALSE, TINYPY_TRUE);

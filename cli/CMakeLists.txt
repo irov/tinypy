@@ -33,6 +33,7 @@ if(BUILD_TESTING)
         constructors_runtime
         container_methods
         dict_view_runtime
+        exception_codec_runtime
         exception_custom
         exception_finally
         exception_minimal
@@ -49,6 +50,7 @@ if(BUILD_TESTING)
         object_new_runtime
         old_class_runtime
         output_runtime
+        print_function_runtime
         set_runtime
         slots_runtime
         string_methods

@@ -64,6 +64,7 @@ assert repr(Ellipsis) == "Ellipsis"
 assert bool(Ellipsis) is True
 
 readonly_memory = memoryview("abcd")
+assert memoryview.__doc__ == "memoryview(object)\n\nCreate a new memoryview object which references the given object."
 assert type(readonly_memory) is memoryview
 assert not hasattr(readonly_memory, "__builtins__")
 assert not hasattr(readonly_memory, "__dict__")

@@ -710,6 +710,10 @@ static tinypy_value_t *__tinypy_bytearray_inplace_add_method(tinypy_value_t *fun
         return NULL;
     }
     size_t left_size = TINYPY_SIZED_SIZE(left);
+    if (left == right && right_size != 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_BUFFER, "Existing exports of data: object cannot be re-sized", out_error);
+        return NULL;
+    }
     if (right_size > SIZE_MAX - left_size) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
         return NULL;
@@ -721,9 +725,6 @@ static tinypy_value_t *__tinypy_bytearray_inplace_add_method(tinypy_value_t *fun
         return NULL;
     }
     uint8_t *left_bytes = TINYPY_BYTEARRAY_OBJECT(left)->bytes;
-    if (left == right) {
-        right_bytes = left_bytes;
-    }
     if (right_size != 0U) {
         (void)memcpy(left_bytes + left_size, right_bytes, right_size);
     }

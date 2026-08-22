@@ -34,6 +34,10 @@ def main() -> int:
     artifact = arguments.build_dir / "output_runtime.marshal"
     subprocess.run([str(arguments.compiler), str(source), str(artifact), "tests/runtime/fixtures/output_runtime.py", "exec", "0"], check=True)
     subprocess.run([str(arguments.runner), "--eval-output", str(artifact), "alpha 42\ntail continued\n", "error 7\n"], check=True)
+    source = root / "tests/runtime/fixtures/print_function_runtime.py"
+    artifact = arguments.build_dir / "print_function_runtime.marshal"
+    subprocess.run([str(arguments.compiler), str(source), str(artifact), "tests/runtime/fixtures/print_function_runtime.py", "exec", "0"], check=True)
+    subprocess.run([str(arguments.runner), "--eval-any", str(artifact)], check=True)
     source = root / "tests/runtime/fixtures/constructors_runtime.py"
     artifact = arguments.build_dir / "constructors_runtime.marshal"
     subprocess.run([str(arguments.compiler), str(source), str(artifact), "tests/runtime/fixtures/constructors_runtime.py", "exec", "0"], check=True)
@@ -85,6 +89,10 @@ def main() -> int:
     source = root / "tests/runtime/fixtures/codecs_runtime.py"
     artifact = arguments.build_dir / "codecs_runtime.marshal"
     subprocess.run([str(arguments.compiler), str(source), str(artifact), "tests/runtime/fixtures/codecs_runtime.py", "exec", "0"], check=True)
+    subprocess.run([str(arguments.runner), "--eval-any", str(artifact)], check=True)
+    source = root / "tests/runtime/fixtures/exception_codec_runtime.py"
+    artifact = arguments.build_dir / "exception_codec_runtime.marshal"
+    subprocess.run([str(arguments.compiler), str(source), str(artifact), "tests/runtime/fixtures/exception_codec_runtime.py", "exec", "0"], check=True)
     subprocess.run([str(arguments.runner), "--eval-any", str(artifact)], check=True)
     source = root / "tests/runtime/fixtures/metaclass_checks_runtime.py"
     artifact = arguments.build_dir / "metaclass_checks_runtime.marshal"

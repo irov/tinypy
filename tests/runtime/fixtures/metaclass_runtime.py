@@ -114,8 +114,161 @@ MutableMetadata.__name__ = "RenamedMetadata"
 MutableMetadata.__module__ = "renamed_module"
 assert MutableMetadata.__name__ == "RenamedMetadata"
 assert MutableMetadata.__module__ == "renamed_module"
+
+try:
+    MutableMetadata.__name__ = "invalid\x00name"
+except ValueError:
+    pass
+else:
+    raise AssertionError("type __name__ accepted an embedded null")
+assert MutableMetadata.__name__ == "RenamedMetadata"
+
+try:
+    type("invalid\x00name", (object,), {})
+except ValueError:
+    pass
+else:
+    raise AssertionError("type() accepted an embedded null in the name")
+
+
+class AbstractMetadata(object):
+    pass
+
+
+try:
+    del AbstractMetadata.__abstractmethods__
+except AttributeError:
+    pass
+else:
+    raise AssertionError("missing __abstractmethods__ was deleted")
+
+AbstractMetadata.__abstractmethods__ = frozenset(["required"])
+assert AbstractMetadata.__flags__ & (1 << 20)
+try:
+    AbstractMetadata()
+except TypeError:
+    pass
+else:
+    raise AssertionError("abstract class was instantiated")
+del AbstractMetadata.__abstractmethods__
+assert AbstractMetadata.__flags__ & (1 << 20) == 0
+assert isinstance(AbstractMetadata(), AbstractMetadata)
+assert type(object.__flags__) is long
+assert object.__flags__ & (1 << 10)
+assert object.__flags__ & (1 << 12)
+assert int.__flags__ & (1 << 23)
+assert str.__flags__ & (1 << 27)
+assert Exception.__flags__ & (1 << 30)
+assert type.__flags__ & (1 << 31)
+
+
+class AbstractCustomNew(object):
+    def __new__(cls):
+        return 42
+
+
+AbstractCustomNew.__abstractmethods__ = frozenset(["required"])
+assert AbstractCustomNew() == 42
+del AbstractCustomNew.__abstractmethods__
+
+assert sorted(bool.__dict__.keys()) == [
+    "__and__", "__doc__", "__new__", "__or__", "__rand__",
+    "__repr__", "__ror__", "__rxor__", "__str__", "__xor__",
+]
+for type_metadata_name in (
+    "__abstractmethods__", "__base__", "__bases__", "__basicsize__",
+    "__dict__", "__dictoffset__", "__doc__", "__flags__", "__itemsize__",
+    "__module__", "__mro__", "__name__", "__weakrefoffset__",
+):
+    assert type_metadata_name in type.__dict__
+assert type.__dict__["__name__"].__get__(MutableMetadata, type) == "RenamedMetadata"
+assert type.__dict__["__bases__"].__get__(MutableMetadata, type) == (object,)
+
+
+class RebaseFirst(object):
+    marker = "first"
+
+
+class RebaseSecond(object):
+    marker = "second"
+
+
+class Rebased(RebaseFirst):
+    pass
+
+
+class RebasedChild(Rebased):
+    pass
+
+
+rebased = Rebased()
+rebased_child = RebasedChild()
+assert Rebased in RebaseFirst.__subclasses__()
+Rebased.__bases__ = (RebaseSecond,)
+assert Rebased.__bases__ == (RebaseSecond,)
+assert Rebased.__base__ is RebaseSecond
+assert Rebased.__mro__ == (Rebased, RebaseSecond, object)
+assert RebasedChild.__mro__ == (RebasedChild, Rebased, RebaseSecond, object)
+assert rebased.marker == "second" and rebased_child.marker == "second"
+assert Rebased not in RebaseFirst.__subclasses__()
+assert Rebased in RebaseSecond.__subclasses__()
+
+
+class CachedBase(object):
+    cached_value = 1
+
+
+class CachedChild(CachedBase):
+    pass
+
+
+cached_child = CachedChild()
+for cache_iteration in range(20):
+    assert cached_child.cached_value == 1
+CachedBase.cached_value = 2
+assert cached_child.cached_value == 2
+del CachedBase.cached_value
+try:
+    cached_child.cached_value
+except AttributeError:
+    pass
+else:
+    raise AssertionError("descendant attribute cache survived a base mutation")
+
+
+class DocumentedType(object):
+    "documented type"
+
+
+class UndocumentedType(DocumentedType):
+    pass
+
+
+assert DocumentedType.__doc__ == "documented type"
+assert UndocumentedType.__doc__ is None
+try:
+    DocumentedType.__doc__ = "changed"
+except AttributeError:
+    pass
+else:
+    raise AssertionError("type.__doc__ was writable")
+
+try:
+    del DocumentedType.__doc__
+except AttributeError:
+    pass
+else:
+    raise AssertionError("type.__doc__ was deletable")
+
+try:
+    Rebased.__bases__ = (RebasedChild,)
+except TypeError:
+    pass
+else:
+    raise AssertionError("cyclic type bases were accepted")
+assert Rebased.__bases__ == (RebaseSecond,)
+
 for metadata_name, metadata_value in (
-    ("__bases__", (object,)),
     ("__mro__", (MutableMetadata, object)),
     ("__flags__", 0),
     ("__basicsize__", 0),

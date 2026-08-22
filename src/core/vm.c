@@ -440,6 +440,7 @@ static void __tinypy_internal_initialize_type_dicts(tinypy_vm_t *vm) {
         dict->mask = TINYPY_DICT_MIN_SIZE - 1U;
         dict->table = dict->small_table;
         dict->type_dictionary = INT32_C(1);
+        dict->type_owner = &vm->types[index];
         vm->types[index].dict = &dict->base;
     }
 }
@@ -458,6 +459,7 @@ static void __tinypy_internal_initialize_type_docs(tinypy_vm_t *vm) {
         {TINYPY_VALUE_COMPLEX, "complex(real[, imag]) -> complex number"},
         {TINYPY_VALUE_STRING, "str(object='') -> string"},
         {TINYPY_VALUE_UNICODE, "unicode(string[, encoding[, errors]]) -> object"},
+        {TINYPY_VALUE_INVALID, "Type basestring cannot be instantiated; it is the base for str and unicode."},
         {TINYPY_VALUE_TUPLE, "tuple() -> empty tuple; tuple(iterable) -> tuple initialized from iterable"},
         {TINYPY_VALUE_LIST, "list() -> new empty list; list(iterable) -> new list initialized from iterable"},
         {TINYPY_VALUE_DICT, "dict() -> new empty dictionary"},
