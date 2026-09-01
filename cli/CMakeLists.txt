@@ -53,6 +53,7 @@ if(BUILD_TESTING)
         print_function_runtime
         set_runtime
         slots_runtime
+        sre_runtime
         string_methods
         struct_runtime
         sys_runtime
