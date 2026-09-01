@@ -526,7 +526,8 @@ static tinypy_bool_t __tinypy_eval_exception_class(tinypy_vm_t *vm, tinypy_value
     if (value == NULL) {
         return TINYPY_FALSE;
     }
-    tinypy_bool_t return_value_1 = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)value, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0;
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    tinypy_bool_t return_value_1 = kind == TINYPY_VALUE_CLASS || (kind == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)value, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0) ? TINYPY_TRUE : TINYPY_FALSE;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -534,8 +535,19 @@ static tinypy_bool_t __tinypy_eval_exception_instance(tinypy_vm_t *vm, tinypy_va
     if (value == NULL) {
         return TINYPY_FALSE;
     }
-    tinypy_bool_t return_value_1 = tinypy_type_is_subtype(value->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0;
+    tinypy_bool_t return_value_1 = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE || tinypy_type_is_subtype(value->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_eval_exception_instance_of(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *candidate) {
+    if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_CLASS) {
+        tinypy_bool_t return_value_1 = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && tinypy_class_is_subclass(TINYPY_OLD_INSTANCE_OBJECT(value)->class_object, candidate) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        return return_value_1;
+    }
+    tinypy_bool_t return_value_2 = TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype(value->type, (tinypy_type_t *)candidate) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+    (void)vm;
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t argument, tinypy_error_t **out_error) {
@@ -567,7 +579,7 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
         TINYPY_INCREF(exception);
     }
     else if (__tinypy_eval_exception_class(vm, raise_type) != 0) {
-        if (raise_value != NULL && __tinypy_eval_exception_instance(vm, raise_value) != 0 && tinypy_type_is_subtype(raise_value->type, (tinypy_type_t *)raise_type) != 0) {
+        if (raise_value != NULL && __tinypy_eval_exception_instance_of(vm, raise_value, raise_type) != 0) {
             exception = raise_value;
             TINYPY_INCREF(exception);
         }
@@ -584,7 +596,12 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
             else {
                 args = tinypy_tuple_from_items(vm, &raise_value, 1U);
             }
-            exception = tinypy_internal_exception_instantiate((tinypy_type_t *)raise_type, args, NULL, out_error);
+            if (TINYPY_VALUE_KIND(raise_type) == TINYPY_VALUE_CLASS) {
+                exception = tinypy_call(raise_type, args, NULL, out_error);
+            }
+            else {
+                exception = tinypy_internal_exception_instantiate((tinypy_type_t *)raise_type, args, NULL, out_error);
+            }
             TINYPY_DECREF(args);
             if (exception == NULL) {
                 goto cleanup;
@@ -592,7 +609,7 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
         }
     }
     else {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exceptions must derive from BaseException", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exceptions must be old-style classes or derived from BaseException", out_error);
         goto cleanup;
     }
     if (traceback != NULL && TINYPY_VALUE_KIND(traceback) != TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(traceback) != TINYPY_VALUE_TRACEBACK) {
@@ -638,7 +655,7 @@ static tinypy_eval_reason_e __tinypy_eval_end_finally(tinypy_vm_t *vm, tinypy_fr
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "END_FINALLY received an invalid unwind reason", out_error), reason = TINYPY_EVAL_REASON_EXCEPTION;
         }
     }
-    else if (TINYPY_VALUE_KIND(top) == TINYPY_VALUE_TYPE && __tinypy_eval_exception_class(vm, top) != 0) {
+    else if (__tinypy_eval_exception_class(vm, top) != 0) {
         tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
         tinypy_value_t *traceback = __tinypy_eval_pop_owned(frame);
 
@@ -1740,43 +1757,48 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             if (TINYPY_VALUE_KIND(execution_globals) != TINYPY_VALUE_DICT || TINYPY_VALUE_KIND(execution_locals) != TINYPY_VALUE_DICT) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exec globals and locals must be dictionaries", out_error);
             }
-            else if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_CODE) {
-                execution_result = __tinypy_eval_code_bound(source, execution_globals, execution_locals, NULL, NULL, 0U, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, out_error);
-            }
-            else if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(source) == TINYPY_VALUE_UNICODE) {
-                tinypy_compile_options_t options;
-                tinypy_value_t *execution_code;
-                const void *source_bytes;
-                size_t source_size;
-                const char *filename;
-                size_t filename_size;
-                tinypy_bool_t source_is_unicode;
+            else {
+                if (tinypy_dict_contains(execution_globals, vm->builtins_key) == 0) {
+                    tinypy_dict_set(execution_globals, vm->builtins_key, vm->builtins);
+                }
+                if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_CODE) {
+                    execution_result = __tinypy_eval_code_bound(source, execution_globals, execution_locals, NULL, NULL, 0U, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, out_error);
+                }
+                else if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(source) == TINYPY_VALUE_UNICODE) {
+                    tinypy_compile_options_t options;
+                    tinypy_value_t *execution_code;
+                    const void *source_bytes;
+                    size_t source_size;
+                    const char *filename;
+                    size_t filename_size;
+                    tinypy_bool_t source_is_unicode;
 
-                if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_STRING) {
-                    source_bytes = tinypy_string_view(source, &source_size);
-                    source_is_unicode = 0;
+                    if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_STRING) {
+                        source_bytes = tinypy_string_view(source, &source_size);
+                        source_is_unicode = 0;
+                    }
+                    else {
+                        size_t code_points;
+
+                        source_bytes = tinypy_unicode_utf8_view(source, &source_size, &code_points);
+                        source_is_unicode = 1;
+                    }
+                    tinypy_value_t *code_filename = TINYPY_CODE_FILENAME(frame->code);
+                    filename = (const char *)tinypy_string_view(code_filename, &filename_size);
+                    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+                    if (tinypy_internal_compile_options_inherit_frame(vm, &options) == 0) {
+                        options.optimize_level = vm->optimize_level;
+                    }
+                    options.dont_inherit = 0;
+                    execution_code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, filename, filename_size, &options, out_error);
+                    if (execution_code != NULL) {
+                        execution_result = tinypy_exec_code(execution_code, execution_globals, execution_locals, out_error);
+                        TINYPY_DECREF(execution_code);
+                    }
                 }
                 else {
-                    size_t code_points;
-
-                    source_bytes = tinypy_unicode_utf8_view(source, &source_size, &code_points);
-                    source_is_unicode = 1;
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exec requires a string or code object", out_error);
                 }
-                tinypy_value_t *code_filename = TINYPY_CODE_FILENAME(frame->code);
-                filename = (const char *)tinypy_string_view(code_filename, &filename_size);
-                tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
-                if (tinypy_internal_compile_options_inherit_frame(vm, &options) == 0) {
-                    options.optimize_level = vm->optimize_level;
-                }
-                options.dont_inherit = 0;
-                execution_code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, filename, filename_size, &options, out_error);
-                if (execution_code != NULL) {
-                    execution_result = tinypy_exec_code(execution_code, execution_globals, execution_locals, out_error);
-                    TINYPY_DECREF(execution_code);
-                }
-            }
-            else {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exec requires a string or code object", out_error);
             }
             TINYPY_DECREF(source);
             TINYPY_DECREF(globals_value);

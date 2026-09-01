@@ -434,7 +434,7 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
     int32_t comparison;
 
     if (right->sign == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "long division by zero", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "long division or modulo by zero", out_error);
         return NULL;
     }
     if (left->count == SIZE_MAX || right->count == SIZE_MAX) {
@@ -1885,7 +1885,9 @@ static tinypy_value_t *__tinypy_operator_divide(tinypy_value_t *left, tinypy_val
             return NULL;
         }
         if (br == 0.0 && bi == 0.0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "complex division by zero", out_error);
+            const char *message = division == TINYPY_OPERATOR_DIVISION_FLOOR ? "complex divmod()" : (division == TINYPY_OPERATOR_DIVISION_REMAINDER ? "complex remainder" : "complex division by zero");
+
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, message, out_error);
             return NULL;
         }
         __tinypy_operator_complex_quotient(ar, ai, br, bi, &quotient_real, &quotient_imaginary);
@@ -1915,7 +1917,18 @@ static tinypy_value_t *__tinypy_operator_divide(tinypy_value_t *left, tinypy_val
         }
 
         if (divisor == 0.0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "division by zero", out_error);
+            const char *message;
+
+            if (division == TINYPY_OPERATOR_DIVISION_FLOOR) {
+                message = "float divmod()";
+            }
+            else if (division == TINYPY_OPERATOR_DIVISION_REMAINDER) {
+                message = "float modulo";
+            }
+            else {
+                message = left_kind == TINYPY_VALUE_FLOAT || right_kind == TINYPY_VALUE_FLOAT ? "float division by zero" : "division by zero";
+            }
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, message, out_error);
             return NULL;
         }
         if (division == TINYPY_OPERATOR_DIVISION_FLOOR || division == TINYPY_OPERATOR_DIVISION_REMAINDER) {
@@ -1945,7 +1958,7 @@ static tinypy_value_t *__tinypy_operator_divide(tinypy_value_t *left, tinypy_val
         int64_t quotient;
         int64_t modulo;
         if (divisor == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "integer division by zero", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "integer division or modulo by zero", out_error);
             return NULL;
         }
         if (dividend == INT64_MIN && divisor == -1) {

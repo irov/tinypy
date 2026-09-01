@@ -497,36 +497,44 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
             if (__tinypy_bytearray_collect(vm, item, &replacement, &replacement_size, out_error) == 0) {
                 return TINYPY_FALSE;
             }
-            if (slice.step != 1 && replacement_size != slice.length) {
+            if (slice.step != 1 && replacement_size == 0U) {
+                if (replacement != NULL) {
+                    tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
+                    replacement = NULL;
+                }
+            }
+            else {
+                if (slice.step != 1 && replacement_size != slice.length) {
+                    if (replacement != NULL) {
+                        tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
+                    }
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "extended slice assignment has the wrong size", out_error);
+                    return TINYPY_FALSE;
+                }
+                if (slice.step == 1 && replacement_size > SIZE_MAX - (size - slice.length)) {
+                    if (replacement != NULL) {
+                        tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
+                    }
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
+                    return TINYPY_FALSE;
+                }
+                if (slice.step == 1 && tinypy_internal_bytearray_resize_allowed(value, size - slice.length + replacement_size, out_error) == 0) {
+                    if (replacement != NULL) {
+                        tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
+                    }
+                    return TINYPY_FALSE;
+                }
+                if (__tinypy_bytearray_replace_slice(value, &slice, replacement, replacement_size, out_error) == 0) {
+                    if (replacement != NULL) {
+                        tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
+                    }
+                    return TINYPY_FALSE;
+                }
                 if (replacement != NULL) {
                     tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
                 }
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "extended slice assignment has the wrong size", out_error);
-                return TINYPY_FALSE;
+                return TINYPY_TRUE;
             }
-            if (slice.step == 1 && replacement_size > SIZE_MAX - (size - slice.length)) {
-                if (replacement != NULL) {
-                    tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
-                }
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
-                return TINYPY_FALSE;
-            }
-            if (slice.step == 1 && tinypy_internal_bytearray_resize_allowed(value, size - slice.length + replacement_size, out_error) == 0) {
-                if (replacement != NULL) {
-                    tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
-                }
-                return TINYPY_FALSE;
-            }
-            if (__tinypy_bytearray_replace_slice(value, &slice, replacement, replacement_size, out_error) == 0) {
-                if (replacement != NULL) {
-                    tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
-                }
-                return TINYPY_FALSE;
-            }
-            if (replacement != NULL) {
-                tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
-            }
-            return TINYPY_TRUE;
         }
         if (slice.length != 0U && tinypy_internal_bytearray_resize_allowed(value, size - slice.length, out_error) == 0) {
             return TINYPY_FALSE;
@@ -573,6 +581,9 @@ tinypy_value_t *tinypy_internal_bytearray_repr(tinypy_value_t *value, tinypy_err
     tinypy_value_t *string = tinypy_internal_bytearray_string(value, out_error);
     const uint8_t *quoted_bytes;
     size_t quoted_size;
+    size_t escaped_single_quotes = 0U;
+    size_t quoted_index;
+    size_t output_index;
     uint8_t *output;
 
     if (string == NULL) {
@@ -584,19 +595,32 @@ tinypy_value_t *tinypy_internal_bytearray_repr(tinypy_value_t *value, tinypy_err
         return NULL;
     }
     quoted_bytes = (const uint8_t *)tinypy_string_view(quoted, &quoted_size);
-    if (quoted_size > SIZE_MAX - 12U) {
+    if (quoted_size != 0U && quoted_bytes[0] == (uint8_t)'"') {
+        for (quoted_index = 1U; quoted_index + 1U < quoted_size; ++quoted_index) {
+            if (quoted_bytes[quoted_index] == (uint8_t)'\'') {
+                escaped_single_quotes += 1U;
+            }
+        }
+    }
+    if (quoted_size > SIZE_MAX - 12U || escaped_single_quotes > SIZE_MAX - quoted_size - 12U) {
         TINYPY_DECREF(quoted);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray representation is too large", out_error);
         return NULL;
     }
-    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, quoted_size + 12U, quoted_size + 12U, &output, out_error);
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, quoted_size + escaped_single_quotes + 12U, quoted_size + escaped_single_quotes + 12U, &output, out_error);
     if (result == NULL) {
         TINYPY_DECREF(quoted);
         return NULL;
     }
     (void)memcpy(output, "bytearray(b", 11U);
-    (void)memcpy(output + 11U, quoted_bytes, quoted_size);
-    output[quoted_size + 11U] = (uint8_t)')';
+    output_index = 11U;
+    for (quoted_index = 0U; quoted_index < quoted_size; ++quoted_index) {
+        if (escaped_single_quotes != 0U && quoted_bytes[quoted_index] == (uint8_t)'\'') {
+            output[output_index++] = (uint8_t)'\\';
+        }
+        output[output_index++] = quoted_bytes[quoted_index];
+    }
+    output[output_index] = (uint8_t)')';
     TINYPY_DECREF(quoted);
     return result;
 }

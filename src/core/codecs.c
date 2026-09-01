@@ -193,6 +193,99 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_codecs_hex_digit(uint8_t character) {
+    if (character >= (uint8_t)'0' && character <= (uint8_t)'9') {
+        return (int32_t)(character - (uint8_t)'0');
+    }
+    if (character >= (uint8_t)'a' && character <= (uint8_t)'f') {
+        return (int32_t)(character - (uint8_t)'a') + 10;
+    }
+    if (character >= (uint8_t)'A' && character <= (uint8_t)'F') {
+        return (int32_t)(character - (uint8_t)'A') + 10;
+    }
+    return -1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_codecs_hex(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    static const uint8_t hexadecimal[] = "0123456789abcdef";
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_bool_t decode = (intptr_t)user_data != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_value_t *input;
+    tinypy_value_t *bytes_value;
+    tinypy_value_t *converted;
+    tinypy_value_t *result;
+    const uint8_t *source;
+    size_t source_size;
+    uint8_t *output;
+    size_t index;
+
+    if (__tinypy_codecs_arguments(vm, args, kwargs, 1U, 2U, out_error) == 0) {
+        return NULL;
+    }
+    input = TINYPY_TUPLE_GET(args, 0U);
+    if (__tinypy_codecs_require_text(vm, input, out_error) == 0) {
+        return NULL;
+    }
+    if (TINYPY_VALUE_KIND(input) == TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *encoding = tinypy_string_from_bytes(vm, "ascii", 5U);
+
+        bytes_value = __tinypy_codecs_call_text(vm, input, "encode", encoding, NULL, out_error);
+        TINYPY_DECREF(encoding);
+        if (bytes_value == NULL) {
+            return NULL;
+        }
+    }
+    else {
+        bytes_value = input;
+        TINYPY_INCREF(bytes_value);
+    }
+    source = TINYPY_TEXT_BYTES(bytes_value);
+    source_size = TINYPY_TEXT_BYTE_SIZE(bytes_value);
+    if (decode != 0) {
+        if ((source_size & 1U) != 0U) {
+            TINYPY_DECREF(bytes_value);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Odd-length string", out_error);
+            return NULL;
+        }
+        converted = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, source_size / 2U, source_size / 2U, &output, out_error);
+        if (converted == NULL) {
+            TINYPY_DECREF(bytes_value);
+            return NULL;
+        }
+        for (index = 0U; index != source_size; index += 2U) {
+            int32_t high = __tinypy_codecs_hex_digit(source[index]);
+            int32_t low = __tinypy_codecs_hex_digit(source[index + 1U]);
+
+            if (high < 0 || low < 0) {
+                TINYPY_DECREF(converted);
+                TINYPY_DECREF(bytes_value);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Non-hexadecimal digit found", out_error);
+                return NULL;
+            }
+            output[index / 2U] = (uint8_t)((high << 4) | low);
+        }
+    }
+    else {
+        if (source_size > SIZE_MAX / 2U) {
+            TINYPY_DECREF(bytes_value);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "hex encoding is too large", out_error);
+            return NULL;
+        }
+        converted = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, source_size * 2U, source_size * 2U, &output, out_error);
+        if (converted == NULL) {
+            TINYPY_DECREF(bytes_value);
+            return NULL;
+        }
+        for (index = 0U; index != source_size; ++index) {
+            output[index * 2U] = hexadecimal[source[index] >> 4];
+            output[index * 2U + 1U] = hexadecimal[source[index] & 0x0fU];
+        }
+    }
+    TINYPY_DECREF(bytes_value);
+    result = __tinypy_codecs_codec_result(vm, input, converted);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_codecs_transform_registered(tinypy_vm_t *vm, tinypy_value_t *input, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_error_t **out_error) {
     tinypy_value_t *module_key = tinypy_string_from_bytes(vm, "_codecs", 7U);
     tinypy_value_t *module = tinypy_dict_get_optional(vm->modules, module_key);
@@ -495,6 +588,8 @@ void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm) {
     static const size_t ascii_alias_sizes[] = {5U, 3U, 8U, 9U, 14U, 14U};
     static const char *const latin1_aliases[] = {"latin-1", "latin1", "latin_1", "iso-8859-1", "iso8859-1", "iso_8859-1", "cp819", "l1"};
     static const size_t latin1_alias_sizes[] = {7U, 6U, 7U, 10U, 9U, 10U, 5U, 2U};
+    static const char *const hex_aliases[] = {"hex", "hex-codec", "hex_codec"};
+    static const size_t hex_alias_sizes[] = {3U, 9U, 9U};
     tinypy_value_t *module = tinypy_module_new(vm, "_codecs", 7U);
     tinypy_value_t *name = tinypy_string_from_bytes(vm, "_codecs", 7U);
     tinypy_value_t *search_path = tinypy_list_from_items(vm, NULL, 0U);
@@ -507,6 +602,8 @@ void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm) {
     tinypy_value_t *ascii_decode;
     tinypy_value_t *latin1_encode;
     tinypy_value_t *latin1_decode;
+    tinypy_value_t *hex_encode;
+    tinypy_value_t *hex_decode;
 
     tinypy_module_add_value(module, "__name__", 8U, name);
     tinypy_module_add_value(module, "_search_path", 12U, search_path);
@@ -547,10 +644,15 @@ void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm) {
     function = __tinypy_codecs_add_function(vm, module, "latin_1_decode", 14U, __tinypy_codecs_specific, (void *)(intptr_t)5);
     latin1_decode = function;
     TINYPY_DECREF(function);
+    hex_encode = tinypy_native_function_new(vm, "hex_encode", 10U, __tinypy_codecs_hex, (void *)(intptr_t)0, NULL);
+    hex_decode = tinypy_native_function_new(vm, "hex_decode", 10U, __tinypy_codecs_hex, (void *)(intptr_t)1, NULL);
 
     __tinypy_codecs_cache_builtin(vm, module, utf8_encode, utf8_decode, utf8_aliases, utf8_alias_sizes, sizeof(utf8_aliases) / sizeof(utf8_aliases[0]));
     __tinypy_codecs_cache_builtin(vm, module, ascii_encode, ascii_decode, ascii_aliases, ascii_alias_sizes, sizeof(ascii_aliases) / sizeof(ascii_aliases[0]));
     __tinypy_codecs_cache_builtin(vm, module, latin1_encode, latin1_decode, latin1_aliases, latin1_alias_sizes, sizeof(latin1_aliases) / sizeof(latin1_aliases[0]));
+    __tinypy_codecs_cache_builtin(vm, module, hex_encode, hex_decode, hex_aliases, hex_alias_sizes, sizeof(hex_aliases) / sizeof(hex_aliases[0]));
+    TINYPY_DECREF(hex_decode);
+    TINYPY_DECREF(hex_encode);
 
     for (index = 0U; index < 5U; ++index) {
         tinypy_value_t *key;

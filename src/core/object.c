@@ -913,7 +913,7 @@ static tinypy_value_t *__tinypy_internal_type_attribute(tinypy_vm_t *vm, tinypy_
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_object_attribute_error(tinypy_vm_t *vm, tinypy_error_t **out_error) {
-    if (vm->raised_type != NULL) {
+    if (vm->raised_type != NULL && TINYPY_VALUE_KIND(vm->raised_type) == TINYPY_VALUE_TYPE) {
         tinypy_bool_t return_value_1 = tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_ATTRIBUTE_ERROR]);
         return return_value_1;
     }

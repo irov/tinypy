@@ -2832,6 +2832,7 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
     int64_t tab_size = 8;
     size_t column = 0U;
     size_t offset;
+    tinypy_bool_t unicode;
     tinypy_string_builder_t builder;
 
     (void)user_data;
@@ -2847,6 +2848,7 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
     if (condition_8) {
         return NULL;
     }
+    unicode = TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
     for (offset = 0U; offset < TINYPY_TEXT_BYTE_SIZE(text); ++offset) {
@@ -2865,13 +2867,12 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
             if (character == (uint8_t)'\n' || character == (uint8_t)'\r') {
                 column = 0U;
             }
-            else if ((character & 0xc0U) != 0x80U) {
+            else if (unicode == 0 || (character & 0xc0U) != 0x80U) {
                 column += 1U;
             }
         }
     }
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(text);
-    tinypy_value_t *return_value_1 = __tinypy_string_builder_finish(&builder, kind == TINYPY_VALUE_UNICODE, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_string_builder_finish(&builder, unicode, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

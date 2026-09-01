@@ -1438,6 +1438,18 @@ static tinypy_value_t *__tinypy_sre_getlower(tinypy_value_t *function, tinypy_va
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_sre_getcodesize(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *result;
+
+    (void)user_data;
+    if (__tinypy_sre_method_arguments(vm, args, kwargs, 0U, 0U, out_error) == 0) {
+        return NULL;
+    }
+    result = tinypy_integer_from_i64(vm, INT64_C(4));
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_sre_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
     tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
 
@@ -1458,6 +1470,7 @@ void tinypy_internal_initialize_sre_module(tinypy_vm_t *vm) {
     tinypy_value_t *magic = tinypy_integer_from_i64(vm, TINYPY_SRE_MAGIC);
     tinypy_value_t *code_size = tinypy_integer_from_i64(vm, INT64_C(4));
     tinypy_value_t *max_repeat = tinypy_long_from_i64(vm, UINT32_MAX);
+    tinypy_value_t *copyright = tinypy_string_from_bytes(vm, " SRE 2.2.2 Copyright (c) 1997-2002 by Secret Labs AB ", 53U);
 
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_PATTERN], "match", 5U, __tinypy_sre_pattern_match_or_search, NULL);
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_PATTERN], "search", 6U, __tinypy_sre_pattern_match_or_search, (void *)(intptr_t)1);
@@ -1473,8 +1486,11 @@ void tinypy_internal_initialize_sre_module(tinypy_vm_t *vm) {
     tinypy_module_add_value(module, "MAGIC", 5U, magic);
     tinypy_module_add_value(module, "CODESIZE", 8U, code_size);
     tinypy_module_add_value(module, "MAXREPEAT", 9U, max_repeat);
+    tinypy_module_add_value(module, "copyright", 9U, copyright);
     __tinypy_sre_add_module_function(vm, module, "compile", 7U, __tinypy_sre_compile);
     __tinypy_sre_add_module_function(vm, module, "getlower", 8U, __tinypy_sre_getlower);
+    __tinypy_sre_add_module_function(vm, module, "getcodesize", 11U, __tinypy_sre_getcodesize);
+    TINYPY_DECREF(copyright);
     TINYPY_DECREF(max_repeat);
     TINYPY_DECREF(code_size);
     TINYPY_DECREF(magic);

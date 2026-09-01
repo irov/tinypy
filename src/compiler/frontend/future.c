@@ -39,7 +39,7 @@ static tinypy_bool_t __tinypy_frontend_future_check_features(tinypy_compile_ctx_
             ff->features |= TINYPY_CODE_FUTURE_UNICODE_LITERALS;
         }
         else if (strcmp(feature, "braces") == 0) {
-            tinypy_internal_compiler_error(arena, TINYPY_ERROR_SYNTAX, "not a chance", s->lineno, 1, arena->out_error);
+            tinypy_internal_compiler_semantic_error(arena, "not a chance", s->lineno);
             return TINYPY_FALSE;
         }
         else {
@@ -50,7 +50,7 @@ static tinypy_bool_t __tinypy_frontend_future_check_features(tinypy_compile_ctx_
             size_t part_sizes[] = {sizeof(prefix) - 1U, feature_size < 100U ? feature_size : 100U, sizeof(suffix) - 1U};
 
             (void)filename;
-            tinypy_internal_compiler_error_parts(arena, TINYPY_ERROR_SYNTAX, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), s->lineno, 1);
+            tinypy_internal_compiler_semantic_error_parts(arena, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), s->lineno);
             return TINYPY_FALSE;
         }
     }
@@ -97,7 +97,7 @@ static tinypy_bool_t __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena,
             }
             if (condition) {
                 if (done) {
-                    tinypy_internal_compiler_error(arena, TINYPY_ERROR_SYNTAX, TINYPY_FUTURE_LATE_IMPORT_MESSAGE, s->lineno, 1, arena->out_error);
+                    tinypy_internal_compiler_semantic_error(arena, TINYPY_FUTURE_LATE_IMPORT_MESSAGE, s->lineno);
                     return TINYPY_FALSE;
                 }
                 if (!__tinypy_frontend_future_check_features(arena, ff, s, filename)) {

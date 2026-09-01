@@ -10,6 +10,17 @@ enum {
 };
 
 //////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_set_like_size(const tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
+        size_t return_value_1 = tinypy_set_size(value);
+        return return_value_1;
+    }
+    size_t return_value_2 = TINYPY_DICT_SIZE(TINYPY_DICT_VIEW_OBJECT((tinypy_value_t *)value)->dict);
+    return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_set_allocate_type(tinypy_type_t *type) {
     tinypy_vm_t *vm = type->vm;
     tinypy_set_object_t *set = (tinypy_set_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
@@ -141,6 +152,14 @@ static tinypy_bool_t __tinypy_set_update_iterable(tinypy_value_t *set, tinypy_va
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_set_copy_type(const tinypy_value_t *source, tinypy_type_t *type) {
+    tinypy_value_t *result = __tinypy_set_allocate_type(type);
+    tinypy_bool_t updated = __tinypy_set_update_iterable(result, (tinypy_value_t *)source, NULL);
+
+    (void)updated;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_set_copy_kind(const tinypy_value_t *source, tinypy_bool_t frozen) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(source);
     tinypy_type_t *type = source->type;
@@ -148,10 +167,7 @@ static tinypy_value_t *__tinypy_set_copy_kind(const tinypy_value_t *source, tiny
     if ((frozen != 0) != (type->layout_kind == TINYPY_VALUE_FROZENSET)) {
         type = &vm->types[frozen != 0 ? TINYPY_VALUE_FROZENSET : TINYPY_VALUE_SET];
     }
-    tinypy_value_t *result = __tinypy_set_allocate_type(type);
-    tinypy_bool_t updated = __tinypy_set_update_iterable(result, (tinypy_value_t *)source, NULL);
-
-    (void)updated;
+    tinypy_value_t *result = __tinypy_set_copy_type(source, type);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -493,7 +509,10 @@ static tinypy_value_t *__tinypy_set_binary_with_view(tinypy_value_t *left, tinyp
     tinypy_bool_t success;
 
     if (operation == TINYPY_SET_BINARY_AND) {
-        success = __tinypy_set_binary_update_selected(result, left, right, 1, out_error);
+        tinypy_value_t *selected = __tinypy_set_like_size(left) < __tinypy_set_like_size(right) ? left : right;
+        tinypy_value_t *other = selected == left ? right : left;
+
+        success = __tinypy_set_binary_update_selected(result, selected, other, 1, out_error);
     }
     else if (operation == TINYPY_SET_BINARY_SUBTRACT) {
         success = __tinypy_set_binary_update_selected(result, left, right, -1, out_error);
@@ -525,9 +544,12 @@ tinypy_value_t *tinypy_internal_set_binary(tinypy_value_t *left, tinypy_value_t 
         tinypy_value_t *return_value_1 = __tinypy_set_binary_with_view(left, right, operation, out_error);
         return return_value_1;
     }
-    tinypy_value_t *result = __tinypy_set_copy_kind(left, left_kind == TINYPY_VALUE_FROZENSET);
+    tinypy_value_t *copy_source = operation == TINYPY_SET_BINARY_AND && tinypy_set_size(right) <= tinypy_set_size(left) ? right : left;
+    tinypy_value_t *result = __tinypy_set_copy_type(copy_source, left->type);
     if (operation == TINYPY_SET_BINARY_AND) {
-        if (__tinypy_set_intersection_update_set(result, right, out_error) == 0) {
+        tinypy_value_t *other = copy_source == left ? right : left;
+
+        if (__tinypy_set_intersection_update_set(result, other, out_error) == 0) {
             TINYPY_DECREF(result);
             return NULL;
         }
@@ -828,7 +850,19 @@ static tinypy_value_t *__tinypy_set_intersection_method(tinypy_value_t *function
             TINYPY_DECREF(result);
             return NULL;
         }
-        if (__tinypy_set_intersection_update_set(result, other, out_error) == 0) {
+        if (tinypy_set_size(other) <= tinypy_set_size(result)) {
+            tinypy_value_t *replacement = __tinypy_set_copy_type(other, result->type);
+
+            if (__tinypy_set_intersection_update_set(replacement, result, out_error) == 0) {
+                TINYPY_DECREF(replacement);
+                TINYPY_DECREF(other);
+                TINYPY_DECREF(result);
+                return NULL;
+            }
+            TINYPY_DECREF(result);
+            result = replacement;
+        }
+        else if (__tinypy_set_intersection_update_set(result, other, out_error) == 0) {
             TINYPY_DECREF(other);
             TINYPY_DECREF(result);
             return NULL;

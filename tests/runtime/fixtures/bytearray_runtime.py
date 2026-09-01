@@ -2,6 +2,7 @@ empty = bytearray()
 assert len(empty) == 0, "empty len"
 assert str(empty) == "", "empty str"
 assert repr(empty) == "bytearray(b'')", "empty repr"
+assert repr(bytearray("J'")) == 'bytearray(b"J\\\'")', "single quote repr"
 
 zeros = bytearray(4)
 assert list(zeros) == [0, 0, 0, 0], "zeros list"
@@ -22,6 +23,9 @@ value[::2] = [65, 66, 67, 68, 69]
 assert str(value) == "A1BXCZDeE", "extended slice"
 del value[1:3]
 assert str(value) == "AXCZDeE", "delete slice"
+deleted_by_empty_assignment = bytearray("abc")
+deleted_by_empty_assignment[::2] = ""
+assert deleted_by_empty_assignment == bytearray("b"), "empty extended slice assignment"
 
 joined = bytearray("ab") + "cd"
 assert repr(joined) == "bytearray(b'abcd')", "joined repr"

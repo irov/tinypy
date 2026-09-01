@@ -68,7 +68,8 @@ uint32_t struct_size;
 
 Меньший известный `struct_size` означает отсутствие добавленных в конец полей.
 Required pointers, ownership, правильный direct-accessor type и индекс являются
-C contract и проверяются assertions в debug build.
+C preconditions. Их нарушение имеет undefined behavior во всех build types;
+публичный контракт не обещает runtime-проверку или debug assertion.
 
 ## 4. VM и параллельность
 
@@ -154,9 +155,21 @@ Runtime реализует:
 - descriptors, properties, class/static methods и `__slots__`;
 - weak references и explicit finalization behavior.
 
-Type slots возвращают прямой semantic result. Неверный slot input является
-debug contract. Python exceptions используются только для настоящих runtime
-ошибок.
+Type slots возвращают прямой semantic result. Неверный slot input нарушает C
+precondition и имеет undefined behavior. Python exceptions используются только
+для настоящих runtime ошибок.
+
+Python-visible bundled surface намеренно ограничен memory-only runtime:
+
+- встроены `__builtin__`, `sys`, `exceptions`, `__future__`, `_codecs`,
+  `_functools`, `_weakref`, `_struct`, `_sre` и `copy_reg`;
+- `_codecs` гарантирует ASCII, Latin-1, UTF-8 и transform codec `hex`; остальные
+  encodings должен предоставить host search function;
+- `_struct` гарантирует формат `d` с repeat counts и byte-order prefixes, а
+  также `Struct`, `pack`, `unpack`, `pack_into` и `unpack_from`;
+- filesystem-backed standard library, source-encoding discovery, process
+  metadata, environment-dependent `sys` paths и standard I/O input не
+  эмулируются. Их предоставляет host либо импортированный memory artifact.
 
 ## 7. Bytecode runtime
 

@@ -1938,10 +1938,8 @@ static tinypy_bool_t __tinypy_codegen_assert(tinypy_codegen_t *c, tinypy_ast_sta
         return TINYPY_TRUE;
     }
     if (s->v.Assert.test->kind == TINYPY_AST_KIND_TUPLE && TINYPY_AST_SEQUENCE_LENGTH(s->v.Assert.test->v.Tuple.elts) > 0) {
-        const char *msg =
-            "assertion is always TINYPY_COMPILER_TRUE, perhaps remove parentheses?";
-        if (TINYPY_COMPILER_ERR_WARN_EXPLICIT(TINYPY_COMPILER_EXC_SYNTAX_WARNING, msg, c->c_filename,
-                                              c->u->u_lineno, NULL, NULL) == -1) {
+        const char *msg = "assertion is always true, perhaps remove parentheses?";
+        if (tinypy_internal_compiler_syntax_warning(c->c_arena, msg, c->u->u_lineno) == 0) {
             return TINYPY_FALSE;
         }
     }
@@ -2299,9 +2297,7 @@ static tinypy_bool_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_ide
                              TINYPY_COMPILER_STRING_AS_STRING(name), name_size);
                 (void)memcpy(message + sizeof(prefix) - 1U + name_size,
                              suffix, sizeof(suffix));
-                tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_SYNTAX,
-                                               message, c->u->u_lineno, 1,
-                                               c->c_arena->out_error);
+                tinypy_internal_compiler_semantic_error(c->c_arena, message, c->u->u_lineno);
             }
             TINYPY_COMPILER_DECREF(mangled);
             return TINYPY_FALSE;
@@ -3074,10 +3070,9 @@ static tinypy_bool_t __tinypy_codegen_augassign(tinypy_codegen_t *c, tinypy_ast_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_codegen_push_fblock(tinypy_codegen_t *c, tinypy_codegen_frame_block_e t, tinypy_codegen_block_t *b) {
     if (c->u->u_nfblocks >= TINYPY_COMPILER_MAX_BLOCKS) {
-        tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_SYNTAX,
-                                       "too many statically nested blocks",
-                                       c->u->u_lineno, 1,
-                                       c->c_arena->out_error);
+        tinypy_internal_compiler_semantic_error(c->c_arena,
+                                                "too many statically nested blocks",
+                                                c->u->u_lineno);
         return TINYPY_FALSE;
     }
     tinypy_codegen_frame_block_t *f = &c->u->u_fblock[c->u->u_nfblocks++];
@@ -3109,8 +3104,7 @@ static tinypy_bool_t __tinypy_codegen_in_loop(tinypy_codegen_t *c) {
 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_codegen_error(tinypy_codegen_t *c, const char *errstr) {
-    tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_SYNTAX, errstr,
-                                   c->u->u_lineno, 1, c->c_arena->out_error);
+    tinypy_internal_compiler_semantic_error(c->c_arena, errstr, c->u->u_lineno);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////

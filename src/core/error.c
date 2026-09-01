@@ -87,8 +87,8 @@ static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, con
     size_t string_length = __tinypy_internal_string_length(message);
     tinypy_value_t *message_value = tinypy_string_from_bytes(vm, message, string_length);
     tinypy_value_t *filename_value = logical_filename != NULL ? tinypy_string_from_bytes(vm, logical_filename, filename_size) : tinypy_none_get(vm);
-    line_value = tinypy_integer_from_i64(vm, line_number);
-    offset_value = tinypy_integer_from_i64(vm, column_offset);
+    line_value = line_number > 0 ? tinypy_integer_from_i64(vm, line_number) : tinypy_none_get(vm);
+    offset_value = column_offset > 0 ? tinypy_integer_from_i64(vm, column_offset) : tinypy_none_get(vm);
     text_value = source_line != NULL ? tinypy_string_from_bytes(vm, source_line, source_line_size) : tinypy_none_get(vm);
     location_items[0] = filename_value;
     location_items[1] = line_value;

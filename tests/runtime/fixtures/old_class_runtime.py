@@ -171,3 +171,24 @@ for expected_name in ("inherited_marker", "local_marker", "method", "instance_ma
     assert expected_name in instance_names
 for unexpected_name in ("__class__", "__dict__"):
     assert unexpected_name not in instance_names
+
+
+class ClassicDescriptor(object):
+    def __get__(self, instance, owner):
+        return instance is None, owner.__name__
+
+
+class ClassicDescriptorOwner:
+    value = ClassicDescriptor()
+
+
+assert ClassicDescriptorOwner.value == (True, "ClassicDescriptorOwner")
+assert ClassicDescriptorOwner().value == (False, "ClassicDescriptorOwner")
+
+
+class ClassicPropertyOwner:
+    value = property(lambda self: 9)
+
+
+assert ClassicPropertyOwner.value is ClassicPropertyOwner.__dict__["value"]
+assert ClassicPropertyOwner().value == 9

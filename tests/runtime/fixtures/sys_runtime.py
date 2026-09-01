@@ -1,5 +1,49 @@
 import sys
 
+assert sys.version_info == (2, 7, 18, "final", 0)
+assert sys.api_version == 1013
+assert sys.maxsize == sys.maxint
+assert sys.getdefaultencoding() == "ascii"
+assert "_struct" in sys.builtin_module_names
+assert sys.warnoptions == []
+assert sys.meta_path == []
+assert sys.path_hooks == []
+assert sys.path_importer_cache == {}
+
+for exit_code in (None, 7, "exit"):
+    try:
+        if exit_code is None:
+            sys.exit()
+        else:
+            sys.exit(exit_code)
+    except SystemExit as exit_error:
+        assert exit_error.code is exit_code
+    else:
+        raise AssertionError("sys.exit did not raise SystemExit")
+
+import __future__ as future
+
+assert future.all_feature_names == [
+    "nested_scopes", "generators", "division", "absolute_import",
+    "with_statement", "print_function", "unicode_literals",
+]
+assert future.division.getOptionalRelease() == (2, 2, 0, "alpha", 2)
+assert future.division.getMandatoryRelease() == (3, 0, 0, "alpha", 0)
+assert future.division.compiler_flag == future.CO_FUTURE_DIVISION == 0x2000
+assert future.CO_FUTURE_UNICODE_LITERALS == 0x20000
+assert repr(future.division) == "_Feature((2, 2, 0, 'alpha', 2), (3, 0, 0, 'alpha', 0), 8192)"
+
+import __builtin__
+if sys.platform == "win32":
+    assert hasattr(__builtin__, "WindowsError")
+else:
+    assert not hasattr(__builtin__, "WindowsError")
+
+import _sre
+
+assert _sre.getcodesize() == _sre.CODESIZE == 4
+assert _sre.copyright == " SRE 2.2.2 Copyright (c) 1997-2002 by Secret Labs AB "
+
 assert callable(sys.displayhook)
 assert sys.displayhook is sys.__displayhook__
 
@@ -29,6 +73,32 @@ sys.displayhook = lambda value: displayed.append(value)
 assert eval(compile("6 * 7", "<single>", "single")) is None
 assert displayed == [42]
 sys.displayhook = original_displayhook
+
+warning_sink = DisplaySink()
+original_stderr = sys.stderr
+sys.stderr = warning_sink
+try:
+    compile("assert (1, 2)", "warn.py", "exec")
+    compile("def f():\n x=1\n global x", "warn.py", "exec")
+    compile("def f():\n print x\n global x", "warn.py", "exec")
+    compile("def f():\n from m import *", "warn.py", "exec")
+finally:
+    sys.stderr = original_stderr
+assert warning_sink.text == (
+    "warn.py:1: SyntaxWarning: assertion is always true, perhaps remove parentheses?\n"
+    "warn.py:3: SyntaxWarning: name 'x' is assigned to before global declaration\n"
+    "warn.py:3: SyntaxWarning: name 'x' is used prior to global declaration\n"
+    "warn.py:1: SyntaxWarning: import * only allowed at module level\n"
+)
+
+try:
+    compile("return 1", "sample.py", "exec")
+except SyntaxError as syntax_error:
+    assert syntax_error.args == ("'return' outside function", ("sample.py", 1, None, None))
+    assert syntax_error.offset is None
+    assert syntax_error.text is None
+else:
+    raise AssertionError("return outside function compiled")
 
 dynamic_unicode = eval("u'\xd0\xb0'")
 assert type(dynamic_unicode) is unicode

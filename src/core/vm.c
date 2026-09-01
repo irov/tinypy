@@ -666,6 +666,35 @@ static tinypy_value_t *__tinypy_internal_sys_setrecursionlimit(tinypy_value_t *f
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_sys_getdefaultencoding(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *result;
+
+    (void)user_data;
+    if (__tinypy_internal_sys_arguments(vm, args, kwargs, 0U, 0U, out_error) == 0) {
+        return NULL;
+    }
+    result = tinypy_string_from_bytes(vm, "ascii", 5U);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_sys_exit(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *exception;
+
+    (void)user_data;
+    if (__tinypy_internal_sys_arguments(vm, args, kwargs, 0U, 1U, out_error) == 0) {
+        return NULL;
+    }
+    exception = tinypy_exception_new(vm->exception_types[TINYPY_EXCEPTION_SYSTEM_EXIT], args, out_error);
+    if (exception == NULL) {
+        return NULL;
+    }
+    (void)tinypy_exception_raise(exception, NULL, out_error);
+    TINYPY_DECREF(exception);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_sys_displayhook(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *value;
@@ -724,6 +753,199 @@ static tinypy_value_t *__tinypy_internal_sys_displayhook(tinypy_value_t *functio
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_future_feature_init(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *result;
+
+    (void)user_data;
+    if (__tinypy_internal_sys_arguments(vm, args, kwargs, 4U, 4U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_instance_set_attr(self, "optional", 8U, TINYPY_TUPLE_GET(args, 1U));
+    tinypy_instance_set_attr(self, "mandatory", 9U, TINYPY_TUPLE_GET(args, 2U));
+    tinypy_instance_set_attr(self, "compiler_flag", 13U, TINYPY_TUPLE_GET(args, 3U));
+    result = tinypy_none_get(vm);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_future_feature_release(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    const char *name = (intptr_t)user_data == 0 ? "optional" : "mandatory";
+    size_t name_size = (intptr_t)user_data == 0 ? 8U : 9U;
+
+    if (__tinypy_internal_sys_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *value = tinypy_object_get_attr(TINYPY_TUPLE_GET(args, 0U), name, name_size, out_error);
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_future_feature_repr(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *optional = NULL;
+    tinypy_value_t *mandatory = NULL;
+    tinypy_value_t *flag = NULL;
+    tinypy_value_t *optional_repr = NULL;
+    tinypy_value_t *mandatory_repr = NULL;
+    tinypy_value_t *flag_repr = NULL;
+    tinypy_value_t *result = NULL;
+
+    (void)user_data;
+    if (__tinypy_internal_sys_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    optional = tinypy_object_get_attr(self, "optional", 8U, out_error);
+    mandatory = optional != NULL ? tinypy_object_get_attr(self, "mandatory", 9U, out_error) : NULL;
+    flag = mandatory != NULL ? tinypy_object_get_attr(self, "compiler_flag", 13U, out_error) : NULL;
+    if (flag == NULL) {
+        goto cleanup;
+    }
+    optional_repr = tinypy_object_repr(optional, out_error);
+    mandatory_repr = optional_repr != NULL ? tinypy_object_repr(mandatory, out_error) : NULL;
+    flag_repr = mandatory_repr != NULL ? tinypy_object_repr(flag, out_error) : NULL;
+    if (flag_repr != NULL) {
+        size_t optional_size = TINYPY_TEXT_BYTE_SIZE(optional_repr);
+        size_t mandatory_size = TINYPY_TEXT_BYTE_SIZE(mandatory_repr);
+        size_t flag_size = TINYPY_TEXT_BYTE_SIZE(flag_repr);
+        size_t result_size = optional_size + mandatory_size + flag_size + 14U;
+        uint8_t *output;
+
+        result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, result_size, result_size, &output, out_error);
+        if (result != NULL) {
+            size_t position = 0U;
+
+            (void)memcpy(output + position, "_Feature(", 9U);
+            position += 9U;
+            (void)memcpy(output + position, TINYPY_TEXT_BYTES(optional_repr), optional_size);
+            position += optional_size;
+            (void)memcpy(output + position, ", ", 2U);
+            position += 2U;
+            (void)memcpy(output + position, TINYPY_TEXT_BYTES(mandatory_repr), mandatory_size);
+            position += mandatory_size;
+            (void)memcpy(output + position, ", ", 2U);
+            position += 2U;
+            (void)memcpy(output + position, TINYPY_TEXT_BYTES(flag_repr), flag_size);
+            position += flag_size;
+            output[position] = (uint8_t)')';
+        }
+    }
+
+cleanup:
+    if (flag_repr != NULL) {
+        TINYPY_DECREF(flag_repr);
+    }
+    if (mandatory_repr != NULL) {
+        TINYPY_DECREF(mandatory_repr);
+    }
+    if (optional_repr != NULL) {
+        TINYPY_DECREF(optional_repr);
+    }
+    if (flag != NULL) {
+        TINYPY_DECREF(flag);
+    }
+    if (mandatory != NULL) {
+        TINYPY_DECREF(mandatory);
+    }
+    if (optional != NULL) {
+        TINYPY_DECREF(optional);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_future_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
+    tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
+
+    tinypy_type_set_attr(type, name, name_size, function);
+    TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_future_release_tuple(tinypy_vm_t *vm, int64_t major, int64_t minor, int64_t micro, const char *level, size_t level_size, int64_t serial) {
+    tinypy_value_t *values[5];
+    tinypy_value_t *result;
+    size_t index;
+
+    values[0] = tinypy_integer_from_i64(vm, major);
+    values[1] = tinypy_integer_from_i64(vm, minor);
+    values[2] = tinypy_integer_from_i64(vm, micro);
+    values[3] = tinypy_string_from_bytes(vm, level, level_size);
+    values[4] = tinypy_integer_from_i64(vm, serial);
+    result = tinypy_tuple_from_items(vm, values, 5U);
+    for (index = 0U; index != 5U; ++index) {
+        TINYPY_DECREF(values[index]);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_future_add_feature(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_type_t *feature_type, tinypy_value_t *names, const char *name, size_t name_size, tinypy_value_t *optional, tinypy_value_t *mandatory, int64_t flag) {
+    tinypy_value_t *instance = tinypy_instance_new(feature_type);
+    tinypy_value_t *flag_value = tinypy_integer_from_i64(vm, flag);
+    tinypy_value_t *name_value = tinypy_string_from_bytes(vm, name, name_size);
+
+    tinypy_instance_set_attr(instance, "optional", 8U, optional);
+    tinypy_instance_set_attr(instance, "mandatory", 9U, mandatory);
+    tinypy_instance_set_attr(instance, "compiler_flag", 13U, flag_value);
+    tinypy_module_add_value(module, name, name_size, instance);
+    (void)tinypy_internal_list_append_checked(names, name_value, NULL);
+    TINYPY_DECREF(name_value);
+    TINYPY_DECREF(flag_value);
+    TINYPY_DECREF(instance);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_initialize_future_module(tinypy_vm_t *vm) {
+    static const char *const constant_names[] = {"CO_NESTED", "CO_GENERATOR_ALLOWED", "CO_FUTURE_DIVISION", "CO_FUTURE_ABSOLUTE_IMPORT", "CO_FUTURE_WITH_STATEMENT", "CO_FUTURE_PRINT_FUNCTION", "CO_FUTURE_UNICODE_LITERALS"};
+    static const size_t constant_name_sizes[] = {9U, 20U, 18U, 25U, 24U, 24U, 26U};
+    static const int64_t constant_values[] = {16, 0, 8192, 16384, 32768, 65536, 131072};
+    tinypy_value_t *module = tinypy_module_new(vm, "__future__", 10U);
+    tinypy_value_t *name = tinypy_string_from_bytes(vm, "__future__", 10U);
+    tinypy_type_t *feature_type = tinypy_type_new(vm, "_Feature", 8U, NULL, 0U, NULL, NULL, NULL);
+    tinypy_value_t *module_name = tinypy_string_from_bytes(vm, "__future__", 10U);
+    tinypy_value_t *feature_names = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *optional;
+    tinypy_value_t *mandatory;
+    size_t index;
+
+    tinypy_module_add_value(module, "__name__", 8U, name);
+    tinypy_type_set_attr(feature_type, "__module__", 10U, module_name);
+    __tinypy_future_add_method(feature_type, "__init__", 8U, __tinypy_future_feature_init, NULL);
+    __tinypy_future_add_method(feature_type, "getOptionalRelease", 18U, __tinypy_future_feature_release, (void *)(intptr_t)0);
+    __tinypy_future_add_method(feature_type, "getMandatoryRelease", 19U, __tinypy_future_feature_release, (void *)(intptr_t)1);
+    __tinypy_future_add_method(feature_type, "__repr__", 8U, __tinypy_future_feature_repr, NULL);
+    tinypy_module_add_value(module, "_Feature", 8U, &feature_type->base.base);
+    for (index = 0U; index != sizeof(constant_values) / sizeof(constant_values[0]); ++index) {
+        tinypy_value_t *value = tinypy_integer_from_i64(vm, constant_values[index]);
+
+        tinypy_module_add_value(module, constant_names[index], constant_name_sizes[index], value);
+        TINYPY_DECREF(value);
+    }
+
+#define TINYPY_FUTURE_FEATURE(feature_name, optional_major, optional_minor, optional_level, optional_serial, mandatory_major, mandatory_minor, mandatory_level, flag_value) \
+    do {                                                                                                                                                                                   \
+        optional = __tinypy_future_release_tuple(vm, optional_major, optional_minor, 0, optional_level, sizeof(optional_level) - 1U, optional_serial);                                      \
+        mandatory = __tinypy_future_release_tuple(vm, mandatory_major, mandatory_minor, 0, mandatory_level, sizeof(mandatory_level) - 1U, 0);                                               \
+        __tinypy_future_add_feature(vm, module, feature_type, feature_names, #feature_name, sizeof(#feature_name) - 1U, optional, mandatory, flag_value);                                     \
+        TINYPY_DECREF(mandatory);                                                                                                                                                           \
+        TINYPY_DECREF(optional);                                                                                                                                                            \
+    } while (0)
+
+    TINYPY_FUTURE_FEATURE(nested_scopes, 2, 1, "beta", 1, 2, 2, "alpha", 16);
+    TINYPY_FUTURE_FEATURE(generators, 2, 2, "alpha", 1, 2, 3, "final", 0);
+    TINYPY_FUTURE_FEATURE(division, 2, 2, "alpha", 2, 3, 0, "alpha", 8192);
+    TINYPY_FUTURE_FEATURE(absolute_import, 2, 5, "alpha", 1, 3, 0, "alpha", 16384);
+    TINYPY_FUTURE_FEATURE(with_statement, 2, 5, "alpha", 1, 2, 6, "alpha", 32768);
+    TINYPY_FUTURE_FEATURE(print_function, 2, 6, "alpha", 2, 3, 0, "alpha", 65536);
+    TINYPY_FUTURE_FEATURE(unicode_literals, 2, 6, "alpha", 2, 3, 0, "alpha", 131072);
+#undef TINYPY_FUTURE_FEATURE
+
+    tinypy_module_add_value(module, "all_feature_names", 17U, feature_names);
+    TINYPY_DECREF(feature_names);
+    TINYPY_DECREF(module_name);
+    TINYPY_DECREF(&feature_type->base.base);
+    TINYPY_DECREF(name);
+    return module;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_sys_add_function(tinypy_vm_t *vm, tinypy_value_t *module, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
     tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
 
@@ -764,11 +986,69 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     TINYPY_DECREF(name);
     name = tinypy_integer_from_i64(vm, INT64_MAX);
     tinypy_module_add_value(sys_module, "maxint", 6U, name);
+    tinypy_module_add_value(sys_module, "maxsize", 7U, name);
     TINYPY_DECREF(name);
     name = tinypy_integer_from_i64(vm, INT64_C(0x10ffff));
     tinypy_module_add_value(sys_module, "maxunicode", 10U, name);
     TINYPY_DECREF(name);
     tinypy_module_add_value(sys_module, "py3kwarning", 11U, &vm->false_object.base);
+    tinypy_module_add_value(sys_module, "dont_write_bytecode", 19U, &vm->false_object.base);
+    name = tinypy_string_from_bytes(vm, "2.7.18 (tinypy)", 15U);
+    tinypy_module_add_value(sys_module, "version", 7U, name);
+    TINYPY_DECREF(name);
+    tinypy_value_t *version_items[5];
+    version_items[0] = tinypy_integer_from_i64(vm, INT64_C(2));
+    version_items[1] = tinypy_integer_from_i64(vm, INT64_C(7));
+    version_items[2] = tinypy_integer_from_i64(vm, INT64_C(18));
+    version_items[3] = tinypy_string_from_bytes(vm, "final", 5U);
+    version_items[4] = tinypy_integer_from_i64(vm, INT64_C(0));
+    tinypy_value_t *version_info = tinypy_tuple_from_items(vm, version_items, 5U);
+    for (size_t version_index = 0U; version_index != 5U; ++version_index) {
+        TINYPY_DECREF(version_items[version_index]);
+    }
+    tinypy_module_add_value(sys_module, "version_info", 12U, version_info);
+    TINYPY_DECREF(version_info);
+    name = tinypy_integer_from_i64(vm, INT64_C(1013));
+    tinypy_module_add_value(sys_module, "api_version", 11U, name);
+    TINYPY_DECREF(name);
+#if defined(_WIN32)
+    name = tinypy_string_from_bytes(vm, "win32", 5U);
+#elif defined(__APPLE__)
+    name = tinypy_string_from_bytes(vm, "darwin", 6U);
+#elif defined(__linux__)
+    name = tinypy_string_from_bytes(vm, "linux2", 6U);
+#else
+    name = tinypy_string_from_bytes(vm, "unknown", 7U);
+#endif
+    tinypy_module_add_value(sys_module, "platform", 8U, name);
+    TINYPY_DECREF(name);
+    name = tinypy_string_from_bytes(vm, "short", 5U);
+    tinypy_module_add_value(sys_module, "float_repr_style", 16U, name);
+    TINYPY_DECREF(name);
+    tinypy_value_t *warn_options = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *meta_path = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *path_hooks = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *path_importer_cache = tinypy_dict_new(vm);
+    tinypy_module_add_value(sys_module, "warnoptions", 11U, warn_options);
+    tinypy_module_add_value(sys_module, "meta_path", 9U, meta_path);
+    tinypy_module_add_value(sys_module, "path_hooks", 10U, path_hooks);
+    tinypy_module_add_value(sys_module, "path_importer_cache", 19U, path_importer_cache);
+    TINYPY_DECREF(path_importer_cache);
+    TINYPY_DECREF(path_hooks);
+    TINYPY_DECREF(meta_path);
+    TINYPY_DECREF(warn_options);
+    static const char *const builtin_module_name_bytes[] = {"__builtin__", "__future__", "_codecs", "_functools", "_sre", "_struct", "_weakref", "copy_reg", "exceptions", "sys"};
+    static const size_t builtin_module_name_sizes[] = {11U, 10U, 7U, 10U, 4U, 7U, 8U, 8U, 10U, 3U};
+    tinypy_value_t *builtin_module_name_values[10];
+    for (size_t module_index = 0U; module_index != 10U; ++module_index) {
+        builtin_module_name_values[module_index] = tinypy_string_from_bytes(vm, builtin_module_name_bytes[module_index], builtin_module_name_sizes[module_index]);
+    }
+    tinypy_value_t *builtin_module_names = tinypy_tuple_from_items(vm, builtin_module_name_values, 10U);
+    for (size_t module_index = 0U; module_index != 10U; ++module_index) {
+        TINYPY_DECREF(builtin_module_name_values[module_index]);
+    }
+    tinypy_module_add_value(sys_module, "builtin_module_names", 20U, builtin_module_names);
+    TINYPY_DECREF(builtin_module_names);
     TINYPY_DECREF(stderr_value);
     TINYPY_DECREF(stdout_value);
     __tinypy_internal_sys_add_function(vm, sys_module, "exc_info", 8U, __tinypy_internal_sys_exc_info);
@@ -776,22 +1056,14 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     __tinypy_internal_sys_add_function(vm, sys_module, "_getframe", 9U, __tinypy_internal_sys_getframe);
     __tinypy_internal_sys_add_function(vm, sys_module, "getrecursionlimit", 17U, __tinypy_internal_sys_getrecursionlimit);
     __tinypy_internal_sys_add_function(vm, sys_module, "setrecursionlimit", 17U, __tinypy_internal_sys_setrecursionlimit);
+    __tinypy_internal_sys_add_function(vm, sys_module, "getdefaultencoding", 18U, __tinypy_internal_sys_getdefaultencoding);
+    __tinypy_internal_sys_add_function(vm, sys_module, "exit", 4U, __tinypy_internal_sys_exit);
     tinypy_value_t *displayhook = tinypy_native_function_new(vm, "displayhook", 11U, __tinypy_internal_sys_displayhook, NULL, NULL);
     tinypy_module_add_value(sys_module, "displayhook", 11U, displayhook);
     tinypy_module_add_value(sys_module, "__displayhook__", 15U, displayhook);
     TINYPY_DECREF(displayhook);
     tinypy_internal_register_module(vm, "sys", 3U, sys_module);
-    future_module = tinypy_module_new(vm, "__future__", 10U);
-    name = tinypy_string_from_bytes(vm, "__future__", 10U);
-    tinypy_module_add_value(future_module, "__name__", 8U, name);
-    TINYPY_DECREF(name);
-    tinypy_module_add_value(future_module, "nested_scopes", 13U, &vm->none_object.base);
-    tinypy_module_add_value(future_module, "generators", 10U, &vm->none_object.base);
-    tinypy_module_add_value(future_module, "division", 8U, &vm->none_object.base);
-    tinypy_module_add_value(future_module, "absolute_import", 15U, &vm->none_object.base);
-    tinypy_module_add_value(future_module, "with_statement", 14U, &vm->none_object.base);
-    tinypy_module_add_value(future_module, "print_function", 14U, &vm->none_object.base);
-    tinypy_module_add_value(future_module, "unicode_literals", 16U, &vm->none_object.base);
+    future_module = __tinypy_internal_initialize_future_module(vm);
     tinypy_internal_register_module(vm, "__future__", 10U, future_module);
     tinypy_internal_initialize_weakref_module(vm);
     tinypy_internal_initialize_codecs_module(vm);

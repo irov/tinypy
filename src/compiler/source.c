@@ -249,6 +249,86 @@ void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_erro
     tinypy_internal_compiler_error(ctx, error_kind, message, line_number, column_offset, ctx->out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number) {
+    if (ctx->failed != 0) {
+        return;
+    }
+    ctx->failed = 1;
+    tinypy_internal_make_vm_error_location(ctx->vm, TINYPY_ERROR_SYNTAX, message, ctx->logical_filename, ctx->filename_size, line_number, 0, NULL, 0U, ctx->out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number) {
+    size_t message_size = 0U;
+    size_t index;
+    size_t offset = 0U;
+    char *message;
+
+    for (index = 0U; index != part_count; ++index) {
+        if (part_sizes[index] > SIZE_MAX - message_size) {
+            tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", line_number, 0, ctx->out_error);
+            return;
+        }
+        message_size += part_sizes[index];
+    }
+    if (message_size == SIZE_MAX) {
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", line_number, 0, ctx->out_error);
+        return;
+    }
+    message = (char *)tinypy_internal_compiler_arena_allocate(ctx, message_size + 1U);
+    if (message == NULL) {
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", line_number, 0, ctx->out_error);
+        return;
+    }
+    for (index = 0U; index != part_count; ++index) {
+        if (part_sizes[index] != 0U) {
+            (void)memcpy(message + offset, parts[index], part_sizes[index]);
+        }
+        offset += part_sizes[index];
+    }
+    message[offset] = '\0';
+    tinypy_internal_compiler_semantic_error(ctx, message, line_number);
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number) {
+    static const char label[] = ": SyntaxWarning: ";
+    tinypy_vm_t *vm = ctx->vm;
+    tinypy_value_t *sys_module = tinypy_dict_get_optional(vm->modules, vm->sys_key);
+    tinypy_value_t *stderr_value;
+    tinypy_error_t *write_error = NULL;
+    char line_buffer[16];
+    size_t line_size = 0U;
+    uint32_t line = line_number > 0 ? (uint32_t)line_number : UINT32_C(1);
+
+    if (sys_module == NULL) {
+        return TINYPY_TRUE;
+    }
+    stderr_value = tinypy_module_get_value(sys_module, "stderr", 6U);
+    if (stderr_value == NULL) {
+        return TINYPY_TRUE;
+    }
+    do {
+        line_buffer[sizeof(line_buffer) - 1U - line_size] = (char)('0' + line % UINT32_C(10));
+        line /= UINT32_C(10);
+        line_size += 1U;
+    } while (line != 0U);
+    if (tinypy_internal_output_write(stderr_value, ctx->logical_filename, ctx->filename_size, &write_error) == 0 ||
+        tinypy_internal_output_write(stderr_value, ":", 1U, &write_error) == 0 ||
+        tinypy_internal_output_write(stderr_value, line_buffer + sizeof(line_buffer) - line_size, line_size, &write_error) == 0 ||
+        tinypy_internal_output_write(stderr_value, label, sizeof(label) - 1U, &write_error) == 0 ||
+        tinypy_internal_output_write(stderr_value, message, strlen(message), &write_error) == 0 ||
+        tinypy_internal_output_write(stderr_value, "\n", 1U, &write_error) == 0) {
+        ctx->failed = 1;
+        if (ctx->out_error != NULL) {
+            *ctx->out_error = write_error;
+        }
+        else if (write_error != NULL) {
+            tinypy_error_release(write_error);
+        }
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const void *source, size_t source_size, tinypy_error_t **out_error) {
     const uint8_t *input = (const uint8_t *)source;
     const uint8_t *cookie = NULL;

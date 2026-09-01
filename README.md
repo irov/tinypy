@@ -34,6 +34,9 @@ The current implementation provides:
 tinypy deliberately has no cyclic collector. Embedders must release owned
 values and break owning cycles before destroying a VM.
 
+Its Python-visible standard-library surface is intentionally memory-only;
+filesystem-backed modules and process/environment metadata belong to the host.
+
 ## Compiler
 
 The embedded compiler accepts sized memory buffers in `exec`, `eval` and

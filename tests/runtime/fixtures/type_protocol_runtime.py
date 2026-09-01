@@ -299,3 +299,10 @@ for attribute in ("func", "args", "keywords"):
         pass
     else:
         raise AssertionError("partial exposed a writable structural field")
+
+exec_globals = {}
+exec_locals = {}
+exec "created = 42" in exec_globals, exec_locals
+assert "__builtins__" in exec_globals
+assert "__builtins__" not in exec_locals
+assert exec_locals["created"] == 42

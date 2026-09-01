@@ -296,7 +296,7 @@ static tinypy_bool_t __analyze_name(tinypy_symbol_entry_t *ste, tinypy_value_t *
             const char *parts[] = {prefix, TINYPY_COMPILER_STRING_AS_STRING(name), suffix};
             size_t part_sizes[] = {sizeof(prefix) - 1U, (size_t)TINYPY_COMPILER_STRING_GET_SIZE(name), sizeof(suffix) - 1U};
 
-            tinypy_internal_compiler_error_parts(ste->table->arena, TINYPY_ERROR_SYNTAX, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), ste->line_number, 1);
+            tinypy_internal_compiler_semantic_error_parts(ste->table->arena, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), ste->line_number);
             return TINYPY_FALSE;
         }
         TINYPY_SYMBOL_SET_SCOPE(dict, name, TINYPY_SYMBOL_SCOPE_GLOBAL_EXPLICIT);
@@ -429,7 +429,7 @@ static tinypy_bool_t __check_unoptimized(const tinypy_symbol_entry_t *ste) {
         const char *parts[] = {prefix, name, infix, trailer};
         size_t part_sizes[] = {sizeof(prefix) - 1U, name_size, sizeof(infix) - 1U, trailer_size};
 
-        tinypy_internal_compiler_error_parts(ste->table->arena, TINYPY_ERROR_SYNTAX, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), ste->optimization_line_number, 1);
+        tinypy_internal_compiler_semantic_error_parts(ste->table->arena, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), ste->optimization_line_number);
         break;
     }
     case TINYPY_SYMBOL_OPTIMIZATION_BARE_EXEC: {
@@ -438,7 +438,7 @@ static tinypy_bool_t __check_unoptimized(const tinypy_symbol_entry_t *ste) {
         const char *parts[] = {prefix, name, infix, trailer};
         size_t part_sizes[] = {sizeof(prefix) - 1U, name_size, sizeof(infix) - 1U, trailer_size};
 
-        tinypy_internal_compiler_error_parts(ste->table->arena, TINYPY_ERROR_SYNTAX, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), ste->optimization_line_number, 1);
+        tinypy_internal_compiler_semantic_error_parts(ste->table->arena, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), ste->optimization_line_number);
         break;
     }
     default: {
@@ -447,7 +447,7 @@ static tinypy_bool_t __check_unoptimized(const tinypy_symbol_entry_t *ste) {
         const char *parts[] = {prefix, name, infix, trailer};
         size_t part_sizes[] = {sizeof(prefix) - 1U, name_size, sizeof(infix) - 1U, trailer_size};
 
-        tinypy_internal_compiler_error_parts(ste->table->arena, TINYPY_ERROR_SYNTAX, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), ste->optimization_line_number, 1);
+        tinypy_internal_compiler_semantic_error_parts(ste->table->arena, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), ste->optimization_line_number);
         break;
     }
     }
@@ -743,11 +743,34 @@ static tinypy_bool_t __tinypy_symbol_analyze(tinypy_symbol_table_t *st) {
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_symbol_warn(tinypy_symbol_table_t *st, tinypy_value_t *warn, const char *msg, int32_t lineno) {
-    (void)st;
+    tinypy_bool_t result;
+
     (void)warn;
-    (void)msg;
-    (void)lineno;
-    return TINYPY_TRUE;
+    result = tinypy_internal_compiler_syntax_warning(st->arena, msg, lineno > 0 ? lineno : st->current->line_number);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_symbol_warn_global(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_bool_t assigned, int32_t lineno) {
+    static const char prefix[] = "name '";
+    static const char assigned_suffix[] = "' is assigned to before global declaration";
+    static const char used_suffix[] = "' is used prior to global declaration";
+    const char *suffix = assigned != 0 ? assigned_suffix : used_suffix;
+    size_t suffix_size = assigned != 0 ? sizeof(assigned_suffix) - 1U : sizeof(used_suffix) - 1U;
+    size_t name_size = (size_t)TINYPY_COMPILER_STRING_GET_SIZE(name);
+    size_t message_size = sizeof(prefix) - 1U + name_size + suffix_size;
+    char *message = (char *)TINYPY_COMPILER_ARENA_MALLOC(st->arena, message_size + 1U);
+    tinypy_bool_t result;
+
+    if (message == NULL) {
+        tinypy_internal_compiler_error(st->arena, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", lineno, 0, st->arena->out_error);
+        return TINYPY_FALSE;
+    }
+    (void)memcpy(message, prefix, sizeof(prefix) - 1U);
+    (void)memcpy(message + sizeof(prefix) - 1U, TINYPY_COMPILER_STRING_AS_STRING(name), name_size);
+    (void)memcpy(message + sizeof(prefix) - 1U + name_size, suffix, suffix_size);
+    message[message_size] = '\0';
+    result = __tinypy_symbol_warn(st, NULL, message, lineno);
+    return result;
 }
 
 /* __tinypy_symbol_enter_block() gets a reference via ste_new.
@@ -832,7 +855,7 @@ static tinypy_bool_t __tinypy_symbol_add_def(tinypy_symbol_table_t *st, tinypy_v
             const char *parts[] = {prefix, TINYPY_COMPILER_STRING_AS_STRING(name), suffix};
             size_t part_sizes[] = {sizeof(prefix) - 1U, (size_t)TINYPY_COMPILER_STRING_GET_SIZE(name), sizeof(suffix) - 1U};
 
-            tinypy_internal_compiler_error_parts(st->arena, TINYPY_ERROR_SYNTAX, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), st->current->line_number, 1);
+            tinypy_internal_compiler_semantic_error_parts(st->arena, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), st->current->line_number);
             goto error;
         }
         val |= flag;
@@ -999,7 +1022,7 @@ static tinypy_bool_t __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinyp
             TINYPY_SYMBOL_VISIT(st, expr, s->v.Return.value);
             st->current->returns_value = 1;
             if (st->current->generator) {
-                tinypy_internal_compiler_error(st->arena, TINYPY_ERROR_SYNTAX, TINYPY_SYMBOL_RETURN_VALUE_IN_GENERATOR, s->lineno, 1, st->arena->out_error);
+                tinypy_internal_compiler_semantic_error(st->arena, TINYPY_SYMBOL_RETURN_VALUE_IN_GENERATOR, s->lineno);
                 return TINYPY_FALSE;
             }
         }
@@ -1112,8 +1135,7 @@ static tinypy_bool_t __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinyp
                 return TINYPY_FALSE;
             }
             if (cur & (TINYPY_SYMBOL_DEFINITION_LOCAL | TINYPY_SYMBOL_USE)) {
-                const char *message = (cur & TINYPY_SYMBOL_DEFINITION_LOCAL) ? "name is assigned to before global declaration" : "name is used prior to global declaration";
-                if (!__tinypy_symbol_warn(st, NULL, message, s->lineno)) {
+                if (!__tinypy_symbol_warn_global(st, name, (cur & TINYPY_SYMBOL_DEFINITION_LOCAL) != 0 ? TINYPY_TRUE : TINYPY_FALSE, s->lineno)) {
                     return TINYPY_FALSE;
                 }
             }
@@ -1210,7 +1232,7 @@ static tinypy_bool_t __tinypy_symbol_visit_expr(tinypy_symbol_table_t *st, tinyp
         }
         st->current->generator = 1;
         if (st->current->returns_value) {
-            tinypy_internal_compiler_error(st->arena, TINYPY_ERROR_SYNTAX, TINYPY_SYMBOL_RETURN_VALUE_IN_GENERATOR, e->lineno, 1, st->arena->out_error);
+            tinypy_internal_compiler_semantic_error(st->arena, TINYPY_SYMBOL_RETURN_VALUE_IN_GENERATOR, e->lineno);
             return TINYPY_FALSE;
         }
         break;
@@ -1293,7 +1315,7 @@ static tinypy_bool_t __tinypy_symbol_visit_params(tinypy_symbol_table_t *st, tin
             }
         }
         else {
-            tinypy_internal_compiler_error(st->arena, TINYPY_ERROR_SYNTAX, "invalid expression in parameter list", st->current->line_number, 1, st->arena->out_error);
+            tinypy_internal_compiler_semantic_error(st->arena, "invalid expression in parameter list", st->current->line_number);
             return TINYPY_FALSE;
         }
     }

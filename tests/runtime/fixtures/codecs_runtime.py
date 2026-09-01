@@ -8,6 +8,24 @@ assert _codecs.ascii_encode(u"a\xe9", "replace") == ("a?", 2)
 assert _codecs.ascii_decode("a\xff", "replace") == (u"a\ufffd", 2)
 assert _codecs.latin_1_encode(u"a\xe9") == ("a\xe9", 2)
 assert _codecs.latin_1_decode("a\xe9") == (u"a\xe9", 2)
+
+assert "abc".encode("hex") == "616263"
+assert "616263".decode("hex") == "abc"
+assert u"abc".encode("hex_codec") == "616263"
+
+try:
+    "0".decode("hex")
+except TypeError as error:
+    assert error.args == ("Odd-length string",)
+else:
+    raise AssertionError("odd-length hex input must fail")
+
+try:
+    "0g".decode("hex")
+except TypeError as error:
+    assert error.args == ("Non-hexadecimal digit found",)
+else:
+    raise AssertionError("non-hexadecimal input must fail")
 assert "\xc0\xaf".decode("utf-8", "replace") == u"\ufffd\ufffd"
 assert "\xe2\x82".decode("utf-8", "replace") == u"\ufffd"
 assert "\xe2(\xa1".decode("utf-8", "replace") == u"\ufffd(\ufffd"

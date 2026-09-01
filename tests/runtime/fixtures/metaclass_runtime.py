@@ -291,3 +291,33 @@ except TypeError:
     pass
 else:
     raise AssertionError("required type metadata was deleted")
+
+
+def populate_reclaimable_type_cache():
+    class CachedValue(object):
+        pass
+
+    class CachedOwner(object):
+        value = CachedValue()
+
+    return CachedOwner().value
+
+
+populate_reclaimable_type_cache()
+
+
+def read_reused_type_cache():
+    accesses = []
+
+    class ReusedDescriptor(object):
+        def __get__(self, instance, owner):
+            accesses.append((instance is None, owner.__name__))
+            return 7
+
+    class ReusedOwner(object):
+        value = ReusedDescriptor()
+
+    return ReusedOwner.value, ReusedOwner().value, accesses
+
+
+assert read_reused_type_cache() == (7, 7, [(True, "ReusedOwner"), (False, "ReusedOwner")])

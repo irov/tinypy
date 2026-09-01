@@ -591,6 +591,48 @@ assert type.__ne__(int, str)
 assert type.__eq__(int, 42) is NotImplemented
 assert type.__repr__(int) == repr(int)
 
+
+class TruncatesToInteger(object):
+    def __trunc__(self):
+        return 7
+
+
+class IntegralProxy(object):
+    def __int__(self):
+        return 8
+
+
+class TruncatesToProxy(object):
+    def __trunc__(self):
+        return IntegralProxy()
+
+
+class IntAndTrunc(object):
+    def __int__(self):
+        return 9
+
+    def __trunc__(self):
+        return 10
+
+
+class IntOnly(object):
+    def __int__(self):
+        return 11
+
+
+assert int(TruncatesToInteger()) == 7
+assert long(TruncatesToInteger()) == 7L
+assert int(TruncatesToProxy()) == 8
+assert long(TruncatesToProxy()) == 8L
+assert int(IntAndTrunc()) == 9
+assert long(IntAndTrunc()) == 10L
+try:
+    long(IntOnly())
+except TypeError:
+    pass
+else:
+    raise AssertionError("long accepted __int__ without __long__ or __trunc__")
+
 builtin_function_type = type(len)
 assert len.__name__ == "len"
 assert len.__self__ is None
@@ -609,6 +651,45 @@ assert repr(bound_append).startswith("<built-in method append of list object at 
 import copy_reg
 assert copy_reg._reduce_ex.__name__ == "_reduce_ex"
 assert copy_reg._reduce_ex.__module__ == "copy_reg"
+assert copy_reg.__all__ == ["pickle", "constructor", "add_extension", "remove_extension", "clear_extension_cache"]
+assert copy_reg.dispatch_table[complex] is copy_reg.pickle_complex
+
+
+class RegisteredReduction(object):
+    pass
+
+
+def registered_reduce(value):
+    return RegisteredReduction, ()
+
+
+copy_reg.pickle(RegisteredReduction, registered_reduce)
+assert copy_reg.dispatch_table[RegisteredReduction] is registered_reduce
+assert copy_reg.constructor(RegisteredReduction) is None
+assert copy_reg.pickle_complex(1 + 2j) == (complex, (1.0, 2.0))
+copy_reg.add_extension("tinypy_test", "RegisteredReduction", 42L)
+copy_reg.add_extension("tinypy_test", "RegisteredReduction", 42)
+assert copy_reg._extension_registry[("tinypy_test", "RegisteredReduction")] == 42
+assert copy_reg._inverted_registry[42] == ("tinypy_test", "RegisteredReduction")
+copy_reg._extension_cache[42] = RegisteredReduction
+copy_reg.clear_extension_cache()
+assert copy_reg._extension_cache == {}
+copy_reg._extension_cache[42] = RegisteredReduction
+copy_reg.remove_extension("tinypy_test", "RegisteredReduction", 42)
+assert copy_reg._extension_registry == {}
+assert copy_reg._extension_cache == {}
+
+
+class SlotNameBase(object):
+    __slots__ = ("__private", "base")
+
+
+class SlotNameChild(SlotNameBase):
+    __slots__ = ("child", "__dict__", "__weakref__")
+
+
+assert copy_reg._slotnames(SlotNameChild) == ["child", "_SlotNameBase__private", "base"]
+assert copy_reg._slotnames(SlotNameChild) is SlotNameChild.__slotnames__
 assert int.__module__ == "__builtin__"
 assert int.__basicsize__ > 0
 assert int.__itemsize__ >= 0

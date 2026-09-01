@@ -81,3 +81,26 @@ except TypeError:
     pass
 else:
     raise AssertionError("BaseException.__setstate__ accepted a non-string attribute name")
+
+
+class ClassicFailure:
+    def __init__(self, value):
+        self.value = value
+
+
+class ClassicFailureChild(ClassicFailure):
+    pass
+
+
+try:
+    raise ClassicFailureChild, "classic"
+except ClassicFailure as classic_error:
+    assert classic_error.value == "classic"
+else:
+    raise AssertionError("old-style exception was not matched")
+
+classic_instance = ClassicFailure("instance")
+try:
+    raise classic_instance
+except ClassicFailure as classic_error:
+    assert classic_error is classic_instance

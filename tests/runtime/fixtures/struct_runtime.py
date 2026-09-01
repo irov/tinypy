@@ -24,3 +24,18 @@ for invalid_format in ("1 2d", "1\t2d", "1\v2d", "1\f2d"):
 
 struct.calcsize("d" * 32)
 struct._clearcache()
+
+packed = struct.pack(">2d", 1.0, 2.0)
+destination = bytearray(18)
+assert struct.pack_into(">2d", destination, 1, 1.0, 2.0) is None
+assert struct.unpack_from(">2d", destination, 1) == (1.0, 2.0)
+assert struct.unpack_from(">2d", destination, -17) == (1.0, 2.0)
+
+compiled_struct = struct.Struct(">2d")
+assert compiled_struct.format == ">2d"
+assert compiled_struct.size == 16
+assert compiled_struct.pack(1.0, 2.0) == packed
+assert compiled_struct.unpack(packed) == (1.0, 2.0)
+compiled_destination = bytearray(16)
+assert compiled_struct.pack_into(compiled_destination, 0, 3.0, 4.0) is None
+assert compiled_struct.unpack_from(compiled_destination) == (3.0, 4.0)

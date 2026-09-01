@@ -14,6 +14,10 @@ tinypy_value_t *tinypy_internal_module_from_dict(tinypy_vm_t *vm, const char *na
 tinypy_value_t *tinypy_module_new(tinypy_vm_t *vm, const char *name, size_t name_size) {
     tinypy_value_t *dict = tinypy_dict_new(vm);
     tinypy_value_t *module = tinypy_internal_module_from_dict(vm, name, name_size, dict);
+
+    tinypy_module_add_value(module, "__name__", 8U, TINYPY_MODULE_OBJECT(module)->name);
+    tinypy_module_add_value(module, "__doc__", 7U, &vm->none_object.base);
+    tinypy_module_add_value(module, "__package__", 11U, &vm->none_object.base);
     TINYPY_DECREF(dict);
     return module;
 }

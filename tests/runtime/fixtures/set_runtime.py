@@ -15,6 +15,10 @@ assert set.__xor__(a, c) == set([1, 3, 4, 6])
 assert set.__sub__(a, c) == set([1, 3])
 assert set.__rsub__(a, c) == set([4, 6])
 assert set.__and__(a, [1]) is NotImplemented
+intersection_representative = list(set([0]) & set([False]))[0]
+assert type(intersection_representative) is bool and intersection_representative is False
+method_intersection_representative = list(set([0]).intersection(set([False])))[0]
+assert type(method_intersection_representative) is bool and method_intersection_representative is False
 assert frozenset.__hash__(b) == hash(b)
 assert set.__hash__ is None
 assert set([1, 2]) < a

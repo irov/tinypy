@@ -467,11 +467,16 @@ static const char *__tinypy_cli_exception_type_name(const tinypy_vm_t *vm, const
     tinypy_value_t *raised_type = tinypy_vm_raised_exception_type(vm);
 
     if (raised_type != NULL) {
-        const char *return_value_1 = tinypy_type_name(tinypy_value_as_const_type(raised_type), out_size);
-        return return_value_1;
+        if (tinypy_typeof(raised_type) == TINYPY_VALUE_CLASS) {
+            tinypy_value_t *name = tinypy_class_name(raised_type);
+            const char *return_value_1 = (const char *)tinypy_string_view(name, out_size);
+            return return_value_1;
+        }
+        const char *return_value_2 = tinypy_type_name(tinypy_value_as_const_type(raised_type), out_size);
+        return return_value_2;
     }
-    const char *return_value_2 = __tinypy_cli_error_type_name(tinypy_error_kind(error), out_size);
-    return return_value_2;
+    const char *return_value_3 = __tinypy_cli_error_type_name(tinypy_error_kind(error), out_size);
+    return return_value_3;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_cli_print_exception(const tinypy_vm_t *vm, const tinypy_error_t *error) {

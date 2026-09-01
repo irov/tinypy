@@ -528,7 +528,7 @@ static tinypy_bool_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_valu
     if (__tinypy_comparison_is_numeric(left_kind) != 0 && __tinypy_comparison_is_numeric(right_kind) != 0) {
         if (left_kind == TINYPY_VALUE_COMPLEX || right_kind == TINYPY_VALUE_COMPLEX) {
             tinypy_vm_t *vm_2 = TINYPY_VALUE_VM(left);
-            tinypy_internal_make_vm_error(vm_2, TINYPY_ERROR_TYPE, "complex numbers have no ordering relation", out_error);
+            tinypy_internal_make_vm_error(vm_2, TINYPY_ERROR_TYPE, "no ordering relation is defined for complex numbers", out_error);
             return TINYPY_FALSE;
         }
         if (tinypy_internal_numeric_order(left, right, out_order) == 0) {

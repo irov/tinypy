@@ -1886,3 +1886,22 @@ assert "__str__" not in tuple.__dict__
 assert "__str__" not in dict.__dict__
 assert "aa"[0] is "aa"[1]
 assert next(iter("bb")) is "bb"[0]
+
+
+def raised_args(callback):
+    try:
+        callback()
+    except Exception as error:
+        return error.args
+    raise AssertionError("callback did not raise")
+
+
+assert raised_args(lambda: 1 / 0) == ("integer division or modulo by zero",)
+assert raised_args(lambda: 1L // 0L) == ("long division or modulo by zero",)
+assert raised_args(lambda: 1.0 / 0.0) == ("float division by zero",)
+assert raised_args(lambda: 1.0 // 0.0) == ("float divmod()",)
+assert raised_args(lambda: 1.0 % 0.0) == ("float modulo",)
+assert raised_args(lambda: (1 + 2j) / 0j) == ("complex division by zero",)
+assert raised_args(lambda: (1 + 2j) // 0j) == ("complex divmod()",)
+assert raised_args(lambda: (1 + 2j) % 0j) == ("complex remainder",)
+assert raised_args(lambda: 1j < 2j) == ("no ordering relation is defined for complex numbers",)

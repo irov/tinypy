@@ -1269,6 +1269,11 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
         vm, metaclass, sizeof(*type));
 
     type->vm = vm;
+    vm->type_lookup_cache_epoch += UINT64_C(1);
+    if (vm->type_lookup_cache_epoch == 0U) {
+        vm->type_lookup_cache_epoch = UINT64_C(1);
+    }
+    type->version_tag = vm->type_lookup_cache_epoch;
     inherited_slot_count = layout_base->slot_count;
     type->slot_count = inherited_slot_count + TINYPY_TUPLE_SIZE(own_slots);
     tinypy_bool_t add_instance_dict = configured_instance_dict >= 0 ? (configured_instance_dict != 0 ? TINYPY_TRUE : TINYPY_FALSE) : (slots_declared == 0 || dict_slot != 0 ? TINYPY_TRUE : TINYPY_FALSE);

@@ -19,7 +19,7 @@ set(runtime_fragments
     "  File \"<string>\", line 5, in <module>"
     "  File \"<string>\", line 4, in outer"
     "  File \"<string>\", line 2, in inner"
-    "ZeroDivisionError: integer division by zero"
+    "ZeroDivisionError: integer division or modulo by zero"
 )
 
 foreach(fragment IN LISTS runtime_fragments)

@@ -320,6 +320,8 @@ assert "a\r\nb\n".splitlines(True) == ["a\r\n", "b\n"]
 assert "a\vb\fc\x1cd\x1de\x1ef\x85g".splitlines() == ["a\vb\fc\x1cd\x1de\x1ef\x85g"]
 assert u"a\vb\fc\x1cd\x1de\x1ef\x85g".splitlines() == [u"a", u"b", u"c", u"d", u"e", u"f", u"g"]
 assert "a\tb".expandtabs(4) == "a   b"
+assert "\x80\t".expandtabs(4) == "\x80   "
+assert u"\x80\t".expandtabs(4) == u"\x80   "
 assert "a:b:c".partition(":") == ("a", ":", "b:c")
 assert "a:b:c".rpartition(":") == ("a:b", ":", "c")
 assert "abc".partition("-") == ("abc", "", "")
@@ -335,3 +337,20 @@ assert u"\xe9".encode("utf-8") == "\xc3\xa9"
 assert "\xff".decode("ascii", "ignore") == u""
 assert u"\xe9".encode("ascii", "replace") == "?"
 assert "\xff".decode("latin-1") == u"\xff"
+
+# Keep representative literal forms in the byte-identical marshal-v2 corpus.
+literal_plain = "abc"
+literal_escaped = "\x61bc"
+literal_punctuated = "a-b"
+literal_nested = ("identifier",)
+literal_empty = ""
+literal_raw_identifier = r"raw_name"
+literal_raw_punctuated = r"raw-name"
+literal_implicit_concat = "joined" "_name"
+literal_folded_concat = "folded" + "_name"
+literal_triple_quoted = """triple_name"""
+literal_unicode_identifier = u"unicode_name"
+assert literal_plain == literal_escaped
+assert literal_nested == ("identifier",)
+assert literal_implicit_concat == "joined_name"
+assert literal_folded_concat == "folded_name"
