@@ -482,16 +482,23 @@ static tinypy_value_t *__tinypy_internal_string_from_bytes(tinypy_vm_t *vm, cons
             TINYPY_INCREF(cached);
             return cached;
         }
-        uint8_t *output;
-        tinypy_value_t *result = checked != 0
-                                     ? tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, 1U, 0U, &output, out_error)
-                                     : __tinypy_internal_text_from_bytes(vm, (const uint8_t *)bytes, 1U, 0U, TINYPY_VALUE_STRING);
+        tinypy_value_t *result;
 
-        if (result == NULL) {
-            return NULL;
-        }
         if (checked != 0) {
+            uint8_t *output;
+            result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, 1U, 0U, &output, out_error);
+
+            if (result == NULL) {
+                return NULL;
+            }
             output[0] = *(const uint8_t *)bytes;
+        }
+        else {
+            result = __tinypy_internal_text_from_bytes(vm, (const uint8_t *)bytes, 1U, 0U, TINYPY_VALUE_STRING);
+
+            if (result == NULL) {
+                return NULL;
+            }
         }
         vm->string_char_cache[cache_index] = result;
         TINYPY_INCREF(result);
