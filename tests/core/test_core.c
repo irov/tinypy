@@ -3,10 +3,12 @@
 #include "../../src/core/internal.h"
 #endif
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 typedef char test_double_size_must_match_uint64_t[sizeof(double) == sizeof(uint64_t) ? 1 : -1];
 //////////////////////////////////////////////////////////////////////////
@@ -872,6 +874,14 @@ static int32_t __test_long_canonical(void) {
         }
         extracted = tinypy_long_as_i64(value);
         TEST_CHECK(extracted == values[value_index]);
+
+        double double_value = 17.0;
+        tinypy_error_t *error = NULL;
+        size_t allocations = state.allocation_calls;
+        TEST_CHECK(tinypy_long_as_double(value, &double_value, &error) != 0);
+        TEST_CHECK(double_value == (double)values[value_index]);
+        TEST_CHECK(error == NULL);
+        TEST_CHECK(state.allocation_calls == allocations);
         tinypy_release(value);
         value = NULL;
     }
@@ -915,6 +925,58 @@ static int32_t __test_long_canonical(void) {
         TEST_CHECK(digits[0] == UINT16_C(1));
     }
     tinypy_release(value);
+
+    /* Halfway values round to the even significand for either sign. */
+    uint16_t rounding_digits[] = {0U, 0U, 0U, 256U};
+    const uint16_t rounding_low_digits[] = {1U, 3U};
+    const double rounded_values[] = {9007199254740992.0, 9007199254740996.0};
+    for (size_t index = 0U; index < 2U; ++index) {
+        rounding_digits[0] = rounding_low_digits[index];
+        for (int32_t sign = -1; sign <= 1; sign += 2) {
+            value = tinypy_long_from_base15_digits(vm, sign, rounding_digits, 4U);
+            double double_value = 17.0;
+            TEST_CHECK(tinypy_long_as_double(value, &double_value, NULL) != 0);
+            TEST_CHECK(double_value == (double)sign * rounded_values[index]);
+            tinypy_release(value);
+        }
+    }
+
+    /* 2^100 + 1 exceeds int64_t but rounds to the exactly represented 2^100. */
+    const uint16_t wide_digits[] = {1U, 0U, 0U, 0U, 0U, 0U, 1024U};
+    value = tinypy_long_from_base15_digits(vm, 1, wide_digits, 7U);
+    double double_value = 17.0;
+    TEST_CHECK(tinypy_long_as_double(value, &double_value, NULL) != 0);
+    TEST_CHECK(double_value == ldexp(1.0, 100));
+    tinypy_release(value);
+
+    /* DBL_MAX as an integer: bits 971 through 1023 are set. */
+    uint16_t limit_digits[69] = {0};
+    for (size_t bit = 971U; bit < 1024U; ++bit) {
+        limit_digits[bit / 15U] |= (uint16_t)(UINT16_C(1) << (bit % 15U));
+    }
+    value = tinypy_long_from_base15_digits(vm, 1, limit_digits, 69U);
+    TEST_CHECK(tinypy_long_as_double(value, &double_value, NULL) != 0);
+    TEST_CHECK(double_value == DBL_MAX);
+    tinypy_release(value);
+
+    /* DBL_MAX + 2^970 rounds up to 2^1024, beyond the largest finite double.
+     * 2^1024 itself exceeds DBL_MAX_EXP bits before rounding. Both failures
+     * must preserve the output. */
+    limit_digits[970U / 15U] |= (uint16_t)(UINT16_C(1) << (970U % 15U));
+    for (size_t index = 0U; index < 2U; ++index) {
+        value = tinypy_long_from_base15_digits(vm, 1, limit_digits, 69U);
+        tinypy_error_t *error = NULL;
+        double_value = 17.0;
+        TEST_CHECK(tinypy_long_as_double(value, &double_value, &error) == 0);
+        TEST_CHECK(double_value == 17.0);
+        TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_OVERFLOW);
+        TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+        tinypy_release(value);
+        (void)memset(limit_digits, 0, sizeof(limit_digits));
+        limit_digits[1024U / 15U] = (uint16_t)(UINT16_C(1) << (1024U % 15U));
+    }
 
     tinypy_vm_destroy(vm);
     TEST_CHECK(state.outstanding_allocations == 0U);
@@ -3012,6 +3074,181 @@ static int32_t __test_module_finder(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Consumes the value returned by the build operation under test. */
+static tinypy_bool_t __test_build_value_matches(tinypy_value_t *value, const char *expected) {
+    if (value == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *repr = tinypy_object_repr(value, NULL);
+    tinypy_release(value);
+    if (repr == NULL) {
+        return TINYPY_FALSE;
+    }
+    size_t size;
+    const void *bytes = tinypy_string_view(repr, &size);
+    tinypy_bool_t matches = size == strlen(expected) && memcmp(bytes, expected, size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_release(repr);
+    return matches;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_build_value_va(tinypy_vm_t *vm, const char *format, ...) {
+    va_list args;
+
+    va_start(args, format);
+    tinypy_value_t *first = tinypy_build_value_va(vm, format, args, NULL);
+    tinypy_value_t *second = tinypy_build_value_va(vm, format, args, NULL);
+    va_end(args);
+    TEST_CHECK(__test_build_value_matches(first, "(7, 'copied')"));
+    TEST_CHECK(__test_build_value_matches(second, "(7, 'copied')"));
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+typedef struct test_build_value_converter_state_t {
+    tinypy_value_t *exception;
+    tinypy_value_t *result;
+    size_t calls;
+} test_build_value_converter_state_t;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_build_value_converter(void *argument) {
+    test_build_value_converter_state_t *state = (test_build_value_converter_state_t *)argument;
+    state->calls += 1U;
+    if (state->exception != NULL) {
+        (void)tinypy_exception_raise(state->exception, NULL, NULL);
+    }
+    if (state->result != NULL) {
+        tinypy_retain(state->result);
+    }
+    return state->result;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_build_value(void) {
+    test_allocator_state_t allocator_state = {0};
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_error_t *error = NULL;
+
+    TEST_CHECK(vm != NULL);
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, &error, ""), "None"));
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, NULL, NULL), "None"));
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, NULL, " ,\t:"), "None"));
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, NULL, "i", 7), "7"));
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, NULL, "()[]{}"), "((), [], {})"));
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, NULL, "(i[sz]{s:(iL)})", 7, "bytes", (const char *)NULL, "key", 3, 9LL), "(7, ['bytes', None], {'key': (3, 9L)})"));
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, NULL, "bBhHInlkLKfdc", -3, 255, -300, 65535U, 4000000000U, (ptrdiff_t)-4, -5L, 6UL, -7LL, 18446744073709551615ULL, 1.5, 2.5, 'x'), "(-3, 255, -300, 65535, 4000000000, -4, -5, 6, -7L, 18446744073709551615L, 1.5, 2.5, 'x')"));
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, NULL, "LK", 0LL, 0ULL), "(0L, 0L)"));
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, NULL, "s#z#s#", "a\0b", 3, (const char *)NULL, 100, "end", -1), "('a\\x00b', None, 'end')"));
+    TEST_CHECK(__test_build_value_va(vm, "is", 7, "copied") == 0);
+
+    const double complex_parts[] = {1.5, -2.5};
+    tinypy_value_t *complex_value = tinypy_build_value(vm, NULL, "D", (const void *)complex_parts);
+    TEST_CHECK(complex_value != NULL && tinypy_typeof(complex_value) == TINYPY_VALUE_COMPLEX);
+    double real;
+    double imaginary;
+    tinypy_complex_as_doubles(complex_value, &real, &imaginary);
+    TEST_CHECK(real == 1.5 && imaginary == -2.5);
+    tinypy_release(complex_value);
+
+    const wchar_t wide[] = L"\u00e9\U0001f600";
+    const char expected_utf8[] = "\xc3\xa9\xf0\x9f\x98\x80";
+    tinypy_value_t *unicode = tinypy_build_value(vm, NULL, "u", wide);
+    TEST_CHECK(unicode != NULL && tinypy_typeof(unicode) == TINYPY_VALUE_UNICODE);
+    size_t byte_size;
+    size_t code_points;
+    const char *utf8 = tinypy_unicode_utf8_view(unicode, &byte_size, &code_points);
+    TEST_CHECK(byte_size == sizeof(expected_utf8) - 1U && code_points == 2U);
+    TEST_CHECK(memcmp(utf8, expected_utf8, byte_size) == 0);
+    tinypy_release(unicode);
+    TEST_CHECK(__test_build_value_matches(tinypy_build_value(vm, NULL, "u#u#", L"a\0b", 3, (const wchar_t *)NULL, 1), "(u'a\\x00b', None)"));
+
+    tinypy_value_t *shared = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_ref_t references = tinypy_refcount(shared);
+    tinypy_value_t *retained = tinypy_build_value(vm, NULL, "OS", shared, shared);
+    TEST_CHECK(retained != NULL && tinypy_refcount(shared) == references + 2);
+    tinypy_release(retained);
+    TEST_CHECK(tinypy_refcount(shared) == references);
+    tinypy_retain(shared);
+    tinypy_value_t *transferred = tinypy_build_value(vm, NULL, "N", shared);
+    TEST_CHECK(transferred == shared && tinypy_refcount(shared) == references + 1);
+    tinypy_release(transferred);
+    TEST_CHECK(tinypy_refcount(shared) == references);
+
+    test_build_value_converter_state_t converter = {NULL, shared, 0U};
+    tinypy_value_t *converted = tinypy_build_value(vm, NULL, "O&", __test_build_value_converter, (void *)&converter);
+    TEST_CHECK(converted == shared && converter.calls == 1U && tinypy_refcount(shared) == references + 1);
+    tinypy_release(converted);
+
+    tinypy_vm_raise_error(vm, TINYPY_ERROR_VALUE, "first-converter-error");
+    tinypy_value_t *first_error = tinypy_vm_raised_exception(vm);
+    tinypy_retain(first_error);
+    tinypy_vm_clear_error(vm);
+    tinypy_vm_raise_error(vm, TINYPY_ERROR_TYPE, "second-converter-error");
+    tinypy_value_t *second_error = tinypy_vm_raised_exception(vm);
+    tinypy_retain(second_error);
+    tinypy_vm_clear_error(vm);
+    test_build_value_converter_state_t first = {first_error, NULL, 0U};
+    test_build_value_converter_state_t second = {second_error, NULL, 0U};
+    tinypy_retain(shared);
+    tinypy_retain(shared);
+    tinypy_value_t *failed = tinypy_build_value(vm, &error, "(O&[N]O&N)", __test_build_value_converter, (void *)&first, shared, __test_build_value_converter, (void *)&second, shared);
+    TEST_CHECK(failed == NULL && first.calls == 1U && second.calls == 1U);
+    TEST_CHECK(tinypy_refcount(shared) == references);
+    TEST_CHECK(tinypy_vm_raised_exception(vm) == first_error);
+    TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_VALUE);
+    TEST_CHECK(strcmp(tinypy_error_message(error, NULL), "first-converter-error") == 0);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+
+    /* Format errors must use the VM's real SystemError type even if a host
+     * has replaced that name in the mutable builtins dictionary. */
+    tinypy_value_t *system_key = tinypy_string_from_bytes(vm, "SystemError", 11U);
+    tinypy_value_t *builtins = tinypy_vm_builtins(vm);
+    tinypy_value_t *system_type = tinypy_dict_get(builtins, system_key);
+    tinypy_retain(system_type);
+    tinypy_dict_set(builtins, system_key, shared);
+    const char *invalid_formats[] = {"?", "(", "[)", ")", "}"};
+    for (size_t index = 0U; index < sizeof(invalid_formats) / sizeof(invalid_formats[0]); ++index) {
+        TEST_CHECK(tinypy_build_value(vm, &error, invalid_formats[index]) == NULL);
+        TEST_CHECK(error != NULL && tinypy_vm_raised_exception_type(vm) == system_type);
+        tinypy_error_release(error);
+        error = NULL;
+        tinypy_vm_clear_error(vm);
+    }
+    TEST_CHECK(tinypy_build_value(vm, NULL, "{i}", 7) == NULL);
+    TEST_CHECK(tinypy_vm_raised_exception_type(vm) == system_type);
+    tinypy_vm_clear_error(vm);
+    converter.result = NULL;
+    TEST_CHECK(tinypy_build_value(vm, NULL, "O&", __test_build_value_converter, (void *)&converter) == NULL);
+    TEST_CHECK(tinypy_vm_raised_exception_type(vm) == system_type);
+    tinypy_vm_clear_error(vm);
+    tinypy_dict_set(builtins, system_key, system_type);
+    tinypy_release(system_type);
+    tinypy_release(system_key);
+
+    TEST_CHECK(tinypy_build_value(vm, &error, "{Oi}", shared, 7) == NULL);
+    TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+    TEST_CHECK(tinypy_refcount(shared) == references);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    /* A pre-existing exception is preserved when an object argument is NULL. */
+    (void)tinypy_exception_raise(first_error, NULL, NULL);
+    TEST_CHECK(tinypy_build_value(vm, NULL, "O", (tinypy_value_t *)NULL) == NULL);
+    TEST_CHECK(tinypy_vm_raised_exception(vm) == first_error);
+    tinypy_vm_clear_error(vm);
+    tinypy_release(first_error);
+    tinypy_release(second_error);
+    tinypy_release(shared);
+
+    TEST_CHECK(tinypy_vm_has_error(vm) == 0);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
     if (argc != 2) {
         (void)fprintf(stderr, "usage: %s TEST_NAME\n", argv[0]);
@@ -3041,6 +3278,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "byte_strings") == 0) {
         int return_value_6 = __test_byte_strings();
         return return_value_6;
+    }
+    if (strcmp(argv[1], "build_value") == 0) {
+        int result = __test_build_value();
+        return result;
     }
     if (strcmp(argv[1], "unicode_utf8") == 0) {
         int return_value_7 = __test_unicode_utf8();

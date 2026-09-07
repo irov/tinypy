@@ -4,6 +4,7 @@
 #include "tinypy/types.h"
 #include "tinypy/vm.h"
 #include "tinypy/value.h"
+#include "tinypy/build_value.h"
 #include "tinypy/object.h"
 #include "tinypy/operator.h"
 #include "tinypy/comparison.h"

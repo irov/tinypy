@@ -150,13 +150,15 @@ static tinypy_bool_t __tinypy_internal_long_bit(const tinypy_long_object_t *valu
         : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_long_as_double(const tinypy_value_t *value, double *out_value, tinypy_error_t **out_error) {
+tinypy_bool_t tinypy_long_as_double(const tinypy_value_t *value, double *out_value, tinypy_error_t **out_error) {
     const tinypy_long_object_t *long_value = TINYPY_LONG_OBJECT((tinypy_value_t *)value);
     size_t digit_count = long_value->digit_count;
     size_t bit_length;
     size_t bit_index;
     uint64_t significand = UINT64_C(0);
     double result;
+
+    TINYPY_CLEAR_ERROR(out_error);
 
     if (digit_count == 0U || long_value->sign == 0) {
         *out_value = 0.0;
@@ -204,6 +206,9 @@ tinypy_bool_t tinypy_internal_long_as_double(const tinypy_value_t *value, double
         result = ldexp((double)significand, (int)shift);
     }
 
+    /* Even when bit_length fits DBL_MAX_EXP, rounding the significand can
+     * carry past the largest finite double. Reject infinity from ldexp as
+     * OverflowError, leaving out_value unchanged. */
     if (isfinite(result) == 0) {
         tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_OVERFLOW, "long int too large to convert to float", out_error);
         return TINYPY_FALSE;

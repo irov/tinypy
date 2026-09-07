@@ -3731,7 +3731,7 @@ static tinypy_bool_t __tinypy_percent_append_float(tinypy_vm_t *vm, tinypy_strin
         number = (double)TINYPY_INTEGER_VALUE(value);
     }
     else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG) {
-        if (tinypy_internal_long_as_double(value, &number, out_error) == 0) {
+        if (tinypy_long_as_double(value, &number, out_error) == 0) {
             if (long_overflow_type_error != 0) {
                 if (out_error != NULL && *out_error != NULL) {
                     tinypy_error_release(*out_error);

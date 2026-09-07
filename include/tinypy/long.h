@@ -14,6 +14,15 @@ tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int32_t sign, co
 /* The value must fit in int64_t. Range overflow is a C contract violation. */
 int64_t tinypy_long_as_i64(const tinypy_value_t *value);
 
+/* Converts a long value to double, rounding to nearest with ties to even.
+ * value must be a live TINYPY_VALUE_LONG and out_value must be non-NULL.
+ * Returns TINYPY_TRUE and writes out_value on success. If the magnitude is
+ * too large, including overflow caused by rounding, returns TINYPY_FALSE,
+ * leaves out_value unchanged and raises OverflowError in the value's VM.
+ * Optional out_error receives an owned diagnostic on failure or NULL on
+ * success. A successful conversion does not clear a pending VM exception. */
+tinypy_bool_t tinypy_long_as_double(const tinypy_value_t *value, double *out_value, tinypy_error_t **out_error);
+
 /* The returned base-2^15 digit view is borrowed. */
 const uint16_t *tinypy_long_base15_view(const tinypy_value_t *value, int32_t *out_sign, size_t *out_digit_count);
 

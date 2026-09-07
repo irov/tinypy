@@ -216,6 +216,7 @@ class PublicApiNamingTests(unittest.TestCase):
                 "tinypy_generator_close",
                 "tinypy_generator_finished",
                 "tinypy_is_callable",
+                "tinypy_long_as_double",
                 "tinypy_marshal_bool_value",
                 "tinypy_native_instance_construct",
                 "tinypy_native_type_update_spec",
@@ -441,6 +442,8 @@ class PublicApiNamingTests(unittest.TestCase):
             {
                 "tinypy_vm_destroy",
                 "tinypy_none_get",
+                "tinypy_build_value",
+                "tinypy_build_value_va",
                 "tinypy_not_implemented_get",
                 "tinypy_bool_from_i32",
                 "tinypy_integer_from_i64",

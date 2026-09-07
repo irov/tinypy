@@ -66,6 +66,7 @@ add_library(tinypy STATIC
     src/core/dictproxy.c
     src/core/dict_view.c
     src/core/buffer.c
+    src/core/build_value.c
     src/core/bytearray.c
     src/core/weakref.c
     src/core/set.c
@@ -219,6 +220,7 @@ if(BUILD_TESTING)
     add_test(NAME core_value_lifetime COMMAND tinypy_core_tests value_lifetime)
     add_test(NAME core_constant_cache COMMAND tinypy_core_tests constant_cache)
     add_test(NAME core_byte_strings COMMAND tinypy_core_tests byte_strings)
+    add_test(NAME core_build_value COMMAND tinypy_core_tests build_value)
     add_test(NAME core_unicode_utf8 COMMAND tinypy_core_tests unicode_utf8)
     add_test(
         NAME core_string_release_contract

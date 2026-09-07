@@ -709,7 +709,7 @@ static tinypy_bool_t __tinypy_operator_as_double(const tinypy_value_t *value, do
         *out_value = (double)TINYPY_INTEGER_VALUE(value);
         return TINYPY_TRUE;
     }
-    tinypy_bool_t return_value_1 = tinypy_internal_long_as_double(value, out_value, out_error);
+    tinypy_bool_t return_value_1 = tinypy_long_as_double(value, out_value, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

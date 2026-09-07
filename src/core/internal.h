@@ -1011,7 +1011,6 @@ void *tinypy_internal_vm_reallocate_checked(tinypy_vm_t *vm, void *memory, size_
 void tinypy_internal_vm_deallocate(tinypy_vm_t *vm, void *memory, size_t size);
 tinypy_bool_t tinypy_internal_decimal_double(tinypy_vm_t *vm, const char *text, size_t size, double *out_value);
 tinypy_value_t *tinypy_internal_long_from_double(tinypy_vm_t *vm, double value);
-tinypy_bool_t tinypy_internal_long_as_double(const tinypy_value_t *value, double *out_value, tinypy_error_t **out_error);
 
 void tinypy_internal_make_error(const tinypy_allocator_t *allocator, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error);
 void tinypy_internal_make_vm_error(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error);

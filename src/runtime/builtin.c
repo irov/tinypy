@@ -2074,7 +2074,7 @@ static tinypy_value_t *__tinypy_builtin_round(tinypy_value_t *function, tinypy_v
         number = (double)TINYPY_INTEGER_VALUE(value);
     }
     else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG) {
-        if (tinypy_internal_long_as_double(value, &number, out_error) == 0) {
+        if (tinypy_long_as_double(value, &number, out_error) == 0) {
             return NULL;
         }
     }

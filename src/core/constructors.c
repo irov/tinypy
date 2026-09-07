@@ -494,7 +494,7 @@ static tinypy_bool_t __tinypy_constructor_number_as_double(tinypy_vm_t *vm, tiny
         *out_value = (double)TINYPY_INTEGER_VALUE(value);
     }
     else if (kind == TINYPY_VALUE_LONG) {
-        if (tinypy_internal_long_as_double(value, out_value, out_error) == 0) {
+        if (tinypy_long_as_double(value, out_value, out_error) == 0) {
             return TINYPY_FALSE;
         }
     }
