@@ -34,6 +34,12 @@ The current implementation provides:
 tinypy deliberately has no cyclic collector. Embedders must release owned
 values and break owning cycles before destroying a VM.
 
+This is a foundational rule, not a missing feature: the runtime keeps no
+registry of live values and `tinypy_vm_destroy` never sweeps unreachable
+objects. A value still alive at that point is a bug in the host or in the
+runtime and is fixed where the reference was leaked; the opt-in cycle
+diagnostics below exist to locate such places.
+
 Its Python-visible standard-library surface is intentionally memory-only;
 filesystem-backed modules and process/environment metadata belong to the host.
 
