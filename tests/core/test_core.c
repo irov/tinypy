@@ -1931,6 +1931,95 @@ static int32_t __test_function_call_runtime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_exception_state_lost_native(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *result = tinypy_call(none, empty, NULL, &error);
+
+    (void)function;
+    (void)args;
+    (void)kwargs;
+
+    if (result != NULL) {
+        tinypy_release(result);
+    }
+    tinypy_release(empty);
+    tinypy_release(none);
+    tinypy_vm_clear_error(vm);
+    if (out_error != NULL) {
+        *out_error = error;
+    }
+    else if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_exception_state_lost_runtime(void) {
+    static const char source[] =
+        "def run(items):\n"
+        "    total = 0\n"
+        "    for item in items:\n"
+        "        try:\n"
+        "            lost()\n"
+        "        except:\n"
+        "            total = total + item\n"
+        "    return total\n"
+        "outcome = run([1, 2, 3])\n";
+    test_allocator_state_t state;
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_vm_t *vm;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *builtins;
+    tinypy_value_t *name;
+    tinypy_value_t *native;
+    tinypy_value_t *code;
+    tinypy_value_t *globals;
+    tinypy_value_t *result;
+    tinypy_value_t *outcome_key;
+    tinypy_value_t *outcome;
+
+    (void)memset(&state, 0, sizeof(state));
+    allocator = __test_make_allocator(&state);
+    config = __test_make_config(&allocator);
+    vm = tinypy_vm_create(&config);
+    builtins = tinypy_vm_builtins(vm);
+    name = tinypy_string_from_bytes(vm, "lost", 4U);
+    native = tinypy_native_function_new(vm, "lost", 4U, &__test_exception_state_lost_native, vm, NULL);
+    tinypy_dict_set(builtins, name, native);
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "lost.py", sizeof("lost.py") - 1U, &options, &error);
+    TEST_CHECK(code != NULL);
+    TEST_CHECK(error == NULL);
+    globals = tinypy_dict_new(vm);
+    result = tinypy_eval_code(code, globals, NULL, &error);
+    TEST_CHECK(result != NULL);
+    TEST_CHECK(error == NULL);
+
+    outcome_key = tinypy_string_from_bytes(vm, "outcome", 7U);
+    outcome = tinypy_dict_get(globals, outcome_key);
+    TEST_CHECK(outcome != NULL);
+    TEST_CHECK(tinypy_integer_as_i64(outcome) == 6);
+
+    tinypy_release(outcome_key);
+    tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_release(code);
+    tinypy_dict_delete(builtins, name);
+    tinypy_release(native);
+    tinypy_release(name);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_operator_numeric_runtime(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
@@ -3330,6 +3419,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "function_call") == 0) {
         int return_value_18 = __test_function_call_runtime();
         return return_value_18;
+    }
+    if (strcmp(argv[1], "exception_state_lost") == 0) {
+        int return_value_24 = __test_exception_state_lost_runtime();
+        return return_value_24;
     }
     if (strcmp(argv[1], "operator_numeric") == 0) {
         int return_value_19 = __test_operator_numeric_runtime();

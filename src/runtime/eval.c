@@ -1041,8 +1041,22 @@ static void __tinypy_eval_push_exception_triple(tinypy_vm_t *vm, tinypy_frame_ob
     __tinypy_eval_push_owned(frame, type);
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_eval_raise_lost_exception(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    tinypy_error_kind_e kind = TINYPY_ERROR_RUNTIME;
+    const char *message = "unwinding without a pending exception";
+
+    if (out_error != NULL && *out_error != NULL) {
+        kind = tinypy_error_kind(*out_error);
+        message = tinypy_error_message(*out_error, NULL);
+    }
+    tinypy_internal_exception_raise_kind(vm, kind, message);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_unwind_reason(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_eval_reason_e *reason, size_t *out_instruction_offset, tinypy_value_t **in_out_result, tinypy_error_t **out_error) {
     if (*reason == TINYPY_EVAL_REASON_EXCEPTION) {
+        if (vm->raised_value == NULL) {
+            __tinypy_eval_raise_lost_exception(vm, out_error);
+        }
         tinypy_internal_traceback_here(vm, frame);
     }
     else if (*reason == TINYPY_EVAL_REASON_RERAISE) {
