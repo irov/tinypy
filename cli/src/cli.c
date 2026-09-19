@@ -479,14 +479,57 @@ static const char *__tinypy_cli_exception_type_name(const tinypy_vm_t *vm, const
     return return_value_3;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_cli_print_exception(const tinypy_vm_t *vm, const tinypy_error_t *error) {
+/* Python 2.7 prefixes the reported exception with its defining module unless
+   the exception comes from the built-in exceptions module. */
+static const char *__tinypy_cli_exception_module_name(tinypy_vm_t *vm, size_t *out_size) {
+    tinypy_value_t *raised_type = tinypy_vm_raised_exception_type(vm);
+    tinypy_value_t *module = NULL;
+    const char *name;
+
+    *out_size = 0U;
+    if (raised_type == NULL) {
+        return NULL;
+    }
+    if (tinypy_typeof(raised_type) == TINYPY_VALUE_CLASS) {
+        tinypy_value_t *key = tinypy_string_from_bytes(vm, "__module__", 10U);
+        tinypy_value_t *class_dict = tinypy_class_dict(raised_type);
+
+        module = tinypy_dict_get_optional(class_dict, key);
+        tinypy_release(key);
+    }
+    else {
+        module = tinypy_type_get_attr(tinypy_value_as_const_type(raised_type), "__module__", 10U);
+    }
+    if (module == NULL || tinypy_typeof(module) != TINYPY_VALUE_STRING) {
+        return NULL;
+    }
+    name = (const char *)tinypy_string_view(module, out_size);
+    if (*out_size == sizeof("exceptions") - 1U) {
+        int comparison = memcmp(name, "exceptions", *out_size);
+
+        if (comparison == 0) {
+            *out_size = 0U;
+            return NULL;
+        }
+    }
+    return name;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_cli_print_exception(tinypy_vm_t *vm, const tinypy_error_t *error) {
     const char *message;
+    const char *module_name;
     const char *type_name;
     size_t message_size;
+    size_t module_name_size;
     size_t type_name_size;
 
     message = tinypy_error_message(error, &message_size);
     type_name = __tinypy_cli_exception_type_name(vm, error, &type_name_size);
+    module_name = __tinypy_cli_exception_module_name(vm, &module_name_size);
+    if (module_name != NULL) {
+        (void)fwrite(module_name, 1U, module_name_size, stderr);
+        (void)fputc('.', stderr);
+    }
     (void)fwrite(type_name, 1U, type_name_size, stderr);
     if (message_size != 0U) {
         (void)fputs(": ", stderr);
@@ -495,7 +538,7 @@ static void __tinypy_cli_print_exception(const tinypy_vm_t *vm, const tinypy_err
     (void)fputc('\n', stderr);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_cli_print_syntax_error(const tinypy_vm_t *vm, const tinypy_error_t *error, const char *fallback_filename) {
+static void __tinypy_cli_print_syntax_error(tinypy_vm_t *vm, const tinypy_error_t *error, const char *fallback_filename) {
     const char *filename;
     const char *source_line;
     size_t filename_size;
@@ -579,7 +622,7 @@ static void __tinypy_cli_print_traceback(const tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_cli_print_error(const tinypy_vm_t *vm, const tinypy_error_t *error, const char *fallback_filename) {
+static void __tinypy_cli_print_error(tinypy_vm_t *vm, const tinypy_error_t *error, const char *fallback_filename) {
     if (__tinypy_cli_error_has_syntax_location(tinypy_error_kind(error)) != 0) {
         __tinypy_cli_print_syntax_error(vm, error, fallback_filename);
         return;

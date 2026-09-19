@@ -454,8 +454,8 @@ tinypy_bool_t tinypy_internal_text_ascii_compatible(tinypy_vm_t *vm, const tinyp
     }
     for (index = 0U; index < TINYPY_TEXT_BYTE_SIZE(value); ++index) {
         if (TINYPY_TEXT_BYTES(value)[index] >= 0x80U) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_UNICODE_DECODE, "ascii decode error", out_error);
-            return TINYPY_FALSE;
+            tinypy_bool_t return_value_1 = tinypy_internal_raise_ascii_decode_error(vm, value, index, index + 1U, out_error);
+            return return_value_1;
         }
     }
     return TINYPY_TRUE;

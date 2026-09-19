@@ -263,21 +263,57 @@ tinypy_bool_t tinypy_internal_old_instance_set_attribute(tinypy_value_t *instanc
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_class_delete_from_dict(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *name, tinypy_error_t **out_error) {
+tinypy_bool_t tinypy_internal_old_instance_set_class(tinypy_value_t *instance_value, tinypy_value_t *class_value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(instance_value);
+    tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(instance_value);
+    tinypy_value_t *previous;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (class_value == NULL || TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_CLASS) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ must be set to a class", out_error);
+        return TINYPY_FALSE;
+    }
+    previous = instance->class_object;
+    TINYPY_INCREF(class_value);
+    instance->class_object = class_value;
+    TINYPY_DECREF(previous);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_old_instance_set_dict(tinypy_value_t *instance_value, tinypy_value_t *dict_value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(instance_value);
+    tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(instance_value);
+    tinypy_value_t *previous;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (dict_value == NULL || TINYPY_VALUE_KIND(dict_value) != TINYPY_VALUE_DICT) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__dict__ must be set to a dictionary", out_error);
+        return TINYPY_FALSE;
+    }
+    previous = instance->dict;
+    TINYPY_INCREF(dict_value);
+    instance->dict = dict_value;
+    TINYPY_DECREF(previous);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_class_delete_from_dict(tinypy_value_t *owner, tinypy_value_t *dict, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(owner);
+
     if (tinypy_internal_dict_delete_optional(vm, dict, name) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "attribute does not exist", out_error);
+        tinypy_internal_object_make_attribute_error_key(owner, name, out_error);
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_class_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_bool_t return_value_1 = __tinypy_class_delete_from_dict(TINYPY_VALUE_VM(value), TINYPY_CLASS_OBJECT(value)->dict, name, out_error);
+    tinypy_bool_t return_value_1 = __tinypy_class_delete_from_dict(value, TINYPY_CLASS_OBJECT(value)->dict, name, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_old_instance_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_bool_t return_value_1 = __tinypy_class_delete_from_dict(TINYPY_VALUE_VM(value), TINYPY_OLD_INSTANCE_OBJECT(value)->dict, name, out_error);
+    tinypy_bool_t return_value_1 = __tinypy_class_delete_from_dict(value, TINYPY_OLD_INSTANCE_OBJECT(value)->dict, name, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

@@ -1258,7 +1258,7 @@ static tinypy_value_t *__tinypy_dict_pop_method(tinypy_value_t *function, tinypy
             TINYPY_INCREF(value);
             return value;
         }
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_KEY, "dictionary key is absent", out_error);
+        tinypy_internal_exception_raise_key_error(vm, key, out_error);
         return NULL;
     }
     if (tinypy_internal_dict_get_optional_index_checked(vm, dict, key, &index, &value, out_error) == 0) {
@@ -1270,7 +1270,7 @@ static tinypy_value_t *__tinypy_dict_pop_method(tinypy_value_t *function, tinypy
             TINYPY_INCREF(value);
             return value;
         }
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_KEY, "dictionary key is absent", out_error);
+        tinypy_internal_exception_raise_key_error(vm, key, out_error);
         return NULL;
     }
     tinypy_value_t *owned_key;
@@ -1423,7 +1423,15 @@ static tinypy_value_t *__tinypy_container_compare_method(tinypy_value_t *functio
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 2U, 2U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_internal_compare_builtin_value(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), (tinypy_compare_operation_e)(intptr_t)user_data, out_error);
+    tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
+    /* A built-in comparison only answers for built-in operands; anything else
+       is NotImplemented so the other operand's hook gets its turn. */
+    if (tinypy_internal_comparison_is_exact_builtin(left) == 0 || tinypy_internal_comparison_is_exact_builtin(right) == 0) {
+        tinypy_value_t *not_implemented = tinypy_not_implemented_get(vm);
+        return not_implemented;
+    }
+    tinypy_value_t *return_value_1 = tinypy_internal_compare_builtin_value(left, right, (tinypy_compare_operation_e)(intptr_t)user_data, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

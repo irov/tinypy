@@ -629,11 +629,14 @@ tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_valu
     }
 
     if (__tinypy_internal_dict_needs_resize(dict)) {
-        size_t minimum = TINYPY_DICT_CAPACITY(dict) * 2U;
-        if (minimum < TINYPY_DICT_CAPACITY(dict) || __tinypy_internal_dict_resize(vm, dict, minimum, TINYPY_TRUE, out_error) == 0) {
-            if (minimum < TINYPY_DICT_CAPACITY(dict)) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "dictionary is too large", out_error);
-            }
+        /* The new capacity follows the live entry count, not the old capacity,
+           so a table full of deleted slots shrinks back the way dictresize
+           does in Python 2.7. */
+        size_t used = TINYPY_DICT_SIZE(dict) + 1U;
+        size_t growth = used > 50000U ? 2U : 4U;
+        size_t minimum = used > SIZE_MAX / growth ? SIZE_MAX : used * growth;
+
+        if (__tinypy_internal_dict_resize(vm, dict, minimum, TINYPY_TRUE, out_error) == 0) {
             return TINYPY_FALSE;
         }
         lookup.index = __tinypy_internal_dict_clean_index(dict, hash);

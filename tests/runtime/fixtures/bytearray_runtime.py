@@ -120,3 +120,18 @@ class HashableBytearray(bytearray):
 hashable_bytearray = HashableBytearray("abc")
 assert bytearray.__hash__(hashable_bytearray) == object.__hash__(hashable_bytearray)
 assert hash(hashable_bytearray) == object.__hash__(hashable_bytearray)
+
+
+# A byte string concatenated with a bytearray keeps the mutable type.
+assert "a" + bytearray("b") == bytearray("ab")
+assert type("a" + bytearray("b")) is bytearray
+assert bytearray("a") + "b" == bytearray("ab")
+assert "" + bytearray("") == bytearray()
+assert type("" + bytearray("")) is bytearray
+
+try:
+    "a" + buffer("b")
+except TypeError:
+    pass
+else:
+    raise AssertionError("str accepted a buffer operand")

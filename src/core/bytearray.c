@@ -640,6 +640,34 @@ static tinypy_bool_t __tinypy_bytearray_method_arguments(tinypy_vm_t *vm, tinypy
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Python 2.7 lets a byte string concatenate with a bytearray and keeps the
+   mutable type for the result. */
+tinypy_value_t *tinypy_internal_bytearray_concat_bytes(tinypy_vm_t *vm, const uint8_t *left_bytes, size_t left_size, const uint8_t *right_bytes, size_t right_size, tinypy_error_t **out_error) {
+    tinypy_value_t *result;
+    uint8_t *bytes;
+
+    if (right_size > SIZE_MAX - left_size) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
+        return NULL;
+    }
+    if (left_size + right_size == 0U) {
+        tinypy_value_t *return_value_1 = __tinypy_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
+        return return_value_1;
+    }
+    result = __tinypy_bytearray_allocate_checked(vm, left_size + right_size, out_error);
+    if (result == NULL) {
+        return NULL;
+    }
+    bytes = TINYPY_BYTEARRAY_OBJECT(result)->bytes;
+    if (left_size != 0U) {
+        (void)memcpy(bytes, left_bytes, left_size);
+    }
+    if (right_size != 0U) {
+        (void)memcpy(bytes + left_size, right_bytes, right_size);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_add_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     const uint8_t *right_bytes;
@@ -657,26 +685,8 @@ static tinypy_value_t *__tinypy_bytearray_add_method(tinypy_value_t *function, t
         return NULL;
     }
     left_size = TINYPY_SIZED_SIZE(left);
-    if (right_size > SIZE_MAX - left_size) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
-        return NULL;
-    }
-    if (left_size + right_size == 0U) {
-        tinypy_value_t *return_value_1 = __tinypy_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
-        return return_value_1;
-    }
-    tinypy_value_t *result = __tinypy_bytearray_allocate_checked(vm, left_size + right_size, out_error);
-    if (result == NULL) {
-        return NULL;
-    }
-    uint8_t *bytes = TINYPY_BYTEARRAY_OBJECT(result)->bytes;
-    if (left_size != 0U) {
-        (void)memcpy(bytes, TINYPY_BYTEARRAY_OBJECT(left)->bytes, left_size);
-    }
-    if (right_size != 0U) {
-        (void)memcpy(bytes + left_size, right_bytes, right_size);
-    }
-    return result;
+    tinypy_value_t *return_value_2 = tinypy_internal_bytearray_concat_bytes(vm, TINYPY_BYTEARRAY_OBJECT(left)->bytes, left_size, right_bytes, right_size, out_error);
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_multiply_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

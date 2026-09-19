@@ -170,3 +170,45 @@ except TypeError:
     pass
 else:
     raise AssertionError("codec registry accepted a non-four-tuple result")
+
+
+# Implicit promotion of a byte string to unicode uses the default ASCII codec
+# and reports the same structured error as an explicit decode.
+def ascii_decode_error(operation):
+    try:
+        operation()
+    except UnicodeDecodeError, decode_error:
+        return (
+            decode_error.encoding,
+            decode_error.object,
+            decode_error.start,
+            decode_error.end,
+            decode_error.reason,
+            str(decode_error),
+        )
+    raise AssertionError("ASCII promotion did not raise UnicodeDecodeError")
+
+
+expected_decode_error = (
+    "ascii",
+    "\xff",
+    0,
+    1,
+    "ordinal not in range(128)",
+    "'ascii' codec can't decode byte 0xff in position 0: ordinal not in range(128)",
+)
+
+for ascii_operation in (
+    lambda: "\xff".decode("ascii"),
+    lambda: "\xff" + u"b",
+    lambda: unicode("\xff"),
+    lambda: u"".join(["\xff"]),
+    lambda: "-".join(["\xff", u"a"]),
+    lambda: u"{0}".format("\xff"),
+    lambda: u"%s" % "\xff",
+    lambda: u"a".startswith("\xff"),
+    lambda: u"a".replace("\xff", "b"),
+):
+    assert ascii_decode_error(ascii_operation) == expected_decode_error, ascii_operation
+
+assert ascii_decode_error(lambda: format(0x80, u"c"))[1] == "\x80"

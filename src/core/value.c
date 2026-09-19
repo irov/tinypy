@@ -267,6 +267,28 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A generator abandoned while suspended is closed first, so that try/finally
+   and with blocks in its body still run, as gen_dealloc does in Python 2.7. */
+static tinypy_bool_t __tinypy_internal_value_finalize_generator(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_generator_object_t *generator = TINYPY_GENERATOR_OBJECT(value);
+    tinypy_internal_exception_state_t exception_state;
+    tinypy_error_t *error = NULL;
+
+    if (vm->state != TINYPY_VM_STATE_LIVE || generator->running != 0 || generator->finished != 0 || generator->frame == NULL) {
+        return TINYPY_FALSE;
+    }
+    value->ref = 1;
+    tinypy_internal_exception_preserve_begin(vm, &exception_state);
+    (void)tinypy_generator_close(value, &error);
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    tinypy_internal_exception_preserve_end(vm, &exception_state);
+    value->ref -= 1U;
+    return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = value->type;
@@ -277,6 +299,9 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
         __tinypy_internal_integer_set_free_next(integer, vm->integer_free_list);
         vm->integer_free_list = integer;
         vm->integer_free_count += 1U;
+        return;
+    }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GENERATOR && __tinypy_internal_value_finalize_generator(value) != 0) {
         return;
     }
     if (type->has_finalizer != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {

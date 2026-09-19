@@ -96,3 +96,21 @@ for set_subclass_type in (SetSubclass, FrozenSetSubclass):
         pass
     else:
         raise AssertionError("object.__new__ created an unsafe set subtype")
+
+
+# A missing member is reported through KeyError with the member as argument.
+try:
+    set([1]).remove(5)
+except KeyError, missing_member_error:
+    assert missing_member_error.args == (5,), missing_member_error.args
+else:
+    raise AssertionError("removing a missing set member did not raise KeyError")
+
+try:
+    set().pop()
+except KeyError, missing_member_error:
+    assert missing_member_error.args == ("pop from an empty set",)
+else:
+    raise AssertionError("popping an empty set did not raise KeyError")
+
+assert set([1]).discard(5) is None

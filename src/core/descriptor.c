@@ -194,7 +194,10 @@ tinypy_value_t *tinypy_internal_class_method_get(tinypy_value_t *descriptor, tin
         tinypy_internal_make_vm_error(TINYPY_VALUE_VM(descriptor), TINYPY_ERROR_RUNTIME, "uninitialized classmethod object", out_error);
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_method_new(callable, &owner->base.base, &owner->base.base);
+    /* A bound classmethod carries the class as self and the metaclass as its
+       owner, so im_class matches Python 2.7. */
+    tinypy_value_t *metaclass = &owner->base.base.type->base.base;
+    tinypy_value_t *return_value_1 = tinypy_method_new(callable, &owner->base.base, metaclass);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

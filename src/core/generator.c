@@ -268,7 +268,28 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
             }
         }
     }
-    else if (tinypy_type_is_subtype(exception_argument->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0 && count == 2U) {
+    else if (TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_CLASS) {
+        /* Classic classes are legal exceptions in Python 2, and contextlib
+           relies on throwing them into a generator. */
+        tinypy_value_t *item = count >= 3U ? TINYPY_TUPLE_GET(args, 2U) : NULL;
+
+        if (item != NULL && TINYPY_VALUE_KIND(item) == TINYPY_VALUE_OLD_INSTANCE && tinypy_class_is_subclass(tinypy_old_instance_class(item), exception_argument) != 0) {
+            exception = item;
+            TINYPY_INCREF(exception);
+        }
+        else {
+            tinypy_value_t *exception_args = item != NULL && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE
+                                                 ? tinypy_tuple_from_items(vm, &item, 1U)
+                                                 : tinypy_tuple_from_items(vm, NULL, 0U);
+
+            exception = tinypy_call(exception_argument, exception_args, NULL, out_error);
+            TINYPY_DECREF(exception_args);
+            if (exception == NULL) {
+                return NULL;
+            }
+        }
+    }
+    else if ((tinypy_type_is_subtype(exception_argument->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0 || TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_OLD_INSTANCE) && count == 2U) {
         exception = exception_argument;
         TINYPY_INCREF(exception);
     }

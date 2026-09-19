@@ -354,3 +354,55 @@ assert literal_plain == literal_escaped
 assert literal_nested == ("identifier",)
 assert literal_implicit_concat == "joined_name"
 assert literal_folded_concat == "folded_name"
+
+
+# %-formatting accepts any mapping for named keys and coerces numeric operands.
+class MappingOperand:
+    def __getitem__(self, key):
+        return "value:" + key
+
+
+class NumericOperand:
+    def __int__(self):
+        return 7
+
+    def __float__(self):
+        return 7.5
+
+
+class TextOperand:
+    def __unicode__(self):
+        return u"unicode form"
+
+    def __str__(self):
+        return "byte form"
+
+
+assert "%(name)s" % MappingOperand() == "value:name"
+assert "%(name)s" % {"name": 1} == "1"
+assert "%d" % NumericOperand() == "7"
+assert "%x" % NumericOperand() == "7"
+assert "%f" % NumericOperand() == "7.500000"
+assert u"%s" % TextOperand() == u"unicode form"
+assert "%s" % TextOperand() == "byte form"
+
+for rejected in ("a", None, [1]):
+    try:
+        "%d" % rejected
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("%d accepted a non-number")
+
+try:
+    "%s" % (1, 2)
+except TypeError:
+    pass
+else:
+    raise AssertionError("a surplus positional argument was not reported")
+
+# object.__format__ applies the specification to the stringified object.
+assert format(None, "5") == "None "
+assert format(None, "") == "None"
+assert "{0:>10}".format(None) == "      None"
+assert format(1, "5") == "    1"

@@ -2811,7 +2811,13 @@ static tinypy_value_t *__tinypy_builtin_vars(tinypy_value_t *function, tinypy_va
         TINYPY_INCREF(value);
         return value;
     }
-    tinypy_value_t *return_value_1 = tinypy_object_get_attr(TINYPY_TUPLE_GET(args, 0U), "__dict__", 8U, out_error);
+    tinypy_value_t *target = TINYPY_TUPLE_GET(args, 0U);
+
+    if (tinypy_object_has_attr(target, "__dict__", 8U) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "vars() argument must have __dict__ attribute", out_error);
+        return NULL;
+    }
+    tinypy_value_t *return_value_1 = tinypy_object_get_attr(target, "__dict__", 8U, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

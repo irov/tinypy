@@ -785,7 +785,9 @@ static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
     size_t size;
 
-    if (tinypy_internal_memoryview_check(sequence) != 0) {
+    /* PySequence_Check excludes dictionaries outright and otherwise demands an
+       item protocol, so mappings never reach the index-counting path. */
+    if (tinypy_internal_memoryview_check(sequence) != 0 || TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || tinypy_internal_object_has_special(sequence, "__getitem__", 11U) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument to reversed() must be a sequence", out_error);
         return NULL;
     }
@@ -929,7 +931,7 @@ static tinypy_value_t *__tinypy_xrange_getitem_method(tinypy_value_t *function, 
     if (__tinypy_xrange_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value = tinypy_get_item(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), out_error);
+    tinypy_value_t *return_value = tinypy_internal_get_item_builtin(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), out_error);
     return return_value;
 }
 //////////////////////////////////////////////////////////////////////////

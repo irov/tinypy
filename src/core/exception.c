@@ -871,6 +871,7 @@ static tinypy_error_kind_e __tinypy_exception_error_from_type(tinypy_vm_t *vm, t
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
+    tinypy_value_t *module_name = tinypy_string_from_bytes(vm, "exceptions", 10U);
     size_t index;
 
     for (index = 0U; index < (size_t)TINYPY_EXCEPTION_TYPE_COUNT; ++index) {
@@ -914,6 +915,7 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
             __tinypy_exception_add_method(type, "__setstate__", 12U, __tinypy_exception_setstate_method);
             type->string = &__tinypy_exception_string;
         }
+        tinypy_type_set_attr(type, "__module__", 10U, module_name);
         vm->exception_types[index] = type;
 #if defined(_WIN32)
         __tinypy_exception_builtin_set(vm, definition->name, definition->name_size, &type->base.base);
@@ -954,6 +956,7 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
     __tinypy_exception_type_set_none(vm->exception_types[TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR], "start", 5U);
     __tinypy_exception_type_set_none(vm->exception_types[TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR], "end", 3U);
     __tinypy_exception_type_set_none(vm->exception_types[TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR], "reason", 6U);
+    TINYPY_DECREF(module_name);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_exceptions_module(tinypy_vm_t *vm) {
@@ -1052,6 +1055,7 @@ void tinypy_internal_exception_clear_handled(tinypy_vm_t *vm) {
     vm->handled_type = NULL;
     vm->handled_value = NULL;
     vm->handled_traceback = NULL;
+    tinypy_internal_sys_publish_handled_exception(vm);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_preserve_begin(tinypy_vm_t *vm, tinypy_internal_exception_state_t *state) {
@@ -1095,6 +1099,7 @@ void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm) {
     vm->raised_type = NULL;
     vm->raised_value = NULL;
     vm->raised_traceback = NULL;
+    tinypy_internal_sys_publish_handled_exception(vm);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_restore_raised_from_handled(tinypy_vm_t *vm) {
@@ -1176,6 +1181,18 @@ void tinypy_internal_exception_make_diagnostic(tinypy_vm_t *vm, tinypy_error_t *
         TINYPY_DECREF(rendered);
     }
     tinypy_internal_make_error(&vm->allocator, kind, message, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_exception_raise_key_error(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error) {
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &key, 1U);
+    tinypy_value_t *exception = tinypy_exception_new(vm->exception_types[TINYPY_EXCEPTION_KEY_ERROR], args, out_error);
+
+    TINYPY_DECREF(args);
+    if (exception == NULL) {
+        return;
+    }
+    (void)tinypy_exception_raise(exception, NULL, out_error);
+    TINYPY_DECREF(exception);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_raise_stop_iteration(tinypy_vm_t *vm, tinypy_error_t **out_error) {

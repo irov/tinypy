@@ -164,3 +164,44 @@ except RuntimeError:
 
 sys.setrecursionlimit(original_limit)
 assert sys.getrecursionlimit() == original_limit
+
+
+# The version and float tables are reachable by name as well as by index, and
+# the exception being handled is mirrored for Python 2 compatibility.
+assert sys.version_info.major == 2
+assert sys.version_info.minor == 7
+assert sys.version_info.micro == 18
+assert sys.version_info.releaselevel == "final"
+assert sys.version_info.serial == 0
+assert sys.version_info[0] == 2
+assert len(sys.version_info) == 5
+
+assert sys.float_info.mant_dig == 53
+assert sys.float_info.dig == 15
+assert sys.float_info.radix == 2
+assert sys.float_info.max > 1e308
+assert 0.0 < sys.float_info.min < 1e-307
+assert 0.0 < sys.float_info.epsilon < 1e-15
+assert sys.float_info.max_exp == 1024
+assert sys.float_info.min_exp == -1021
+
+assert sys.getsizeof(1) > 0
+assert sys.getsizeof("abc") > 0
+assert sys.getsizeof(object(), 99) > 0
+
+sys.exc_clear()
+assert sys.exc_type is None
+assert sys.exc_value is None
+assert sys.exc_traceback is None
+try:
+    raise ValueError("mirrored")
+except ValueError:
+    assert sys.exc_type is ValueError
+    assert isinstance(sys.exc_value, ValueError)
+    assert sys.exc_traceback is not None
+assert sys.exc_type is ValueError
+sys.exc_clear()
+assert sys.exc_type is None
+assert sys.exc_value is None
+assert sys.exc_traceback is None
+assert sys.exc_info() == (None, None, None)

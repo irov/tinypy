@@ -847,6 +847,46 @@ static tinypy_bool_t __tinypy_eval_multiply_overflow(int64_t left, int64_t right
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Float arithmetic gets the same inline treatment as integers, including
+   reusing an operand that nothing else holds. */
+static tinypy_value_t *__tinypy_eval_exact_float_binary(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right, tinypy_eval_integer_binary_e operation, tinypy_bool_t *out_handled, tinypy_bool_t *out_reused) {
+    double result;
+
+    *out_handled = 0;
+    *out_reused = 0;
+    if (left->type != &vm->types[TINYPY_VALUE_FLOAT] || right->type != &vm->types[TINYPY_VALUE_FLOAT]) {
+        return NULL;
+    }
+    double left_number = TINYPY_FLOAT_OBJECT(left)->value;
+    double right_number = TINYPY_FLOAT_OBJECT(right)->value;
+
+    if (operation == TINYPY_EVAL_INTEGER_BINARY_ADD) {
+        result = left_number + right_number;
+    }
+    else if (operation == TINYPY_EVAL_INTEGER_BINARY_SUBTRACT) {
+        result = left_number - right_number;
+    }
+    else if (operation == TINYPY_EVAL_INTEGER_BINARY_MULTIPLY) {
+        result = left_number * right_number;
+    }
+    else {
+        return NULL;
+    }
+    *out_handled = 1;
+    if (TINYPY_REFCNT(left) == 1) {
+        TINYPY_FLOAT_OBJECT(left)->value = result;
+        *out_reused = 1;
+        return left;
+    }
+    if (TINYPY_REFCNT(right) == 1) {
+        TINYPY_FLOAT_OBJECT(right)->value = result;
+        *out_reused = 1;
+        return right;
+    }
+    tinypy_value_t *return_value_1 = tinypy_float_from_double(vm, result);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
 static inline tinypy_value_t *__tinypy_eval_exact_integer_binary(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right, tinypy_eval_integer_binary_e operation, tinypy_bool_t *out_handled, tinypy_bool_t *out_reused) {
     int64_t left_integer;
     int64_t right_integer;
@@ -855,7 +895,8 @@ static inline tinypy_value_t *__tinypy_eval_exact_integer_binary(tinypy_vm_t *vm
     *out_handled = 0;
     *out_reused = 0;
     if (left->type != &vm->types[TINYPY_VALUE_INTEGER] || right->type != &vm->types[TINYPY_VALUE_INTEGER]) {
-        return NULL;
+        tinypy_value_t *return_value_float = __tinypy_eval_exact_float_binary(vm, left, right, operation, out_handled, out_reused);
+        return return_value_float;
     }
     left_integer = TINYPY_INTEGER_VALUE(left);
     right_integer = TINYPY_INTEGER_VALUE(right);
@@ -967,18 +1008,18 @@ static inline tinypy_bool_t __tinypy_eval_binary(tinypy_vm_t *vm, tinypy_frame_o
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_eval_pop_slice_key(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t variant) {
-    tinypy_value_t *stop = (variant & 2U) != 0U ? __tinypy_eval_pop_owned(frame) : NULL;
-    tinypy_value_t *start = (variant & 1U) != 0U ? __tinypy_eval_pop_owned(frame) : NULL;
-    tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
-
+static void __tinypy_eval_pop_slice_bounds(tinypy_frame_object_t *frame, size_t variant, tinypy_value_t **out_start, tinypy_value_t **out_stop) {
+    *out_stop = (variant & 2U) != 0U ? __tinypy_eval_pop_owned(frame) : NULL;
+    *out_start = (variant & 1U) != 0U ? __tinypy_eval_pop_owned(frame) : NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_eval_release_slice_bounds(tinypy_value_t *start, tinypy_value_t *stop) {
     if (start != NULL) {
         TINYPY_DECREF(start);
     }
     if (stop != NULL) {
         TINYPY_DECREF(stop);
     }
-    return slice;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_push_block(tinypy_frame_object_t *frame, int32_t type, size_t handler) {
@@ -2062,11 +2103,14 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
         case TINYPY_OP_SLICE_2:
         case TINYPY_OP_SLICE_3: {
             size_t variant = (size_t)(instruction.opcode - TINYPY_OP_SLICE_0);
-            tinypy_value_t *slice = __tinypy_eval_pop_slice_key(vm, frame, variant);
-            tinypy_value_t *container = __tinypy_eval_pop_owned(frame);
-            tinypy_value_t *item = tinypy_get_item(container, slice, out_error);
+            tinypy_value_t *start;
+            tinypy_value_t *stop;
 
-            TINYPY_DECREF(slice);
+            __tinypy_eval_pop_slice_bounds(frame, variant, &start, &stop);
+            tinypy_value_t *container = __tinypy_eval_pop_owned(frame);
+            tinypy_value_t *item = tinypy_internal_get_slice(container, start, stop, out_error);
+
+            __tinypy_eval_release_slice_bounds(start, stop);
             TINYPY_DECREF(container);
             if (item == NULL) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
@@ -2080,12 +2124,15 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
         case TINYPY_OP_STORE_SLICE_2:
         case TINYPY_OP_STORE_SLICE_3: {
             size_t variant = (size_t)(instruction.opcode - TINYPY_OP_STORE_SLICE_0);
-            tinypy_value_t *slice = __tinypy_eval_pop_slice_key(vm, frame, variant);
+            tinypy_value_t *start;
+            tinypy_value_t *stop;
+
+            __tinypy_eval_pop_slice_bounds(frame, variant, &start, &stop);
             tinypy_value_t *container = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
-            tinypy_bool_t stored = tinypy_set_item(container, slice, value, out_error);
+            tinypy_bool_t stored = tinypy_internal_set_slice(container, start, stop, value, out_error);
 
-            TINYPY_DECREF(slice);
+            __tinypy_eval_release_slice_bounds(start, stop);
             TINYPY_DECREF(container);
             TINYPY_DECREF(value);
             if (stored == 0) {
@@ -2098,11 +2145,14 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
         case TINYPY_OP_DELETE_SLICE_2:
         case TINYPY_OP_DELETE_SLICE_3: {
             size_t variant = (size_t)(instruction.opcode - TINYPY_OP_DELETE_SLICE_0);
-            tinypy_value_t *slice = __tinypy_eval_pop_slice_key(vm, frame, variant);
-            tinypy_value_t *container = __tinypy_eval_pop_owned(frame);
-            tinypy_bool_t deleted = tinypy_delete_item(container, slice, out_error);
+            tinypy_value_t *start;
+            tinypy_value_t *stop;
 
-            TINYPY_DECREF(slice);
+            __tinypy_eval_pop_slice_bounds(frame, variant, &start, &stop);
+            tinypy_value_t *container = __tinypy_eval_pop_owned(frame);
+            tinypy_bool_t deleted = tinypy_internal_delete_slice(container, start, stop, out_error);
+
+            __tinypy_eval_release_slice_bounds(start, stop);
             TINYPY_DECREF(container);
             if (deleted == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;

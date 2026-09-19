@@ -88,3 +88,53 @@ unicode_lookbehind = compile_pattern(
     [17, 4, 0, 1, 1, 4, 5, 1, 19, 120, 1, 19, 1040, 1],
 )
 assert unicode_lookbehind.search(u"\u0410x\u0410").span() == (2, 3)
+
+
+# The pattern and match protocols carry split, scanner-based iteration and the
+# group helpers that the re module builds on.
+comma = compile_pattern(",", 0, [17, 8, 3, 1, 1, 1, 1, 44, 0, 19, 44, 1])
+assert comma.split("a,b,c") == ["a", "b", "c"]
+assert comma.split("a,b,c", 1) == ["a", "b,c"]
+assert comma.split("abc") == ["abc"]
+assert comma.split(",a") == ["", "a"]
+assert comma.split("a,") == ["a", ""]
+
+letter = compile_pattern("a", 0, [17, 8, 3, 1, 1, 1, 1, 97, 0, 19, 97, 1])
+assert [found.span() for found in letter.finditer("aXa")] == [(0, 1), (2, 3)]
+assert letter.findall("aXa") == ["a", "a"]
+
+scanner = letter.scanner("aXa")
+assert scanner.match().span() == (0, 1)
+assert scanner.match() is None
+scanner = letter.scanner("aXa")
+assert scanner.search().span() == (0, 1)
+assert scanner.search().span() == (2, 3)
+assert scanner.search() is None
+
+pair = compile_pattern(
+    "(a)(b)",
+    0,
+    [17, 10, 1, 2, 2, 2, 0, 97, 98, 0, 0, 21, 0, 19, 97, 21, 1, 21, 2, 19, 98, 21, 3, 1],
+    2,
+)
+pair_match = pair.match("ab")
+assert pair_match.groups() == ("a", "b")
+assert pair_match.regs == ((0, 2), (0, 1), (1, 2))
+assert pair_match.groupdict() == {}
+
+named = _sre.compile(
+    "(?P<x>a)(?P<y>b)",
+    0,
+    [17, 10, 1, 2, 2, 2, 0, 97, 98, 0, 0, 21, 0, 19, 97, 21, 1, 21, 2, 19, 98, 21, 3, 1],
+    2,
+    {"x": 1, "y": 2},
+    [None, "x", "y"],
+)
+named_match = named.match("ab")
+assert named_match.groupdict() == {"x": "a", "y": "b"}
+assert named_match.group("x") == "a"
+assert named_match.lastgroup == "y"
+
+optional = compile_pattern("(a)", 0, [17, 8, 1, 1, 1, 1, 0, 97, 0, 21, 0, 19, 97, 21, 1, 1], 1)
+assert optional.match("a").regs == ((0, 1), (0, 1))
+assert optional.sub("X", "aa") == "XX"

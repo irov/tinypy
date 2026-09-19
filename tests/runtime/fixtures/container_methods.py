@@ -1905,3 +1905,89 @@ assert raised_args(lambda: (1 + 2j) / 0j) == ("complex division by zero",)
 assert raised_args(lambda: (1 + 2j) // 0j) == ("complex divmod()",)
 assert raised_args(lambda: (1 + 2j) % 0j) == ("complex remainder",)
 assert raised_args(lambda: 1j < 2j) == ("no ordering relation is defined for complex numbers",)
+
+# A missing key is reported through KeyError with the key itself as argument.
+missing_key_dict = {"present": 1}
+for missing_operation in (
+    lambda: missing_key_dict["absent"],
+    lambda: missing_key_dict.pop("absent"),
+    lambda: {}.pop("absent"),
+    lambda: missing_key_dict.__delitem__("absent"),
+):
+    try:
+        missing_operation()
+    except KeyError, missing_error:
+        assert missing_error.args == ("absent",), missing_error.args
+        assert str(missing_error) == "'absent'"
+    else:
+        raise AssertionError("missing dictionary key did not raise KeyError")
+
+try:
+    {}[(1, 2)]
+except KeyError, missing_error:
+    assert missing_error.args == ((1, 2),)
+else:
+    raise AssertionError("missing tuple key did not raise KeyError")
+
+try:
+    {}.popitem()
+except KeyError, missing_error:
+    assert missing_error.args == ("popitem(): dictionary is empty",)
+else:
+    raise AssertionError("popitem on an empty dictionary did not raise KeyError")
+
+assert missing_key_dict.pop("absent", "default") == "default"
+assert missing_key_dict.get("absent") is None
+
+
+# dict.__init__ merges into the mapping; the other mutable built-ins re-initialise.
+merged_dict = {"kept": 1}
+merged_dict.__init__({"added": 2})
+merged_dict.__init__(keyword=3)
+assert sorted(merged_dict.items()) == [("added", 2), ("kept", 1), ("keyword", 3)]
+assert sorted(dict({"a": 1}, b=2).items()) == [("a", 1), ("b", 2)]
+
+replaced_list = [1, 2]
+replaced_list.__init__([9])
+assert replaced_list == [9]
+
+# reversed() needs a sequence: mappings are refused outright.
+for unsequenced in ({0: "a", 1: "b"}, set([1]), 5):
+    try:
+        reversed(unsequenced)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("reversed() accepted a non-sequence")
+
+assert list(reversed([1, 2])) == [2, 1]
+assert list(reversed("ab")) == ["b", "a"]
+assert list(reversed(xrange(3))) == [2, 1, 0]
+
+# A full-width slice or single repeat of an immutable sequence is the original.
+constant_tuple = (1, 2, 3)
+assert constant_tuple[:] is constant_tuple
+assert constant_tuple[0:3] is constant_tuple
+assert constant_tuple * 1 is constant_tuple
+assert constant_tuple[0:2] is not constant_tuple
+assert constant_tuple[::-1] == (3, 2, 1)
+assert "abc"[:] is "abc"[:]
+assert [1, 2][:] is not [1, 2]
+
+# A mutable set probes as a temporary frozenset instead of failing as unhashable.
+frozen_members = set([frozenset([1]), frozenset([2, 3])])
+assert set([1]) in frozen_members
+assert set([9]) not in frozen_members
+frozen_members.remove(set([1]))
+assert len(frozen_members) == 1
+frozen_members.discard(set([2, 3]))
+assert len(frozen_members) == 0
+
+# Tables follow the live entry count, so churn does not grow them forever.
+churned = {}
+for churn_index in range(2000):
+    churned[churn_index] = churn_index
+    del churned[churn_index]
+assert len(churned) == 0
+churned[1] = 1
+assert churned.keys() == [1]

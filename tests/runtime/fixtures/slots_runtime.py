@@ -55,3 +55,40 @@ class TightChild(Slotted):
 
 tight = TightChild(7)
 assert not hasattr(tight, "__dict__")
+
+
+# Protocol 2 pickling carries __slots__ values beside the instance dictionary.
+class SlottedState(object):
+    __slots__ = ("first", "second")
+
+
+slotted_state = SlottedState()
+slotted_state.first = 1
+slotted_state.second = [2]
+reduced = slotted_state.__reduce_ex__(2)
+assert reduced[2] == (None, {"first": 1, "second": [2]})
+
+slotted_state = SlottedState()
+slotted_state.first = 3
+assert slotted_state.__reduce_ex__(2)[2] == (None, {"first": 3})
+
+assert SlottedState().__reduce_ex__(2)[2] is None
+
+
+class MixedState(object):
+    __slots__ = ("slotted", "__dict__")
+
+
+mixed_state = MixedState()
+mixed_state.slotted = 1
+mixed_state.stored = 2
+assert mixed_state.__reduce_ex__(2)[2] == ({"stored": 2}, {"slotted": 1})
+
+
+class PlainState(object):
+    pass
+
+
+plain_state = PlainState()
+plain_state.stored = 1
+assert plain_state.__reduce_ex__(2)[2] == {"stored": 1}

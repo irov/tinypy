@@ -737,6 +737,87 @@ static tinypy_bool_t __tinypy_representation_append_text(tinypy_representation_b
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_representation_text_equal(const tinypy_value_t *text, const char *name, size_t name_size) {
+    if (TINYPY_TEXT_BYTE_SIZE(text) != name_size) {
+        return TINYPY_FALSE;
+    }
+    int comparison = memcmp(TINYPY_TEXT_BYTES(text), name, name_size);
+
+    return comparison == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_representation_dict_module(tinypy_vm_t *vm, tinypy_value_t *dict) {
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, "__module__", 10U);
+    tinypy_value_t *module = tinypy_internal_dict_get_optional(vm, dict, key);
+
+    TINYPY_DECREF(key);
+    if (module == NULL || TINYPY_VALUE_KIND(module) != TINYPY_VALUE_STRING) {
+        return NULL;
+    }
+    return module;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Old-style classes and their instances always show the defining module,
+   falling back to "?" the way Python 2.7 does when it is missing. */
+static void __tinypy_representation_class_qualified_name(tinypy_representation_builder_t *builder, tinypy_value_t *class_value) {
+    tinypy_value_t *module = __tinypy_representation_dict_module(builder->vm, tinypy_class_dict(class_value));
+    tinypy_value_t *name = tinypy_class_name(class_value);
+
+    if (module != NULL) {
+        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
+    }
+    else {
+        __tinypy_representation_append_character(builder, (uint8_t)'?');
+    }
+    __tinypy_representation_append_character(builder, (uint8_t)'.');
+    __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name));
+}
+//////////////////////////////////////////////////////////////////////////
+/* Instances of types defined in Python show the defining module, the way
+   object.__repr__ does in Python 2.7; built-in types stay unqualified. */
+static void __tinypy_representation_type_qualified_name(tinypy_representation_builder_t *builder, const tinypy_type_t *type) {
+    tinypy_value_t *module = tinypy_type_get_attr(type, "__module__", 10U);
+
+    if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && __tinypy_representation_text_equal(module, "__builtin__", 11U) == 0) {
+        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
+        __tinypy_representation_append_character(builder, (uint8_t)'.');
+    }
+    __tinypy_representation_append(builder, type->name, type->name_size);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_representation_qualifier(tinypy_representation_builder_t *builder, tinypy_value_t *value) {
+    const uint8_t *bytes = (const uint8_t *)"?";
+    size_t size = 1U;
+    tinypy_value_t *name = NULL;
+
+    if (value == NULL) {
+        __tinypy_representation_append(builder, bytes, size);
+        return;
+    }
+    switch (TINYPY_VALUE_KIND(value)) {
+    case TINYPY_VALUE_TYPE:
+        bytes = (const uint8_t *)((tinypy_type_t *)value)->name;
+        size = ((tinypy_type_t *)value)->name_size;
+        break;
+    case TINYPY_VALUE_CLASS:
+        name = tinypy_class_name(value);
+        break;
+    case TINYPY_VALUE_FUNCTION:
+        name = tinypy_function_name(value);
+        break;
+    case TINYPY_VALUE_NATIVE_FUNCTION:
+        name = tinypy_native_function_name(value);
+        break;
+    default:
+        break;
+    }
+    if (name != NULL && (TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(name) == TINYPY_VALUE_UNICODE)) {
+        bytes = TINYPY_TEXT_BYTES(name);
+        size = TINYPY_TEXT_BYTE_SIZE(name);
+    }
+    __tinypy_representation_append(builder, bytes, size);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error) {
     tinypy_bool_t function_result;
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
@@ -843,11 +924,48 @@ static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder
     case TINYPY_VALUE_FROZENSET:
         function_result = __tinypy_representation_set(builder, value, out_error);
         return function_result;
-    case TINYPY_VALUE_TYPE:
-        __tinypy_representation_append(builder, "<type '", 7U);
-        __tinypy_representation_append(builder, ((tinypy_type_t *)value)->name, ((tinypy_type_t *)value)->name_size);
+    case TINYPY_VALUE_TYPE: {
+        tinypy_type_t *type_value = (tinypy_type_t *)value;
+        tinypy_bool_t heap_type = (type_value->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+        tinypy_value_t *module = tinypy_type_get_attr(type_value, "__module__", 10U);
+
+        /* Types defined in Python report their module; built-in types live in
+           __builtin__ and keep the bare "<type 'name'>" form. */
+        __tinypy_representation_append(builder, heap_type != 0 ? "<class '" : "<type '", heap_type != 0 ? 8U : 7U);
+        if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && __tinypy_representation_text_equal(module, "__builtin__", 11U) == 0) {
+            __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
+            __tinypy_representation_append_character(builder, (uint8_t)'.');
+        }
+        __tinypy_representation_append(builder, type_value->name, type_value->name_size);
         __tinypy_representation_append(builder, "'>", 2U);
         return TINYPY_TRUE;
+    }
+    case TINYPY_VALUE_CLASS:
+        __tinypy_representation_append(builder, "<class ", 7U);
+        __tinypy_representation_class_qualified_name(builder, value);
+        __tinypy_representation_append(builder, " at ", 4U);
+        __tinypy_representation_pointer(builder, value);
+        __tinypy_representation_append_character(builder, (uint8_t)'>');
+        return TINYPY_TRUE;
+    case TINYPY_VALUE_METHOD: {
+        tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(value);
+        tinypy_bool_t bound = method->self != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+
+        __tinypy_representation_append(builder, bound != 0 ? "<bound method " : "<unbound method ", bound != 0 ? 14U : 16U);
+        __tinypy_representation_qualifier(builder, method->owner);
+        __tinypy_representation_append_character(builder, (uint8_t)'.');
+        __tinypy_representation_qualifier(builder, method->function);
+        if (bound == 0) {
+            __tinypy_representation_append_character(builder, (uint8_t)'>');
+            return TINYPY_TRUE;
+        }
+        __tinypy_representation_append(builder, " of ", 4U);
+        if (__tinypy_representation_value(builder, method->self, INT32_C(0), out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        __tinypy_representation_append_character(builder, (uint8_t)'>');
+        return TINYPY_TRUE;
+    }
     case TINYPY_VALUE_FUNCTION:
         __tinypy_representation_append(builder, "<function ", 10U);
         tinypy_value_t *function_name = tinypy_function_name(value);
@@ -979,9 +1097,29 @@ static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder
         if (out_error != NULL && *out_error != NULL) {
             return TINYPY_FALSE;
         }
+        /* str() of a classic instance without __str__ falls back to __repr__,
+           the way instance_str does in Python 2.7. */
+        if (raw != 0 && kind == TINYPY_VALUE_OLD_INSTANCE) {
+            tinypy_value_t *fallback = __tinypy_representation_custom(value, "__repr__", 8U, out_error);
+
+            if (fallback != NULL) {
+                tinypy_bool_t appended = __tinypy_representation_append_text(builder, fallback, raw, out_error);
+                TINYPY_DECREF(fallback);
+                return appended;
+            }
+            if (out_error != NULL && *out_error != NULL) {
+                return TINYPY_FALSE;
+            }
+        }
         __tinypy_representation_append_character(builder, (uint8_t)'<');
-        __tinypy_representation_append(builder, value->type->name, value->type->name_size);
-        __tinypy_representation_append(builder, " object at ", 11U);
+        if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+            __tinypy_representation_class_qualified_name(builder, tinypy_old_instance_class(value));
+            __tinypy_representation_append(builder, " instance at ", 13U);
+        }
+        else {
+            __tinypy_representation_type_qualified_name(builder, value->type);
+            __tinypy_representation_append(builder, " object at ", 11U);
+        }
         __tinypy_representation_pointer(builder, value);
         __tinypy_representation_append_character(builder, (uint8_t)'>');
         return TINYPY_TRUE;
@@ -1014,7 +1152,7 @@ static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *va
     __tinypy_representation_initialize(&builder, TINYPY_VALUE_VM(value));
     TINYPY_CLEAR_ERROR(out_error);
     __tinypy_representation_append_character(&builder, (uint8_t)'<');
-    __tinypy_representation_append(&builder, value->type->name, value->type->name_size);
+    __tinypy_representation_type_qualified_name(&builder, value->type);
     __tinypy_representation_append(&builder, " object at ", 11U);
     __tinypy_representation_pointer(&builder, value);
     __tinypy_representation_append_character(&builder, (uint8_t)'>');
@@ -1128,6 +1266,56 @@ static tinypy_value_t *__tinypy_object_class_property(tinypy_value_t *function, 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* __class__ may be reassigned between Python-defined classes whose instances
+   have the same layout, matching object_set_class in Python 2.7. */
+static tinypy_value_t *__tinypy_object_class_assign(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 2U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ descriptor received invalid arguments", out_error);
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *replacement = TINYPY_TUPLE_GET(args, 1U);
+
+    if (TINYPY_VALUE_KIND(replacement) != TINYPY_VALUE_TYPE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ must be set to a class", out_error);
+        return NULL;
+    }
+    tinypy_type_t *current = self->type;
+    tinypy_type_t *target = (tinypy_type_t *)replacement;
+    tinypy_bool_t compatible = (current->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && (target->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U
+                               && current->basic_size == target->basic_size && current->item_size == target->item_size
+                               && current->dict_offset == target->dict_offset && current->weakref_offset == target->weakref_offset
+                               && current->slots_offset == target->slots_offset && current->layout_kind == target->layout_kind
+                               && current->base_type == target->base_type ? TINYPY_TRUE : TINYPY_FALSE;
+
+    if (compatible != 0) {
+        /* Equal-sized slot tables still differ by name, which CPython checks
+           through same_slots_added. */
+        tinypy_value_t *current_slots = tinypy_type_get_attr(current, "__slots__", 9U);
+        tinypy_value_t *target_slots = tinypy_type_get_attr(target, "__slots__", 9U);
+
+        if (current_slots != target_slots) {
+            int32_t equal = current_slots == NULL || target_slots == NULL
+                                ? INT32_C(0)
+                                : tinypy_compare_bool(current_slots, target_slots, TINYPY_COMPARE_EQUAL, NULL);
+
+            compatible = equal > 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        }
+    }
+    if (compatible == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ assignment: only for heap types with a compatible layout", out_error);
+        return NULL;
+    }
+    TINYPY_INCREF(replacement);
+    self->type = target;
+    TINYPY_DECREF(&current->base.base);
+    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_sizeof_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -1215,7 +1403,8 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
     tinypy_type_set_attr(&vm->types[TINYPY_VALUE_INSTANCE], "__repr__", 8U, object_repr_function);
     tinypy_type_set_attr(&vm->types[TINYPY_VALUE_INSTANCE], "__str__", 7U, object_str_function);
     tinypy_value_t *class_getter = tinypy_native_function_new(vm, "__class__", 9U, __tinypy_object_class_property, NULL, NULL);
-    tinypy_value_t *class_property = tinypy_property_new(vm, class_getter, NULL, NULL, NULL);
+    tinypy_value_t *class_setter = tinypy_native_function_new(vm, "__class__", 9U, __tinypy_object_class_assign, NULL, NULL);
+    tinypy_value_t *class_property = tinypy_property_new(vm, class_getter, class_setter, NULL, NULL);
     tinypy_value_t *sizeof_function = tinypy_native_function_new(vm, "__sizeof__", 10U, __tinypy_object_sizeof_method, NULL, NULL);
 
     tinypy_type_set_attr(&vm->types[TINYPY_VALUE_INSTANCE], "__class__", 9U, class_property);
@@ -1238,6 +1427,7 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
     }
     TINYPY_DECREF(sizeof_function);
     TINYPY_DECREF(class_property);
+    TINYPY_DECREF(class_setter);
     TINYPY_DECREF(class_getter);
     TINYPY_DECREF(object_str_function);
     TINYPY_DECREF(object_repr_function);

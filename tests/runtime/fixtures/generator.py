@@ -108,3 +108,81 @@ if throw_ready != "ready" or throw_result != "caught":
     raise AssertionError("generator throw failed")
 if close_result is not None or close_marker != 42:
     raise AssertionError("generator close failed")
+
+
+# A generator abandoned while suspended is closed, so its cleanup still runs,
+# and classic classes are legal exceptions for throw().
+generator_log = []
+
+
+def cleanup_generator():
+    try:
+        yield 1
+        yield 2
+    finally:
+        generator_log.append("finally")
+
+
+def drop_suspended():
+    suspended = cleanup_generator()
+    suspended.next()
+
+
+drop_suspended()
+assert generator_log == ["finally"]
+
+del generator_log[:]
+for produced in cleanup_generator():
+    break
+assert generator_log == ["finally"]
+
+del generator_log[:]
+assert list(cleanup_generator()) == [1, 2]
+assert generator_log == ["finally"]
+
+
+class ContextRecorder(object):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        generator_log.append("exit")
+        return False
+
+
+def context_generator():
+    with ContextRecorder():
+        yield 1
+        yield 2
+
+
+del generator_log[:]
+
+
+def drop_context():
+    suspended = context_generator()
+    suspended.next()
+
+
+drop_context()
+assert generator_log == ["exit"]
+
+
+class ClassicSignal:
+    pass
+
+
+def classic_catcher():
+    try:
+        yield 1
+    except ClassicSignal:
+        yield "caught"
+
+
+thrown = classic_catcher()
+thrown.next()
+assert thrown.throw(ClassicSignal) == "caught"
+
+thrown = classic_catcher()
+thrown.next()
+assert thrown.throw(ClassicSignal()) == "caught"

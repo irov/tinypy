@@ -30,8 +30,10 @@ if(BUILD_TESTING)
         bytearray_runtime
         class_method
         codecs_runtime
+        comparison_runtime
         constructors_runtime
         container_methods
+        control_flow_runtime
         dict_view_runtime
         exception_codec_runtime
         exception_custom
@@ -44,6 +46,7 @@ if(BUILD_TESTING)
         finalizer_runtime
         functools_runtime
         generator
+        legacy_slice_runtime
         metaclass_checks_runtime
         metaclass_runtime
         multislots_runtime

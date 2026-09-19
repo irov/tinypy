@@ -357,12 +357,31 @@ size_t tinypy_set_size(const tinypy_value_t *set) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A mutable set is unhashable, so membership tests probe with a temporary
+   frozenset the way CPython's set_contains and set_discard_key retry. */
+static tinypy_value_t *__tinypy_set_probe_key(tinypy_value_t *item, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SET) {
+        TINYPY_INCREF(item);
+        return item;
+    }
+    tinypy_value_t *return_value_1 = tinypy_set_from_iterable(item, TINYPY_TRUE, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
 int32_t tinypy_set_contains(const tinypy_value_t *set, const tinypy_value_t *item, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
     tinypy_bool_t contains;
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (tinypy_internal_dict_contains_checked(vm, TINYPY_SET_OBJECT((tinypy_value_t *)set)->dict, item, &contains, out_error) == 0) {
+    tinypy_value_t *probe = __tinypy_set_probe_key((tinypy_value_t *)item, out_error);
+
+    if (probe == NULL) {
+        return INT32_C(-1);
+    }
+    tinypy_bool_t checked = tinypy_internal_dict_contains_checked(vm, TINYPY_SET_OBJECT((tinypy_value_t *)set)->dict, probe, &contains, out_error);
+
+    TINYPY_DECREF(probe);
+    if (checked == 0) {
         return INT32_C(-1);
     }
     return contains != 0 ? INT32_C(1) : INT32_C(0);
@@ -377,7 +396,15 @@ tinypy_bool_t tinypy_set_discard(tinypy_value_t *set, tinypy_value_t *item, tiny
     tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
     tinypy_bool_t deleted;
 
-    if (tinypy_internal_dict_delete_optional_checked(vm, TINYPY_SET_OBJECT(set)->dict, item, &deleted, out_error) == 0) {
+    tinypy_value_t *probe = __tinypy_set_probe_key(item, out_error);
+
+    if (probe == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t removed = tinypy_internal_dict_delete_optional_checked(vm, TINYPY_SET_OBJECT(set)->dict, probe, &deleted, out_error);
+
+    TINYPY_DECREF(probe);
+    if (removed == 0) {
         return TINYPY_FALSE;
     }
     if (deleted != 0) {
@@ -735,11 +762,19 @@ static tinypy_value_t *__tinypy_set_remove_method(tinypy_value_t *function, tiny
     }
     tinypy_value_t *set = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
-    if (tinypy_internal_dict_delete_optional_checked(vm, TINYPY_SET_OBJECT(set)->dict, item, &deleted, out_error) == 0) {
+    tinypy_value_t *probe = __tinypy_set_probe_key(item, out_error);
+
+    if (probe == NULL) {
+        return NULL;
+    }
+    tinypy_bool_t removed = tinypy_internal_dict_delete_optional_checked(vm, TINYPY_SET_OBJECT(set)->dict, probe, &deleted, out_error);
+
+    TINYPY_DECREF(probe);
+    if (removed == 0) {
         return NULL;
     }
     if (deleted == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_KEY, "set member was not found", out_error);
+        tinypy_internal_exception_raise_key_error(vm, item, out_error);
         return NULL;
     }
     TINYPY_SET_OBJECT(set)->hash_computed = 0;

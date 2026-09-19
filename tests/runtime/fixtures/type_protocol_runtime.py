@@ -306,3 +306,67 @@ exec "created = 42" in exec_globals, exec_locals
 assert "__builtins__" in exec_globals
 assert "__builtins__" not in exec_locals
 assert exec_locals["created"] == 42
+
+
+# Types defined in Python report their module; built-in and extension types
+# keep the bare form, and the built-in exceptions live in their own module.
+class RepresentedType(object):
+    pass
+
+
+class RepresentedSubclass(list):
+    pass
+
+
+assert repr(RepresentedType) == "<class '%s.RepresentedType'>" % __name__
+assert repr(RepresentedSubclass) == "<class '%s.RepresentedSubclass'>" % __name__
+assert str(RepresentedType) == repr(RepresentedType)
+assert repr(int) == "<type 'int'>"
+assert repr(object) == "<type 'object'>"
+assert repr(type) == "<type 'type'>"
+assert repr(xrange) == "<type 'xrange'>"
+assert repr(Exception) == "<type 'exceptions.Exception'>"
+assert repr(ValueError) == "<type 'exceptions.ValueError'>"
+assert Exception.__module__ == "exceptions"
+assert ValueError.__module__ == "exceptions"
+assert int.__module__ == "__builtin__"
+assert RepresentedType.__module__ == __name__
+
+
+class RepresentedError(Exception):
+    pass
+
+
+assert repr(RepresentedError) == "<class '%s.RepresentedError'>" % __name__
+assert RepresentedError.__module__ == __name__
+
+
+# Instances and methods of types defined in Python report the defining module,
+# and a bound classmethod carries the metaclass as its owner.
+class RepresentedInstance(object):
+    def method(self):
+        return 1
+
+    @classmethod
+    def class_method(cls):
+        return cls.__name__
+
+
+represented = RepresentedInstance()
+assert repr(represented).startswith("<%s.RepresentedInstance object at 0x" % __name__)
+assert repr(represented).endswith(">")
+assert str(represented) == repr(represented)
+assert repr(object()).startswith("<object object at 0x")
+assert repr(RepresentedInstance.method) == "<unbound method RepresentedInstance.method>"
+assert repr(represented.method).startswith("<bound method RepresentedInstance.method of <%s.RepresentedInstance object at 0x" % __name__)
+assert repr(RepresentedInstance.class_method) == "<bound method type.class_method of <class '%s.RepresentedInstance'>>" % __name__
+assert RepresentedInstance.class_method.im_class is type
+assert RepresentedInstance.class_method.im_self is RepresentedInstance
+assert RepresentedInstance.class_method() == "RepresentedInstance"
+
+try:
+    RepresentedInstance.missing
+except AttributeError, missing_error:
+    assert str(missing_error) == "type object 'RepresentedInstance' has no attribute 'missing'"
+else:
+    raise AssertionError("missing type attribute did not raise")

@@ -1327,7 +1327,7 @@ static tinypy_value_t *__tinypy_sre_join(tinypy_vm_t *vm, tinypy_value_t *pieces
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_sre_pattern_sub(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_sre_pattern_sub_expanded(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *string;
     tinypy_value_t *pieces;
@@ -1560,6 +1560,386 @@ static tinypy_value_t *__tinypy_sre_getcodesize(tinypy_value_t *function, tinypy
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Template expansion and the scanner protocol live in the re module, exactly
+   as they do in Python 2.7, so the engine calls back into it. */
+static tinypy_value_t *__tinypy_sre_call_re_helper(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
+    tinypy_value_t *module = tinypy_import_module(vm, "re", 2U, NULL, NULL, INT32_C(0), out_error);
+    tinypy_value_t *helper;
+    tinypy_value_t *call_args;
+    tinypy_value_t *result;
+
+    if (module == NULL) {
+        return NULL;
+    }
+    helper = tinypy_object_get_attr(module, name, name_size, out_error);
+    TINYPY_DECREF(module);
+    if (helper == NULL) {
+        return NULL;
+    }
+    call_args = tinypy_tuple_from_items(vm, items, item_count);
+    result = tinypy_call(helper, call_args, NULL, out_error);
+    TINYPY_DECREF(call_args);
+    TINYPY_DECREF(helper);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_sre_template_is_literal(tinypy_value_t *replacement) {
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(replacement);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(replacement);
+    size_t index;
+
+    for (index = 0U; index < size; ++index) {
+        if (bytes[index] == (uint8_t)'\\') {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_sre_match_regs(tinypy_value_t *match_value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(match_value);
+    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(match_value);
+    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(match->pattern);
+    size_t count = pattern->groups + 1U;
+    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, count * sizeof(*items));
+    tinypy_value_t *result;
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        size_t start = index == 0U ? match->start : match->marks[(index - 1U) * 2U];
+        size_t end = index == 0U ? match->end : match->marks[(index - 1U) * 2U + 1U];
+        tinypy_value_t *span[2];
+
+        if (start == SIZE_MAX || end == SIZE_MAX) {
+            span[0] = tinypy_integer_from_i64(vm, INT64_C(-1));
+            span[1] = tinypy_integer_from_i64(vm, INT64_C(-1));
+        }
+        else {
+            span[0] = tinypy_integer_from_i64(vm, (int64_t)start);
+            span[1] = tinypy_integer_from_i64(vm, (int64_t)end);
+        }
+        items[index] = tinypy_tuple_from_items(vm, span, 2U);
+        TINYPY_DECREF(span[1]);
+        TINYPY_DECREF(span[0]);
+    }
+    result = tinypy_tuple_from_items(vm, items, count);
+    for (index = 0U; index < count; ++index) {
+        TINYPY_DECREF(items[index]);
+    }
+    tinypy_internal_vm_deallocate(vm, items, count * sizeof(*items));
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_sre_match_groupdict(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *default_value;
+    tinypy_value_t *result;
+    size_t position = 0U;
+    tinypy_value_t *name;
+    tinypy_value_t *index_value;
+
+    (void)user_data;
+    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 1U, 2U, out_error) == 0;
+    if (condition == 0) {
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
+        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_MATCH;
+    }
+    if (condition) {
+        return NULL;
+    }
+    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(match->pattern);
+    default_value = TINYPY_TUPLE_SIZE(args) == 2U ? TINYPY_TUPLE_GET(args, 1U) : tinypy_none_get(vm);
+    if (TINYPY_TUPLE_SIZE(args) == 2U) {
+        TINYPY_INCREF(default_value);
+    }
+    result = tinypy_dict_new(vm);
+    while (tinypy_dict_next(pattern->groupindex, &position, &name, &index_value) != 0) {
+        size_t index;
+        tinypy_value_t *value;
+
+        if (__tinypy_sre_match_group_index(match, name, &index, out_error) == 0) {
+            TINYPY_DECREF(result);
+            TINYPY_DECREF(default_value);
+            return NULL;
+        }
+        value = __tinypy_sre_match_group_value(match, index, default_value);
+        tinypy_dict_set(result, name, value);
+        TINYPY_DECREF(value);
+    }
+    TINYPY_DECREF(default_value);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_sre_match_expand(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0;
+    if (condition == 0) {
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
+        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_MATCH;
+    }
+    if (condition) {
+        return NULL;
+    }
+    tinypy_value_t *match_value = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(match_value);
+    tinypy_value_t *items[3] = {match->pattern, match_value, TINYPY_TUPLE_GET(args, 1U)};
+    tinypy_value_t *return_value_1 = __tinypy_sre_call_re_helper(vm, "_expand", 7U, items, 3U, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_sre_pattern_split(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *string;
+    tinypy_value_t *result;
+    size_t string_size;
+    size_t pos = 0U;
+    size_t last = 0U;
+    size_t splits = 0U;
+    size_t limit = 0U;
+
+    (void)user_data;
+    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 2U, 3U, out_error) == 0;
+    if (condition == 0) {
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
+        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_PATTERN;
+    }
+    if (condition) {
+        return NULL;
+    }
+    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    string = TINYPY_TUPLE_GET(args, 1U);
+    if (TINYPY_VALUE_KIND(string) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(string) != TINYPY_VALUE_UNICODE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected string or buffer", out_error);
+        return NULL;
+    }
+    if (TINYPY_TUPLE_SIZE(args) == 3U) {
+        int64_t count;
+
+        if (__tinypy_sre_integer(TINYPY_TUPLE_GET(args, 2U), &count) == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "maxsplit must be an integer", out_error);
+            return NULL;
+        }
+        limit = count <= 0 ? 0U : (size_t)count;
+    }
+    string_size = __tinypy_sre_text_size(string);
+    result = tinypy_list_from_items(vm, NULL, 0U);
+    while (pos <= string_size && (limit == 0U || splits < limit)) {
+        tinypy_value_t *match_value = __tinypy_sre_execute(pattern, string, pos, string_size, INT32_C(1), out_error);
+        tinypy_sre_match_object_t *match;
+        tinypy_value_t *piece;
+        size_t group;
+
+        if (match_value == NULL) {
+            TINYPY_DECREF(result);
+            return NULL;
+        }
+        if (TINYPY_VALUE_KIND(match_value) == TINYPY_VALUE_NONE) {
+            TINYPY_DECREF(match_value);
+            break;
+        }
+        match = TINYPY_SRE_MATCH_OBJECT(match_value);
+        /* Python 2.7 never splits on an empty match. */
+        if (match->start == match->end) {
+            TINYPY_DECREF(match_value);
+            pos += 1U;
+            continue;
+        }
+        piece = __tinypy_sre_text_slice(vm, string, last, match->start);
+        if (tinypy_internal_list_append_checked(result, piece, out_error) == 0) {
+            TINYPY_DECREF(piece);
+            TINYPY_DECREF(match_value);
+            TINYPY_DECREF(result);
+            return NULL;
+        }
+        TINYPY_DECREF(piece);
+        for (group = 1U; group <= pattern->groups; ++group) {
+            tinypy_value_t *none = tinypy_none_get(vm);
+            tinypy_value_t *value = __tinypy_sre_match_group_value(match, group, none);
+
+            TINYPY_DECREF(none);
+            if (tinypy_internal_list_append_checked(result, value, out_error) == 0) {
+                TINYPY_DECREF(value);
+                TINYPY_DECREF(match_value);
+                TINYPY_DECREF(result);
+                return NULL;
+            }
+            TINYPY_DECREF(value);
+        }
+        last = match->end;
+        pos = match->end;
+        splits += 1U;
+        TINYPY_DECREF(match_value);
+    }
+    tinypy_value_t *tail = __tinypy_sre_text_slice(vm, string, last, string_size);
+
+    if (tinypy_internal_list_append_checked(result, tail, out_error) == 0) {
+        TINYPY_DECREF(tail);
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    TINYPY_DECREF(tail);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+typedef struct tinypy_internal_sre_scanner_payload_t {
+    tinypy_value_t *pattern;
+    tinypy_value_t *string;
+    size_t pos;
+    size_t endpos;
+} tinypy_internal_sre_scanner_payload_t;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_internal_sre_scanner_payload_t *__tinypy_sre_scanner_payload(tinypy_value_t *value) {
+    tinypy_internal_sre_scanner_payload_t *payload = (tinypy_internal_sre_scanner_payload_t *)tinypy_native_instance_payload(value);
+    return payload;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_sre_scanner_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_internal_sre_scanner_payload_t *payload = __tinypy_sre_scanner_payload(value);
+    tinypy_value_t *pattern = payload->pattern;
+    tinypy_value_t *string = payload->string;
+
+    tinypy_internal_instance_release_references(value, visit, user_data);
+    payload->pattern = NULL;
+    payload->string = NULL;
+    if (pattern != NULL) {
+        visit(pattern, user_data);
+    }
+    if (string != NULL) {
+        visit(string, user_data);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_sre_scanner_step(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0;
+    if (condition == 0) {
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
+        condition = item->type != vm->sre_scanner_type;
+    }
+    if (condition) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected an SRE scanner", out_error);
+        return NULL;
+    }
+    tinypy_internal_sre_scanner_payload_t *payload = __tinypy_sre_scanner_payload(TINYPY_TUPLE_GET(args, 0U));
+    if (payload->pattern == NULL || payload->pos > payload->endpos) {
+        tinypy_value_t *finished = tinypy_none_get(vm);
+        return finished;
+    }
+    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(payload->pattern);
+    tinypy_value_t *match_value = __tinypy_sre_execute(pattern, payload->string, payload->pos, payload->endpos, user_data != NULL ? INT32_C(1) : INT32_C(0), out_error);
+
+    if (match_value == NULL) {
+        return NULL;
+    }
+    if (TINYPY_VALUE_KIND(match_value) == TINYPY_VALUE_NONE) {
+        payload->pos = payload->endpos + 1U;
+        return match_value;
+    }
+    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(match_value);
+    payload->pos = match->end == match->start ? match->end + 1U : match->end;
+    return match_value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_sre_scanner_new(tinypy_vm_t *vm, tinypy_value_t *pattern_value, tinypy_value_t *string, size_t pos, size_t endpos) {
+    tinypy_value_t *scanner = tinypy_native_instance_new(vm->sre_scanner_type);
+    tinypy_internal_sre_scanner_payload_t *payload;
+
+    if (scanner == NULL) {
+        return NULL;
+    }
+    payload = __tinypy_sre_scanner_payload(scanner);
+    TINYPY_INCREF(pattern_value);
+    TINYPY_INCREF(string);
+    payload->pattern = pattern_value;
+    payload->string = string;
+    payload->pos = pos;
+    payload->endpos = endpos;
+    return scanner;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_sre_pattern_scanner(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    size_t pos;
+    size_t endpos;
+
+    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 2U, 4U, out_error) == 0;
+    if (condition == 0) {
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
+        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_PATTERN;
+    }
+    if (condition) {
+        return NULL;
+    }
+    tinypy_value_t *pattern_value = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(pattern_value);
+    if (__tinypy_sre_bounds(pattern, args, 1U, &pos, &endpos, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *scanner = __tinypy_sre_scanner_new(vm, pattern_value, TINYPY_TUPLE_GET(args, 1U), pos, endpos);
+
+    if (scanner == NULL) {
+        return NULL;
+    }
+    if (user_data == NULL) {
+        return scanner;
+    }
+    tinypy_value_t *search = tinypy_object_get_attr(scanner, "search", 6U, out_error);
+
+    TINYPY_DECREF(scanner);
+    if (search == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *sentinel = tinypy_none_get(vm);
+    tinypy_value_t *iterator = tinypy_internal_call_iterator_new(search, sentinel, out_error);
+
+    TINYPY_DECREF(sentinel);
+    TINYPY_DECREF(search);
+    return iterator;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A replacement holding a backslash is a template, not a literal: re._subx
+   turns it into the finished string or into a filter over the match. */
+static tinypy_value_t *__tinypy_sre_pattern_sub(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *replacement;
+    tinypy_value_t *expanded;
+    tinypy_value_t *rewritten;
+    tinypy_value_t *result;
+    tinypy_value_t *items[4];
+    size_t count;
+    size_t index;
+
+    if (TINYPY_VALUE_KIND(args) != TINYPY_VALUE_TUPLE || TINYPY_TUPLE_SIZE(args) < 2U || TINYPY_TUPLE_SIZE(args) > 4U) {
+        tinypy_value_t *return_value_1 = __tinypy_sre_pattern_sub_expanded(function, args, kwargs, user_data, out_error);
+        return return_value_1;
+    }
+    replacement = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_bool_t template_text = TINYPY_VALUE_KIND(replacement) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(replacement) == TINYPY_VALUE_UNICODE;
+    if (template_text == 0 || __tinypy_sre_template_is_literal(replacement) != 0 || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_SRE_PATTERN) {
+        tinypy_value_t *return_value_2 = __tinypy_sre_pattern_sub_expanded(function, args, kwargs, user_data, out_error);
+        return return_value_2;
+    }
+    tinypy_value_t *helper_items[2] = {TINYPY_TUPLE_GET(args, 0U), replacement};
+
+    expanded = __tinypy_sre_call_re_helper(vm, "_subx", 5U, helper_items, 2U, out_error);
+    if (expanded == NULL) {
+        return NULL;
+    }
+    count = TINYPY_TUPLE_SIZE(args);
+    for (index = 0U; index < count; ++index) {
+        items[index] = index == 1U ? expanded : TINYPY_TUPLE_GET(args, index);
+    }
+    rewritten = tinypy_tuple_from_items(vm, items, count);
+    result = __tinypy_sre_pattern_sub_expanded(function, rewritten, kwargs, user_data, out_error);
+    TINYPY_DECREF(rewritten);
+    TINYPY_DECREF(expanded);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_sre_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
     tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
 
@@ -1572,6 +1952,27 @@ static void __tinypy_sre_add_module_function(tinypy_vm_t *vm, tinypy_value_t *mo
 
     tinypy_module_add_value(module, name, name_size, function);
     TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_sre_initialize_scanner_type(tinypy_vm_t *vm) {
+    tinypy_native_type_spec_t spec;
+    static const char *const step_names[] = {"match", "search"};
+    size_t index;
+
+    tinypy_native_type_spec_init(&spec);
+    spec.payload_size = sizeof(tinypy_internal_sre_scanner_payload_t);
+    spec.has_instance_dict = TINYPY_FALSE;
+    spec.has_weakrefs = TINYPY_FALSE;
+    vm->sre_scanner_type = tinypy_native_type_new(vm, "SRE_Scanner", 11U, NULL, 0U, NULL, &spec, NULL);
+    vm->sre_scanner_type->release_references = __tinypy_sre_scanner_release_references;
+    vm->sre_scanner_type->traverse_references = __tinypy_sre_scanner_release_references;
+    for (index = 0U; index < sizeof(step_names) / sizeof(step_names[0]); ++index) {
+        size_t name_size = index == 0U ? 5U : 6U;
+        tinypy_value_t *step = tinypy_native_function_new(vm, step_names[index], name_size, __tinypy_sre_scanner_step, index == 0U ? NULL : (void *)(intptr_t)1, NULL);
+
+        tinypy_type_set_attr(vm->sre_scanner_type, step_names[index], name_size, step);
+        TINYPY_DECREF(step);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_sre_module(tinypy_vm_t *vm) {
@@ -1587,11 +1988,17 @@ void tinypy_internal_initialize_sre_module(tinypy_vm_t *vm) {
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_PATTERN], "findall", 7U, __tinypy_sre_pattern_findall, NULL);
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_PATTERN], "sub", 3U, __tinypy_sre_pattern_sub, NULL);
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_PATTERN], "subn", 4U, __tinypy_sre_pattern_sub, (void *)(intptr_t)1);
+    __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_PATTERN], "split", 5U, __tinypy_sre_pattern_split, NULL);
+    __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_PATTERN], "scanner", 7U, __tinypy_sre_pattern_scanner, NULL);
+    __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_PATTERN], "finditer", 8U, __tinypy_sre_pattern_scanner, (void *)(intptr_t)1);
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_MATCH], "group", 5U, __tinypy_sre_match_group, NULL);
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_MATCH], "groups", 6U, __tinypy_sre_match_groups, NULL);
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_MATCH], "start", 5U, __tinypy_sre_match_span_method, (void *)(intptr_t)0);
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_MATCH], "end", 3U, __tinypy_sre_match_span_method, (void *)(intptr_t)1);
     __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_MATCH], "span", 4U, __tinypy_sre_match_span_method, (void *)(intptr_t)2);
+    __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_MATCH], "groupdict", 9U, __tinypy_sre_match_groupdict, NULL);
+    __tinypy_sre_add_method(&vm->types[TINYPY_VALUE_SRE_MATCH], "expand", 6U, __tinypy_sre_match_expand, NULL);
+    __tinypy_sre_initialize_scanner_type(vm);
     tinypy_module_add_value(module, "__name__", 8U, name);
     tinypy_module_add_value(module, "MAGIC", 5U, magic);
     tinypy_module_add_value(module, "CODESIZE", 8U, code_size);
