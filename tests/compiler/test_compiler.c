@@ -239,7 +239,32 @@ static int32_t __test_empty_exec(void) {
     assert(tinypy_string_view(tinypy_code_filename(code), &bytecode_size) != NULL);
     assert(bytecode_size == sizeof(logical_filename));
     assert(memcmp(tinypy_string_view(tinypy_code_filename(code), &bytecode_size), logical_filename, sizeof(logical_filename)) == 0);
-    tinypy_release(code);
+    tinypy_release(code); {
+        static const char blank_lines[] = "\n\npass\n";
+        static const char indented_pass[] = "  pass\n";
+        static const char glued_pass[] = "passpass\n";
+        static const uint8_t expected_lnotab[] = {0U, 2U};
+        tinypy_error_t *error = NULL;
+        tinypy_value_t *lnotab;
+        size_t lnotab_size;
+
+        /* A pass-only module keeps its line table and an indented or glued
+           pass is not an empty module. */
+        code = tinypy_compile_source(vm, blank_lines, sizeof(blank_lines) - 1U, logical_filename, sizeof(logical_filename), &options, &error);
+        assert(code != NULL && error == NULL);
+        assert(tinypy_code_first_line_number(code) == 1);
+        lnotab = tinypy_code_lnotab(code);
+        assert(memcmp(tinypy_string_view(lnotab, &lnotab_size), expected_lnotab, sizeof(expected_lnotab)) == 0 && lnotab_size == sizeof(expected_lnotab));
+        tinypy_release(code);
+        code = tinypy_compile_source(vm, indented_pass, sizeof(indented_pass) - 1U, logical_filename, sizeof(logical_filename), &options, &error);
+        assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDENTATION);
+        tinypy_error_release(error);
+        error = NULL;
+        code = tinypy_compile_source(vm, glued_pass, sizeof(glued_pass) - 1U, logical_filename, sizeof(logical_filename), &options, &error);
+        assert(code != NULL && error == NULL);
+        assert(tinypy_tuple_size(tinypy_code_names(code)) == 1U);
+        tinypy_release(code);
+    }
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U);
     assert(state.bytes == 0U);
@@ -1007,13 +1032,24 @@ static int32_t __test_indentation_diagnostics(void) {
     static const char unexpected_indent[] = "  value = 1\n";
     static const char missing_indent[] = "if True:\npass\n";
     static const char mixed_tabs[] = "if True:\n\tvalue = 1\n        value = 2\n";
+    static const char unexpected_unindent[] = "if 1:\n    try:\n        pass\nvalue = 1\n";
+    static const char unindent_message[] = "unexpected unindent";
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
     tinypy_compile_options_t options;
     tinypy_error_t *error = NULL;
     tinypy_value_t *code;
+    const char *message;
+    size_t message_size;
 
     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, unexpected_unindent, sizeof(unexpected_unindent) - 1U, "indent.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDENTATION);
+    message = tinypy_error_message(error, &message_size);
+    assert(message_size == sizeof(unindent_message) - 1U && memcmp(message, unindent_message, message_size) == 0);
+    assert(tinypy_error_line_number(error) == 4);
+    tinypy_error_release(error);
+    error = NULL;
     code = tinypy_compile_source(vm, unexpected_indent, sizeof(unexpected_indent) - 1U, "indent.py", 9U, &options, &error);
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDENTATION);
     assert(tinypy_error_line_number(error) == 1 && tinypy_error_column_offset(error) == 2);
@@ -1107,14 +1143,24 @@ static int32_t __test_symtable_and_ast_error_messages(void) {
     static const char local_and_global[] = "def f(value):\n    global value\n";
     static const char assign_literal[] = "1 = value\n";
     static const char delete_literal[] = "del 1\n";
+    static const char default_order[] = "def f(a=1, b): pass\n";
+    static const char repeated_keyword[] = "f(a=1, a=2)\n";
+    static const char assign_comparison[] = "1 < 2 = 3\n";
+    static const char none_parameter[] = "def f(x, (a, None)): pass\n";
+    static const char generator_argument[] = "f(x for x in y, 1)\n";
     static const char duplicate_message[] = "duplicate argument 'value' in function definition";
     static const char global_message[] = "name 'value' is local and global";
     static const char assign_message[] = "can't assign to literal";
     static const char delete_message[] = "can't delete literal";
-    const char *sources[] = {duplicate_argument, local_and_global, assign_literal, delete_literal};
-    const size_t source_sizes[] = {sizeof(duplicate_argument) - 1U, sizeof(local_and_global) - 1U, sizeof(assign_literal) - 1U, sizeof(delete_literal) - 1U};
-    const char *messages[] = {duplicate_message, global_message, assign_message, delete_message};
-    const size_t message_sizes[] = {sizeof(duplicate_message) - 1U, sizeof(global_message) - 1U, sizeof(assign_message) - 1U, sizeof(delete_message) - 1U};
+    static const char default_order_message[] = "non-default argument follows default argument";
+    static const char repeated_keyword_message[] = "keyword argument repeated";
+    static const char assign_comparison_message[] = "can't assign to comparison";
+    static const char none_parameter_message[] = "cannot assign to None";
+    static const char generator_argument_message[] = "Generator expression must be parenthesized if not sole argument";
+    const char *sources[] = {duplicate_argument, local_and_global, assign_literal, delete_literal, default_order, repeated_keyword, assign_comparison, none_parameter, generator_argument};
+    const size_t source_sizes[] = {sizeof(duplicate_argument) - 1U, sizeof(local_and_global) - 1U, sizeof(assign_literal) - 1U, sizeof(delete_literal) - 1U, sizeof(default_order) - 1U, sizeof(repeated_keyword) - 1U, sizeof(assign_comparison) - 1U, sizeof(none_parameter) - 1U, sizeof(generator_argument) - 1U};
+    const char *messages[] = {duplicate_message, global_message, assign_message, delete_message, default_order_message, repeated_keyword_message, assign_comparison_message, none_parameter_message, generator_argument_message};
+    const size_t message_sizes[] = {sizeof(duplicate_message) - 1U, sizeof(global_message) - 1U, sizeof(assign_message) - 1U, sizeof(delete_message) - 1U, sizeof(default_order_message) - 1U, sizeof(repeated_keyword_message) - 1U, sizeof(assign_comparison_message) - 1U, sizeof(none_parameter_message) - 1U, sizeof(generator_argument_message) - 1U};
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
     tinypy_compile_options_t options;
@@ -1487,9 +1533,117 @@ static int32_t __test_source_limit(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static size_t __test_append_text(char *buffer, size_t size, const char *text) {
+    size_t text_size = strlen(text);
+
+    (void)memcpy(buffer + size, text, text_size);
+    return size + text_size;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_expression_nesting_limit(void) {
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_compile_limits_t limits;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+    static char chain[8192];
+    static char trailers[4096];
+    size_t chain_size;
+    size_t trailer_size;
+    size_t index;
+
+    /* A flat chain of 1200 operands nests 1200 levels deep in the AST, which
+       the default nesting limit rejects while a raised limit accepts. */
+    chain_size = __test_append_text(chain, 0U, "x = 1");
+    for (index = 0U; index < 1199U; index += 1U) {
+        chain_size = __test_append_text(chain, chain_size, " + 1");
+    }
+    chain_size = __test_append_text(chain, chain_size, "\n");
+    trailer_size = __test_append_text(trailers, 0U, "x = a");
+    for (index = 0U; index < 1200U; index += 1U) {
+        trailer_size = __test_append_text(trailers, trailer_size, ".b");
+    }
+    trailer_size = __test_append_text(trailers, trailer_size, "\n");
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, chain, chain_size, "chain.py", 8U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, trailers, trailer_size, "chain.py", 8U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_compile_limits_init(&limits);
+    limits.max_nesting = 2000U;
+    options.limits = &limits;
+    code = tinypy_compile_source(vm, chain, chain_size, "chain.py", 8U, &options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_release(code);
+    code = tinypy_compile_source(vm, trailers, trailer_size, "chain.py", 8U, &options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_source_positions_and_literals(void) {
+    static const char invalid_utf8[] = "x = 1\ny = 2\nz = '\xff'\n";
+    static const char tab_width[] = "# tab-width: 99999999999999999999\nvalue = 1\n";
+    static const char shared_strings[] = "a = '\\x41'\nb = 'A'\nc = chr(65)\nc += 'b'\nd = chr(65)\nsame = a == b and c == 'Ab' and d == 'A'\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+    tinypy_value_t *globals;
+    tinypy_value_t *result;
+    static char digits[8192];
+    size_t digits_size;
+    size_t index;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, invalid_utf8, sizeof(invalid_utf8) - 1U, "utf8.py", 7U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SOURCE_DECODING);
+    assert(tinypy_error_line_number(error) == 3 && tinypy_error_column_offset(error) == 6);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, tab_width, sizeof(tab_width) - 1U, "tabs.py", 7U, &options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_release(code);
+    /* A literal with thousands of significant digits converts exactly. */
+    digits_size = __test_append_text(digits, 0U, "exact = 1");
+    for (index = 0U; index < 3000U; index += 1U) {
+        digits[digits_size++] = '0';
+    }
+    digits_size = __test_append_text(digits, digits_size, "e-3000\nhalf = 0.");
+    for (index = 0U; index < 2000U; index += 1U) {
+        digits[digits_size++] = '0';
+    }
+    digits_size = __test_append_text(digits, digits_size, "5e2001\n");
+    globals = tinypy_dict_new(vm);
+    result = tinypy_exec_source(vm, digits, digits_size, "digits.py", 9U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    tinypy_release(result);
+    assert(tinypy_float_as_double(__test_dict_get(vm, globals, "exact", 5U)) == 1.0);
+    assert(tinypy_float_as_double(__test_dict_get(vm, globals, "half", 4U)) == 5.0);
+    /* An escape-decoded one-byte literal must not retype the shared
+       one-byte string of the VM, so in-place concatenation leaves it intact. */
+    result = tinypy_exec_source(vm, shared_strings, sizeof(shared_strings) - 1U, "shared.py", 9U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    tinypy_release(result);
+    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "same", 4U)) == 1);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_build_preprocessor(void) {
-    static const char source[] = "if __FEATURE__ and (1 + 1 == 2):\n    result = __VALUE__\nelse:\n    missing_runtime_name\nif __NDEBUG__:\n    ndebug = 1\nelse:\n    ndebug = 0\nif True:\n    literal_true = 1\nif False:\n    dead_runtime_name\nelse:\n    literal_false = 0\nruntime_flag = True\nif __FEATURE__ and runtime_flag:\n    mixed = __VALUE__\nprofile_values = (__TEXT__, __FLOAT__, __TUPLE__, __LONG__)\ndynamic_eval = eval('__VALUE__ + 1')\ndynamic_code = compile('__VALUE__ + 2', '<dynamic>', 'eval')\ndynamic_compile = eval(dynamic_code)\nexec 'dynamic_exec = __VALUE__ + 3'\n";
+    static const char source[] = "if __FEATURE__ and (1 + 1 == 2):\n    result = __VALUE__\nelse:\n    missing_runtime_name\nif __NDEBUG__:\n    ndebug = 1\nelse:\n    ndebug = 0\nif True:\n    literal_true = 1\nif False:\n    dead_runtime_name\nelse:\n    literal_false = 0\nruntime_flag = True\nif __FEATURE__ and runtime_flag:\n    mixed = __VALUE__\nprofile_values = (__TEXT__, __FLOAT__, __TUPLE__, __LONG__)\ndynamic_eval = eval('__VALUE__ + 1')\ndynamic_code = compile('__VALUE__ + 2', '<dynamic>', 'eval')\ndynamic_compile = eval(dynamic_code)\nexec 'dynamic_exec = __VALUE__ + 3'\ntargets = {__VALUE__: 0}\ntargets[__VALUE__] += 1\nfor targets[__VALUE__] in (5,):\n    pass\nif runtime_flag:\n    kept = 1\nelse:\n    if False:\n        dead_else_name\n";
     static const char missing_source[] = "value = __MISSING__\n";
+    static const char dropped_else_source[] = "def g(flag):\n    x = 1\n    if flag:\n        x = 2\n    else:\n        if False:\n            dead\n    return x\n";
     static const char rebound_source[] = "if False:\n    __FEATURE__ = False\n";
     static const char unicode_text[] = "profile text";
     static const char tuple_text[] = "tuple item";
@@ -1584,11 +1738,32 @@ static int32_t __test_build_preprocessor(void) {
     globals = tinypy_dict_new(vm);
     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
     options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR;
+    /* The preprocessor without a build profile defines no constants. */
+    result = tinypy_compile_source(vm, missing_source, sizeof(missing_source) - 1U, "missing.py", 10U, &options, &error);
+    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_PREPROCESSOR);
+    tinypy_error_release(error);
+    error = NULL;
     options.build_profile = profile;
     result = tinypy_compile_source(vm, missing_source, sizeof(missing_source) - 1U, "missing.py", 10U, &options, &error);
     assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_PREPROCESSOR);
     tinypy_error_release(error);
     error = NULL;
+    result = tinypy_compile_source(vm, dropped_else_source, sizeof(dropped_else_source) - 1U, "dropped.py", 10U, &options, &error);
+    assert(result != NULL && error == NULL); {
+        /* An eliminated else clause disappears instead of adding a pass at
+           line 1, which kept the line table from running backwards. */
+        tinypy_value_t *nested = __test_find_nested_code(result, "g", 1U);
+        size_t lnotab_size;
+        const uint8_t *lnotab;
+        size_t offset;
+
+        assert(nested != NULL);
+        lnotab = (const uint8_t *)tinypy_string_view(tinypy_code_lnotab(nested), &lnotab_size);
+        for (offset = 1U; offset < lnotab_size; offset += 2U) {
+            assert(lnotab[offset] < 128U);
+        }
+    }
+    tinypy_release(result);
     result = tinypy_compile_source(vm, rebound_source, sizeof(rebound_source) - 1U, "rebound.py", 10U, &options, &error);
     assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_PREPROCESSOR);
     tinypy_error_release(error);
@@ -1635,7 +1810,14 @@ static int32_t __test_build_preprocessor(void) {
     }
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic_eval", 12U)) == 43);
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic_compile", 15U)) == 44);
-    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic_exec", 12U)) == 45);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic_exec", 12U)) == 45); {
+        tinypy_value_t *targets = __test_dict_get(vm, globals, "targets", 7U);
+        tinypy_value_t *key = tinypy_integer_from_i64(vm, 42);
+
+        assert(tinypy_integer_as_i64(tinypy_dict_get(targets, key)) == 5);
+        tinypy_release(key);
+    }
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "kept", 4U)) == 1);
     tinypy_release(globals);
     tinypy_vm_destroy(vm);
     if (profile != NULL) {
@@ -1649,7 +1831,8 @@ static int32_t __test_build_preprocessor(void) {
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_preprocess_renderer(void) {
-    static const char source[] = "from __future__ import division, with_statement\nimport package.module as module\nfrom package import value as imported\n\nglobal_value = 1\nunicode_value = u'\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442'\ninfinite = 1e400\ncomplex_infinite = 1e400j\n\ndef generator(argument, optional=2, *args, **kwargs):\n    global global_value\n    assert argument, 'argument'\n    target = lambda item=1: item + optional\n    sequence = [item for item in (1, 2, 3) if item]\n    mapping = {item: item * 2 for item in sequence}\n    unique = {item for item in sequence}\n    sliced = sequence[0:2:1]\n    extended = sequence[0:1, ...]\n    representation = `mapping`\n    print >>kwargs['stream'], representation,\n    exec kwargs['code'] in kwargs, mapping\n    try:\n        with kwargs['context'] as context_value:\n            yield context_value\n    except ValueError as error:\n        raise TypeError, error, None\n    else:\n        pass\n    finally:\n        global_value += 1\n    del mapping[argument]\n\n@decorator\nclass Example(object):\n    @staticmethod\n    def method():\n        return u'value'\n";
+    static const char source[] = "from __future__ import division, with_statement\nimport package.module as module\nfrom package import value as imported\n\nglobal_value = 1\nunicode_value = u'\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442'\ninfinite = 1e400\ncomplex_infinite = 1e400j\n\ndef generator(argument, optional=2, *args, **kwargs):\n    global global_value\n    assert argument, 'argument'\n    target = lambda item=1: item + optional\n    sequence = [item for item in (1, 2, 3) if item]\n    mapping = {item: item * 2 for item in sequence}\n    unique = {item for item in sequence}\n    sliced = sequence[0:2:1]\n    extended = sequence[0:1, ...]\n    representation = `mapping`\n    print >>kwargs['stream'], representation,\n    exec kwargs['code'] in kwargs, mapping\n    try:\n        with kwargs['context'] as context_value:\n            yield context_value\n    except ValueError as error:\n        raise TypeError, error, None\n    else:\n        pass\n    finally:\n        global_value += 1\n    del mapping[argument]\n\n@decorator\nclass Example(object):\n    @staticmethod\n    def method():\n        return u'value'\n\n@module.decorator\ndef decorated():\n    return (-5) ** 2, (-2j) ** 2, (1).real, 1 .imag\n";
+    static const char bytes_source[] = "from __future__ import unicode_literals\nvalue = b'abc'\n";
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
     tinypy_compile_options_t options;
@@ -1674,9 +1857,20 @@ static int32_t __test_preprocess_renderer(void) {
     assert(tinypy_preprocess_result_source_map_count(preprocessed) == 0U);
     expanded = tinypy_preprocess_result_expanded_source(preprocessed, &expanded_size);
     assert(strstr(expanded, "u'\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442'") != NULL);
+    /* Negative literals and numeric operands keep their parentheses, dotted
+       decorators stay valid and infinite complex parts avoid nan. */
+    assert(strstr(expanded, "((-5) ** 2)") != NULL && strstr(expanded, "((-2j) ** 2)") != NULL);
+    assert(strstr(expanded, "(1).real") != NULL && strstr(expanded, "(1).imag") != NULL);
+    assert(strstr(expanded, "@module.decorator\n") != NULL);
+    assert(strstr(expanded, "complex(0.0, 1e400)") != NULL);
     code = tinypy_compile_source(vm, expanded, expanded_size, "renderer.expanded.py", 20U, &options, &error);
     assert(code != NULL && error == NULL);
     tinypy_release(code);
+    tinypy_preprocess_result_destroy(preprocessed);
+    preprocessed = tinypy_preprocess_source(vm, bytes_source, sizeof(bytes_source) - 1U, "bytes.py", 8U, &options, &error);
+    assert(preprocessed != NULL && error == NULL);
+    expanded = tinypy_preprocess_result_expanded_source(preprocessed, &expanded_size);
+    assert(strstr(expanded, "value = b'abc'") != NULL);
     tinypy_preprocess_result_destroy(preprocessed);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
@@ -1684,9 +1878,11 @@ static int32_t __test_preprocess_renderer(void) {
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_meta_template(void) {
-    static const char source[] = "class Base(object):\n    def initialize(self):\n        self.base = 1\n\n@meta.template\ndef ObjectTemplate(TypeName):\n    ClassName = meta.concat('Mixin', TypeName)\n\n    @meta.emit(name=ClassName)\n    class Generated(Base):\n        def initialize(self):\n            super(meta.current_class(), self).initialize()\n            meta.setattr(self, TypeName, 42)\n\n@meta.template\ndef PairTemplate(Prefix):\n    @meta.emit(name=meta.concat(Prefix, 'Class'))\n    class GeneratedClass(object):\n        values = [value for value in (1, 2, 3)]\n\n    @meta.emit(name=meta.concat(Prefix, 'Function'))\n    def generated_function():\n        return 7\n\nMixinItem = meta.expand(ObjectTemplate, 'Item')\nPairClass, PairFunction = meta.expand(PairTemplate, 'Pair')\nobj = MixinItem()\nobj.initialize()\ndynamic = eval('40 + 2')\ndynamic_debug = eval('__debug__')\nresult = (MixinItem.__name__, obj.Item, obj.base, dynamic, PairClass.values, PairFunction(), dynamic_debug)\n";
+    static const char source[] = "class Base(object):\n    def initialize(self):\n        self.base = 1\n\n@meta.template\ndef ObjectTemplate(TypeName):\n    ClassName = meta.concat('Mixin', TypeName)\n\n    @meta.emit(name=ClassName)\n    class Generated(Base):\n        def initialize(self):\n            super(meta.current_class(), self).initialize()\n            meta.setattr(self, TypeName, 42)\n\n@meta.template\ndef PairTemplate(Prefix):\n    Items = meta.range(3)\n\n    @meta.emit(name=meta.concat(Prefix, 'Class'))\n    class GeneratedClass(object):\n        values = [value for value in (1, 2, 3)]\n        items = Items\n        pair = (Prefix, Items)\n\n    @meta.emit(name=meta.concat(Prefix, 'Function'))\n    def generated_function():\n        return 7\n\nMixinItem = meta.expand(ObjectTemplate, 'Item')\nPairClass, PairFunction = meta.expand(PairTemplate, 'Pair')\nobj = MixinItem()\nobj.initialize()\ndynamic = eval('40 + 2')\ndynamic_debug = eval('__debug__')\nresult = (MixinItem.__name__, obj.Item, obj.base, dynamic, PairClass.values, PairFunction(), dynamic_debug, PairClass.items, PairClass.pair)\n";
     static const char bare_meta_source[] = "@meta\ndef Template():\n    pass\n";
     static const char invalid_source[] = "value = meta.unknown()\n";
+    static const char keyword_source[] = "@meta.template\ndef Template():\n    @meta.emit(name='class')\n    def generated():\n        pass\n\nmeta.expand(Template)\n";
+    static const char import_source[] = "import meta.submodule\n";
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm;
     tinypy_compile_options_t options;
@@ -1740,7 +1936,7 @@ static int32_t __test_meta_template(void) {
     assert(execution_result != NULL && error == NULL);
     tinypy_release(execution_result);
     result = __test_dict_get(vm, globals, "result", 6U);
-    assert(tinypy_typeof(result) == TINYPY_VALUE_TUPLE && tinypy_tuple_size(result) == 7U);
+    assert(tinypy_typeof(result) == TINYPY_VALUE_TUPLE && tinypy_tuple_size(result) == 9U);
     tinypy_value_t *item = tinypy_tuple_get(result, 0U);
     name = (const char *)tinypy_string_view(item, &name_size);
     assert(name_size == 9U && memcmp(name, "MixinItem", 9U) == 0);
@@ -1750,6 +1946,19 @@ static int32_t __test_meta_template(void) {
     assert(tinypy_typeof(tinypy_tuple_get(result, 4U)) == TINYPY_VALUE_LIST && tinypy_list_size(tinypy_tuple_get(result, 4U)) == 3U);
     assert(tinypy_integer_as_i64(tinypy_tuple_get(result, 5U)) == 7);
     assert(tinypy_bool_as_i32(tinypy_tuple_get(result, 6U)) == 0);
+    /* Staged sequences are substituted as displays, not as constants. */
+    assert(tinypy_typeof(tinypy_tuple_get(result, 7U)) == TINYPY_VALUE_LIST && tinypy_list_size(tinypy_tuple_get(result, 7U)) == 3U);
+    assert(tinypy_integer_as_i64(tinypy_list_get(tinypy_tuple_get(result, 7U), 2U)) == 2);
+    assert(tinypy_typeof(tinypy_tuple_get(result, 8U)) == TINYPY_VALUE_TUPLE && tinypy_tuple_size(tinypy_tuple_get(result, 8U)) == 2U);
+    assert(tinypy_typeof(tinypy_tuple_get(tinypy_tuple_get(result, 8U), 1U)) == TINYPY_VALUE_LIST);
+    execution_result = tinypy_compile_source(vm, keyword_source, sizeof(keyword_source) - 1U, "keyword_meta.py", 15U, &options, &error);
+    assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_META);
+    tinypy_error_release(error);
+    error = NULL;
+    execution_result = tinypy_compile_source(vm, import_source, sizeof(import_source) - 1U, "import_meta.py", 14U, &options, &error);
+    assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_META);
+    tinypy_error_release(error);
+    error = NULL;
     execution_result = tinypy_compile_source(vm, bare_meta_source, sizeof(bare_meta_source) - 1U, "bare_meta.py", 12U, &options, &error);
     assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_META);
     tinypy_error_release(error);
@@ -1926,6 +2135,12 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_source_package_and_circular_imports() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_expression_nesting_limit() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_source_positions_and_literals() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_build_preprocessor() != 0) {

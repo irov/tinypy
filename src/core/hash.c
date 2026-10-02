@@ -299,8 +299,14 @@ static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinyp
         return INT32_C(-1);
     }
     if (TINYPY_VALUE_KIND(method) == TINYPY_VALUE_NONE) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(mutable_value),
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
+
         TINYPY_DECREF(method);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable type", out_error);
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
         return INT32_C(-1);
     }
     tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
@@ -439,8 +445,13 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
     case TINYPY_VALUE_SET:
     case TINYPY_VALUE_BYTEARRAY: {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(value),
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
 
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable type", out_error);
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
         return (tinypy_hash_t)0;
     }
     default: {
@@ -569,10 +580,32 @@ static int32_t __tinypy_internal_integer_double_order(const tinypy_value_t *inte
     int32_t floating_sign;
     int32_t magnitude_order;
 
-    integer_count = __tinypy_internal_integer_digits(integer, &integer_sign, integer_local, &integer_digits);
     if (isinf(floating)) {
         return floating < 0.0 ? 1 : -1;
     }
+    if (TINYPY_VALUE_KIND(integer) != TINYPY_VALUE_LONG) {
+        /* A machine integer compares against the floor of the float. */
+        int64_t value = TINYPY_INTEGER_VALUE(integer);
+        double floored;
+        int64_t floored_value;
+
+        if (floating >= 9223372036854775808.0) {
+            return -1;
+        }
+        if (floating < -9223372036854775808.0) {
+            return 1;
+        }
+        floored = floor(floating);
+        floored_value = (int64_t)floored;
+        if (value < floored_value) {
+            return -1;
+        }
+        if (value > floored_value) {
+            return 1;
+        }
+        return floating != floored ? -1 : 0;
+    }
+    integer_count = __tinypy_internal_integer_digits(integer, &integer_sign, integer_local, &integer_digits);
     floating_sign = floating < 0.0 ? -1 : (floating > 0.0 ? 1 : 0);
     if (integer_sign != floating_sign) {
         return integer_sign < floating_sign ? -1 : 1;

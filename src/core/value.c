@@ -213,28 +213,12 @@ void tinypy_internal_integer_free_list_finalize(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_value_is_vm_embedded(const tinypy_vm_t *vm, const tinypy_value_t *value) {
-    size_t index;
-    size_t integer_index;
+    /* Singletons, cached integers, builtin types and their dictionaries all
+       live inside the VM allocation, so one address-range test covers them. */
+    uintptr_t offset = (uintptr_t)value - (uintptr_t)vm;
 
-    if (value == &vm->none_object.base || value == &vm->not_implemented_object.base || value == &vm->ellipsis_object.base || value == &vm->false_object.base || value == &vm->true_object.base || value == &vm->float_zero_object.base || value == &vm->empty_string_object.base.base || value == &vm->empty_tuple_object.base.base) {
-        return TINYPY_TRUE;
-    }
-
-    for (integer_index = 0U;
-         integer_index < TINYPY_INTEGER_CONSTANT_COUNT;
-         ++integer_index) {
-        if (value == &vm->integer_constants[integer_index].base) {
-            return TINYPY_TRUE;
-        }
-    }
-
-    for (index = 0U; index < TINYPY_BUILTIN_TYPE_COUNT; ++index) {
-        if (value == &vm->types[index].base.base || value == &vm->builtin_type_dicts[index].base) {
-            return TINYPY_TRUE;
-        }
-    }
-
-    return TINYPY_FALSE;
+    tinypy_bool_t embedded = offset < sizeof(*vm) ? TINYPY_TRUE : TINYPY_FALSE;
+    return embedded;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
@@ -249,7 +233,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     }
     value->ref = 1;
     tinypy_internal_exception_preserve_begin(vm, &exception_state);
-    tinypy_value_t *method = tinypy_internal_object_get_special(value, "__del__", 7U, &error);
+    tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->special_del_key, &error);
     if (method != NULL) {
         args = tinypy_tuple_from_items(vm, NULL, 0U);
         result = tinypy_call(method, args, NULL, &error);
@@ -304,16 +288,17 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GENERATOR && __tinypy_internal_value_finalize_generator(value) != 0) {
         return;
     }
+    if (type->weakref_offset != 0U) {
+        tinypy_internal_weakref_clear(value);
+    }
     if (type->has_finalizer != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
         if (__tinypy_internal_value_finalize(value) != 0) {
             return;
         }
     }
-    if (type->weakref_offset != 0U) {
-        tinypy_internal_weakref_clear(value);
-    }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE) {
         tinypy_internal_type_lookup_cache_invalidate(vm);
+        tinypy_internal_type_detach((tinypy_type_t *)value);
     }
     if (type != NULL && type->release_references != NULL) {
         type->release_references(value, __tinypy_internal_release_visit, NULL);
@@ -378,6 +363,44 @@ static tinypy_value_t *__tinypy_internal_text_allocate_uninitialized(tinypy_vm_t
     payload[byte_size] = 0U;
     *out_bytes = payload;
     return value;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Grows a byte string in place, as string_concatenate does when the left
+   operand is about to be rebound: the caller holds the only reference, so
+   the object may move. NULL leaves the string untouched. */
+tinypy_value_t *tinypy_internal_string_concat_in_place(tinypy_vm_t *vm, tinypy_value_t *left, const uint8_t *bytes, size_t size) {
+    size_t old_size = TINYPY_SIZED_SIZE(left);
+    size_t old_allocation = __tinypy_internal_text_allocation_size(TINYPY_VALUE_STRING, old_size);
+    size_t new_allocation;
+    tinypy_value_t *grown;
+
+    if (size > SIZE_MAX - old_size) {
+        return NULL;
+    }
+    new_allocation = __tinypy_internal_text_allocation_size(TINYPY_VALUE_STRING, old_size + size);
+    if (new_allocation == 0U) {
+        return NULL;
+    }
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    __tinypy_internal_cycle_diagnostics_value_unregister(vm, left);
+#endif
+    grown = (tinypy_value_t *)tinypy_internal_vm_reallocate_checked(vm, left, old_allocation, new_allocation, NULL);
+    if (grown == NULL) {
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_value_register(vm, left);
+#endif
+        tinypy_internal_exception_clear_raised(vm);
+        return NULL;
+    }
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    __tinypy_internal_cycle_diagnostics_value_register(vm, grown);
+#endif
+    (void)memcpy(TINYPY_STRING_OBJECT(grown)->bytes + old_size, bytes, size);
+    TINYPY_STRING_OBJECT(grown)->bytes[old_size + size] = 0U;
+    TINYPY_SIZED_SIZE(grown) = old_size + size;
+    TINYPY_STRING_OBJECT(grown)->hash_computed = INT32_C(0);
+    TINYPY_STRING_OBJECT(grown)->interned = INT32_C(0);
+    return grown;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_text_allocate_uninitialized(tinypy_vm_t *vm, tinypy_value_type_e type, size_t byte_size, size_t code_point_count, uint8_t **out_bytes) {

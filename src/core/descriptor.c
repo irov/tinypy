@@ -919,8 +919,11 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_repr_method(tinypy_value_t
     descriptor = TINYPY_C_DESCRIPTOR_OBJECT(value);
     prefix = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_MEMBER_DESCRIPTOR ? member_prefix : getset_prefix;
     prefix_size = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_MEMBER_DESCRIPTOR ? sizeof(member_prefix) - 1U : sizeof(getset_prefix) - 1U;
+    static const char detached_owner[] = "<deleted type>";
+    const char *owner_name = descriptor->owner != NULL ? descriptor->owner->name : detached_owner;
+
     name_size = TINYPY_TEXT_BYTE_SIZE(descriptor->name);
-    owner_size = descriptor->owner->name_size;
+    owner_size = descriptor->owner != NULL ? descriptor->owner->name_size : sizeof(detached_owner) - 1U;
     if (name_size > SIZE_MAX - prefix_size - (sizeof(owner_separator) - 1U) - (sizeof(suffix) - 1U) || owner_size > SIZE_MAX - prefix_size - name_size - (sizeof(owner_separator) - 1U) - (sizeof(suffix) - 1U)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "descriptor representation is too large", out_error);
         return NULL;
@@ -936,7 +939,7 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_repr_method(tinypy_value_t
     offset += name_size;
     (void)memcpy(bytes + offset, owner_separator, sizeof(owner_separator) - 1U);
     offset += sizeof(owner_separator) - 1U;
-    (void)memcpy(bytes + offset, descriptor->owner->name, owner_size);
+    (void)memcpy(bytes + offset, owner_name, owner_size);
     offset += owner_size;
     (void)memcpy(bytes + offset, suffix, sizeof(suffix) - 1U);
     return result;
@@ -993,6 +996,10 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_metadata(tinypy_value_t *f
         return NULL;
     }
     tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(value);
+    if (user_data != NULL && descriptor->owner == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "descriptor owner type no longer exists", out_error);
+        return NULL;
+    }
     tinypy_value_t *result = user_data == NULL ? descriptor->name : &descriptor->owner->base.base;
 
     TINYPY_INCREF(result);
@@ -1027,7 +1034,7 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         TINYPY_INCREF(descriptor_value);
         return descriptor_value;
     }
-    if (tinypy_type_is_subtype(instance->type, descriptor->owner) == 0) {
+    if (descriptor->owner == NULL || tinypy_type_is_subtype(instance->type, descriptor->owner) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor does not apply to this object", out_error);
         return NULL;
     }
@@ -1336,7 +1343,7 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor_value);
     tinypy_internal_c_descriptor_field_e field = (tinypy_internal_c_descriptor_field_e)descriptor->field;
     TINYPY_CLEAR_ERROR(out_error);
-    if (tinypy_type_is_subtype(instance->type, descriptor->owner) == 0) {
+    if (descriptor->owner == NULL || tinypy_type_is_subtype(instance->type, descriptor->owner) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor does not apply to this object", out_error);
         return TINYPY_FALSE;
     }

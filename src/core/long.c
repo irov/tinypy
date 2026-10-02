@@ -141,21 +141,14 @@ int64_t tinypy_long_as_i64(const tinypy_value_t *value) {
     return INT64_C(0);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_internal_long_bit(const tinypy_long_object_t *value, size_t bit_index) {
-    size_t digit_index = bit_index / 15U;
-    size_t digit_bit = bit_index % 15U;
-
-    return (value->digits[digit_index] & (uint16_t)(UINT16_C(1) << digit_bit)) != 0U
-        ? TINYPY_TRUE
-        : TINYPY_FALSE;
-}
-//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_long_as_double(const tinypy_value_t *value, double *out_value, tinypy_error_t **out_error) {
     const tinypy_long_object_t *long_value = TINYPY_LONG_OBJECT((tinypy_value_t *)value);
     size_t digit_count = long_value->digit_count;
     size_t bit_length;
-    size_t bit_index;
-    uint64_t significand = UINT64_C(0);
+    size_t index;
+    uint64_t top;
+    size_t top_bits;
+    tinypy_bool_t sticky = TINYPY_FALSE;
     double result;
 
     TINYPY_CLEAR_ERROR(out_error);
@@ -164,7 +157,6 @@ tinypy_bool_t tinypy_long_as_double(const tinypy_value_t *value, double *out_val
         *out_value = 0.0;
         return TINYPY_TRUE;
     }
-
     bit_length = (digit_count - 1U) * 15U;
     {
         uint16_t most_significant = long_value->digits[digit_count - 1U];
@@ -178,40 +170,49 @@ tinypy_bool_t tinypy_long_as_double(const tinypy_value_t *value, double *out_val
         tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_OVERFLOW, "long int too large to convert to float", out_error);
         return TINYPY_FALSE;
     }
+    /* The leading digits supply 55 significant bits (mantissa, guard and
+       round); every lower digit only contributes to the sticky bit. */
+    index = digit_count - 1U;
+    top_bits = bit_length - index * 15U;
+    top = long_value->digits[index];
+    while (index != 0U && top_bits < (size_t)DBL_MANT_DIG + 2U) {
+        index -= 1U;
+        top = (top << 15U) | long_value->digits[index];
+        top_bits += 15U;
+    }
+    if (top_bits > (size_t)DBL_MANT_DIG + 2U) {
+        size_t excess = top_bits - ((size_t)DBL_MANT_DIG + 2U);
 
-    if (bit_length <= (size_t)DBL_MANT_DIG) {
-        for (bit_index = bit_length; bit_index != 0U; --bit_index) {
-            significand = (significand << 1U) | (uint64_t)__tinypy_internal_long_bit(long_value, bit_index - 1U);
+        if ((top & ((UINT64_C(1) << excess) - 1U)) != 0U) {
+            sticky = TINYPY_TRUE;
         }
-        result = (double)significand;
+        top >>= excess;
+        top_bits = (size_t)DBL_MANT_DIG + 2U;
+    }
+    while (index != 0U && sticky == 0) {
+        index -= 1U;
+        if (long_value->digits[index] != 0U) {
+            sticky = TINYPY_TRUE;
+        }
+    }
+    if (bit_length <= (size_t)DBL_MANT_DIG) {
+        result = (double)top;
     }
     else {
-        size_t shift = bit_length - (size_t)DBL_MANT_DIG;
-        tinypy_bool_t halfway;
-        tinypy_bool_t sticky = TINYPY_FALSE;
+        if (top_bits < (size_t)DBL_MANT_DIG + 2U) {
+            top <<= (size_t)DBL_MANT_DIG + 2U - top_bits;
+        }
+        uint64_t mantissa = top >> 2U;
+        uint64_t round_bits = top & UINT64_C(3);
 
-        for (bit_index = bit_length; bit_index != shift; --bit_index) {
-            significand = (significand << 1U) | (uint64_t)__tinypy_internal_long_bit(long_value, bit_index - 1U);
+        if (round_bits > 2U || (round_bits == 2U && (sticky != 0 || (mantissa & 1U) != 0U))) {
+            mantissa += 1U;
         }
-        halfway = __tinypy_internal_long_bit(long_value, shift - 1U);
-        for (bit_index = 0U; bit_index + 1U < shift; ++bit_index) {
-            if (__tinypy_internal_long_bit(long_value, bit_index) != 0) {
-                sticky = TINYPY_TRUE;
-                break;
-            }
+        result = ldexp((double)mantissa, (int)(bit_length - (size_t)DBL_MANT_DIG));
+        if (isinf(result)) {
+            tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_OVERFLOW, "long int too large to convert to float", out_error);
+            return TINYPY_FALSE;
         }
-        if (halfway != 0 && (sticky != 0 || (significand & UINT64_C(1)) != 0U)) {
-            significand += UINT64_C(1);
-        }
-        result = ldexp((double)significand, (int)shift);
-    }
-
-    /* Even when bit_length fits DBL_MAX_EXP, rounding the significand can
-     * carry past the largest finite double. Reject infinity from ldexp as
-     * OverflowError, leaving out_value unchanged. */
-    if (isfinite(result) == 0) {
-        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_OVERFLOW, "long int too large to convert to float", out_error);
-        return TINYPY_FALSE;
     }
     *out_value = long_value->sign < 0 ? -result : result;
     return TINYPY_TRUE;

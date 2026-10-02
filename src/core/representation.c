@@ -393,8 +393,13 @@ static void __tinypy_representation_double(tinypy_representation_builder_t *buil
         digit_count -= first_significant;
         (void)memmove(digits, digits + first_significant, digit_count * sizeof(*digits));
     }
-    scientific = exponent < -4 || exponent >= (raw != 0 ? 12 : 16);
+    /* %.12g with ADD_DOT_0 moves to the exponent form once the integer
+       part would need all twelve digits; repr keeps seventeen. */
+    scientific = exponent < -4 || exponent >= (raw != 0 ? 11 : 16);
     if (scientific != 0) {
+        while (digit_count > 1U && digits[digit_count - 1U] == 0U) {
+            digit_count -= 1U;
+        }
         __tinypy_representation_append_character(builder, (uint8_t)('0' + (char)digits[0]));
         if (digit_count > 1U) {
             __tinypy_representation_append_character(builder, (uint8_t)'.');
@@ -1285,28 +1290,12 @@ static tinypy_value_t *__tinypy_object_class_assign(tinypy_value_t *function, ti
     }
     tinypy_type_t *current = self->type;
     tinypy_type_t *target = (tinypy_type_t *)replacement;
-    tinypy_bool_t compatible = (current->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && (target->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U
-                               && current->basic_size == target->basic_size && current->item_size == target->item_size
-                               && current->dict_offset == target->dict_offset && current->weakref_offset == target->weakref_offset
-                               && current->slots_offset == target->slots_offset && current->layout_kind == target->layout_kind
-                               && current->base_type == target->base_type ? TINYPY_TRUE : TINYPY_FALSE;
 
-    if (compatible != 0) {
-        /* Equal-sized slot tables still differ by name, which CPython checks
-           through same_slots_added. */
-        tinypy_value_t *current_slots = tinypy_type_get_attr(current, "__slots__", 9U);
-        tinypy_value_t *target_slots = tinypy_type_get_attr(target, "__slots__", 9U);
-
-        if (current_slots != target_slots) {
-            int32_t equal = current_slots == NULL || target_slots == NULL
-                                ? INT32_C(0)
-                                : tinypy_compare_bool(current_slots, target_slots, TINYPY_COMPARE_EQUAL, NULL);
-
-            compatible = equal > 0 ? TINYPY_TRUE : TINYPY_FALSE;
-        }
+    if ((current->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U || (target->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ assignment: only for heap types", out_error);
+        return NULL;
     }
-    if (compatible == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ assignment: only for heap types with a compatible layout", out_error);
+    if (tinypy_internal_type_layout_compatible(target, current, "__class__", 9U, out_error) == 0) {
         return NULL;
     }
     TINYPY_INCREF(replacement);

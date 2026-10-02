@@ -433,11 +433,24 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
         tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(ctx->vm, (const char *)output, output_size);
         return return_value_1;
     }
-    tinypy_value_t *result = tinypy_string_from_bytes(ctx->vm, output, output_size);
+    tinypy_value_t *result;
 
-    if (decoded_escape != 0 && output_size != 0U) {
-        tinypy_internal_string_set_interned(result, 0);
+    if (decoded_escape == 0 || output_size == 0U) {
+        result = tinypy_string_from_bytes(ctx->vm, output, output_size);
+        return result;
     }
+    if (output_size == 1U) {
+        /* One-byte strings of the VM are shared interned singletons, while an
+           escape-decoded literal is a distinct non-interned object in CPython. */
+        uint8_t *bytes;
+
+        result = tinypy_internal_text_allocate_uninitialized(ctx->vm, TINYPY_VALUE_STRING, 1U, 0U, &bytes);
+        bytes[0] = output[0];
+    }
+    else {
+        result = tinypy_string_from_bytes(ctx->vm, output, output_size);
+    }
+    tinypy_internal_string_set_interned(result, 0);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

@@ -187,6 +187,39 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_dict(tinypy_marshal_
     return TINYPY_MARSHAL_OK;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The interpreter sizes frames by nlocals and the verifier bounds local
+   operands by len(co_varnames), so a marshalled code object is only accepted
+   when the two agree and its fields have the kinds the runtime relies on. */
+static tinypy_marshal_result_e __tinypy_marshal_validate_code_fields(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, const tinypy_marshal_code_t *source_code, tinypy_value_t *const *fields) {
+    static const tinypy_value_type_e expected_kinds[9] = {TINYPY_VALUE_STRING, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_STRING, TINYPY_VALUE_STRING, TINYPY_VALUE_STRING};
+    uint8_t wire_type = tinypy_marshal_object_wire_type(source);
+    size_t required_locals;
+    size_t index;
+
+    for (index = 0U; index < 9U; ++index) {
+        if (TINYPY_VALUE_KIND(fields[index]) != expected_kinds[index]) {
+            __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_CODE, wire_type, "code object field has an unexpected type");
+            return TINYPY_MARSHAL_INVALID_CODE;
+        }
+    }
+    if (source_code->argcount < 0 || source_code->nlocals < 0 || (size_t)source_code->nlocals != TINYPY_TUPLE_SIZE(fields[3])) {
+        __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_CODE, wire_type, "code object nlocals does not match its variable names");
+        return TINYPY_MARSHAL_INVALID_CODE;
+    }
+    required_locals = (size_t)source_code->argcount;
+    if ((source_code->flags & TINYPY_CODE_VARARGS) != 0) {
+        required_locals += 1U;
+    }
+    if ((source_code->flags & TINYPY_CODE_VAR_KEYWORDS) != 0) {
+        required_locals += 1U;
+    }
+    if (required_locals > (size_t)source_code->nlocals) {
+        __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_CODE, wire_type, "code object argument count exceeds its local count");
+        return TINYPY_MARSHAL_INVALID_CODE;
+    }
+    return TINYPY_MARSHAL_OK;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_result_e __tinypy_marshal_materialize_code(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t **out_value) {
     const tinypy_marshal_code_t *source_code = tinypy_marshal_code_view(source);
     const tinypy_marshal_object_t *source_fields[9];
@@ -209,6 +242,9 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_code(tinypy_marshal_
         if (result != TINYPY_MARSHAL_OK) {
             break;
         }
+    }
+    if (result == TINYPY_MARSHAL_OK) {
+        result = __tinypy_marshal_validate_code_fields(materializer, source, source_code, fields);
     }
     if (result == TINYPY_MARSHAL_OK) {
         *out_value = tinypy_code_new(source_code->argcount, source_code->nlocals, source_code->stacksize, source_code->flags, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], source_code->firstlineno, fields[8]);

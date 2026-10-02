@@ -134,6 +134,114 @@ void tinypy_internal_make_vm_error(tinypy_vm_t *vm, tinypy_error_kind_e error_ki
     tinypy_internal_make_error(&vm->allocator, error_kind, message, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+size_t tinypy_internal_format_size(char *buffer, size_t value) {
+    char reversed[TINYPY_MESSAGE_SIZE_BUFFER];
+    size_t count = 0U;
+    size_t index;
+
+    do {
+        reversed[count] = (char)('0' + (char)(value % 10U));
+        value /= 10U;
+        count += 1U;
+    } while (value != 0U);
+    for (index = 0U; index < count; ++index) {
+        buffer[index] = reversed[count - 1U - index];
+    }
+    return count;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_make_vm_error_parts(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const tinypy_message_part_t *parts, size_t part_count, tinypy_error_t **out_error) {
+    size_t message_size = 0U;
+    size_t offset = 0U;
+    size_t index;
+    char *message;
+
+    for (index = 0U; index < part_count; ++index) {
+        message_size += parts[index].size;
+    }
+    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U);
+    for (index = 0U; index < part_count; ++index) {
+        if (parts[index].size != 0U) {
+            (void)memcpy(message + offset, parts[index].bytes, parts[index].size);
+            offset += parts[index].size;
+        }
+    }
+    message[message_size] = '\0';
+    tinypy_internal_make_vm_error(vm, error_kind, message, out_error);
+    tinypy_internal_vm_deallocate(vm, message, message_size + 1U);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_make_arity_error(tinypy_vm_t *vm, const char *name, size_t name_size, size_t count, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
+    char expected_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+    char count_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+    size_t expected = count < minimum ? minimum : maximum;
+    size_t expected_size = tinypy_internal_format_size(expected_buffer, expected);
+    size_t count_size = tinypy_internal_format_size(count_buffer, count);
+
+    if (style == TINYPY_ARITY_STYLE_SINGLE) {
+        tinypy_message_part_t parts[] = {
+            {name, name_size},
+            TINYPY_MESSAGE_PART_LITERAL("() takes exactly one argument ("),
+            {count_buffer, count_size},
+            TINYPY_MESSAGE_PART_LITERAL(" given)"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return;
+    }
+    if (style == TINYPY_ARITY_STYLE_UNPACK) {
+        tinypy_message_part_t parts[] = {
+            {name, name_size},
+            TINYPY_MESSAGE_PART_LITERAL(" expected "),
+            TINYPY_MESSAGE_PART_LITERAL("at least "),
+            {expected_buffer, expected_size},
+            TINYPY_MESSAGE_PART_LITERAL(" arguments, got "),
+            {count_buffer, count_size},
+        };
+
+        if (minimum == maximum) {
+            parts[2].size = 0U;
+        }
+        else if (count > maximum) {
+            parts[2].bytes = "at most ";
+            parts[2].size = 8U;
+        }
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return;
+    }
+    if (maximum == 0U) {
+        tinypy_message_part_t parts[] = {
+            {name, name_size},
+            TINYPY_MESSAGE_PART_LITERAL("() takes no arguments ("),
+            {count_buffer, count_size},
+            TINYPY_MESSAGE_PART_LITERAL(" given)"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return;
+    }
+    tinypy_message_part_t parts[] = {
+        {name, name_size},
+        TINYPY_MESSAGE_PART_LITERAL("() takes "),
+        TINYPY_MESSAGE_PART_LITERAL("exactly "),
+        {expected_buffer, expected_size},
+        TINYPY_MESSAGE_PART_LITERAL(" argument"),
+        TINYPY_MESSAGE_PART_LITERAL("s"),
+        TINYPY_MESSAGE_PART_LITERAL(" ("),
+        {count_buffer, count_size},
+        TINYPY_MESSAGE_PART_LITERAL(" given)"),
+    };
+
+    if (minimum != maximum) {
+        parts[2].bytes = count < minimum ? "at least " : "at most ";
+        parts[2].size = count < minimum ? 9U : 8U;
+    }
+    if (expected == 1U) {
+        parts[5].size = 0U;
+    }
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 uint32_t tinypy_abi_version(void) {
     return TINYPY_ABI_VERSION;
 }

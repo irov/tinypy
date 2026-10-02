@@ -3,6 +3,11 @@
 #include "value_ops.h"
 #include "ast_sequence.h"
 #include "bytecode_builder.h"
+#include "ast_nodes.h"
+
+#include "tinypy/list.h"
+#include "tinypy/tuple.h"
+#include "tinypy/value.h"
 
 //////////////////////////////////////////////////////////////////////////
 size_t __tinypy_frontend_string_size(const tinypy_value_t *value) {
@@ -231,20 +236,55 @@ static int32_t __tinypy_frontend_string_compare(tinypy_value_t *left, tinypy_val
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t __tinypy_frontend_list_sort(tinypy_value_t *list) {
-    tinypy_list_object_t *list_object = TINYPY_LIST_OBJECT(list);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
+    tinypy_value_t **items = TINYPY_LIST_OBJECT(list)->items;
     size_t size = TINYPY_SIZED_SIZE(list);
-    size_t index;
+    tinypy_value_t **buffer;
+    tinypy_value_t **source = items;
+    tinypy_value_t **target;
+    size_t width;
 
-    for (index = 1U; index < size; ++index) {
-        tinypy_value_t *item = list_object->items[index];
-        size_t position = index;
-
-        while (position != 0U && __tinypy_frontend_string_compare(list_object->items[position - 1U], item) > 0) {
-            list_object->items[position] = list_object->items[position - 1U];
-            position -= 1U;
-        }
-        list_object->items[position] = item;
+    if (size < 2U) {
+        return 0;
     }
+    /* Bottom-up merge sort: symbol names arrive in hash order, which is a
+       worst case for insertion sort on large scopes. */
+    buffer = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*buffer));
+    target = buffer;
+    for (width = 1U; width < size; width *= 2U) {
+        size_t start;
+
+        for (start = 0U; start < size; start += width * 2U) {
+            size_t middle = size - start > width ? start + width : size;
+            size_t end = size - start > width * 2U ? start + width * 2U : size;
+            size_t left = start;
+            size_t right = middle;
+            size_t output = start;
+
+            while (left < middle && right < end) {
+                if (__tinypy_frontend_string_compare(source[right], source[left]) < 0) {
+                    target[output++] = source[right++];
+                }
+                else {
+                    target[output++] = source[left++];
+                }
+            }
+            while (left < middle) {
+                target[output++] = source[left++];
+            }
+            while (right < end) {
+                target[output++] = source[right++];
+            }
+        }
+        tinypy_value_t **swap = source;
+
+        source = target;
+        target = swap;
+    }
+    if (source != items) {
+        (void)memcpy(items, source, size * sizeof(*items));
+    }
+    tinypy_internal_vm_deallocate(vm, buffer, size * sizeof(*buffer));
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -457,4 +497,119 @@ tinypy_ast_integer_sequence_t *tinypy_internal_compiler_ast_integer_sequence_new
     }
     sequence->size = size;
     return sequence;
+}
+//////////////////////////////////////////////////////////////////////////
+static uint64_t __tinypy_frontend_integer_bits(const tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind == TINYPY_VALUE_BOOL) {
+        return 1U;
+    }
+    if (kind == TINYPY_VALUE_INTEGER) {
+        int64_t integer = tinypy_integer_as_i64(value);
+        uint64_t magnitude = integer < 0 ? UINT64_C(0) - (uint64_t)integer : (uint64_t)integer;
+        uint64_t bits = 0U;
+
+        while (magnitude != 0U) {
+            bits += 1U;
+            magnitude >>= 1U;
+        }
+        return bits;
+    }
+    if (kind == TINYPY_VALUE_LONG) {
+        uint64_t long_bits = (uint64_t)TINYPY_LONG_OBJECT(value)->digit_count * UINT64_C(15);
+        return long_bits;
+    }
+    return 0U;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Reads a repeat count, exponent or shift distance; a positive long counts
+   as unbounded and a non-integer operand is reported as absent. */
+static tinypy_bool_t __tinypy_frontend_constant_count(const tinypy_value_t *value, uint64_t *out_count) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind == TINYPY_VALUE_BOOL) {
+        *out_count = 1U;
+        return TINYPY_TRUE;
+    }
+    if (kind == TINYPY_VALUE_INTEGER) {
+        int64_t count = tinypy_integer_as_i64(value);
+
+        *out_count = count > 0 ? (uint64_t)count : 0U;
+        return TINYPY_TRUE;
+    }
+    if (kind == TINYPY_VALUE_LONG) {
+        *out_count = TINYPY_LONG_OBJECT(value)->sign > 0 ? UINT64_MAX : 0U;
+        return TINYPY_TRUE;
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static uint64_t __tinypy_frontend_sequence_bytes(const tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    size_t size;
+
+    if (kind == TINYPY_VALUE_STRING) {
+        (void)tinypy_string_view(value, &size);
+        return (uint64_t)size;
+    }
+    if (kind == TINYPY_VALUE_UNICODE) {
+        size_t code_points;
+
+        (void)tinypy_unicode_utf8_view(value, &size, &code_points);
+        return (uint64_t)size;
+    }
+    if (kind == TINYPY_VALUE_TUPLE) {
+        uint64_t tuple_bytes = (uint64_t)TINYPY_TUPLE_SIZE(value) * sizeof(tinypy_value_t *);
+        return tuple_bytes;
+    }
+    if (kind == TINYPY_VALUE_LIST) {
+        uint64_t list_bytes = (uint64_t)TINYPY_LIST_SIZE(value) * sizeof(tinypy_value_t *);
+        return list_bytes;
+    }
+    return 0U;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t __tinypy_frontend_constant_operation_bounded(const tinypy_value_t *left, const tinypy_value_t *right, int32_t operation, size_t max_sequence_bytes) {
+    uint64_t left_bits = __tinypy_frontend_integer_bits(left);
+    uint64_t right_bits = __tinypy_frontend_integer_bits(right);
+    uint64_t left_bytes = __tinypy_frontend_sequence_bytes(left);
+    uint64_t right_bytes = __tinypy_frontend_sequence_bytes(right);
+    uint64_t sequence_limit = max_sequence_bytes != 0U ? (uint64_t)max_sequence_bytes : UINT64_MAX;
+    uint64_t count;
+    tinypy_bool_t bounded = TINYPY_TRUE;
+
+    switch (operation) {
+    case TINYPY_AST_BINARY_POWER:
+        /* Bases 0 and +-1 stay small; any other integer base needs about
+           bits(base) * exponent bits. */
+        if (left_bits > 1U && __tinypy_frontend_constant_count(right, &count) != 0 && count != 0U) {
+            bounded = count <= TINYPY_COMPILER_CONSTANT_INTEGER_BITS / left_bits;
+        }
+        break;
+    case TINYPY_AST_BINARY_LEFT_SHIFT:
+        if (left_bits != 0U && __tinypy_frontend_constant_count(right, &count) != 0) {
+            bounded = count <= TINYPY_COMPILER_CONSTANT_INTEGER_BITS && left_bits <= TINYPY_COMPILER_CONSTANT_INTEGER_BITS - count;
+        }
+        break;
+    case TINYPY_AST_BINARY_MULTIPLY:
+        if (left_bits != 0U && right_bits != 0U) {
+            bounded = left_bits <= TINYPY_COMPILER_CONSTANT_INTEGER_BITS && right_bits <= TINYPY_COMPILER_CONSTANT_INTEGER_BITS - left_bits;
+        }
+        else if (left_bytes != 0U && __tinypy_frontend_constant_count(right, &count) != 0) {
+            bounded = count <= sequence_limit / left_bytes;
+        }
+        else if (right_bytes != 0U && __tinypy_frontend_constant_count(left, &count) != 0) {
+            bounded = count <= sequence_limit / right_bytes;
+        }
+        break;
+    case TINYPY_AST_BINARY_ADD:
+        if (left_bytes != 0U || right_bytes != 0U) {
+            bounded = left_bytes <= sequence_limit && right_bytes <= sequence_limit - left_bytes;
+        }
+        break;
+    default:
+        break;
+    }
+    return bounded;
 }

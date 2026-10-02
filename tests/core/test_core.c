@@ -2859,10 +2859,12 @@ static int32_t __test_native_embedding(void) {
     TEST_CHECK(native_state.compare_order_count == 3U);
     TEST_CHECK(native_state.compare_order[0] == 2 && native_state.compare_order[1] == 1 && native_state.compare_order[2] == 2);
     native_state.compare_order_count = 0U;
+    /* try_rich_compare asks the right operand's slot as well once the left
+       one answers NotImplemented, even for a single type. */
     TEST_CHECK(tinypy_compare_bool(instance, other_instance, TINYPY_COMPARE_EQUAL, &error) == 0);
     TEST_CHECK(error == NULL);
-    TEST_CHECK(native_state.compare_order_count == 1U);
-    TEST_CHECK(native_state.compare_order[0] == 2);
+    TEST_CHECK(native_state.compare_order_count == 2U);
+    TEST_CHECK(native_state.compare_order[0] == 2 && native_state.compare_order[1] == 2);
 
     value = tinypy_integer_from_i64(vm, 7);
     native_result = tinypy_add(instance, value, &error);

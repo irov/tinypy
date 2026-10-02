@@ -196,6 +196,41 @@ def break_directly_in_finally():
 assert break_directly_in_finally() == [1]
 
 
+# A while loop keeps no iterator below its block, so the finally handler
+# abandoned by break sits exactly at the depth the loop unwinds to.
+def break_directly_in_finally_of_while():
+    del log[:]
+    counter = 0
+    while 1:
+        counter += 1
+        try:
+            log.append(counter)
+        finally:
+            break
+    return list(log)
+
+
+assert break_directly_in_finally_of_while() == [1]
+
+
+def break_in_nested_finally_of_while():
+    del log[:]
+    counter = 0
+    while counter < 2:
+        counter += 1
+        try:
+            pass
+        finally:
+            try:
+                break
+            finally:
+                log.append("inner")
+    return list(log)
+
+
+assert break_in_nested_finally_of_while() == ["inner"]
+
+
 def break_in_nested_finally():
     del log[:]
     for outer in [1, 2]:

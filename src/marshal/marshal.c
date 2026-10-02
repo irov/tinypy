@@ -99,6 +99,7 @@ struct tinypy_marshal_object_t {
             size_t size;
             size_t code_points;
             tinypy_bool_t interned;
+            size_t intern_index;
         } string_value;
         struct {
             size_t count;
@@ -108,6 +109,7 @@ struct tinypy_marshal_object_t {
             size_t count;
             tinypy_marshal_dict_entry_t *first;
             tinypy_marshal_dict_entry_t *last;
+            tinypy_marshal_dict_entry_t **entries;
         } dict_value;
         tinypy_marshal_code_t code_value;
     } as;
@@ -264,6 +266,14 @@ static void *__tinypy_marshal_graph_allocate(tinypy_marshal_parser_t *parser, si
         total_size,
         TINYPY_MARSHAL_ALIGNMENT);
 
+    if (allocation == NULL) {
+        __tinypy_marshal_parser_fail(
+            parser,
+            TINYPY_MARSHAL_BYTE_LIMIT,
+            parser->offset,
+            "marshal allocation failed");
+        return NULL;
+    }
     allocation->next = document->allocations;
     allocation->total_size = total_size;
     document->allocations = allocation;
@@ -616,6 +626,7 @@ static tinypy_bool_t __tinypy_marshal_intern_append(tinypy_marshal_parser_t *par
         chunk = new_chunk;
     }
 
+    object->as.string_value.intern_index = document->intern_count;
     chunk->items[chunk->count] = object;
     chunk->count += 1U;
     document->intern_count += 1U;
@@ -837,6 +848,28 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_sequence(tinypy_marshal_p
     return object;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_marshal_dict_index(tinypy_marshal_parser_t *parser, tinypy_marshal_object_t *object) {
+    size_t count = object->as.dict_value.count;
+    tinypy_marshal_dict_entry_t *entry = object->as.dict_value.first;
+    tinypy_marshal_dict_entry_t **entries;
+    size_t index = 0U;
+
+    if (count == 0U) {
+        return TINYPY_TRUE;
+    }
+    entries = (tinypy_marshal_dict_entry_t **)__tinypy_marshal_graph_allocate(parser, count * sizeof(*entries));
+    if (entries == NULL) {
+        return TINYPY_FALSE;
+    }
+    while (entry != NULL) {
+        entries[index] = entry;
+        index += 1U;
+        entry = entry->next;
+    }
+    object->as.dict_value.entries = entries;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_object_t *__tinypy_marshal_parse_dict(tinypy_marshal_parser_t *parser, uint8_t wire_type) {
     tinypy_marshal_object_t *object =
         __tinypy_marshal_object_allocate(parser, TINYPY_MARSHAL_TYPE_DICT, wire_type);
@@ -855,6 +888,9 @@ static tinypy_marshal_object_t *__tinypy_marshal_parse_dict(tinypy_marshal_parse
             return NULL;
         }
         if (key_is_null) {
+            if (!__tinypy_marshal_dict_index(parser, object)) {
+                return NULL;
+            }
             return object;
         }
         if (object->as.dict_value.count >=
@@ -1289,6 +1325,15 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(const void *bytes, size_t size, c
         sizeof(*document),
         TINYPY_MARSHAL_ALIGNMENT);
 
+    if (document == NULL) {
+        __tinypy_marshal_set_error_direct(
+            out_error,
+            TINYPY_MARSHAL_BYTE_LIMIT,
+            0U,
+            0U,
+            "marshal document allocation failed");
+        return TINYPY_MARSHAL_BYTE_LIMIT;
+    }
     (void)memset(document, 0, sizeof(*document));
     document->state = TINYPY_MARSHAL_DOCUMENT_LIVE;
     document->allocator = *allocator;
@@ -1451,21 +1496,13 @@ static tinypy_bool_t __tinypy_marshal_writer_binary_double(tinypy_marshal_writer
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_marshal_intern_index(const tinypy_marshal_document_t *document, const tinypy_marshal_object_t *object, size_t *out_index) {
-    const tinypy_marshal_intern_chunk_t *chunk = document->intern_first;
-    size_t base = 0U;
+    size_t index = object->as.string_value.intern_index;
 
-    while (chunk != NULL) {
-        size_t index;
-        for (index = 0U; index != chunk->count; ++index) {
-            if (chunk->items[index] == object) {
-                *out_index = base + index;
-                return TINYPY_TRUE;
-            }
-        }
-        base += chunk->count;
-        chunk = chunk->next;
+    if (index >= document->intern_count || __tinypy_marshal_intern_get(document, index) != object) {
+        return TINYPY_FALSE;
     }
-    return TINYPY_FALSE;
+    *out_index = index;
+    return TINYPY_TRUE;
 }
 
 static tinypy_bool_t __tinypy_marshal_write_object(tinypy_marshal_writer_t *writer, const tinypy_marshal_object_t *object);
@@ -1948,7 +1985,13 @@ size_t tinypy_marshal_dict_size(const tinypy_marshal_object_t *object) {
 }
 //////////////////////////////////////////////////////////////////////////
 static const tinypy_marshal_dict_entry_t *__tinypy_marshal_dict_entry_at(const tinypy_marshal_object_t *object, size_t index) {
-    const tinypy_marshal_dict_entry_t *entry = object->as.dict_value.first;
+    const tinypy_marshal_dict_entry_t *entry;
+
+    if (object->as.dict_value.entries != NULL) {
+        entry = object->as.dict_value.entries[index];
+        return entry;
+    }
+    entry = object->as.dict_value.first;
     while (index != 0U) {
         entry = entry->next;
         index -= 1U;

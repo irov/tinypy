@@ -31,6 +31,8 @@ typedef struct tinypy_render_builder_t {
     size_t size;
     int32_t line;
     int32_t column;
+    tinypy_source_map_record_t **records; /* source map records ordered by statement address */
+    size_t record_count;
 } tinypy_render_builder_t;
 
 struct tinypy_preprocess_result_t {
@@ -231,6 +233,11 @@ static tinypy_bool_t __tinypy_render_text_literal(tinypy_render_builder_t *build
     }
     else {
         bytes = (const uint8_t *)tinypy_string_view(value, &size);
+        /* Under unicode_literals an unprefixed literal would change type when
+           the canonical source is compiled again. */
+        if ((builder->compile->preprocessor_future_flags & (uint32_t)TINYPY_COMPILE_FLAG_FUTURE_UNICODE_LITERALS) != 0U && __tinypy_render_character(builder, 'b') == 0) {
+            return TINYPY_FALSE;
+        }
     }
     if (__tinypy_render_character(builder, '\'') == 0) {
         return TINYPY_FALSE;
@@ -332,11 +339,72 @@ static tinypy_bool_t __tinypy_render_literal(tinypy_render_builder_t *builder, t
             tinypy_bool_t return_value_4 = __tinypy_render_repr_literal(builder, value);
             return return_value_4;
         }
-        tinypy_bool_t return_value_5 = __tinypy_render_character(builder, '(') && __tinypy_render_double_literal(builder, real_value) && __tinypy_render_text(builder, " + (") && __tinypy_render_double_literal(builder, imaginary_value) && __tinypy_render_text(builder, ") * 1j)");
+        /* Infinite parts cannot be combined arithmetically without producing nan. */
+        tinypy_bool_t return_value_5 = __tinypy_render_text(builder, "complex(") && __tinypy_render_double_literal(builder, real_value) && __tinypy_render_text(builder, ", ") && __tinypy_render_double_literal(builder, imaginary_value) && __tinypy_render_character(builder, ')');
         return return_value_5;
     }
     tinypy_bool_t return_value_6 = __tinypy_render_repr_literal(builder, value);
     return return_value_6;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_render_literal_negative(tinypy_value_t *value) {
+    tinypy_value_type_e type = tinypy_typeof(value);
+    uint64_t bits;
+    double real_value;
+    double imaginary_value;
+
+    if (type == TINYPY_VALUE_INTEGER) {
+        tinypy_bool_t integer_negative = tinypy_integer_as_i64(value) < 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        return integer_negative;
+    }
+    if (type == TINYPY_VALUE_LONG) {
+        tinypy_bool_t long_negative = TINYPY_LONG_OBJECT(value)->sign < 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        return long_negative;
+    }
+    if (type == TINYPY_VALUE_FLOAT) {
+        real_value = tinypy_float_as_double(value);
+        (void)memcpy(&bits, &real_value, sizeof(bits));
+        tinypy_bool_t float_negative = (bits >> 63U) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+        return float_negative;
+    }
+    if (type == TINYPY_VALUE_COMPLEX) {
+        tinypy_complex_as_doubles(value, &real_value, &imaginary_value);
+        (void)memcpy(&bits, &real_value, sizeof(bits));
+        if (bits != 0U) {
+            /* A non-zero or negative-zero real part renders inside parentheses. */
+            return TINYPY_FALSE;
+        }
+        (void)memcpy(&bits, &imaginary_value, sizeof(bits));
+        tinypy_bool_t imaginary_negative = (bits >> 63U) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+        return imaginary_negative;
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A negative literal binds weaker than ** and attribute access, so it is
+   rendered in parentheses: (-5) ** 2 must not become -5 ** 2. */
+static tinypy_bool_t __tinypy_render_number_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
+    tinypy_bool_t negative = __tinypy_render_literal_negative(value);
+
+    if (negative != 0 && __tinypy_render_character(builder, '(') == 0) {
+        return TINYPY_FALSE;
+    }
+    if (__tinypy_render_literal(builder, value) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t result = negative == 0 || __tinypy_render_character(builder, ')');
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Operands of attribute access and subscription: compound expressions render
+   their own parentheses and a numeric literal needs them (1 .real). */
+static tinypy_bool_t __tinypy_render_operand(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
+    if (expression->kind != TINYPY_AST_KIND_NUM) {
+        tinypy_bool_t rendered = __tinypy_render_expression(builder, expression);
+        return rendered;
+    }
+    tinypy_bool_t result = __tinypy_render_character(builder, '(') && __tinypy_render_literal(builder, expression->v.Num.n) && __tinypy_render_character(builder, ')');
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static const char *__tinypy_render_binary_operator(tinypy_ast_binary_operator_e operation) {
@@ -476,7 +544,7 @@ static tinypy_bool_t __tinypy_render_call(tinypy_render_builder_t *builder, tiny
     int32_t emitted = 0;
     int32_t index;
 
-    if (__tinypy_render_expression(builder, expression->v.Call.func) == 0 || __tinypy_render_character(builder, '(') == 0) {
+    if (__tinypy_render_operand(builder, expression->v.Call.func) == 0 || __tinypy_render_character(builder, '(') == 0) {
         return TINYPY_FALSE;
     }
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.args); ++index) {
@@ -528,7 +596,7 @@ static tinypy_bool_t __tinypy_render_expression(tinypy_render_builder_t *builder
     }
     switch (expression->kind) {
     case TINYPY_AST_KIND_NUM:
-        function_result = __tinypy_render_literal(builder, expression->v.Num.n);
+        function_result = __tinypy_render_number_literal(builder, expression->v.Num.n);
         return function_result;
     case TINYPY_AST_KIND_STR:
         function_result = __tinypy_render_literal(builder, expression->v.Str.s);
@@ -537,10 +605,10 @@ static tinypy_bool_t __tinypy_render_expression(tinypy_render_builder_t *builder
         function_result = __tinypy_render_identifier(builder, expression->v.Name.id);
         return function_result;
     case TINYPY_AST_KIND_ATTRIBUTE:
-        function_result = __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.Attribute.value) && __tinypy_render_text(builder, ").") && __tinypy_render_identifier(builder, expression->v.Attribute.attr);
+        function_result = __tinypy_render_operand(builder, expression->v.Attribute.value) && __tinypy_render_character(builder, '.') && __tinypy_render_identifier(builder, expression->v.Attribute.attr);
         return function_result;
     case TINYPY_AST_KIND_SUBSCRIPT:
-        function_result = __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.Subscript.value) && __tinypy_render_text(builder, ")[") && __tinypy_render_slice(builder, expression->v.Subscript.slice) && __tinypy_render_character(builder, ']');
+        function_result = __tinypy_render_operand(builder, expression->v.Subscript.value) && __tinypy_render_character(builder, '[') && __tinypy_render_slice(builder, expression->v.Subscript.slice) && __tinypy_render_character(builder, ']');
         return function_result;
     case TINYPY_AST_KIND_BOOL_OP:
         if (__tinypy_render_character(builder, '(') == 0) {
@@ -699,13 +767,24 @@ static tinypy_bool_t __tinypy_render_arguments(tinypy_render_builder_t *builder,
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_source_map_record_t *__tinypy_render_source_map_record(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement) {
-    tinypy_source_map_record_t *record = builder->compile->source_map_records;
+    size_t lower = 0U;
+    size_t upper = builder->record_count;
+    uintptr_t key = (uintptr_t)statement;
 
-    while (record != NULL) {
-        if (record->statement == statement) {
+    while (lower < upper) {
+        size_t middle = lower + (upper - lower) / 2U;
+        tinypy_source_map_record_t *record = builder->records[middle];
+        uintptr_t candidate = (uintptr_t)record->statement;
+
+        if (candidate == key) {
             return record;
         }
-        record = record->next;
+        if (candidate < key) {
+            lower = middle + 1U;
+        }
+        else {
+            upper = middle;
+        }
     }
     return NULL;
 }
@@ -1005,30 +1084,71 @@ static int32_t __tinypy_render_record_compare(const tinypy_source_map_record_t *
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compile_ctx_t *ctx) {
+static int32_t __tinypy_render_record_statement_compare(const tinypy_source_map_record_t *left, const tinypy_source_map_record_t *right) {
+    uintptr_t left_key = (uintptr_t)left->statement;
+    uintptr_t right_key = (uintptr_t)right->statement;
+
+    return left_key < right_key ? -1 : (left_key > right_key ? 1 : 0);
+}
+//////////////////////////////////////////////////////////////////////////
+typedef int32_t (*tinypy_render_record_compare_t)(const tinypy_source_map_record_t *left, const tinypy_source_map_record_t *right);
+
+static void __tinypy_render_sort_records(tinypy_source_map_record_t **records, tinypy_source_map_record_t **buffer, size_t count, tinypy_render_record_compare_t compare) {
+    tinypy_source_map_record_t **source = records;
+    tinypy_source_map_record_t **target = buffer;
+    size_t width;
+
+    for (width = 1U; width < count; width *= 2U) {
+        size_t start;
+
+        for (start = 0U; start < count; start += width * 2U) {
+            size_t middle = count - start > width ? start + width : count;
+            size_t end = count - start > width * 2U ? start + width * 2U : count;
+            size_t left = start;
+            size_t right = middle;
+            size_t output = start;
+
+            while (left < middle && right < end) {
+                if (compare(source[right], source[left]) < 0) {
+                    target[output++] = source[right++];
+                }
+                else {
+                    target[output++] = source[left++];
+                }
+            }
+            while (left < middle) {
+                target[output++] = source[left++];
+            }
+            while (right < end) {
+                target[output++] = source[right++];
+            }
+        }
+        tinypy_source_map_record_t **swap = source;
+
+        source = target;
+        target = swap;
+    }
+    if (source != records) {
+        (void)memcpy(records, source, count * sizeof(*records));
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_source_map_record_t **__tinypy_render_sorted_records(tinypy_compile_ctx_t *ctx, tinypy_render_record_compare_t compare) {
     tinypy_source_map_record_t *record;
     size_t count = 0U;
-    size_t index;
 
     if (ctx->source_map_entries == 0U) {
         return NULL;
     }
     tinypy_source_map_record_t **records = (tinypy_source_map_record_t **)tinypy_internal_compiler_arena_allocate(ctx, ctx->source_map_entries * sizeof(*records));
-    if (records == NULL) {
+    tinypy_source_map_record_t **buffer = (tinypy_source_map_record_t **)tinypy_internal_compiler_arena_allocate(ctx, ctx->source_map_entries * sizeof(*buffer));
+    if (records == NULL || buffer == NULL) {
         return NULL;
     }
     for (record = ctx->source_map_records; record != NULL; record = record->next) {
         records[count++] = record;
     }
-    for (index = 1U; index < count; ++index) {
-        tinypy_source_map_record_t *item = records[index];
-        size_t position = index;
-        while (position != 0U && __tinypy_render_record_compare(records[position - 1U], item) > 0) {
-            records[position] = records[position - 1U];
-            position -= 1U;
-        }
-        records[position] = item;
-    }
+    __tinypy_render_sort_records(records, buffer, count, compare);
     return records;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1043,6 +1163,14 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
     (void)memset(&source_builder, 0, sizeof(source_builder));
     source_builder.compile = ctx;
     source_builder.line = 1;
+    if (ctx->source_map_entries != 0U) {
+        source_builder.records = __tinypy_render_sorted_records(ctx, __tinypy_render_record_statement_compare);
+        if (source_builder.records == NULL) {
+            (void)__tinypy_render_limit(&source_builder, "source map exceeds compiler arena limit", 1, 0);
+            return NULL;
+        }
+        source_builder.record_count = ctx->source_map_entries;
+    }
     if (module->kind == TINYPY_AST_KIND_MODULE) {
         if (__tinypy_render_statement_sequence(&source_builder, module->v.Module.body, 0U) == 0) {
             return NULL;
@@ -1066,7 +1194,7 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
     else {
         return NULL;
     }
-    tinypy_source_map_record_t **records = __tinypy_render_sorted_records(ctx);
+    tinypy_source_map_record_t **records = __tinypy_render_sorted_records(ctx, __tinypy_render_record_compare);
     if (ctx->source_map_entries != 0U && records == NULL) {
         (void)__tinypy_render_limit(&source_builder, "source map exceeds compiler arena limit", 1, 0);
         return NULL;

@@ -44,6 +44,10 @@ void tinypy_internal_native_function_release_references(tinypy_value_t *value, t
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_native_function_destroy(tinypy_value_t *value) {
+    tinypy_internal_native_function_finalize(value);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_native_function_finalize(tinypy_value_t *value) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(value);
 
     if (function->finalize != NULL) {
@@ -830,11 +834,20 @@ void tinypy_internal_native_instance_release_references(tinypy_value_t *value, t
     tinypy_internal_instance_release_references(value, visit, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_native_instance_destroy(tinypy_value_t *value) {
+void tinypy_internal_native_instance_finalize(tinypy_value_t *value) {
+    tinypy_native_instance_object_t *instance = TINYPY_NATIVE_INSTANCE_OBJECT(value);
     tinypy_native_type_spec_t *spec = &value->type->native_spec;
 
+    if (instance->finalized != 0) {
+        return;
+    }
+    instance->finalized = TINYPY_TRUE;
     if (spec->finalize != NULL) {
         void *native_payload = __tinypy_internal_native_payload(value);
         spec->finalize(value, native_payload, spec->user_data);
     }
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_native_instance_destroy(tinypy_value_t *value) {
+    tinypy_internal_native_instance_finalize(value);
 }

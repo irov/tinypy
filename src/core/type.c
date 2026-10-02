@@ -3,8 +3,10 @@
 #include "internal.h"
 
 #include <string.h>
+/* MRO and base entries are types or classic classes, so the merge works on
+   values and only the layout and metaclass selection see the type entries. */
 typedef struct tinypy_mro_sequence_t {
-    tinypy_type_t **items;
+    tinypy_value_t **items;
     size_t size;
     size_t position;
 } tinypy_mro_sequence_t;
@@ -258,11 +260,11 @@ static size_t __tinypy_internal_type_mro_size_raw(const tinypy_type_t *type) {
     return count;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_type_t *__tinypy_internal_type_mro_at_raw(const tinypy_type_t *type, size_t index) {
+static tinypy_value_t *__tinypy_internal_type_mro_value_at(const tinypy_type_t *type, size_t index) {
     if (type->mro != NULL) {
         tinypy_value_t *const *items = tinypy_internal_tuple_items(type->mro);
 
-        return (tinypy_type_t *)items[index];
+        return items[index];
     }
 
     const tinypy_type_t *current = type;
@@ -270,7 +272,60 @@ static tinypy_type_t *__tinypy_internal_type_mro_at_raw(const tinypy_type_t *typ
         current = current->base_type;
         index -= 1U;
     }
-    return (tinypy_type_t *)current;
+    return current != NULL ? (tinypy_value_t *)&current->base.base : NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_type_mro_entry_dict(tinypy_value_t *entry) {
+    tinypy_value_t *dict = TINYPY_VALUE_KIND(entry) == TINYPY_VALUE_CLASS ? TINYPY_CLASS_OBJECT(entry)->dict : ((tinypy_type_t *)entry)->dict;
+
+    return dict;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_mro_entry_name(tinypy_value_t *entry, const char **out_bytes, size_t *out_size) {
+    if (TINYPY_VALUE_KIND(entry) == TINYPY_VALUE_CLASS) {
+        tinypy_value_t *name = TINYPY_CLASS_OBJECT(entry)->name;
+
+        *out_bytes = (const char *)TINYPY_TEXT_BYTES(name);
+        *out_size = TINYPY_TEXT_BYTE_SIZE(name);
+        return;
+    }
+    *out_bytes = ((tinypy_type_t *)entry)->name;
+    *out_size = ((tinypy_type_t *)entry)->name_size;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Depth-first, left-to-right linearisation of a classic class, as
+   classic_mro produces for a classic base of a new-style class. */
+static size_t __tinypy_internal_classic_mro_bound(tinypy_value_t *class_value) {
+    tinypy_value_t *bases = TINYPY_CLASS_OBJECT(class_value)->bases;
+    size_t count = 1U;
+    size_t index;
+
+    for (index = 0U; index < TINYPY_TUPLE_SIZE(bases); ++index) {
+        count += __tinypy_internal_classic_mro_bound(TINYPY_TUPLE_GET(bases, index));
+    }
+    return count;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_classic_mro_fill(tinypy_value_t *class_value, tinypy_value_t **items, size_t *in_out_count) {
+    tinypy_value_t *bases = TINYPY_CLASS_OBJECT(class_value)->bases;
+    size_t index;
+
+    for (index = 0U; index < *in_out_count; ++index) {
+        if (items[index] == class_value) {
+            return;
+        }
+    }
+    items[*in_out_count] = class_value;
+    *in_out_count += 1U;
+    for (index = 0U; index < TINYPY_TUPLE_SIZE(bases); ++index) {
+        __tinypy_internal_classic_mro_fill(TINYPY_TUPLE_GET(bases, index), items, in_out_count);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_internal_mro_entry_bound(tinypy_value_t *base) {
+    size_t bound = TINYPY_VALUE_KIND(base) == TINYPY_VALUE_CLASS ? __tinypy_internal_classic_mro_bound(base) : __tinypy_internal_type_mro_size_raw((const tinypy_type_t *)base);
+
+    return bound;
 }
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_internal_type_bases_size_raw(const tinypy_type_t *type) {
@@ -281,13 +336,13 @@ static size_t __tinypy_internal_type_bases_size_raw(const tinypy_type_t *type) {
     return type->base_type != NULL ? 1U : 0U;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_type_t *__tinypy_internal_type_base_at_raw(const tinypy_type_t *type, size_t index) {
+static tinypy_value_t *__tinypy_internal_type_base_value_at(const tinypy_type_t *type, size_t index) {
     if (type->bases != NULL) {
         tinypy_value_t *const *items = tinypy_internal_tuple_items(type->bases);
 
-        return (tinypy_type_t *)items[index];
+        return items[index];
     }
-    return index == 0U ? type->base_type : NULL;
+    return index == 0U && type->base_type != NULL ? (tinypy_value_t *)&type->base_type->base.base : NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_type_remove_subclass(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -368,9 +423,12 @@ tinypy_bool_t tinypy_type_is_subtype(const tinypy_type_t *type, const tinypy_typ
     size_t count;
     size_t index;
 
+    if (type == candidate_base) {
+        return TINYPY_TRUE;
+    }
     count = __tinypy_internal_type_mro_size_raw(type);
     for (index = 0U; index < count; ++index) {
-        if (__tinypy_internal_type_mro_at_raw(type, index) == candidate_base) {
+        if (__tinypy_internal_type_mro_value_at(type, index) == &candidate_base->base.base) {
             return TINYPY_TRUE;
         }
     }
@@ -399,8 +457,15 @@ size_t tinypy_type_bases_size(const tinypy_type_t *type) {
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_type_base_at(const tinypy_type_t *type, size_t index) {
-    const tinypy_type_t *return_value_1 = __tinypy_internal_type_base_at_raw(type, index);
+    tinypy_value_t *entry = __tinypy_internal_type_base_value_at(type, index);
+    const tinypy_type_t *return_value_1 = entry != NULL && TINYPY_VALUE_KIND(entry) == TINYPY_VALUE_TYPE ? (const tinypy_type_t *)entry : NULL;
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_type_base_value_at(const tinypy_type_t *type, size_t index) {
+    tinypy_value_t *entry = __tinypy_internal_type_base_value_at(type, index);
+
+    return entry;
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_type_mro_size(const tinypy_type_t *type) {
@@ -409,8 +474,15 @@ size_t tinypy_type_mro_size(const tinypy_type_t *type) {
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_type_mro_at(const tinypy_type_t *type, size_t index) {
-    const tinypy_type_t *return_value_1 = __tinypy_internal_type_mro_at_raw(type, index);
+    tinypy_value_t *entry = __tinypy_internal_type_mro_value_at(type, index);
+    const tinypy_type_t *return_value_1 = entry != NULL && TINYPY_VALUE_KIND(entry) == TINYPY_VALUE_TYPE ? (const tinypy_type_t *)entry : NULL;
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_type_mro_value_at(const tinypy_type_t *type, size_t index) {
+    tinypy_value_t *entry = __tinypy_internal_type_mro_value_at(type, index);
+
+    return entry;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_type_t *__tinypy_internal_select_metaclass(tinypy_vm_t *vm, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_error_t **out_error) {
@@ -442,14 +514,14 @@ static tinypy_type_t *__tinypy_internal_select_metaclass(tinypy_vm_t *vm, const 
         }
         __tinypy_internal_type_error(
             vm,
-            "metaclass conflict between the selected bases", out_error);
+            "metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases", out_error);
         return NULL;
     }
 
     return winner;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_internal_mro_head_in_tail(tinypy_type_t *candidate, const tinypy_mro_sequence_t *sequences, size_t sequence_count) {
+static tinypy_bool_t __tinypy_internal_mro_head_in_tail(tinypy_value_t *candidate, const tinypy_mro_sequence_t *sequences, size_t sequence_count) {
     size_t sequence_index;
 
     for (sequence_index = 0U;
@@ -469,7 +541,7 @@ static tinypy_bool_t __tinypy_internal_mro_head_in_tail(tinypy_type_t *candidate
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_mro_free(tinypy_vm_t *vm, tinypy_mro_sequence_t *sequences, size_t sequence_size, tinypy_type_t **storage, size_t storage_size, tinypy_type_t **result, size_t result_size) {
+static void __tinypy_internal_mro_free(tinypy_vm_t *vm, tinypy_mro_sequence_t *sequences, size_t sequence_size, tinypy_value_t **storage, size_t storage_size, tinypy_value_t **result, size_t result_size) {
     if (result != NULL) {
         tinypy_internal_vm_deallocate(
             vm, result, result_size);
@@ -484,10 +556,49 @@ static void __tinypy_internal_mro_free(tinypy_vm_t *vm, tinypy_mro_sequence_t *s
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_type_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, const tinypy_type_t *const *bases, size_t base_count, size_t *out_count, size_t *out_allocation_size, tinypy_error_t **out_error) {
+/* Reports the heads that block the merge, as set_mro_error does. */
+static void __tinypy_internal_mro_conflict_error(tinypy_vm_t *vm, const tinypy_mro_sequence_t *sequences, size_t sequence_count, tinypy_error_t **out_error) {
+    static const char prefix[] = "Cannot create a consistent method resolution\norder (MRO) for bases";
+    size_t part_capacity = 1U + sequence_count * 2U;
+    tinypy_message_part_t *parts = (tinypy_message_part_t *)tinypy_internal_vm_allocate(vm, part_capacity * sizeof(*parts));
+    size_t part_count = 1U;
+    size_t sequence_index;
+
+    parts[0].bytes = prefix;
+    parts[0].size = sizeof(prefix) - 1U;
+    for (sequence_index = 0U; sequence_index < sequence_count; ++sequence_index) {
+        const tinypy_mro_sequence_t *sequence = &sequences[sequence_index];
+        tinypy_value_t *head;
+        size_t earlier;
+        tinypy_bool_t seen = TINYPY_FALSE;
+
+        if (sequence->position == sequence->size) {
+            continue;
+        }
+        head = sequence->items[sequence->position];
+        for (earlier = 0U; earlier < sequence_index; ++earlier) {
+            if (sequences[earlier].position < sequences[earlier].size && sequences[earlier].items[sequences[earlier].position] == head) {
+                seen = TINYPY_TRUE;
+                break;
+            }
+        }
+        if (seen != 0) {
+            continue;
+        }
+        parts[part_count].bytes = part_count == 1U ? " " : ", ";
+        parts[part_count].size = part_count == 1U ? 1U : 2U;
+        part_count += 1U;
+        __tinypy_internal_mro_entry_name(head, &parts[part_count].bytes, &parts[part_count].size);
+        part_count += 1U;
+    }
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, part_count, out_error);
+    tinypy_internal_vm_deallocate(vm, parts, part_capacity * sizeof(*parts));
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, tinypy_value_t *const *bases, size_t base_count, size_t *out_count, size_t *out_allocation_size, tinypy_error_t **out_error) {
     tinypy_mro_sequence_t *sequences = NULL;
-    tinypy_type_t **storage = NULL;
-    tinypy_type_t **result = NULL;
+    tinypy_value_t **storage = NULL;
+    tinypy_value_t **result = NULL;
     size_t sequence_count;
     size_t sequence_size;
     size_t total_items = base_count;
@@ -505,9 +616,7 @@ static tinypy_type_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, const tinypy_
     sequence_size = sequence_count * sizeof(*sequences);
 
     for (index = 0U; index < base_count; ++index) {
-        size_t base_mro_size = __tinypy_internal_type_mro_size_raw(bases[index]);
-
-        total_items += base_mro_size;
+        total_items += __tinypy_internal_mro_entry_bound(bases[index]);
     }
     storage_size = total_items * sizeof(*storage);
     result_capacity = total_items + 1U;
@@ -515,35 +624,39 @@ static tinypy_type_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, const tinypy_
 
     sequences = (tinypy_mro_sequence_t *)tinypy_internal_vm_allocate(
         vm, sequence_size);
-    storage = (tinypy_type_t **)tinypy_internal_vm_allocate(
+    storage = (tinypy_value_t **)tinypy_internal_vm_allocate(
         vm, storage_size);
-    result = (tinypy_type_t **)tinypy_internal_vm_allocate(
+    result = (tinypy_value_t **)tinypy_internal_vm_allocate(
         vm, result_size);
     (void)memset(sequences, 0, sequence_size);
     result[0] = NULL;
 
     for (index = 0U; index < base_count; ++index) {
         tinypy_mro_sequence_t *sequence = &sequences[index];
-        size_t mro_index;
 
         sequence->items = &storage[storage_offset];
-        sequence->size = __tinypy_internal_type_mro_size_raw(bases[index]);
-        for (mro_index = 0U;
-             mro_index < sequence->size;
-             ++mro_index) {
-            sequence->items[mro_index] =
-                __tinypy_internal_type_mro_at_raw(bases[index], mro_index);
+        if (TINYPY_VALUE_KIND(bases[index]) == TINYPY_VALUE_CLASS) {
+            sequence->size = 0U;
+            __tinypy_internal_classic_mro_fill(bases[index], sequence->items, &sequence->size);
+        }
+        else {
+            size_t mro_index;
+
+            sequence->size = __tinypy_internal_type_mro_size_raw((const tinypy_type_t *)bases[index]);
+            for (mro_index = 0U; mro_index < sequence->size; ++mro_index) {
+                sequence->items[mro_index] = __tinypy_internal_type_mro_value_at((const tinypy_type_t *)bases[index], mro_index);
+            }
         }
         storage_offset += sequence->size;
     }
     sequences[base_count].items = &storage[storage_offset];
     sequences[base_count].size = base_count;
     for (index = 0U; index < base_count; ++index) {
-        sequences[base_count].items[index] = (tinypy_type_t *)bases[index];
+        sequences[base_count].items[index] = bases[index];
     }
 
     for (;;) {
-        tinypy_type_t *candidate = NULL;
+        tinypy_value_t *candidate = NULL;
         tinypy_bool_t has_items = TINYPY_FALSE;
         size_t sequence_index;
 
@@ -568,13 +681,10 @@ static tinypy_type_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, const tinypy_
             break;
         }
         if (candidate == NULL) {
+            __tinypy_internal_mro_conflict_error(vm, sequences, sequence_count, out_error);
             __tinypy_internal_mro_free(
                 vm, sequences, sequence_size, storage, storage_size,
                 result, result_size);
-            __tinypy_internal_type_error(
-                vm,
-                "cannot create a consistent C3 method resolution order",
-                out_error);
             return NULL;
         }
 
@@ -600,27 +710,67 @@ static tinypy_type_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, const tinypy_
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_internal_validate_bases(tinypy_vm_t *vm, const tinypy_type_t *const *bases, size_t base_count, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_internal_validate_bases(tinypy_vm_t *vm, tinypy_value_t *const *bases, size_t base_count, tinypy_error_t **out_error) {
     size_t index;
+    tinypy_bool_t has_type = TINYPY_FALSE;
 
     for (index = 0U; index < base_count; ++index) {
+        tinypy_value_t *base = bases[index];
         size_t earlier;
 
-        if ((bases[index]->flags & TINYPY_TYPE_FLAG_BASE_TYPE) == 0U) {
-            __tinypy_internal_type_error(
-                vm,
-                "selected type does not permit subclassing", out_error);
+        if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_TYPE && TINYPY_VALUE_KIND(base) != TINYPY_VALUE_CLASS) {
+            __tinypy_internal_type_error(vm, "bases must be types", out_error);
             return TINYPY_FALSE;
         }
         for (earlier = 0U; earlier < index; ++earlier) {
-            if (bases[earlier] == bases[index]) {
-                __tinypy_internal_type_error(
-                    vm, "duplicate type base", out_error);
+            if (bases[earlier] == base) {
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("duplicate base class "),
+                    {NULL, 0U},
+                };
+
+                __tinypy_internal_mro_entry_name(base, &parts[1].bytes, &parts[1].size);
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
                 return TINYPY_FALSE;
             }
         }
+        if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_TYPE) {
+            continue;
+        }
+        has_type = TINYPY_TRUE;
+        if ((((const tinypy_type_t *)base)->flags & TINYPY_TYPE_FLAG_BASE_TYPE) == 0U) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("type '"),
+                {((const tinypy_type_t *)base)->name, ((const tinypy_type_t *)base)->name_size},
+                TINYPY_MESSAGE_PART_LITERAL("' is not an acceptable base type"),
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+            return TINYPY_FALSE;
+        }
+    }
+    if (has_type == 0) {
+        __tinypy_internal_type_error(vm, "a new-style class can't have only classic bases", out_error);
+        return TINYPY_FALSE;
     }
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Collects the type entries of a validated base list for layout and
+   metaclass selection. */
+static const tinypy_type_t **__tinypy_internal_collect_type_bases(tinypy_vm_t *vm, tinypy_value_t *const *bases, size_t base_count, size_t *out_count) {
+    const tinypy_type_t **types = (const tinypy_type_t **)tinypy_internal_vm_allocate(vm, base_count * sizeof(*types));
+    size_t count = 0U;
+    size_t index;
+
+    for (index = 0U; index < base_count; ++index) {
+        if (TINYPY_VALUE_KIND(bases[index]) == TINYPY_VALUE_TYPE) {
+            types[count] = (const tinypy_type_t *)bases[index];
+            count += 1U;
+        }
+    }
+    *out_count = count;
+    return types;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_release_if_not_null(tinypy_value_t *value) {
@@ -836,11 +986,11 @@ typedef struct tinypy_rebase_record_t {
     tinypy_bool_t processed;
 } tinypy_rebase_record_t;
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_internal_rebase_find(const tinypy_rebase_record_t *records, size_t count, const tinypy_type_t *type) {
+static size_t __tinypy_internal_rebase_find(const tinypy_rebase_record_t *records, size_t count, const tinypy_value_t *entry) {
     size_t index;
 
     for (index = 0U; index < count; ++index) {
-        if (records[index].type == type) {
+        if (&records[index].type->base.base == entry) {
             return index;
         }
     }
@@ -879,7 +1029,7 @@ static tinypy_rebase_record_t *__tinypy_internal_rebase_collect(tinypy_type_t *t
                 continue;
             }
             subclass = (tinypy_type_t *)subclass_value;
-            if (__tinypy_internal_rebase_find(records, count, subclass) != SIZE_MAX) {
+            if (__tinypy_internal_rebase_find(records, count, subclass_value) != SIZE_MAX) {
                 continue;
             }
             if (count == capacity) {
@@ -929,76 +1079,114 @@ static void __tinypy_internal_rebase_destroy_mro(tinypy_vm_t *vm, tinypy_value_t
 static tinypy_value_t *__tinypy_internal_rebase_mro(tinypy_type_t *type, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t base_count = __tinypy_internal_type_bases_size_raw(type);
-    const tinypy_type_t **bases = (const tinypy_type_t **)tinypy_internal_vm_allocate(vm, base_count * sizeof(*bases));
-    tinypy_type_t **merged;
-    tinypy_value_t **values;
+    tinypy_value_t **bases = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, base_count * sizeof(*bases));
+    tinypy_value_t **merged;
     tinypy_value_t *mro;
     size_t merged_count;
     size_t merged_size;
     size_t index;
 
     for (index = 0U; index < base_count; ++index) {
-        bases[index] = __tinypy_internal_type_base_at_raw(type, index);
+        bases[index] = __tinypy_internal_type_base_value_at(type, index);
     }
     merged = __tinypy_internal_c3_merge(vm, bases, base_count, &merged_count, &merged_size, out_error);
     tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
     if (merged == NULL) {
         return NULL;
     }
-    values = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (merged_count + 1U) * sizeof(*values));
-    values[0] = &type->base.base;
-    for (index = 0U; index < merged_count; ++index) {
-        values[index + 1U] = &merged[index + 1U]->base.base;
-    }
-    mro = tinypy_internal_tuple_from_borrowed_items(vm, values, merged_count + 1U);
-    tinypy_internal_vm_deallocate(vm, values, (merged_count + 1U) * sizeof(*values));
+    merged[0] = &type->base.base;
+    mro = tinypy_internal_tuple_from_borrowed_items(vm, merged, merged_count + 1U);
     tinypy_internal_vm_deallocate(vm, merged, merged_size);
     return mro;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_internal_rebase_layout_compatible(const tinypy_type_t *old_base, const tinypy_type_t *new_base) {
-    if (old_base == new_base) {
+/* equiv_structs in Python 2.7: two types whose instances share one layout. */
+static tinypy_bool_t __tinypy_internal_type_equivalent_layout(const tinypy_type_t *left, const tinypy_type_t *right) {
+    if (left == right) {
         return TINYPY_TRUE;
     }
-    if (old_base->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE || new_base->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE) {
+    if (left == NULL || right == NULL) {
         return TINYPY_FALSE;
     }
-    return old_base->layout_kind == new_base->layout_kind
-        && old_base->basic_size == new_base->basic_size
-        && old_base->item_size == new_base->item_size
-        && old_base->slots_offset == new_base->slots_offset
-        && old_base->slot_count == new_base->slot_count
-        && old_base->has_instance_dict == new_base->has_instance_dict
-        && old_base->dict_offset == new_base->dict_offset
-        && old_base->weakref_offset == new_base->weakref_offset
-        && old_base->number_slots == new_base->number_slots
-        && old_base->sequence_slots == new_base->sequence_slots
-        && old_base->mapping_slots == new_base->mapping_slots
-        && old_base->repr == new_base->repr
-        && old_base->string == new_base->string
-        && old_base->hash == new_base->hash
-        && old_base->call == new_base->call
-        && old_base->get_attribute == new_base->get_attribute
-        && old_base->set_attribute == new_base->set_attribute
-        && old_base->rich_compare == new_base->rich_compare
-        && old_base->release_references == new_base->release_references
-        && old_base->traverse_references == new_base->traverse_references
-        && old_base->destroy == new_base->destroy
-        && old_base->iter == new_base->iter
-        && old_base->next == new_base->next
-        && old_base->descriptor_get == new_base->descriptor_get
-        && old_base->descriptor_set == new_base->descriptor_set
-        && old_base->initialize == new_base->initialize
-        && old_base->create == new_base->create
-            ? TINYPY_TRUE
-            : TINYPY_FALSE;
+    tinypy_bool_t equivalent = left->layout_kind == right->layout_kind
+                               && left->basic_size == right->basic_size
+                               && left->item_size == right->item_size
+                               && left->dict_offset == right->dict_offset
+                               && left->weakref_offset == right->weakref_offset
+                               && left->slots_offset == right->slots_offset
+                               && left->slot_count == right->slot_count
+                               && left->release_references == right->release_references
+                               && left->destroy == right->destroy
+                                   ? TINYPY_TRUE
+                                   : TINYPY_FALSE;
+
+    return equivalent;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_internal_rebase_has_type(tinypy_value_t *bases, const tinypy_type_t *type) {
+/* same_slots_added in Python 2.7: siblings that add identical slots. */
+static tinypy_bool_t __tinypy_internal_type_same_slots_added(const tinypy_type_t *left, const tinypy_type_t *right) {
+    tinypy_vm_t *vm = left->vm;
+    tinypy_value_t *key;
+    tinypy_value_t *left_slots;
+    tinypy_value_t *right_slots;
+    tinypy_bool_t same = TINYPY_TRUE;
+
+    if (left->basic_size != right->basic_size || left->slot_count != right->slot_count || left->dict_offset != right->dict_offset || left->weakref_offset != right->weakref_offset) {
+        return TINYPY_FALSE;
+    }
+    key = tinypy_string_from_bytes(vm, "__slots__", 9U);
+    left_slots = tinypy_internal_dict_get_optional(vm, left->dict, key);
+    right_slots = tinypy_internal_dict_get_optional(vm, right->dict, key);
+    TINYPY_DECREF(key);
+    if (left_slots != NULL && right_slots != NULL) {
+        same = tinypy_compare_bool(left_slots, right_slots, TINYPY_COMPARE_EQUAL, NULL) > 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    return same;
+}
+//////////////////////////////////////////////////////////////////////////
+/* compatible_for_assignment in Python 2.7, shared by __class__ and __bases__
+   assignment; the deallocator test maps to the heap/static distinction. */
+tinypy_bool_t tinypy_internal_type_layout_compatible(const tinypy_type_t *old_type, const tinypy_type_t *new_type, const char *attribute, size_t attribute_size, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = old_type->vm;
+    const tinypy_type_t *new_base = new_type;
+    const tinypy_type_t *old_base = old_type;
+    const char *reason = NULL;
+
+    if (((old_type->flags ^ new_type->flags) & TINYPY_TYPE_FLAG_HEAP) != 0U || old_type->destroy != new_type->destroy) {
+        reason = "' deallocator differs from '";
+    }
+    else {
+        while (__tinypy_internal_type_equivalent_layout(new_base, new_base->base_type)) {
+            new_base = new_base->base_type;
+        }
+        while (__tinypy_internal_type_equivalent_layout(old_base, old_base->base_type)) {
+            old_base = old_base->base_type;
+        }
+        if (new_base != old_base && (new_base->base_type != old_base->base_type || __tinypy_internal_type_same_slots_added(new_base, old_base) == 0)) {
+            reason = "' object layout differs from '";
+        }
+    }
+    if (reason == NULL) {
+        return TINYPY_TRUE;
+    }
+    tinypy_message_part_t parts[] = {
+        {attribute, attribute_size},
+        TINYPY_MESSAGE_PART_LITERAL(" assignment: '"),
+        {new_type->name, new_type->name_size},
+        {reason, strlen(reason)},
+        {old_type->name, old_type->name_size},
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_rebase_has_entry(tinypy_value_t *bases, const tinypy_value_t *entry) {
     size_t index;
 
     for (index = 0U; index < TINYPY_TUPLE_SIZE(bases); ++index) {
-        if (TINYPY_TUPLE_GET(bases, index) == &type->base.base) {
+        if (TINYPY_TUPLE_GET(bases, index) == entry) {
             return TINYPY_TRUE;
         }
     }
@@ -1023,7 +1211,9 @@ static void __tinypy_internal_rebase_remove_subclass(tinypy_type_t *base, const 
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t *bases_value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
-    const tinypy_type_t **bases = NULL;
+    tinypy_value_t *const *bases;
+    const tinypy_type_t **type_bases = NULL;
+    size_t type_base_count = 0U;
     const tinypy_type_t *layout_base;
     tinypy_type_t *metaclass;
     tinypy_value_t *old_bases;
@@ -1048,53 +1238,45 @@ tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type __bases__ must not be empty", out_error);
         return TINYPY_FALSE;
     }
-    if (base_count > SIZE_MAX / sizeof(*bases)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "type base list is too large", out_error);
-        return TINYPY_FALSE;
-    }
-    bases = (const tinypy_type_t **)tinypy_internal_vm_allocate_checked(vm, base_count * sizeof(*bases), out_error);
-    if (bases == NULL) {
-        return TINYPY_FALSE;
-    }
+    bases = TINYPY_TUPLE_ITERATOR_BEGIN(bases_value);
     for (index = 0U; index < base_count; ++index) {
-        tinypy_value_t *base_value = TINYPY_TUPLE_GET(bases_value, index);
+        tinypy_value_t *base_value = bases[index];
 
-        if (TINYPY_VALUE_KIND(base_value) != TINYPY_VALUE_TYPE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type __bases__ entries must be types", out_error);
-            tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
+        if (TINYPY_VALUE_KIND(base_value) != TINYPY_VALUE_TYPE && TINYPY_VALUE_KIND(base_value) != TINYPY_VALUE_CLASS) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("__bases__ must be tuple of old- or new-style classes, not '"),
+                TINYPY_MESSAGE_PART_TYPE_NAME(base_value),
+                TINYPY_MESSAGE_PART_LITERAL("'"),
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
             return TINYPY_FALSE;
         }
-        bases[index] = (tinypy_type_t *)base_value;
-        if (bases[index] == type || tinypy_type_is_subtype(bases[index], type) != 0) {
+        if (base_value == &type->base.base || (TINYPY_VALUE_KIND(base_value) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)base_value, type) != 0)) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "a __bases__ item causes an inheritance cycle", out_error);
-            tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
             return TINYPY_FALSE;
         }
     }
     if (__tinypy_internal_validate_bases(vm, bases, base_count, out_error) == 0) {
-        tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
         return TINYPY_FALSE;
     }
-    layout_base = __tinypy_internal_select_layout_base(vm, bases, base_count, out_error);
-    if (layout_base == NULL || __tinypy_internal_rebase_layout_compatible(type->base_type, layout_base) == 0) {
-        if (layout_base != NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__bases__ assignment changes the instance layout", out_error);
-        }
-        tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
+    type_bases = __tinypy_internal_collect_type_bases(vm, bases, base_count, &type_base_count);
+    layout_base = __tinypy_internal_select_layout_base(vm, type_bases, type_base_count, out_error);
+    if (layout_base == NULL || tinypy_internal_type_layout_compatible(type->base_type, layout_base, "__bases__", 9U, out_error) == 0) {
+        tinypy_internal_vm_deallocate(vm, type_bases, base_count * sizeof(*type_bases));
         return TINYPY_FALSE;
     }
-    metaclass = __tinypy_internal_select_metaclass(vm, bases, base_count, type->base.base.type, out_error);
+    metaclass = __tinypy_internal_select_metaclass(vm, type_bases, type_base_count, type->base.base.type, out_error);
+    tinypy_internal_vm_deallocate(vm, type_bases, base_count * sizeof(*type_bases));
     if (metaclass == NULL || metaclass != type->base.base.type) {
         if (metaclass != NULL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__bases__ assignment would change the metaclass", out_error);
         }
-        tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
         return TINYPY_FALSE;
     }
 
     records = __tinypy_internal_rebase_collect(type, &record_count, &record_capacity, out_error);
     if (records == NULL) {
-        tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
         return TINYPY_FALSE;
     }
     old_bases = type->bases;
@@ -1114,7 +1296,7 @@ tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t
             }
             candidate_base_count = __tinypy_internal_type_bases_size_raw(record->type);
             for (base_index = 0U; base_index < candidate_base_count; ++base_index) {
-                tinypy_type_t *candidate_base = __tinypy_internal_type_base_at_raw(record->type, base_index);
+                tinypy_value_t *candidate_base = __tinypy_internal_type_base_value_at(record->type, base_index);
                 size_t record_index = __tinypy_internal_rebase_find(records, record_count, candidate_base);
 
                 if (record_index != SIZE_MAX && records[record_index].processed == 0) {
@@ -1141,14 +1323,14 @@ tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t
     }
 
     for (index = 0U; index < TINYPY_TUPLE_SIZE(old_bases); ++index) {
-        tinypy_type_t *old_base = (tinypy_type_t *)TINYPY_TUPLE_GET(old_bases, index);
+        tinypy_value_t *old_base = TINYPY_TUPLE_GET(old_bases, index);
 
-        if (__tinypy_internal_rebase_has_type(bases_value, old_base) == 0) {
-            __tinypy_internal_rebase_remove_subclass(old_base, type);
+        if (TINYPY_VALUE_KIND(old_base) == TINYPY_VALUE_TYPE && __tinypy_internal_rebase_has_entry(bases_value, old_base) == 0) {
+            __tinypy_internal_rebase_remove_subclass((tinypy_type_t *)old_base, type);
         }
     }
     for (index = 0U; index < base_count; ++index) {
-        if (__tinypy_internal_rebase_has_type(old_bases, bases[index]) == 0) {
+        if (TINYPY_VALUE_KIND(bases[index]) == TINYPY_VALUE_TYPE && __tinypy_internal_rebase_has_entry(old_bases, bases[index]) == 0) {
             __tinypy_internal_type_add_subclass((tinypy_type_t *)bases[index], type);
         }
     }
@@ -1162,11 +1344,10 @@ tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t
         if (record->type->version_tag == 0U) {
             record->type->version_tag = UINT64_C(1);
         }
-        record->type->has_finalizer = tinypy_type_get_attr(record->type, "__del__", 7U) != NULL ? INT32_C(1) : INT32_C(0);
+        record->type->has_finalizer = tinypy_internal_type_lookup_key(vm, record->type, vm->special_del_key) != NULL ? INT32_C(1) : INT32_C(0);
     }
     TINYPY_DECREF(old_bases);
     __tinypy_internal_rebase_release_records(vm, records, record_count, record_capacity);
-    tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
     return TINYPY_TRUE;
 
 rollback:
@@ -1181,16 +1362,17 @@ rollback:
         }
     }
     __tinypy_internal_rebase_release_records(vm, records, record_count, record_capacity);
-    tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, int32_t configured_instance_dict, int32_t configured_weakrefs, tinypy_error_t **out_error) {
-    const tinypy_type_t *default_base = NULL;
-    const tinypy_type_t *const *actual_bases = bases;
+static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, int32_t configured_instance_dict, int32_t configured_weakrefs, tinypy_error_t **out_error) {
+    tinypy_value_t *default_base = NULL;
+    tinypy_value_t *const *actual_bases = bases;
     size_t actual_base_count = base_count;
+    const tinypy_type_t **type_bases = NULL;
+    size_t type_base_count = 0U;
     tinypy_type_t *metaclass = NULL;
-    tinypy_type_t **mro_types = NULL;
+    tinypy_value_t **mro_types = NULL;
     size_t mro_tail_count = 0U;
     size_t mro_workspace_size = 0U;
     tinypy_type_t *type = NULL;
@@ -1199,10 +1381,6 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
     tinypy_value_t *bases_tuple = NULL;
     tinypy_value_t *mro_tuple = NULL;
     tinypy_value_t *own_slots = NULL;
-    tinypy_value_t **base_values = NULL;
-    tinypy_value_t **mro_values = NULL;
-    size_t base_values_size = 0U;
-    size_t mro_values_size = 0U;
     tinypy_value_type_e instance_kind;
     int32_t slots_declared = INT32_C(0);
     int32_t dict_slot = INT32_C(0);
@@ -1218,7 +1396,7 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
     }
 
     if (actual_base_count == 0U) {
-        default_base = &vm->types[TINYPY_VALUE_INSTANCE];
+        default_base = &vm->types[TINYPY_VALUE_INSTANCE].base.base;
         actual_bases = &default_base;
         actual_base_count = 1U;
     }
@@ -1226,14 +1404,15 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
             vm, actual_bases, actual_base_count, out_error) == 0) {
         return NULL;
     }
-    const tinypy_type_t *layout_base = __tinypy_internal_select_layout_base(vm, actual_bases, actual_base_count, out_error);
-    if (layout_base == NULL) {
-        return NULL;
+    type_bases = __tinypy_internal_collect_type_bases(vm, actual_bases, actual_base_count, &type_base_count);
+    const tinypy_type_t *layout_base = __tinypy_internal_select_layout_base(vm, type_bases, type_base_count, out_error);
+    if (layout_base != NULL) {
+        metaclass = __tinypy_internal_select_metaclass(
+            vm, type_bases, type_base_count,
+            explicit_metaclass, out_error);
     }
-    metaclass = __tinypy_internal_select_metaclass(
-        vm, actual_bases, actual_base_count,
-        explicit_metaclass, out_error);
-    if (metaclass == NULL) {
+    tinypy_internal_vm_deallocate(vm, type_bases, actual_base_count * sizeof(*type_bases));
+    if (layout_base == NULL || metaclass == NULL) {
         return NULL;
     }
     mro_types = __tinypy_internal_c3_merge(
@@ -1242,12 +1421,13 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
     if (mro_types == NULL) {
         return NULL;
     }
-    if (namespace_dict == NULL) {
-        dict = tinypy_dict_new(vm);
-    }
-    else {
-        TINYPY_INCREF(namespace_dict);
-        dict = namespace_dict;
+    /* The type owns a private copy of the namespace, as type_new does in
+       Python 2.7: the caller's dictionary must stay independent of the type. */
+    dict = tinypy_dict_new(vm);
+    if (namespace_dict != NULL && tinypy_internal_dict_update_from(dict, namespace_dict, out_error) == 0) {
+        TINYPY_DECREF(dict);
+        tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
+        return NULL;
     }
     own_slots = __tinypy_internal_type_parse_slots(vm, name, name_size, dict, &slots_declared, &dict_slot, &weakref_slot, out_error);
     if (own_slots == NULL) {
@@ -1259,7 +1439,14 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
         TINYPY_DECREF(own_slots);
         TINYPY_DECREF(dict);
         tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "nonempty __slots__ are not supported for tuple subtypes", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "nonempty __slots__ not supported for subtype of 'tuple'", out_error);
+        return NULL;
+    }
+    if ((dict_slot != 0 && layout_base->has_instance_dict != 0) || (weakref_slot != 0 && layout_base->weakref_offset != 0U)) {
+        TINYPY_DECREF(own_slots);
+        TINYPY_DECREF(dict);
+        tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, dict_slot != 0 && layout_base->has_instance_dict != 0 ? "__dict__ slot disallowed: we already got one" : "__weakref__ slot disallowed: either we already got one, or __itemsize__ != 0", out_error);
         return NULL;
     }
     instance_kind = tinypy_type_is_subtype(layout_base, &vm->types[TINYPY_VALUE_TYPE]) != 0
@@ -1395,24 +1582,12 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
     type->name = (const char *)TINYPY_STRING_OBJECT(name_object)->bytes;
     type->name_size = name_size;
 
-    base_values_size = actual_base_count * sizeof(*base_values);
-    base_values = (tinypy_value_t **)tinypy_internal_vm_allocate(
-        vm, base_values_size);
-    for (index = 0U; index < actual_base_count; ++index) {
-        base_values[index] = &((tinypy_type_t *)actual_bases[index])->base.base;
-    }
     bases_tuple = tinypy_tuple_from_items(
-        vm, base_values, actual_base_count);
+        vm, actual_bases, actual_base_count);
 
-    mro_values_size = (mro_tail_count + 1U) * sizeof(*mro_values);
-    mro_values = (tinypy_value_t **)tinypy_internal_vm_allocate(
-        vm, mro_values_size);
-    mro_values[0] = &type->base.base;
-    for (index = 0U; index < mro_tail_count; ++index) {
-        mro_values[index + 1U] = &mro_types[index + 1U]->base.base;
-    }
+    mro_types[0] = &type->base.base;
     mro_tuple = tinypy_internal_tuple_from_borrowed_items(
-        vm, mro_values, mro_tail_count + 1U);
+        vm, mro_types, mro_tail_count + 1U);
 
     type->name_object = name_object;
     type->dict = dict;
@@ -1438,8 +1613,6 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
         if (__tinypy_internal_type_namespace_value(vm, type->dict, (const char *)bytes, byte_size) != NULL) {
             TINYPY_DECREF(own_slots);
             TINYPY_DECREF(&type->base.base);
-            tinypy_internal_vm_deallocate(vm, mro_values, mro_values_size);
-            tinypy_internal_vm_deallocate(vm, base_values, base_values_size);
             tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "slot name conflicts with a class variable", out_error);
             return NULL;
@@ -1465,21 +1638,39 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
         TINYPY_DECREF(key);
     }
     TINYPY_DECREF(own_slots);
-    type->has_finalizer = tinypy_type_get_attr(type, "__del__", 7U) != NULL ? INT32_C(1) : INT32_C(0);
+    type->has_finalizer = vm->special_del_key != NULL && tinypy_internal_type_lookup_key(vm, type, vm->special_del_key) != NULL ? INT32_C(1) : INT32_C(0);
 
-    tinypy_internal_vm_deallocate(
-        vm, mro_values, mro_values_size);
-    tinypy_internal_vm_deallocate(
-        vm, base_values, base_values_size);
     tinypy_internal_vm_deallocate(
         vm, mro_types, mro_workspace_size);
     for (index = 0U; index < actual_base_count; ++index) {
-        __tinypy_internal_type_add_subclass((tinypy_type_t *)actual_bases[index], type);
+        if (TINYPY_VALUE_KIND(actual_bases[index]) == TINYPY_VALUE_TYPE) {
+            __tinypy_internal_type_add_subclass((tinypy_type_t *)actual_bases[index], type);
+        }
     }
     return type;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
+static tinypy_type_t *__tinypy_internal_type_new_from_types(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, int32_t configured_instance_dict, int32_t configured_weakrefs, tinypy_error_t **out_error) {
+    tinypy_value_t **values = NULL;
+    tinypy_type_t *result;
+    size_t index;
+
+    if (base_count != 0U) {
+        values = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, base_count * sizeof(*values));
+        for (index = 0U; index < base_count; ++index) {
+            values[index] = (tinypy_value_t *)&bases[index]->base.base;
+        }
+    }
+    result = __tinypy_internal_type_new(vm, name, name_size, values, base_count, explicit_metaclass, namespace_dict, configured_instance_dict, configured_weakrefs, out_error);
+    if (values != NULL) {
+        tinypy_internal_vm_deallocate(vm, values, base_count * sizeof(*values));
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Creates a Python-visible class from a bases tuple whose entries may be
+   classic classes, the way type(name, bases, dict) accepts them. */
+tinypy_type_t *tinypy_internal_type_new_from_values(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
     tinypy_type_t *result = __tinypy_internal_type_new(vm, name, name_size, bases, base_count, explicit_metaclass, namespace_dict, -1, -1, out_error);
 
     if (result != NULL) {
@@ -1488,8 +1679,52 @@ tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_si
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A dying type may leave its dictionary and the descriptors it created behind
+   (a dictproxy or `A.__dict__['x']` can outlive the class), so those lose their
+   back-pointers before the type's references are released. */
+void tinypy_internal_type_detach(tinypy_type_t *type) {
+    tinypy_dict_object_t *dict;
+    tinypy_dict_entry_t *iterator;
+    tinypy_dict_entry_t *iterator_end;
+
+    if (type->dict == NULL) {
+        return;
+    }
+    dict = TINYPY_DICT_OBJECT(type->dict);
+    if (dict->type_owner == type) {
+        dict->type_dictionary = INT32_C(0);
+        dict->type_owner = NULL;
+    }
+    iterator = TINYPY_DICT_ITERATOR_BEGIN(type->dict);
+    iterator_end = TINYPY_DICT_ITERATOR_END(type->dict);
+    for (; iterator != iterator_end; ++iterator) {
+        tinypy_value_type_e kind;
+
+        if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
+            continue;
+        }
+        kind = TINYPY_VALUE_KIND(iterator->value);
+        if (kind == TINYPY_VALUE_MEMBER_DESCRIPTOR || kind == TINYPY_VALUE_GETSET_DESCRIPTOR) {
+            tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(iterator->value);
+
+            if (descriptor->owner == type && descriptor->owner_retained == 0) {
+                descriptor->owner = NULL;
+            }
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
+    tinypy_type_t *result = __tinypy_internal_type_new_from_types(vm, name, name_size, bases, base_count, explicit_metaclass, namespace_dict, -1, -1, out_error);
+
+    if (result != NULL) {
+        result->flags |= TINYPY_TYPE_FLAG_PYTHON_HEAP;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_type_t *tinypy_internal_type_new_configured(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_bool_t has_instance_dict, tinypy_bool_t has_weakrefs, tinypy_error_t **out_error) {
-    tinypy_type_t *result = __tinypy_internal_type_new(vm, name, name_size, bases, base_count, explicit_metaclass, namespace_dict, has_instance_dict != 0 ? 1 : 0, has_weakrefs != 0 ? 1 : 0, out_error);
+    tinypy_type_t *result = __tinypy_internal_type_new_from_types(vm, name, name_size, bases, base_count, explicit_metaclass, namespace_dict, has_instance_dict != 0 ? 1 : 0, has_weakrefs != 0 ? 1 : 0, out_error);
 
     return result;
 }
@@ -1509,6 +1744,9 @@ static void __tinypy_internal_type_modified_epoch(tinypy_type_t *type, uint64_t 
     type->version_tag += UINT64_C(1);
     if (type->version_tag == 0U) {
         type->version_tag = UINT64_C(1);
+    }
+    if (type->vm->special_del_key != NULL) {
+        type->has_finalizer = tinypy_internal_type_lookup_key(type->vm, type, type->vm->special_del_key) != NULL ? INT32_C(1) : INT32_C(0);
     }
     count = type->subclasses != NULL ? TINYPY_LIST_SIZE(type->subclasses) : 0U;
     for (index = 0U; index != count; ++index) {
@@ -1569,9 +1807,9 @@ tinypy_value_t *tinypy_internal_type_lookup_key(tinypy_vm_t *vm, const tinypy_ty
         }
     }
     for (index = 0U; index < mro_size; ++index) {
-        tinypy_type_t *mro_type = __tinypy_internal_type_mro_at_raw(type, index);
+        tinypy_value_t *mro_entry = __tinypy_internal_type_mro_value_at(type, index);
 
-        tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, mro_type->dict, key);
+        tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, tinypy_internal_type_mro_entry_dict(mro_entry), key);
 
         if (value != NULL) {
             if (entry != NULL) {
@@ -1613,11 +1851,18 @@ tinypy_value_t *tinypy_type_get_attr(const tinypy_type_t *type, const char *name
 void tinypy_type_set_attr(tinypy_type_t *type, const char *name, size_t name_size, tinypy_value_t *value) {
     tinypy_vm_t *vm = type->vm;
     tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
-    tinypy_internal_type_set_attr_key(type, key, value);
+    tinypy_internal_type_install_attr_key(type, key, value);
     TINYPY_DECREF(key);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_type_set_attr_key(tinypy_type_t *type, tinypy_value_t *key, tinypy_value_t *value) {
+    tinypy_dict_set(type->dict, key, value);
+}
+//////////////////////////////////////////////////////////////////////////
+/* Registration through the C API turns a fresh native function into a method
+   descriptor of the type; a plain assignment from Python keeps builtins such
+   as len unbound, as CPython does. */
+void tinypy_internal_type_install_attr_key(tinypy_type_t *type, tinypy_value_t *key, tinypy_value_t *value) {
     tinypy_vm_t *vm = type->vm;
 
     if (value->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] && vm->native_method_descriptor_type != NULL && vm->native_wrapper_descriptor_type != NULL) {
@@ -1785,27 +2030,8 @@ tinypy_value_t *tinypy_internal_type_call(tinypy_value_t *callable, tinypy_value
     if (instance == NULL) {
         return NULL;
     }
-    if ((type->flags & TINYPY_TYPE_FLAG_TYPE_SUBCLASS) != 0U) {
-        tinypy_value_t *metaclass_initializer = tinypy_internal_type_lookup_key(vm, type, vm->special_init_key);
-
-        if (metaclass_initializer != NULL) {
-            tinypy_value_t *type_raw_callable_2 = __tinypy_internal_type_raw_callable(metaclass_initializer);
-            tinypy_value_t *metaclass_initialize_result = __tinypy_internal_type_call_with_first(type_raw_callable_2, instance, args, kwargs, out_error);
-
-            if (metaclass_initialize_result == NULL) {
-                TINYPY_DECREF(instance);
-                return NULL;
-            }
-            if (TINYPY_VALUE_KIND(metaclass_initialize_result) != TINYPY_VALUE_NONE) {
-                TINYPY_DECREF(metaclass_initialize_result);
-                TINYPY_DECREF(instance);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "metaclass __init__ must return None", out_error);
-                return NULL;
-            }
-            TINYPY_DECREF(metaclass_initialize_result);
-        }
-        return instance;
-    }
+    /* As in type_call, an object that is not an instance of the type is
+       returned without initialisation. */
     if (tinypy_type_is_subtype(instance->type, type) == 0) {
         return instance;
     }
@@ -1818,26 +2044,55 @@ tinypy_value_t *tinypy_internal_type_call(tinypy_value_t *callable, tinypy_value
         }
         if (TINYPY_TUPLE_SIZE(args) != 0U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U)) {
             TINYPY_DECREF(instance);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "class constructor takes no arguments", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object() takes no parameters", out_error);
             return NULL;
         }
         return instance;
     }
-    initializer = tinypy_internal_descriptor_get_value(vm, initializer_attribute, instance, type, out_error);
-    if (initializer == NULL) {
-        TINYPY_DECREF(instance);
-        return NULL;
+    if (TINYPY_VALUE_KIND(initializer_attribute) == TINYPY_VALUE_FUNCTION) {
+        /* A Python __init__ is entered directly with the instance prepended,
+           saving the bound method and the argument tuple. */
+        size_t count = TINYPY_TUPLE_SIZE(args);
+        tinypy_value_t *stack_items[8];
+        tinypy_value_t **items = stack_items;
+        size_t items_size = 0U;
+
+        if (count + 1U > sizeof(stack_items) / sizeof(stack_items[0])) {
+            items_size = (count + 1U) * sizeof(*items);
+            items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, items_size);
+        }
+        items[0] = instance;
+        if (count != 0U) {
+            (void)memcpy(items + 1, TINYPY_TUPLE_ITERATOR_BEGIN(args), count * sizeof(*items));
+        }
+        initialize_result = tinypy_internal_eval_function_items(initializer_attribute, items, count + 1U, kwargs, out_error);
+        if (items != stack_items) {
+            tinypy_internal_vm_deallocate(vm, items, items_size);
+        }
     }
-    initialize_result = tinypy_call(initializer, args, kwargs, out_error);
-    TINYPY_DECREF(initializer);
+    else {
+        initializer = tinypy_internal_descriptor_get_value(vm, initializer_attribute, instance, type, out_error);
+        if (initializer == NULL) {
+            TINYPY_DECREF(instance);
+            return NULL;
+        }
+        initialize_result = tinypy_call(initializer, args, kwargs, out_error);
+        TINYPY_DECREF(initializer);
+    }
     if (initialize_result == NULL) {
         TINYPY_DECREF(instance);
         return NULL;
     }
     if (TINYPY_VALUE_KIND(initialize_result) != TINYPY_VALUE_NONE) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("__init__() should return None, not '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(initialize_result),
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         TINYPY_DECREF(initialize_result);
         TINYPY_DECREF(instance);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__init__ must return None", out_error);
         return NULL;
     }
     TINYPY_DECREF(initialize_result);

@@ -134,6 +134,16 @@ Lifetime определяется reference counting. Ациклические �
 исправляется в месте утечки ссылки; для поиска таких мест предназначены opt-in
 cycle diagnostics.
 
+`tinypy_vm_destroy` сначала вызывает финализаторы native functions и native
+instances, достижимых из VM, пока все значения живы, и только затем
+освобождает память достижимых объектов. Финализатор вызывается ровно один раз.
+
+Модуль `sys` принадлежит VM через собственную ссылку: `sys.stdout`,
+`sys.displayhook` и `sys.exc_*` читаются и пишутся напрямую в его словарь, а
+переопределение `sys.modules['sys']` на рантайм не влияет. Атрибут `__mro__`
+возвращает владеющую копию внутреннего кортежа MRO: тип не может владеть
+кортежем, ссылающимся на него самого, без циклического сборщика.
+
 VM хранит собственные постоянные значения:
 
 - `None`, `True`, `False`;
@@ -156,7 +166,9 @@ Runtime реализует:
 - functions, bound methods, closures и cells;
 - iterators, comprehensions и generators;
 - exceptions, frames и tracebacks;
-- old-style и new-style classes;
+- old-style и new-style classes, включая classic classes среди `__bases__` и
+  `__mro__` new-style класса (`tinypy_type_mro_at` и `tinypy_type_base_at`
+  возвращают NULL для classic записей);
 - `type`, metaclasses, C3 MRO и `super`;
 - descriptors, properties, class/static methods и `__slots__`;
 - weak references и explicit finalization behavior.
@@ -165,6 +177,13 @@ Type slots возвращают прямой semantic result. Неверный s
 precondition и имеет undefined behavior. Python exceptions используются только
 для настоящих runtime ошибок.
 
+Внутренний MRO типа хранит заимствованные ссылки: тип входит в собственный
+MRO, и без cyclic GC владеющая ссылка образовала бы неосвобождаемый цикл.
+Поэтому `__mro__` при каждом обращении возвращает новый кортеж с владеющими
+ссылками, и `C.__mro__ is C.__mro__` ложно, в отличие от CPython. Member и
+getset descriptors, пережившие свой тип, остаются безопасными: repr показывает
+`<deleted type>`, а применение к объекту даёт TypeError.
+
 Python-visible bundled surface намеренно ограничен memory-only runtime:
 
 - встроены `__builtin__`, `sys`, `exceptions`, `__future__`, `_codecs`,
@@ -172,7 +191,8 @@ Python-visible bundled surface намеренно ограничен memory-only
 - `_codecs` гарантирует ASCII, Latin-1, UTF-8 и transform codec `hex`; остальные
   encodings должен предоставить host search function;
 - `_struct` гарантирует формат `d` с repeat counts и byte-order prefixes, а
-  также `Struct`, `pack`, `unpack`, `pack_into` и `unpack_from`;
+  также `Struct`, `pack`, `unpack`, `pack_into` и `unpack_from`; `_struct.error`
+  является `ValueError`;
 - filesystem-backed standard library, source-encoding discovery, process
   metadata, environment-dependent `sys` paths и standard I/O input не
   эмулируются. Их предоставляет host либо импортированный memory artifact.
@@ -190,8 +210,17 @@ Verifier контролирует:
 - indices names/constants/locals/free variables;
 - configured instruction и stack limits.
 
+`code()` и загрузчик marshal дополнительно требуют `co_nlocals ==
+len(co_varnames)` и места для аргументов: frame размечается по первому
+значению, а verifier проверяет local operands по второму. CPython принимает
+такие code objects, tinypy их отвергает.
+
 Frame execution поддерживает closures, generators, exception blocks,
 comprehensions, `with`, imports и tracing data code object.
+
+При выходе из frame его fast locals освобождаются сразу, даже если frame
+остаётся достижим через traceback: без cyclic GC это разрывает циклы
+frame -> locals -> frame. Это намеренное отличие от CPython.
 
 ## 8. Compiler
 
@@ -234,11 +263,19 @@ Source decoder поддерживает:
 
 Numeric parsing locale-independent. Integer literal создаёт integer при
 попадании в signed 64-bit range, иначе arbitrary-precision long. Float и
-complex сохраняют binary value.
+complex сохраняют binary value; float literal любой длины округляется
+корректно, при этом разбор учитывает не более 800 значащих цифр и sticky
+digit, чего достаточно для точного округления double.
 
 Compiler воспроизводит closures, cells, class scopes, name mangling, generators,
 comprehensions, future flags, code flags, constants ordering, line table и
 nested code objects Python 2.7.
+
+Односимвольные и пустые byte strings являются разделяемыми interned
+singletons VM, как `characters[]` в CPython. Escape-decoded односимвольный
+литерал и односимвольный результат `%`-форматирования при свёртке констант
+создаются отдельными non-interned объектами, поэтому marshal output совпадает
+с CPython 2.7.18 побайтово, а разделяемые строки никогда не меняют свои флаги.
 
 Optimization levels:
 
@@ -271,7 +308,8 @@ Compiler limits охватывают:
 - source bytes;
 - tokens;
 - CST и AST nodes;
-- nesting;
+- nesting: глубина parser stack и глубина AST выражения, включая плоские
+  цепочки бинарных операторов, attribute, call и subscript trailers;
 - symbols;
 - basic blocks;
 - instructions;
@@ -316,6 +354,15 @@ arithmetic и bitwise operations, comparisons, membership и identity с
 analysis. Calls, attributes, subscripts, lambdas и comprehensions оставляют
 условие runtime, хотя build constants внутри него уже заменены.
 
+Build constants заменяются и внутри целей присваивания: augmented assignment,
+`for`, `with`, `except` и comprehension targets. Suite, полностью удалённая
+preprocessing, заменяется `pass` в позиции своего первого statement, а
+опустевший `else` исчезает целиком, так что line table остаётся монотонной.
+Промежуточные результаты evaluator ограничены до вычисления: целочисленные
+результаты `**`, `<<` и `*` не превышают 65536 бит, а строки и
+последовательности — `max_preprocessor_bytes`; превышение является compile
+error. Preprocessor без build profile не определяет ни одной константы.
+
 ## 11. Metatemplates
 
 При `TINYPY_COMPILE_FEATURE_META` имя `meta` является compiler builtin без
@@ -344,12 +391,20 @@ private-name mangling и `super`.
 
 Во время expansion не исполняются Python bytecode, imports, I/O или
 пользовательские runtime functions. После pass любой оставшийся доступ или
-binding имени `meta` является compile error.
+binding имени `meta` является compile error; `import meta.x` запрещён так же,
+как `import meta`. Staged tuple и list значения подставляются в generated code
+как displays, а не как constants. Generated name не может быть keyword.
+Evaluator meta учитывает `from __future__ import division` и те же границы
+результатов, что и build preprocessor.
 
 `tinypy_preprocess_source` выполняет тот же preprocessing pipeline и возвращает
 owned result с canonical valid Python 2 source, source-map entries и SHA-256
 digest карты. Каждая generated declaration связывает generated position,
-template position, expansion position и semantic symbol.
+template position, expansion position и semantic symbol. Canonical source
+компилируется в ту же программу: отрицательные числовые литералы и числовые
+операнды attribute/subscript заключаются в скобки, byte strings под
+`unicode_literals` получают префикс `b`, а complex literal с бесконечной
+частью записывается как `complex(...)`.
 
 ## 12. Compile environment
 

@@ -133,20 +133,22 @@ static tinypy_bool_t __tinypy_compiler_encoding_cookie(const uint8_t *source, si
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_compiler_ascii_valid(const uint8_t *bytes, size_t size) {
+static tinypy_bool_t __tinypy_compiler_ascii_valid(const uint8_t *bytes, size_t size, size_t *out_invalid_offset) {
     size_t index;
 
     for (index = 0U; index < size; ++index) {
         if (bytes[index] >= 0x80U) {
+            *out_invalid_offset = index;
             return TINYPY_FALSE;
         }
     }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_compiler_utf8_valid(const uint8_t *bytes, size_t size) {
+static tinypy_bool_t __tinypy_compiler_utf8_valid(const uint8_t *bytes, size_t size, size_t *out_invalid_offset) {
     size_t index = 0U;
 
+    *out_invalid_offset = 0U;
     while (index < size) {
         uint8_t first = bytes[index];
         size_t length;
@@ -157,6 +159,7 @@ static tinypy_bool_t __tinypy_compiler_utf8_valid(const uint8_t *bytes, size_t s
             index += 1U;
             continue;
         }
+        *out_invalid_offset = index;
         if (first >= 0xc2U && first <= 0xdfU) {
             length = 2U;
             code_point = (uint32_t)(first & 0x1fU);
@@ -191,6 +194,49 @@ static tinypy_bool_t __tinypy_compiler_utf8_valid(const uint8_t *bytes, size_t s
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_compiler_byte_position(const uint8_t *bytes, size_t offset, int32_t *out_line, int32_t *out_column) {
+    size_t index;
+    size_t line_start = 0U;
+    int32_t line = 1;
+
+    for (index = 0U; index < offset; ++index) {
+        if (bytes[index] == '\n') {
+            line += 1;
+            line_start = index + 1U;
+        }
+    }
+    *out_line = line;
+    *out_column = (int32_t)(offset - line_start) + 1;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Locates the text of a source line, including its newline, for diagnostics. */
+static void __tinypy_compiler_source_line(const tinypy_compile_ctx_t *ctx, int32_t line_number, const char **out_bytes, size_t *out_size) {
+    size_t position = 0U;
+    int32_t line = 1;
+    size_t end;
+
+    *out_bytes = NULL;
+    *out_size = 0U;
+    if (line_number <= 0 || ctx->source.bytes == NULL) {
+        return;
+    }
+    while (position < ctx->source.size && line < line_number) {
+        if (ctx->source.bytes[position] == '\n') {
+            line += 1;
+        }
+        position += 1U;
+    }
+    if (line != line_number) {
+        return;
+    }
+    end = position;
+    while (end < ctx->source.size && ctx->source.bytes[end] != '\n') {
+        end += 1U;
+    }
+    *out_bytes = (const char *)(ctx->source.bytes + position);
+    *out_size = end - position + (end < ctx->source.size ? 1U : 0U);
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, tinypy_error_t **out_error) {
     const char *line_bytes = NULL;
     size_t line_size = 0U;
@@ -199,29 +245,7 @@ void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind
         return;
     }
     ctx->failed = 1;
-    if (line_number > 0 && ctx->source.bytes != NULL) {
-        size_t position = 0U;
-        int32_t line = 1;
-
-        while (position < ctx->source.size && line < line_number) {
-            if (ctx->source.bytes[position] == '\n') {
-                line += 1;
-            }
-            position += 1U;
-        }
-        if (line == line_number) {
-            size_t end = position;
-
-            while (end < ctx->source.size && ctx->source.bytes[end] != '\n') {
-                end += 1U;
-            }
-            line_bytes = (const char *)(ctx->source.bytes + position);
-            line_size = end - position;
-            if (end < ctx->source.size) {
-                line_size += 1U;
-            }
-        }
-    }
+    __tinypy_compiler_source_line(ctx, line_number, &line_bytes, &line_size);
     tinypy_internal_make_vm_error_location(ctx->vm, error_kind, message, ctx->logical_filename, ctx->filename_size, line_number, column_offset, line_bytes, line_size, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -250,11 +274,15 @@ void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_erro
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number) {
+    const char *line_bytes = NULL;
+    size_t line_size = 0U;
+
     if (ctx->failed != 0) {
         return;
     }
     ctx->failed = 1;
-    tinypy_internal_make_vm_error_location(ctx->vm, TINYPY_ERROR_SYNTAX, message, ctx->logical_filename, ctx->filename_size, line_number, 0, NULL, 0U, ctx->out_error);
+    __tinypy_compiler_source_line(ctx, line_number, &line_bytes, &line_size);
+    tinypy_internal_make_vm_error_location(ctx->vm, TINYPY_ERROR_SYNTAX, message, ctx->logical_filename, ctx->filename_size, line_number, 0, line_bytes, line_size, ctx->out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number) {
@@ -342,6 +370,9 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     uint8_t *output;
     size_t input_index;
     size_t output_size = 0U;
+    size_t invalid_offset = 0U;
+    int32_t invalid_line;
+    int32_t invalid_column;
 
     ctx->source.bytes = input;
     ctx->source.size = source_size;
@@ -382,12 +413,14 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source encoding conflicts with UTF-8 BOM", cookie_line, 1, out_error);
         return TINYPY_FALSE;
     }
-    if (ascii != 0 && __tinypy_compiler_ascii_valid(input + input_offset, source_size - input_offset) == 0) {
-        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source is not valid ASCII", cookie_line, 1, out_error);
+    if (ascii != 0 && __tinypy_compiler_ascii_valid(input + input_offset, source_size - input_offset, &invalid_offset) == 0) {
+        __tinypy_compiler_byte_position(input + input_offset, invalid_offset, &invalid_line, &invalid_column);
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source is not valid ASCII", invalid_line, invalid_column, out_error);
         return TINYPY_FALSE;
     }
-    if (latin1 == 0 && ascii == 0 && __tinypy_compiler_utf8_valid(input + input_offset, source_size - input_offset) == 0) {
-        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source is not valid UTF-8", 1, 1, out_error);
+    if (latin1 == 0 && ascii == 0 && __tinypy_compiler_utf8_valid(input + input_offset, source_size - input_offset, &invalid_offset) == 0) {
+        __tinypy_compiler_byte_position(input + input_offset, invalid_offset, &invalid_line, &invalid_column);
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source is not valid UTF-8", invalid_line, invalid_column, out_error);
         return TINYPY_FALSE;
     }
     ctx->source_is_latin1 = latin1 != 0 ? TINYPY_TRUE : TINYPY_FALSE;

@@ -1092,14 +1092,39 @@ void tinypy_internal_exception_set_raised(tinypy_vm_t *vm, tinypy_value_t *value
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm) {
-    tinypy_internal_exception_clear_handled(vm);
-    vm->handled_type = vm->raised_type;
-    vm->handled_value = vm->raised_value;
-    vm->handled_traceback = vm->raised_traceback;
+    tinypy_value_t *type = vm->raised_type;
+    tinypy_value_t *value = vm->raised_value;
+    tinypy_value_t *traceback = vm->raised_traceback;
+
     vm->raised_type = NULL;
     vm->raised_value = NULL;
     vm->raised_traceback = NULL;
-    tinypy_internal_sys_publish_handled_exception(vm);
+    tinypy_internal_exception_restore_handled(vm, type, value, traceback);
+}
+//////////////////////////////////////////////////////////////////////////
+/* Takes over the three references and publishes sys.exc_* only when the
+   handled exception actually changed. */
+void tinypy_internal_exception_restore_handled(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback) {
+    tinypy_value_t *previous_type = vm->handled_type;
+    tinypy_value_t *previous_value = vm->handled_value;
+    tinypy_value_t *previous_traceback = vm->handled_traceback;
+    tinypy_bool_t changed = previous_type != type || previous_value != value || previous_traceback != traceback ? TINYPY_TRUE : TINYPY_FALSE;
+
+    vm->handled_type = type;
+    vm->handled_value = value;
+    vm->handled_traceback = traceback;
+    if (previous_type != NULL) {
+        TINYPY_DECREF(previous_type);
+    }
+    if (previous_value != NULL) {
+        TINYPY_DECREF(previous_value);
+    }
+    if (previous_traceback != NULL) {
+        TINYPY_DECREF(previous_traceback);
+    }
+    if (changed != 0) {
+        tinypy_internal_sys_publish_handled_exception(vm);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_restore_raised_from_handled(tinypy_vm_t *vm) {
@@ -1206,10 +1231,10 @@ void tinypy_internal_exception_raise_stop_iteration(tinypy_vm_t *vm, tinypy_erro
     }
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_exception_consume_stop_iteration(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+tinypy_bool_t tinypy_internal_exception_consume_kind(tinypy_vm_t *vm, tinypy_exception_type_index_e index, tinypy_error_t **out_error) {
     tinypy_value_t *raised_type = vm->raised_type;
 
-    if (raised_type == NULL || TINYPY_VALUE_KIND(raised_type) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype((tinypy_type_t *)raised_type, vm->exception_types[TINYPY_EXCEPTION_STOP_ITERATION]) == 0) {
+    if (raised_type == NULL || TINYPY_VALUE_KIND(raised_type) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype((tinypy_type_t *)raised_type, vm->exception_types[index]) == 0) {
         return TINYPY_FALSE;
     }
     if (out_error != NULL && *out_error != NULL) {
@@ -1217,6 +1242,57 @@ tinypy_bool_t tinypy_internal_exception_consume_stop_iteration(tinypy_vm_t *vm, 
         *out_error = NULL;
     }
     tinypy_internal_exception_clear_raised(vm);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_exception_consume_stop_iteration(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    tinypy_bool_t consumed = tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_STOP_ITERATION, out_error);
+
+    return consumed;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Prepends text to the message of the raised exception when it is an instance
+   of the given type carrying a single string argument, the way build_class in
+   CPython annotates errors raised while calling the metaclass. */
+tinypy_bool_t tinypy_internal_exception_prefix_raised(tinypy_vm_t *vm, tinypy_exception_type_index_e index, const char *prefix, size_t prefix_size, tinypy_error_t **out_error) {
+    tinypy_value_t *value = vm->raised_value;
+    tinypy_internal_exception_payload_t *payload;
+    tinypy_value_t *text;
+    tinypy_value_t *joined;
+    tinypy_value_t *args;
+    size_t text_size;
+    char *buffer;
+
+    if (value == NULL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE || tinypy_type_is_subtype(value->type, vm->exception_types[index]) == 0) {
+        return TINYPY_FALSE;
+    }
+    payload = __tinypy_exception_payload(value);
+    if (payload->args == NULL || TINYPY_VALUE_KIND(payload->args) != TINYPY_VALUE_TUPLE || TINYPY_TUPLE_SIZE(payload->args) != 1U) {
+        return TINYPY_FALSE;
+    }
+    text = TINYPY_TUPLE_GET(payload->args, 0U);
+    if (TINYPY_VALUE_KIND(text) != TINYPY_VALUE_STRING) {
+        return TINYPY_FALSE;
+    }
+    text_size = TINYPY_TEXT_BYTE_SIZE(text);
+    buffer = (char *)tinypy_internal_vm_allocate(vm, prefix_size + text_size);
+    (void)memcpy(buffer, prefix, prefix_size);
+    if (text_size != 0U) {
+        (void)memcpy(buffer + prefix_size, TINYPY_TEXT_BYTES(text), text_size);
+    }
+    joined = tinypy_string_from_bytes(vm, buffer, prefix_size + text_size);
+    tinypy_internal_vm_deallocate(vm, buffer, prefix_size + text_size);
+    args = tinypy_tuple_from_items(vm, &joined, 1U);
+    __tinypy_exception_replace_args(payload, args);
+    if (payload->message != NULL) {
+        TINYPY_DECREF(payload->message);
+    }
+    payload->message = joined;
+    if (out_error != NULL && *out_error != NULL) {
+        tinypy_error_release(*out_error);
+        *out_error = NULL;
+        tinypy_internal_exception_make_diagnostic(vm, out_error);
+    }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1240,8 +1316,9 @@ int32_t tinypy_exception_matches(tinypy_value_t *exception, tinypy_value_t *cand
         return 0;
     }
     if (__tinypy_exception_is_class(vm, candidate) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "catching classes that do not inherit from BaseException is not allowed", out_error);
-        return -1;
+        int32_t identical = exception == candidate ? 1 : 0;
+
+        return identical;
     }
     if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_CLASS) {
         tinypy_value_t *exception_class = NULL;

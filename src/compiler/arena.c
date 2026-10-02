@@ -60,7 +60,7 @@ void *tinypy_internal_compiler_arena_allocate(tinypy_compile_ctx_t *ctx, size_t 
 //////////////////////////////////////////////////////////////////////////
 void *tinypy_internal_compiler_ast_allocate(tinypy_compile_ctx_t *ctx, size_t size) {
     if (ctx->limits.max_ast_nodes != 0U && ctx->ast_node_count >= ctx->limits.max_ast_nodes) {
-        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "AST tinypy_cst_node_t limit exceeded", 0, 0, ctx->out_error);
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "AST node limit exceeded", 0, 0, ctx->out_error);
         return NULL;
     }
     ctx->ast_node_count += 1U;

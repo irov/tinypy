@@ -1,4 +1,6 @@
 #include "tinypy/marshal.h"
+#include "tinypy/dict.h"
+#include "tinypy/value.h"
 
 #include "internal.h"
 
@@ -22,9 +24,8 @@ typedef struct tinypy_marshal_dump_writer_t {
     size_t offset;
     size_t max_output_bytes;
     size_t max_depth;
-    const tinypy_value_t **interns;
+    tinypy_value_t *intern_indices; /* interned string -> TYPE_STRINGREF index */
     size_t intern_count;
-    size_t intern_capacity;
     tinypy_marshal_result_e result;
     tinypy_marshal_error_t *error;
 } tinypy_marshal_dump_writer_t;
@@ -183,36 +184,30 @@ static tinypy_bool_t __tinypy_marshal_dump_unicode(tinypy_marshal_dump_writer_t 
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static ptrdiff_t __tinypy_marshal_dump_find_intern(const tinypy_marshal_dump_writer_t *writer, const uint8_t *bytes, size_t size) {
-    size_t index;
+static ptrdiff_t __tinypy_marshal_dump_find_intern(const tinypy_marshal_dump_writer_t *writer, const tinypy_value_t *value) {
+    tinypy_value_t *index;
 
-    for (index = 0U; index < writer->intern_count; ++index) {
-        size_t candidate_size;
-        const uint8_t *candidate = (const uint8_t *)tinypy_string_view(writer->interns[index], &candidate_size);
-
-        if (candidate_size == size && (size == 0U || memcmp(candidate, bytes, size) == 0)) {
-            return (ptrdiff_t)index;
-        }
+    if (writer->intern_indices == NULL) {
+        return -1;
     }
-    return -1;
+    index = tinypy_internal_dict_get_optional(writer->vm, writer->intern_indices, value);
+    if (index == NULL) {
+        return -1;
+    }
+    ptrdiff_t return_value_1 = (ptrdiff_t)tinypy_integer_as_i64(index);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_dump_add_intern(tinypy_marshal_dump_writer_t *writer, const tinypy_value_t *value) {
-    if (writer->intern_count == writer->intern_capacity) {
-        size_t old_size = writer->intern_capacity * sizeof(*writer->interns);
-        size_t new_capacity = writer->intern_capacity == 0U ? 32U : writer->intern_capacity * 2U;
-        size_t new_size;
+    tinypy_value_t *index = tinypy_integer_from_i64(writer->vm, (int64_t)writer->intern_count);
 
-        new_size = new_capacity * sizeof(*writer->interns);
-        if (writer->interns == NULL) {
-            writer->interns = (const tinypy_value_t **)tinypy_internal_vm_allocate(writer->vm, new_size);
-        }
-        else {
-            writer->interns = (const tinypy_value_t **)tinypy_internal_vm_reallocate(writer->vm, (void *)writer->interns, old_size, new_size);
-        }
-        writer->intern_capacity = new_capacity;
+    if (writer->intern_indices == NULL) {
+        writer->intern_indices = tinypy_dict_new(writer->vm);
     }
-    writer->interns[writer->intern_count++] = value;
+    /* The dictionary only retains the key; the writer never mutates it. */
+    tinypy_dict_set(writer->intern_indices, (tinypy_value_t *)value, index);
+    TINYPY_DECREF(index);
+    writer->intern_count += 1U;
 }
 
 static tinypy_bool_t __tinypy_marshal_dump_value(tinypy_marshal_dump_writer_t *writer, const tinypy_value_t *value, size_t depth, tinypy_marshal_dump_string_context_e string_context);
@@ -226,7 +221,7 @@ static tinypy_bool_t __tinypy_marshal_dump_string(tinypy_marshal_dump_writer_t *
     (void)context;
 
     if (interned != 0) {
-        ptrdiff_t index = __tinypy_marshal_dump_find_intern(writer, bytes, size);
+        ptrdiff_t index = __tinypy_marshal_dump_find_intern(writer, value);
 
         if (index >= 0) {
             tinypy_bool_t return_value_1 = __tinypy_marshal_dump_u8(writer, (uint8_t)'R') && __tinypy_marshal_dump_i32(writer, (int32_t)index);
@@ -379,8 +374,8 @@ static tinypy_bool_t __tinypy_marshal_dump_value(tinypy_marshal_dump_writer_t *w
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_dump_writer_destroy(tinypy_marshal_dump_writer_t *writer) {
-    if (writer->interns != NULL) {
-        tinypy_internal_vm_deallocate(writer->vm, (void *)writer->interns, writer->intern_capacity * sizeof(*writer->interns));
+    if (writer->intern_indices != NULL) {
+        TINYPY_DECREF(writer->intern_indices);
     }
 }
 //////////////////////////////////////////////////////////////////////////

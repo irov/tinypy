@@ -129,18 +129,25 @@ tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_valu
     iterator = TINYPY_TUPLE_ITERATOR_BEGIN(bases);
     iterator_end = TINYPY_TUPLE_ITERATOR_END(bases);
     for (; iterator != iterator_end; ++iterator) {
-        tinypy_value_t *const *earlier;
         tinypy_value_t *base = *iterator;
 
         if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_CLASS) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "classic class base is not a class", out_error);
-            return NULL;
-        }
-        for (earlier = TINYPY_TUPLE_ITERATOR_BEGIN(bases); earlier != iterator; ++earlier) {
-            if (*earlier == base) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "duplicate class base", out_error);
+            /* PyClass_New lets the type of the first non-class base build the
+               class, which is how class C(Old, object) becomes new-style. */
+            tinypy_value_t *metaclass = &base->type->base.base;
+
+            if (base->type->call == NULL && TINYPY_VALUE_KIND(metaclass) != TINYPY_VALUE_TYPE) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "PyClass_New: base must be a class", out_error);
                 return NULL;
             }
+            tinypy_value_t *name_value = tinypy_string_from_bytes(vm, name, name_size);
+            tinypy_value_t *items[3] = {name_value, bases, namespace_dict};
+            tinypy_value_t *args = tinypy_tuple_from_items(vm, items, 3U);
+            tinypy_value_t *result = tinypy_call(metaclass, args, NULL, out_error);
+
+            TINYPY_DECREF(args);
+            TINYPY_DECREF(name_value);
+            return result;
         }
     }
     tinypy_class_object_t *class_object = (tinypy_class_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_CLASS, sizeof(*class_object));

@@ -239,11 +239,18 @@ static tinypy_bool_t __tinypy_struct_as_double(tinypy_vm_t *vm, tinypy_value_t *
         *out_value = (double)TINYPY_INTEGER_VALUE(value);
         return TINYPY_TRUE;
     }
-    if (kind == TINYPY_VALUE_LONG && TINYPY_LONG_DIGIT_COUNT(value) <= 4U) {
-        *out_value = (double)tinypy_long_as_i64(value);
-        return TINYPY_TRUE;
+    if (kind == TINYPY_VALUE_LONG) {
+        tinypy_error_t *conversion_error = NULL;
+
+        if (tinypy_long_as_double(value, out_value, &conversion_error) != 0) {
+            return TINYPY_TRUE;
+        }
+        if (conversion_error != NULL) {
+            tinypy_error_release(conversion_error);
+        }
+        tinypy_vm_clear_error(vm);
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "required argument is not a float", out_error);
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "required argument is not a float", out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////

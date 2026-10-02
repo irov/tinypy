@@ -310,6 +310,15 @@ tinypy_value_t *tinypy_internal_code_create(tinypy_type_t *type, tinypy_value_t 
     if (__tinypy_code_identifier_tuple(vm, TINYPY_TUPLE_GET(args, 6U), out_error) == 0 || __tinypy_code_identifier_tuple(vm, TINYPY_TUPLE_GET(args, 7U), out_error) == 0) {
         return NULL;
     }
+    if ((size_t)integers[1] != TINYPY_TUPLE_SIZE(TINYPY_TUPLE_GET(args, 7U))) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code() nlocals must match the number of variable names", out_error);
+        return NULL;
+    }
+    size_t required_locals = (size_t)integers[0] + ((integers[3] & TINYPY_CODE_VARARGS) != 0 ? 1U : 0U) + ((integers[3] & TINYPY_CODE_VAR_KEYWORDS) != 0 ? 1U : 0U);
+    if (required_locals > (size_t)integers[1]) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code() argcount exceeds nlocals", out_error);
+        return NULL;
+    }
     if (count < 14U) {
         empty = tinypy_tuple_from_items(vm, NULL, 0U);
     }

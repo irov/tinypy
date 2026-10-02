@@ -91,5 +91,6 @@ tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ct
 tinypy_bool_t tinypy_internal_preprocessor_transform(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module, uint32_t future_flags);
 tinypy_bool_t tinypy_internal_meta_transform(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module);
 tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module);
+tinypy_bool_t tinypy_internal_compiler_is_keyword(const char *text);
 
 #endif

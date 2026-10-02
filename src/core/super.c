@@ -99,18 +99,19 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
     }
     mro_size = tinypy_type_mro_size(super_value->object_type);
     for (index = 0U; index < mro_size; ++index) {
-        tinypy_type_t *mro_type = (tinypy_type_t *)tinypy_type_mro_at(super_value->object_type, index);
+        tinypy_value_t *entry = tinypy_internal_type_mro_value_at(super_value->object_type, index);
 
         if (found_type == 0) {
-            if (mro_type == super_value->type) {
+            if (entry == &super_value->type->base.base) {
                 found_type = 1;
             }
             continue;
         }
-        tinypy_value_t *attribute = tinypy_dict_get_optional(mro_type->dict, name);
+        tinypy_value_t *attribute = tinypy_dict_get_optional(tinypy_internal_type_mro_entry_dict(entry), name);
 
         if (attribute != NULL) {
-            tinypy_value_t *return_value_2 = tinypy_internal_descriptor_get_value(vm, attribute, super_value->object, super_value->object_type, out_error);
+            tinypy_value_t *instance = super_value->object == &super_value->object_type->base.base ? NULL : super_value->object;
+            tinypy_value_t *return_value_2 = tinypy_internal_descriptor_get_value(vm, attribute, instance, super_value->object_type, out_error);
             return return_value_2;
         }
     }

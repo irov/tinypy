@@ -1290,17 +1290,24 @@ static tinypy_value_t *__tinypy_dict_popitem_method(tinypy_value_t *function, ti
         return NULL;
     }
     tinypy_value_t *dict_value = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_END(dict_value);
+    tinypy_dict_object_t *dict = TINYPY_DICT_OBJECT(dict_value);
+    size_t capacity = dict->mask + 1U;
+    size_t finger = dict->popitem_finger < capacity ? dict->popitem_finger : 0U;
+    size_t scanned;
+
+    /* The finger remembers where the last scan stopped, as dict_popitem
+       does, so draining a dictionary stays linear. */
     iterator_begin = TINYPY_DICT_ITERATOR_BEGIN(dict_value);
-    while (iterator != iterator_begin) {
-        iterator -= 1;
+    for (scanned = 0U; scanned < capacity; ++scanned) {
+        size_t index = (finger + scanned) % capacity;
+        tinypy_dict_entry_t *iterator = &iterator_begin[index];
 
         if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
             tinypy_value_t *items[2] = {iterator->key, iterator->value};
             tinypy_value_t *result = tinypy_tuple_from_items(vm, items, 2U);
-            size_t index = (size_t)(iterator - iterator_begin);
 
             (void)tinypy_internal_dict_delete_index(vm, dict_value, index, NULL, NULL);
+            dict->popitem_finger = index + 1U;
             return result;
         }
     }
@@ -1361,6 +1368,31 @@ static tinypy_value_t *__tinypy_container_contains_method(tinypy_value_t *functi
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* int.__add__(1, 2L) is NotImplemented in Python 2.7: a numeric method only
+   accepts operands its own type converts, so the owner type decides. */
+static tinypy_bool_t __tinypy_container_numeric_operand_accepted(tinypy_value_t *function, tinypy_value_type_e operand_kind) {
+    tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(function);
+    tinypy_type_t *owner = native->owner;
+
+    if (owner == NULL && native->function != NULL) {
+        owner = TINYPY_NATIVE_FUNCTION_OBJECT(native->function)->owner;
+    }
+    if (owner == NULL) {
+        return TINYPY_TRUE;
+    }
+    switch (owner->layout_kind) {
+    case TINYPY_VALUE_BOOL:
+    case TINYPY_VALUE_INTEGER:
+        return operand_kind == TINYPY_VALUE_BOOL || operand_kind == TINYPY_VALUE_INTEGER;
+    case TINYPY_VALUE_LONG:
+        return operand_kind == TINYPY_VALUE_BOOL || operand_kind == TINYPY_VALUE_INTEGER || operand_kind == TINYPY_VALUE_LONG;
+    case TINYPY_VALUE_FLOAT:
+        return operand_kind != TINYPY_VALUE_COMPLEX;
+    default:
+        return TINYPY_TRUE;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_container_binary_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     intptr_t mode = (intptr_t)user_data;
@@ -1389,6 +1421,11 @@ static tinypy_value_t *__tinypy_container_binary_method(tinypy_value_t *function
     tinypy_bool_t right_sequence = right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE || right_kind == TINYPY_VALUE_TUPLE || right_kind == TINYPY_VALUE_LIST;
 
     if (self_numeric != 0 && (left_numeric == 0 || right_numeric == 0)) {
+        tinypy_value_t *result = &vm->not_implemented_object.base;
+        TINYPY_INCREF(result);
+        return result;
+    }
+    if (self_numeric != 0 && (__tinypy_container_numeric_operand_accepted(function, left_kind) == 0 || __tinypy_container_numeric_operand_accepted(function, right_kind) == 0)) {
         tinypy_value_t *result = &vm->not_implemented_object.base;
         TINYPY_INCREF(result);
         return result;

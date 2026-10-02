@@ -1156,6 +1156,18 @@ static size_t __tinypy_verify_surviving_marker(const tinypy_verify_context_t *co
     return marker_index;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Leaving a loop with break or continue abandons every finally or with
+   handler that was entered inside that loop. Such a handler stashed its
+   values at or above the loop's base depth, which in a while loop equals the
+   depth the unwind returns to, so the test is against the loop level rather
+   than the resulting stack depth. */
+static size_t __tinypy_verify_marker_outside_loop(const tinypy_verify_context_t *context, size_t marker_index, size_t loop_level) {
+    while (marker_index != TINYPY_VERIFY_NO_MARKER && context->markers[marker_index].resume_depth >= loop_level) {
+        marker_index = context->markers[marker_index].parent;
+    }
+    return marker_index;
+}
+//////////////////////////////////////////////////////////////////////////
 /* pending_marker is the finally/with marker chain already in flight at the
    unwind site. Popping a loop block or entering a nested finally must keep it,
    otherwise a break, continue or return inside a finally clause loses the
@@ -1185,7 +1197,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
                 continue_target,
                 stack_depth,
                 block_index,
-                __tinypy_verify_surviving_marker(context, pending_marker, stack_depth),
+                __tinypy_verify_marker_outside_loop(context, pending_marker, block->level),
                 instruction->offset,
                 instruction->opcode);
             return return_value_2;
@@ -1201,7 +1213,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
                     block->handler,
                     stack_depth,
                     block_index,
-                    __tinypy_verify_surviving_marker(context, pending_marker, stack_depth),
+                    __tinypy_verify_marker_outside_loop(context, pending_marker, block->level),
                     instruction->offset,
                     instruction->opcode);
                 return return_value_3;

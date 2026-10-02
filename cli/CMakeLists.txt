@@ -27,7 +27,9 @@ if(BUILD_TESTING)
 
     set(tinypy_runtime_source_fixtures
         buffer_runtime
+        builtin_semantics_runtime
         bytearray_runtime
+        call_semantics_runtime
         class_method
         codecs_runtime
         comparison_runtime
@@ -46,10 +48,12 @@ if(BUILD_TESTING)
         finalizer_runtime
         functools_runtime
         generator
+        import_semantics_runtime
         legacy_slice_runtime
         metaclass_checks_runtime
         metaclass_runtime
         multislots_runtime
+        numeric_semantics_runtime
         object_new_runtime
         old_class_runtime
         output_runtime
@@ -57,9 +61,11 @@ if(BUILD_TESTING)
         set_runtime
         slots_runtime
         sre_runtime
+        statement_semantics_runtime
         string_methods
         struct_runtime
         sys_runtime
+        text_semantics_runtime
         tuple_subclass_runtime
         type_protocol_runtime
         weakref_runtime

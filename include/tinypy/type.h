@@ -25,6 +25,9 @@ const tinypy_type_t *tinypy_value_as_const_type(const tinypy_value_t *value);
 /* Returns one owned type reference. Semantic construction failures return
  * NULL and, when requested, place their diagnostic in out_error. */
 tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error);
+/* A new-style class created from Python may list classic classes among its
+ * bases, as Python 2 permits; such entries appear in __bases__ and __mro__
+ * but are not types, so these accessors return NULL for them. */
 size_t tinypy_type_bases_size(const tinypy_type_t *type);
 const tinypy_type_t *tinypy_type_base_at(const tinypy_type_t *type, size_t index);
 size_t tinypy_type_mro_size(const tinypy_type_t *type);

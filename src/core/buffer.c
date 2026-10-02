@@ -137,13 +137,21 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
         return NULL;
     }
     (void)__tinypy_buffer_owner_view(owner, &owner_size);
-    if (offset < 0 || (uint64_t)offset > (uint64_t)owner_size) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "buffer offset is outside the source", out_error);
+    if (offset < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "offset must be zero or positive", out_error);
         return NULL;
     }
-    if (requested_size < -1 || (requested_size >= 0 && (uint64_t)requested_size > (uint64_t)(owner_size - (size_t)offset))) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "buffer size is outside the source", out_error);
+    if (requested_size < -1) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "size must be zero or positive", out_error);
         return NULL;
+    }
+    /* An offset past the end yields an empty buffer and a size beyond the
+       end is clamped, as get_buf does. */
+    if ((uint64_t)offset > (uint64_t)owner_size) {
+        offset = (int64_t)owner_size;
+    }
+    if (requested_size >= 0 && (uint64_t)requested_size > (uint64_t)(owner_size - (size_t)offset)) {
+        requested_size = (int64_t)(owner_size - (size_t)offset);
     }
     tinypy_value_t *return_value_1 = tinypy_buffer_from_object(owner, (size_t)offset, requested_size < 0 ? TINYPY_BUFFER_TO_END : (size_t)requested_size);
     return return_value_1;

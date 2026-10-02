@@ -20,15 +20,6 @@ void tinypy_internal_generator_release_references(tinypy_value_t *value, tinypy_
         visit(generator->frame, user_data);
     }
     visit(generator->code, user_data);
-    if (generator->handled_type != NULL) {
-        visit(generator->handled_type, user_data);
-    }
-    if (generator->handled_value != NULL) {
-        visit(generator->handled_value, user_data);
-    }
-    if (generator->handled_traceback != NULL) {
-        visit(generator->handled_traceback, user_data);
-    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_generator_iter(tinypy_value_t *value, tinypy_error_t **out_error) {

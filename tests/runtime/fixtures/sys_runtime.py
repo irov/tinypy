@@ -91,12 +91,15 @@ assert warning_sink.text == (
     "warn.py:1: SyntaxWarning: import * only allowed at module level\n"
 )
 
+# CPython reads the text of a semantic error's line from the named file,
+# which here does not exist; tinypy compiles from memory and attaches the
+# line it has.
 try:
     compile("return 1", "sample.py", "exec")
 except SyntaxError as syntax_error:
-    assert syntax_error.args == ("'return' outside function", ("sample.py", 1, None, None))
+    assert syntax_error.args == ("'return' outside function", ("sample.py", 1, None, "return 1\n"))
     assert syntax_error.offset is None
-    assert syntax_error.text is None
+    assert syntax_error.text == "return 1\n"
 else:
     raise AssertionError("return outside function compiled")
 

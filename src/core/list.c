@@ -335,6 +335,160 @@ void tinypy_list_delete(tinypy_value_t *list, size_t index) {
     TINYPY_DECREF(previous);
 }
 //////////////////////////////////////////////////////////////////////////
+/* Displaced items are released only after the list is consistent again, so
+   a finalizer that mutates the list cannot observe a half-edited layout. */
+static tinypy_value_t **__tinypy_list_detach_begin(tinypy_vm_t *vm, size_t count, tinypy_error_t **out_error) {
+    tinypy_value_t **displaced;
+
+    if (count == 0U) {
+        return NULL;
+    }
+    displaced = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, count * sizeof(*displaced), out_error);
+    return displaced;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_list_detach_end(tinypy_vm_t *vm, tinypy_value_t **displaced, size_t count) {
+    size_t index;
+
+    if (displaced == NULL) {
+        return;
+    }
+    for (index = 0U; index < count; ++index) {
+        TINYPY_DECREF(displaced[index]);
+    }
+    tinypy_internal_vm_deallocate(vm, displaced, count * sizeof(*displaced));
+}
+//////////////////////////////////////////////////////////////////////////
+/* items must not alias the list storage; callers pass a materialized copy. */
+tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, size_t start, size_t count, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
+    tinypy_list_object_t *object = TINYPY_LIST_OBJECT(list);
+    size_t size = TINYPY_SIZED_SIZE(list);
+    size_t tail = size - start - count;
+    size_t new_size;
+    size_t index;
+    tinypy_value_t **displaced;
+
+    if (item_count > count && item_count - count > SIZE_MAX / sizeof(tinypy_value_t *) - size) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "list is too large", out_error);
+        return TINYPY_FALSE;
+    }
+    new_size = size - count + item_count;
+    displaced = __tinypy_list_detach_begin(vm, count, out_error);
+    if (count != 0U && displaced == NULL) {
+        return TINYPY_FALSE;
+    }
+    if (new_size > size && tinypy_internal_list_reserve_checked(vm, list, new_size, out_error) == 0) {
+        if (displaced != NULL) {
+            tinypy_internal_vm_deallocate(vm, displaced, count * sizeof(*displaced));
+        }
+        return TINYPY_FALSE;
+    }
+    if (count != 0U) {
+        (void)memcpy(displaced, object->items + start, count * sizeof(*displaced));
+    }
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    for (index = 0U; index < count; ++index) {
+        __tinypy_internal_cycle_diagnostics_list_remove(vm, list, start);
+    }
+#endif
+    for (index = 0U; index < item_count; ++index) {
+        TINYPY_INCREF(items[index]);
+    }
+    if (tail != 0U && item_count != count) {
+        (void)memmove(object->items + start + item_count, object->items + start + count, tail * sizeof(tinypy_value_t *));
+    }
+    if (item_count != 0U) {
+        (void)memcpy(object->items + start, items, item_count * sizeof(tinypy_value_t *));
+    }
+    if (new_size < size) {
+        (void)memset(object->items + new_size, 0, (size - new_size) * sizeof(tinypy_value_t *));
+    }
+    object->base.size = new_size;
+    object->mutation_version += UINT64_C(1);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    for (index = 0U; index < item_count; ++index) {
+        __tinypy_internal_cycle_diagnostics_list_insert(vm, list, start + index, items[index]);
+    }
+#endif
+    __tinypy_list_detach_end(vm, displaced, count);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_list_replace_strided_checked(tinypy_value_t *list, size_t start, int64_t step, size_t count, tinypy_value_t *const *items, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
+    tinypy_list_object_t *object = TINYPY_LIST_OBJECT(list);
+    size_t index;
+    tinypy_value_t **displaced;
+
+    if (count == 0U) {
+        return TINYPY_TRUE;
+    }
+    displaced = __tinypy_list_detach_begin(vm, count, out_error);
+    if (displaced == NULL) {
+        return TINYPY_FALSE;
+    }
+    for (index = 0U; index < count; ++index) {
+        size_t position = (size_t)((int64_t)start + (int64_t)index * step);
+
+        TINYPY_INCREF(items[index]);
+        displaced[index] = object->items[position];
+        object->items[position] = items[index];
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_list_set(vm, list, position, items[index]);
+#endif
+    }
+    object->mutation_version += UINT64_C(1);
+    __tinypy_list_detach_end(vm, displaced, count);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_list_delete_strided_checked(tinypy_value_t *list, size_t start, int64_t step, size_t count, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
+    tinypy_list_object_t *object = TINYPY_LIST_OBJECT(list);
+    size_t size = TINYPY_SIZED_SIZE(list);
+    size_t stride;
+    size_t index;
+    tinypy_value_t **displaced;
+
+    if (count == 0U) {
+        return TINYPY_TRUE;
+    }
+    /* Walk the removed positions in increasing order whatever the sign of
+       the step, as list_ass_subscript does in Python 2.7. */
+    if (step < 0) {
+        start = (size_t)((int64_t)start + (int64_t)(count - 1U) * step);
+        stride = (size_t)-step;
+    }
+    else {
+        stride = (size_t)step;
+    }
+    displaced = __tinypy_list_detach_begin(vm, count, out_error);
+    if (displaced == NULL) {
+        return TINYPY_FALSE;
+    }
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    for (index = count; index != 0U; --index) {
+        __tinypy_internal_cycle_diagnostics_list_remove(vm, list, start + (index - 1U) * stride);
+    }
+#endif
+    for (index = 0U; index < count; ++index) {
+        size_t current = start + index * stride;
+        size_t next = index + 1U < count ? current + stride : size;
+        size_t kept = next - current - 1U;
+
+        displaced[index] = object->items[current];
+        if (kept != 0U) {
+            (void)memmove(object->items + current - index, object->items + current + 1U, kept * sizeof(tinypy_value_t *));
+        }
+    }
+    (void)memset(object->items + size - count, 0, count * sizeof(tinypy_value_t *));
+    object->base.size = size - count;
+    object->mutation_version += UINT64_C(1);
+    __tinypy_list_detach_end(vm, displaced, count);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_list_pop(tinypy_value_t *list, size_t index) {
     size_t move_count;
 

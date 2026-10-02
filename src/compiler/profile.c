@@ -38,6 +38,7 @@ typedef struct tinypy_profile_allocation_t {
 typedef struct tinypy_profile_constant_t {
     char *name;
     size_t name_size;
+    size_t source_index;
     tinypy_build_value_t value;
 } tinypy_profile_constant_t;
 
@@ -788,9 +789,12 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
             __tinypy_profile_destroy_partial(profile);
             return result;
         }
+        profile->constants[index].source_index = index;
     }
     static const char ndebug_name[] = "__NDEBUG__";
     tinypy_profile_constant_t *ndebug = &profile->constants[constant_count];
+
+    ndebug->source_index = constant_count;
     size_t name_size = sizeof(ndebug_name) - 1U;
     ndebug->name = (char *)__tinypy_profile_allocate(
         profile,
@@ -838,10 +842,13 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
                 profile->constants[index - 1U].name_size,
                 profile->constants[index].name,
                 profile->constants[index].name_size) == 0) {
+            size_t first_index = profile->constants[index - 1U].source_index;
+            size_t second_index = profile->constants[index].source_index;
+
             result = __tinypy_profile_fail(
                 out_error,
                 TINYPY_BUILD_PROFILE_DUPLICATE_NAME,
-                index,
+                first_index > second_index ? first_index : second_index,
                 0U,
                 "duplicate build constant name");
             __tinypy_profile_destroy_partial(profile);
@@ -878,6 +885,9 @@ tinypy_bool_t tinypy_build_profile_find(const tinypy_build_profile_t *profile, c
     size_t lower = 0U;
     size_t upper;
     *out_value = NULL;
+    if (profile == NULL) {
+        return TINYPY_FALSE;
+    }
     upper = profile->constant_count;
     while (lower < upper) {
         size_t middle = lower + (upper - lower) / 2U;

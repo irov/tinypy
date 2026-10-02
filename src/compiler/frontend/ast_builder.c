@@ -18,6 +18,7 @@ typedef struct tinypy_ast_builder_t {
     tinypy_bool_t c_future_unicode;          /* __future__ unicode literals flag */
     tinypy_compile_ctx_t *c_arena; /* arena for allocating memeory */
     const char *c_filename;        /* filename */
+    int32_t c_depth;               /* expression nesting depth */
 } tinypy_ast_builder_t;
 
 static tinypy_ast_sequence_t *__seq_for_testlist(tinypy_ast_builder_t *, const tinypy_cst_node_t *);
@@ -71,6 +72,25 @@ static tinypy_ast_identifier_t __new_identifier(const char *n, tinypy_compile_ct
 static tinypy_bool_t __ast_error(const tinypy_cst_node_t *n, const char *errstr) {
     tinypy_internal_compiler_error(n->context, TINYPY_ERROR_SYNTAX, errstr, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1, n->context->out_error);
     return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __ast_nesting_check(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, int32_t depth) {
+    size_t limit = c->c_arena->limits.max_nesting;
+
+    if (limit != 0U && (size_t)depth > limit) {
+        tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_COMPILER_LIMIT, "expression nesting limit exceeded", TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1, c->c_arena->out_error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__ast_arena_value(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, tinypy_value_t *value) {
+    if (TINYPY_COMPILER_ARENA_ADD_VALUE(c->c_arena, value) != 0) {
+        TINYPY_DECREF(value);
+        tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_COMPILER_LIMIT, "constant exceeds compiler arena limit", TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1, c->c_arena->out_error);
+        return NULL;
+    }
+    return value;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __ast_error_finish(const char *filename) {
@@ -181,6 +201,7 @@ tinypy_ast_module_t __tinypy_ast_build(const tinypy_cst_node_t *n, tinypy_compil
     c.c_future_unicode = flags && flags->flags & TINYPY_CODE_FUTURE_UNICODE_LITERALS;
     c.c_arena = arena;
     c.c_filename = filename;
+    c.c_depth = 0;
 
     k = 0;
     switch (TINYPY_CST_TYPE(n)) {
@@ -400,7 +421,7 @@ static tinypy_bool_t __set_context(tinypy_ast_builder_t *c, tinypy_ast_expressio
         expr_name = "literal";
         break;
     case TINYPY_AST_KIND_COMPARE:
-        expr_name = "TINYPY_GRAMMAR_COMPARISON";
+        expr_name = "comparison";
         break;
     case TINYPY_AST_KIND_REPR:
         expr_name = "repr";
@@ -599,6 +620,9 @@ static tinypy_ast_expression_t __compiler_complex_args(tinypy_ast_builder_t *c, 
             }
             arg = __compiler_complex_args(c, child);
         }
+        if (arg == NULL) {
+            return NULL;
+        }
         TINYPY_AST_SEQUENCE_SET(args, i, arg);
     }
 
@@ -681,8 +705,7 @@ static tinypy_ast_arguments_t __ast_for_arguments(tinypy_ast_builder_t *c, const
                     __ast_error(n, "parenthesized arg with default");
                     return NULL;
                 }
-                __ast_error(n,
-                            "non-default TINYPY_GRAMMAR_ARGUMENT follows default TINYPY_GRAMMAR_ARGUMENT");
+                __ast_error(n, "non-default argument follows default argument");
                 return NULL;
             }
             if (TINYPY_CST_CHILD_COUNT(ch) == 3) {
@@ -1343,7 +1366,9 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
             }
             return NULL;
         }
-        TINYPY_COMPILER_ARENA_ADD_VALUE(c->c_arena, str);
+        if (__ast_arena_value(c, n, str) == NULL) {
+            return NULL;
+        }
         tinypy_ast_expression_t return_value_2 = __tinypy_ast_str(str, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
         return return_value_2;
     }
@@ -1353,7 +1378,9 @@ static tinypy_ast_expression_t __ast_for_atom(tinypy_ast_builder_t *c, const tin
             return NULL;
         }
 
-        TINYPY_COMPILER_ARENA_ADD_VALUE(c->c_arena, pynum);
+        if (__ast_arena_value(c, n, pynum) == NULL) {
+            return NULL;
+        }
         tinypy_ast_expression_t return_value_3 = __tinypy_ast_num(pynum, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
         return return_value_3;
     }
@@ -1609,6 +1636,9 @@ static tinypy_ast_expression_t __ast_for_binop(tinypy_ast_builder_t *c, const ti
         tinypy_ast_expression_t tmp_result, tmp;
         const tinypy_cst_node_t *next_oper = TINYPY_CST_CHILD(n, i * 2 + 1);
 
+        if (__ast_nesting_check(c, next_oper, c->c_depth + i) == 0) {
+            return NULL;
+        }
         newoperator = __get_operator(next_oper);
         if (!newoperator) {
             return NULL;
@@ -1742,7 +1772,9 @@ static tinypy_ast_expression_t __ast_for_factor(tinypy_ast_builder_t *c, const t
             return NULL;
         }
 
-        TINYPY_COMPILER_ARENA_ADD_VALUE(c->c_arena, pynum);
+        if (__ast_arena_value(c, n, pynum) == NULL) {
+            return NULL;
+        }
         tinypy_ast_expression_t return_value_1 = __tinypy_ast_num(pynum, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
         return return_value_1;
     }
@@ -1787,6 +1819,9 @@ static tinypy_ast_expression_t __ast_for_power(tinypy_ast_builder_t *c, const ti
         if (TINYPY_CST_TYPE(ch) != TINYPY_GRAMMAR_TRAILER) {
             break;
         }
+        if (__ast_nesting_check(c, ch, c->c_depth + i) == 0) {
+            return NULL;
+        }
         tmp = __ast_for_trailer(c, ch, e);
         if (!tmp) {
             return NULL;
@@ -1813,7 +1848,7 @@ static tinypy_ast_expression_t __ast_for_power(tinypy_ast_builder_t *c, const ti
  */
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_ast_expression_t __ast_for_expr(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
+static tinypy_ast_expression_t __ast_for_expr_node(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
     tinypy_ast_expression_t function_result;
     /* handle the full range of simple expressions
        TINYPY_GRAMMAR_TEST: TINYPY_GRAMMAR_OR_TEST ['if' TINYPY_GRAMMAR_OR_TEST 'else' TINYPY_GRAMMAR_TEST] | TINYPY_GRAMMAR_LAMBDEF
@@ -1982,6 +2017,18 @@ loop:
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_ast_expression_t __ast_for_expr(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
+    tinypy_ast_expression_t result;
+
+    if (__ast_nesting_check(c, n, c->c_depth + 1) == 0) {
+        return NULL;
+    }
+    c->c_depth += 1;
+    result = __ast_for_expr_node(c, n);
+    c->c_depth -= 1;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, tinypy_ast_expression_t func) {
     /* TINYPY_GRAMMAR_ARGLIST: (TINYPY_GRAMMAR_ARGUMENT ',')* (TINYPY_GRAMMAR_ARGUMENT [',']| '*' TINYPY_GRAMMAR_TEST [',' '**' TINYPY_GRAMMAR_TEST]
                | '**' TINYPY_GRAMMAR_TEST)
@@ -2010,7 +2057,7 @@ static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *c, const tin
     }
     if (ngens > 1 || (ngens && (nargs || nkeywords))) {
         __ast_error(n, "Generator expression must be parenthesized "
-                       "if not sole TINYPY_GRAMMAR_ARGUMENT");
+                       "if not sole argument");
         return NULL;
     }
 
@@ -2090,7 +2137,7 @@ static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *c, const tin
                     tmp = TINYPY_COMPILER_STRING_AS_STRING(
                         ((tinypy_ast_keyword_t)TINYPY_AST_SEQUENCE_GET(keywords, k))->arg);
                     if (!strcmp(tmp, TINYPY_COMPILER_STRING_AS_STRING(key))) {
-                        __ast_error(TINYPY_CST_CHILD(ch, 0), "keyword TINYPY_GRAMMAR_ARGUMENT repeated");
+                        __ast_error(TINYPY_CST_CHILD(ch, 0), "keyword argument repeated");
                         return NULL;
                     }
                 }

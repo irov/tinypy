@@ -82,6 +82,19 @@ static tinypy_bool_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size
    becoming large in the presence of code like:  (None,)*1000.
 */
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_optimizer_unshared_string(tinypy_value_t *shared) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(shared);
+    uint8_t *bytes;
+    tinypy_value_t *copy = tinypy_internal_text_allocate_uninitialized(vm, TINYPY_VALUE_STRING, 1U, 0U, &bytes);
+    size_t size;
+    const uint8_t *source = (const uint8_t *)tinypy_string_view(shared, &size);
+
+    bytes[0] = source[0];
+    tinypy_internal_string_set_interned(copy, TINYPY_FALSE);
+    TINYPY_COMPILER_DECREF(shared);
+    return copy;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t *consts) {
     tinypy_value_t *newconst, *v, *w;
     tinypy_compiler_size_t len_consts, size;
@@ -158,7 +171,14 @@ static tinypy_bool_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t
         return TINYPY_FALSE;
     }
     if (TINYPY_VALUE_KIND(newconst) == TINYPY_VALUE_STRING) {
-        tinypy_internal_string_set_interned(newconst, TINYPY_FALSE);
+        if (TINYPY_SIZED_SIZE(newconst) > 1U) {
+            tinypy_internal_string_set_interned(newconst, TINYPY_FALSE);
+        }
+        else if (opcode == TINYPY_OP_BINARY_MODULO && TINYPY_SIZED_SIZE(newconst) == 1U) {
+            /* One-byte strings are shared interned singletons, while string
+               formatting yields a distinct non-interned string in CPython. */
+            newconst = __tinypy_optimizer_unshared_string(newconst);
+        }
     }
     size = TINYPY_COMPILER_OBJECT_SIZE(newconst);
     if (size == -1) {

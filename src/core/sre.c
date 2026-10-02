@@ -79,19 +79,73 @@ typedef enum tinypy_sre_category_e {
     TINYPY_SRE_CATEGORY_UNI_NOT_LINEBREAK = 17
 } tinypy_sre_category_e;
 
+/* The matcher follows sre_lib.h from Python 2.7: every backtracking point
+   is a context on a heap-allocated stack, so pattern depth and repeat counts
+   are bounded by memory rather than by the native stack. */
+typedef enum tinypy_sre_jump_e {
+    TINYPY_SRE_JUMP_NONE = 0,
+    TINYPY_SRE_JUMP_MAX_UNTIL_1 = 1,
+    TINYPY_SRE_JUMP_MAX_UNTIL_2 = 2,
+    TINYPY_SRE_JUMP_MAX_UNTIL_3 = 3,
+    TINYPY_SRE_JUMP_MIN_UNTIL_1 = 4,
+    TINYPY_SRE_JUMP_MIN_UNTIL_2 = 5,
+    TINYPY_SRE_JUMP_MIN_UNTIL_3 = 6,
+    TINYPY_SRE_JUMP_REPEAT = 7,
+    TINYPY_SRE_JUMP_REPEAT_ONE = 8,
+    TINYPY_SRE_JUMP_MIN_REPEAT_ONE = 9,
+    TINYPY_SRE_JUMP_BRANCH = 10,
+    TINYPY_SRE_JUMP_ASSERT = 11,
+    TINYPY_SRE_JUMP_ASSERT_NOT = 12
+} tinypy_sre_jump_e;
+
+typedef struct tinypy_sre_repeat_t {
+    size_t previous;
+    size_t pc;
+    size_t count;
+    size_t last_position;
+} tinypy_sre_repeat_t;
+
+typedef struct tinypy_sre_context_t {
+    size_t pc;
+    size_t position;
+    size_t count;
+    size_t saved_last_position;
+    size_t mark_offset;
+    size_t repeat_index;
+    ptrdiff_t lastmark;
+    ptrdiff_t lastindex;
+    tinypy_sre_repeat_t repeat;
+    uint32_t jump;
+    uint32_t literal;
+    tinypy_bool_t literal_tail;
+} tinypy_sre_context_t;
+
 typedef struct tinypy_sre_state_t {
     tinypy_vm_t *vm;
     tinypy_sre_pattern_object_t *pattern;
+    tinypy_value_t *string;
     const uint8_t *bytes;
     uint32_t *characters;
     size_t size;
     size_t beginning;
     size_t end;
-    size_t recursion_depth;
+    size_t position;
+    size_t *marks;
+    ptrdiff_t lastmark;
+    ptrdiff_t lastindex;
+    size_t repeat;
+    tinypy_sre_context_t *contexts;
+    size_t context_count;
+    size_t context_capacity;
+    size_t *mark_stack;
+    size_t mark_top;
+    size_t mark_capacity;
     tinypy_bool_t invalid_code;
+    tinypy_bool_t memory_failed;
 } tinypy_sre_state_t;
 
-static tinypy_bool_t __tinypy_sre_match_code(tinypy_sre_state_t *state, size_t pc, size_t stop, size_t *position, size_t *marks, ptrdiff_t *lastindex);
+static tinypy_bool_t __tinypy_sre_match(tinypy_sre_state_t *state, size_t start_pc, size_t *inout_position, size_t *marks, ptrdiff_t *inout_lastindex);
+static void __tinypy_sre_pattern_cache_release(tinypy_sre_pattern_object_t *pattern);
 
 //////////////////////////////////////////////////////////////////////////
 static uint32_t __tinypy_sre_ascii_lower(uint32_t character) {
@@ -223,6 +277,10 @@ static tinypy_bool_t __tinypy_sre_at(const tinypy_sre_state_t *state, size_t pos
     case TINYPY_SRE_AT_NON_BOUNDARY:
     case TINYPY_SRE_AT_LOC_NON_BOUNDARY:
     case TINYPY_SRE_AT_UNI_NON_BOUNDARY:
+        /* An empty subject has no word boundaries and no non-boundaries. */
+        if (state->beginning == state->end) {
+            return TINYPY_FALSE;
+        }
         if (at == TINYPY_SRE_AT_UNI_BOUNDARY || at == TINYPY_SRE_AT_UNI_NON_BOUNDARY) {
             previous_word = position > state->beginning ? __tinypy_sre_is_unicode_word(__tinypy_sre_character_at(state, position - 1U)) : TINYPY_FALSE;
             current_word = position < state->end ? __tinypy_sre_is_unicode_word(__tinypy_sre_character_at(state, position)) : TINYPY_FALSE;
@@ -387,372 +445,739 @@ static tinypy_bool_t __tinypy_sre_match_one(tinypy_sre_state_t *state, size_t pc
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_sre_match_repeat(tinypy_sre_state_t *state, size_t pc, size_t stop, size_t *position, size_t *marks, ptrdiff_t *lastindex) {
-    tinypy_sre_pattern_object_t *pattern = state->pattern;
-    size_t skip = pattern->code[pc + 1U];
-    size_t minimum = pattern->code[pc + 2U];
-    size_t maximum = pattern->code[pc + 3U] == TINYPY_SRE_MAXREPEAT ? state->end - *position + 1U : pattern->code[pc + 3U];
-    size_t until = pc + 1U + skip;
-    size_t capacity = maximum + 1U;
-    size_t *positions;
-    size_t *saved_marks;
-    ptrdiff_t *saved_lastindex;
-    size_t count = 0U;
-    size_t index;
-    tinypy_bool_t greedy;
+/* The pool reallocator needs a live block, so an empty buffer is allocated. */
+static void *__tinypy_sre_grow(tinypy_sre_state_t *state, void *memory, size_t old_size, size_t new_size) {
+    void *grown;
 
-    if (until >= pattern->code_size || capacity > SIZE_MAX / sizeof(*positions) || pattern->groups * 2U > TINYPY_SRE_MAX_MARKS) {
-        return TINYPY_FALSE;
+    if (memory == NULL) {
+        grown = tinypy_internal_vm_allocate_checked(state->vm, new_size, NULL);
     }
-    greedy = pattern->code[until] == TINYPY_SRE_OP_MAX_UNTIL ? INT32_C(1) : INT32_C(0);
-    if (greedy == 0 && pattern->code[until] != TINYPY_SRE_OP_MIN_UNTIL) {
-        return TINYPY_FALSE;
+    else {
+        grown = tinypy_internal_vm_reallocate_checked(state->vm, memory, old_size, new_size, NULL);
     }
-    positions = (size_t *)tinypy_internal_vm_allocate(state->vm, capacity * sizeof(*positions));
-    saved_lastindex = (ptrdiff_t *)tinypy_internal_vm_allocate(state->vm, capacity * sizeof(*saved_lastindex));
-    saved_marks = pattern->groups != 0U ? (size_t *)tinypy_internal_vm_allocate(state->vm, capacity * pattern->groups * 2U * sizeof(*saved_marks)) : NULL;
-    positions[0] = *position;
-    saved_lastindex[0] = *lastindex;
-    if (pattern->groups != 0U) {
-        __tinypy_sre_copy_marks(saved_marks, marks, pattern->groups * 2U);
+    if (grown == NULL) {
+        state->memory_failed = TINYPY_TRUE;
     }
-    while (count < maximum) {
-        size_t next_position = positions[count];
-        size_t next_marks[TINYPY_SRE_MAX_MARKS];
-        ptrdiff_t next_lastindex = saved_lastindex[count];
-
-        if (pattern->groups != 0U) {
-            __tinypy_sre_copy_marks(next_marks, saved_marks + count * pattern->groups * 2U, pattern->groups * 2U);
-        }
-        if (__tinypy_sre_match_code(state, pc + 4U, until, &next_position, next_marks, &next_lastindex) == 0 || next_position == positions[count]) {
-            break;
-        }
-        count += 1U;
-        positions[count] = next_position;
-        saved_lastindex[count] = next_lastindex;
-        if (pattern->groups != 0U) {
-            __tinypy_sre_copy_marks(saved_marks + count * pattern->groups * 2U, next_marks, pattern->groups * 2U);
-        }
-    }
-    if (count >= minimum) {
-        size_t attempts = count - minimum + 1U;
-
-        for (index = 0U; index < attempts; ++index) {
-            size_t selected = greedy != 0 ? count - index : minimum + index;
-            size_t trial_position = positions[selected];
-            size_t trial_marks[TINYPY_SRE_MAX_MARKS];
-            ptrdiff_t trial_lastindex = saved_lastindex[selected];
-
-            if (pattern->groups != 0U) {
-                __tinypy_sre_copy_marks(trial_marks, saved_marks + selected * pattern->groups * 2U, pattern->groups * 2U);
-            }
-            if (__tinypy_sre_match_code(state, until + 1U, stop, &trial_position, trial_marks, &trial_lastindex) != 0) {
-                *position = trial_position;
-                *lastindex = trial_lastindex;
-                if (pattern->groups != 0U) {
-                    __tinypy_sre_copy_marks(marks, trial_marks, pattern->groups * 2U);
-                }
-                if (saved_marks != NULL) {
-                    tinypy_internal_vm_deallocate(state->vm, saved_marks, capacity * pattern->groups * 2U * sizeof(*saved_marks));
-                }
-                tinypy_internal_vm_deallocate(state->vm, saved_lastindex, capacity * sizeof(*saved_lastindex));
-                tinypy_internal_vm_deallocate(state->vm, positions, capacity * sizeof(*positions));
-                return TINYPY_TRUE;
-            }
-        }
-    }
-    if (saved_marks != NULL) {
-        tinypy_internal_vm_deallocate(state->vm, saved_marks, capacity * pattern->groups * 2U * sizeof(*saved_marks));
-    }
-    tinypy_internal_vm_deallocate(state->vm, saved_lastindex, capacity * sizeof(*saved_lastindex));
-    tinypy_internal_vm_deallocate(state->vm, positions, capacity * sizeof(*positions));
-    return TINYPY_FALSE;
+    return grown;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_sre_match_code(tinypy_sre_state_t *state, size_t pc, size_t stop, size_t *position, size_t *marks, ptrdiff_t *lastindex) {
+static size_t __tinypy_sre_marks_save(tinypy_sre_state_t *state) {
+    size_t count = state->pattern->groups * 2U;
+    size_t offset = state->mark_top;
+
+    if (count == 0U) {
+        return offset;
+    }
+    if (count > state->mark_capacity - offset) {
+        size_t new_capacity = state->mark_capacity == 0U ? count * 4U : state->mark_capacity * 2U;
+        size_t *grown;
+
+        while (new_capacity - offset < count) {
+            new_capacity *= 2U;
+        }
+        grown = (size_t *)__tinypy_sre_grow(state, state->mark_stack, state->mark_capacity * sizeof(*grown), new_capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return SIZE_MAX;
+        }
+        state->mark_stack = grown;
+        state->mark_capacity = new_capacity;
+    }
+    (void)memcpy(state->mark_stack + offset, state->marks, count * sizeof(*state->marks));
+    state->mark_top = offset + count;
+    return offset;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_sre_marks_restore(tinypy_sre_state_t *state, size_t offset, tinypy_bool_t keep) {
+    size_t count = state->pattern->groups * 2U;
+
+    if (count != 0U) {
+        (void)memcpy(state->marks, state->mark_stack + offset, count * sizeof(*state->marks));
+    }
+    if (keep == 0) {
+        state->mark_top = offset;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_sre_marks_drop(tinypy_sre_state_t *state, size_t offset) {
+    state->mark_top = offset;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Marks above lastmark count as unset, so only the two fields are restored. */
+static void __tinypy_sre_lastmark_restore(tinypy_sre_state_t *state, const tinypy_sre_context_t *context) {
+    state->lastmark = context->lastmark;
+    state->lastindex = context->lastindex;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_sre_context_t *__tinypy_sre_context_push(tinypy_sre_state_t *state, size_t pc) {
+    tinypy_sre_context_t *context;
+
+    if (state->context_count == state->context_capacity) {
+        size_t new_capacity = state->context_capacity == 0U ? 16U : state->context_capacity * 2U;
+        tinypy_sre_context_t *grown;
+
+        if (new_capacity > SIZE_MAX / sizeof(*grown)) {
+            state->memory_failed = TINYPY_TRUE;
+            return NULL;
+        }
+        grown = (tinypy_sre_context_t *)__tinypy_sre_grow(state, state->contexts, state->context_capacity * sizeof(*grown), new_capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return NULL;
+        }
+        state->contexts = grown;
+        state->context_capacity = new_capacity;
+    }
+    context = &state->contexts[state->context_count];
+    state->context_count += 1U;
+    (void)memset(context, 0, sizeof(*context));
+    context->pc = pc;
+    context->position = state->position;
+    context->mark_offset = SIZE_MAX;
+    context->repeat_index = SIZE_MAX;
+    return context;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Counts how often the single-character item at item_pc matches, up to limit. */
+static size_t __tinypy_sre_count(tinypy_sre_state_t *state, size_t item_pc, size_t position, size_t limit) {
+    const uint32_t *code = state->pattern->code;
+    size_t code_size = state->pattern->code_size;
+    size_t start = position;
+    size_t end = state->end;
+
+    if (item_pc >= code_size || position >= end) {
+        return 0U;
+    }
+    if (limit < end - position) {
+        end = position + limit;
+    }
+    switch ((tinypy_sre_opcode_e)code[item_pc]) {
+    case TINYPY_SRE_OP_ANY_ALL:
+        position = end;
+        break;
+    case TINYPY_SRE_OP_ANY:
+        while (position < end && __tinypy_sre_is_linebreak(__tinypy_sre_character_at(state, position)) == 0) {
+            position += 1U;
+        }
+        break;
+    case TINYPY_SRE_OP_LITERAL:
+        if (item_pc + 1U >= code_size) {
+            return 0U;
+        }
+        while (position < end && __tinypy_sre_character_at(state, position) == code[item_pc + 1U]) {
+            position += 1U;
+        }
+        break;
+    case TINYPY_SRE_OP_NOT_LITERAL:
+        if (item_pc + 1U >= code_size) {
+            return 0U;
+        }
+        while (position < end && __tinypy_sre_character_at(state, position) != code[item_pc + 1U]) {
+            position += 1U;
+        }
+        break;
+    case TINYPY_SRE_OP_IN:
+        if (item_pc + 1U >= code_size) {
+            return 0U;
+        }
+        while (position < end && __tinypy_sre_charset(state->pattern, item_pc + 2U, __tinypy_sre_character_at(state, position)) != 0) {
+            position += 1U;
+        }
+        break;
+    default:
+        while (position < end) {
+            size_t next_position;
+
+            if (__tinypy_sre_match_one(state, item_pc, position, &next_position) == 0) {
+                break;
+            }
+            position = next_position;
+        }
+        break;
+    }
+    return position - start;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_sre_match(tinypy_sre_state_t *state, size_t start_pc, size_t *inout_position, size_t *marks, ptrdiff_t *inout_lastindex) {
     tinypy_sre_pattern_object_t *pattern = state->pattern;
+    const uint32_t *code = pattern->code;
+    size_t code_size = pattern->code_size;
+    size_t mark_count = pattern->groups * 2U;
+    tinypy_sre_context_t *ctx;
+    tinypy_sre_repeat_t *rep;
+    tinypy_bool_t ret = TINYPY_FALSE;
+    size_t pc;
+    size_t index;
+    size_t skip;
+    size_t minimum;
+    size_t maximum;
+    size_t count;
+    size_t next_position;
 
-    state->recursion_depth += 1U;
-    while (pc < pattern->code_size) {
-        uint32_t opcode;
-
-        if (pc == stop) {
-            state->recursion_depth -= 1U;
-            return TINYPY_TRUE;
-        }
-        opcode = pattern->code[pc];
-        switch ((tinypy_sre_opcode_e)opcode) {
-        case TINYPY_SRE_OP_SUCCESS:
-            state->recursion_depth -= 1U;
-            return TINYPY_TRUE;
-        case TINYPY_SRE_OP_FAILURE:
-            state->recursion_depth -= 1U;
-            return TINYPY_FALSE;
-        case TINYPY_SRE_OP_INFO:
-        case TINYPY_SRE_OP_JUMP:
-            if (pc + 1U >= pattern->code_size || pattern->code[pc + 1U] > SIZE_MAX - pc - 1U) {
-                goto invalid;
-            }
-            pc += 1U + pattern->code[pc + 1U];
-            break;
-        case TINYPY_SRE_OP_LITERAL:
-        case TINYPY_SRE_OP_LITERAL_IGNORE:
-        case TINYPY_SRE_OP_NOT_LITERAL:
-        case TINYPY_SRE_OP_NOT_LITERAL_IGNORE:
-        case TINYPY_SRE_OP_ANY:
-        case TINYPY_SRE_OP_ANY_ALL:
-        case TINYPY_SRE_OP_CATEGORY: {
-            size_t next_position;
-
-            if (__tinypy_sre_match_one(state, pc, *position, &next_position) == 0) {
-                state->recursion_depth -= 1U;
-                return TINYPY_FALSE;
-            }
-            *position = next_position;
-            pc += opcode == TINYPY_SRE_OP_ANY || opcode == TINYPY_SRE_OP_ANY_ALL ? 1U : 2U;
-        }
-        break;
-        case TINYPY_SRE_OP_IN:
-        case TINYPY_SRE_OP_IN_IGNORE: {
-            size_t next_position;
-            size_t skip;
-
-            if (pc + 1U >= pattern->code_size || __tinypy_sre_match_one(state, pc, *position, &next_position) == 0) {
-                state->recursion_depth -= 1U;
-                return TINYPY_FALSE;
-            }
-            skip = pattern->code[pc + 1U];
-            if (skip > SIZE_MAX - pc - 1U) {
-                goto invalid;
-            }
-            *position = next_position;
-            pc += 1U + skip;
-        }
-        break;
-        case TINYPY_SRE_OP_MARK: {
-            size_t mark;
-
-            if (pc + 1U >= pattern->code_size) {
-                goto invalid;
-            }
-            mark = pattern->code[pc + 1U];
-            if (mark >= pattern->groups * 2U) {
-                goto invalid;
-            }
-            marks[mark] = *position;
-            if ((mark & 1U) != 0U) {
-                *lastindex = (ptrdiff_t)(mark / 2U + 1U);
-            }
-            pc += 2U;
-        }
-        break;
-        case TINYPY_SRE_OP_AT:
-            if (pc + 1U >= pattern->code_size) {
-                goto invalid;
-            }
-            if (__tinypy_sre_at(state, *position, pattern->code[pc + 1U]) == 0) {
-                state->recursion_depth -= 1U;
-                return TINYPY_FALSE;
-            }
-            pc += 2U;
-            break;
-        case TINYPY_SRE_OP_BRANCH: {
-            size_t branch = pc + 1U;
-
-            while (branch < pattern->code_size && pattern->code[branch] != 0U) {
-                size_t trial_position = *position;
-                size_t trial_marks[TINYPY_SRE_MAX_MARKS];
-                ptrdiff_t trial_lastindex = *lastindex;
-                size_t skip = pattern->code[branch];
-
-                if (skip > SIZE_MAX - branch) {
-                    goto invalid;
-                }
-                if (pattern->groups != 0U) {
-                    __tinypy_sre_copy_marks(trial_marks, marks, pattern->groups * 2U);
-                }
-                if (__tinypy_sre_match_code(state, branch + 1U, stop, &trial_position, trial_marks, &trial_lastindex) != 0) {
-                    *position = trial_position;
-                    *lastindex = trial_lastindex;
-                    if (pattern->groups != 0U) {
-                        __tinypy_sre_copy_marks(marks, trial_marks, pattern->groups * 2U);
-                    }
-                    state->recursion_depth -= 1U;
-                    return TINYPY_TRUE;
-                }
-                branch += skip;
-            }
-            state->recursion_depth -= 1U;
-            return TINYPY_FALSE;
-        }
-        case TINYPY_SRE_OP_REPEAT_ONE:
-        case TINYPY_SRE_OP_MIN_REPEAT_ONE: {
-            size_t skip;
-            size_t minimum;
-            size_t maximum;
-            size_t count = 0U;
-            size_t cursor = *position;
-            size_t tail;
-            size_t attempts;
-            size_t index;
-
-            if (pc + 3U >= pattern->code_size) {
-                goto invalid;
-            }
-            skip = pattern->code[pc + 1U];
-            minimum = pattern->code[pc + 2U];
-            maximum = pattern->code[pc + 3U] == TINYPY_SRE_MAXREPEAT ? state->end - cursor : pattern->code[pc + 3U];
-            if (skip > SIZE_MAX - pc - 1U) {
-                goto invalid;
-            }
-            tail = pc + 1U + skip;
-            while (count < maximum) {
-                size_t next_position;
-
-                if (__tinypy_sre_match_one(state, pc + 4U, cursor, &next_position) == 0) {
-                    break;
-                }
-                cursor = next_position;
-                count += 1U;
-            }
-            if (count < minimum) {
-                state->recursion_depth -= 1U;
-                return TINYPY_FALSE;
-            }
-            attempts = count - minimum + 1U;
-            for (index = 0U; index < attempts; ++index) {
-                size_t selected = opcode == TINYPY_SRE_OP_REPEAT_ONE ? count - index : minimum + index;
-                size_t trial_position = *position + selected;
-                size_t trial_marks[TINYPY_SRE_MAX_MARKS];
-                ptrdiff_t trial_lastindex = *lastindex;
-
-                if (pattern->groups != 0U) {
-                    __tinypy_sre_copy_marks(trial_marks, marks, pattern->groups * 2U);
-                }
-                if (__tinypy_sre_match_code(state, tail, stop, &trial_position, trial_marks, &trial_lastindex) != 0) {
-                    *position = trial_position;
-                    *lastindex = trial_lastindex;
-                    if (pattern->groups != 0U) {
-                        __tinypy_sre_copy_marks(marks, trial_marks, pattern->groups * 2U);
-                    }
-                    state->recursion_depth -= 1U;
-                    return TINYPY_TRUE;
-                }
-            }
-            state->recursion_depth -= 1U;
-            return TINYPY_FALSE;
-        }
-        case TINYPY_SRE_OP_REPEAT: {
-            tinypy_bool_t matched;
-
-            if (pc + 3U >= pattern->code_size) {
-                goto invalid;
-            }
-            matched = __tinypy_sre_match_repeat(state, pc, stop, position, marks, lastindex);
-            state->recursion_depth -= 1U;
-            return matched;
-        }
-        case TINYPY_SRE_OP_GROUPREF:
-        case TINYPY_SRE_OP_GROUPREF_IGNORE: {
-            size_t group;
-            size_t mark;
-            size_t source;
-            size_t source_end;
-
-            if (pc + 1U >= pattern->code_size) {
-                goto invalid;
-            }
-            group = pattern->code[pc + 1U];
-            mark = group * 2U;
-            if (mark + 1U >= pattern->groups * 2U || marks[mark] == SIZE_MAX || marks[mark + 1U] == SIZE_MAX) {
-                state->recursion_depth -= 1U;
-                return TINYPY_FALSE;
-            }
-            source = marks[mark];
-            source_end = marks[mark + 1U];
-            while (source < source_end) {
-                uint32_t left;
-                uint32_t right;
-
-                if (*position >= state->end) {
-                    state->recursion_depth -= 1U;
-                    return TINYPY_FALSE;
-                }
-                left = __tinypy_sre_character_at(state, source++);
-                right = __tinypy_sre_character_at(state, *position);
-                if (opcode == TINYPY_SRE_OP_GROUPREF_IGNORE) {
-                    left = __tinypy_sre_lower(left, pattern->flags);
-                    right = __tinypy_sre_lower(right, pattern->flags);
-                }
-                if (left != right) {
-                    state->recursion_depth -= 1U;
-                    return TINYPY_FALSE;
-                }
-                *position += 1U;
-            }
-            pc += 2U;
-        }
-        break;
-        case TINYPY_SRE_OP_GROUPREF_EXISTS: {
-            size_t group;
-            size_t mark;
-
-            if (pc + 2U >= pattern->code_size) {
-                goto invalid;
-            }
-            group = pattern->code[pc + 1U];
-            mark = group * 2U;
-            if (mark + 1U >= pattern->groups * 2U || marks[mark] == SIZE_MAX || marks[mark + 1U] == SIZE_MAX) {
-                pc += 1U + pattern->code[pc + 2U];
-            }
-            else {
-                pc += 3U;
-            }
-        }
-        break;
-        case TINYPY_SRE_OP_ASSERT:
-        case TINYPY_SRE_OP_ASSERT_NOT: {
-            size_t skip;
-            size_t back;
-            size_t trial_position;
-            size_t trial_marks[TINYPY_SRE_MAX_MARKS];
-            ptrdiff_t trial_lastindex = *lastindex;
-            tinypy_bool_t matched;
-
-            if (pc + 2U >= pattern->code_size) {
-                goto invalid;
-            }
-            skip = pattern->code[pc + 1U];
-            back = pattern->code[pc + 2U];
-            if (back > *position - state->beginning || skip > SIZE_MAX - pc - 1U) {
-                matched = INT32_C(0);
-            }
-            else {
-                trial_position = *position - back;
-                if (pattern->groups != 0U) {
-                    __tinypy_sre_copy_marks(trial_marks, marks, pattern->groups * 2U);
-                }
-                matched = __tinypy_sre_match_code(state, pc + 3U, pc + 1U + skip, &trial_position, trial_marks, &trial_lastindex);
-            }
-            if ((opcode == TINYPY_SRE_OP_ASSERT && matched == 0) || (opcode == TINYPY_SRE_OP_ASSERT_NOT && matched != 0)) {
-                state->recursion_depth -= 1U;
-                return TINYPY_FALSE;
-            }
-            if (opcode == TINYPY_SRE_OP_ASSERT && matched != 0 && pattern->groups != 0U) {
-                __tinypy_sre_copy_marks(marks, trial_marks, pattern->groups * 2U);
-                *lastindex = trial_lastindex;
-            }
-            pc += 1U + skip;
-        }
-        break;
-        default:
-            goto invalid;
+    state->marks = marks;
+    state->lastindex = *inout_lastindex;
+    state->lastmark = -1;
+    for (index = 0U; index < mark_count; ++index) {
+        if (marks[index] != SIZE_MAX) {
+            state->lastmark = (ptrdiff_t)index;
         }
     }
+    state->position = *inout_position;
+    state->context_count = 0U;
+    state->repeat = SIZE_MAX;
+    state->mark_top = 0U;
+    if (__tinypy_sre_context_push(state, start_pc) == NULL) {
+        return TINYPY_FALSE;
+    }
+
+entrance:
+    ctx = &state->contexts[state->context_count - 1U];
+    ctx->position = state->position;
+    pc = ctx->pc;
+    if (pc < code_size && code[pc] == TINYPY_SRE_OP_INFO) {
+        if (pc + 3U >= code_size || code[pc + 1U] > code_size - pc - 1U) {
+            goto invalid;
+        }
+        if (code[pc + 3U] != 0U && code[pc + 3U] > state->end - ctx->position) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        pc += 1U + code[pc + 1U];
+    }
+
+dispatch:
+    if (pc >= code_size) {
+        goto invalid;
+    }
+    switch ((tinypy_sre_opcode_e)code[pc]) {
+    case TINYPY_SRE_OP_SUCCESS:
+        state->position = ctx->position;
+        ret = TINYPY_TRUE;
+        goto exit;
+    case TINYPY_SRE_OP_FAILURE:
+        ret = TINYPY_FALSE;
+        goto exit;
+    case TINYPY_SRE_OP_INFO:
+    case TINYPY_SRE_OP_JUMP:
+        if (pc + 1U >= code_size || code[pc + 1U] > code_size - pc - 1U) {
+            goto invalid;
+        }
+        pc += 1U + code[pc + 1U];
+        goto dispatch;
+    case TINYPY_SRE_OP_MARK: {
+        size_t mark;
+
+        if (pc + 1U >= code_size) {
+            goto invalid;
+        }
+        mark = code[pc + 1U];
+        if (mark >= mark_count) {
+            goto invalid;
+        }
+        if ((mark & 1U) != 0U) {
+            state->lastindex = (ptrdiff_t)(mark / 2U + 1U);
+        }
+        if ((ptrdiff_t)mark > state->lastmark) {
+            for (index = (size_t)(state->lastmark + 1); index < mark; ++index) {
+                marks[index] = SIZE_MAX;
+            }
+            state->lastmark = (ptrdiff_t)mark;
+        }
+        marks[mark] = ctx->position;
+        pc += 2U;
+        goto dispatch;
+    }
+    case TINYPY_SRE_OP_LITERAL:
+    case TINYPY_SRE_OP_LITERAL_IGNORE:
+    case TINYPY_SRE_OP_NOT_LITERAL:
+    case TINYPY_SRE_OP_NOT_LITERAL_IGNORE:
+    case TINYPY_SRE_OP_ANY:
+    case TINYPY_SRE_OP_ANY_ALL:
+    case TINYPY_SRE_OP_CATEGORY:
+        if (__tinypy_sre_match_one(state, pc, ctx->position, &next_position) == 0) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        ctx->position = next_position;
+        pc += code[pc] == TINYPY_SRE_OP_ANY || code[pc] == TINYPY_SRE_OP_ANY_ALL ? 1U : 2U;
+        goto dispatch;
+    case TINYPY_SRE_OP_IN:
+    case TINYPY_SRE_OP_IN_IGNORE:
+        if (pc + 1U >= code_size || code[pc + 1U] > code_size - pc - 1U) {
+            goto invalid;
+        }
+        if (__tinypy_sre_match_one(state, pc, ctx->position, &next_position) == 0) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        ctx->position = next_position;
+        pc += 1U + code[pc + 1U];
+        goto dispatch;
+    case TINYPY_SRE_OP_AT:
+        if (pc + 1U >= code_size) {
+            goto invalid;
+        }
+        if (__tinypy_sre_at(state, ctx->position, code[pc + 1U]) == 0) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        pc += 2U;
+        goto dispatch;
+    case TINYPY_SRE_OP_GROUPREF:
+    case TINYPY_SRE_OP_GROUPREF_IGNORE: {
+        size_t mark;
+        size_t source;
+        size_t source_end;
+
+        if (pc + 1U >= code_size) {
+            goto invalid;
+        }
+        mark = code[pc + 1U] * 2U;
+        if (mark + 1U >= mark_count || (ptrdiff_t)(mark + 1U) > state->lastmark || marks[mark] == SIZE_MAX || marks[mark + 1U] == SIZE_MAX) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        source = marks[mark];
+        source_end = marks[mark + 1U];
+        if (source_end < source) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        while (source < source_end) {
+            uint32_t left;
+            uint32_t right;
+
+            if (ctx->position >= state->end) {
+                ret = TINYPY_FALSE;
+                goto exit;
+            }
+            left = __tinypy_sre_character_at(state, source);
+            right = __tinypy_sre_character_at(state, ctx->position);
+            if (code[pc] == TINYPY_SRE_OP_GROUPREF_IGNORE) {
+                left = __tinypy_sre_lower(left, pattern->flags);
+                right = __tinypy_sre_lower(right, pattern->flags);
+            }
+            if (left != right) {
+                ret = TINYPY_FALSE;
+                goto exit;
+            }
+            source += 1U;
+            ctx->position += 1U;
+        }
+        pc += 2U;
+        goto dispatch;
+    }
+    case TINYPY_SRE_OP_GROUPREF_EXISTS: {
+        size_t mark;
+
+        if (pc + 2U >= code_size) {
+            goto invalid;
+        }
+        mark = code[pc + 1U] * 2U;
+        if (mark + 1U >= mark_count || (ptrdiff_t)(mark + 1U) > state->lastmark || marks[mark] == SIZE_MAX || marks[mark + 1U] == SIZE_MAX || marks[mark + 1U] < marks[mark]) {
+            if (code[pc + 2U] > code_size - pc - 1U) {
+                goto invalid;
+            }
+            pc += 1U + code[pc + 2U];
+        }
+        else {
+            pc += 3U;
+        }
+        goto dispatch;
+    }
+    case TINYPY_SRE_OP_ASSERT:
+    case TINYPY_SRE_OP_ASSERT_NOT: {
+        size_t back;
+
+        if (pc + 2U >= code_size || code[pc + 1U] > code_size - pc - 1U) {
+            goto invalid;
+        }
+        back = code[pc + 2U];
+        if (back > ctx->position - state->beginning) {
+            if (code[pc] == TINYPY_SRE_OP_ASSERT) {
+                ret = TINYPY_FALSE;
+                goto exit;
+            }
+            pc += 1U + code[pc + 1U];
+            goto dispatch;
+        }
+        state->position = ctx->position - back;
+        ctx->pc = pc;
+        ctx->jump = code[pc] == TINYPY_SRE_OP_ASSERT ? TINYPY_SRE_JUMP_ASSERT : TINYPY_SRE_JUMP_ASSERT_NOT;
+        if (__tinypy_sre_context_push(state, pc + 3U) == NULL) {
+            goto failure;
+        }
+        goto entrance;
+    }
+    case TINYPY_SRE_OP_BRANCH:
+        ctx->lastmark = state->lastmark;
+        ctx->lastindex = state->lastindex;
+        ctx->repeat_index = state->repeat;
+        if (state->repeat != SIZE_MAX) {
+            ctx->mark_offset = __tinypy_sre_marks_save(state);
+            if (ctx->mark_offset == SIZE_MAX) {
+                goto failure;
+            }
+        }
+        ctx->pc = pc + 1U;
+        goto branch_next;
+    case TINYPY_SRE_OP_REPEAT_ONE:
+    case TINYPY_SRE_OP_MIN_REPEAT_ONE:
+        if (pc + 3U >= code_size || code[pc + 1U] >= code_size - pc - 1U) {
+            goto invalid;
+        }
+        skip = code[pc + 1U];
+        minimum = code[pc + 2U];
+        maximum = code[pc + 3U] == TINYPY_SRE_MAXREPEAT ? SIZE_MAX : code[pc + 3U];
+        if (minimum > state->end - ctx->position) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        count = __tinypy_sre_count(state, pc + 4U, ctx->position, code[pc] == TINYPY_SRE_OP_REPEAT_ONE ? maximum : minimum);
+        if (count < minimum) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        ctx->position += count;
+        if (code[pc + 1U + skip] == TINYPY_SRE_OP_SUCCESS) {
+            state->position = ctx->position;
+            ret = TINYPY_TRUE;
+            goto exit;
+        }
+        ctx->lastmark = state->lastmark;
+        ctx->lastindex = state->lastindex;
+        ctx->count = count;
+        ctx->pc = pc;
+        if (code[pc] == TINYPY_SRE_OP_REPEAT_ONE) {
+            ctx->literal_tail = code[pc + 1U + skip] == TINYPY_SRE_OP_LITERAL && pc + 2U + skip < code_size ? TINYPY_TRUE : TINYPY_FALSE;
+            ctx->literal = ctx->literal_tail != 0 ? code[pc + 2U + skip] : 0U;
+            goto repeat_one_next;
+        }
+        goto min_repeat_one_next;
+    case TINYPY_SRE_OP_REPEAT:
+        if (pc + 3U >= code_size || code[pc + 1U] > code_size - pc - 1U) {
+            goto invalid;
+        }
+        ctx->repeat.previous = state->repeat;
+        ctx->repeat.pc = pc;
+        ctx->repeat.count = SIZE_MAX;
+        ctx->repeat.last_position = SIZE_MAX;
+        state->repeat = state->context_count - 1U;
+        state->position = ctx->position;
+        ctx->pc = pc;
+        ctx->jump = TINYPY_SRE_JUMP_REPEAT;
+        if (__tinypy_sre_context_push(state, pc + 1U + code[pc + 1U]) == NULL) {
+            goto failure;
+        }
+        goto entrance;
+    case TINYPY_SRE_OP_MAX_UNTIL:
+        if (state->repeat == SIZE_MAX) {
+            goto invalid;
+        }
+        rep = &state->contexts[state->repeat].repeat;
+        if (rep->pc + 3U >= code_size) {
+            goto invalid;
+        }
+        ctx->repeat_index = state->repeat;
+        ctx->pc = pc;
+        minimum = code[rep->pc + 2U];
+        maximum = code[rep->pc + 3U] == TINYPY_SRE_MAXREPEAT ? SIZE_MAX : code[rep->pc + 3U];
+        count = rep->count + 1U;
+        ctx->count = count;
+        if (count < minimum) {
+            rep->count = count;
+            state->position = ctx->position;
+            ctx->jump = TINYPY_SRE_JUMP_MAX_UNTIL_1;
+            if (__tinypy_sre_context_push(state, rep->pc + 4U) == NULL) {
+                goto failure;
+            }
+            goto entrance;
+        }
+        if (count < maximum && ctx->position != rep->last_position) {
+            rep->count = count;
+            ctx->lastmark = state->lastmark;
+            ctx->lastindex = state->lastindex;
+            ctx->mark_offset = __tinypy_sre_marks_save(state);
+            if (ctx->mark_offset == SIZE_MAX) {
+                goto failure;
+            }
+            ctx->saved_last_position = rep->last_position;
+            rep->last_position = ctx->position;
+            state->position = ctx->position;
+            ctx->jump = TINYPY_SRE_JUMP_MAX_UNTIL_2;
+            if (__tinypy_sre_context_push(state, rep->pc + 4U) == NULL) {
+                goto failure;
+            }
+            goto entrance;
+        }
+        goto max_until_tail;
+    case TINYPY_SRE_OP_MIN_UNTIL:
+        if (state->repeat == SIZE_MAX) {
+            goto invalid;
+        }
+        rep = &state->contexts[state->repeat].repeat;
+        if (rep->pc + 3U >= code_size) {
+            goto invalid;
+        }
+        ctx->repeat_index = state->repeat;
+        ctx->pc = pc;
+        minimum = code[rep->pc + 2U];
+        count = rep->count + 1U;
+        ctx->count = count;
+        if (count < minimum) {
+            rep->count = count;
+            state->position = ctx->position;
+            ctx->jump = TINYPY_SRE_JUMP_MIN_UNTIL_1;
+            if (__tinypy_sre_context_push(state, rep->pc + 4U) == NULL) {
+                goto failure;
+            }
+            goto entrance;
+        }
+        ctx->lastmark = state->lastmark;
+        ctx->lastindex = state->lastindex;
+        ctx->mark_offset = __tinypy_sre_marks_save(state);
+        if (ctx->mark_offset == SIZE_MAX) {
+            goto failure;
+        }
+        state->repeat = rep->previous;
+        state->position = ctx->position;
+        ctx->jump = TINYPY_SRE_JUMP_MIN_UNTIL_2;
+        if (__tinypy_sre_context_push(state, pc + 1U) == NULL) {
+            goto failure;
+        }
+        goto entrance;
+    default:
+        goto invalid;
+    }
+
+branch_next:
+    /* ctx->pc is the header of the alternative to try; a zero header ends
+       the list. */
+    if (ctx->pc >= code_size) {
+        goto invalid;
+    }
+    if (code[ctx->pc] == 0U) {
+        if (ctx->mark_offset != SIZE_MAX) {
+            __tinypy_sre_marks_drop(state, ctx->mark_offset);
+        }
+        ret = TINYPY_FALSE;
+        goto exit;
+    }
+    if (code[ctx->pc] > code_size - ctx->pc) {
+        goto invalid;
+    }
+    if (ctx->pc + 2U < code_size && (code[ctx->pc + 1U] == TINYPY_SRE_OP_LITERAL || code[ctx->pc + 1U] == TINYPY_SRE_OP_IN)) {
+        tinypy_bool_t possible = TINYPY_FALSE;
+
+        if (ctx->position < state->end) {
+            uint32_t character = __tinypy_sre_character_at(state, ctx->position);
+
+            if (code[ctx->pc + 1U] == TINYPY_SRE_OP_LITERAL) {
+                possible = character == code[ctx->pc + 2U] ? TINYPY_TRUE : TINYPY_FALSE;
+            }
+            else {
+                possible = __tinypy_sre_charset(pattern, ctx->pc + 3U, character);
+            }
+        }
+        if (possible == 0) {
+            ctx->pc += code[ctx->pc];
+            goto branch_next;
+        }
+    }
+    state->position = ctx->position;
+    ctx->jump = TINYPY_SRE_JUMP_BRANCH;
+    if (__tinypy_sre_context_push(state, ctx->pc + 1U) == NULL) {
+        goto failure;
+    }
+    goto entrance;
+
+repeat_one_next:
+    minimum = code[ctx->pc + 2U];
+    if (ctx->literal_tail != 0) {
+        while (ctx->count >= minimum && (ctx->position >= state->end || __tinypy_sre_character_at(state, ctx->position) != ctx->literal)) {
+            if (ctx->count == 0U) {
+                break;
+            }
+            ctx->position -= 1U;
+            ctx->count -= 1U;
+        }
+        if (ctx->count < minimum || ctx->position >= state->end || __tinypy_sre_character_at(state, ctx->position) != ctx->literal) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+    }
+    state->position = ctx->position;
+    ctx->jump = TINYPY_SRE_JUMP_REPEAT_ONE;
+    if (__tinypy_sre_context_push(state, ctx->pc + 1U + code[ctx->pc + 1U]) == NULL) {
+        goto failure;
+    }
+    goto entrance;
+
+min_repeat_one_next:
+    state->position = ctx->position;
+    ctx->jump = TINYPY_SRE_JUMP_MIN_REPEAT_ONE;
+    if (__tinypy_sre_context_push(state, ctx->pc + 1U + code[ctx->pc + 1U]) == NULL) {
+        goto failure;
+    }
+    goto entrance;
+
+max_until_tail:
+    rep = &state->contexts[ctx->repeat_index].repeat;
+    state->repeat = rep->previous;
+    state->position = ctx->position;
+    ctx->jump = TINYPY_SRE_JUMP_MAX_UNTIL_3;
+    if (__tinypy_sre_context_push(state, ctx->pc + 1U) == NULL) {
+        goto failure;
+    }
+    goto entrance;
+
 invalid:
-    state->invalid_code = INT32_C(1);
-    state->recursion_depth -= 1U;
-    return TINYPY_FALSE;
+    state->invalid_code = TINYPY_TRUE;
+failure:
+    ret = TINYPY_FALSE;
+
+exit:
+    state->context_count -= 1U;
+    if (state->context_count == 0U) {
+        goto finished;
+    }
+    ctx = &state->contexts[state->context_count - 1U];
+    if (state->invalid_code != 0 || state->memory_failed != 0) {
+        ret = TINYPY_FALSE;
+        goto exit;
+    }
+    switch ((tinypy_sre_jump_e)ctx->jump) {
+    case TINYPY_SRE_JUMP_BRANCH:
+        if (ret != 0) {
+            if (ctx->mark_offset != SIZE_MAX) {
+                __tinypy_sre_marks_drop(state, ctx->mark_offset);
+            }
+            goto exit;
+        }
+        if (ctx->mark_offset != SIZE_MAX) {
+            __tinypy_sre_marks_restore(state, ctx->mark_offset, TINYPY_TRUE);
+        }
+        __tinypy_sre_lastmark_restore(state, ctx);
+        ctx->pc += code[ctx->pc];
+        goto branch_next;
+    case TINYPY_SRE_JUMP_REPEAT_ONE:
+        if (ret != 0) {
+            goto exit;
+        }
+        __tinypy_sre_lastmark_restore(state, ctx);
+        if (ctx->count <= code[ctx->pc + 2U]) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        ctx->position -= 1U;
+        ctx->count -= 1U;
+        goto repeat_one_next;
+    case TINYPY_SRE_JUMP_MIN_REPEAT_ONE:
+        if (ret != 0) {
+            goto exit;
+        }
+        maximum = code[ctx->pc + 3U] == TINYPY_SRE_MAXREPEAT ? SIZE_MAX : code[ctx->pc + 3U];
+        if (ctx->count >= maximum || __tinypy_sre_match_one(state, ctx->pc + 4U, ctx->position, &next_position) == 0) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        ctx->position = next_position;
+        ctx->count += 1U;
+        __tinypy_sre_lastmark_restore(state, ctx);
+        goto min_repeat_one_next;
+    case TINYPY_SRE_JUMP_REPEAT:
+        state->repeat = ctx->repeat.previous;
+        goto exit;
+    case TINYPY_SRE_JUMP_MAX_UNTIL_1:
+        if (ret != 0) {
+            goto exit;
+        }
+        rep = &state->contexts[ctx->repeat_index].repeat;
+        rep->count = ctx->count - 1U;
+        ret = TINYPY_FALSE;
+        goto exit;
+    case TINYPY_SRE_JUMP_MAX_UNTIL_2:
+        rep = &state->contexts[ctx->repeat_index].repeat;
+        rep->last_position = ctx->saved_last_position;
+        if (ret != 0) {
+            __tinypy_sre_marks_drop(state, ctx->mark_offset);
+            goto exit;
+        }
+        __tinypy_sre_marks_restore(state, ctx->mark_offset, TINYPY_FALSE);
+        __tinypy_sre_lastmark_restore(state, ctx);
+        rep->count = ctx->count - 1U;
+        goto max_until_tail;
+    case TINYPY_SRE_JUMP_MAX_UNTIL_3:
+        if (ret != 0) {
+            goto exit;
+        }
+        state->repeat = ctx->repeat_index;
+        ret = TINYPY_FALSE;
+        goto exit;
+    case TINYPY_SRE_JUMP_MIN_UNTIL_1:
+        if (ret != 0) {
+            goto exit;
+        }
+        rep = &state->contexts[ctx->repeat_index].repeat;
+        rep->count = ctx->count - 1U;
+        ret = TINYPY_FALSE;
+        goto exit;
+    case TINYPY_SRE_JUMP_MIN_UNTIL_2:
+        if (ret != 0) {
+            __tinypy_sre_marks_drop(state, ctx->mark_offset);
+            goto exit;
+        }
+        rep = &state->contexts[ctx->repeat_index].repeat;
+        __tinypy_sre_marks_restore(state, ctx->mark_offset, TINYPY_FALSE);
+        state->repeat = ctx->repeat_index;
+        __tinypy_sre_lastmark_restore(state, ctx);
+        maximum = code[rep->pc + 3U] == TINYPY_SRE_MAXREPEAT ? SIZE_MAX : code[rep->pc + 3U];
+        if (ctx->count >= maximum || ctx->position == rep->last_position) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        rep->count = ctx->count;
+        ctx->saved_last_position = rep->last_position;
+        rep->last_position = ctx->position;
+        state->position = ctx->position;
+        ctx->jump = TINYPY_SRE_JUMP_MIN_UNTIL_3;
+        if (__tinypy_sre_context_push(state, rep->pc + 4U) == NULL) {
+            goto failure;
+        }
+        goto entrance;
+    case TINYPY_SRE_JUMP_MIN_UNTIL_3:
+        rep = &state->contexts[ctx->repeat_index].repeat;
+        rep->last_position = ctx->saved_last_position;
+        if (ret != 0) {
+            goto exit;
+        }
+        rep->count = ctx->count - 1U;
+        ret = TINYPY_FALSE;
+        goto exit;
+    case TINYPY_SRE_JUMP_ASSERT:
+        if (ret == 0) {
+            goto exit;
+        }
+        pc = ctx->pc + 1U + code[ctx->pc + 1U];
+        goto dispatch;
+    case TINYPY_SRE_JUMP_ASSERT_NOT:
+        if (ret != 0) {
+            ret = TINYPY_FALSE;
+            goto exit;
+        }
+        pc = ctx->pc + 1U + code[ctx->pc + 1U];
+        goto dispatch;
+    default:
+        goto invalid;
+    }
+
+finished:
+    if (ret != 0) {
+        *inout_position = state->position;
+        *inout_lastindex = state->lastindex;
+        for (index = (size_t)(state->lastmark + 1); index < mark_count; ++index) {
+            marks[index] = SIZE_MAX;
+        }
+    }
+    return ret;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_sre_integer(tinypy_value_t *value, int64_t *out_value) {
@@ -808,11 +1233,15 @@ void tinypy_internal_sre_pattern_release_references(tinypy_value_t *value, tinyp
     visit(pattern->pattern, user_data);
     visit(pattern->groupindex, user_data);
     visit(pattern->indexgroup, user_data);
+    if (pattern->cache_string != NULL) {
+        visit(pattern->cache_string, user_data);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_sre_pattern_destroy(tinypy_value_t *value) {
     tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(value);
 
+    __tinypy_sre_pattern_cache_release(pattern);
     if (pattern->code != NULL) {
         tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), pattern->code, pattern->code_size * sizeof(*pattern->code));
     }
@@ -859,11 +1288,27 @@ static tinypy_bool_t __tinypy_sre_state_initialize(tinypy_sre_state_t *state, ti
     (void)memset(state, 0, sizeof(*state));
     state->vm = vm;
     state->pattern = pattern;
+    state->string = string;
     state->bytes = TINYPY_TEXT_BYTES(string);
     state->size = __tinypy_sre_text_size(string);
     state->beginning = 0U;
     state->end = endpos;
+    /* The matcher stacks and a decoded subject are handed over from the
+       pattern's cache and returned on finalisation. */
+    state->contexts = (tinypy_sre_context_t *)pattern->cache_contexts;
+    state->context_capacity = pattern->cache_contexts_size / sizeof(*state->contexts);
+    pattern->cache_contexts = NULL;
+    pattern->cache_contexts_size = 0U;
+    state->mark_stack = pattern->cache_marks;
+    state->mark_capacity = pattern->cache_mark_capacity;
+    pattern->cache_marks = NULL;
+    pattern->cache_mark_capacity = 0U;
     if (TINYPY_VALUE_KIND(string) != TINYPY_VALUE_UNICODE || TINYPY_TEXT_BYTE_SIZE(string) == state->size) {
+        return TINYPY_TRUE;
+    }
+    if (pattern->cache_string == string && pattern->cache_characters != NULL) {
+        state->characters = pattern->cache_characters;
+        pattern->cache_characters = NULL;
         return TINYPY_TRUE;
     }
     if (state->size > SIZE_MAX / sizeof(*state->characters)) {
@@ -893,9 +1338,66 @@ static tinypy_bool_t __tinypy_sre_state_initialize(tinypy_sre_state_t *state, ti
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_sre_state_finalize(tinypy_sre_state_t *state) {
+    tinypy_sre_pattern_object_t *pattern = state->pattern;
+
     if (state->characters != NULL) {
-        tinypy_internal_vm_deallocate(state->vm, state->characters, state->size * sizeof(*state->characters));
+        if (pattern->cache_characters != NULL) {
+            tinypy_internal_vm_deallocate(state->vm, pattern->cache_characters, pattern->cache_size * sizeof(*pattern->cache_characters));
+        }
+        if (pattern->cache_string != state->string) {
+            if (pattern->cache_string != NULL) {
+                TINYPY_DECREF(pattern->cache_string);
+            }
+            pattern->cache_string = state->string;
+            TINYPY_INCREF(state->string);
+        }
+        pattern->cache_characters = state->characters;
+        pattern->cache_size = state->size;
     }
+    if (state->mark_stack != NULL) {
+        if (pattern->cache_marks != NULL) {
+            tinypy_internal_vm_deallocate(state->vm, pattern->cache_marks, pattern->cache_mark_capacity * sizeof(*pattern->cache_marks));
+        }
+        pattern->cache_marks = state->mark_stack;
+        pattern->cache_mark_capacity = state->mark_capacity;
+    }
+    if (state->contexts != NULL) {
+        if (pattern->cache_contexts != NULL) {
+            tinypy_internal_vm_deallocate(state->vm, pattern->cache_contexts, pattern->cache_contexts_size);
+        }
+        pattern->cache_contexts = state->contexts;
+        pattern->cache_contexts_size = state->context_capacity * sizeof(*state->contexts);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_sre_pattern_cache_release(tinypy_sre_pattern_object_t *pattern) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(&pattern->base);
+
+    if (pattern->cache_characters != NULL) {
+        tinypy_internal_vm_deallocate(vm, pattern->cache_characters, pattern->cache_size * sizeof(*pattern->cache_characters));
+        pattern->cache_characters = NULL;
+    }
+    if (pattern->cache_marks != NULL) {
+        tinypy_internal_vm_deallocate(vm, pattern->cache_marks, pattern->cache_mark_capacity * sizeof(*pattern->cache_marks));
+        pattern->cache_marks = NULL;
+    }
+    if (pattern->cache_contexts != NULL) {
+        tinypy_internal_vm_deallocate(vm, pattern->cache_contexts, pattern->cache_contexts_size);
+        pattern->cache_contexts = NULL;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* Reports a matcher failure that is an error rather than a non-match. */
+static tinypy_bool_t __tinypy_sre_state_check(tinypy_sre_state_t *state, tinypy_error_t **out_error) {
+    if (state->invalid_code != 0) {
+        tinypy_internal_make_vm_error(state->vm, TINYPY_ERROR_RUNTIME, "invalid SRE bytecode", out_error);
+        return TINYPY_FALSE;
+    }
+    if (state->memory_failed != 0) {
+        tinypy_internal_make_vm_error(state->vm, TINYPY_ERROR_MEMORY, "memory allocation failed", out_error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_sre_execute(tinypy_sre_pattern_object_t *pattern, tinypy_value_t *string, size_t pos, size_t endpos, int32_t search, tinypy_error_t **out_error) {
@@ -922,22 +1424,57 @@ static tinypy_value_t *__tinypy_sre_execute(tinypy_sre_pattern_object_t *pattern
     if (__tinypy_sre_state_initialize(&state, pattern, string, endpos, out_error) == 0) {
         return NULL;
     }
+    /* The INFO block names a literal prefix or a leading character class;
+       sre_search skips candidate positions that cannot start a match. The
+       compiler only records them for patterns that never match empty. */
+    uint32_t prefix_character = 0U;
+    size_t charset_pc = 0U;
+    tinypy_bool_t has_prefix = TINYPY_FALSE;
+
+    if (search != 0 && pattern->code_size > 7U && pattern->code[0] == TINYPY_SRE_OP_INFO && pattern->code[1] <= pattern->code_size - 1U) {
+        uint32_t info_flags = pattern->code[2];
+
+        if ((info_flags & 1U) != 0U && pattern->code[5] != 0U && 7U < pattern->code_size) {
+            has_prefix = TINYPY_TRUE;
+            prefix_character = pattern->code[7];
+        }
+        else if ((info_flags & 4U) != 0U) {
+            charset_pc = 5U;
+        }
+    }
     for (candidate = pos; candidate <= endpos; ++candidate) {
         size_t marks[TINYPY_SRE_MAX_MARKS];
-        size_t matched_end = candidate;
+        size_t matched_end;
         ptrdiff_t lastindex = -1;
         size_t index;
 
+        if (has_prefix != 0) {
+            while (candidate < endpos && __tinypy_sre_character_at(&state, candidate) != prefix_character) {
+                candidate += 1U;
+            }
+            if (candidate >= endpos) {
+                break;
+            }
+        }
+        else if (charset_pc != 0U) {
+            while (candidate < endpos && __tinypy_sre_charset(pattern, charset_pc, __tinypy_sre_character_at(&state, candidate)) == 0) {
+                candidate += 1U;
+            }
+            if (candidate >= endpos) {
+                break;
+            }
+        }
         for (index = 0U; index < pattern->groups * 2U; ++index) {
             marks[index] = SIZE_MAX;
         }
-        state.invalid_code = INT32_C(0);
-        if (__tinypy_sre_match_code(&state, 0U, SIZE_MAX, &matched_end, marks, &lastindex) != 0) {
+        matched_end = candidate;
+        state.invalid_code = TINYPY_FALSE;
+        state.memory_failed = TINYPY_FALSE;
+        if (__tinypy_sre_match(&state, 0U, &matched_end, marks, &lastindex) != 0) {
             result = __tinypy_sre_match_new(&state, string, pos, endpos, candidate, matched_end, marks, lastindex);
             break;
         }
-        if (state.invalid_code != 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "invalid SRE bytecode", out_error);
+        if (__tinypy_sre_state_check(&state, out_error) == 0) {
             break;
         }
         if (search == 0 || candidate == endpos) {
@@ -1307,6 +1844,17 @@ static tinypy_value_t *__tinypy_sre_join(tinypy_vm_t *vm, tinypy_value_t *pieces
         }
         size = TINYPY_TEXT_BYTE_SIZE(piece);
         total += size;
+    }
+    if (unicode != 0) {
+        /* Byte-string pieces join into a unicode result only when they are
+           ASCII, as ''.join does in Python 2.7. */
+        for (index = 0U; index < count; ++index) {
+            tinypy_value_t *piece = TINYPY_LIST_GET(pieces, index);
+
+            if (TINYPY_VALUE_KIND(piece) == TINYPY_VALUE_STRING && tinypy_internal_text_ascii_compatible(vm, piece, out_error) == 0) {
+                return NULL;
+            }
+        }
     }
     if (total == 0U) {
         tinypy_value_t *return_value_1 = unicode != 0 ? tinypy_unicode_from_utf8(vm, NULL, 0U) : tinypy_string_from_bytes(vm, NULL, 0U);

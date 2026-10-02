@@ -328,6 +328,7 @@ static tinypy_bool_t __tinypy_internal_dict_resize(tinypy_vm_t *vm, tinypy_value
             old_size);
     }
     TINYPY_DICT_OBJECT(dict)->table = new_entries;
+    TINYPY_DICT_OBJECT(dict)->popitem_finger = 0U;
     TINYPY_DICT_OBJECT(dict)->mask = new_capacity - 1U;
     TINYPY_DICT_OBJECT(dict)->fill = TINYPY_DICT_OBJECT(dict)->used;
     return TINYPY_TRUE;
@@ -396,6 +397,7 @@ void tinypy_internal_dict_destroy(tinypy_value_t *value) {
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_dict_initialize_empty(tinypy_value_t *dict) {
     TINYPY_DICT_OBJECT(dict)->table = TINYPY_DICT_OBJECT(dict)->small_table;
+    TINYPY_DICT_OBJECT(dict)->popitem_finger = 0U;
     TINYPY_DICT_OBJECT(dict)->mask = TINYPY_DICT_MIN_SIZE - 1U;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -972,6 +974,7 @@ void tinypy_dict_clear(tinypy_value_t *dict) {
     }
     (void)memset(TINYPY_DICT_OBJECT(dict)->small_table, 0, sizeof(TINYPY_DICT_OBJECT(dict)->small_table));
     TINYPY_DICT_OBJECT(dict)->table = TINYPY_DICT_OBJECT(dict)->small_table;
+    TINYPY_DICT_OBJECT(dict)->popitem_finger = 0U;
     TINYPY_DICT_OBJECT(dict)->mask = TINYPY_DICT_MIN_SIZE - 1U;
     TINYPY_DICT_OBJECT(dict)->used = 0U;
     TINYPY_DICT_OBJECT(dict)->fill = 0U;

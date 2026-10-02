@@ -57,7 +57,8 @@ typedef enum tinypy_cli_execute_result_e {
     TINYPY_CLI_EXECUTE_OK = 0,
     TINYPY_CLI_EXECUTE_ERROR = 1,
     TINYPY_CLI_EXECUTE_INCOMPLETE = 2,
-    TINYPY_CLI_EXECUTE_NOT_EXPRESSION = 3
+    TINYPY_CLI_EXECUTE_NOT_EXPRESSION = 3,
+    TINYPY_CLI_EXECUTE_EXIT = 4
 } tinypy_cli_execute_result_e;
 
 //////////////////////////////////////////////////////////////////////////
@@ -588,6 +589,56 @@ static void __tinypy_cli_print_syntax_error(tinypy_vm_t *vm, const tinypy_error_
     __tinypy_cli_print_exception(vm, error);
 }
 //////////////////////////////////////////////////////////////////////////
+/* Prints the stripped text of a source line the way traceback.print_tb does
+   when the file can be read. */
+static void __tinypy_cli_print_source_line(const char *filename, size_t filename_size, int32_t line_number) {
+    char *path;
+    uint8_t *data;
+    size_t size;
+    size_t position = 0U;
+    size_t end;
+    int32_t line = 1;
+
+    if (line_number <= 0 || filename_size == 0U || filename[0] == '<') {
+        return;
+    }
+    path = (char *)malloc(filename_size + 1U);
+    if (path == NULL) {
+        return;
+    }
+    (void)memcpy(path, filename, filename_size);
+    path[filename_size] = '\0';
+    if (__tinypy_cli_read_file(path, &data, &size) == 0) {
+        free(path);
+        return;
+    }
+    free(path);
+    while (position < size && line < line_number) {
+        if (data[position] == (uint8_t)'\n') {
+            line += 1;
+        }
+        position += 1U;
+    }
+    if (line == line_number) {
+        end = position;
+        while (end < size && data[end] != (uint8_t)'\n') {
+            end += 1U;
+        }
+        while (end > position && (data[end - 1U] == (uint8_t)'\r' || data[end - 1U] == (uint8_t)' ' || data[end - 1U] == (uint8_t)'\t')) {
+            end -= 1U;
+        }
+        while (position < end && (data[position] == (uint8_t)' ' || data[position] == (uint8_t)'\t' || data[position] == (uint8_t)'\f')) {
+            position += 1U;
+        }
+        if (end > position) {
+            (void)fputs("    ", stderr);
+            (void)fwrite(data + position, 1U, end - position, stderr);
+            (void)fputc('\n', stderr);
+        }
+    }
+    free(data);
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_cli_print_traceback(const tinypy_vm_t *vm) {
     const tinypy_value_t *traceback = tinypy_vm_raised_traceback(vm);
 
@@ -618,8 +669,56 @@ static void __tinypy_cli_print_traceback(const tinypy_vm_t *vm) {
         (void)fprintf(stderr, "\", line %d, in ", tinypy_traceback_line_number(traceback));
         (void)fwrite(function_name, 1U, function_name_size, stderr);
         (void)fputc('\n', stderr);
+        __tinypy_cli_print_source_line(filename, filename_size, tinypy_traceback_line_number(traceback));
         traceback = tinypy_traceback_next(traceback);
     }
+}
+//////////////////////////////////////////////////////////////////////////
+/* Follows handle_system_exit: None exits with 0, an int is the status and
+   anything else is printed to stderr with status 1. */
+static tinypy_bool_t __tinypy_cli_system_exit(tinypy_vm_t *vm, int32_t *out_code) {
+    tinypy_value_t *exception = tinypy_vm_raised_exception(vm);
+    tinypy_value_t *builtins = tinypy_vm_builtins(vm);
+    tinypy_value_t *key;
+    tinypy_value_t *system_exit;
+    tinypy_value_t *code;
+
+    if (exception == NULL || builtins == NULL) {
+        return TINYPY_FALSE;
+    }
+    key = tinypy_string_from_bytes(vm, "SystemExit", 10U);
+    system_exit = tinypy_dict_get_optional(builtins, key);
+    tinypy_release(key);
+    if (system_exit == NULL || tinypy_exception_matches(exception, system_exit, NULL) <= 0) {
+        return TINYPY_FALSE;
+    }
+    code = tinypy_object_get_attr(exception, "code", 4U, NULL);
+    *out_code = 0;
+    if (code != NULL) {
+        tinypy_value_type_e kind = tinypy_typeof(code);
+
+        if (kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_BOOL) {
+            *out_code = (int32_t)tinypy_integer_as_i64(code);
+        }
+        else if (kind != TINYPY_VALUE_NONE) {
+            tinypy_value_t *text = tinypy_object_str(code, NULL);
+
+            if (text != NULL) {
+                size_t text_size;
+                const char *text_bytes = __tinypy_cli_text_view(text, &text_size);
+
+                if (text_bytes != NULL) {
+                    (void)fwrite(text_bytes, 1U, text_size, stderr);
+                }
+                tinypy_release(text);
+            }
+            (void)fputc('\n', stderr);
+            *out_code = 1;
+        }
+        tinypy_release(code);
+    }
+    tinypy_vm_clear_error(vm);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_cli_print_error(tinypy_vm_t *vm, const tinypy_error_t *error, const char *fallback_filename) {
@@ -631,7 +730,7 @@ static void __tinypy_cli_print_error(tinypy_vm_t *vm, const tinypy_error_t *erro
     __tinypy_cli_print_exception(vm, error);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_cli_execute_result_e __tinypy_cli_execute(tinypy_vm_t *vm, tinypy_value_t *globals, const void *source, size_t source_size, const char *filename, tinypy_compile_mode_e mode, int32_t optimize_level, tinypy_bool_t allow_incomplete) {
+static tinypy_cli_execute_result_e __tinypy_cli_execute(tinypy_vm_t *vm, tinypy_value_t *globals, const void *source, size_t source_size, const char *filename, tinypy_compile_mode_e mode, int32_t optimize_level, tinypy_bool_t allow_incomplete, int32_t *out_exit_code) {
     tinypy_compile_options_t options;
     tinypy_error_t *error = NULL;
     tinypy_value_t *result;
@@ -650,6 +749,12 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute(tinypy_vm_t *vm, tinypy_
         tinypy_vm_clear_error(vm);
         return TINYPY_CLI_EXECUTE_INCOMPLETE;
     }
+    if (__tinypy_cli_system_exit(vm, out_exit_code) != 0) {
+        if (error != NULL) {
+            tinypy_error_release(error);
+        }
+        return TINYPY_CLI_EXECUTE_EXIT;
+    }
     if (error != NULL) {
         __tinypy_cli_print_error(vm, error, filename);
         tinypy_error_release(error);
@@ -661,7 +766,7 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute(tinypy_vm_t *vm, tinypy_
     return TINYPY_CLI_EXECUTE_ERROR;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *vm, tinypy_value_t *globals, const void *source, size_t source_size, const char *filename, int32_t optimize_level, tinypy_bool_t allow_incomplete) {
+static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *vm, tinypy_value_t *globals, const void *source, size_t source_size, const char *filename, int32_t optimize_level, tinypy_bool_t allow_incomplete, int32_t *out_exit_code) {
     tinypy_compile_options_t options;
     tinypy_error_t *error = NULL;
     tinypy_value_t *result;
@@ -714,6 +819,12 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *
         tinypy_error_release(error);
         tinypy_vm_clear_error(vm);
         return TINYPY_CLI_EXECUTE_NOT_EXPRESSION;
+    }
+    if (__tinypy_cli_system_exit(vm, out_exit_code) != 0) {
+        if (error != NULL) {
+            tinypy_error_release(error);
+        }
+        return TINYPY_CLI_EXECUTE_EXIT;
     }
     if (error != NULL) {
         __tinypy_cli_print_error(vm, error, filename);
@@ -817,7 +928,7 @@ static tinypy_bool_t __tinypy_cli_stdin_is_terminal(void) {
 #endif
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_cli_repl(tinypy_vm_t *vm, tinypy_value_t *globals, int32_t optimize_level) {
+static tinypy_bool_t __tinypy_cli_repl(tinypy_vm_t *vm, tinypy_value_t *globals, int32_t optimize_level, int32_t *out_exit_code) {
     tinypy_cli_buffer_t source = {NULL, 0U, 0U};
     char line[4096];
     tinypy_bool_t result = TINYPY_TRUE;
@@ -831,7 +942,7 @@ static tinypy_bool_t __tinypy_cli_repl(tinypy_vm_t *vm, tinypy_value_t *globals,
         (void)fflush(stdout);
         if (fgets(line, (int32_t)sizeof(line), stdin) == NULL) {
             (void)fputc('\n', stdout);
-            if (source.size != 0U && __tinypy_cli_execute(vm, globals, source.data, source.size, "<stdin>", TINYPY_COMPILE_SINGLE, optimize_level, INT32_C(0)) == TINYPY_CLI_EXECUTE_ERROR) {
+            if (source.size != 0U && __tinypy_cli_execute(vm, globals, source.data, source.size, "<stdin>", TINYPY_COMPILE_SINGLE, optimize_level, INT32_C(0), out_exit_code) == TINYPY_CLI_EXECUTE_ERROR) {
                 result = INT32_C(0);
             }
             break;
@@ -845,12 +956,15 @@ static tinypy_bool_t __tinypy_cli_repl(tinypy_vm_t *vm, tinypy_value_t *globals,
         if (line_size == sizeof(line) - 1U && line[line_size - 1U] != '\n') {
             continue;
         }
-        execute_result = __tinypy_cli_execute_expression(vm, globals, source.data, source.size, "<stdin>", optimize_level, INT32_C(1));
+        execute_result = __tinypy_cli_execute_expression(vm, globals, source.data, source.size, "<stdin>", optimize_level, INT32_C(1), out_exit_code);
         if (execute_result == TINYPY_CLI_EXECUTE_NOT_EXPRESSION) {
-            execute_result = __tinypy_cli_execute(vm, globals, source.data, source.size, "<stdin>", TINYPY_COMPILE_SINGLE, optimize_level, INT32_C(1));
+            execute_result = __tinypy_cli_execute(vm, globals, source.data, source.size, "<stdin>", TINYPY_COMPILE_SINGLE, optimize_level, INT32_C(1), out_exit_code);
         }
         if (execute_result == TINYPY_CLI_EXECUTE_INCOMPLETE) {
             continue;
+        }
+        if (execute_result == TINYPY_CLI_EXECUTE_EXIT) {
+            break;
         }
         source.size = 0U;
     }
@@ -883,6 +997,7 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
     int32_t show_stats = INT32_C(0);
     tinypy_bool_t interactive = TINYPY_FALSE;
     tinypy_bool_t success = TINYPY_TRUE;
+    int32_t exit_code = -1;
     clock_t begin;
     clock_t end;
 
@@ -1023,10 +1138,14 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
         success = INT32_C(0);
     }
     else if (interactive != 0) {
-        success = __tinypy_cli_repl(vm, globals, context.optimize_level);
+        success = __tinypy_cli_repl(vm, globals, context.optimize_level, &exit_code);
     }
-    else if (__tinypy_cli_execute(vm, globals, source, source_size, filename, TINYPY_COMPILE_EXEC, context.optimize_level, INT32_C(0)) != TINYPY_CLI_EXECUTE_OK) {
-        success = INT32_C(0);
+    else {
+        tinypy_cli_execute_result_e execute_result = __tinypy_cli_execute(vm, globals, source, source_size, filename, TINYPY_COMPILE_EXEC, context.optimize_level, INT32_C(0), &exit_code);
+
+        if (execute_result != TINYPY_CLI_EXECUTE_OK && execute_result != TINYPY_CLI_EXECUTE_EXIT) {
+            success = INT32_C(0);
+        }
     }
     tinypy_release(main_module);
     tinypy_vm_destroy(vm);
@@ -1046,5 +1165,8 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
     if (command_argument >= 0 || script_argument < 0) {
         free(python_argv);
     }
-    return success != 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (success == 0) {
+        return EXIT_FAILURE;
+    }
+    return exit_code >= 0 ? exit_code : EXIT_SUCCESS;
 }

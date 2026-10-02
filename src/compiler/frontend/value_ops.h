@@ -112,6 +112,10 @@ tinypy_value_t *__tinypy_frontend_tuple_new(tinypy_value_t *owner, tinypy_compil
 void __tinypy_frontend_tuple_set(tinypy_value_t *tuple, tinypy_compiler_size_t index, tinypy_value_t *value);
 tinypy_value_t *__tinypy_frontend_dict_keys(tinypy_value_t *dict);
 int32_t __tinypy_frontend_list_sort(tinypy_value_t *list);
+/* Compile-time evaluators refuse constant results above these bounds before
+   computing them: integers by bit count, sequences by byte count. */
+#define TINYPY_COMPILER_CONSTANT_INTEGER_BITS UINT64_C(65536)
+tinypy_bool_t __tinypy_frontend_constant_operation_bounded(const tinypy_value_t *left, const tinypy_value_t *right, int32_t operation, size_t max_sequence_bytes);
 tinypy_value_t *__tinypy_frontend_list_as_tuple(tinypy_value_t *list);
 tinypy_value_t *__tinypy_frontend_sequence_list(tinypy_value_t *sequence);
 int32_t __tinypy_frontend_string_resize(tinypy_value_t **string, tinypy_compiler_size_t size);
@@ -139,7 +143,7 @@ static inline int32_t __tinypy_frontend_ascii_to_integer(const char *text) {
     int32_t value = 0;
 
     while (*text >= '0' && *text <= '9') {
-        value = value * 10 + (*text - '0');
+        value = value <= (INT32_MAX - 9) / 10 ? value * 10 + (*text - '0') : INT32_MAX;
         text += 1;
     }
     return value;

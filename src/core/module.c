@@ -25,8 +25,12 @@ tinypy_value_t *tinypy_module_new(tinypy_vm_t *vm, const char *name, size_t name
 void tinypy_internal_module_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_module_object_t *module = TINYPY_MODULE_OBJECT(value);
 
-    visit(module->name, user_data);
-    visit(module->dict, user_data);
+    if (module->name != NULL) {
+        visit(module->name, user_data);
+    }
+    if (module->dict != NULL) {
+        visit(module->dict, user_data);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_module_dict(const tinypy_value_t *module) {
@@ -128,6 +132,10 @@ tinypy_value_t *tinypy_internal_module_create(tinypy_type_t *type, tinypy_value_
 
     if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || count < 1U || count > 2U || tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_MODULE]) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "module() requires a name and optional doc string", out_error);
+        return NULL;
+    }
+    if (TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_STRING) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "module name must be a string", out_error);
         return NULL;
     }
     module = (tinypy_module_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);

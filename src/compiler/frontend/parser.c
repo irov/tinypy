@@ -527,3 +527,8 @@ The parse tree generated for the input a+b is:
 (TINYPY_GRAMMAR_EXPR: (TINYPY_GRAMMAR_TERM: (TINYPY_TOKEN_NAME: a)), (TINYPY_TOKEN_OPERATOR: +), (TINYPY_GRAMMAR_TERM: (TINYPY_TOKEN_NAME: b)))
 
 */
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_compiler_is_keyword(const char *text) {
+    tinypy_bool_t return_value_1 = __tinypy_frontend_keyword_label(text) >= 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return return_value_1;
+}

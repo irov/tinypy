@@ -3,6 +3,9 @@
 #include <string.h>
 
 #define TINYPY_DECIMAL_INLINE_WORDS ((size_t)64U)
+/* 767 significant digits plus a sticky digit decide the rounding of any
+   double; longer significands are truncated to this prefix. */
+#define TINYPY_DECIMAL_MAX_SIGNIFICANT_DIGITS ((size_t)800U)
 
 typedef struct tinypy_decimal_bigint_t {
     tinypy_compile_ctx_t *ctx;
@@ -241,6 +244,9 @@ tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx,
     size_t significand_end;
     size_t fractional_digits = 0U;
     size_t significant_digits = 0U;
+    size_t accumulated_digits = 0U;
+    size_t dropped_digits = 0U;
+    uint32_t sticky_digit = 0U;
     int32_t saw_nonzero = 0;
     int32_t past_decimal = 0;
     int32_t negative = 0;
@@ -330,10 +336,30 @@ tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx,
     for (index = significand_begin; index < significand_end; ++index) {
         uint8_t byte = (uint8_t)text[index];
 
-        if (byte != '.' && __tinypy_decimal_bigint_multiply_add(&numerator, 10U, (uint32_t)(byte - '0')) == 0) {
+        if (byte == '.' || (accumulated_digits == 0U && byte == '0')) {
+            continue;
+        }
+        if (accumulated_digits == TINYPY_DECIMAL_MAX_SIGNIFICANT_DIGITS) {
+            /* Digits past the correctly rounding prefix only matter through a
+               sticky digit, which keeps the conversion linear in the input. */
+            dropped_digits += 1U;
+            if (byte != '0') {
+                sticky_digit = 1U;
+            }
+            continue;
+        }
+        if (__tinypy_decimal_bigint_multiply_add(&numerator, 10U, (uint32_t)(byte - '0')) == 0) {
             tinypy_bool_t return_value_2 = __tinypy_decimal_fail_limit(ctx, line_number, column_offset);
             return return_value_2;
         }
+        accumulated_digits += 1U;
+    }
+    if (dropped_digits != 0U) {
+        if (__tinypy_decimal_bigint_multiply_add(&numerator, 10U, sticky_digit) == 0) {
+            tinypy_bool_t sticky_result = __tinypy_decimal_fail_limit(ctx, line_number, column_offset);
+            return sticky_result;
+        }
+        decimal_exponent += (int64_t)dropped_digits - INT64_C(1);
     }
     if (decimal_exponent >= 0) {
         for (index = 0U; index < (size_t)decimal_exponent; ++index) {

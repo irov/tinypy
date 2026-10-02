@@ -540,6 +540,20 @@ static tinypy_bool_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_valu
         return TINYPY_TRUE;
     }
     if ((left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE) && (right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE)) {
+        if (left_kind != right_kind) {
+            /* Ordering a byte string against unicode decodes it as ASCII. */
+            const tinypy_value_t *string = left_kind == TINYPY_VALUE_STRING ? left : right;
+            const uint8_t *bytes = TINYPY_TEXT_BYTES(string);
+            size_t size = TINYPY_TEXT_BYTE_SIZE(string);
+            size_t index;
+
+            for (index = 0U; index < size; ++index) {
+                if (bytes[index] >= 0x80U) {
+                    (void)tinypy_internal_raise_ascii_decode_error(TINYPY_VALUE_VM(left), string, index, index + 1U, out_error);
+                    return TINYPY_FALSE;
+                }
+            }
+        }
         *out_order = tinypy_internal_text_order(left, right);
         return TINYPY_TRUE;
     }
@@ -1007,14 +1021,14 @@ static tinypy_bool_t __tinypy_comparison_try_special(tinypy_value_t *left, tinyp
     static const size_t name_sizes[] = {6U, 6U, 6U, 6U, 6U, 6U};
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     size_t index = (size_t)operation;
+    tinypy_compare_operation_e reversed_operation;
 
     *out_handled = INT32_C(0);
     if (operation > TINYPY_COMPARE_GREATER_EQUAL) {
         return TINYPY_TRUE;
     }
+    reversed_operation = __tinypy_comparison_reverse_operation(operation);
     if (right->type != left->type && tinypy_type_is_subtype(right->type, left->type) != 0) {
-        tinypy_compare_operation_e reversed_operation = __tinypy_comparison_reverse_operation(operation);
-
         if (__tinypy_comparison_try_rich_slot(right, left, reversed_operation, out_handled, out_value, out_error) == 0) {
             return TINYPY_FALSE;
         }
@@ -1028,13 +1042,24 @@ static tinypy_bool_t __tinypy_comparison_try_special(tinypy_value_t *left, tinyp
     if (*out_handled != 0) {
         return TINYPY_TRUE;
     }
-    if (right->type != left->type) {
-        tinypy_compare_operation_e reversed_operation = __tinypy_comparison_reverse_operation(operation);
+    if (__tinypy_comparison_try_rich_slot(right, left, reversed_operation, out_handled, out_value, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (*out_handled != 0) {
+        return TINYPY_TRUE;
+    }
+    /* try_rich_compare gives a subclass on the right the first word. */
+    if (right->type != left->type && tinypy_type_is_subtype(right->type, left->type) != 0 && tinypy_internal_object_has_special_override(right, right_names[index], name_sizes[index]) != 0) {
+        tinypy_value_t *result = __tinypy_comparison_call_binary(right, right_names[index], name_sizes[index], left, out_error);
+        tinypy_bool_t not_implemented;
 
-        if (__tinypy_comparison_try_rich_slot(right, left, reversed_operation, out_handled, out_value, out_error) == 0) {
+        if (result == NULL) {
+            *out_handled = INT32_C(1);
             return TINYPY_FALSE;
         }
-        if (*out_handled != 0) {
+        (void)__tinypy_comparison_special_result(vm, result, out_value, &not_implemented);
+        if (not_implemented == 0) {
+            *out_handled = INT32_C(1);
             return TINYPY_TRUE;
         }
     }
@@ -1052,7 +1077,7 @@ static tinypy_bool_t __tinypy_comparison_try_special(tinypy_value_t *left, tinyp
             return TINYPY_TRUE;
         }
     }
-    if ((right->type != left->type || (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_OLD_INSTANCE && tinypy_old_instance_class(left) != tinypy_old_instance_class(right))) && tinypy_internal_object_has_special_override(right, right_names[index], name_sizes[index]) != 0) {
+    if (tinypy_internal_object_has_special_override(right, right_names[index], name_sizes[index]) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_binary(right, right_names[index], name_sizes[index], left, out_error);
         tinypy_bool_t not_implemented;
 
@@ -1073,7 +1098,7 @@ static tinypy_bool_t __tinypy_comparison_try_special(tinypy_value_t *left, tinyp
         return TINYPY_FALSE;
     }
     /* Python 2 also tries the right operand's __cmp__ and negates its answer. */
-    if (ordered == 0 && right->type != left->type && __tinypy_comparison_try_three_way(right, left, TINYPY_TRUE, &order, &ordered, out_handled, out_error) == 0) {
+    if (ordered == 0 && *out_handled == 0 && __tinypy_comparison_try_three_way(right, left, TINYPY_TRUE, &order, &ordered, out_handled, out_error) == 0) {
         return TINYPY_FALSE;
     }
     if (ordered != 0) {

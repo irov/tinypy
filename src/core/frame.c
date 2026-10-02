@@ -143,12 +143,98 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* Locals other than a plain dict go through the item protocol, like
+   map_to_dict in CPython; their failures are ignored. */
 static void __tinypy_internal_frame_sync_local(tinypy_vm_t *vm, tinypy_value_t *locals, tinypy_value_t *name, tinypy_value_t *value) {
-    if (value != NULL) {
-        tinypy_dict_set(locals, name, value);
+    if (locals->type == &vm->types[TINYPY_VALUE_DICT]) {
+        if (value != NULL) {
+            tinypy_dict_set(locals, name, value);
+        }
+        else if (tinypy_internal_dict_get_optional(vm, locals, name) != NULL) {
+            tinypy_dict_delete(locals, name);
+        }
+        return;
     }
-    else if (tinypy_internal_dict_get_optional(vm, locals, name) != NULL) {
-        tinypy_dict_delete(locals, name);
+    tinypy_error_t *error = NULL;
+    tinypy_bool_t synced = value != NULL ? tinypy_set_item(locals, name, value, &error) : tinypy_delete_item(locals, name, &error);
+
+    if (synced == 0) {
+        if (error != NULL) {
+            tinypy_error_release(error);
+        }
+        tinypy_vm_clear_error(vm);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* Returns a new reference to the binding of name in a locals mapping, or
+   NULL without an error when the name is absent. */
+tinypy_value_t *tinypy_internal_frame_locals_get(tinypy_vm_t *vm, tinypy_value_t *mapping, tinypy_value_t *name, tinypy_error_t **out_error) {
+    if (mapping->type == &vm->types[TINYPY_VALUE_DICT]) {
+        tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, mapping, name);
+
+        if (value != NULL) {
+            TINYPY_INCREF(value);
+        }
+        return value;
+    }
+    tinypy_value_t *value = tinypy_get_item(mapping, name, out_error);
+
+    if (value == NULL) {
+        (void)tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_KEY_ERROR, out_error);
+    }
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Mirrors PyFrame_LocalsToFast(frame, 0): names missing from the mapping
+   keep their current fast values. */
+void tinypy_internal_frame_locals_to_fast(tinypy_frame_object_t *frame) {
+    tinypy_value_t *code = frame->code;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
+    tinypy_value_t *varnames = TINYPY_CODE_VARNAMES(code);
+    tinypy_value_t *cellvars = TINYPY_CODE_CELLVARS(code);
+    tinypy_value_t *freevars = TINYPY_CODE_FREEVARS(code);
+    size_t local_count = (size_t)TINYPY_CODE_LOCAL_COUNT(code);
+    size_t cell_count = TINYPY_TUPLE_SIZE(cellvars);
+    size_t free_count = (TINYPY_CODE_FLAGS(code) & TINYPY_CODE_OPTIMIZED) != 0 ? TINYPY_TUPLE_SIZE(freevars) : 0U;
+    size_t index;
+
+    if (frame->locals == NULL) {
+        return;
+    }
+    for (index = 0U; index < local_count; ++index) {
+        tinypy_error_t *error = NULL;
+        tinypy_value_t *value = tinypy_internal_frame_locals_get(vm, frame->locals, TINYPY_TUPLE_GET(varnames, index), &error);
+        tinypy_value_t *previous = frame->locals_plus[index];
+
+        if (error != NULL) {
+            tinypy_error_release(error);
+            tinypy_vm_clear_error(vm);
+        }
+        if (value == NULL) {
+            continue;
+        }
+        frame->locals_plus[index] = value;
+        if (previous != NULL) {
+            TINYPY_DECREF(previous);
+        }
+    }
+    for (index = 0U; index < cell_count + free_count; ++index) {
+        tinypy_value_t *name = index < cell_count ? TINYPY_TUPLE_GET(cellvars, index) : TINYPY_TUPLE_GET(freevars, index - cell_count);
+        tinypy_value_t *cell = frame->locals_plus[local_count + index];
+        tinypy_error_t *error = NULL;
+        tinypy_value_t *value = tinypy_internal_frame_locals_get(vm, frame->locals, name, &error);
+
+        if (error != NULL) {
+            tinypy_error_release(error);
+            tinypy_vm_clear_error(vm);
+        }
+        if (value == NULL) {
+            continue;
+        }
+        if (cell != NULL && tinypy_cell_get(cell) != value) {
+            tinypy_cell_set(cell, value);
+        }
+        TINYPY_DECREF(value);
     }
 }
 //////////////////////////////////////////////////////////////////////////

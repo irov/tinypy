@@ -28,9 +28,12 @@ except AttributeError:
 else:
     raise AssertionError("dictproxy exposed a mutating dict method")
 assert MetadataTarget.__bases__ is MetadataTarget.__bases__
-assert MetadataTarget.__mro__ is MetadataTarget.__mro__
+# Without a cyclic collector a type cannot own a tuple that references it, so
+# __mro__ is handed out as an owning copy rather than the shared object.
+assert MetadataTarget.__mro__ == MetadataTarget.__mro__
+assert MetadataTarget.__mro__ == (MetadataTarget, object)
 assert type.__bases__ is type.__bases__
-assert type.__mro__ is type.__mro__
+assert type.__mro__ == (type, object)
 
 
 class SentinelCallable(object):

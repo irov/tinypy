@@ -36,7 +36,8 @@ values and break owning cycles before destroying a VM.
 
 This is a foundational rule, not a missing feature: the runtime keeps no
 registry of live values and `tinypy_vm_destroy` never sweeps unreachable
-objects. A value still alive at that point is a bug in the host or in the
+objects. Native finalizers of reachable values run before the final sweep,
+while every value is still intact, so they may release values normally. A value still alive at that point is a bug in the host or in the
 runtime and is fixed where the reference was leaked; the opt-in cycle
 diagnostics below exist to locate such places.
 
@@ -53,22 +54,30 @@ stack-depth calculation and peephole optimizer.
 Source decoding supports UTF-8 BOM, PEP 263 cookies, ASCII, UTF-8, Latin-1,
 CRLF/CR normalization and structured syntax diagnostics. Compiler limits cover
 source bytes, tokens, syntax nodes, nesting, symbols, blocks, instructions,
-constants and arena memory.
+constants and arena memory. The nesting limit bounds both the parser stack and
+the AST depth of an expression, so very long flat operator, attribute or call
+chains need a raised `max_nesting`.
 
 Trusted source can opt into two compiler-only features. The build
 preprocessor replaces reserved `__UPPERCASE__` names with immutable typed
 profile constants and removes fully decidable `if` branches before symbol
-analysis. The `meta` builtin expands valid Python 2 declarations such as
-`@meta.template`, `@meta.emit(...)` and `meta.expand(...)` into ordinary classes
-and functions. Bare `@meta` is not a template marker. Neither profile constants
-nor `meta` exist in runtime globals.
+analysis; a suite that becomes empty keeps a `pass` at its original line and
+an empty `else` disappears. The `meta` builtin expands valid Python 2
+declarations such as `@meta.template`, `@meta.emit(...)` and `meta.expand(...)`
+into ordinary classes and functions. Bare `@meta` is not a template marker.
+Neither profile constants nor `meta` exist in runtime globals. Both evaluators
+refuse constant results above 65536 bits or above the preprocessor byte limit
+before computing them.
 
 Every compiled code graph owns an immutable compile environment containing its
 feature flags, optimize level and an optional deep-copied build profile. String
 `exec`, `eval` and Python-visible `compile` inherit that environment from the
 current frame; `dont_inherit` continues to control future flags only. The host
 can also request canonical expanded Python source plus a deterministic source
-map through `tinypy_preprocess_source`.
+map through `tinypy_preprocess_source`. The canonical source compiles back to
+the same program: negative literals and numeric operands are parenthesized,
+byte strings under `unicode_literals` carry a `b` prefix and non-finite complex
+literals are spelled as `complex(...)`.
 
 The generated code objects and marshal-v2 payloads follow Python 2.7 semantics.
 The compiler never opens the logical filename supplied for diagnostics.

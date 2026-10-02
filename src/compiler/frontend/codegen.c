@@ -242,6 +242,11 @@ tinypy_code_object_t *__tinypy_ast_compile(tinypy_compile_ctx_t *arena, tinypy_a
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_codegen_free(tinypy_codegen_t *c) {
+    /* A failed compilation leaves the current unit and its enclosing units
+       behind; unwind them so their tables are released. */
+    while (c->u != NULL) {
+        __tinypy_codegen_exit_scope(c);
+    }
     TINYPY_COMPILER_XDECREF(c->c_stack);
     TINYPY_COMPILER_XDECREF(c->c_none);
     TINYPY_COMPILER_XDECREF(c->c_ellipsis);
@@ -1173,6 +1178,10 @@ static tinypy_bool_t __tinypy_codegen_make_closure(tinypy_codegen_t *c, tinypy_c
         }
         else /* (reftype == TINYPY_SYMBOL_SCOPE_FREE) */ {
             arg = __tinypy_codegen_lookup_arg(c->u->u_freevars, name);
+        }
+        if (arg == -1) {
+            tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_RUNTIME, "closure variable is missing from the enclosing scope", c->u->u_lineno, 1, c->c_arena->out_error);
+            return TINYPY_FALSE;
         }
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_LOAD_CLOSURE, arg);
     }
@@ -3326,73 +3335,94 @@ typedef struct tinypy_assembler_t {
     int32_t a_lineno_off;                     /* bytecode offset of last lineno */
 } tinypy_assembler_t;
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_codegen_depth_first(tinypy_codegen_t *c, tinypy_codegen_block_t *b, tinypy_assembler_t *a) {
+static tinypy_bool_t __tinypy_codegen_depth_first(tinypy_codegen_t *c, tinypy_codegen_block_t *b, tinypy_assembler_t *a, int32_t end) {
     int32_t i;
-    tinypy_codegen_instruction_t *instr = NULL;
+    int32_t j;
 
-    if (b == NULL || (b->b_iused != 0 && b->b_instr == NULL)) {
+    if (b == NULL) {
         return TINYPY_FALSE;
     }
-    if (b->b_seen) {
-        return TINYPY_TRUE;
+    /* Blocks reached by normal control flow are ordered without recursion:
+       the unused tail of a_postorder (from a_nblocks to end) holds the
+       blocks whose jump targets still have to be visited. */
+    for (j = end; b != NULL && !b->b_seen; b = b->b_next) {
+        if (b->b_iused != 0 && b->b_instr == NULL) {
+            return TINYPY_FALSE;
+        }
+        b->b_seen = 1;
+        j -= 1;
+        a->a_postorder[j] = b;
     }
-    b->b_seen = 1;
-    if (b->b_next != NULL && __tinypy_codegen_depth_first(c, b->b_next, a) == 0) {
-        return TINYPY_FALSE;
-    }
-    for (i = 0; i < b->b_iused; i++) {
-        instr = &b->b_instr[i];
-        if (instr->i_jrel || instr->i_jabs) {
-            if (__tinypy_codegen_depth_first(c, instr->i_target, a) == 0) {
+    while (j < end) {
+        b = a->a_postorder[j];
+        j += 1;
+        for (i = 0; i < b->b_iused; i++) {
+            tinypy_codegen_instruction_t *instr = &b->b_instr[i];
+
+            if ((instr->i_jrel || instr->i_jabs) && __tinypy_codegen_depth_first(c, instr->i_target, a, j) == 0) {
                 return TINYPY_FALSE;
             }
         }
+        a->a_postorder[a->a_nblocks++] = b;
     }
-    a->a_postorder[a->a_nblocks++] = b;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_codegen_stack_depth_walk(tinypy_codegen_t *c, tinypy_codegen_block_t *b, int32_t depth, int32_t maxdepth) {
+    tinypy_codegen_block_t *first = b;
+    tinypy_codegen_block_t *last = NULL;
     int32_t i, target_depth;
     tinypy_codegen_instruction_t *instr;
-    if (b->b_seen || b->b_startdepth >= depth) {
-        return maxdepth;
-    }
-    b->b_seen = 1;
-    b->b_startdepth = depth;
-    for (i = 0; i < b->b_iused; i++) {
-        instr = &b->b_instr[i];
-        depth += __tinypy_opcode_stack_effect(instr->i_opcode, instr->i_oparg);
-        if (depth > maxdepth) {
-            maxdepth = depth;
-        }
-         /* invalid code or bug in __tinypy_codegen_stack_depth() */
-        if (instr->i_jrel || instr->i_jabs) {
-            target_depth = depth;
-            if (instr->i_opcode == TINYPY_OP_FOR_ITER) {
-                target_depth = depth - 2;
+
+    /* Blocks reached by normal control flow are walked iteratively; every
+       block of the chain stays marked until the whole chain is done, exactly
+       as the recursive walk keeps a block marked while visiting b_next. */
+    while (b != NULL && !b->b_seen && b->b_startdepth < depth) {
+        tinypy_bool_t dead = TINYPY_FALSE;
+
+        b->b_seen = 1;
+        b->b_startdepth = depth;
+        last = b;
+        for (i = 0; i < b->b_iused; i++) {
+            instr = &b->b_instr[i];
+            depth += __tinypy_opcode_stack_effect(instr->i_opcode, instr->i_oparg);
+            if (depth > maxdepth) {
+                maxdepth = depth;
             }
-            else if (instr->i_opcode == TINYPY_OP_SETUP_FINALLY || instr->i_opcode == TINYPY_OP_SETUP_EXCEPT) {
-                target_depth = depth + 3;
-                if (target_depth > maxdepth) {
-                    maxdepth = target_depth;
+            /* invalid code or bug in __tinypy_codegen_stack_depth() */
+            if (instr->i_jrel || instr->i_jabs) {
+                target_depth = depth;
+                if (instr->i_opcode == TINYPY_OP_FOR_ITER) {
+                    target_depth = depth - 2;
+                }
+                else if (instr->i_opcode == TINYPY_OP_SETUP_FINALLY || instr->i_opcode == TINYPY_OP_SETUP_EXCEPT) {
+                    target_depth = depth + 3;
+                    if (target_depth > maxdepth) {
+                        maxdepth = target_depth;
+                    }
+                }
+                else if (instr->i_opcode == TINYPY_OP_JUMP_IF_TRUE_OR_POP || instr->i_opcode == TINYPY_OP_JUMP_IF_FALSE_OR_POP) {
+                    depth = depth - 1;
+                }
+                maxdepth = __tinypy_codegen_stack_depth_walk(c, instr->i_target,
+                                                             target_depth, maxdepth);
+                if (instr->i_opcode == TINYPY_OP_JUMP_ABSOLUTE || instr->i_opcode == TINYPY_OP_JUMP_FORWARD) {
+                    dead = TINYPY_TRUE; /* remaining code is dead */
+                    break;
                 }
             }
-            else if (instr->i_opcode == TINYPY_OP_JUMP_IF_TRUE_OR_POP || instr->i_opcode == TINYPY_OP_JUMP_IF_FALSE_OR_POP) {
-                depth = depth - 1;
-            }
-            maxdepth = __tinypy_codegen_stack_depth_walk(c, instr->i_target,
-                                                         target_depth, maxdepth);
-            if (instr->i_opcode == TINYPY_OP_JUMP_ABSOLUTE || instr->i_opcode == TINYPY_OP_JUMP_FORWARD) {
-                goto out; /* remaining code is dead */
-            }
+        }
+        if (dead != 0) {
+            break;
+        }
+        b = b->b_next;
+    }
+    for (b = first; last != NULL; b = b->b_next) {
+        b->b_seen = 0;
+        if (b == last) {
+            break;
         }
     }
-    if (b->b_next) {
-        maxdepth = __tinypy_codegen_stack_depth_walk(c, b->b_next, depth, maxdepth);
-    }
-out:
-    b->b_seen = 0;
     return maxdepth;
 }
 /* Find the flow path that needs the largest stack.  We assume that
@@ -3855,7 +3885,7 @@ static tinypy_code_object_t *__tinypy_assembler_build(tinypy_codegen_t *c, int32
     if (!__tinypy_assembler_init(c, &a, nblocks, c->u->u_firstlineno)) {
         goto error;
     }
-    if (__tinypy_codegen_depth_first(c, entryblock, &a) == 0) {
+    if (__tinypy_codegen_depth_first(c, entryblock, &a, nblocks) == 0) {
         goto error;
     }
 

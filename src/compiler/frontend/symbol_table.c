@@ -16,6 +16,17 @@
     "'return' with argument inside generator"
 
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_symbol_arena_value(tinypy_symbol_table_t *st, tinypy_value_t *value) {
+    if (value == NULL) {
+        return TINYPY_FALSE;
+    }
+    if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, value) != 0) {
+        TINYPY_COMPILER_DECREF(value);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_symbol_entry_t *__tinypy_symbol_entry_new(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_symbol_block_e block, void *key, int32_t lineno) {
 
     tinypy_symbol_entry_t *ste = (tinypy_symbol_entry_t *)TINYPY_COMPILER_ARENA_MALLOC(st->arena, sizeof(*ste));
@@ -24,25 +35,25 @@ static tinypy_symbol_entry_t *__tinypy_symbol_entry_new(tinypy_symbol_table_t *s
     }
     ste->table = st;
     ste->id = tinypy_string_from_bytes(st->arena->vm, &key, sizeof(key));
-    if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, ste->id) != 0) {
+    if (!__tinypy_symbol_arena_value(st, ste->id)) {
         return NULL;
     }
     tinypy_value_t *handle = tinypy_string_from_bytes(st->arena->vm, &ste, sizeof(ste));
-    if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, handle) != 0) {
+    if (!__tinypy_symbol_arena_value(st, handle)) {
         return NULL;
     }
     ste->handle = handle;
     ste->name = name;
     ste->symbols = tinypy_dict_new(st->arena->vm);
-    if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, ste->symbols) != 0) {
+    if (!__tinypy_symbol_arena_value(st, ste->symbols)) {
         return NULL;
     }
     ste->variable_names = tinypy_list_from_items(st->arena->vm, NULL, 0U);
-    if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, ste->variable_names) != 0) {
+    if (!__tinypy_symbol_arena_value(st, ste->variable_names)) {
         return NULL;
     }
     ste->children = tinypy_list_from_items(st->arena->vm, NULL, 0U);
-    if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, ste->children) != 0) {
+    if (!__tinypy_symbol_arena_value(st, ste->children)) {
         return NULL;
     }
 
@@ -1456,11 +1467,10 @@ static tinypy_bool_t __tinypy_symbol_new_tmpname(tinypy_symbol_table_t *st) {
     if (!tmp) {
         return TINYPY_FALSE;
     }
-    if (!__tinypy_symbol_add_def(st, tmp, TINYPY_SYMBOL_DEFINITION_LOCAL)) {
-        return TINYPY_FALSE;
-    }
+    tinypy_bool_t added = __tinypy_symbol_add_def(st, tmp, TINYPY_SYMBOL_DEFINITION_LOCAL);
+
     TINYPY_COMPILER_DECREF(tmp);
-    return TINYPY_TRUE;
+    return added;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_symbol_handle_comprehension(tinypy_symbol_table_t *st, tinypy_ast_expression_t e, tinypy_ast_identifier_t scope_name, tinypy_ast_sequence_t *generators, tinypy_ast_expression_t elt, tinypy_ast_expression_t value) {

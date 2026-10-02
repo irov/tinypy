@@ -43,10 +43,6 @@ tinypy_bool_t tinypy_internal_output_write(tinypy_value_t *target, const void *b
         tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(target)->channel, bytes, size);
         return TINYPY_TRUE;
     }
-    if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_NONE) {
-        tinypy_output_emit(vm, TINYPY_OUTPUT_STDOUT, bytes, size);
-        return TINYPY_TRUE;
-    }
     tinypy_value_t *text = tinypy_string_from_bytes(vm, bytes, size);
     tinypy_bool_t result = __tinypy_internal_output_call_write(target, text, out_error);
 
@@ -66,7 +62,7 @@ tinypy_bool_t tinypy_internal_output_write_value(tinypy_value_t *target, tinypy_
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "output write requires a string", out_error);
         return TINYPY_FALSE;
     }
-    if (target_kind != TINYPY_VALUE_OUTPUT_STREAM && target_kind != TINYPY_VALUE_NONE) {
+    if (target_kind != TINYPY_VALUE_OUTPUT_STREAM) {
         tinypy_bool_t return_value_1 = __tinypy_internal_output_call_write(target, text, out_error);
         return return_value_1;
     }
@@ -78,11 +74,7 @@ tinypy_bool_t tinypy_internal_output_write_value(tinypy_value_t *target, tinypy_
 
         bytes = tinypy_unicode_utf8_view(text, &size, &code_points);
     }
-    if (target_kind == TINYPY_VALUE_OUTPUT_STREAM) {
-        tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(target)->channel, bytes, size);
-        return TINYPY_TRUE;
-    }
-    tinypy_output_emit(vm, TINYPY_OUTPUT_STDOUT, bytes, size);
+    tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(target)->channel, bytes, size);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -94,7 +86,9 @@ tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
         tinypy_bool_t return_value_1 = TINYPY_OUTPUT_STREAM_OBJECT(target)->soft_space;
         return return_value_1;
     }
-    if (kind == TINYPY_VALUE_NATIVE_INSTANCE) {
+    if (kind != TINYPY_VALUE_INSTANCE) {
+        /* Any object with a write method may carry softspace, as the print
+           statement reads it through the attribute protocol in Python 2.7. */
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
         tinypy_error_t *error = NULL;
         tinypy_value_t *value;
@@ -133,19 +127,19 @@ void tinypy_internal_output_set_soft_space(tinypy_value_t *target, tinypy_bool_t
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_OUTPUT_STREAM) {
         TINYPY_OUTPUT_STREAM_OBJECT(target)->soft_space = soft_space != 0 ? INT32_C(1) : INT32_C(0);
     }
-    else if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_NATIVE_INSTANCE) {
+    else if (TINYPY_VALUE_KIND(target) != TINYPY_VALUE_INSTANCE) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
         tinypy_error_t *error = NULL;
         tinypy_value_t *value = tinypy_bool_from_i32(vm, soft_space);
 
-        (void)tinypy_object_set_attr(target, "softspace", 9U, value, &error);
+        (void)tinypy_object_set_attr_value(target, vm->softspace_key, value, &error);
         TINYPY_DECREF(value);
         if (error != NULL) {
             tinypy_error_release(error);
             tinypy_vm_clear_error(vm);
         }
     }
-    else if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_INSTANCE) {
+    else {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
         tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(target);
 
@@ -177,6 +171,10 @@ static tinypy_value_t *__tinypy_output_write_method(tinypy_value_t *function, ti
     }
     tinypy_value_t *stream = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *text = TINYPY_TUPLE_GET(args, 1U);
+    if (TINYPY_VALUE_KIND(stream) != TINYPY_VALUE_OUTPUT_STREAM) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor requires an output stream object", out_error);
+        return NULL;
+    }
     if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_STRING) {
         bytes = tinypy_string_view(text, &size);
     }
@@ -226,6 +224,10 @@ static tinypy_value_t *__tinypy_output_writelines_method(tinypy_value_t *functio
     }
     tinypy_value_t *stream = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
+    if (TINYPY_VALUE_KIND(stream) != TINYPY_VALUE_OUTPUT_STREAM) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor requires an output stream object", out_error);
+        return NULL;
+    }
     tinypy_value_t *iterator = tinypy_iter(item, out_error);
     if (iterator == NULL) {
         return NULL;

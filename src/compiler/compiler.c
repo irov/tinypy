@@ -53,64 +53,6 @@ static uint32_t __tinypy_compiler_inherited_flags(const tinypy_compile_ctx_t *ct
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_compiler_source_is_empty_suite(const tinypy_compile_ctx_t *ctx) {
-    size_t position = 0U;
-
-    while (position < ctx->source.size) {
-        uint8_t byte = ctx->source.bytes[position];
-
-        if (byte == ' ' || byte == '\t' || byte == '\f' || byte == '\n') {
-            position += 1U;
-            continue;
-        }
-        if (byte == '#') {
-            while (position < ctx->source.size && ctx->source.bytes[position] != '\n') {
-                position += 1U;
-            }
-            continue;
-        }
-        if (position + 4U <= ctx->source.size && memcmp(ctx->source.bytes + position, "pass", 4U) == 0) {
-            position += 4U;
-            continue;
-        }
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_compiler_empty_code(tinypy_compile_ctx_t *ctx) {
-    uint8_t instructions[4];
-    tinypy_value_t *consts;
-    tinypy_value_t *empty;
-    tinypy_value_t *filename;
-    tinypy_value_t *name;
-    tinypy_value_t *lnotab;
-    tinypy_value_t *code;
-    uint32_t flags = __tinypy_compiler_inherited_flags(ctx) | (uint32_t)TINYPY_CODE_NO_FREE;
-
-    instructions[0] = (uint8_t)TINYPY_OP_LOAD_CONST;
-    instructions[1] = 0U;
-    instructions[2] = 0U;
-    instructions[3] = (uint8_t)TINYPY_OP_RETURN_VALUE;
-    tinypy_value_t *none = tinypy_none_get(ctx->vm);
-    tinypy_value_t *bytecode = tinypy_string_from_bytes(ctx->vm, instructions, sizeof(instructions));
-    consts = tinypy_tuple_from_items(ctx->vm, &none, 1U);
-    empty = tinypy_tuple_from_items(ctx->vm, NULL, 0U);
-    filename = tinypy_string_from_bytes(ctx->vm, ctx->logical_filename, ctx->filename_size);
-    name = tinypy_string_from_bytes(ctx->vm, "<module>", 8U);
-    tinypy_internal_string_set_interned(name, 1);
-    lnotab = tinypy_string_from_bytes(ctx->vm, NULL, 0U);
-    code = tinypy_code_new(0, 0, 1, (int32_t)flags, bytecode, consts, empty, empty, empty, empty, filename, name, 1, lnotab);
-    TINYPY_DECREF(lnotab);
-    TINYPY_DECREF(name);
-    TINYPY_DECREF(filename);
-    TINYPY_DECREF(empty);
-    TINYPY_DECREF(consts);
-    TINYPY_DECREF(bytecode);
-    TINYPY_DECREF(none);
-    return code;
-}
-//////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_compiler_parser_start(tinypy_compile_mode_e mode) {
     if (mode == TINYPY_COMPILE_EXEC) {
         return TINYPY_GRAMMAR_FILE_INPUT;
@@ -143,7 +85,7 @@ static tinypy_error_kind_e __tinypy_compiler_parser_error_kind(int32_t error, in
     if (error == TINYPY_PARSER_DEDENT_ERROR || error == TINYPY_PARSER_TOO_DEEP) {
         return TINYPY_ERROR_INDENTATION;
     }
-    if (error == TINYPY_PARSER_SYNTAX_ERROR && (token == TINYPY_TOKEN_INDENT || expected == TINYPY_TOKEN_INDENT)) {
+    if (error == TINYPY_PARSER_SYNTAX_ERROR && (token == TINYPY_TOKEN_INDENT || token == TINYPY_TOKEN_DEDENT || expected == TINYPY_TOKEN_INDENT)) {
         return TINYPY_ERROR_INDENTATION;
     }
     if (error == TINYPY_PARSER_DECODE_ERROR) {
@@ -188,6 +130,9 @@ static const char *__tinypy_compiler_parser_error_message(int32_t error, int32_t
     }
     if (error == TINYPY_PARSER_SYNTAX_ERROR && token == TINYPY_TOKEN_INDENT) {
         return "unexpected indent";
+    }
+    if (error == TINYPY_PARSER_SYNTAX_ERROR && token == TINYPY_TOKEN_DEDENT) {
+        return "unexpected unindent";
     }
     if (error == TINYPY_PARSER_SYNTAX_ERROR && expected == TINYPY_TOKEN_INDENT) {
         return "expected an indented block";
@@ -252,14 +197,6 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
     tinypy_symbol_table_t *symbols;
     tinypy_code_object_t *code;
 
-    if (ctx->options.mode == TINYPY_COMPILE_EXEC && __tinypy_compiler_source_is_empty_suite(ctx) != 0) {
-        tinypy_value_t *return_value_1 = __tinypy_compiler_empty_code(ctx);
-        return return_value_1;
-    }
-    if (ctx->options.mode == TINYPY_COMPILE_SINGLE && __tinypy_compiler_source_is_empty_suite(ctx) != 0 && ctx->source.size > 1U) {
-        tinypy_value_t *return_value_2 = __tinypy_compiler_empty_code(ctx);
-        return return_value_2;
-    }
     tinypy_cst_node_t *tree = __tinypy_compiler_parse(ctx, &parser_flags, out_error);
     if (tree == NULL) {
         return NULL;
@@ -279,6 +216,7 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
         }
         return NULL;
     }
+    ctx->preprocessor_future_flags = (uint32_t)future->features | (uint32_t)flags.flags;
     if ((ctx->options.feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) != 0U && tinypy_internal_preprocessor_transform(ctx, module, (uint32_t)future->features | (uint32_t)flags.flags) == 0) {
         if (ctx->failed == 0) {
             tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "preprocessor exceeds compiler limits", 1, 1, out_error);
@@ -381,6 +319,7 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
         }
         goto complete;
     }
+    ctx.preprocessor_future_flags = (uint32_t)future->features | (uint32_t)flags.flags;
     if ((ctx.options.feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) != 0U && tinypy_internal_preprocessor_transform(&ctx, module, (uint32_t)future->features | (uint32_t)flags.flags) == 0) {
         if (ctx.failed == 0) {
             tinypy_internal_compiler_error(&ctx, TINYPY_ERROR_COMPILER_LIMIT, "preprocessor exceeds compiler limits", 1, 1, out_error);
