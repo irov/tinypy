@@ -695,8 +695,8 @@ tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t n
             (void)memcpy(canonical + package_size + 1U, name, name_size);
         }
         if (level < 0) {
-            tinypy_bool_t fresh = TINYPY_FALSE;
-            tinypy_value_t *head = __tinypy_import_load_one(vm, canonical, package_size + 1U + head_size, importer, importer_size, NULL, &fresh, &not_found, out_error);
+            size_t canonical_head_size = package_size + 1U + head_size;
+            tinypy_value_t *head = __tinypy_import_load_path(vm, canonical, canonical_head_size, importer, importer_size, canonical_head_size, &not_found, out_error);
 
             if (head == NULL) {
                 if (not_found == 0) {

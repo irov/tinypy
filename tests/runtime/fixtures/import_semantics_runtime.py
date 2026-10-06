@@ -4,11 +4,22 @@
 import sys
 
 from import_semantics import pkg
+
+# An implicit relative import in a function must publish the submodule on
+# its package even though the local import does not assign a package global.
+local_sibling = pkg.import_sibling()
+from import_semantics.pkg import sibling
+assert sibling is local_sibling
+assert pkg.sibling is sys.modules["import_semantics.pkg.sibling"]
+
 from import_semantics.pkg import relative
 
 module = __import__("import_semantics.pkg", fromlist=["other"])
 assert module.__name__ == "import_semantics.pkg"
 assert module.other.value == "other"
+assert pkg.import_other_value() == "other"
+from import_semantics.pkg import other
+assert other is sys.modules["import_semantics.pkg.other"]
 module = __import__("import_semantics.pkg", globals(), locals(), [], -1)
 assert module.__name__ == "import_semantics"
 module = __import__("import_semantics.pkg.sub")
@@ -60,6 +71,11 @@ assert relative.sibling_value == "sibling"
 assert relative.partial_error == "No module named zzz"
 assert relative.beyond_error == "Attempted relative import beyond toplevel package"
 assert relative.plain_value == "plain"
+
+# A cached implicit import must preserve an explicitly replaced attribute.
+pkg.sibling = "replaced"
+assert pkg.import_sibling() is sibling
+assert pkg.sibling == "replaced"
 
 pkg.sub = "replaced"
 import import_semantics.pkg.sub
