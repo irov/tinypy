@@ -335,7 +335,11 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         }
         *out_value = tinypy_string_from_bytes(materializer->vm, bytes, size);
         if (interned != 0) {
-            tinypy_internal_string_set_interned(*out_value, 1);
+            if (tinypy_internal_string_intern(out_value, NULL) == 0) {
+                TINYPY_DECREF(*out_value);
+                *out_value = NULL;
+                return TINYPY_MARSHAL_BYTE_LIMIT;
+            }
             if (__tinypy_marshal_cache_append(materializer, source, *out_value) == 0) {
                 TINYPY_DECREF(*out_value);
                 *out_value = NULL;

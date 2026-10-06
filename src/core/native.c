@@ -60,6 +60,9 @@ void tinypy_internal_native_function_finalize(tinypy_value_t *value) {
         tinypy_internal_exception_state_t state;
         tinypy_internal_exception_preserve_begin(vm, &state);
         finalize(user_data);
+        if (vm->state == TINYPY_VM_STATE_LIVE) {
+            tinypy_internal_output_unraisable(vm, value);
+        }
         tinypy_internal_exception_preserve_end(vm, &state);
     }
 }
@@ -120,13 +123,9 @@ tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *calla
     if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded while calling a Python object", out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *args = tinypy_internal_tuple_new_checked(vm, count + 1U, out_error);
+    tinypy_value_t *args = tinypy_internal_tuple_join_items_checked(vm, function->self, items, count, NULL, 0U, out_error);
     if (args == NULL) {
         return NULL;
-    }
-    tinypy_tuple_set(args, 0U, function->self);
-    for (size_t index = 0U; index < count; ++index) {
-        tinypy_tuple_set(args, index + 1U, items[index]);
     }
     vm->evaluation_depth += 1U;
     tinypy_value_t *result = __tinypy_native_function_invoke(callable, args, kwargs, out_error);
@@ -924,6 +923,9 @@ void tinypy_internal_native_instance_finalize(tinypy_value_t *value) {
         tinypy_internal_exception_state_t state;
         tinypy_internal_exception_preserve_begin(vm, &state);
         spec->finalize(value, native_payload, spec->user_data);
+        if (vm->state == TINYPY_VM_STATE_LIVE) {
+            tinypy_internal_output_unraisable(vm, value);
+        }
         tinypy_internal_exception_preserve_end(vm, &state);
     }
 }

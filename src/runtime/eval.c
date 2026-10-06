@@ -190,14 +190,16 @@ static tinypy_bool_t __tinypy_eval_set_item(tinypy_vm_t *vm, tinypy_value_t *con
 }
 //////////////////////////////////////////////////////////////////////////
 static inline tinypy_bool_t __tinypy_eval_attribute_cache_valid(const tinypy_attribute_lookup_cache_entry_t *cache, tinypy_value_t *object, size_t name_index) {
-    return cache->epoch == object->type->version_tag && cache->name_index == name_index && cache->type == object->type
-        && (cache->attribute == NULL || (cache->attribute->type == cache->attribute_type && cache->attribute_type->version_tag == cache->attribute_epoch));
+    tinypy_bool_t valid = TINYPY_VALUE_VM(object)->type_lookup_cache_epoch != 0U && cache->epoch == TINYPY_VALUE_VM(object)->type_lookup_cache_epoch && cache->name_index == name_index && cache->type == object->type
+        && (cache->attribute == NULL || (cache->attribute->type == cache->attribute_type));
+
+    return valid;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_value_t *object, tinypy_value_t *name, size_t name_index, tinypy_error_t **out_error) {
     const uint8_t *name_bytes = TINYPY_TEXT_BYTES(name);
     size_t name_size = TINYPY_TEXT_BYTE_SIZE(name);
-    if (TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE || object->type->get_attribute != NULL || object->type->has_classic_mro != 0
+    if (TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE || object->type->get_attribute != NULL || (object->type->has_classic_mro != 0 || object->type->has_custom_mro != 0)
         || (name_size >= 2U && name_bytes[0] == (uint8_t)'_' && name_bytes[1] == (uint8_t)'_')) {
         tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
         return result;
@@ -232,7 +234,7 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
             TINYPY_INCREF(attribute);
         }
         TINYPY_INCREF(&type->base.base);
-        uint64_t epoch = type->version_tag;
+        uint64_t epoch = vm->type_lookup_cache_epoch;
         has_get = attribute != NULL ? tinypy_internal_descriptor_has_get(vm, attribute) : TINYPY_FALSE;
         data_descriptor = attribute != NULL && has_get != 0 ? tinypy_internal_descriptor_is_data(vm, attribute) : TINYPY_FALSE;
         cache->epoch = epoch;
@@ -240,7 +242,6 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         cache->type = type;
         cache->attribute = attribute;
         cache->attribute_type = attribute != NULL ? attribute->type : NULL;
-        cache->attribute_epoch = attribute != NULL ? attribute->type->version_tag : 0U;
         cache->data_descriptor = data_descriptor;
         cache->has_descriptor_get = has_get;
     }
@@ -294,14 +295,14 @@ done:
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_value_t *object, tinypy_value_t *name, size_t name_index, tinypy_value_t *value, tinypy_error_t **out_error) {
-    if (TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE || object->type->set_attribute != NULL || object->type->has_classic_mro != 0) {
+    if (TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE || object->type->set_attribute != NULL || (object->type->has_classic_mro != 0 || object->type->has_custom_mro != 0)) {
         tinypy_bool_t result = tinypy_internal_object_set_attr_protocol_key(object, name, value, out_error);
         return result;
     }
     tinypy_attribute_store_cache_entry_t *cache = &TINYPY_CODE_OBJECT(code)->attribute_store_cache[name_index & (TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE - 1U)];
-    if (cache->epoch == object->type->version_tag && cache->name_index == name_index && cache->type == object->type
+    if (TINYPY_VALUE_VM(object)->type_lookup_cache_epoch != 0U && cache->epoch == TINYPY_VALUE_VM(object)->type_lookup_cache_epoch && cache->name_index == name_index && cache->type == object->type
         && (cache->direct_instance_dict != 0 || cache->data_descriptor != 0)
-        && (cache->descriptor == NULL || (cache->descriptor->type == cache->descriptor_type && cache->descriptor_type->version_tag == cache->descriptor_epoch))) {
+        && (cache->descriptor == NULL || (cache->descriptor->type == cache->descriptor_type))) {
         if (cache->data_descriptor != 0) {
             tinypy_bool_t result = tinypy_internal_descriptor_set_value(vm, cache->descriptor, object, value, out_error);
             return result;
@@ -321,14 +322,13 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
             TINYPY_INCREF(descriptor);
         }
         TINYPY_INCREF(&type->base.base);
-        uint64_t epoch = type->version_tag;
+        uint64_t epoch = vm->type_lookup_cache_epoch;
         tinypy_bool_t data = descriptor != NULL ? tinypy_internal_descriptor_is_data(vm, descriptor) : TINYPY_FALSE;
         cache->epoch = epoch;
         cache->name_index = name_index;
         cache->type = type;
         cache->descriptor = descriptor;
         cache->descriptor_type = descriptor != NULL ? descriptor->type : NULL;
-        cache->descriptor_epoch = descriptor != NULL ? descriptor->type->version_tag : 0U;
         cache->data_descriptor = data;
         cache->direct_instance_dict = data == 0 && type->has_instance_dict != 0;
         tinypy_bool_t stored;
@@ -833,6 +833,8 @@ cleanup:
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_eval_reason_e __tinypy_eval_end_finally(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t **out_result, tinypy_error_t **out_error) {
+#if !defined(NDEBUG)
+    /* Stack shape is established by the one-time bytecode verifier. */
     size_t depth = __tinypy_eval_stack_depth(frame);
     if (depth < 1U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "invalid value stack during exception cleanup", out_error);
@@ -853,6 +855,7 @@ static tinypy_eval_reason_e __tinypy_eval_end_finally(tinypy_vm_t *vm, tinypy_fr
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "invalid value stack during exception cleanup", out_error);
         return TINYPY_EVAL_REASON_EXCEPTION;
     }
+#endif
     tinypy_value_t *top = __tinypy_eval_pop_owned(frame);
     tinypy_eval_reason_e reason = TINYPY_EVAL_REASON_NOT;
 
@@ -932,6 +935,8 @@ static tinypy_bool_t __tinypy_eval_setup_with(tinypy_vm_t *vm, tinypy_frame_obje
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_eval_reason_e __tinypy_eval_with_cleanup(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_error_t **out_error) {
+#if !defined(NDEBUG)
+    /* Stack shape is established by the one-time bytecode verifier. */
     size_t depth = __tinypy_eval_stack_depth(frame);
     if (depth < 2U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "invalid value stack during exception cleanup", out_error);
@@ -952,6 +957,7 @@ static tinypy_eval_reason_e __tinypy_eval_with_cleanup(tinypy_vm_t *vm, tinypy_f
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "invalid value stack during exception cleanup", out_error);
         return TINYPY_EVAL_REASON_EXCEPTION;
     }
+#endif
     tinypy_value_t *top = __tinypy_eval_pop_owned(frame);
     tinypy_value_t *type = NULL;
     tinypy_value_t *value = NULL;
@@ -1470,6 +1476,13 @@ static tinypy_bool_t __tinypy_eval_unwind_reason(tinypy_vm_t *vm, tinypy_frame_o
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_eval_constant_is_none(const void *user_data, size_t index) {
+    const tinypy_code_object_t *code = (const tinypy_code_object_t *)user_data;
+    tinypy_bool_t result = TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(code->consts, index)) == TINYPY_VALUE_NONE ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_verify_code(tinypy_vm_t *vm, tinypy_code_object_t *code, tinypy_error_t **out_error) {
     tinypy_bytecode_metadata_t metadata;
     tinypy_bytecode_verify_result_t result;
@@ -1484,6 +1497,8 @@ static tinypy_bool_t __tinypy_eval_verify_code(tinypy_vm_t *vm, tinypy_code_obje
     }
     bytecode = TINYPY_STRING_OBJECT(code->bytecode)->bytes;
     bytecode_size = TINYPY_SIZED_SIZE(code->bytecode);
+    metadata.is_none_constant = __tinypy_eval_constant_is_none;
+    metadata.constant_user_data = code;
     metadata.const_count = TINYPY_TUPLE_SIZE(code->consts);
     metadata.name_count = TINYPY_TUPLE_SIZE(code->names);
     metadata.varname_count = TINYPY_TUPLE_SIZE(code->varnames);
@@ -2163,18 +2178,10 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             TINYPY_INCREF(frame->back);
         }
         frame->handled_clear_epoch = vm->handled_clear_epoch;
-        frame->previous_handled_type = vm->handled_type;
-        frame->previous_handled_value = vm->handled_value;
-        frame->previous_handled_traceback = vm->handled_traceback;
-        if (frame->previous_handled_type != NULL) {
-            TINYPY_INCREF(frame->previous_handled_type);
-        }
-        if (frame->previous_handled_value != NULL) {
-            TINYPY_INCREF(frame->previous_handled_value);
-        }
-        if (frame->previous_handled_traceback != NULL) {
-            TINYPY_INCREF(frame->previous_handled_traceback);
-        }
+        frame->handled_state_saved = TINYPY_FALSE;
+        frame->previous_handled_type = NULL;
+        frame->previous_handled_value = NULL;
+        frame->previous_handled_traceback = NULL;
         if (generator->started != 0 && throw_value == NULL) {
             TINYPY_INCREF(send_value);
             __tinypy_eval_push_owned(frame, send_value);
@@ -3169,6 +3176,22 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
                 break;
             }
+#if !defined(TINYPY_DEBUGGER)
+            if (comparison->type == &vm->types[TINYPY_VALUE_BOOL] && instruction_offset < bytecode_size) {
+                tinypy_decoded_instruction_t next;
+
+                __tinypy_eval_decode_trusted(bytecode, instruction_offset, &next);
+                if (next.opcode == TINYPY_OP_POP_JUMP_IF_FALSE || next.opcode == TINYPY_OP_POP_JUMP_IF_TRUE) {
+                    tinypy_bool_t truth = tinypy_bool_as_i32(comparison) != 0;
+                    tinypy_bool_t jump = next.opcode == TINYPY_OP_POP_JUMP_IF_TRUE ? truth : truth == 0;
+
+                    frame->last_instruction = (int32_t)next.offset;
+                    instruction_offset = jump != 0 ? (size_t)next.argument : next.next_offset;
+                    TINYPY_DECREF(comparison);
+                    break;
+                }
+            }
+#endif
             __tinypy_eval_push_owned(frame, comparison);
         }
         break;
@@ -3396,7 +3419,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
     }
     vm->evaluation_depth -= 1U;
     vm->current_frame = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
-    if (vm->handled_clear_epoch == frame->handled_clear_epoch) {
+    if (frame->handled_state_saved != 0 && vm->handled_clear_epoch == frame->handled_clear_epoch) {
         tinypy_internal_exception_restore_handled(vm, frame->previous_handled_type, frame->previous_handled_value, frame->previous_handled_traceback);
     }
     else {
@@ -3410,6 +3433,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             TINYPY_DECREF(frame->previous_handled_traceback);
         }
     }
+    frame->handled_state_saved = TINYPY_FALSE;
     frame->previous_handled_type = NULL;
     frame->previous_handled_value = NULL;
     frame->previous_handled_traceback = NULL;

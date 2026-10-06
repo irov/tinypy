@@ -553,6 +553,7 @@ static size_t __tinypy_verify_reason_item_count(tinypy_verify_reason_e reason) {
     case TINYPY_VERIFY_REASON_BREAK:
         return 1U;
     case TINYPY_VERIFY_REASON_NORMAL:
+        return 1U;
     default:
         return 0U;
     }
@@ -1538,6 +1539,36 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                 TINYPY_OPCODE_DECODE_OK);
             return return_value_10;
         }
+        if (context->blocks[state.block_index].type == TINYPY_OP_SETUP_FINALLY
+            || context->blocks[state.block_index].type == TINYPY_OP_SETUP_WITH) {
+            const tinypy_verify_block_t *block = &context->blocks[state.block_index];
+            tinypy_decoded_instruction_t sentinel;
+            size_t normal_marker;
+            size_t resume_depth = block->level;
+            uint8_t needs_cleanup = block->type == TINYPY_OP_SETUP_WITH ? 1U : 0U;
+
+            if (tinypy_opcode_decode(context->bytecode, context->bytecode_size, instruction.next_offset, &sentinel) != TINYPY_OPCODE_DECODE_OK
+                || sentinel.opcode != TINYPY_OP_LOAD_CONST || context->metadata->is_none_constant == NULL
+                || context->metadata->is_none_constant(context->metadata->constant_user_data, (size_t)sentinel.argument) == 0
+                || (needs_cleanup != 0U && resume_depth == 0U)) {
+                status = __tinypy_verify_fail(context, TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE, offset, instruction.opcode, 0U, TINYPY_OPCODE_DECODE_OK);
+                return status;
+            }
+            if (needs_cleanup != 0U) {
+                resume_depth -= 1U;
+            }
+            status = __tinypy_verify_push_marker(context, &instruction, state.marker_index, TINYPY_VERIFY_REASON_NORMAL,
+                resume_depth, TINYPY_VERIFY_NO_TARGET, needs_cleanup, &normal_marker);
+            if (status != TINYPY_BYTECODE_VERIFY_OK) {
+                return status;
+            }
+            if (!__tinypy_verify_add_size(block->level, 1U, &depth)) {
+                status = __tinypy_verify_fail(context, TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW, offset, instruction.opcode, 0U, TINYPY_OPCODE_DECODE_OK);
+                return status;
+            }
+            status = __tinypy_verify_fallthrough(context, &sentinel, depth, block->parent, normal_marker);
+            return status;
+        }
         tinypy_bytecode_verify_status_e return_value_11 = __tinypy_verify_fallthrough(
             context,
             &instruction,
@@ -1545,6 +1576,39 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             context->blocks[state.block_index].parent,
             state.marker_index);
         return return_value_11;
+
+    case TINYPY_OP_LOAD_CONST:
+        if (context->metadata->is_none_constant != NULL
+            && context->metadata->is_none_constant(context->metadata->constant_user_data, (size_t)instruction.argument) != 0
+            && instruction.next_offset < context->bytecode_size) {
+            uint8_t next_opcode = __tinypy_verify_opcode_at(context, instruction.next_offset);
+
+            if (next_opcode == TINYPY_OP_END_FINALLY || next_opcode == TINYPY_OP_WITH_CLEANUP) {
+                size_t normal_marker;
+                size_t resume_depth = state.stack_depth;
+                uint8_t cleanup = next_opcode == TINYPY_OP_WITH_CLEANUP ? 1U : 0U;
+
+                if (cleanup != 0U && resume_depth == 0U) {
+                    status = __tinypy_verify_fail(context, TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE, offset, instruction.opcode, 0U, TINYPY_OPCODE_DECODE_OK);
+                    return status;
+                }
+                if (cleanup != 0U) {
+                    resume_depth -= 1U;
+                }
+                status = __tinypy_verify_push_marker(context, &instruction, state.marker_index, TINYPY_VERIFY_REASON_NORMAL,
+                    resume_depth, TINYPY_VERIFY_NO_TARGET, cleanup, &normal_marker);
+                if (status != TINYPY_BYTECODE_VERIFY_OK) {
+                    return status;
+                }
+                status = __tinypy_verify_apply_effect(context, &instruction, state.stack_depth, &effect, &depth);
+                if (status != TINYPY_BYTECODE_VERIFY_OK) {
+                    return status;
+                }
+                status = __tinypy_verify_fallthrough(context, &instruction, depth, state.block_index, normal_marker);
+                return status;
+            }
+        }
+        break;
 
     case TINYPY_OP_WITH_CLEANUP: {
         const tinypy_verify_marker_t *marker = NULL;
@@ -1569,51 +1633,9 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         }
 
         if (handles_pending_with == 0) {
-            size_t protected_depth = 0U;
-
-            effect.required = 2U;
-            if (marker != NULL) {
-                protected_depth = expected;
-                if (marker->needs_with_cleanup != 0U && !__tinypy_verify_add_size(
-                        protected_depth,
-                        1U,
-                        &protected_depth)) {
-                    tinypy_bytecode_verify_status_e return_value_13 = __tinypy_verify_fail(
-                        context,
-                        TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
-                        offset,
-                        instruction.opcode,
-                        UINT64_C(0),
-                        TINYPY_OPCODE_DECODE_OK);
-                    return return_value_13;
-                }
-                if (state.stack_depth < protected_depth || state.stack_depth - protected_depth < 2U) {
-                    tinypy_bytecode_verify_status_e return_value_14 = __tinypy_verify_fail(
-                        context,
-                        TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE,
-                        offset,
-                        instruction.opcode,
-                        (uint64_t)state.stack_depth,
-                        TINYPY_OPCODE_DECODE_OK);
-                    return return_value_14;
-                }
-            }
-            status = __tinypy_verify_apply_effect(
-                context,
-                &instruction,
-                state.stack_depth,
-                &effect,
-                &depth);
-            if (status != TINYPY_BYTECODE_VERIFY_OK) {
-                return status;
-            }
-            tinypy_bytecode_verify_status_e return_value_15 = __tinypy_verify_fallthrough(
-                context,
-                &instruction,
-                depth,
-                state.block_index,
-                state.marker_index);
-            return return_value_15;
+            status = __tinypy_verify_fail(context, TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE, offset,
+                instruction.opcode, (uint64_t)state.stack_depth, TINYPY_OPCODE_DECODE_OK);
+            return status;
         }
 
         status = __tinypy_verify_apply_effect(
@@ -1670,12 +1692,19 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                     TINYPY_OPCODE_DECODE_OK);
                 return return_value_16;
             }
+            size_t normal_marker;
+
+            status = __tinypy_verify_push_marker(context, &instruction, marker->parent, TINYPY_VERIFY_REASON_NORMAL,
+                marker->resume_depth, TINYPY_VERIFY_NO_TARGET, 0U, &normal_marker);
+            if (status != TINYPY_BYTECODE_VERIFY_OK) {
+                return status;
+            }
             tinypy_bytecode_verify_status_e return_value_17 = __tinypy_verify_fallthrough(
                 context,
                 &instruction,
                 suppressed_depth,
                 state.block_index,
-                marker->parent);
+                normal_marker);
             return return_value_17;
         }
 
@@ -1684,27 +1713,13 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
 
     case TINYPY_OP_END_FINALLY:
         if (state.marker_index == TINYPY_VERIFY_NO_MARKER) {
-            status = __tinypy_verify_apply_effect(
-                context,
-                &instruction,
-                state.stack_depth,
-                &effect,
-                &depth);
-            if (status != TINYPY_BYTECODE_VERIFY_OK) {
-                return status;
-            }
-            tinypy_bytecode_verify_status_e return_value_18 = __tinypy_verify_fallthrough(
-                context,
-                &instruction,
-                depth,
-                state.block_index,
-                TINYPY_VERIFY_NO_MARKER);
-            return return_value_18;
+            status = __tinypy_verify_fail(context, TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE, offset,
+                instruction.opcode, (uint64_t)state.stack_depth, TINYPY_OPCODE_DECODE_OK);
+            return status;
         }
         const tinypy_verify_marker_t *marker =
             &context->markers[state.marker_index];
         size_t expected;
-        size_t protected_depth;
         tinypy_verify_reason_e marker_reason =
             (tinypy_verify_reason_e)marker->reason;
 
@@ -1718,39 +1733,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                 TINYPY_OPCODE_DECODE_OK);
             return return_value_19;
         }
-        protected_depth = expected;
-        if (marker->needs_with_cleanup != 0U && !__tinypy_verify_add_size(
-                protected_depth,
-                1U,
-                &protected_depth)) {
-            tinypy_bytecode_verify_status_e return_value_20 = __tinypy_verify_fail(
-                context,
-                TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
-                offset,
-                instruction.opcode,
-                UINT64_C(0),
-                TINYPY_OPCODE_DECODE_OK);
-            return return_value_20;
-        }
-
-        if (state.stack_depth > protected_depth) {
-            status = __tinypy_verify_apply_effect(
-                context,
-                &instruction,
-                state.stack_depth,
-                &effect,
-                &depth);
-            if (status != TINYPY_BYTECODE_VERIFY_OK) {
-                return status;
-            }
-            tinypy_bytecode_verify_status_e return_value_21 = __tinypy_verify_fallthrough(
-                context,
-                &instruction,
-                depth,
-                state.block_index,
-                state.marker_index);
-            return return_value_21;
-        }
         if (marker->needs_with_cleanup != 0U || state.stack_depth != expected) {
             tinypy_bytecode_verify_status_e return_value_22 = __tinypy_verify_fail(
                 context,
@@ -1760,6 +1742,10 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                 (uint64_t)state.stack_depth,
                 TINYPY_OPCODE_DECODE_OK);
             return return_value_22;
+        }
+        if (marker_reason == TINYPY_VERIFY_REASON_NORMAL) {
+            status = __tinypy_verify_fallthrough(context, &instruction, marker->resume_depth, state.block_index, marker->parent);
+            return status;
         }
         if (marker_reason ==
                 TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE || marker_reason == TINYPY_VERIFY_REASON_EXCEPTION_FINAL) {
@@ -1948,23 +1934,45 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         return return_value_32;
 
     default:
-        status = __tinypy_verify_apply_effect(
-            context,
-            &instruction,
-            state.stack_depth,
-            &effect,
-            &depth);
-        if (status != TINYPY_BYTECODE_VERIFY_OK) {
+        break;
+    }
+    status = __tinypy_verify_apply_effect(
+        context,
+        &instruction,
+        state.stack_depth,
+        &effect,
+        &depth);
+    if (status != TINYPY_BYTECODE_VERIFY_OK) {
+        return status;
+    }
+    size_t changed_items = effect.pop_count;
+    size_t marker_index = state.marker_index;
+
+    if (instruction.opcode == TINYPY_OP_ROT_TWO || instruction.opcode == TINYPY_OP_ROT_THREE || instruction.opcode == TINYPY_OP_ROT_FOUR) {
+        changed_items = effect.required;
+    }
+    while (changed_items != 0U && marker_index != TINYPY_VERIFY_NO_MARKER) {
+        const tinypy_verify_marker_t *marker = &context->markers[marker_index];
+        size_t expected;
+
+        if (!__tinypy_verify_marker_expected_depth(marker, &expected)) {
+            status = __tinypy_verify_fail(context, TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW, offset, instruction.opcode, 0U, TINYPY_OPCODE_DECODE_OK);
             return status;
         }
-        tinypy_bytecode_verify_status_e return_value_33 = __tinypy_verify_fallthrough(
-            context,
-            &instruction,
-            depth,
-            state.block_index,
-            state.marker_index);
-        return return_value_33;
+        if (state.stack_depth - changed_items >= expected) {
+            break;
+        }
+        /* A consumed or rewritten token no longer proves a finally
+           reason, even when the instruction leaves the depth unchanged. */
+        marker_index = marker->parent;
     }
+    status = __tinypy_verify_fallthrough(
+        context,
+        &instruction,
+        depth,
+        state.block_index,
+        marker_index);
+    return status;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bytecode_verify_status_e __tinypy_verify_control_flow(tinypy_verify_context_t *context) {

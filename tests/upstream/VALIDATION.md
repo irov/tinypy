@@ -1,12 +1,13 @@
 # Portable corpus validation
 
-macOS arm64 validation on 2026-10-06, after runtime compatibility fixes:
+macOS arm64 validation on 2026-10-07, after runtime compatibility fixes:
 
-- 20 byte-for-byte unchanged CPython 2.7.18 modules: 221 discovered cases, including inherited methods.
-- Six project-authored Python 2.7 modules: 349 discovered cases.
-- All 555 active cases pass on tinypy and external CPython 2.7.18.
-- 15 original CPython cases remain explicitly deferred for the reasons in `manifest.json`.
-- Total: 570 cases, 555 PASS, 15 DEFER, no active failures or signal exits.
+- 20 byte-for-byte unchanged CPython 2.7.18 modules: 221 discovered cases, including inherited methods; 210 selected.
+- Eight project-authored Python 2.7 modules: 460 discovered and selected cases.
+- All 666 ordinary active cases pass on tinypy and external CPython 2.7.18.
+- Four ownership-sensitive cases use Debug detector adaptations and are skipped in Release.
+- Seven tuple-cache identity variants are excluded; four CPython-specific originals have local replacements.
+- Total: 681 discovered, 11 excluded originals, 670 selected cases; Debug has 670 PASS, Release has 666 PASS / 4 SKIP. No DEFER remains.
 - Every tinypy case runs independently with zero outstanding allocator memory.
 - The assertion adapter passes its positive and negative checks under both interpreters.
 - No expected-failure annotations or relaxed runtime expectations were added.
@@ -24,7 +25,9 @@ the same inherited malformed-iterator check.
 | `local.test_object_protocols` | 29 | 29 | Truth protocols, short circuiting, attributes, properties, inheritance, reflected operations |
 | `local.test_percent_format` | 77 | 77 | Formatting vectors, Unicode, flags, bad arguments, mapping lookup, conversion protocols |
 | `local.test_runtime_regressions` | 23 | 23 | Recursion, exception cleanup, classic coercion and callback errors, augmented assignment, implicit static `__new__` |
-| `local.test_review_regressions` | 54 | 54 | Long conversion, caches, finalizers, metaclasses, imports, numeric/codec/container protocols, output and exception state |
+| `local.test_review_regressions` | 109 | 109 | Long conversion, custom MRO, intern sharing/lifetime, caches, finalizers, subtype factories, imports, builtins namespaces, numeric/codec/container protocols, sorting, finally, exception state, deletion/reversed and length-hint protocols |
+| `local.test_evaluation_semantics` | 25 | 25 | Evaluation order, scope, decorators, control-flow unwinding, context managers and generators |
+| `local.test_container_semantics` | 31 | 31 | Iteration, list/set/bytearray partial updates and reinitialization, constructor keywords, subclass representation, slices, mappings and properties |
 
 The local modules use independently authored test bodies and operand vectors,
 with all expectations checked on CPython 2.7.18.
@@ -53,43 +56,98 @@ The dict-comprehension assignment error check is now active; its literal
 `assertRaisesRegexp` patterns are supported by the assertion adapter. The 23
 new regression cases cover the fixes and adjacent error paths.
 
-## Deferred originals
+## Selected replacements and cycle adaptations
 
-The remaining 15 originals require cyclic GC, CPython extension/iterator details,
-refcount inspection or ownership cleanup. `AugAssignTest.testCustomMethods1`
-captures its own class in closures. `ClassTests.testSFBug532646` creates a
-class/instance ownership cycle; its initial native crash was fixed by guarding
-native callable recursion. Local equivalents now check augmented-assignment
-identity/rebinding and recursive calls with explicit cycle cleanup. The
-unchanged originals remain deferred and are not counted as passing.
+Seven `test_tuple_reuse` variants are excluded from the selected corpus.
+`ClassTests.testDelItem`, `TestReversed.test_len`, `test_bug1229429` and
+`test_xrange_optimization` have independently authored replacements under
+`local.test_review_regressions`: Python deletion/error propagation, direct
+length hints, weakref lifetime after invalid reversed calls, and reversed
+xrange values/exhaustion. These replacements pass on CPython 2.7.18 and tinypy;
+they do not claim CPython's C ABI, refcount inspection or concrete iterator type.
+All eleven originals remain in the vendor/discovery inventory and are excluded
+from execution, with reasons in `manifest.json` and reports. Discovery still
+validates them, so exclusions cannot silently hide a missing source case.
+
+Four ownership-sensitive cases use `cycle_cases.py`
+in Debug with `TINYPY_ENABLE_CYCLE_DIAGNOSTICS=ON`:
+
+- `ClassTests.testDel`: acyclic finalization and zero detector false positives.
+- `TestReversed.test_gc`: one sequence/reversed cycle.
+- `AugAssignTest.testCustomMethods1`: two class/method/closure cycles, retaining identity/rebinding assertions.
+- `ClassTests.testSFBug532646`: one class/instance cycle, retaining the RuntimeError recursion check.
+
+Weak references allow cleanup without rooting the cycles. Each adaptation
+first checks that reachable cycles are not reported, then checks unreachable
+detection, breaks its owning edges and checks zero remaining cycles;
+the process must also return its allocator balance to zero. The coordinator
+checks diagnostic edges and source locations and records an explicit
+`debug-cycle-adaptation` mode. Release skips all four before fixture execution.
+Vendor sources remain unchanged; adaptation PASS is not an original GC test PASS.
 
 The runtime still uses reference counting with explicit ownership-cycle cleanup;
 this change does not add cyclic GC or the CPython `_testcapi` ABI.
 
 ## Completed checks
 
-| Profile | Active cases | Deferred cases | CTest |
+| Profile | Active cases | Skipped cases | CTest |
 | --- | --- | --- | --- |
-| Debug | 555 PASS | 15 | 109/109 PASS |
-| Release | 555 PASS | 15 | 109/109 PASS |
-| Debug with ASan and UBSan | 555 PASS | 15 | 109/109 PASS |
+| Debug with cycle diagnostics | 670 PASS | 0 | 114/114 PASS |
+| Release | 666 PASS | 4 | 114/114 PASS |
+| Debug with cycle diagnostics, ASan and UBSan | 670 PASS | 0 | 114/114 PASS |
+| Release with LTO | 666 PASS | 4 | 114/114 PASS |
 
-All 81 pre-existing CTests pass in each profile. New registrations comprise 26
-corpus modules, the assertion adapter and a native-stack-budget test. The latter
-checks an explicit byte budget, default/older-config behavior, RuntimeError,
+All 81 pre-existing CTests pass in each profile. New registrations comprise 28
+corpus modules, the assertion adapter, native stack/heap budget, intern-lifetime
+and locale tests. The native-stack-budget test checks an explicit byte budget,
+default/older-config behavior, RuntimeError,
 recovery and zero outstanding allocations. No AddressSanitizer or
 UndefinedBehaviorSanitizer diagnostics occurred. UBSan used
 `UBSAN_OPTIONS=halt_on_error=1`; sanitizer Debug remains unoptimized.
 
-Compiler differential passed for 35 Python 2 vendor, local and adapter sources
+The earlier runtime closure's compiler differential passed for 35 Python 2 vendor, local and adapter sources
 at optimize levels 0, 1 and 2: 105 byte-identical marshal-v2 outputs against
-CPython 2.7.18. The existing tool/API suite passed 34/34. All builds completed
+CPython 2.7.18. The current tool/API and coordinator suite passed 45/45, including
+exclusion/discovery validation and rejection of explicitly requested excluded
+cases. Runtime builds completed
 with the repository's strict warnings-as-errors flags.
 
 These checks cover the listed corpus and native tests; they do not prove full
 Python 2 compatibility or acceptance of an embedded application. Rerun the
 coordinator with `--report` for current case-by-case results.
 
-The current review adds 54 functional cases and two import fixtures. Its
-source-audit findings, measured performance, primary references and unresolved
-compatibility/optimization work are listed in [REVIEW_STATUS.md](REVIEW_STATUS.md).
+The review module now has 109 functional cases and import fixtures also cover
+reload/package behavior. Source-audit findings, closure validation, measured
+performance and profile boundaries are listed in [REVIEW_STATUS.md](REVIEW_STATUS.md).
+
+The third pass adds module/minimal/missing builtins namespaces, inherited eval
+builtins and tuple concatenation subtype/identity checks. Independent matrices
+also cover 4,476 text/Unicode outcomes, 47 frame/eval outcomes and 66 tuple
+outcomes. The redundant finally/with stack-shape diagnostics compile only in
+Debug; one-time structural verification and semantic exceptions remain active
+in Release.
+
+The fourth pass compares 484 deterministic aggregate-function and iterator
+outcomes against CPython 2.7.18 in all four profiles. The five new local cases
+cover filter's immutable-subtype item protocol and storage length, indexed
+errors, immediate text-item validation, bool truth callbacks, and map's shallow
+copy/subtype-iteration behavior. Semantic checks remain active in Release.
+
+The fifth pass adds checked Python 2 length hints for sequence consumers. Its
+differential covers callback order, `__len__` fallback, classic instances,
+negative hints and propagated callback errors. Subclasses of `reversed` also
+retain Python 2's ignored-keyword behavior. The general multi-sequence `map`
+path also retains Python 2.7's observable ignored-hint-error behavior. These
+semantic callbacks and errors remain active in Release.
+
+The external-suite review adds 56 project-authored cases: 25 evaluation/control
+flow checks and 31 container/iterator checks. Every ordinary case also passes
+on external CPython 2.7.18. General list extension now appends as the source
+yields. Reinitializing list, set and bytearray clears first and retains partial
+progress on failure; set difference-update streams general iterables. Sequence
+and bytearray constructor keywords and set-subclass representation follow
+Python 2.7. Slice replacement retains its separate atomic collection semantics.
+Selection and pinned upstream references are documented in
+[EXTERNAL_TEST_REVIEW.md](EXTERNAL_TEST_REVIEW.md).
+Both new source files additionally produce byte-identical marshal-v2 against
+CPython 2.7.18 at optimize levels 0, 1 and 2 (six compilations).

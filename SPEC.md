@@ -169,7 +169,7 @@ Runtime реализует:
 - old-style и new-style classes, включая classic classes среди `__bases__` и
   `__mro__` new-style класса (`tinypy_type_mro_at` и `tinypy_type_base_at`
   возвращают NULL для classic записей);
-- `type`, metaclasses, C3 MRO и `super`;
+- `type`, metaclasses, C3 MRO, custom `mro()` и `super`;
 - descriptors, properties, class/static methods и `__slots__`;
 - weak references и explicit finalization behavior.
 
@@ -177,12 +177,23 @@ Type slots возвращают прямой semantic result. Неверный s
 precondition и имеет undefined behavior. Python exceptions используются только
 для настоящих runtime ошибок.
 
-Внутренний MRO типа хранит заимствованные ссылки: тип входит в собственный
-MRO, и без cyclic GC владеющая ссылка образовала бы неосвобождаемый цикл.
-Поэтому `__mro__` при каждом обращении возвращает новый кортеж с владеющими
-ссылками, и `C.__mro__ is C.__mro__` ложно, в отличие от CPython. Member и
-getset descriptors, пережившие свой тип, остаются безопасными: repr показывает
-`<deleted type>`, а применение к объекту даёт TypeError.
+Внутренний MRO типа заимствует ссылку на сам тип и владеет остальными
+записями, включая классы, добавленные custom `mro()` вне `__bases__`.
+Без cyclic GC владеющая ссылка на сам тип образовала бы неосвобождаемый цикл.
+`__mro__` при каждом обращении возвращает новый кортеж с владеющими ссылками,
+и `C.__mro__ is C.__mro__` ложно, в отличие от CPython. Hook вызывается при
+создании типа и пересчёте MRO потомков после изменения баз; результат должен
+содержать классы с совместимым solid layout. Пересекающиеся реентерабельные
+присваивания `__bases__` во время hook отвергаются с RuntimeError; неудачный
+пересчёт откатывает MRO и базы. Member и getset descriptors, пережившие свой
+тип, остаются безопасными: repr показывает `<deleted type>`, а применение к
+объекту даёт TypeError.
+
+Runtime `intern()`, имена compiler и interned строки marshal используют общую
+VM-local таблицу без владеющих ссылок. Строка удаляется из таблицы при переходе
+refcount в ноль до отложенного освобождения; таблица периодически очищает
+tombstones и сокращает ёмкость. Односимвольные строки и другие постоянные
+значения по-прежнему удерживаются своими owned references самой VM.
 
 Python-visible bundled surface намеренно ограничен memory-only runtime:
 
@@ -207,8 +218,15 @@ Verifier контролирует:
 - jump targets;
 - block-stack transitions;
 - value-stack depth;
+- finally/with reason markers, их ширину и глубину продолжения;
 - indices names/constants/locals/free variables;
 - configured instruction и stack limits.
+
+Нормальный вход в cleanup требует доказанного None constant; verifier получает
+его признак из constants code object. Изменение или потребление reason marker
+сбрасывает доказательство, а cleanup без известного marker отвергается.
+Это структурная проверка CFG и стека: типы произвольных Python-операндов и
+эффекты пользовательских callbacks проверяются runtime.
 
 `code()` и загрузчик marshal дополнительно требуют `co_nlocals ==
 len(co_varnames)` и места для аргументов: frame размечается по первому

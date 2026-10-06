@@ -64,7 +64,7 @@ tinypy_value_t *tinypy_internal_slice_create(tinypy_type_t *type, tinypy_value_t
         tinypy_value_t *return_value_3 = tinypy_slice_new(vm, item, item_2, item_3);
         return return_value_3;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice requires one to three arguments", out_error);
+    tinypy_internal_make_arity_error(vm, "slice", 5U, argument_count, 1U, 3U, TINYPY_ARITY_STYLE_UNPACK, out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -113,10 +113,27 @@ static tinypy_value_t *__tinypy_slice_indices_method(tinypy_value_t *function, t
         return NULL;
     }
     if (length < 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "length should not be negative", out_error);
-        return NULL;
+        if (tinypy_internal_slice_unpack(TINYPY_TUPLE_GET(args, 0U), &indices, out_error) == 0) {
+            return NULL;
+        }
+        int64_t *bounds[] = {&indices.start, &indices.stop};
+        int64_t upper = indices.step < 0 ? (int64_t)((uint64_t)length - UINT64_C(1)) : length;
+
+        for (size_t index = 0U; index < 2U; ++index) {
+            if (*bounds[index] < 0) {
+                /* Python 2 exposes machine-word wrapping for this legacy
+                   case. Unsigned addition keeps it defined in the runtime. */
+                *bounds[index] = (int64_t)((uint64_t)*bounds[index] + (uint64_t)length);
+                if (*bounds[index] < 0) {
+                    *bounds[index] = indices.step < 0 ? -1 : 0;
+                }
+            }
+            else if (*bounds[index] >= length) {
+                *bounds[index] = upper;
+            }
+        }
     }
-    if (tinypy_internal_slice_indices(TINYPY_TUPLE_GET(args, 0U), (size_t)length, &indices, out_error) == 0) {
+    else if (tinypy_internal_slice_indices(TINYPY_TUPLE_GET(args, 0U), (size_t)length, &indices, out_error) == 0) {
         return NULL;
     }
     items[0] = tinypy_integer_from_i64(vm, indices.start);

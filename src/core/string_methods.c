@@ -4259,6 +4259,9 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
             __tinypy_string_builder_discard(&field);
             continue;
         }
+        if (mapping_key != 0) {
+            arguments.consumed = 1U;
+        }
         value = mapping_key != 0 ? __tinypy_percent_mapping_argument(vm, format, argument_value, bytes + key_begin, key_size, out_error) : __tinypy_percent_next_argument(vm, &arguments, out_error);
         if (value == NULL) {
             __tinypy_string_builder_discard(&output);

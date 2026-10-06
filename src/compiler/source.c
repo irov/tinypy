@@ -3,6 +3,26 @@
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_compiler_cookie_prefix(const uint8_t *name, size_t size, const char *canonical, size_t canonical_size) {
+    if (size < canonical_size || (size > canonical_size && name[canonical_size] != '-' && name[canonical_size] != '_')) {
+        return TINYPY_FALSE;
+    }
+    for (size_t index = 0U; index < canonical_size; ++index) {
+        uint8_t byte = name[index];
+
+        if (byte == '_') {
+            byte = '-';
+        }
+        else if (byte >= 'A' && byte <= 'Z') {
+            byte = (uint8_t)(byte + ('a' - 'A'));
+        }
+        if (byte != (uint8_t)canonical[index]) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_compiler_is_utf8_cookie(const uint8_t *name, size_t size) {
     char normalized[16];
     size_t index;
@@ -23,7 +43,8 @@ static tinypy_bool_t __tinypy_compiler_is_utf8_cookie(const uint8_t *name, size_
         normalized[output_size] = (char)byte;
         output_size += 1U;
     }
-    tinypy_bool_t return_value_1 = output_size == 4U && memcmp(normalized, "utf8", 4U) == 0;
+    tinypy_bool_t return_value_1 = (output_size == 4U && memcmp(normalized, "utf8", 4U) == 0)
+        || __tinypy_compiler_cookie_prefix(name, size, "utf-8", 5U) != 0;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -409,7 +430,7 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
             latin1 = 0;
         }
     }
-    if (bom != 0 && (latin1 != 0 || ascii != 0)) {
+    if (bom != 0 && (latin1 != 0 || ascii != 0 || (cookie != NULL && __tinypy_compiler_cookie_prefix(cookie, cookie_size, "utf-8", 5U) == 0))) {
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source encoding conflicts with UTF-8 BOM", cookie_line, 1, out_error);
         return TINYPY_FALSE;
     }

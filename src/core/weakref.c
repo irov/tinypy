@@ -63,7 +63,10 @@ static tinypy_value_t *__tinypy_weakref_new_with_type(tinypy_type_t *type, tinyp
             current = candidate->next;
         }
     }
-    tinypy_weakref_object_t *weakref = (tinypy_weakref_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
+    tinypy_weakref_object_t *weakref = (tinypy_weakref_object_t *)tinypy_internal_object_allocate_checked(vm, type, type->basic_size, out_error);
+    if (weakref == NULL) {
+        return NULL;
+    }
     weakref->object = object;
     weakref->callback = callback;
     weakref->next = *head_slot;
@@ -126,6 +129,7 @@ void tinypy_internal_weakref_clear(tinypy_value_t *value) {
                 TINYPY_DECREF(result);
             }
             if (error != NULL) {
+                tinypy_internal_output_unraisable(vm, weakref->callback);
                 tinypy_error_release(error);
             }
             tinypy_internal_exception_preserve_end(vm, &exception_state);

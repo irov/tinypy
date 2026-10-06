@@ -135,14 +135,17 @@ python3 tests/marshal/run_tests.py --sanitize
 python3 tools/audit_core_symbols.py build/default/libtinypy.a
 ```
 
-Cycle diagnostics are an opt-in build feature. They are disabled by default,
-including Debug builds:
+Cycle diagnostic support is compiled by default in Debug builds and excluded
+from Release builds. Tracking still requires `config.cycle_diagnostics = 1`
+for the VM, or `--cycle-diagnostics` when using the CLI:
 
 ```sh
 cmake -S . -B build/cycles \
-    -DCMAKE_BUILD_TYPE=Debug \
-    -DTINYPY_ENABLE_CYCLE_DIAGNOSTICS=ON
+    -DCMAKE_BUILD_TYPE=Debug
 ```
+
+Use `-DTINYPY_ENABLE_CYCLE_DIAGNOSTICS=OFF` to omit support explicitly. Existing
+CMake caches that retain OFF need `-DTINYPY_ENABLE_CYCLE_DIAGNOSTICS=ON`.
 
 The symbol audit rejects direct allocator, I/O, environment, process, locale
 and thread dependencies as well as symbols outside the tinypy namespace.

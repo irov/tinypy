@@ -32,6 +32,7 @@ tinypy_value_t *tinypy_internal_long_allocate_digits(tinypy_vm_t *vm, int32_t si
         return NULL;
     }
     TINYPY_LONG_OBJECT(result)->digit_count = digit_count;
+    TINYPY_LONG_OBJECT(result)->digit_capacity = digit_count;
     TINYPY_LONG_OBJECT(result)->sign = sign;
     return result;
 }
@@ -58,6 +59,7 @@ tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int32_t sign, co
         TINYPY_VALUE_LONG,
         allocation_size);
     TINYPY_LONG_OBJECT(result)->digit_count = digit_count;
+    TINYPY_LONG_OBJECT(result)->digit_capacity = digit_count;
     TINYPY_LONG_OBJECT(result)->sign = (int32_t)sign;
     if (digit_count != 0U) {
         (void)memcpy(

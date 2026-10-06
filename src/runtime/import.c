@@ -70,6 +70,21 @@ static tinypy_bool_t __tinypy_import_parent_package(tinypy_vm_t *vm, tinypy_valu
             }
         }
     }
+    if (package == NULL || TINYPY_VALUE_KIND(package) == TINYPY_VALUE_NONE) {
+        tinypy_value_t *module_name = __tinypy_import_dict_value(vm, globals, "__name__", 8U);
+
+        if (module_name != NULL && TINYPY_VALUE_KIND(module_name) == TINYPY_VALUE_STRING) {
+            tinypy_value_t *key = tinypy_string_from_bytes(vm, "__package__", 11U);
+            tinypy_value_t *inferred = package_size != 0U ? tinypy_string_from_bytes(vm, package_bytes, package_size) : tinypy_none_get(vm);
+            tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, globals, key, inferred, out_error);
+
+            TINYPY_DECREF(key);
+            TINYPY_DECREF(inferred);
+            if (stored == 0) {
+                return TINYPY_FALSE;
+            }
+        }
+    }
     if (package_size == 0U) {
         if (level > 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "Attempted relative import in non-package", out_error);
@@ -96,21 +111,13 @@ static void __tinypy_import_discard_error(tinypy_vm_t *vm, tinypy_error_t **out_
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_import_set_metadata(tinypy_vm_t *vm, tinypy_value_t *module, const char *name, size_t name_size, const tinypy_module_artifact_t *artifact) {
     tinypy_value_t *value = tinypy_string_from_bytes(vm, name, name_size);
-    size_t package_size = name_size;
-
     tinypy_module_add_value(module, "__name__", 8U, value);
     TINYPY_DECREF(value);
-    if ((artifact->flags & TINYPY_MODULE_ARTIFACT_PACKAGE) == 0U) {
-        while (package_size != 0U && name[package_size - 1U] != '.') {
-            package_size -= 1U;
-        }
-        if (package_size != 0U) {
-            package_size -= 1U;
-        }
+    if (tinypy_module_get_value(module, "__package__", 11U) == NULL) {
+        value = tinypy_none_get(vm);
+        tinypy_module_add_value(module, "__package__", 11U, value);
+        TINYPY_DECREF(value);
     }
-    value = tinypy_string_from_bytes(vm, name, package_size);
-    tinypy_module_add_value(module, "__package__", 11U, value);
-    TINYPY_DECREF(value);
     if (artifact->logical_filename != NULL || artifact->logical_filename_size != 0U) {
         value = tinypy_string_from_bytes(vm, artifact->logical_filename, artifact->logical_filename_size);
         tinypy_module_add_value(module, "__file__", 8U, value);
@@ -491,8 +498,15 @@ static tinypy_value_t *__tinypy_import_load_path(tinypy_vm_t *vm, const char *na
         if (offset != name_size && name[offset] != '.') {
             continue;
         }
+        if (offset == component_start && offset == name_size && parent != NULL) {
+            if (return_name_size == name_size) {
+                selected = parent;
+                TINYPY_INCREF(selected);
+            }
+            break;
+        }
         if (offset == component_start) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "Empty module name", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "Empty module name", out_error);
             goto failure;
         }
         tinypy_bool_t not_found = TINYPY_FALSE;
@@ -800,26 +814,6 @@ tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t n
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_import_restore_parent(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *module) {
-    size_t parent_size = name_size;
-
-    while (parent_size != 0U && name[parent_size - 1U] != '.') {
-        parent_size -= 1U;
-    }
-    if (parent_size != 0U) {
-        tinypy_value_t *parent_key;
-        tinypy_value_t *parent;
-
-        parent_size -= 1U;
-        parent_key = tinypy_string_from_bytes(vm, name, parent_size);
-        parent = tinypy_dict_get_optional(vm->modules, parent_key);
-        TINYPY_DECREF(parent_key);
-        if (parent != NULL && TINYPY_VALUE_KIND(parent) == TINYPY_VALUE_MODULE) {
-            tinypy_module_add_value(parent, name + parent_size + 1U, name_size - parent_size - 1U, module);
-        }
-    }
-}
-//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module);
     tinypy_value_t *name_value;
@@ -850,6 +844,29 @@ tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_err
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "reload() module is not registered in sys.modules", out_error);
         return NULL;
     }
+    size_t parent_size = name_size;
+
+    while (parent_size != 0U && name[parent_size - 1U] != '.') {
+        parent_size -= 1U;
+    }
+    if (parent_size != 0U) {
+        tinypy_value_t *parent_key = tinypy_string_from_bytes(vm, name, parent_size - 1U);
+        tinypy_value_t *parent = tinypy_dict_get_optional(vm->modules, parent_key);
+
+        TINYPY_DECREF(parent_key);
+        if (parent == NULL) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("reload(): parent "),
+                {name, parent_size - 1U},
+                TINYPY_MESSAGE_PART_LITERAL(" not in sys.modules"),
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_IMPORT, parts, 3U, out_error);
+            TINYPY_DECREF(key);
+            TINYPY_DECREF(name_value);
+            return NULL;
+        }
+    }
     loaded = __tinypy_import_load_one(vm, name, name_size, name, name_size, module, &fresh, &not_found, out_error);
     if (loaded == NULL && not_found != 0 && tinypy_module_get_value(module, "__file__", 8U) == NULL) {
         /* Modules without a source artifact are the VM's built-in modules,
@@ -860,7 +877,6 @@ tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_err
     }
     if (loaded == NULL) {
         tinypy_dict_set(vm->modules, key, module);
-        __tinypy_import_restore_parent(vm, name, name_size, module);
         TINYPY_DECREF(key);
         TINYPY_DECREF(name_value);
         return NULL;
@@ -869,7 +885,6 @@ tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_err
         if (TINYPY_VALUE_KIND(loaded) != TINYPY_VALUE_MODULE || tinypy_internal_dict_update_from(tinypy_module_dict(module), tinypy_module_dict(loaded), out_error) == 0) {
             TINYPY_DECREF(loaded);
             tinypy_dict_set(vm->modules, key, module);
-            __tinypy_import_restore_parent(vm, name, name_size, module);
             TINYPY_DECREF(key);
             TINYPY_DECREF(name_value);
             if (out_error == NULL || *out_error == NULL) {
@@ -882,7 +897,6 @@ tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_err
         loaded = module;
     }
     tinypy_dict_set(vm->modules, key, module);
-    __tinypy_import_restore_parent(vm, name, name_size, module);
     TINYPY_DECREF(key);
     TINYPY_DECREF(name_value);
     return loaded;

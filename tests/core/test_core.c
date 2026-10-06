@@ -5,6 +5,7 @@
 
 #include <float.h>
 #include <math.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2644,6 +2645,158 @@ static int32_t __test_stack_budget(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __test_intern_lifetime(void) {
+    static const char source[] =
+        "def batch(seed):\n"
+        "    for index in xrange(2000):\n"
+        "        intern('batch_%d_%d_' % (seed, index) + 'x' * 300)\n";
+    test_allocator_state_t state;
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+    tinypy_value_t *globals;
+    tinypy_value_t *function;
+    tinypy_value_t *result;
+    size_t warm_bytes = 0U;
+
+    (void)memset(&state, 0, sizeof(state));
+    allocator = __test_make_allocator(&state);
+    config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+
+    TEST_CHECK(vm != NULL);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "intern_lifetime.py", 18U, &options, &error);
+    TEST_CHECK(code != NULL && error == NULL);
+    globals = tinypy_dict_new(vm);
+    result = tinypy_eval_code(code, globals, NULL, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, "batch", 5U);
+
+    function = tinypy_dict_get(globals, key);
+    tinypy_retain(function);
+    tinypy_release(key);
+    for (int64_t seed = 0; seed < 4; ++seed) {
+        tinypy_value_t *argument = tinypy_integer_from_i64(vm, seed);
+        tinypy_value_t *args = tinypy_tuple_from_items(vm, &argument, 1U);
+
+        result = tinypy_call(function, args, NULL, &error);
+        TEST_CHECK(result != NULL && error == NULL);
+        tinypy_release(result);
+        tinypy_release(args);
+        tinypy_release(argument);
+        if (seed == 0) {
+            warm_bytes = state.outstanding_bytes;
+        }
+        else {
+            TEST_CHECK(state.outstanding_bytes <= warm_bytes + 32768U);
+        }
+    }
+    tinypy_release(function);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_bytes == 0U && state.outstanding_allocations == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_float_hex_locale(void) {
+    test_allocator_state_t state;
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_error_t *error = NULL;
+    char saved_locale[128];
+    const char *current_locale = setlocale(LC_NUMERIC, NULL);
+    const char *const candidates[] = {"de_DE.UTF-8", "fr_FR.UTF-8", "de_DE", "fr_FR"};
+
+    TEST_CHECK(current_locale != NULL && strlen(current_locale) < sizeof(saved_locale));
+    (void)strcpy(saved_locale, current_locale);
+    for (size_t index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
+        if (setlocale(LC_NUMERIC, candidates[index]) != NULL) {
+            break;
+        }
+    }
+    (void)memset(&state, 0, sizeof(state));
+    allocator = __test_make_allocator(&state);
+    config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *sample = tinypy_float_from_double(vm, 0.0);
+    tinypy_value_t *method = tinypy_object_get_attr(sample, "fromhex", 7U, &error);
+    tinypy_value_t *text = tinypy_string_from_bytes(vm, "0x1.8p+1", 8U);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &text, 1U);
+    tinypy_value_t *result = tinypy_call(method, args, NULL, &error);
+
+    TEST_CHECK(result != NULL && error == NULL && tinypy_float_as_double(result) == 3.0);
+    tinypy_release(result);
+    tinypy_release(args);
+    tinypy_release(text);
+    tinypy_release(method);
+    tinypy_release(sample);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(setlocale(LC_NUMERIC, saved_locale) != NULL);
+    TEST_CHECK(state.outstanding_bytes == 0U && state.outstanding_allocations == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_subtype_factory_limits(void) {
+    static const char source[] =
+        "class Text(str): pass\n"
+        "class Wide(unicode): pass\n"
+        "class Number(long): pass\n"
+        "class Record(tuple): pass\n"
+        "text = 'x' * 65536\n"
+        "wide = u'x' * 65536\n"
+        "number = 1L << 131072\n"
+        "record = tuple(range(2048))\n";
+    static const char *const type_names[] = {"Text", "Wide", "Number", "Record"};
+    static const char *const value_names[] = {"text", "wide", "number", "record"};
+    test_allocator_state_t state;
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    allocator = __test_make_allocator(&state);
+    config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "factory_limits.py", 17U, globals, NULL, &options, &error);
+
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    for (size_t index = 0U; index < sizeof(type_names) / sizeof(type_names[0]); ++index) {
+        tinypy_value_t *type_key = tinypy_string_from_bytes(vm, type_names[index], strlen(type_names[index]));
+        tinypy_value_t *value_key = tinypy_string_from_bytes(vm, value_names[index], strlen(value_names[index]));
+        tinypy_value_t *type = tinypy_dict_get(globals, type_key);
+        tinypy_value_t *value = tinypy_dict_get(globals, value_key);
+        tinypy_value_t *args = tinypy_tuple_from_items(vm, &value, 1U);
+
+        TEST_CHECK(type != NULL && value != NULL);
+        state.fail_allocation_above = 4096U;
+        result = tinypy_call(type, args, NULL, &error);
+        state.fail_allocation_above = 0U;
+        TEST_CHECK(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+        tinypy_error_release(error);
+        error = NULL;
+        tinypy_vm_clear_error(vm);
+        tinypy_release(args);
+        tinypy_release(type_key);
+        tinypy_release(value_key);
+    }
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_bytes == 0U && state.outstanding_allocations == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_container_heap_limits(void) {
     static const char source[] =
         "list_failed = False\n"
@@ -3508,6 +3661,18 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "stack_budget") == 0) {
         int result = __test_stack_budget();
+        return result;
+    }
+    if (strcmp(argv[1], "intern_lifetime") == 0) {
+        int result = __test_intern_lifetime();
+        return result;
+    }
+    if (strcmp(argv[1], "float_hex_locale") == 0) {
+        int result = __test_float_hex_locale();
+        return result;
+    }
+    if (strcmp(argv[1], "subtype_factory_limits") == 0) {
+        int result = __test_subtype_factory_limits();
         return result;
     }
     if (strcmp(argv[1], "container_heap_limits") == 0) {

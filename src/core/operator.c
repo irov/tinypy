@@ -467,33 +467,43 @@ static tinypy_bool_t __tinypy_operator_long_multiply_digits(tinypy_vm_t *vm, uin
 static tinypy_value_t *__tinypy_operator_long_multiply_views(tinypy_vm_t *vm, const tinypy_integer_view_t *left, const tinypy_integer_view_t *right, tinypy_error_t **out_error) {
     size_t capacity;
     uint16_t *digits;
-    size_t count;
+    tinypy_value_t *result;
 
     if (left->sign == 0 || right->sign == 0) {
-        tinypy_value_t *return_value_1 = tinypy_internal_long_allocate_digits(vm, 0, 0U, out_error);
-        return return_value_1;
+        result = tinypy_internal_long_allocate_digits(vm, 0, 0U, out_error);
+        return result;
     }
     if (left->count > SIZE_MAX - right->count) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long int is too large", out_error);
         return NULL;
     }
     capacity = left->count + right->count;
-    if (capacity > SIZE_MAX / sizeof(*digits)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long int is too large", out_error);
+    result = tinypy_internal_long_allocate_digits(vm, left->sign == right->sign ? 1 : -1, capacity, out_error);
+    if (result == NULL) {
         return NULL;
     }
-    digits = (uint16_t *)tinypy_internal_vm_allocate_checked(vm, capacity * sizeof(*digits), out_error);
-    if (digits == NULL) {
-        return NULL;
+    digits = TINYPY_LONG_OBJECT(result)->digits;
+    if (left->count == 1U || right->count == 1U) {
+        const tinypy_integer_view_t *large = left->count == 1U ? right : left;
+        uint32_t multiplier = left->count == 1U ? left->digits[0] : right->digits[0];
+        uint32_t carry = 0U;
+
+        for (size_t index = 0U; index < large->count; ++index) {
+            uint32_t product = (uint32_t)large->digits[index] * multiplier + carry;
+
+            digits[index] = (uint16_t)(product & TINYPY_LONG_MASK);
+            carry = product >> 15U;
+        }
+        digits[large->count] = (uint16_t)carry;
+        TINYPY_LONG_OBJECT(result)->digit_count = large->count + (carry != 0U ? 1U : 0U);
+        return result;
     }
     (void)memset(digits, 0, capacity * sizeof(*digits));
     if (__tinypy_operator_long_multiply_digits(vm, digits, capacity, left->digits, left->count, right->digits, right->count, out_error) == 0) {
-        tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits));
+        TINYPY_DECREF(result);
         return NULL;
     }
-    count = __tinypy_operator_trim_digits(digits, capacity);
-    tinypy_value_t *result = tinypy_internal_long_from_base15_digits_checked(vm, left->sign == right->sign ? 1 : -1, digits, count, out_error);
-    tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits));
+    TINYPY_LONG_OBJECT(result)->digit_count = __tinypy_operator_trim_digits(digits, capacity);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1698,7 +1708,8 @@ static tinypy_value_t *__tinypy_operator_concat_sequence(tinypy_vm_t *vm, tinypy
         return NULL;
     }
     if (kind == TINYPY_VALUE_TUPLE) {
-        result = tinypy_internal_tuple_new_checked(vm, total_size, out_error);
+        tinypy_value_t *tuple = tinypy_internal_tuple_join_items_checked(vm, NULL, tinypy_internal_tuple_items(left), left_size, tinypy_internal_tuple_items(right), right_size, out_error);
+        return tuple;
     }
     else {
         result = tinypy_list_from_items(vm, NULL, 0U);
@@ -1711,23 +1722,17 @@ static tinypy_value_t *__tinypy_operator_concat_sequence(tinypy_vm_t *vm, tinypy
         return NULL;
     }
     for (index = 0U; index < left_size; ++index) {
-        tinypy_value_t *item = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(left, index) : TINYPY_LIST_GET(left, index);
+        tinypy_value_t *item = TINYPY_LIST_GET(left, index);
 
-        if (kind == TINYPY_VALUE_TUPLE) {
-            tinypy_tuple_set(result, index, item);
-        }
-        else if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
+        if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
             TINYPY_DECREF(result);
             return NULL;
         }
     }
     for (index = 0U; index < right_size; ++index) {
-        tinypy_value_t *item = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(right, index) : TINYPY_LIST_GET(right, index);
+        tinypy_value_t *item = TINYPY_LIST_GET(right, index);
 
-        if (kind == TINYPY_VALUE_TUPLE) {
-            tinypy_tuple_set(result, left_size + index, item);
-        }
-        else if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
+        if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
             TINYPY_DECREF(result);
             return NULL;
         }
@@ -1826,12 +1831,12 @@ static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t 
     }
     unit_size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(sequence) : TINYPY_LIST_SIZE(sequence);
     if (unit_size != 0U && count > SIZE_MAX / unit_size) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "repeated sequence is too large", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "repeated sequence is too large", out_error);
         return NULL;
     }
     total_size = unit_size * count; {
         if (total_size >= (size_t)PTRDIFF_MAX || total_size > SIZE_MAX / sizeof(tinypy_value_t *)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "repeated sequence is too large", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "repeated sequence is too large", out_error);
             return NULL;
         }
         tinypy_value_t *result = kind == TINYPY_VALUE_TUPLE ? tinypy_internal_tuple_new_checked(vm, total_size, out_error) : tinypy_list_from_items(vm, NULL, 0U);

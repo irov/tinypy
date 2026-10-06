@@ -82,3 +82,19 @@ import import_semantics.pkg.sub
 assert pkg.sub == "replaced"
 
 assert reload(sys) is sys
+
+# Reload uses the registered parent but leaves its replaced attribute alone.
+assert reload(sibling) is sibling
+assert pkg.sibling == "replaced"
+parent_name = "import_semantics.pkg"
+parent = sys.modules[parent_name]
+del sys.modules[parent_name]
+try:
+    try:
+        reload(sibling)
+    except ImportError as error:
+        assert str(error) == "reload(): parent import_semantics.pkg not in sys.modules"
+    else:
+        raise AssertionError("reload accepted an unregistered parent")
+finally:
+    sys.modules[parent_name] = parent

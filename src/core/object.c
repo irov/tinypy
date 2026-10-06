@@ -223,7 +223,7 @@ static tinypy_value_t *__tinypy_object_type_tuple(tinypy_vm_t *vm, tinypy_type_t
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_builtin_attribute(tinypy_value_t *value, const char *name, size_t name_size) {
+tinypy_value_t *tinypy_internal_object_builtin_attribute(tinypy_value_t *value, const char *name, size_t name_size) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     int32_t dunder_name = name_size >= 2U && name[0] == '_' && name[1] == '_' ? INT32_C(1) : INT32_C(0);
@@ -273,8 +273,12 @@ static tinypy_value_t *__tinypy_object_builtin_attribute(tinypy_value_t *value, 
             return return_value_7;
         }
         if (__tinypy_object_name_equal(name, name_size, "__mro__", 7U) != 0) {
-            /* The internal mro tuple borrows its items and dies with the type,
-               so Python code only ever receives an owning copy. */
+            if (type->mro == NULL && (type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
+                tinypy_value_t *result = tinypy_none_get(vm);
+
+                return result;
+            }
+            /* The internal tuple borrows self; expose an owning copy. */
             tinypy_value_t *mro = tinypy_internal_type_mro_tuple(type);
             tinypy_value_t *const *mro_items = tinypy_internal_tuple_items(mro);
             tinypy_value_t *return_value_8 = tinypy_tuple_from_items(vm, mro_items, TINYPY_TUPLE_SIZE(mro));
@@ -1122,7 +1126,7 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
         builtin_attribute = attribute == NULL || TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_GETSET_DESCRIPTOR ? TINYPY_TRUE : TINYPY_FALSE;
     }
     if (builtin_attribute != 0) {
-        result = __tinypy_object_builtin_attribute(value, name, name_size);
+        result = tinypy_internal_object_builtin_attribute(value, name, name_size);
         if (result != NULL) {
             return result;
         }

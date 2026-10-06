@@ -349,6 +349,21 @@ static void __tinypy_cli_diagnostic(void *user_data, const tinypy_diagnostic_t *
     (void)fputc('\n', stderr);
     (void)fflush(stderr);
 }
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_cli_report_cycles(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
+
+    (void)function;
+    (void)out_error;
+    if (tinypy_tuple_size(args) != 0U || (kwargs != NULL && tinypy_dict_size(kwargs) != 0U)) {
+        tinypy_vm_raise_error(vm, TINYPY_ERROR_TYPE, "cycle reporter takes no arguments");
+        return NULL;
+    }
+    size_t count = tinypy_vm_report_cycles(vm, __tinypy_cli_diagnostic, NULL);
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)count);
+
+    return result;
+}
 #endif
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_cli_message_contains(const char *message, size_t message_size, const char *needle) {
@@ -973,8 +988,9 @@ static tinypy_bool_t __tinypy_cli_repl(tinypy_vm_t *vm, tinypy_value_t *globals,
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_cli_usage(FILE *stream) {
-    (void)fputs("usage: tinypy [-O | -OO] [--stats] [-c command | script.py | -] [args]\n", stream);
+    (void)fputs("usage: tinypy [-O | -OO] [--stats] [--cycle-diagnostics] [-c command | script.py | -] [args]\n", stream);
     (void)fputs("       tinypy --version\n", stream);
+    (void)fputs("       tinypy --build-info\n", stream);
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_cli_run(int32_t argc, char **argv) {
@@ -995,6 +1011,7 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
     int32_t command_argument = -1;
     int32_t script_argument = -1;
     int32_t show_stats = INT32_C(0);
+    tinypy_bool_t cycle_diagnostics = TINYPY_FALSE;
     tinypy_bool_t interactive = TINYPY_FALSE;
     tinypy_bool_t success = TINYPY_TRUE;
     int32_t exit_code = -1;
@@ -1014,6 +1031,28 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
         else if (strcmp(argv[argument], "--stats") == 0) {
             show_stats = INT32_C(1);
             argument += 1;
+        }
+        else if (strcmp(argv[argument], "--build-info") == 0) {
+#if defined(TINYPY_DEBUGGER)
+            (void)fputs("{\"debug\":true,", stdout);
+#else
+            (void)fputs("{\"debug\":false,", stdout);
+#endif
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+            (void)fputs("\"cycle_diagnostics\":true}\n", stdout);
+#else
+            (void)fputs("\"cycle_diagnostics\":false}\n", stdout);
+#endif
+            return EXIT_SUCCESS;
+        }
+        else if (strcmp(argv[argument], "--cycle-diagnostics") == 0) {
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+            cycle_diagnostics = TINYPY_TRUE;
+            argument += 1;
+#else
+            (void)fputs("tinypy: cycle diagnostics require a Debug build with TINYPY_ENABLE_CYCLE_DIAGNOSTICS=ON\n", stderr);
+            return EXIT_FAILURE;
+#endif
         }
         else if (strcmp(argv[argument], "--version") == 0 || strcmp(argv[argument], "-V") == 0) {
             (void)fputs("TinyPy 0.1.0 (Python 2.7 compatible)\n", stdout);
@@ -1130,10 +1169,22 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
     config.allocator = &allocator;
     config.host = &host;
     config.optimize_level = context.optimize_level;
+    config.cycle_diagnostics = cycle_diagnostics;
     begin = clock();
     vm = tinypy_vm_create(&config);
     main_module = __tinypy_cli_create_main(vm, interactive != 0 ? NULL : filename);
     globals = tinypy_module_dict(main_module);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    if (cycle_diagnostics != 0) {
+        static const char name[] = "__tinypy_report_cycles__";
+        tinypy_value_t *key = tinypy_string_from_bytes(vm, name, sizeof(name) - 1U);
+        tinypy_value_t *reporter = tinypy_native_function_new(vm, name, sizeof(name) - 1U, __tinypy_cli_report_cycles, vm, NULL);
+
+        tinypy_dict_set(globals, key, reporter);
+        tinypy_release(reporter);
+        tinypy_release(key);
+    }
+#endif
     if (__tinypy_cli_set_sys_values(vm, python_argc, python_argv, &context) == 0) {
         success = INT32_C(0);
     }

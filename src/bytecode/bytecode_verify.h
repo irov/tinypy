@@ -13,6 +13,9 @@ typedef struct tinypy_bytecode_metadata_t {
     size_t freevar_count;
     size_t cellvar_count;
     size_t declared_stack_size;
+    /* Required to prove a normal finally marker is the None singleton. */
+    tinypy_bool_t (*is_none_constant)(const void *user_data, size_t index);
+    const void *constant_user_data;
 } tinypy_bytecode_metadata_t;
 
 typedef struct tinypy_bytecode_verify_limits_t {

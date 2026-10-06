@@ -132,7 +132,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         vm, &vm->types[TINYPY_VALUE_CODE], &vm->types[TINYPY_VALUE_TYPE], "code", 4U,
         sizeof(tinypy_code_object_t), 0U,
         TINYPY_TYPE_FLAG_IMMUTABLE, &vm->types[TINYPY_VALUE_INSTANCE],
-        tinypy_internal_code_release_references, NULL);
+        tinypy_internal_code_release_references, tinypy_internal_code_destroy);
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_FRAME], &vm->types[TINYPY_VALUE_TYPE], "frame", 5U,
         offsetof(tinypy_frame_object_t, locals_plus), sizeof(tinypy_value_t *),
@@ -1375,7 +1375,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
         &vm->types[TINYPY_VALUE_TUPLE]);
 #define TINYPY_INTERNAL_KEY_CREATE(field, name) \
     vm->field = tinypy_string_from_bytes(vm, name, sizeof(name) - 1U); \
-    tinypy_internal_string_set_interned(vm->field, 1);
+    (void)tinypy_internal_string_intern(&vm->field, NULL);
     TINYPY_INTERNAL_KEY_LIST(TINYPY_INTERNAL_KEY_CREATE)
 #undef TINYPY_INTERNAL_KEY_CREATE
     for (size_t operator_index = 0U; operator_index != TINYPY_SPECIAL_OPERATOR_COUNT; ++operator_index) {
@@ -1383,13 +1383,12 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
         const char *operator_name = tinypy_internal_object_special_operator_name(operator_index, &operator_size);
 
         vm->special_operator_keys[operator_index] = tinypy_string_from_bytes(vm, operator_name, operator_size);
-        tinypy_internal_string_set_interned(vm->special_operator_keys[operator_index], 1);
+        (void)tinypy_internal_string_intern(&vm->special_operator_keys[operator_index], NULL);
     }
 
     tinypy_internal_object_initialize_special_keys(vm);
     __tinypy_internal_initialize_type_dicts(vm);
     __tinypy_internal_initialize_type_docs(vm);
-    vm->interned_strings = tinypy_dict_new(vm);
     tinypy_internal_initialize_native_descriptor_types(vm);
     tinypy_internal_initialize_container_types(vm);
     tinypy_internal_initialize_slice_type(vm);
@@ -1566,7 +1565,6 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph, tinypy_boo
     __tinypy_shutdown_add(graph, vm->codec_search_path);
     __tinypy_shutdown_add(graph, vm->codec_cache);
     __tinypy_shutdown_add(graph, vm->codec_errors);
-    __tinypy_shutdown_add(graph, vm->interned_strings);
 #define TINYPY_INTERNAL_KEY_ROOT(field, name) __tinypy_shutdown_add(graph, vm->field);
     TINYPY_INTERNAL_KEY_LIST(TINYPY_INTERNAL_KEY_ROOT)
 #undef TINYPY_INTERNAL_KEY_ROOT
@@ -1755,6 +1753,7 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
 
     __tinypy_shutdown_finalize_natives(vm);
     vm->state = TINYPY_VM_STATE_DESTROYING;
+    tinypy_internal_intern_finalize(vm);
     tinypy_internal_type_lookup_cache_finalize(vm);
     tinypy_internal_integer_free_list_finalize(vm);
     tinypy_internal_frame_free_list_finalize(vm);

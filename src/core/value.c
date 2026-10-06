@@ -65,7 +65,7 @@ size_t tinypy_internal_variable_builtin_payload_size(const tinypy_value_t *value
         result = offsetof(tinypy_unicode_object_t, utf8) + TINYPY_UNICODE_OBJECT(value)->byte_size + 1U;
         break;
     case TINYPY_VALUE_LONG:
-        result = offsetof(tinypy_long_object_t, digits) + TINYPY_LONG_DIGIT_COUNT(value) * sizeof(uint16_t);
+        result = offsetof(tinypy_long_object_t, digits) + TINYPY_LONG_OBJECT(value)->digit_capacity * sizeof(uint16_t);
         break;
     default:
         result = 0U;
@@ -112,7 +112,11 @@ tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tin
                        ? tinypy_internal_variable_builtin_payload_size(value)
                        : vm->types[kind].basic_size;
     if (type == &vm->types[kind]) {
-        result = tinypy_internal_value_allocate(vm, kind, payload_size);
+        result = tinypy_internal_object_allocate_checked(vm, &vm->types[kind], payload_size, out_error);
+        if (result == NULL) {
+            TINYPY_DECREF(value);
+            return NULL;
+        }
         (void)memcpy((uint8_t *)result + sizeof(tinypy_value_t), (const uint8_t *)value + sizeof(tinypy_value_t), payload_size - sizeof(tinypy_value_t));
         if (kind == TINYPY_VALUE_STRING) {
             TINYPY_STRING_OBJECT(result)->interned = TINYPY_FALSE;
@@ -129,7 +133,11 @@ tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tin
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "immutable subtype is too large", out_error);
         return NULL;
     }
-    result = tinypy_internal_object_allocate(vm, type, allocation_size);
+    result = tinypy_internal_object_allocate_checked(vm, type, allocation_size, out_error);
+    if (result == NULL) {
+        TINYPY_DECREF(value);
+        return NULL;
+    }
     (void)memcpy((uint8_t *)result + sizeof(tinypy_value_t), (const uint8_t *)value + sizeof(tinypy_value_t), payload_size - sizeof(tinypy_value_t));
     if (kind == TINYPY_VALUE_STRING) {
         TINYPY_STRING_OBJECT(result)->interned = TINYPY_FALSE;
@@ -181,6 +189,9 @@ size_t tinypy_internal_value_allocation_size(const tinypy_value_t *value) {
 void tinypy_internal_value_destroy(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     size_t allocation_size = tinypy_internal_value_allocation_size(value);
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
+        tinypy_internal_string_unintern(value);
+    }
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_value_unregister(vm, value);
 #endif
@@ -228,22 +239,36 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     tinypy_value_t *result;
     tinypy_error_t *error = NULL;
 
-    if (value->type->has_finalizer == 0 && value->type->has_classic_mro == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_old_instance_has_special(value, "__del__", 7U) == 0)) {
+    if (vm->type_lookup_cache_epoch != 0U && value->type->finalizer_epoch == vm->type_lookup_cache_epoch && value->type->has_finalizer == 0 && value->type->has_classic_mro == 0 && value->type->has_custom_mro == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_old_instance_has_special(value, "__del__", 7U) == 0)) {
         return TINYPY_FALSE;
     }
     value->ref = 1;
     tinypy_internal_exception_preserve_begin(vm, &exception_state);
+    tinypy_type_t *type = value->type;
+    uint64_t epoch = vm->type_lookup_cache_epoch;
+    type->finalizer_epoch = epoch;
+    type->has_finalizer = tinypy_internal_type_lookup_key(vm, type, vm->special_del_key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    if (type->has_finalizer == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE
+        || tinypy_internal_old_instance_has_special(value, "__del__", 7U) == 0)) {
+        tinypy_internal_exception_preserve_end(vm, &exception_state);
+        value->ref -= 1U;
+        return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+    }
     tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->special_del_key, &error);
     if (method != NULL) {
         args = tinypy_tuple_from_items(vm, NULL, 0U);
         result = tinypy_call(method, args, NULL, &error);
         TINYPY_DECREF(args);
-        TINYPY_DECREF(method);
         if (result != NULL) {
             TINYPY_DECREF(result);
         }
+        else {
+            tinypy_internal_output_unraisable(vm, method);
+        }
+        TINYPY_DECREF(method);
     }
     if (error != NULL) {
+        tinypy_internal_output_unraisable(vm, value);
         tinypy_error_release(error);
     }
     tinypy_internal_exception_preserve_end(vm, &exception_state);
@@ -266,6 +291,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize_generator(tinypy_value_t *
     tinypy_internal_exception_preserve_begin(vm, &exception_state);
     (void)tinypy_generator_close(value, &error);
     if (error != NULL) {
+        tinypy_internal_output_unraisable(vm, value);
         tinypy_error_release(error);
     }
     tinypy_internal_exception_preserve_end(vm, &exception_state);
@@ -328,8 +354,22 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     if (type->weakref_offset != 0U) {
         tinypy_internal_weakref_clear(value);
     }
-    if (type->has_finalizer != 0 || type->has_classic_mro != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+    if (vm->special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_epoch != vm->type_lookup_cache_epoch || vm->type_lookup_cache_epoch == 0U || type->has_finalizer != 0 || type->has_classic_mro != 0 || type->has_custom_mro != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE)) {
         if (__tinypy_internal_value_finalize(value) != 0) {
+            return;
+        }
+    }
+    if ((TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && value->type->native_spec.finalize != NULL)
+        || (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_FUNCTION && TINYPY_NATIVE_FUNCTION_OBJECT(value)->finalize != NULL)) {
+        value->ref = 1;
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE) {
+            tinypy_internal_native_instance_finalize(value);
+        }
+        else {
+            tinypy_internal_native_function_finalize(value);
+        }
+        value->ref -= 1U;
+        if (value->ref != 0U) {
             return;
         }
     }
@@ -337,6 +377,9 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     type = value->type;
     if (type->weakref_offset != 0U) {
         tinypy_internal_weakref_clear(value);
+    }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
+        tinypy_internal_string_unintern(value);
     }
     /* Only already-finalized zero-ref objects are deferred. Their ref word
        temporarily links the queue; no registry or extra allocation is needed. */
@@ -723,12 +766,21 @@ void tinypy_internal_type_release_references(tinypy_value_t *value, tinypy_relea
     if (type->subclasses != NULL) {
         visit(type->subclasses, user_data);
     }
+    if (type->mro != NULL && (type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
+        for (size_t index = 0U; index < TINYPY_TUPLE_SIZE(type->mro); ++index) {
+            tinypy_value_t *entry = TINYPY_TUPLE_GET(type->mro, index);
+
+            if (entry != value) {
+                visit(entry, user_data);
+            }
+        }
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_type_destroy(tinypy_value_t *value) {
     tinypy_type_t *type = (tinypy_type_t *)value;
 
-    if (type->mro != NULL) {
+    if (type->mro != NULL && tinypy_internal_value_is_vm_embedded(type->vm, type->mro) == 0) {
         tinypy_internal_value_destroy(type->mro);
         TINYPY_DECREF(&type->vm->types[TINYPY_VALUE_TUPLE].base.base);
     }

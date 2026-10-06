@@ -22,6 +22,7 @@ INTERNAL_CORE_UNITS = {
     "dictproxy",
     "double_conversion",
     "functools",
+    "intern",
     "pool",
     "sre",
     "string_methods",

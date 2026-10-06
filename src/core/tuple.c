@@ -41,14 +41,27 @@ void tinypy_internal_tuple_subclass_destroy(tinypy_value_t *value) {
     tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), tuple->items, TINYPY_SIZED_SIZE(value) * sizeof(*tuple->items));
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, tinypy_value_t *const *items, size_t size) {
+tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, tinypy_value_t *const *items, size_t size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
 
-    tinypy_tuple_subclass_object_t *tuple = (tinypy_tuple_subclass_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
-    tuple->base.size = size;
-    if (size != 0U) {
-        tuple->items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*tuple->items));
+    tinypy_tuple_subclass_object_t *tuple;
+
+    if (size > SIZE_MAX / sizeof(*tuple->items)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "tuple is too large", out_error);
+        return NULL;
     }
+    tuple = (tinypy_tuple_subclass_object_t *)tinypy_internal_object_allocate_checked(vm, type, type->basic_size, out_error);
+    if (tuple == NULL) {
+        return NULL;
+    }
+    if (size != 0U) {
+        tuple->items = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, size * sizeof(*tuple->items), out_error);
+        if (tuple->items == NULL) {
+            TINYPY_DECREF(&tuple->base.base);
+            return NULL;
+        }
+    }
+    tuple->base.size = size;
     for (size_t index = 0U; index < size; ++index) {
         tuple->items[index] = items[index];
         TINYPY_INCREF(items[index]);
@@ -156,7 +169,7 @@ tinypy_value_t *tinypy_internal_tuple_from_items_checked(tinypy_vm_t *vm, tinypy
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_tuple_join_checked(tinypy_vm_t *vm, tinypy_value_t *first, tinypy_value_t *const *left, size_t left_size, tinypy_value_t *const *right, size_t right_size, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_internal_tuple_join_items_checked(tinypy_vm_t *vm, tinypy_value_t *first, tinypy_value_t *const *left, size_t left_size, tinypy_value_t *const *right, size_t right_size, tinypy_error_t **out_error) {
     size_t prefix_size = first != NULL ? 1U : 0U;
 
     if (left_size > SIZE_MAX - prefix_size || right_size > SIZE_MAX - prefix_size - left_size) {
@@ -199,7 +212,7 @@ static tinypy_value_t *__tinypy_internal_tuple_join_checked(tinypy_vm_t *vm, tin
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_tuple_prepend_checked(tinypy_vm_t *vm, tinypy_value_t *first, const tinypy_value_t *tail, tinypy_error_t **out_error) {
     tinypy_value_t *const *tail_items = tinypy_internal_tuple_items(tail);
-    tinypy_value_t *result = __tinypy_internal_tuple_join_checked(vm, first, NULL, 0U, tail_items, TINYPY_TUPLE_SIZE(tail), out_error);
+    tinypy_value_t *result = tinypy_internal_tuple_join_items_checked(vm, first, NULL, 0U, tail_items, TINYPY_TUPLE_SIZE(tail), out_error);
 
     return result;
 }
@@ -219,7 +232,7 @@ tinypy_value_t *tinypy_internal_tuple_concat_checked(tinypy_vm_t *vm, const tiny
     }
     tinypy_value_t *const *left_items = tinypy_internal_tuple_items(left);
     tinypy_value_t *const *right_items = tinypy_internal_tuple_items(right);
-    tinypy_value_t *result = __tinypy_internal_tuple_join_checked(vm, NULL, left_items, TINYPY_TUPLE_SIZE(left), right_items, TINYPY_TUPLE_SIZE(right), out_error);
+    tinypy_value_t *result = tinypy_internal_tuple_join_items_checked(vm, NULL, left_items, TINYPY_TUPLE_SIZE(left), right_items, TINYPY_TUPLE_SIZE(right), out_error);
 
     return result;
 }
@@ -232,7 +245,7 @@ tinypy_value_t *tinypy_internal_tuple_tail_checked(tinypy_vm_t *vm, const tinypy
         return NULL;
     }
     tinypy_value_t *const *items = tinypy_internal_tuple_items(tuple);
-    tinypy_value_t *result = __tinypy_internal_tuple_join_checked(vm, NULL, items + start, size - start, NULL, 0U, out_error);
+    tinypy_value_t *result = tinypy_internal_tuple_join_items_checked(vm, NULL, items + start, size - start, NULL, 0U, out_error);
 
     return result;
 }

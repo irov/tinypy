@@ -499,6 +499,15 @@ tinypy_value_t *tinypy_dict_new(tinypy_vm_t *vm) {
     return dict;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_dict_new_checked(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    tinypy_value_t *result = tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_DICT], sizeof(tinypy_dict_object_t), out_error);
+
+    if (result != NULL) {
+        tinypy_internal_dict_initialize_empty(result);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 size_t tinypy_dict_size(const tinypy_value_t *dict) {
 
     size_t return_value_1 = TINYPY_DICT_OBJECT(dict)->used;

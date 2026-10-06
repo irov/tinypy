@@ -1121,6 +1121,7 @@ void tinypy_internal_exception_set_raised(tinypy_vm_t *vm, tinypy_value_t *value
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm) {
+    tinypy_internal_frame_save_handled(vm);
     tinypy_value_t *type = vm->raised_type;
     tinypy_value_t *value = vm->raised_value;
     tinypy_value_t *traceback = vm->raised_traceback;
@@ -1256,6 +1257,19 @@ void tinypy_internal_exception_raise_stop_iteration(tinypy_vm_t *vm, tinypy_erro
     tinypy_value_t *exception = tinypy_exception_new(vm->exception_types[TINYPY_EXCEPTION_STOP_ITERATION], empty, out_error);
 
     TINYPY_DECREF(empty);
+    if (exception != NULL) {
+        (void)tinypy_exception_raise(exception, NULL, out_error);
+        TINYPY_DECREF(exception);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_exception_raise_system_error(tinypy_vm_t *vm, const char *message, tinypy_error_t **out_error) {
+    tinypy_value_t *text = tinypy_string_from_bytes(vm, message, strlen(message));
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &text, 1U);
+    tinypy_value_t *exception = tinypy_exception_new(vm->exception_types[TINYPY_EXCEPTION_SYSTEM_ERROR], args, out_error);
+
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(text);
     if (exception != NULL) {
         (void)tinypy_exception_raise(exception, NULL, out_error);
         TINYPY_DECREF(exception);
@@ -1402,11 +1416,12 @@ int32_t tinypy_exception_matches(tinypy_value_t *exception, tinypy_value_t *cand
         if (method != NULL) {
             TINYPY_DECREF(method);
         }
-        TINYPY_DECREF(candidate);
-        TINYPY_DECREF(exception_class);
         if (callback_error != NULL) {
+            tinypy_internal_output_unraisable(vm, exception_class);
             tinypy_error_release(callback_error);
         }
+        TINYPY_DECREF(candidate);
+        TINYPY_DECREF(exception_class);
         tinypy_internal_exception_preserve_end(vm, &state);
         /* Exception matching cannot replace the pending exception with a
            failure raised by a metaclass check. */

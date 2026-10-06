@@ -7,7 +7,17 @@ project(tinypy
 )
 
 option(TINYPY_BUILD_CLI "Build the optional TinyPy CLI library and executables" OFF)
-option(TINYPY_ENABLE_CYCLE_DIAGNOSTICS "Enable TinyPy cycle diagnostics in Debug builds" OFF)
+option(TINYPY_ENABLE_CYCLE_DIAGNOSTICS "Enable TinyPy cycle diagnostics in Debug builds" ON)
+option(TINYPY_ENABLE_LTO "Enable supported interprocedural optimization in Release builds" OFF)
+
+if(TINYPY_ENABLE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT tinypy_ipo_supported OUTPUT tinypy_ipo_error LANGUAGES C)
+    if(NOT tinypy_ipo_supported)
+        message(FATAL_ERROR "TinyPy LTO is unavailable: ${tinypy_ipo_error}")
+    endif()
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
 
 function(tinypy_enable_strict_warnings target)
     if(MSVC)
@@ -92,6 +102,7 @@ add_library(tinypy STATIC
     src/core/generator.c
     src/core/iterator.c
     src/core/item.c
+    src/core/intern.c
     src/core/method.c
     src/core/module.c
     src/core/native.c
@@ -214,6 +225,9 @@ if(BUILD_TESTING)
     tinypy_enable_test_assertions(tinypy_compiler_fuzz_standalone)
     tinypy_enable_strict_warnings(tinypy_compiler_fuzz_standalone)
 
+    add_test(NAME runtime_subtype_factory_limits COMMAND tinypy_core_tests subtype_factory_limits)
+    add_test(NAME runtime_intern_lifetime COMMAND tinypy_core_tests intern_lifetime)
+    add_test(NAME runtime_float_hex_locale COMMAND tinypy_core_tests float_hex_locale)
     add_test(NAME core_allocator_accounting COMMAND tinypy_core_tests allocator)
     add_test(NAME core_pool_allocator COMMAND tinypy_core_tests pool_allocator)
     add_test(NAME core_independent_vms COMMAND tinypy_core_tests independent_vms)

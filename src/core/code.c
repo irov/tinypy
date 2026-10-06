@@ -23,22 +23,22 @@ static tinypy_bool_t __tinypy_internal_code_all_name_chars(const tinypy_value_t 
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_code_intern_constants(tinypy_value_t *value) {
+static void __tinypy_internal_code_intern_constants(tinypy_value_t **owned_value) {
+    tinypy_value_t *value = *owned_value;
     tinypy_value_type_e type = TINYPY_VALUE_KIND(value);
 
     if (type == TINYPY_VALUE_STRING) {
         if (__tinypy_internal_code_all_name_chars(value) != 0) {
-            tinypy_internal_string_set_interned(value, 1);
+            (void)tinypy_internal_string_intern(owned_value, NULL);
         }
         return;
     }
     if (type == TINYPY_VALUE_TUPLE) {
-        tinypy_value_t *const *iterator = TINYPY_TUPLE_ITERATOR_BEGIN(value);
-        tinypy_value_t *const *iterator_end = TINYPY_TUPLE_ITERATOR_END(value);
+        tinypy_value_t **iterator = TINYPY_TUPLE_ITERATOR_BEGIN(value);
+        tinypy_value_t **iterator_end = TINYPY_TUPLE_ITERATOR_END(value);
 
         for (; iterator != iterator_end; ++iterator) {
-            tinypy_value_t *item = *iterator;
-            __tinypy_internal_code_intern_constants(item);
+            __tinypy_internal_code_intern_constants(iterator);
         }
         return;
     }
@@ -49,20 +49,18 @@ static void __tinypy_internal_code_intern_constants(tinypy_value_t *value) {
 
         for (; iterator != iterator_end; ++iterator) {
             if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-                __tinypy_internal_code_intern_constants(iterator->key);
+                __tinypy_internal_code_intern_constants(&iterator->key);
             }
         }
     }
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_code_intern_identifiers(tinypy_value_t *tuple) {
-    tinypy_value_t *const *iterator = TINYPY_TUPLE_ITERATOR_BEGIN(tuple);
-    tinypy_value_t *const *iterator_end = TINYPY_TUPLE_ITERATOR_END(tuple);
+    tinypy_value_t **iterator = TINYPY_TUPLE_ITERATOR_BEGIN(tuple);
+    tinypy_value_t **iterator_end = TINYPY_TUPLE_ITERATOR_END(tuple);
 
     for (; iterator != iterator_end; ++iterator) {
-        tinypy_value_t *value = *iterator;
-
-        tinypy_internal_string_set_interned(value, 1);
+        (void)tinypy_internal_string_intern(iterator, NULL);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -73,7 +71,7 @@ tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t 
     __tinypy_internal_code_intern_identifiers(varnames);
     __tinypy_internal_code_intern_identifiers(freevars);
     __tinypy_internal_code_intern_identifiers(cellvars);
-    __tinypy_internal_code_intern_constants(consts);
+    __tinypy_internal_code_intern_constants(&consts);
 
     tinypy_code_object_t *code = (tinypy_code_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_CODE, sizeof(*code));
     code->arg_count = arg_count;
@@ -104,6 +102,18 @@ tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t 
     TINYPY_INCREF(lnotab);
 
     return &code->base;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_code_destroy(tinypy_value_t *value) {
+    tinypy_code_object_t *code = TINYPY_CODE_OBJECT(value);
+
+    if (code->cached_frame != NULL) {
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+        tinypy_internal_value_destroy(code->cached_frame);
+        TINYPY_DECREF(&vm->types[TINYPY_VALUE_FRAME].base.base);
+        code->cached_frame = NULL;
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_code_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {

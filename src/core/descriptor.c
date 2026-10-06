@@ -1067,7 +1067,7 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
             TINYPY_INCREF(value);
             return value;
         }
-        tinypy_value_t *return_value_1 = tinypy_object_get_attr(instance, (const char *)TINYPY_TEXT_BYTES(descriptor->name), TINYPY_TEXT_BYTE_SIZE(descriptor->name), out_error);
+        tinypy_value_t *return_value_1 = tinypy_internal_object_builtin_attribute(instance, (const char *)TINYPY_TEXT_BYTES(descriptor->name), TINYPY_TEXT_BYTE_SIZE(descriptor->name));
         return return_value_1;
     }
     if (field == TINYPY_INTERNAL_C_DESCRIPTOR_INSTANCE_SLOT) {

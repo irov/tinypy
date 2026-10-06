@@ -25,7 +25,7 @@ static int32_t __tinypy_internal_frame_line_number(const tinypy_frame_object_t *
     return line;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, tinypy_value_t *globals) {
+static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, tinypy_value_t *globals, int32_t function_frame) {
     if (vm->current_frame != NULL && vm->current_frame->globals == globals) {
         tinypy_value_t *builtins = vm->current_frame->builtins;
         TINYPY_INCREF(builtins);
@@ -34,19 +34,60 @@ static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, ti
 
     tinypy_value_t *builtins = tinypy_internal_dict_get_optional(vm, globals, vm->builtins_key);
 
+    if (builtins != NULL && TINYPY_VALUE_KIND(builtins) == TINYPY_VALUE_MODULE) {
+        builtins = TINYPY_MODULE_OBJECT(builtins)->dict;
+    }
     if (builtins != NULL && TINYPY_VALUE_KIND(builtins) == TINYPY_VALUE_DICT) {
         TINYPY_INCREF(builtins);
         return builtins;
     }
 
-    builtins = vm->builtins;
-    TINYPY_INCREF(builtins);
+    if (builtins == NULL && (function_frame == 0 || globals == vm->builtins)) {
+        builtins = vm->builtins;
+        if (globals != vm->builtins && tinypy_internal_dict_set_checked(vm, globals, vm->builtins_key, builtins, NULL) == 0) {
+            return NULL;
+        }
+        TINYPY_INCREF(builtins);
+        return builtins;
+    }
+    /* Python frames with invalid builtins get only None. The embedding API
+       retains its default builtins for an absent key on a top-level frame. */
+    builtins = tinypy_internal_dict_new_checked(vm, NULL);
+    if (builtins == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *key = tinypy_internal_string_from_bytes_checked(vm, "None", 4U, NULL);
+    if (key == NULL) {
+        TINYPY_DECREF(builtins);
+        return NULL;
+    }
+    tinypy_value_t *none = tinypy_none_get(vm);
+
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, builtins, key, none, NULL);
+    TINYPY_DECREF(none);
+    TINYPY_DECREF(key);
+    if (stored == 0) {
+        TINYPY_DECREF(builtins);
+        return NULL;
+    }
     return builtins;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_vm_t *vm, size_t allocation_size, size_t local_slot_count) {
+static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_value_t *code, size_t allocation_size, size_t local_slot_count) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
     tinypy_frame_object_t *previous = NULL;
-    tinypy_frame_object_t *frame = vm->frame_free_list;
+    tinypy_frame_object_t *frame;
+
+    if (TINYPY_CODE_OBJECT(code)->cached_frame != NULL) {
+        frame = TINYPY_FRAME_OBJECT(TINYPY_CODE_OBJECT(code)->cached_frame);
+        TINYPY_CODE_OBJECT(code)->cached_frame = NULL;
+        frame->base.base.ref = 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_value_reuse(vm, &frame->base.base);
+#endif
+        return frame;
+    }
+    frame = vm->frame_free_list;
 
     while (frame != NULL) {
         tinypy_frame_object_t *next = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
@@ -113,9 +154,38 @@ void tinypy_internal_frame_free_list_finalize(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_frame_save_handled(tinypy_vm_t *vm) {
+    tinypy_frame_object_t *frame = vm->current_frame;
+
+    if (frame == NULL || frame->handled_state_saved != 0) {
+        return;
+    }
+    frame->handled_state_saved = TINYPY_TRUE;
+    frame->handled_clear_epoch = vm->handled_clear_epoch;
+    frame->previous_handled_type = vm->handled_type;
+    frame->previous_handled_value = vm->handled_value;
+    frame->previous_handled_traceback = vm->handled_traceback;
+    if (frame->previous_handled_type != NULL) {
+        TINYPY_INCREF(frame->previous_handled_type);
+    }
+    if (frame->previous_handled_value != NULL) {
+        TINYPY_INCREF(frame->previous_handled_value);
+    }
+    if (frame->previous_handled_traceback != NULL) {
+        TINYPY_INCREF(frame->previous_handled_traceback);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&frame->base.base);
 
+    tinypy_value_t *code = frame->code;
+    tinypy_bool_t cache_code = code->ref > 1U && TINYPY_CODE_OBJECT(code)->cached_frame == NULL
+        && TINYPY_SIZED_SIZE(&frame->base) <= 1024U ? TINYPY_TRUE : TINYPY_FALSE;
+
+    if (cache_code != 0) {
+        TINYPY_INCREF(code);
+    }
     frame->base.base.ref = 0;
     if (frame->back != NULL) {
         TINYPY_DECREF(frame->back);
@@ -134,6 +204,14 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
     if (frame->trace != NULL) {
         TINYPY_DECREF(frame->trace);
         frame->trace = NULL;
+    }
+    if (cache_code != 0 && TINYPY_CODE_OBJECT(code)->cached_frame == NULL) {
+        TINYPY_CODE_OBJECT(code)->cached_frame = &frame->base.base;
+        TINYPY_DECREF(code);
+        return;
+    }
+    if (cache_code != 0) {
+        TINYPY_DECREF(code);
     }
     if (vm->frame_free_count < TINYPY_FRAME_FREE_LIST_MAX) {
         tinypy_internal_frame_free_list_push(vm, &frame->base.base);
@@ -304,8 +382,11 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
         return NULL;
     }
     allocation_size = offsetof(tinypy_frame_object_t, locals_plus) + extras * sizeof(tinypy_value_t *);
-    tinypy_value_t *builtins = __tinypy_internal_frame_make_builtins(vm, globals);
-    tinypy_frame_object_t *frame = __tinypy_internal_frame_allocate(vm, allocation_size, local_count + cell_count + free_count);
+    tinypy_value_t *builtins = __tinypy_internal_frame_make_builtins(vm, globals, function_frame);
+    if (builtins == NULL) {
+        return NULL;
+    }
+    tinypy_frame_object_t *frame = __tinypy_internal_frame_allocate(code, allocation_size, local_count + cell_count + free_count);
     if (frame == NULL) {
         TINYPY_DECREF(builtins);
         return NULL;
@@ -332,9 +413,10 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
     }
     frame->trace = NULL;
     frame->handled_clear_epoch = vm->handled_clear_epoch;
-    frame->previous_handled_type = vm->handled_type;
-    frame->previous_handled_value = vm->handled_value;
-    frame->previous_handled_traceback = vm->handled_traceback;
+    frame->handled_state_saved = TINYPY_FALSE;
+    frame->previous_handled_type = NULL;
+    frame->previous_handled_value = NULL;
+    frame->previous_handled_traceback = NULL;
     frame->value_stack = frame->locals_plus + local_count + cell_count + free_count;
     frame->stack_top = frame->value_stack;
     frame->last_instruction = -1;
@@ -349,15 +431,6 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
     TINYPY_INCREF(globals);
     if (frame->locals != NULL && owns_locals == 0) {
         TINYPY_INCREF(frame->locals);
-    }
-    if (frame->previous_handled_type != NULL) {
-        TINYPY_INCREF(frame->previous_handled_type);
-    }
-    if (frame->previous_handled_value != NULL) {
-        TINYPY_INCREF(frame->previous_handled_value);
-    }
-    if (frame->previous_handled_traceback != NULL) {
-        TINYPY_INCREF(frame->previous_handled_traceback);
     }
     return &frame->base.base;
 }

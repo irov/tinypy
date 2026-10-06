@@ -14,6 +14,12 @@ import sys
 ROOT = Path(__file__).resolve().parent
 ACCOUNTING = re.compile(r"outstanding_bytes=(\d+) outstanding_allocations=(\d+)")
 STATS_LINE = re.compile(r"^tinypy stats:.*(?:\n|$)", re.MULTILINE)
+CYCLE_HEADER = re.compile(r"^\[tinypy cycle\] cycle \d+ contains \d+ unreachable objects?; break one owning edge listed below$", re.MULTILINE)
+CYCLE_LINE = re.compile(
+    r"^(?:\[tinypy cycle\] .*|  object #\d+: .*|    created at .*|"
+    r"    owning edge: .*|      candidate break site at .*)(?:\n|$)",
+    re.MULTILINE,
+)
 
 
 def invoke(command, timeout):
@@ -27,9 +33,12 @@ def invoke(command, timeout):
 def run_case(case, arguments, manifest):
     name, path = case
     identity = name + "." + path
-    reason = manifest["deferred_cases"].get(identity)
-    if reason is not None:
-        return {"case": identity, "status": "DEFER", "detail": reason}
+    cycle_count = manifest.get("debug_cycle_cases", {}).get(identity)
+    if cycle_count is not None:
+        if not arguments.build_info["debug"]:
+            return {"case": identity, "status": "SKIP", "detail": "Cycle diagnostic adaptation runs only in Debug."}
+        if not arguments.build_info["cycle_diagnostics"]:
+            return {"case": identity, "status": "FAIL", "detail": "Debug cycle tests require TINYPY_ENABLE_CYCLE_DIAGNOSTICS=ON."}
     runner = str(ROOT / "run_case.py")
     expected_output = None
     expected_error = ""
@@ -42,8 +51,12 @@ def run_case(case, arguments, manifest):
             return {"case": identity, "status": "REFERENCE_FAIL", "detail": error or output}
         expected_output = output
         expected_error = error
+    command = [str(arguments.tinypy), "--stats"]
+    if cycle_count is not None:
+        command.append("--cycle-diagnostics")
+    command.extend([runner, "tinypy-cycle" if cycle_count is not None else "tinypy", name, path])
     code, output, error = invoke(
-        [str(arguments.tinypy), "--stats", runner, "tinypy", name, path],
+        command,
         arguments.timeout,
     )
     if code != 0:
@@ -52,11 +65,21 @@ def run_case(case, arguments, manifest):
     if accounting is None or accounting.groups() != ("0", "0"):
         return {"case": identity, "status": "FAIL", "detail": "allocator did not return to zero:\n" + error}
     diagnostic = STATS_LINE.sub("", error)
+    if cycle_count is not None:
+        if len(CYCLE_HEADER.findall(diagnostic)) != cycle_count:
+            return {"case": identity, "status": "FAIL", "detail": "unexpected cycle diagnostic count:\n" + diagnostic}
+        if cycle_count and ("owning edge:" not in diagnostic or "cycle_cases.py:" not in diagnostic):
+            return {"case": identity, "status": "FAIL", "detail": "cycle report lacks owning edges or source locations:\n" + diagnostic}
+        diagnostic = CYCLE_LINE.sub("", diagnostic)
     if diagnostic != expected_error:
         return {"case": identity, "status": "FAIL", "detail": "unexpected stderr:\n" + diagnostic}
     if expected_output is not None and output != expected_output:
         return {"case": identity, "status": "FAIL", "detail": "stdout differs: tinypy=%r reference=%r" % (output, expected_output)}
-    return {"case": identity, "status": "PASS", "detail": ""}
+    result = {"case": identity, "status": "PASS", "detail": ""}
+    if cycle_count is not None:
+        result["mode"] = "debug-cycle-adaptation"
+        result["detail"] = "Debug adaptation: %d detected cycles; explicit cleanup; zero allocator balance." % cycle_count
+    return result
 
 
 def main():
@@ -79,6 +102,10 @@ def main():
     if arguments.jobs < 1 or arguments.timeout <= 0:
         parser.error("--jobs and --timeout must be positive")
     arguments.tinypy = arguments.tinypy.resolve()
+    code, output, error = invoke([str(arguments.tinypy), "--build-info"], arguments.timeout)
+    if code != 0:
+        raise RuntimeError("cannot query tinypy build capabilities:\n" + (error or output))
+    arguments.build_info = json.loads(output)
     if arguments.reference is not None:
         arguments.reference = arguments.reference.resolve()
         result = subprocess.run(
@@ -97,9 +124,13 @@ def main():
         for name, specification in manifest["modules"].items()
         for path in specification["cases"]
     }
-    stale_deferred = set(manifest["deferred_cases"]) - identities
-    if stale_deferred:
-        raise RuntimeError("unknown deferred cases: " + ", ".join(sorted(stale_deferred)))
+    excluded_cases = manifest.get("excluded_cases", {})
+    stale_excluded = set(excluded_cases) - identities
+    if stale_excluded:
+        raise RuntimeError("unknown excluded cases: " + ", ".join(sorted(stale_excluded)))
+    cycle_cases = set(manifest.get("debug_cycle_cases", {}))
+    if cycle_cases - identities or cycle_cases & set(excluded_cases):
+        raise RuntimeError("invalid debug cycle case manifest")
     for name in modules:
         specification = manifest["modules"][name]
         source = ROOT / specification["path"]
@@ -116,8 +147,10 @@ def main():
         )
         if code != 0 or output.splitlines() != specification["cases"]:
             raise RuntimeError("upstream discovery changed: %s\n%s" % (name, error or output))
-        cases.extend((name, path) for path in specification["cases"])
+        cases.extend((name, path) for path in specification["cases"] if name + "." + path not in excluded_cases)
     if arguments.case is not None:
+        if arguments.case in excluded_cases:
+            parser.error("case outside the tinypy corpus: " + excluded_cases[arguments.case])
         cases = [case for case in cases if ".".join(case) == arguments.case]
         if not cases:
             parser.error("unknown case: " + arguments.case)
@@ -133,8 +166,8 @@ def main():
     print("upstream: %d cases; %s" % (len(results), ", ".join("%s=%d" % item for item in sorted(counts.items()))))
     if arguments.report is not None:
         arguments.report.parent.mkdir(parents=True, exist_ok=True)
-        arguments.report.write_text(json.dumps({"counts": counts, "results": results}, indent=2) + "\n")
-    return int(any(result["status"] not in ("PASS", "DEFER") for result in results))
+        arguments.report.write_text(json.dumps({"counts": counts, "results": results, "excluded_cases": excluded_cases}, indent=2) + "\n")
+    return int(any(result["status"] not in ("PASS", "SKIP") for result in results))
 
 
 if __name__ == "__main__":

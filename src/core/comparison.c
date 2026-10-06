@@ -250,6 +250,41 @@ static int32_t __tinypy_comparison_type_name_order(const tinypy_type_t *left, co
     return (uintptr_t)left < (uintptr_t)right ? -1 : 1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_comparison_number_check(const tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (__tinypy_comparison_is_numeric(kind) != 0 || kind == TINYPY_VALUE_OLD_INSTANCE) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t result = tinypy_internal_object_has_special((tinypy_value_t *)value, "__int__", 7U) != 0
+        || tinypy_internal_object_has_special((tinypy_value_t *)value, "__float__", 9U) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_internal_comparison_fallback_order(tinypy_value_t *left, tinypy_value_t *right) {
+    tinypy_bool_t left_numeric;
+    tinypy_bool_t right_numeric;
+
+    if (left->type == right->type) {
+        return left == right ? 0 : ((uintptr_t)left < (uintptr_t)right ? -1 : 1);
+    }
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_NONE || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_NONE) {
+        int32_t result = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_NONE ? -1 : 1;
+
+        return result;
+    }
+    left_numeric = __tinypy_comparison_number_check(left);
+    right_numeric = __tinypy_comparison_number_check(right);
+    if (left_numeric != right_numeric) {
+        return left_numeric != 0 ? -1 : 1;
+    }
+    if (left_numeric != 0) {
+        return (uintptr_t)left->type < (uintptr_t)right->type ? -1 : 1;
+    }
+    int32_t result = __tinypy_comparison_type_name_order(left->type, right->type);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_comparison_sequence_equal_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     size_t left_size;
@@ -703,8 +738,8 @@ static tinypy_bool_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_valu
         *out_order = left_kind == right_kind ? 0 : (left_kind == TINYPY_VALUE_NONE ? -1 : 1);
         return TINYPY_TRUE;
     }
-    if (__tinypy_comparison_is_numeric(left_kind) != __tinypy_comparison_is_numeric(right_kind)) {
-        *out_order = __tinypy_comparison_is_numeric(left_kind) != 0 ? -1 : 1;
+    if (__tinypy_comparison_number_check(left) != __tinypy_comparison_number_check(right)) {
+        *out_order = __tinypy_comparison_number_check(left) != 0 ? -1 : 1;
         return TINYPY_TRUE;
     }
     if (left->type != right->type) {

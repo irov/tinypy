@@ -9,6 +9,99 @@ void tinypy_output_emit(tinypy_vm_t *vm, tinypy_output_channel_e channel, const 
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_output_unraisable_text(tinypy_value_t *stream, const void *bytes, size_t size) {
+    tinypy_error_t *error = NULL;
+
+    (void)tinypy_internal_output_write(stream, bytes, size, &error);
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    tinypy_internal_exception_clear_raised(TINYPY_VALUE_VM(stream));
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_output_unraisable_repr(tinypy_value_t *stream, tinypy_value_t *value, const char *fallback) {
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *text = value != NULL ? tinypy_object_repr(value, &error) : NULL;
+
+    if (text != NULL) {
+        __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(text), TINYPY_TEXT_BYTE_SIZE(text));
+        TINYPY_DECREF(text);
+    }
+    else {
+        __tinypy_output_unraisable_text(stream, fallback, strlen(fallback));
+    }
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    tinypy_internal_exception_clear_raised(TINYPY_VALUE_VM(stream));
+}
+//////////////////////////////////////////////////////////////////////////
+/* The caller has already separated the exception that was pending before
+   its callback. Reporting consumes only the callback's ignored exception. */
+void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object) {
+    tinypy_internal_exception_state_t state;
+    tinypy_value_t *stream;
+    tinypy_value_t *module;
+    tinypy_error_t *error = NULL;
+
+    if (vm->raised_type == NULL || vm->sys_module == NULL) {
+        return;
+    }
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    stream = tinypy_internal_dict_get_optional(vm, TINYPY_MODULE_OBJECT(vm->sys_module)->dict, vm->stderr_key);
+    if (stream != NULL) {
+        TINYPY_INCREF(stream);
+        __tinypy_output_unraisable_text(stream, "Exception ", 10U);
+        module = tinypy_object_get_attr(state.type, "__module__", 10U, &error);
+        if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING) {
+            size_t size = TINYPY_TEXT_BYTE_SIZE(module);
+
+            if (size != 10U || memcmp(TINYPY_TEXT_BYTES(module), "exceptions", 10U) != 0) {
+                __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(module), size);
+                __tinypy_output_unraisable_text(stream, ".", 1U);
+            }
+        }
+        else if (module == NULL) {
+            __tinypy_output_unraisable_text(stream, "<unknown>", 9U);
+        }
+        if (module != NULL) {
+            TINYPY_DECREF(module);
+        }
+        if (error != NULL) {
+            tinypy_error_release(error);
+        }
+        tinypy_internal_exception_clear_raised(vm);
+        if (TINYPY_VALUE_KIND(state.type) == TINYPY_VALUE_TYPE) {
+            tinypy_type_t *type = (tinypy_type_t *)state.type;
+
+            __tinypy_output_unraisable_text(stream, type->name, type->name_size);
+        }
+        else if (TINYPY_VALUE_KIND(state.type) == TINYPY_VALUE_CLASS) {
+            tinypy_value_t *name = TINYPY_CLASS_OBJECT(state.type)->name;
+
+            __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name));
+        }
+        if (state.value != NULL && TINYPY_VALUE_KIND(state.value) != TINYPY_VALUE_NONE) {
+            __tinypy_output_unraisable_text(stream, ": ", 2U);
+            __tinypy_output_unraisable_repr(stream, state.value, "<exception repr() failed>");
+        }
+        __tinypy_output_unraisable_text(stream, " in ", 4U);
+        __tinypy_output_unraisable_repr(stream, object, "<object repr() failed>");
+        __tinypy_output_unraisable_text(stream, " ignored\n", 9U);
+        TINYPY_DECREF(stream);
+    }
+    if (state.type != NULL) {
+        TINYPY_DECREF(state.type);
+    }
+    if (state.value != NULL) {
+        TINYPY_DECREF(state.value);
+    }
+    if (state.traceback != NULL) {
+        TINYPY_DECREF(state.traceback);
+    }
+    tinypy_internal_exception_clear_raised(vm);
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_output_stream_new(tinypy_vm_t *vm, tinypy_output_channel_e channel) {
     tinypy_output_stream_object_t *stream = (tinypy_output_stream_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_OUTPUT_STREAM, sizeof(*stream));
     stream->channel = channel;

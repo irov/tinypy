@@ -1,10 +1,10 @@
 # Portable Python 2 tests
 
 This corpus vendors 20 complete CPython 2.7.18 modules with 221 discovered
-cases, including inherited TestCase methods, and adds six project-authored
-modules with 349 cases. Upstream files are byte-for-byte unchanged.
+cases, of which 210 are selected, and adds eight project-authored
+modules with 460 cases. Upstream files are byte-for-byte unchanged.
 `manifest.json` records source commits, paths, SHA-256 hashes, case names and
-explicit reasons for deferring individual cases. Locally authored modules
+explicit reasons for excluding originals outside the tinypy corpus. Locally authored modules
 have an explicit origin marker and a complete case list; their source is
 editable without updating a vendor checksum. Tests require no network or
 installed third-party test framework.
@@ -15,7 +15,7 @@ Sources:
   <https://github.com/python/cpython/tree/v2.7.18/Lib/test>.
 - Project-authored modules under `local/` check numeric slot dispatch,
   receiver binding, truth and object protocols, percent formatting and runtime
-  regressions.
+  regressions, evaluation order, control flow and container semantics.
   Their vectors and expectations are validated on CPython 2.7.18.
 - CPython license and copyright notices: `LICENSES/PSF-2.0.txt`
   relative to the repository root, or
@@ -32,6 +32,10 @@ cmake --build build/upstream -j
 ctest --test-dir build/upstream -L upstream --output-on-failure
 ```
 
+For an optional Release LTO build, configure with
+`-DCMAKE_BUILD_TYPE=Release -DTINYPY_ENABLE_LTO=ON`. CMake verifies toolchain
+support; the option defaults to OFF.
+
 Python 3.7 or newer runs only the host coordinator that launches processes,
 collects results and enforces timeouts. The actual test programs are Python 2.7
 and execute inside tinypy. This optional build-time dependency does not change
@@ -40,6 +44,15 @@ per module and a separate assertion-adapter check. Every case
 runs in its own tinypy process, with a timeout and allocator accounting; a
 crash cannot prevent the remaining cases from running. Nonzero exit codes,
 undeclared skips and nonzero outstanding allocations fail the check.
+The coordinator queries `tinypy --build-info`; four ownership-sensitive cases
+use Debug diagnostic adaptations and receive `SKIP` in Release. Debug builds
+compile cycle diagnostics by default (`TINYPY_ENABLE_CYCLE_DIAGNOSTICS=ON`);
+explicitly disabling the option makes those checks fail. Release never compiles
+the detector, including with the option enabled. Existing CMake caches that
+retain OFF must be reconfigured with `-DTINYPY_ENABLE_CYCLE_DIAGNOSTICS=ON`.
+The CLI's `--cycle-diagnostics` switch enables tracking and supplies
+`__tinypy_report_cycles__()` in the script's globals as a bridge to the public
+`tinypy_vm_report_cycles` API. It is available only with diagnostic support.
 
 The optional reference mode also requires every active case to pass on an
 external CPython 2.7.18 interpreter and compares its stdout with tinypy:
@@ -55,7 +68,10 @@ Use `--module cpython.test_class`, or a full case identifier such as
 `--case cpython.test_class.ClassTests.testHashStuff`, to narrow a run.
 Reference Python is not downloaded, embedded or required by CTest.
 Discovery must match the manifest exactly; changing a vendor file or silently
-losing a test makes the coordinator fail.
+losing a test makes the coordinator fail, including for excluded originals.
+`excluded_cases` removes those originals from execution and PASS/SKIP counts;
+reports retain their exclusion reasons separately. An explicit `--case` request
+for an excluded original fails with its reason.
 
 ## Adapter boundaries
 
@@ -72,14 +88,29 @@ The CPython reference uses its real standard-library unittest and test support.
 Neither the adapters
 nor the vendor files are part of the runtime library or its installation.
 
-## Deferred work
+## Corpus selection
 
-15 individual cases remain present in their unchanged CPython modules but are
-listed as `DEFER` with reasons in `manifest.json`. They require cyclic GC or
-CPython implementation details. Two original fixtures create owning cycles;
-their behavior is also checked by local equivalents with explicit cleanup or
-without a closure cycle. Their unchanged originals remain deferred. A deferred
-case is not reported as passing.
+No selected case remains DEFER. Seven inherited `test_tuple_reuse` variants
+are excluded because they require CPython's particular tuple-cache identity.
+Ordinary enumerate value/subclass tests remain active. Four other originals
+are replaced by independently authored cases in `local.test_review_regressions`:
+
+| Original | Selected replacement |
+| --- | --- |
+| `ClassTests.testDelItem` | Python deletion dispatch and KeyError propagation, without the `_testcapi` C ABI |
+| `TestReversed.test_len` | Direct `__length_hint__()` calls, remaining length, exhaustion and callback errors |
+| `TestReversed.test_bug1229429` | TypeError for noncallable `__reversed__`, weakref lifetime and zero allocator balance |
+| `TestReversed.test_xrange_optimization` | Reversed values, iterator identity and exhaustion, without concrete CPython type identity |
+
+The eleven originals remain only in the pinned vendor sources and discovery
+inventory; they are not pending tests or reported as passing. Four
+ownership-sensitive cases use project-authored adaptations in
+`cycle_cases.py`, selected by `debug_cycle_cases` in the manifest. Debug checks
+the exact number of unreachable owning cycles, diagnostic edges/source
+locations, explicit cleanup and a zero allocator balance; `testDel` checks an
+acyclic destructor and zero false positives. Release skips these four before
+running their fixtures. Reports identify Debug adaptation results explicitly;
+they do not claim that tinypy executes the unchanged GC-dependent originals.
 
 Whole modules needing additional libraries or source cleanup were not copied:
 
@@ -96,11 +127,18 @@ Whole modules needing additional libraries or source cleanup were not copied:
 | IronPython tests | iptest and CLR-specific infrastructure |
 | MicroPython tests | Select and validate Python 2-compatible cases from a Python 3 corpus |
 
-All 555 active cases currently pass on tinypy and the CPython 2.7.18 reference.
+All 666 ordinary active cases currently pass on tinypy and the CPython 2.7.18
+reference. Debug additionally passes four diagnostic adaptations (670 PASS);
+Release reports 666 PASS and 4 SKIP.
 Failures remain failures, without expected-failure annotations. Runtime fixes
 and validation results are recorded in [VALIDATION.md](VALIDATION.md). Passing
 compiler checks or the portable subset does not establish complete Python 2
 compatibility.
 
-The October runtime review, optimization measurements and remaining work are
+The October runtime review closure and optimization measurements are
 tracked in [REVIEW_STATUS.md](REVIEW_STATUS.md).
+
+The review of RustPython snippets and python-spec-test-suite contributed 56
+independently written Python 2.7 checks in `local.test_evaluation_semantics` and
+`local.test_container_semantics`. Selection, pinned source references and
+Python 2/3 differences are recorded in [EXTERNAL_TEST_REVIEW.md](EXTERNAL_TEST_REVIEW.md).

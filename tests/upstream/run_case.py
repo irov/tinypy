@@ -16,7 +16,7 @@ def install_adapters():
 
 
 def load_module(name, target):
-    if target == "tinypy":
+    if target in ("tinypy", "tinypy-cycle"):
         install_adapters()
     else:
         import unittest
@@ -69,7 +69,11 @@ def main():
     if path not in list_cases(module, name):
         raise ValueError("unknown upstream case: " + path)
     try:
-        run_case(module, path)
+        if target == "tinypy-cycle":
+            import cycle_cases
+            cycle_cases.run(name + "." + path, __tinypy_report_cycles__)
+        else:
+            run_case(module, path)
     except assertions.SkipTest as error:
         print "SKIP:", str(error)
         sys.exit(77)

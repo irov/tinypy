@@ -669,22 +669,61 @@ static tinypy_bool_t __tinypy_representation_set(tinypy_representation_builder_t
     else {
         __tinypy_representation_append(builder, frozen != 0 ? "frozenset([" : "set([", frozen != 0 ? 11U : 5U);
     }
-    TINYPY_INCREF(dict);
-    while (tinypy_dict_next(dict, &position, &key, &item) != 0) {
-        TINYPY_INCREF(key);
-        if (emitted != 0U) {
-            __tinypy_representation_append(builder, ", ", 2U);
-        }
-        tinypy_bool_t represented = __tinypy_representation_value(builder, key, INT32_C(0), out_error);
-        TINYPY_DECREF(key);
-        if (represented == 0) {
-            TINYPY_DECREF(dict);
+    if (subtype != 0) {
+        tinypy_value_t *iterator = tinypy_iter(value, out_error);
+        tinypy_error_t *iteration_error = NULL;
+
+        if (iterator == NULL) {
             __tinypy_representation_leave(builder, value);
             return TINYPY_FALSE;
         }
-        emitted += 1U;
+        for (;;) {
+            key = tinypy_next(iterator, &iteration_error);
+            if (key == NULL) {
+                break;
+            }
+            if (emitted != 0U) {
+                __tinypy_representation_append(builder, ", ", 2U);
+            }
+            tinypy_bool_t represented = __tinypy_representation_value(builder, key, INT32_C(0), out_error);
+            TINYPY_DECREF(key);
+            if (represented == 0) {
+                TINYPY_DECREF(iterator);
+                __tinypy_representation_leave(builder, value);
+                return TINYPY_FALSE;
+            }
+            emitted += 1U;
+        }
+        TINYPY_DECREF(iterator);
+        if (iteration_error != NULL) {
+            if (out_error != NULL) {
+                *out_error = iteration_error;
+            }
+            else {
+                tinypy_error_release(iteration_error);
+            }
+            __tinypy_representation_leave(builder, value);
+            return TINYPY_FALSE;
+        }
     }
-    TINYPY_DECREF(dict);
+    else {
+        TINYPY_INCREF(dict);
+        while (tinypy_dict_next(dict, &position, &key, &item) != 0) {
+            TINYPY_INCREF(key);
+            if (emitted != 0U) {
+                __tinypy_representation_append(builder, ", ", 2U);
+            }
+            tinypy_bool_t represented = __tinypy_representation_value(builder, key, INT32_C(0), out_error);
+            TINYPY_DECREF(key);
+            if (represented == 0) {
+                TINYPY_DECREF(dict);
+                __tinypy_representation_leave(builder, value);
+                return TINYPY_FALSE;
+            }
+            emitted += 1U;
+        }
+        TINYPY_DECREF(dict);
+    }
     __tinypy_representation_append(builder, "])", 2U);
     __tinypy_representation_leave(builder, value);
     return TINYPY_TRUE;
@@ -741,7 +780,8 @@ static tinypy_bool_t __tinypy_representation_append_text(tinypy_representation_b
     size_t byte_size = TINYPY_TEXT_BYTE_SIZE(text);
     size_t index;
 
-    if (raw != 0 && TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
+    (void)raw;
+    if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
         for (index = 0U; index < byte_size; ++index) {
             if (bytes[index] >= 0x80U) {
                 tinypy_internal_make_vm_error(builder->vm, TINYPY_ERROR_UNICODE_ENCODE, "ascii encode error", out_error);

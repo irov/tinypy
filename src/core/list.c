@@ -163,6 +163,19 @@ tinypy_value_t *tinypy_list_from_items(tinypy_vm_t *vm, tinypy_value_t *const *i
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_list_from_items_checked(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size, tinypy_error_t **out_error) {
+    tinypy_value_t *result = tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_LIST], sizeof(tinypy_list_object_t), out_error);
+
+    if (result == NULL) {
+        return NULL;
+    }
+    if (tinypy_internal_list_extend_checked(result, items, size, out_error) == 0) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 size_t tinypy_list_size(const tinypy_value_t *value) {
 
     size_t return_value_1 = TINYPY_SIZED_SIZE(value);

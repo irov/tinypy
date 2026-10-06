@@ -17,9 +17,17 @@
         }                                    \
     } while (0)
 
+static tinypy_bool_t __test_constant_is_none(const void *user_data, size_t index) {
+    (void)user_data;
+    (void)index;
+    return TINYPY_TRUE;
+}
+
 static tinypy_bytecode_metadata_t __test_metadata(size_t stack_size) {
     tinypy_bytecode_metadata_t metadata;
 
+    metadata.is_none_constant = __test_constant_is_none;
+    metadata.constant_user_data = NULL;
     metadata.const_count = 64U;
     metadata.name_count = 64U;
     metadata.varname_count = 64U;

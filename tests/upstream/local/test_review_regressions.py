@@ -5,6 +5,334 @@ import unittest
 
 
 class ReviewRegressions(unittest.TestCase):
+    def test_filter_immutable_subtype_item_protocol(self):
+        for base in (tuple, str, unicode):
+            class Items(base):
+                def __iter__(self):
+                    raise AssertionError('filter must use item access')
+                def __len__(self):
+                    raise AssertionError('filter must use storage length')
+                def __getitem__(self, index):
+                    self.calls.append(index)
+                    return self.values[index]
+            source = Items('abc')
+            source.values = (0, 7, 9) if base is tuple else (base(''), base('XY'), base('z'))
+            expected = (7, 9) if base is tuple else base('XYz')
+            for predicate in (None, bool):
+                source.calls = []
+                result = filter(predicate, source)
+                self.assertIs(type(result), base)
+                self.assertEqual(result, expected)
+                self.assertEqual(source.calls, [0, 1, 2])
+
+    def test_filter_indexed_errors_propagate(self):
+        for base in (tuple, str, unicode):
+            class Items(base):
+                def __getitem__(self, index):
+                    raise self.failure('item failed')
+            source = Items('a')
+            for failure in (IndexError, StopIteration, ValueError):
+                source.failure = failure
+                self.assertRaises(failure, filter, None, source)
+
+    def test_filter_text_item_validation_order(self):
+        for base in (str, unicode):
+            class Items(base):
+                def __getitem__(self, index):
+                    self.calls.append(index)
+                    return self.values[index]
+            source = Items('abc')
+            source.values = (0, base('a'), base('b'))
+            source.calls = []
+            self.assertRaises(TypeError, filter, None, source)
+            self.assertEqual(source.calls, [0])
+            source.calls = []
+            self.assertEqual(filter(bool, source), base('ab'))
+            self.assertEqual(source.calls, [0, 1, 2])
+            class CustomTruth(base):
+                def __nonzero__(self):
+                    raise ValueError('truth was requested')
+            source.values = (CustomTruth('x'), base(''), base('z'))
+            self.assertEqual(filter(None, source), base('xz'))
+            self.assertRaises(ValueError, filter, bool, source)
+
+    def test_filter_bool_truth_protocol(self):
+        class Truth(object):
+            def __init__(self, value):
+                self.value = value
+                self.calls = 0
+            def __nonzero__(self):
+                self.calls += 1
+                if self.value == 2:
+                    raise ValueError('truth failed')
+                return self.value
+        for predicate in (None, bool):
+            no, yes, failing, trailing = [Truth(value) for value in (0, 1, 2, 1)]
+            self.assertEqual(filter(predicate, [no, yes]), [yes])
+            self.assertEqual((no.calls, yes.calls), (1, 1))
+            self.assertRaises(ValueError, filter, predicate, [failing, trailing])
+            self.assertEqual((failing.calls, trailing.calls), (1, 0))
+
+    def test_map_none_copy_and_subclass_iteration(self):
+        for base in (list, tuple):
+            for values in ([], [[1], [2]]):
+                source = base(values)
+                result = map(None, source)
+                self.assertIs(type(result), list)
+                self.assertIsNot(result, source)
+                self.assertEqual(result, values)
+                for index in range(len(values)):
+                    self.assertIs(result[index], values[index])
+                result.append('extra')
+                self.assertEqual(list(source), values)
+            class Items(base):
+                def __iter__(self):
+                    return iter(['alternate'])
+            self.assertEqual(map(None, Items([1, 2])), ['alternate'])
+
+    def test_sequence_deletion_protocol(self):
+        class Sequence:
+            def __init__(self):
+                self.deleted = []
+            def __delitem__(self, key):
+                self.deleted.append(key)
+        sequence = Sequence()
+        del sequence[2]
+        del sequence[-1]
+        self.assertEqual(sequence.deleted, [2, -1])
+        class RejectDeletion(object):
+            def __delitem__(self, key):
+                raise KeyError(key)
+        with self.assertRaises(KeyError) as error:
+            del RejectDeletion()[3]
+        self.assertEqual(error.exception.args, (3,))
+
+    def test_reversed_length_hint(self):
+        for sequence in ('hello', tuple('hello'), list('hello'), xrange(5)):
+            iterator = reversed(sequence)
+            self.assertEqual(iterator.__length_hint__(), len(sequence))
+            next(iterator)
+            self.assertEqual(iterator.__length_hint__(), len(sequence) - 1)
+            self.assertEqual(list(iterator), list(sequence)[-2::-1])
+            self.assertEqual(iterator.__length_hint__(), 0)
+        class ChangingLength:
+            def __init__(self):
+                self.calls = 0
+            def __len__(self):
+                self.calls += 1
+                if self.calls > 1:
+                    raise ZeroDivisionError('length failed')
+                return 10
+            def __getitem__(self, index):
+                return index
+        iterator = reversed(ChangingLength())
+        self.assertRaises(ZeroDivisionError, iterator.__length_hint__)
+
+    def test_reversed_subclass_ignores_keywords(self):
+        class ReverseSubclass(reversed):
+            pass
+        self.assertEqual(list(ReverseSubclass([1, 2, 3], ignored=True)), [3, 2, 1])
+        self.assertEqual(list(ReverseSubclass([1, 2, 3], sequence='unused')), [3, 2, 1])
+
+    def test_sequence_consumers_call_length_hints(self):
+        class Source(object):
+            def __init__(self, events, missing_length=False):
+                self.events = events
+                self.missing_length = missing_length
+                self.index = 0
+            def __iter__(self):
+                self.events.append('iter')
+                return self
+            def next(self):
+                self.events.append(('next', self.index))
+                if self.index == 3:
+                    raise StopIteration
+                value = self.index
+                self.index += 1
+                return value
+            def __len__(self):
+                self.events.append('len')
+                if self.missing_length:
+                    raise AttributeError('no length')
+                return 7
+            def __length_hint__(self):
+                self.events.append('hint')
+                return 5
+
+        consumers = (
+            (list, [0, 1, 2]),
+            (tuple, (0, 1, 2)),
+            (sorted, [0, 1, 2]),
+            (lambda value: filter(None, value), [1, 2]),
+            (lambda value: map(None, value), [0, 1, 2]),
+        )
+        for consumer, expected in consumers:
+            events = []
+            self.assertEqual(consumer(Source(events)), expected)
+            self.assertEqual(events[:2], ['iter', 'len'])
+            events = []
+            self.assertEqual(consumer(Source(events, True)), expected)
+            self.assertEqual(events[:3], ['iter', 'len', 'hint'])
+
+        events = []
+        self.assertEqual(zip(Source(events), [10, 11, 12]), [(0, 10), (1, 11), (2, 12)])
+        self.assertEqual(events[:2], ['len', 'iter'])
+
+        class BrokenLength(Source):
+            def __len__(self):
+                self.events.append('len')
+                raise ValueError('length failed')
+        for consumer, unused in consumers:
+            events = []
+            self.assertRaises(ValueError, consumer, BrokenLength(events))
+            self.assertEqual(events, ['iter', 'len'])
+        events = []
+        self.assertRaises(ValueError, zip, BrokenLength(events), [1])
+        self.assertEqual(events, ['len'])
+        events = []
+        self.assertEqual(map(None, Source(events), BrokenLength(events)), [(0, 0), (1, 1), (2, 2)])
+        self.assertEqual(events[:4], ['iter', 'len', 'iter', 'len'])
+        events = []
+        self.assertRaises(ValueError, zip, Source(events), BrokenLength(events))
+        self.assertEqual(events, ['len', 'len'])
+
+        class BrokenHintDescriptor(object):
+            def __get__(self, instance, owner):
+                raise AttributeError('descriptor failed')
+        class DescriptorSource(object):
+            __length_hint__ = BrokenHintDescriptor()
+            def __iter__(self):
+                return self
+            def next(self):
+                raise StopIteration
+        self.assertRaises(AttributeError, list, DescriptorSource())
+
+    def test_sequence_consumers_reject_minus_one_length_hint(self):
+        class Source(object):
+            def __init__(self):
+                self.done = False
+            def __iter__(self):
+                return self
+            def next(self):
+                if self.done:
+                    raise StopIteration
+                self.done = True
+                return 1
+            def __length_hint__(self):
+                return -1
+        consumers = (
+            list,
+            tuple,
+            sorted,
+            lambda value: filter(None, value),
+            lambda value: map(None, value),
+            lambda value: zip(value, [1]),
+        )
+        for consumer in consumers:
+            self.assertRaises(SystemError, consumer, Source())
+        self.assertEqual(map(lambda value: value, Source()), [1])
+        self.assertEqual(map(None, Source(), [2]), [(1, 2)])
+
+    def test_reversed_noncallable_releases_reference(self):
+        import _weakref as weakref
+        class Receiver(object):
+            pass
+        def source():
+            pass
+        receiver = Receiver()
+        observed = weakref.ref(receiver)
+        source.__reversed__ = receiver
+        for unused in range(10):
+            self.assertRaises(TypeError, reversed, source)
+            self.assertIs(observed(), receiver)
+        del source.__reversed__
+        receiver = None
+        self.assertIs(observed(), None)
+
+    def test_reversed_xrange_values_and_exhaustion(self):
+        for bounds in ((0,), (1,), (5,), (3, 12, 2), (9, -4, -3), (-9, 4, 3)):
+            sequence = xrange(*bounds)
+            expected = list(sequence)[::-1]
+            iterator = reversed(sequence)
+            self.assertIs(iter(iterator), iterator)
+            if expected:
+                self.assertEqual(next(iterator), expected[0])
+                self.assertEqual(list(iterator), expected[1:])
+            else:
+                self.assertEqual(list(iterator), [])
+            self.assertRaises(StopIteration, next, iterator)
+            self.assertEqual(list(reversed(sequence)), expected)
+
+    def test_builtins_module_namespace_and_cache(self):
+        module = type(sys)('private_builtins')
+        module.parcel = 19
+        module.len = lambda unused: 71
+        scope = {'__builtins__': module, 'sys': sys}
+        try:
+            exec 'def sample():\n    return parcel\n' in scope
+            sample = scope['sample']
+            self.assertEqual(sample(), 19)
+            module.parcel = 29
+            self.assertEqual(sample(), 29)
+            self.assertEqual(eval('len([])', scope), 71)
+            self.assertIs(eval('sys._getframe().f_builtins', scope), module.__dict__)
+            self.assertRaises(NameError, eval, 'True', scope)
+            del module.parcel
+            self.assertRaises(NameError, sample)
+        finally:
+            sample = None
+            scope.clear()
+
+    def test_builtins_invalid_namespace_is_minimal(self):
+        for supplied in (None, 17, [], object()):
+            scope = {'__builtins__': supplied, 'sys': sys}
+            try:
+                self.assertIs(eval('None', scope), None)
+                self.assertRaises(NameError, eval, 'len([])', scope)
+                self.assertRaises(NameError, eval, 'True', scope)
+                actual = eval('sys._getframe().f_builtins', scope)
+                self.assertEqual(actual, {'None': None})
+                self.assertIs(scope['__builtins__'], supplied)
+            finally:
+                scope.clear()
+
+    def test_builtins_removed_before_function_call(self):
+        scope = {'__builtins__': {'parcel': 19}, 'sys': sys}
+        try:
+            exec 'def sample():\n    return parcel\ndef builtins():\n    return sys._getframe().f_builtins\n' in scope
+            self.assertEqual(scope['sample'](), 19)
+            del scope['__builtins__']
+            self.assertRaises(NameError, scope['sample'])
+            self.assertEqual(scope['builtins'](), {'None': None})
+        finally:
+            scope.clear()
+
+    def test_eval_inherits_current_builtins(self):
+        builtins = {'eval': eval, 'parcel': 37}
+        inner = {}
+        scope = {'__builtins__': builtins, 'inner': inner}
+        try:
+            exec 'def sample():\n    return eval("parcel", inner)\n' in scope
+            self.assertEqual(scope['sample'](), 37)
+            self.assertIs(inner['__builtins__'], builtins)
+            builtins['parcel'] = 43
+            self.assertEqual(scope['sample'](), 43)
+        finally:
+            scope.clear()
+            inner.clear()
+
+    def test_tuple_concatenation_subtypes_and_identity(self):
+        class Parcel(tuple):
+            pass
+        for left in ((), (1,), (1, 2), Parcel(), Parcel([1, 2])):
+            for right in ((), (3,), (3, 4), Parcel(), Parcel([3, 4])):
+                result = left + right
+                self.assertIs(type(result), tuple)
+                self.assertEqual(result, tuple(list(left) + list(right)))
+                if result:
+                    self.assertIsNot(result, left)
+                    self.assertIsNot(result, right)
+
     def test_long_float_powers(self):
         for exponent in (64, 65, 69, 70, 75, 80, 95, 127, 200, 500):
             value = 1L << exponent
@@ -523,8 +851,8 @@ class ReviewRegressions(unittest.TestCase):
         self.assertEqual(str(EnvironmentError(None, 'x')), '[Errno None] x')
 
     def test_enumerate_long_start(self):
-        start = 1L << 80
-        self.assertEqual(list(enumerate(['a', 'b'], start)), [(start, 'a'), (start + 1, 'b')])
+        for start in (sys.maxint - 1, sys.maxint, sys.maxint + 1, 1L << 80):
+            self.assertEqual(list(enumerate(['a', 'b'], start)), [(start, 'a'), (start + 1, 'b')])
 
     def test_range_long_bounds(self):
         start = 1L << 80
@@ -581,6 +909,554 @@ class ReviewRegressions(unittest.TestCase):
     def test_module_removes_registration(self):
         self.assertRaises(ImportError, __import__, 'local.review_deleted_module')
         self.assertFalse('local.review_deleted_module' in sys.modules)
+
+
+    def test_intern_dynamic_strings(self):
+        first = ''.join(['parcel', '_', 'dynamic'])
+        second = ''.join(['parcel', '_', 'dynamic'])
+        self.assertIsNot(first, second)
+        self.assertIs(intern(first), intern(second))
+        del first, second
+        for index in range(300):
+            text = 'parcel_%d' % index
+            self.assertIs(intern(text), intern('parcel_%d' % index))
+
+    def test_intern_compiler_names(self):
+        code = compile('def parcel_receiver(parcel_argument): return parcel_argument', '<intern>', 'exec')
+        self.assertIs(code.co_names[0], intern(''.join(['parcel', '_receiver'])))
+        function = code.co_consts[0]
+        self.assertIs(function.co_varnames[0], intern(''.join(['parcel', '_argument'])))
+        constant = compile("'parcel_constant'", '<intern>', 'eval').co_consts[0]
+        self.assertIs(constant, intern(''.join(['parcel', '_constant'])))
+
+    def test_custom_mro_reordering(self):
+        class Meta(type):
+            def mro(cls):
+                result = type.mro(cls)
+                if cls.__name__ == 'Parcel':
+                    result[1], result[2] = result[2], result[1]
+                return result
+        class Left(object):
+            value = 'left'
+        class Right(object):
+            value = 'right'
+        class Parcel(Left, Right):
+            __metaclass__ = Meta
+        self.assertEqual(Parcel.__mro__, (Parcel, Right, Left, object))
+        self.assertEqual(type.mro(Parcel), [Parcel, Left, Right, object])
+        self.assertEqual(Parcel().value, 'right')
+        Right.value = 'updated'
+        self.assertEqual(Parcel().value, 'updated')
+
+    def test_custom_mro_extra_class(self):
+        class Extra(object):
+            value = 41
+        class Meta(type):
+            def mro(cls):
+                return [cls, Extra, object]
+        class Parcel(object):
+            __metaclass__ = Meta
+        self.assertEqual(Parcel().value, 41)
+        self.assertTrue(isinstance(Parcel(), Extra))
+        self.assertEqual(Parcel.__bases__, (object,))
+
+    def test_custom_mro_invalid_entries(self):
+        class Meta(type):
+            def mro(cls):
+                return [cls, 7, object]
+        self.assertRaises(TypeError, Meta, 'Parcel', (object,), {})
+        class Other(type):
+            def mro(cls):
+                return [cls, list, object]
+        self.assertRaises(TypeError, Other, 'Parcel', (object,), {})
+
+    def test_custom_mro_rebase(self):
+        calls = []
+        class Meta(type):
+            def mro(cls):
+                calls.append(cls.__name__)
+                return type.mro(cls)
+        class Left(object):
+            value = 11
+        class Right(object):
+            value = 19
+        class Parcel(Left):
+            __metaclass__ = Meta
+        class Child(Parcel):
+            pass
+        del calls[:]
+        Parcel.__bases__ = (Right,)
+        self.assertEqual(calls, ['Parcel', 'Child'])
+        self.assertEqual(Child().value, 19)
+        self.assertEqual(Parcel.__mro__, (Parcel, Right, object))
+
+    def test_custom_mro_rebase_rollback(self):
+        class Left(object):
+            value = 11
+        class Right(object):
+            value = 19
+        class Meta(type):
+            def mro(cls):
+                if cls.__name__ == 'Child' and cls.__bases__[0].__bases__ == (Right,):
+                    raise ValueError('blocked')
+                return type.mro(cls)
+        class Parcel(Left):
+            __metaclass__ = Meta
+        class Child(Parcel):
+            pass
+        self.assertRaises(ValueError, setattr, Parcel, '__bases__', (Right,))
+        self.assertEqual(Parcel.__bases__, (Left,))
+        self.assertEqual(Child().value, 11)
+
+
+    def test_float_fromhex_rounding(self):
+        cases = [
+            ('0x1.00000000000008p0', 1.0),
+            ('0x1.000000000000080001p0', float.fromhex('0x1.0000000000001p0')),
+            ('0x1.00000000000018p0', float.fromhex('0x1.0000000000002p0')),
+            ('0x1p-1075', 0.0),
+            ('0x1.00000000000001p-1075', float.fromhex('0x1p-1074')),
+            ('0x3p-1075', float.fromhex('0x1p-1073')),
+            ('0x1.fffffffffffffp1023', float.fromhex('0x1.fffffffffffffp1023')),
+            ('-0x0p999999999999999999', -0.0),
+            ('0x1p-999999999999999999', 0.0),
+        ]
+        for text, expected in cases:
+            self.assertEqual(float.fromhex(text).hex(), expected.hex())
+        self.assertRaises(OverflowError, float.fromhex, '0x1.fffffffffffff8p1023')
+        for exponent in [-1074, -1073, -1022, -1021, -53, -1, 0, 1, 52, 100, 1022]:
+            for coefficient in [1.0, 1.25, 1.5, 1.75, 1.9999999999999998]:
+                text = coefficient.hex().split('p')[0] + 'p%d' % exponent
+                value = float.fromhex(text)
+                self.assertEqual(float.fromhex(value.hex()), value)
+
+    def test_cmp_nan_fallback(self):
+        first, second = float('nan'), float('nan')
+        self.assertEqual(cmp(first, first), 0)
+        self.assertEqual(abs(cmp(first, second)), 1)
+        self.assertEqual(cmp(first, second), -cmp(second, first))
+        self.assertEqual(cmp(first, second), cmp(id(first), id(second)))
+        for other in [1, 1L, 1.0, None, 'parcel']:
+            self.assertEqual(abs(cmp(first, other)), 1)
+            self.assertEqual(cmp(first, other), -cmp(other, first))
+            if type(first) is type(other):
+                expected = cmp(id(first), id(other))
+            elif isinstance(other, (int, long, float)):
+                expected = cmp(id(type(first)), id(type(other)))
+            else:
+                continue
+            self.assertEqual(cmp(first, other), expected)
+        self.assertFalse(first < second)
+        self.assertFalse(first > second)
+        self.assertFalse(first == second)
+
+    def test_list_index_error_uses_needle_repr(self):
+        class Needle(object):
+            def __repr__(self):
+                return '<needle>'
+        try:
+            [].index(Needle())
+        except ValueError as error:
+            self.assertEqual(str(error), '<needle> is not in list')
+        else:
+            self.fail('list.index accepted a missing value')
+
+        class BrokenNeedle(object):
+            def __repr__(self):
+                raise RuntimeError('broken repr')
+        try:
+            [].index(BrokenNeedle())
+        except RuntimeError as error:
+            self.assertEqual(str(error), 'broken repr')
+        else:
+            self.fail('list.index suppressed a repr failure')
+
+    def test_slice_and_iterator_diagnostics(self):
+        for arguments, message in [
+                ((), 'slice expected at least 1 arguments, got 0'),
+                ((1, 2, 3, 4), 'slice expected at most 3 arguments, got 4')]:
+            try:
+                slice(*arguments)
+            except TypeError as error:
+                self.assertEqual(str(error), message)
+            else:
+                self.fail('slice accepted an invalid argument count')
+
+        class MissingNext(object):
+            def __iter__(self):
+                return self
+        try:
+            iter(MissingNext())
+        except TypeError as error:
+            self.assertEqual(str(error), "iter() returned non-iterator of type 'MissingNext'")
+        else:
+            self.fail('iter accepted an object without next')
+
+        try:
+            slice(None).indices(1L << 100)
+        except OverflowError as error:
+            self.assertEqual(str(error), "cannot fit 'long' into an index-sized integer")
+        else:
+            self.fail('slice.indices accepted an oversized length')
+
+    def test_numeric_default_classification(self):
+        class Zeta(object):
+            def __int__(self):
+                return 1
+        class Omega(object):
+            def __float__(self):
+                return 1.0
+        class Alpha(object):
+            pass
+        for numeric in [Zeta(), Omega()]:
+            self.assertEqual(cmp(numeric, Alpha()), -1)
+            self.assertEqual(cmp(Alpha(), numeric), 1)
+            self.assertTrue(numeric < Alpha())
+            self.assertTrue(Alpha() > numeric)
+
+    def test_slice_negative_length(self):
+        cases = [
+            (slice(None), (-5, -5, 1)),
+            (slice(1, 4), (-5, -5, 1)),
+            (slice(-3, None), (0, -5, 1)),
+            (slice(None, None, -1), (-6, sys.maxsize - 4, -1)),
+            (slice(None, 1, -2), (-6, -6, -2)),
+        ]
+        for selection, expected in cases:
+            self.assertEqual(selection.indices(-5), expected)
+
+    def test_unicode_repr_contexts(self):
+        class Parcel(object):
+            def __repr__(self):
+                return u'parcel'
+        self.assertEqual(repr(Parcel()), 'parcel')
+        self.assertIs(type(repr(Parcel())), str)
+        self.assertEqual('%r' % Parcel(), 'parcel')
+        self.assertEqual(u'%r' % Parcel(), u'parcel')
+        class Foreign(object):
+            def __repr__(self):
+                return u'\u20ac'
+        self.assertRaises(UnicodeEncodeError, repr, Foreign())
+        self.assertRaises(UnicodeEncodeError, lambda value: '%r' % value, Foreign())
+        self.assertRaises(UnicodeEncodeError, lambda value: u'%r' % value, Foreign())
+
+    def test_finalizer_unraisable(self):
+        class Sink(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                self.parts.append(text)
+        class Parcel(object):
+            def __del__(self):
+                raise ValueError('release parcel')
+        sink, previous = Sink(), sys.stderr
+        sys.stderr = sink
+        try:
+            try:
+                raise KeyError('pending parcel')
+            except KeyError:
+                parcel = Parcel()
+                del parcel
+                self.assertIs(sys.exc_info()[0], KeyError)
+        finally:
+            sys.stderr = previous
+        diagnostic = ''.join(sink.parts)
+        self.assertTrue(diagnostic.startswith('Exception ValueError:'))
+        self.assertTrue('release parcel' in diagnostic)
+        self.assertTrue(diagnostic.endswith(' ignored\n'))
+
+    def test_weakref_unraisable(self):
+        import _weakref as weakref
+        class Sink(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                self.parts.append(text)
+        class Parcel(object):
+            pass
+        def callback(reference):
+            raise ValueError('weak parcel')
+        sink, previous = Sink(), sys.stderr
+        sys.stderr = sink
+        try:
+            parcel = Parcel()
+            reference = weakref.ref(parcel, callback)
+            del parcel
+            self.assertIs(reference(), None)
+        finally:
+            sys.stderr = previous
+        diagnostic = ''.join(sink.parts)
+        self.assertTrue(diagnostic.startswith('Exception ValueError:'))
+        self.assertTrue('weak parcel' in diagnostic)
+        self.assertTrue(diagnostic.endswith(' ignored\n'))
+
+    def test_tuple_subtype_factory(self):
+        class Parcel(tuple):
+            pass
+        for source in [(), (1, 2), [1, 2], iter([1, 2])]:
+            result = Parcel(source)
+            self.assertIs(type(result), Parcel)
+            self.assertEqual(result, tuple(result))
+        self.assertEqual(filter(None, Parcel([0, 1, 2])), (1, 2))
+
+
+    def test_item_view_equality_operand_order(self):
+        calls = []
+        class Stored(object):
+            def __eq__(self, other):
+                calls.append("stored")
+                return True
+        class Candidate(object):
+            def __eq__(self, other):
+                calls.append("candidate")
+                return False
+        self.assertFalse(("key", Candidate()) in {"key": Stored()}.viewitems())
+        self.assertEqual(calls, ["candidate"])
+
+    def test_sort_partial_result_on_comparison_failure(self):
+        expectations = ((3, [2, 5, 4, 1, 3, 0]),
+                        (5, [2, 4, 5, 1, 3, 0]),
+                        (8, [1, 2, 4, 5, 3, 0]))
+        for stop, expected in expectations:
+            values = [5, 2, 4, 1, 3, 0]
+            calls = [0]
+            def compare(first, second):
+                calls[0] += 1
+                if calls[0] == stop:
+                    raise ValueError("stop")
+                return cmp(first, second)
+            self.assertRaises(ValueError, values.sort, cmp=compare)
+            self.assertEqual(values, expected)
+
+    def test_sort_structured_runs_and_stability(self):
+        for size in (31, 32, 63, 64, 65, 127, 257, 511):
+            values = [(index * 37 % 23, index) for index in range(size)]
+            expected = [(key, index) for key in range(23)
+                        for index in range(size) if index * 37 % 23 == key]
+            values.sort(key=lambda value: value[0])
+            self.assertEqual(values, expected)
+            values.sort(key=lambda value: value[0], reverse=True)
+            reverse_expected = [(key, index) for key in range(22, -1, -1)
+                                for index in range(size) if index * 37 % 23 == key]
+            self.assertEqual(values, reverse_expected)
+        values = range(512, 768) + range(512) + range(768, 1024)
+        values.sort()
+        self.assertEqual(values, range(1024))
+
+    def test_sort_failure_preserves_elements(self):
+        original = [(index * 71) % 257 for index in range(257)]
+        for stop in (100, 300, 650, 900):
+            values = original[:]
+            calls = [0]
+            def compare(first, second):
+                calls[0] += 1
+                if calls[0] == stop:
+                    raise ValueError("stop")
+                return cmp(first, second)
+            try:
+                values.sort(cmp=compare)
+            except ValueError:
+                pass
+            self.assertEqual(sorted(values), range(257))
+
+    def test_integer_keyword_arguments(self):
+        for constructor in (int, long):
+            self.assertEqual(constructor(x="101", base=2), 5)
+            self.assertEqual(constructor(x=7), 7)
+            self.assertEqual(constructor("11", base=2), 3)
+            self.assertRaises(TypeError, constructor, "11", x="10")
+            self.assertRaises(TypeError, constructor, "11", 2, base=3)
+            self.assertRaises(TypeError, constructor, base=2)
+            self.assertRaises(TypeError, constructor, unknown=1)
+
+    def test_percent_mapping_and_positional_arguments(self):
+        self.assertRaises(TypeError, lambda: "%(a)s %s" % {"a": 1})
+        self.assertEqual("%s %(a)s" % {"a": 1}, "{'a': 1} 1")
+        self.assertEqual("%(a)s %(a)s" % {"a": 1}, "1 1")
+
+    def test_eval_null_source_error(self):
+        for source in ("1\0+2", u"1\0+2"):
+            with self.assertRaises(TypeError) as caught:
+                eval(source)
+            self.assertEqual(str(caught.exception), "expected string without null bytes")
+
+    def test_import_ignored_non_dict_globals(self):
+        self.assertIs(__import__("sys", 5), sys)
+        self.assertIs(__import__("sys", 5, {}, [], 0), sys)
+
+    def test_import_empty_name_components(self):
+        self.assertIs(__import__("sys."), sys)
+        self.assertIs(__import__("sys.", {}, {}, ["path"], 0), sys)
+        self.assertRaises(ValueError, __import__, "sys..path")
+        self.assertRaises(ValueError, __import__, ".sys")
+
+    def test_import_inferred_package_metadata(self):
+        scope = {"__name__": "sys.child"}
+        self.assertIs(__import__("sys", scope), sys)
+        self.assertEqual(scope["__package__"], "sys")
+        scope = {"__name__": "standalone"}
+        self.assertIs(__import__("sys", scope), sys)
+        self.assertIs(scope["__package__"], None)
+
+    def test_generator_eval_uses_globals(self):
+        def sample():
+            yield marker
+        generator = eval(sample.func_code, {"marker": 19}, {"marker": 29})
+        self.assertEqual(next(generator), 19)
+        self.assertRaises(StopIteration, next, generator)
+
+    def test_escaping_frame_not_reused(self):
+        def sample(value):
+            return sys._getframe()
+        first = sample(19)
+        second = sample(29)
+        self.assertIsNot(first, second)
+        self.assertIs(first.f_code, sample.func_code)
+        self.assertIs(second.f_code, sample.func_code)
+        self.assertEqual(first.f_lasti, second.f_lasti)
+        del first, second
+
+    def test_nested_handled_exception_state(self):
+        def plain():
+            return sys.exc_info()[0]
+        def catches():
+            try:
+                raise ValueError("inner")
+            except ValueError:
+                self.assertIs(plain(), ValueError)
+            return sys.exc_info()[0]
+        try:
+            raise KeyError("outer")
+        except KeyError:
+            self.assertIs(plain(), KeyError)
+            self.assertIs(catches(), ValueError)
+            self.assertIs(sys.exc_info()[0], KeyError)
+
+    def test_nested_finally_with_control_flow(self):
+        events = []
+        class Context(object):
+            def __enter__(self):
+                events.append("enter")
+            def __exit__(self, kind, value, traceback):
+                events.append("exit")
+        def sample():
+            for index in range(3):
+                try:
+                    with Context():
+                        if index == 0:
+                            continue
+                        if index == 1:
+                            break
+                finally:
+                    events.append(index)
+            try:
+                return 37
+            finally:
+                with Context():
+                    events.append("return")
+        self.assertEqual(sample(), 37)
+        self.assertEqual(events, ["enter", "exit", 0, "enter", "exit", 1,
+                                  "enter", "return", "exit"])
+
+    def test_unicode_repr_nested_contexts(self):
+        class Text(object):
+            def __repr__(self):
+                return u"ascii"
+        value = Text()
+        self.assertEqual(repr([value]), "[ascii]")
+        self.assertEqual(repr((value,)), "(ascii,)")
+        self.assertEqual(repr({"key": value}), "{'key': ascii}")
+        self.assertEqual("%r" % value, "ascii")
+        self.assertEqual(u"%r" % value, u"ascii")
+
+    def test_long_multiplication_shapes(self):
+        for bits in (16, 63, 129, 1100, 2200):
+            value = (1L << bits) + 37
+            for multiplier in (-32767, -3, 0, 1, 7, 32767):
+                product = value * multiplier
+                self.assertEqual(product, multiplier * value)
+                if multiplier:
+                    self.assertEqual(product // multiplier, value)
+            other = (1L << (bits // 2)) + 19
+            self.assertEqual(value * other // other, value)
+
+    def test_source_bom_cookie_alias(self):
+        self.assertRaises(SyntaxError, compile, "\xef\xbb\xbf# coding: utf8\nvalue = 1\n", "alias.py", "exec")
+        for encoding in ("utf-8", "utf_8", "UTF-8", "utf-8-sig"):
+            code = compile("\xef\xbb\xbf# coding: " + encoding + "\nvalue = 1\n", "alias.py", "exec")
+            scope = {}
+            exec code in scope
+            self.assertEqual(scope["value"], 1)
+
+    def test_custom_mro_introspection(self):
+        events = []
+        class Meta(type):
+            def mro(cls):
+                events.append(cls.__mro__)
+                return iter(type.mro(cls))
+        class Parcel(object):
+            __metaclass__ = Meta
+        self.assertEqual(events, [None])
+        self.assertEqual(Parcel.__mro__, (Parcel, object))
+
+    def test_custom_mro_retains_extra_class(self):
+        import _weakref
+        class Extra(object):
+            value = 43
+        holder = [Extra]
+        reference = _weakref.ref(Extra)
+        class Meta(type):
+            def mro(cls):
+                return [cls, holder[0], object]
+        class Parcel(object):
+            __metaclass__ = Meta
+        Extra = None
+        holder[:] = []
+        self.assertIsNot(reference(), None)
+        self.assertEqual(Parcel().value, 43)
+        Parcel = None
+
+    def test_failed_exception_subclass_check_is_unraisable(self):
+        class Sink(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                self.parts.append(text)
+        class Meta(type):
+            def __subclasscheck__(cls, other):
+                raise ValueError("matching failed")
+        class Match(Exception):
+            __metaclass__ = Meta
+        sink = Sink()
+        previous = sys.stderr
+        sys.stderr = sink
+        try:
+            try:
+                raise KeyError("original")
+            except Match:
+                self.fail("failed subclass hook matched")
+            except KeyError as error:
+                self.assertEqual(error.args, ("original",))
+        finally:
+            sys.stderr = previous
+        diagnostic = "".join(sink.parts)
+        self.assertIn("ValueError", diagnostic)
+        self.assertIn("matching failed", diagnostic)
+        self.assertIn("ignored", diagnostic)
+
+    def test_star_import_string_all(self):
+        name = "local_review_all"
+        module = type(sys)(name)
+        module.__all__ = "ab"
+        module.a = 19
+        module.b = 29
+        sys.modules[name] = module
+        try:
+            scope = {}
+            exec "from local_review_all import *" in scope
+            self.assertEqual((scope["a"], scope["b"]), (19, 29))
+        finally:
+            del sys.modules[name]
 
 
 if __name__ == "__main__":

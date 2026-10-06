@@ -119,7 +119,12 @@ overflow:
         *out_index = TINYPY_LONG_SIGN(value) < 0 ? -INT64_MAX : INT64_MAX;
         return TINYPY_TRUE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "integer argument does not fit in int64", out_error);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("cannot fit '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        TINYPY_MESSAGE_PART_LITERAL("' into an index-sized integer"),
+    };
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_OVERFLOW, parts, sizeof(parts) / sizeof(parts[0]), out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
