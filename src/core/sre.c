@@ -1593,6 +1593,9 @@ static tinypy_value_t *__tinypy_sre_match_group_value(tinypy_sre_match_object_t 
         TINYPY_INCREF(default_value);
         return default_value;
     }
+    if (end < start) {
+        end = start;
+    }
     tinypy_value_t *return_value_2 = __tinypy_sre_text_slice(vm, match->string, start, end);
     return return_value_2;
 }
@@ -1683,6 +1686,13 @@ static tinypy_value_t *__tinypy_sre_match_groups(tinypy_value_t *function, tinyp
     items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, pattern->groups * sizeof(*items));
     for (index = 0U; index < pattern->groups; ++index) {
         items[index] = __tinypy_sre_match_group_value(match, index + 1U, default_value);
+        if (items[index] == NULL) {
+            while (index != 0U) {
+                TINYPY_DECREF(items[--index]);
+            }
+            tinypy_internal_vm_deallocate(vm, items, pattern->groups * sizeof(*items));
+            return NULL;
+        }
     }
     result = tinypy_tuple_from_items(vm, items, pattern->groups);
     for (index = 0U; index < pattern->groups; ++index) {

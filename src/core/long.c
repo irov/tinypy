@@ -176,18 +176,17 @@ tinypy_bool_t tinypy_long_as_double(const tinypy_value_t *value, double *out_val
     top_bits = bit_length - index * 15U;
     top = long_value->digits[index];
     while (index != 0U && top_bits < (size_t)DBL_MANT_DIG + 2U) {
-        index -= 1U;
-        top = (top << 15U) | long_value->digits[index];
-        top_bits += 15U;
-    }
-    if (top_bits > (size_t)DBL_MANT_DIG + 2U) {
-        size_t excess = top_bits - ((size_t)DBL_MANT_DIG + 2U);
+        size_t take = (size_t)DBL_MANT_DIG + 2U - top_bits;
 
-        if ((top & ((UINT64_C(1) << excess) - 1U)) != 0U) {
+        if (take > 15U) {
+            take = 15U;
+        }
+        index -= 1U;
+        top = (top << take) | (long_value->digits[index] >> (15U - take));
+        if ((long_value->digits[index] & ((UINT64_C(1) << (15U - take)) - 1U)) != 0U) {
             sticky = TINYPY_TRUE;
         }
-        top >>= excess;
-        top_bits = (size_t)DBL_MANT_DIG + 2U;
+        top_bits += take;
     }
     while (index != 0U && sticky == 0) {
         index -= 1U;

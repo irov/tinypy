@@ -56,13 +56,42 @@ void tinypy_internal_native_function_finalize(tinypy_value_t *value) {
 
         function->finalize = NULL;
         function->user_data = NULL;
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+        tinypy_internal_exception_state_t state;
+        tinypy_internal_exception_preserve_begin(vm, &state);
         finalize(user_data);
+        tinypy_internal_exception_preserve_end(vm, &state);
     }
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_native_function_invoke(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
+    tinypy_value_t *result = function->callback(callable, args, kwargs, function->user_data, out_error);
+
+    if (result == NULL && (out_error == NULL || *out_error == NULL)) {
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+        if (tinypy_vm_has_error(vm) != 0) {
+            tinypy_internal_exception_make_diagnostic(vm, out_error);
+        }
+        else {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "native function failed without an error", out_error);
+        }
+    }
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
     tinypy_value_t *call_args = args;
+
+    if (function->self == NULL && function->owner != NULL) {
+        tinypy_value_t *receiver = TINYPY_TUPLE_SIZE(args) != 0U ? TINYPY_TUPLE_GET(args, 0U) : NULL;
+
+        if (receiver == NULL || tinypy_type_is_subtype(receiver->type, function->owner) == 0) {
+            tinypy_internal_make_vm_error(TINYPY_VALUE_VM(callable), TINYPY_ERROR_TYPE, "descriptor requires an instance of its owner", out_error);
+            return NULL;
+        }
+    }
 
     if (function->self != NULL) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
@@ -73,23 +102,58 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
         }
     }
 
-    tinypy_value_t *result = function->callback(callable, call_args, kwargs, function->user_data, out_error);
+    tinypy_value_t *result = __tinypy_native_function_invoke(callable, call_args, kwargs, out_error);
 
     if (call_args != args) {
         TINYPY_DECREF(call_args);
     }
 
-    if (result == NULL && (out_error == NULL || *out_error == NULL)) {
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
-
-        if (tinypy_vm_has_error(vm) != 0) {
-            tinypy_internal_exception_make_diagnostic(vm, out_error);
-        }
-        else {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "native function failed without an error", out_error);
-        }
-    }
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Bound native calls build one owned argument tuple, including self. The
+   callback may retain it; its public ABI and recursion guard stay unchanged. */
+tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
+    TINYPY_CLEAR_ERROR(out_error);
+    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded while calling a Python object", out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *args = tinypy_internal_tuple_new_checked(vm, count + 1U, out_error);
+    if (args == NULL) {
+        return NULL;
+    }
+    tinypy_tuple_set(args, 0U, function->self);
+    for (size_t index = 0U; index < count; ++index) {
+        tinypy_tuple_set(args, index + 1U, items[index]);
+    }
+    vm->evaluation_depth += 1U;
+    tinypy_value_t *result = __tinypy_native_function_invoke(callable, args, kwargs, out_error);
+    TINYPY_DECREF(args);
+    vm->evaluation_depth -= 1U;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_native_method_free_list_push(tinypy_vm_t *vm, tinypy_value_t *value) {
+    tinypy_native_function_object_t *method = TINYPY_NATIVE_FUNCTION_OBJECT(value);
+    method->function = vm->native_method_free_list != NULL ? &vm->native_method_free_list->base : NULL;
+    method->self = NULL;
+    vm->native_method_free_list = method;
+    vm->native_method_free_count += 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_native_method_free_list_finalize(tinypy_vm_t *vm) {
+    while (vm->native_method_free_list != NULL) {
+        tinypy_native_function_object_t *method = vm->native_method_free_list;
+        vm->native_method_free_list = method->function != NULL ? TINYPY_NATIVE_FUNCTION_OBJECT(method->function) : NULL;
+        vm->native_method_free_count -= 1U;
+        vm->types[TINYPY_VALUE_NATIVE_FUNCTION].base.base.ref -= 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_value_unregister(vm, &method->base);
+#endif
+        tinypy_internal_vm_deallocate(vm, method, sizeof(*method));
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
@@ -108,7 +172,19 @@ tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *d
     (void)owner;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
-    tinypy_native_function_object_t *method = (tinypy_native_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_NATIVE_FUNCTION, sizeof(*method));
+    tinypy_native_function_object_t *method;
+    if (vm->native_method_free_list != NULL) {
+        method = vm->native_method_free_list;
+        vm->native_method_free_list = method->function != NULL ? TINYPY_NATIVE_FUNCTION_OBJECT(method->function) : NULL;
+        vm->native_method_free_count -= 1U;
+        method->base.ref = 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_value_reuse(vm, &method->base);
+#endif
+    }
+    else {
+        method = (tinypy_native_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_NATIVE_FUNCTION, sizeof(*method));
+    }
 
     method->name = function->name;
     method->module = function->module;
@@ -844,7 +920,11 @@ void tinypy_internal_native_instance_finalize(tinypy_value_t *value) {
     instance->finalized = TINYPY_TRUE;
     if (spec->finalize != NULL) {
         void *native_payload = __tinypy_internal_native_payload(value);
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+        tinypy_internal_exception_state_t state;
+        tinypy_internal_exception_preserve_begin(vm, &state);
         spec->finalize(value, native_payload, spec->user_data);
+        tinypy_internal_exception_preserve_end(vm, &state);
     }
 }
 //////////////////////////////////////////////////////////////////////////

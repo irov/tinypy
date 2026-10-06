@@ -1,6 +1,15 @@
 #ifndef TINYPY_CORE_INTERNAL_H
 #define TINYPY_CORE_INTERNAL_H
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#define TINYPY_NATIVE_STACK_ADDRESS() ((uintptr_t)_AddressOfReturnAddress())
+#elif defined(__GNUC__) || defined(__clang__)
+#define TINYPY_NATIVE_STACK_ADDRESS() ((uintptr_t)__builtin_frame_address(0))
+#else
+#define TINYPY_NATIVE_STACK_ADDRESS() ((uintptr_t)0U)
+#endif
+
 #if defined(TINYPY_CYCLE_DIAGNOSTICS) && defined(NDEBUG)
 #error "TINYPY_CYCLE_DIAGNOSTICS is Debug-only"
 #endif
@@ -85,18 +94,21 @@ typedef struct tinypy_internal_exception_state_t {
 #define TINYPY_VM_STATE_DESTROYING UINT32_C(0x54505944)
 #define TINYPY_BUILTIN_TYPE_COUNT ((size_t)TINYPY_VALUE_NATIVE_INSTANCE)
 #define TINYPY_FRAME_MAX_BLOCKS 20U
-#define TINYPY_FRAME_GLOBAL_CACHE_SIZE 2U
+#define TINYPY_CODE_GLOBAL_CACHE_SIZE 16U
 #define TINYPY_INTEGER_CONSTANT_MIN (-INT64_C(1023))
 #define TINYPY_INTEGER_CONSTANT_MAX INT64_C(1024)
 #define TINYPY_INTEGER_CONSTANT_COUNT 2048U
 #define TINYPY_INTEGER_FREE_LIST_MAX 256U
 #define TINYPY_FRAME_FREE_LIST_MAX 64U
 #define TINYPY_METHOD_FREE_LIST_MAX 256U
+#define TINYPY_NATIVE_METHOD_FREE_LIST_MAX 64U
+#define TINYPY_SPECIAL_KEY_TABLE_SIZE 256U
 #define TINYPY_TYPE_LOOKUP_CACHE_SIZE 1024U
 //////////////////////////////////////////////////////////////////////////
 /* Interned VM-owned name keys. Dispatch paths look special names up through
    these objects instead of building a fresh string per call. */
 #define TINYPY_INTERNAL_KEY_LIST(X) \
+    X(import_key, "__import__") \
     X(builtins_key, "__builtins__") \
     X(keys_key, "keys") \
     X(key_key, "key") \
@@ -365,9 +377,11 @@ typedef struct tinypy_attribute_store_cache_entry_t {
     tinypy_type_t *descriptor_type;
     tinypy_value_t *descriptor;
     tinypy_bool_t direct_instance_dict;
+    tinypy_bool_t data_descriptor;
 } tinypy_attribute_store_cache_entry_t;
 //////////////////////////////////////////////////////////////////////////
-#define TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE 4U
+#define TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE 16U
+#define TINYPY_ATTRIBUTE_LOOKUP_CACHE_WAYS 2U
 //////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_iterator_type_index_e {
     TINYPY_ITERATOR_TYPE_LIST = 0,
@@ -422,6 +436,7 @@ struct tinypy_type_t {
     size_t slot_count;
     tinypy_bool_t has_instance_dict;
     tinypy_bool_t has_finalizer;
+    tinypy_bool_t has_classic_mro;
     uint64_t version_tag;
     uint64_t modification_epoch;
     tinypy_value_t *weakrefs;
@@ -541,6 +556,7 @@ typedef struct tinypy_dict_object_t {
     size_t mask;
     tinypy_dict_entry_t *table;
     uint64_t mutation_version;
+    uint64_t cache_version;
     tinypy_bool_t type_dictionary;
     tinypy_type_t *type_owner;
     size_t popitem_finger;
@@ -642,6 +658,22 @@ typedef struct tinypy_file_object_t {
     void *host_handle;
 } tinypy_file_object_t;
 //////////////////////////////////////////////////////////////////////////
+typedef enum tinypy_global_cache_source_e
+{
+    TINYPY_GLOBAL_CACHE_EMPTY = 0,
+    TINYPY_GLOBAL_CACHE_GLOBALS = 1,
+    TINYPY_GLOBAL_CACHE_BUILTINS = 2,
+    TINYPY_GLOBAL_CACHE_COMPILE_ENVIRONMENT = 3
+} tinypy_global_cache_source_e;
+//////////////////////////////////////////////////////////////////////////
+typedef struct tinypy_global_cache_entry_t {
+    size_t name_index;
+    uint64_t globals_version;
+    uint64_t builtins_version;
+    tinypy_value_t *value;
+    tinypy_global_cache_source_e source;
+} tinypy_global_cache_entry_t;
+//////////////////////////////////////////////////////////////////////////
 /* tinypy code object. The runtime omits the reference implementation's frame cache and
  * weakref list because neither changes Python code semantics. */
 typedef struct tinypy_code_object_t {
@@ -663,6 +695,7 @@ typedef struct tinypy_code_object_t {
     tinypy_value_t *lnotab;
     tinypy_value_t *parameter_indices;
     tinypy_compile_environment_t *compile_environment;
+    tinypy_global_cache_entry_t global_cache[TINYPY_CODE_GLOBAL_CACHE_SIZE];
     tinypy_attribute_lookup_cache_entry_t attribute_cache[TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE];
     tinypy_attribute_store_cache_entry_t attribute_store_cache[TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE];
 } tinypy_code_object_t;
@@ -672,22 +705,6 @@ typedef struct tinypy_frame_block_t {
     uint32_t handler;
     uint32_t stack_level;
 } tinypy_frame_block_t;
-//////////////////////////////////////////////////////////////////////////
-typedef enum tinypy_global_cache_source_e
-{
-    TINYPY_GLOBAL_CACHE_EMPTY = 0,
-    TINYPY_GLOBAL_CACHE_GLOBALS = 1,
-    TINYPY_GLOBAL_CACHE_BUILTINS = 2,
-    TINYPY_GLOBAL_CACHE_COMPILE_ENVIRONMENT = 3
-} tinypy_global_cache_source_e;
-//////////////////////////////////////////////////////////////////////////
-typedef struct tinypy_global_cache_entry_t {
-    size_t name_index;
-    uint64_t globals_version;
-    uint64_t builtins_version;
-    tinypy_value_t *value;
-    tinypy_global_cache_source_e source;
-} tinypy_global_cache_entry_t;
 //////////////////////////////////////////////////////////////////////////
 /* tinypy frame object. Trace and exception-state fields are added when
  * their Python-visible objects are introduced; the execution layout already
@@ -700,6 +717,7 @@ typedef struct tinypy_frame_object_t {
     tinypy_value_t *globals;
     tinypy_value_t *locals;
     tinypy_value_t *trace;
+    uint64_t handled_clear_epoch;
     tinypy_value_t *previous_handled_type;
     tinypy_value_t *previous_handled_value;
     tinypy_value_t *previous_handled_traceback;
@@ -711,7 +729,6 @@ typedef struct tinypy_frame_object_t {
 #endif
     uint32_t block_count;
     tinypy_frame_block_t blocks[TINYPY_FRAME_MAX_BLOCKS];
-    tinypy_global_cache_entry_t global_cache[TINYPY_FRAME_GLOBAL_CACHE_SIZE];
     tinypy_value_t *locals_plus[];
 } tinypy_frame_object_t;
 //////////////////////////////////////////////////////////////////////////
@@ -821,6 +838,7 @@ typedef struct tinypy_property_object_t {
 typedef struct tinypy_c_descriptor_object_t {
     tinypy_value_t base;
     tinypy_type_t *owner;
+    tinypy_value_t *owner_reference;
     tinypy_value_t *name;
     size_t index;
     int32_t field;
@@ -974,6 +992,10 @@ struct tinypy_vm_t {
     size_t frame_free_count;
     tinypy_method_object_t *method_free_list;
     size_t method_free_count;
+    tinypy_native_function_object_t *native_method_free_list;
+    size_t native_method_free_count;
+    uint64_t dict_cache_epoch;
+    tinypy_bool_t dict_cache_exhausted;
     uint64_t type_lookup_cache_epoch;
     tinypy_type_lookup_cache_entry_t type_lookup_cache[TINYPY_TYPE_LOOKUP_CACHE_SIZE];
 
@@ -999,14 +1021,21 @@ struct tinypy_vm_t {
     tinypy_type_t *exception_types[TINYPY_EXCEPTION_TYPE_COUNT];
     tinypy_value_t *raised_type;
     tinypy_value_t *raised_value;
+    tinypy_value_t *emergency_memory_error;
     tinypy_value_t *raised_traceback;
+    uint64_t handled_clear_epoch;
     tinypy_value_t *handled_type;
     tinypy_value_t *handled_value;
     tinypy_value_t *handled_traceback;
 
     tinypy_frame_object_t *current_frame;
+    size_t release_depth;
+    tinypy_value_t *pending_releases;
     size_t evaluation_depth;
     size_t recursion_limit;
+    uintptr_t native_stack_origin;
+    size_t max_stack_bytes;
+    tinypy_bool_t recursion_error;
 #if defined(TINYPY_DEBUGGER)
     tinypy_debugger_t debugger;
     tinypy_bool_t has_debugger;
@@ -1015,10 +1044,15 @@ struct tinypy_vm_t {
     tinypy_cycle_diagnostics_state_t *cycle_diagnostics;
 #endif
     tinypy_value_t *builtins;
+    tinypy_value_t *codec_module;
+    tinypy_value_t *codec_search_path;
+    tinypy_value_t *codec_cache;
+    tinypy_value_t *codec_errors;
     tinypy_value_t *interned_strings;
 #define TINYPY_INTERNAL_KEY_FIELD(field, name) tinypy_value_t *field;
     TINYPY_INTERNAL_KEY_LIST(TINYPY_INTERNAL_KEY_FIELD)
 #undef TINYPY_INTERNAL_KEY_FIELD
+    tinypy_value_t *special_key_table[TINYPY_SPECIAL_KEY_TABLE_SIZE];
     tinypy_value_t *special_operator_keys[TINYPY_SPECIAL_OPERATOR_COUNT];
     tinypy_value_t *modules;
     /* The sys module is reached through this owned reference, as CPython reads
@@ -1059,6 +1093,7 @@ struct tinypy_error_t {
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_host_valid(const tinypy_host_t *host);
 tinypy_bool_t tinypy_internal_vm_valid(const tinypy_vm_t *vm);
+tinypy_bool_t tinypy_internal_recursion_check(tinypy_vm_t *vm, uintptr_t stack_address, const char *message, tinypy_error_t **out_error);
 
 void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size);
 void *tinypy_internal_vm_allocate_checked(tinypy_vm_t *vm, size_t size, tinypy_error_t **out_error);
@@ -1251,6 +1286,7 @@ void tinypy_internal_list_shrink_to_fit(tinypy_vm_t *vm, tinypy_value_t *list);
 void tinypy_internal_dict_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_dict_destroy(tinypy_value_t *value);
 void tinypy_internal_dict_initialize_empty(tinypy_value_t *dict);
+tinypy_value_t *tinypy_internal_dict_copy(tinypy_value_t *source, tinypy_error_t **out_error);
 void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *right);
 void tinypy_internal_dict_reserve(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_used);
 tinypy_bool_t tinypy_internal_dict_reserve_checked(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_used, tinypy_error_t **out_error);
@@ -1294,6 +1330,8 @@ tinypy_value_t *tinypy_internal_power_modulo(tinypy_value_t *base, tinypy_value_
 tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_index_as_i64(tinypy_value_t *value, int64_t *out_value, tinypy_bool_t clamp_overflow, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_slice_unpack(tinypy_value_t *slice_value, tinypy_internal_slice_indices_t *indices, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_slice_adjust_indices(tinypy_vm_t *vm, size_t size, tinypy_internal_slice_indices_t *indices, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_slice_indices(tinypy_value_t *slice_value, size_t size, tinypy_internal_slice_indices_t *out_indices, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_string_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_unicode(tinypy_value_t *value, tinypy_error_t **out_error);
@@ -1412,6 +1450,7 @@ tinypy_bool_t tinypy_internal_old_instance_has_special(tinypy_value_t *value, co
 tinypy_bool_t tinypy_internal_object_has_special(tinypy_value_t *value, const char *name, size_t name_size);
 tinypy_bool_t tinypy_internal_object_has_special_override(tinypy_value_t *value, const char *name, size_t name_size);
 tinypy_bool_t tinypy_internal_object_has_special_override_key(tinypy_value_t *value, tinypy_value_t *key);
+void tinypy_internal_object_initialize_special_keys(tinypy_vm_t *vm);
 const char *tinypy_internal_object_special_operator_name(size_t index, size_t *out_size);
 tinypy_value_t *tinypy_internal_type_mro_tuple(tinypy_type_t *type);
 tinypy_value_t *tinypy_internal_call_conversion(tinypy_value_t *value, const char *name, size_t name_size, tinypy_bool_t *out_handled, tinypy_error_t **out_error);
@@ -1472,6 +1511,9 @@ void tinypy_internal_native_function_release_references(tinypy_value_t *value, t
 void tinypy_internal_native_function_destroy(tinypy_value_t *value);
 void tinypy_internal_native_function_finalize(tinypy_value_t *value);
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+void tinypy_internal_native_method_free_list_push(tinypy_vm_t *vm, tinypy_value_t *value);
+void tinypy_internal_native_method_free_list_finalize(tinypy_vm_t *vm);
 void tinypy_internal_initialize_native_function_type(tinypy_vm_t *vm);
 void tinypy_internal_initialize_native_descriptor_types(tinypy_vm_t *vm);
 void tinypy_internal_native_instance_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);

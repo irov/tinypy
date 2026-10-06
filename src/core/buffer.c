@@ -277,7 +277,8 @@ static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value
             stop = (int64_t)size - 1;
         }
         if (stop < start) {
-            length = (size_t)(1 + (start - stop - 1) / -step);
+            uint64_t distance = (uint64_t)(-(step + INT64_C(1))) + UINT64_C(1);
+            length = (size_t)(UINT64_C(1) + (uint64_t)(start - stop - INT64_C(1)) / distance);
         }
     }
     if (length == 0U) {
@@ -295,7 +296,9 @@ static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value
     source = start;
     for (index = 0U; index < length; ++index) {
         selected[index] = bytes[(size_t)source];
-        source += step;
+        if (index + 1U < length) {
+            source += step;
+        }
     }
     return result;
 }
@@ -880,6 +883,7 @@ static tinypy_value_t *__tinypy_memoryview_get(tinypy_value_t *instance, void *p
     if (__tinypy_memoryview_index(instance, key, size, &index, out_error) == 0) {
         return NULL;
     }
+    bytes = tinypy_internal_memoryview_view(instance, &size);
     tinypy_value_t *result = tinypy_string_from_bytes(vm, bytes + index, 1U);
 
     return result;
@@ -912,7 +916,6 @@ static tinypy_bool_t __tinypy_memoryview_set(tinypy_value_t *instance, void *pay
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot modify read-only memory", out_error);
         return TINYPY_FALSE;
     }
-    uint8_t *owner_bytes = TINYPY_BYTEARRAY_OBJECT(owner)->bytes + owner_offset;
     if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE) {
         tinypy_internal_slice_indices_t slice;
 
@@ -923,6 +926,8 @@ static tinypy_bool_t __tinypy_memoryview_set(tinypy_value_t *instance, void *pay
             __tinypy_memoryview_not_implemented(vm, out_error);
             return TINYPY_FALSE;
         }
+        (void)tinypy_internal_bytes_view(value, &replacement, &replacement_size);
+        uint8_t *owner_bytes = TINYPY_BYTEARRAY_OBJECT(owner)->bytes + owner_offset;
         if (replacement_size != slice.length) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "cannot modify size of memoryview object", out_error);
             return TINYPY_FALSE;
@@ -936,6 +941,8 @@ static tinypy_bool_t __tinypy_memoryview_set(tinypy_value_t *instance, void *pay
     if (__tinypy_memoryview_index(instance, key, size, &index, out_error) == 0) {
         return TINYPY_FALSE;
     }
+    (void)tinypy_internal_bytes_view(value, &replacement, &replacement_size);
+    uint8_t *owner_bytes = TINYPY_BYTEARRAY_OBJECT(owner)->bytes + owner_offset;
     if (replacement_size != 1U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "memoryview assignment requires a single byte", out_error);
         return TINYPY_FALSE;

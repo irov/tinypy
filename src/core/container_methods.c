@@ -1154,29 +1154,31 @@ static tinypy_value_t *__tinypy_dict_clear_method(tinypy_value_t *function, tiny
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_copy_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_dict_entry_t *iterator;
-    tinypy_dict_entry_t *iterator_end;
-
     (void)user_data;
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *source = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *snapshot = tinypy_internal_dict_copy(source, out_error);
+    if (snapshot == NULL) {
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_dict_new(vm);
-    if (tinypy_internal_dict_reserve_checked(vm, result, TINYPY_DICT_SIZE(source), out_error) == 0) {
+    if (tinypy_internal_dict_reserve_checked(vm, result, TINYPY_DICT_SIZE(snapshot), out_error) == 0) {
+        TINYPY_DECREF(snapshot);
         TINYPY_DECREF(result);
         return NULL;
     }
-    iterator = TINYPY_DICT_ITERATOR_BEGIN(source);
-    iterator_end = TINYPY_DICT_ITERATOR_END(source);
-    for (; iterator != iterator_end; ++iterator) {
-        if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-            if (tinypy_internal_dict_set_checked(vm, result, iterator->key, iterator->value, out_error) == 0) {
-                TINYPY_DECREF(result);
-                return NULL;
-            }
+    for (size_t index = 0U; index <= TINYPY_DICT_OBJECT(snapshot)->mask; ++index) {
+        tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(snapshot)->table[index];
+        if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry)
+            && tinypy_internal_dict_set_hash_checked(vm, result, entry->key, entry->value, entry->hash, out_error) == 0) {
+            TINYPY_DECREF(snapshot);
+            TINYPY_DECREF(result);
+            return NULL;
         }
     }
+    TINYPY_DECREF(snapshot);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1408,7 +1410,17 @@ static tinypy_value_t *__tinypy_container_binary_method(tinypy_value_t *function
         mode -= 100;
     }
     if (mode == 8 && TINYPY_TUPLE_SIZE(args) == 3U) {
-        tinypy_value_t *return_value_1 = tinypy_internal_power_modulo_builtin(left, right, TINYPY_TUPLE_GET(args, 2U), out_error);
+        tinypy_value_t *modulus = TINYPY_TUPLE_GET(args, 2U);
+        tinypy_value_type_e self_kind = TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U));
+
+        if (self_kind != TINYPY_VALUE_FLOAT && self_kind != TINYPY_VALUE_COMPLEX &&
+            (__tinypy_container_numeric_operand_accepted(function, TINYPY_VALUE_KIND(left)) == 0 ||
+             __tinypy_container_numeric_operand_accepted(function, TINYPY_VALUE_KIND(right)) == 0 ||
+             (TINYPY_VALUE_KIND(modulus) != TINYPY_VALUE_NONE && __tinypy_container_numeric_operand_accepted(function, TINYPY_VALUE_KIND(modulus)) == 0))) {
+            tinypy_value_t *result = tinypy_not_implemented_get(vm);
+            return result;
+        }
+        tinypy_value_t *return_value_1 = tinypy_internal_power_modulo_builtin(left, right, modulus, out_error);
         return return_value_1;
     }
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
@@ -1541,14 +1553,23 @@ static tinypy_value_t *__tinypy_container_conversion_method(tinypy_value_t *func
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__index__ requires an integer", out_error);
             return NULL;
         }
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BOOL) {
+            tinypy_value_t *result = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(value));
+            return result;
+        }
         TINYPY_INCREF(value);
-        return value;
+        tinypy_value_t *result = tinypy_internal_immutable_subclass_copy(&vm->types[TINYPY_VALUE_KIND(value)], value, out_error);
+        return result;
     }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_COMPLEX) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot convert complex to a real number", out_error);
         return NULL;
     }
-    tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &value, 1U);
+    tinypy_value_type_e source_kind = TINYPY_VALUE_KIND(value);
+    TINYPY_INCREF(value);
+    tinypy_value_t *exact = source_kind == TINYPY_VALUE_BOOL ? value : tinypy_internal_immutable_subclass_copy(&vm->types[source_kind], value, out_error);
+    tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &exact, 1U);
+    TINYPY_DECREF(exact);
     tinypy_type_t *target = mode == 0 ? &vm->types[TINYPY_VALUE_INTEGER] : (mode == 1 ? &vm->types[TINYPY_VALUE_LONG] : &vm->types[TINYPY_VALUE_FLOAT]);
     tinypy_value_t *result = target->create(target, arguments, NULL, out_error);
     TINYPY_DECREF(arguments);

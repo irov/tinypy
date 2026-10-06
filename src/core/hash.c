@@ -464,6 +464,12 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
         if (special < 0) {
             return (tinypy_hash_t)0;
         }
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE &&
+            (tinypy_internal_object_has_special((tinypy_value_t *)value, "__cmp__", 7U) != 0 ||
+             tinypy_internal_object_has_special((tinypy_value_t *)value, "__eq__", 6U) != 0)) {
+            tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "unhashable instance", out_error);
+            return (tinypy_hash_t)0;
+        }
         function_result = __tinypy_internal_hash_fix(
                     (uint64_t)((uintptr_t)value >> 4U));
         return function_result;

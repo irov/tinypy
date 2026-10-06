@@ -111,6 +111,13 @@ C API preconditions and result in undefined behavior. Python semantic failures,
 malformed external data, configured limits and ABI mismatches remain
 recoverable.
 
+Recursive execution also checks native stack use on GCC, Clang and MSVC.
+`tinypy_vm_config_t.max_stack_bytes` selects the byte budget; zero and older
+configs use 1 MiB. The host should select a budget that fits its owner thread,
+allowing room for runtime call frames, callbacks and exception unwinding.
+Exceeding the byte budget raises `RuntimeError` even when the logical Python
+recursion limit has not been reached.
+
 The optional [CLI library](cli/README.md) is a separate target inside this
 project. It is disabled by default and is never linked into the embedding
 `tinypy` target.
@@ -174,3 +181,8 @@ caller-owned inputs; no external corpus or interpreter is stored in tinypy.
 - `LICENSES/` — third-party attribution and license texts.
 
 The detailed implementation contract is in [SPEC.md](SPEC.md).
+
+The optional CLI test build also runs a pinned, portable selection of
+CPython 2.7.18 tests and project-authored Python 2.7 behavioral checks.
+See [tests/upstream/README.md](tests/upstream/README.md)
+for the corpus, reference comparison, deferred dependencies and validation results.

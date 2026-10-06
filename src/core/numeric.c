@@ -111,7 +111,8 @@ static tinypy_value_t *__tinypy_numeric_field_method(tinypy_value_t *function, t
     if (kind == TINYPY_VALUE_FLOAT) {
         if (field == 0) {
             TINYPY_INCREF(value);
-            return value;
+            tinypy_value_t *result = tinypy_internal_immutable_subclass_copy(&vm->types[kind], value, out_error);
+            return result;
         }
         tinypy_value_t *return_value_1 = tinypy_float_from_double(vm, 0.0);
         return return_value_1;
@@ -119,7 +120,8 @@ static tinypy_value_t *__tinypy_numeric_field_method(tinypy_value_t *function, t
     if (kind == TINYPY_VALUE_LONG) {
         if (field == 0 || field == 2) {
             TINYPY_INCREF(value);
-            return value;
+            tinypy_value_t *result = tinypy_internal_immutable_subclass_copy(&vm->types[kind], value, out_error);
+            return result;
         }
         tinypy_value_t *return_value_1 = tinypy_long_from_i64(vm, field == 3 ? INT64_C(1) : INT64_C(0));
         return return_value_1;
@@ -130,7 +132,8 @@ static tinypy_value_t *__tinypy_numeric_field_method(tinypy_value_t *function, t
     }
     if (field == 0 || field == 2) {
         TINYPY_INCREF(value);
-        return value;
+        tinypy_value_t *result = tinypy_internal_immutable_subclass_copy(&vm->types[kind], value, out_error);
+        return result;
     }
     tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, field == 3 ? INT64_C(1) : INT64_C(0));
     return return_value_1;
@@ -153,7 +156,8 @@ static tinypy_value_t *__tinypy_numeric_conjugate_method(tinypy_value_t *functio
         return return_value_1;
     }
     TINYPY_INCREF(value);
-    return value;
+    tinypy_value_t *result = tinypy_internal_immutable_subclass_copy(&vm->types[TINYPY_VALUE_KIND(value)], value, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_numeric_getnewargs_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -482,15 +486,91 @@ static tinypy_value_t *__tinypy_float_fromhex_method(tinypy_value_t *function, t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "invalid hexadecimal floating-point string", out_error);
         return NULL;
     }
-    size_t allocation_size = end - begin + 1U;
-    local = (char *)vm->allocator.allocate(vm->allocator.user_data, allocation_size, TINYPY_INTERNAL_ALIGNMENT);
-    (void)memcpy(local, bytes + begin, end - begin);
-    local[end - begin] = '\0';
+    size_t text_size = end - begin;
+    size_t sign_size = bytes[begin] == (uint8_t)'+' || bytes[begin] == (uint8_t)'-' ? 1U : 0U;
+    size_t first = begin + sign_size;
+    tinypy_bool_t special = first < end && (bytes[first] == (uint8_t)'i' || bytes[first] == (uint8_t)'I' || bytes[first] == (uint8_t)'n' || bytes[first] == (uint8_t)'N');
+    if (special != 0) {
+        size_t special_size = end - first;
+        const char *expected = (bytes[first] == (uint8_t)'n' || bytes[first] == (uint8_t)'N') ? "nan" : (special_size == 8U ? "infinity" : "inf");
+        tinypy_bool_t valid_special = special_size == strlen(expected) ? TINYPY_TRUE : TINYPY_FALSE;
+        for (size_t index = 0U; valid_special != 0 && index < special_size; ++index) {
+            uint8_t character = bytes[first + index];
+            if (character >= (uint8_t)'A' && character <= (uint8_t)'Z') {
+                character = (uint8_t)(character + ((uint8_t)'a' - (uint8_t)'A'));
+            }
+            if (character != (uint8_t)expected[index]) {
+                valid_special = TINYPY_FALSE;
+            }
+        }
+        if (valid_special == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "invalid hexadecimal floating-point string", out_error);
+            return NULL;
+        }
+    }
+    tinypy_bool_t prefix = first + 1U < end && bytes[first] == (uint8_t)'0' && (bytes[first + 1U] == (uint8_t)'x' || bytes[first + 1U] == (uint8_t)'X');
+    size_t added = special == 0 && prefix == 0 ? 2U : 0U;
+    if (special == 0) {
+        size_t cursor = first + (prefix != 0 ? 2U : 0U);
+        size_t digits = 0U;
+        tinypy_bool_t dot = TINYPY_FALSE;
+        while (cursor < end) {
+            uint8_t character = bytes[cursor];
+            if ((character >= (uint8_t)'0' && character <= (uint8_t)'9') || (character >= (uint8_t)'a' && character <= (uint8_t)'f') || (character >= (uint8_t)'A' && character <= (uint8_t)'F')) {
+                digits += 1U;
+            }
+            else if (character == (uint8_t)'.' && dot == 0) {
+                dot = TINYPY_TRUE;
+            }
+            else {
+                break;
+            }
+            cursor += 1U;
+        }
+        if (digits == 0U) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "invalid hexadecimal floating-point string", out_error);
+            return NULL;
+        }
+        if (cursor < end && (bytes[cursor] == (uint8_t)'p' || bytes[cursor] == (uint8_t)'P')) {
+            cursor += 1U;
+            if (cursor < end && (bytes[cursor] == (uint8_t)'+' || bytes[cursor] == (uint8_t)'-')) {
+                cursor += 1U;
+            }
+            size_t exponent_start = cursor;
+            while (cursor < end && bytes[cursor] >= (uint8_t)'0' && bytes[cursor] <= (uint8_t)'9') {
+                cursor += 1U;
+            }
+            if (cursor == exponent_start) {
+                cursor = begin;
+            }
+        }
+        if (cursor != end) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "invalid hexadecimal floating-point string", out_error);
+            return NULL;
+        }
+    }
+    if (text_size > SIZE_MAX - added - 1U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "hexadecimal string is too large", out_error);
+        return NULL;
+    }
+    size_t allocation_size = text_size + added + 1U;
+    local = (char *)tinypy_internal_vm_allocate_checked(vm, allocation_size, out_error);
+    if (local == NULL) {
+        return NULL;
+    }
+    if (sign_size != 0U) {
+        local[0] = (char)bytes[begin];
+    }
+    if (added != 0U) {
+        (void)memcpy(local + sign_size, "0x", 2U);
+    }
+    (void)memcpy(local + sign_size + added, bytes + first, text_size - sign_size);
+    local[text_size + added] = '\0';
     errno = 0;
     number = strtod(local, &parse_end);
-    tinypy_bool_t valid = parse_end == local + (end - begin) ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t valid = parse_end == local + text_size + added ? TINYPY_TRUE : TINYPY_FALSE;
     int32_t range_error = errno == ERANGE && isinf(number) ? INT32_C(1) : INT32_C(0);
-    vm->allocator.deallocate(vm->allocator.user_data, local, allocation_size, TINYPY_INTERNAL_ALIGNMENT);
+    tinypy_internal_vm_deallocate(vm, local, allocation_size);
     if (valid == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "invalid hexadecimal floating-point string", out_error);
         return NULL;
@@ -565,7 +645,7 @@ static tinypy_value_t *__tinypy_numeric_integer_base_method(tinypy_value_t *func
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
     const uint8_t *spec = base == 8 ? (const uint8_t *)"#o" : (const uint8_t *)"#x";
-    tinypy_value_t *formatted = tinypy_internal_string_format_value(vm, self, 0, spec, 2U, TINYPY_FALSE, &result_unicode, out_error);
+    tinypy_value_t *formatted = tinypy_internal_string_format_builtin_value(vm, self, 0, spec, 2U, TINYPY_FALSE, &result_unicode, out_error);
     if (formatted == NULL) {
         return NULL;
     }

@@ -20,25 +20,51 @@ static tinypy_bool_t __tinypy_class_name_equal(tinypy_value_t *name, const char 
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
-    tinypy_value_t *const *iterator;
-    tinypy_value_t *const *iterator_end;
-
+static tinypy_value_t *__tinypy_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
-    tinypy_value_t *attribute = tinypy_internal_dict_get_optional(vm, class_object->dict, key);
-    if (attribute != NULL) {
-        return attribute;
-    }
-    iterator = TINYPY_TUPLE_ITERATOR_BEGIN(class_object->bases);
-    iterator_end = TINYPY_TUPLE_ITERATOR_END(class_object->bases);
-    for (; iterator != iterator_end; ++iterator) {
-        tinypy_value_t *item = *iterator;
-        attribute = tinypy_internal_class_lookup_key(vm, item, key);
-        if (attribute != NULL) {
+    for (;;) {
+        tinypy_value_t *dict = class_object->dict;
+        TINYPY_INCREF(dict);
+        tinypy_value_t *attribute = tinypy_internal_dict_get_optional(vm, dict, key);
+        if (class_object->dict != dict) {
+            TINYPY_DECREF(dict);
+            if (tinypy_vm_has_error(vm) != 0) {
+                return NULL;
+            }
+            continue;
+        }
+        TINYPY_DECREF(dict);
+        if (attribute != NULL || tinypy_vm_has_error(vm) != 0) {
+            return attribute;
+        }
+        tinypy_value_t *bases = class_object->bases;
+        TINYPY_INCREF(bases);
+        tinypy_bool_t changed = TINYPY_FALSE;
+        for (size_t index = 0U; index < TINYPY_TUPLE_SIZE(bases); ++index) {
+            attribute = tinypy_internal_class_lookup_key(vm, TINYPY_TUPLE_GET(bases, index), key);
+            if (class_object->bases != bases) {
+                changed = TINYPY_TRUE;
+                break;
+            }
+            if (attribute != NULL || tinypy_vm_has_error(vm) != 0) {
+                break;
+            }
+        }
+        TINYPY_DECREF(bases);
+        if (changed == 0 || tinypy_vm_has_error(vm) != 0) {
             return attribute;
         }
     }
-    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
+    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
+        return NULL;
+    }
+    vm->evaluation_depth += 1U;
+    tinypy_value_t *result = __tinypy_class_lookup_key(vm, class_value, key);
+    vm->evaluation_depth -= 1U;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_class_lookup(tinypy_value_t *class_value, const char *name, size_t name_size) {
@@ -50,7 +76,7 @@ tinypy_value_t *tinypy_internal_class_lookup(tinypy_value_t *class_value, const 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base) {
+static tinypy_bool_t __tinypy_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base) {
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
 
@@ -69,7 +95,18 @@ tinypy_bool_t tinypy_class_is_subclass(const tinypy_value_t *class_value, const 
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_class_bind(tinypy_value_t *class_value, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_error_t **out_error) {
+tinypy_bool_t tinypy_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
+    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in subclass check", NULL) == 0) {
+        return TINYPY_FALSE;
+    }
+    vm->evaluation_depth += 1U;
+    tinypy_bool_t result = __tinypy_class_is_subclass(class_value, candidate_base);
+    vm->evaluation_depth -= 1U;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_class_bind_impl(tinypy_value_t *class_value, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(attribute);
 
@@ -89,7 +126,7 @@ static tinypy_value_t *__tinypy_class_bind(tinypy_value_t *class_value, tinypy_v
         return return_value_2;
     }
     if ((attribute->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_type_lookup_key(vm, attribute->type, vm->special_get_key) != NULL) {
-        tinypy_value_t *method = tinypy_internal_object_get_attr_key(attribute, vm->special_get_key, out_error);
+        tinypy_value_t *method = tinypy_internal_object_get_special_key(attribute, vm->special_get_key, out_error);
         tinypy_value_t *none = NULL;
         tinypy_value_t *items[2];
         tinypy_value_t *args;
@@ -118,6 +155,15 @@ static tinypy_value_t *__tinypy_class_bind(tinypy_value_t *class_value, tinypy_v
     }
     TINYPY_INCREF(attribute);
     return attribute;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_class_bind(tinypy_value_t *class_value, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_error_t **out_error) {
+    TINYPY_INCREF(class_value);
+    TINYPY_INCREF(attribute);
+    tinypy_value_t *result = __tinypy_class_bind_impl(class_value, attribute, instance, out_error);
+    TINYPY_DECREF(attribute);
+    TINYPY_DECREF(class_value);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_value_t *bases, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
@@ -248,7 +294,13 @@ tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *insta
     if (hook_attribute == NULL) {
         return NULL;
     }
+    if (vm->raised_value != NULL && tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_ATTRIBUTE_ERROR, out_error) == 0) {
+        return NULL;
+    }
     hook = __tinypy_class_bind(instance->class_object, hook_attribute, instance_value, out_error);
+    if (hook == NULL) {
+        return NULL;
+    }
     args = tinypy_tuple_from_items(vm, &name, 1U);
     result = tinypy_call(hook, args, NULL, out_error);
     TINYPY_DECREF(args);
@@ -258,16 +310,64 @@ tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *insta
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_dict_set(class_object->dict, name, attribute_value);
-    return TINYPY_TRUE;
+    tinypy_value_t **field = NULL;
+    if (__tinypy_class_name_equal(name, "__name__", 8U) != 0) {
+        if (TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_STRING) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__name__ must be a string", out_error);
+            return TINYPY_FALSE;
+        }
+        if (memchr(TINYPY_TEXT_BYTES(attribute_value), '\0', TINYPY_TEXT_BYTE_SIZE(attribute_value)) != NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__name__ must not contain null characters", out_error);
+            return TINYPY_FALSE;
+        }
+        field = &class_object->name;
+    }
+    else if (__tinypy_class_name_equal(name, "__dict__", 8U) != 0) {
+        if (TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_DICT) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__dict__ must be a dictionary", out_error);
+            return TINYPY_FALSE;
+        }
+        field = &class_object->dict;
+    }
+    else if (__tinypy_class_name_equal(name, "__bases__", 9U) != 0) {
+        if (TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_TUPLE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__bases__ must be a tuple", out_error);
+            return TINYPY_FALSE;
+        }
+        for (size_t index = 0U; index < TINYPY_TUPLE_SIZE(attribute_value); ++index) {
+            tinypy_value_t *base = TINYPY_TUPLE_GET(attribute_value, index);
+            if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_CLASS) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__bases__ items must be classes", out_error);
+                return TINYPY_FALSE;
+            }
+            if (tinypy_class_is_subclass(base, class_value) != 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "a __bases__ item causes an inheritance cycle", out_error);
+                return TINYPY_FALSE;
+            }
+            if (tinypy_vm_has_error(vm) != 0) {
+                return TINYPY_FALSE;
+            }
+        }
+        field = &class_object->bases;
+    }
+    if (field != NULL) {
+        tinypy_value_t *previous = *field;
+        TINYPY_INCREF(attribute_value);
+        *field = attribute_value;
+        TINYPY_DECREF(previous);
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(TINYPY_VALUE_VM(class_value), class_object->dict, name, attribute_value, out_error);
+    return stored;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_old_instance_set_attribute(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
     tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(instance_value);
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_dict_set(instance->dict, name, attribute_value);
-    return TINYPY_TRUE;
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(TINYPY_VALUE_VM(instance_value), instance->dict, name, attribute_value, out_error);
+    return stored;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_old_instance_set_class(tinypy_value_t *instance_value, tinypy_value_t *class_value, tinypy_error_t **out_error) {
@@ -338,6 +438,10 @@ tinypy_value_t *tinypy_internal_class_call(tinypy_value_t *callable, tinypy_valu
         return instance;
     }
     tinypy_value_t *initializer = __tinypy_class_bind(callable, initializer_attribute, instance, out_error);
+    if (initializer == NULL) {
+        TINYPY_DECREF(instance);
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_call(initializer, args, kwargs, out_error);
     TINYPY_DECREF(initializer);
     if (result == NULL) {
@@ -355,8 +459,16 @@ tinypy_value_t *tinypy_internal_class_call(tinypy_value_t *callable, tinypy_valu
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_old_instance_has_special(tinypy_value_t *value, const char *name, size_t name_size) {
-    tinypy_bool_t return_value_1 = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_class_lookup(TINYPY_OLD_INSTANCE_OBJECT(value)->class_object, name, name_size) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-    return return_value_1;
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE) {
+        return TINYPY_FALSE;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
+    tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(value);
+    tinypy_bool_t result = tinypy_internal_dict_get_optional(vm, instance->dict, key) != NULL
+        || tinypy_internal_class_lookup_key(vm, instance->class_object, key) != NULL;
+    TINYPY_DECREF(key);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_name(const tinypy_value_t *class_value) {

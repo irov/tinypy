@@ -200,6 +200,7 @@ static tinypy_value_t *__tinypy_internal_iterator_next_dict(tinypy_iterator_obje
 
     if ((uint64_t)dict->used != iterator->expected_state) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator->iterable);
+        iterator->expected_state = UINT64_MAX;
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "dictionary changed size during iteration", out_error);
         return NULL;
     }
@@ -1041,7 +1042,7 @@ static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispat
         result = tinypy_call(method, args, NULL, out_error);
         TINYPY_DECREF(args);
         TINYPY_DECREF(method);
-        if (result != NULL && result->type->next == NULL && tinypy_internal_object_has_special(result, "next", 4U) == 0) {
+        if (result != NULL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_OLD_INSTANCE && result->type->next == NULL && tinypy_internal_object_has_special(result, "next", 4U) == 0) {
             TINYPY_DECREF(result);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__iter__ returned a non-iterator", out_error);
             return NULL;
@@ -1070,7 +1071,7 @@ static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispat
         result = tinypy_call(method, args, NULL, out_error);
         TINYPY_DECREF(args);
         TINYPY_DECREF(method);
-        if (result != NULL && result->type->next == NULL && tinypy_internal_object_has_special(result, "next", 4U) == 0) {
+        if (result != NULL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_OLD_INSTANCE && result->type->next == NULL && tinypy_internal_object_has_special(result, "next", 4U) == 0) {
             TINYPY_DECREF(result);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__iter__ returned a non-iterator", out_error);
             return NULL;

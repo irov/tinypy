@@ -607,6 +607,7 @@ static tinypy_value_t *__tinypy_internal_sys_exc_clear(tinypy_value_t *function,
     if (__tinypy_internal_sys_arguments(vm, args, kwargs, 0U, 0U, out_error) == 0) {
         return NULL;
     }
+    vm->handled_clear_epoch += UINT64_C(1);
     tinypy_internal_exception_clear_handled(vm);
     tinypy_value_t *return_value_1 = tinypy_none_get(vm);
     return return_value_1;
@@ -1238,6 +1239,28 @@ tinypy_bool_t tinypy_internal_vm_valid(const tinypy_vm_t *vm) {
     return vm != NULL && vm->state == TINYPY_VM_STATE_LIVE;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_recursion_check(tinypy_vm_t *vm, uintptr_t stack_address, const char *message, tinypy_error_t **out_error) {
+    size_t stack_usage = 0U;
+
+    if (vm->evaluation_depth == 0U) {
+        vm->native_stack_origin = stack_address;
+    }
+    else if (stack_address != 0U && vm->native_stack_origin != 0U) {
+        stack_usage = (size_t)(stack_address > vm->native_stack_origin
+            ? stack_address - vm->native_stack_origin
+            : vm->native_stack_origin - stack_address);
+    }
+    if (vm->evaluation_depth >= vm->recursion_limit || stack_usage >= vm->max_stack_bytes) {
+        tinypy_bool_t previous = vm->recursion_error;
+
+        vm->recursion_error = TINYPY_TRUE;
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, message, out_error);
+        vm->recursion_error = previous;
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size) {
     void *return_value_1 = tinypy_internal_pool_allocate(vm, size);
     return return_value_1;
@@ -1283,10 +1306,18 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     (void)memset(vm, 0, sizeof(*vm));
     vm->state = TINYPY_VM_STATE_LIVE;
     vm->allocator = *allocator;
-    vm->max_heap_bytes = config->max_heap_bytes;
+    vm->max_heap_bytes =
+        config->struct_size >= (uint32_t)(offsetof(tinypy_vm_config_t, max_heap_bytes) + sizeof(config->max_heap_bytes))
+            ? config->max_heap_bytes
+            : 0U;
     vm->allocated_bytes = sizeof(*vm);
     vm->type_lookup_cache_epoch = UINT64_C(1);
     vm->recursion_limit = 1000U;
+    vm->max_stack_bytes =
+        config->struct_size >= (uint32_t)(offsetof(tinypy_vm_config_t, max_stack_bytes) + sizeof(config->max_stack_bytes))
+            && config->max_stack_bytes != 0U
+            ? config->max_stack_bytes
+            : 1024U * 1024U;
     vm->optimize_level =
         config->struct_size >= (uint32_t)(offsetof(tinypy_vm_config_t, optimize_level) + sizeof(config->optimize_level))
             ? config->optimize_level
@@ -1355,6 +1386,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
         tinypy_internal_string_set_interned(vm->special_operator_keys[operator_index], 1);
     }
 
+    tinypy_internal_object_initialize_special_keys(vm);
     __tinypy_internal_initialize_type_dicts(vm);
     __tinypy_internal_initialize_type_docs(vm);
     vm->interned_strings = tinypy_dict_new(vm);
@@ -1530,6 +1562,10 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph, tinypy_boo
 
     __tinypy_shutdown_add(graph, vm->modules);
     __tinypy_shutdown_add(graph, vm->builtins);
+    __tinypy_shutdown_add(graph, vm->codec_module);
+    __tinypy_shutdown_add(graph, vm->codec_search_path);
+    __tinypy_shutdown_add(graph, vm->codec_cache);
+    __tinypy_shutdown_add(graph, vm->codec_errors);
     __tinypy_shutdown_add(graph, vm->interned_strings);
 #define TINYPY_INTERNAL_KEY_ROOT(field, name) __tinypy_shutdown_add(graph, vm->field);
     TINYPY_INTERNAL_KEY_LIST(TINYPY_INTERNAL_KEY_ROOT)
@@ -1547,6 +1583,7 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph, tinypy_boo
     }
     __tinypy_shutdown_add(graph, vm->raised_type);
     __tinypy_shutdown_add(graph, vm->raised_value);
+    __tinypy_shutdown_add(graph, vm->emergency_memory_error);
     __tinypy_shutdown_add(graph, vm->raised_traceback);
     __tinypy_shutdown_add(graph, vm->handled_type);
     __tinypy_shutdown_add(graph, vm->handled_value);
@@ -1722,6 +1759,7 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     tinypy_internal_integer_free_list_finalize(vm);
     tinypy_internal_frame_free_list_finalize(vm);
     tinypy_internal_method_free_list_finalize(vm);
+    tinypy_internal_native_method_free_list_finalize(vm);
     (void)memset(&graph, 0, sizeof(graph));
     graph.vm = vm;
     __tinypy_shutdown_collect(&graph, TINYPY_TRUE);

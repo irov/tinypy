@@ -395,7 +395,7 @@ void *tinypy_internal_pool_allocate_checked(tinypy_vm_t *vm, size_t size) {
         size = 1U;
     }
     external_growth = size <= TINYPY_INTERNAL_POOL_SMALL_REQUEST ? __tinypy_pool_small_external_growth(vm, size) : size;
-    if (vm->max_heap_bytes != 0U &&
+    if (external_growth != 0U && vm->max_heap_bytes != 0U &&
         (vm->allocated_bytes > vm->max_heap_bytes || external_growth > vm->max_heap_bytes - vm->allocated_bytes)) {
         return NULL;
     }

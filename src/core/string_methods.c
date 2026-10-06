@@ -531,6 +531,16 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
         *out_unicode = TINYPY_VALUE_KIND(result) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
         return result;
     }
+    if (value_kind == TINYPY_VALUE_UNICODE && spec_unicode == 0) {
+        for (size_t index = 0U; index < spec_size; ++index) {
+            if (spec[index] >= 0x80U) {
+                tinypy_value_t *format_spec = tinypy_string_from_bytes(vm, (const char *)spec, spec_size);
+                (void)tinypy_internal_raise_ascii_decode_error(vm, format_spec, index, index + 1U, out_error);
+                TINYPY_DECREF(format_spec);
+                return NULL;
+            }
+        }
+    }
     size_t first_size = 1U;
     if (spec_unicode != 0 && spec_size != 0U) {
         uint32_t first_code_point;
@@ -739,7 +749,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
     }
     else if (float_default_type != 0 || type == (uint8_t)'e' || type == (uint8_t)'E' || type == (uint8_t)'f' || type == (uint8_t)'F' || type == (uint8_t)'g' || type == (uint8_t)'G' || type == (uint8_t)'n' || type == (uint8_t)'%') {
         uint8_t float_type = float_default_type != 0 || type == (uint8_t)'n' ? (uint8_t)'g' : type;
-        int64_t float_precision = float_default_type != 0 && precision < 0 ? 12 : precision;
+        int64_t float_precision = float_default_type != 0 ? (precision < 0 ? 12 : (precision == 0 ? 1 : precision)) : precision;
 
         numeric = TINYPY_TRUE;
         if (value_kind != TINYPY_VALUE_BOOL && value_kind != TINYPY_VALUE_INTEGER && value_kind != TINYPY_VALUE_LONG && value_kind != TINYPY_VALUE_FLOAT) {
@@ -1620,11 +1630,12 @@ static tinypy_value_t *__tinypy_string_from_span_as(tinypy_vm_t *vm, const tinyp
 //////////////////////////////////////////////////////////////////////////
 static int64_t __tinypy_string_normalized_bound(tinypy_vm_t *vm, tinypy_value_t *value, size_t length, int64_t fallback, tinypy_bool_t clamp_upper, tinypy_error_t **out_error) {
     int64_t bound;
+    (void)vm;
 
     if (value == NULL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
         return fallback;
     }
-    if (__tinypy_string_integer(vm, value, &bound, out_error) == 0) {
+    if (tinypy_internal_index_as_i64(value, &bound, TINYPY_TRUE, out_error) == 0) {
         return INT64_MIN;
     }
     if (bound < 0) {
@@ -2494,14 +2505,16 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
     }
     tinypy_value_t *text = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *table = TINYPY_TUPLE_GET(args, 1U);
-    if (TINYPY_VALUE_KIND(text) != TINYPY_VALUE_STRING || (TINYPY_VALUE_KIND(table) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(table) != TINYPY_VALUE_NONE)) {
+    if (TINYPY_VALUE_KIND(text) != TINYPY_VALUE_STRING) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "translate requires byte strings", out_error);
         return NULL;
     }
     translation = NULL;
-    if (TINYPY_VALUE_KIND(table) == TINYPY_VALUE_STRING) {
-        translation = TINYPY_TEXT_BYTES(table);
-        translation_size = TINYPY_TEXT_BYTE_SIZE(table);
+    if (TINYPY_VALUE_KIND(table) != TINYPY_VALUE_NONE) {
+        if (tinypy_internal_bytes_view(table, &translation, &translation_size) == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "translation table must be a buffer", out_error);
+            return NULL;
+        }
         if (translation_size != 256U) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "translation table must be 256 characters long", out_error);
             return NULL;
@@ -2509,12 +2522,10 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
     }
     if (TINYPY_TUPLE_SIZE(args) == 3U) {
         delete_characters = TINYPY_TUPLE_GET(args, 2U);
-        if (TINYPY_VALUE_KIND(delete_characters) != TINYPY_VALUE_STRING) {
+        if (tinypy_internal_bytes_view(delete_characters, &deleted, &deleted_size) == 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "delete characters must be a string", out_error);
             return NULL;
         }
-        deleted = TINYPY_TEXT_BYTES(delete_characters);
-        deleted_size = TINYPY_TEXT_BYTE_SIZE(delete_characters);
         for (input_index = 0U; input_index < deleted_size; ++input_index) {
             deleted_flags[deleted[input_index] >> 3U] |= (uint8_t)(1U << (deleted[input_index] & 7U));
         }
@@ -2968,6 +2979,7 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
     size_t source_size = TINYPY_TEXT_BYTE_SIZE(text);
     size_t total = 0U;
     size_t added_spaces = 0U;
+    size_t tabs = 0U;
     for (offset = 0U; offset < source_size; ++offset) {
         uint8_t character = source[offset];
 
@@ -2980,6 +2992,7 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
             }
             total += spaces;
             added_spaces += spaces;
+            tabs += 1U;
             column += spaces;
         }
         else {
@@ -2993,7 +3006,7 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
         }
     }
     uint8_t *destination;
-    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, unicode != 0 ? TINYPY_VALUE_UNICODE : TINYPY_VALUE_STRING, total, TINYPY_SIZED_SIZE(text) + added_spaces, &destination, out_error);
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, unicode != 0 ? TINYPY_VALUE_UNICODE : TINYPY_VALUE_STRING, total, TINYPY_SIZED_SIZE(text) - tabs + added_spaces, &destination, out_error);
     if (result == NULL) {
         return NULL;
     }
@@ -3005,7 +3018,9 @@ static tinypy_value_t *__tinypy_string_expandtabs_method(tinypy_value_t *functio
         if (character == (uint8_t)'\t') {
             size_t spaces = tab_size > 0 ? (size_t)tab_size - column % (size_t)tab_size : 0U;
 
-            (void)memset(destination + written, ' ', spaces);
+            if (spaces != 0U) {
+                (void)memset(destination + written, ' ', spaces);
+            }
             written += spaces;
             column += spaces;
         }
@@ -3508,6 +3523,7 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
         }
         else {
             size_t character = tinypy_internal_unicode_character_index(text, offset);
+            size_t error_end = character + 1U;
 
             if (error_mode < 0) {
                 error_mode = __tinypy_codec_error_mode(vm, errors, out_error);
@@ -3516,6 +3532,17 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
                     return NULL;
                 }
             }
+            size_t scan = offset + width;
+            while ((error_mode == 0 || error_mode == 5) && scan < size) {
+                uint32_t next_scalar;
+                size_t next_width = tinypy_internal_utf8_decode(bytes + scan, size - scan, &next_scalar);
+                if (next_width == 0U || (codec == 0 && next_scalar <= UINT32_C(0x7f)) || (codec == 2 && next_scalar <= UINT32_C(0xff))) {
+                    break;
+                }
+                error_end += 1U;
+                scan += next_width;
+            }
+
             if (error_mode == 2) {
                 __tinypy_string_builder_character(&builder, (uint8_t)'?');
             }
@@ -3523,7 +3550,7 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
                 __tinypy_codec_append_escape(&builder, code_point, error_mode == 3 ? TINYPY_TRUE : TINYPY_FALSE);
             }
             else if (error_mode == 5) {
-                if (__tinypy_codec_call_error_handler(vm, &builder, text, encoding, errors, codec, TINYPY_FALSE, character, character + 1U, &offset, out_error) == 0) {
+                if (__tinypy_codec_call_error_handler(vm, &builder, text, encoding, errors, codec, TINYPY_FALSE, character, error_end, &offset, out_error) == 0) {
                     __tinypy_string_builder_discard(&builder);
                     return NULL;
                 }
@@ -3531,7 +3558,7 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
             }
             else if (error_mode == 0) {
                 __tinypy_string_builder_discard(&builder);
-                (void)__tinypy_codec_raise_unicode_error(vm, text, encoding, codec, TINYPY_FALSE, character, character + 1U, out_error);
+                (void)__tinypy_codec_raise_unicode_error(vm, text, encoding, codec, TINYPY_FALSE, character, error_end, out_error);
                 return NULL;
             }
         }
@@ -3991,13 +4018,20 @@ static void __tinypy_percent_append_padded(tinypy_string_builder_t *output, tiny
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_percent_clear_conversion_error(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    if (out_error != NULL && *out_error != NULL) {
+        tinypy_error_release(*out_error);
+        *out_error = NULL;
+    }
+    tinypy_vm_clear_error(vm);
+}
+//////////////////////////////////////////////////////////////////////////
 /* %d and %f accept anything numeric, converting through __int__/__float__ the
    way PyNumber_Int and PyFloat_AsDouble do. in_out_value is replaced by an
    owned conversion result when one is produced. */
 static tinypy_bool_t __tinypy_percent_coerce_number(tinypy_vm_t *vm, tinypy_value_t **in_out_value, tinypy_bool_t want_float, tinypy_error_t **out_error) {
     tinypy_value_t *value = *in_out_value;
 
-    (void)vm;
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_bool_t handled = TINYPY_FALSE;
     tinypy_value_t *converted;
@@ -4006,13 +4040,31 @@ static tinypy_bool_t __tinypy_percent_coerce_number(tinypy_vm_t *vm, tinypy_valu
         return TINYPY_TRUE;
     }
     converted = tinypy_internal_call_conversion(value, want_float != 0 ? "__float__" : "__int__", want_float != 0 ? 9U : 7U, &handled, out_error);
-    if (handled == 0) {
-        converted = tinypy_internal_call_conversion(value, want_float != 0 ? "__int__" : "__long__", want_float != 0 ? 7U : 8U, &handled, out_error);
+    if (converted != NULL) {
+        tinypy_value_type_e converted_kind = TINYPY_VALUE_KIND(converted);
+        tinypy_bool_t valid = want_float != 0 ? converted_kind == TINYPY_VALUE_FLOAT
+            : converted_kind == TINYPY_VALUE_BOOL || converted_kind == TINYPY_VALUE_INTEGER || converted_kind == TINYPY_VALUE_LONG;
+
+        if (valid == 0) {
+            TINYPY_DECREF(converted);
+            converted = NULL;
+        }
+    }
+    if (want_float == 0 && converted == NULL && (handled != 0 || kind == TINYPY_VALUE_OLD_INSTANCE)) {
+        __tinypy_percent_clear_conversion_error(vm, out_error);
+        converted = tinypy_internal_call_conversion(value, "__long__", 8U, &handled, out_error);
+        if (converted != NULL && TINYPY_VALUE_KIND(converted) != TINYPY_VALUE_BOOL &&
+            TINYPY_VALUE_KIND(converted) != TINYPY_VALUE_INTEGER && TINYPY_VALUE_KIND(converted) != TINYPY_VALUE_LONG) {
+            TINYPY_DECREF(converted);
+            converted = NULL;
+        }
     }
     if (handled == 0) {
         return TINYPY_TRUE;
     }
     if (converted == NULL) {
+        __tinypy_percent_clear_conversion_error(vm, out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "numeric format requires a number", out_error);
         return TINYPY_FALSE;
     }
     TINYPY_DECREF(value);
@@ -4050,6 +4102,7 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
     while (offset < size) {
         size_t key_begin = 0U;
         size_t key_size = 0U;
+        tinypy_bool_t mapping_key = TINYPY_FALSE;
         int32_t alternate = INT32_C(0);
         int32_t zero = INT32_C(0);
         int32_t left = INT32_C(0);
@@ -4080,6 +4133,7 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
         if (bytes[offset] == (uint8_t)'(') {
             size_t depth = 1U;
 
+            mapping_key = TINYPY_TRUE;
             key_begin = ++offset;
             while (offset < size && depth != 0U) {
                 if (bytes[offset] == (uint8_t)'(') {
@@ -4197,7 +4251,15 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
             return NULL;
         }
         conversion = bytes[offset++];
-        value = key_size != 0U ? __tinypy_percent_mapping_argument(vm, format, argument_value, bytes + key_begin, key_size, out_error) : __tinypy_percent_next_argument(vm, &arguments, out_error);
+        if (conversion == (uint8_t)'%') {
+            (void)memset(&field, 0, sizeof(field));
+            field.vm = vm;
+            __tinypy_string_builder_character(&field, (uint8_t)'%');
+            __tinypy_percent_append_padded(&output, &field, 0U, width, left, INT32_C(0), unicode);
+            __tinypy_string_builder_discard(&field);
+            continue;
+        }
+        value = mapping_key != 0 ? __tinypy_percent_mapping_argument(vm, format, argument_value, bytes + key_begin, key_size, out_error) : __tinypy_percent_next_argument(vm, &arguments, out_error);
         if (value == NULL) {
             __tinypy_string_builder_discard(&output);
             return NULL;
@@ -4217,6 +4279,22 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
             else if (conversion == (uint8_t)'s' && unicode != 0) {
                 /* %s in a unicode format goes through __unicode__. */
                 text = tinypy_internal_object_unicode(value, out_error);
+            }
+            else if (conversion == (uint8_t)'s' && tinypy_internal_object_has_special(value, "__str__", 7U) != 0) {
+                tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->special_str_key, out_error);
+                tinypy_value_t *call_args = method != NULL ? tinypy_tuple_from_items(vm, NULL, 0U) : NULL;
+                text = call_args != NULL ? tinypy_call(method, call_args, NULL, out_error) : NULL;
+                if (call_args != NULL) {
+                    TINYPY_DECREF(call_args);
+                }
+                if (method != NULL) {
+                    TINYPY_DECREF(method);
+                }
+                if (text != NULL && __tinypy_string_is_text(text) == 0) {
+                    TINYPY_DECREF(text);
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__str__ returned non-string", out_error);
+                    text = NULL;
+                }
             }
             else {
                 text = conversion == (uint8_t)'r' ? tinypy_object_repr(value, out_error) : tinypy_object_str(value, out_error);
@@ -4289,6 +4367,27 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
                 int64_t character;
                 int64_t maximum = unicode != 0 ? INT64_C(0x10ffff) : INT64_C(0xff);
 
+                tinypy_value_type_e value_kind = TINYPY_VALUE_KIND(value);
+
+                if (value_kind != TINYPY_VALUE_BOOL && value_kind != TINYPY_VALUE_INTEGER && value_kind != TINYPY_VALUE_LONG &&
+                    (value_kind != TINYPY_VALUE_FLOAT || unicode != 0) && __tinypy_string_is_text(value) == 0) {
+                    tinypy_value_t *conversion_args = tinypy_tuple_from_items(vm, &value, 1U);
+                    tinypy_value_t *converted = tinypy_internal_integer_create(&vm->types[TINYPY_VALUE_INTEGER], conversion_args, NULL, out_error);
+
+                    TINYPY_DECREF(conversion_args);
+                    if (converted == NULL) {
+                        if (unicode != 0) {
+                            __tinypy_percent_clear_conversion_error(vm, out_error);
+                            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "%c requires int or char", out_error);
+                        }
+                        TINYPY_DECREF(value);
+                        __tinypy_string_builder_discard(&field);
+                        __tinypy_string_builder_discard(&output);
+                        return NULL;
+                    }
+                    TINYPY_DECREF(value);
+                    value = converted;
+                }
                 if (__tinypy_string_integer(vm, value, &character, out_error) == 0 || character < 0 || character > maximum) {
                     if (out_error == NULL || *out_error == NULL) {
                         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "%c argument is out of range", out_error);
@@ -4308,6 +4407,7 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
         }
         else if (conversion == (uint8_t)'d' || conversion == (uint8_t)'i' || conversion == (uint8_t)'u' || conversion == (uint8_t)'o' || conversion == (uint8_t)'x' || conversion == (uint8_t)'X') {
             if (__tinypy_percent_coerce_number(vm, &value, TINYPY_FALSE, out_error) == 0) {
+                TINYPY_DECREF(value);
                 __tinypy_string_builder_discard(&field);
                 __tinypy_string_builder_discard(&output);
                 return NULL;
@@ -4321,6 +4421,7 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
         }
         else if (conversion == (uint8_t)'e' || conversion == (uint8_t)'E' || conversion == (uint8_t)'f' || conversion == (uint8_t)'F' || conversion == (uint8_t)'g' || conversion == (uint8_t)'G') {
             if (__tinypy_percent_coerce_number(vm, &value, TINYPY_TRUE, out_error) == 0) {
+                TINYPY_DECREF(value);
                 __tinypy_string_builder_discard(&field);
                 __tinypy_string_builder_discard(&output);
                 return NULL;

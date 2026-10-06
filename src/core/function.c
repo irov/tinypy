@@ -78,7 +78,7 @@ tinypy_value_t *tinypy_internal_function_call(tinypy_value_t *callable, tinypy_v
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     TINYPY_CLEAR_ERROR(out_error);
     if ((callable->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override(callable, "__call__", 8U) != 0) {
@@ -107,8 +107,32 @@ tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tiny
         TINYPY_DECREF(method);
         return result;
     }
+    if (vm->raised_value != NULL) {
+        if (out_error != NULL && *out_error == NULL) {
+            tinypy_internal_exception_make_diagnostic(vm, out_error);
+        }
+        return NULL;
+    }
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object is not callable", out_error);
     return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+
+    /* Python functions are guarded by the evaluator. Native callbacks and
+       descriptor dispatch also consume C stack, even without a Python frame. */
+    if (TINYPY_VALUE_KIND(callable) == TINYPY_VALUE_FUNCTION) {
+        tinypy_value_t *result = __tinypy_call(callable, args, kwargs, out_error);
+        return result;
+    }
+    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded while calling a Python object", out_error) == 0) {
+        return NULL;
+    }
+    vm->evaluation_depth += 1U;
+    tinypy_value_t *result = __tinypy_call(callable, args, kwargs, out_error);
+    vm->evaluation_depth -= 1U;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_code(const tinypy_value_t *function) {

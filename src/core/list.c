@@ -28,16 +28,15 @@ void tinypy_internal_list_swap_contents(tinypy_value_t *left, tinypy_value_t *ri
     tinypy_value_t **items = TINYPY_LIST_OBJECT(left)->items;
     size_t size = TINYPY_SIZED_SIZE(left);
     size_t allocated = TINYPY_LIST_OBJECT(left)->allocated;
-    uint64_t mutation_version = TINYPY_LIST_OBJECT(left)->mutation_version;
 
     TINYPY_LIST_OBJECT(left)->items = TINYPY_LIST_OBJECT(right)->items;
     TINYPY_SIZED_SIZE(left) = TINYPY_SIZED_SIZE(right);
     TINYPY_LIST_OBJECT(left)->allocated = TINYPY_LIST_OBJECT(right)->allocated;
-    TINYPY_LIST_OBJECT(left)->mutation_version = TINYPY_LIST_OBJECT(right)->mutation_version;
+    TINYPY_LIST_OBJECT(left)->mutation_version += UINT64_C(1);
     TINYPY_LIST_OBJECT(right)->items = items;
     TINYPY_SIZED_SIZE(right) = size;
     TINYPY_LIST_OBJECT(right)->allocated = allocated;
-    TINYPY_LIST_OBJECT(right)->mutation_version = mutation_version;
+    TINYPY_LIST_OBJECT(right)->mutation_version += UINT64_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
 static inline size_t __tinypy_internal_list_storage_size(size_t capacity) {
@@ -119,11 +118,15 @@ void tinypy_internal_list_shrink_to_fit(tinypy_vm_t *vm, tinypy_value_t *list) {
         list_object->allocated = 0U;
         return;
     }
-    list_object->items = (tinypy_value_t **)tinypy_internal_vm_reallocate(
+    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_reallocate(
         vm,
         list_object->items,
         __tinypy_internal_list_storage_size(allocated),
         __tinypy_internal_list_storage_size(size));
+    if (items == NULL) {
+        return;
+    }
+    list_object->items = items;
     list_object->allocated = size;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -332,6 +335,9 @@ void tinypy_list_delete(tinypy_value_t *list, size_t index) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_remove(TINYPY_VALUE_VM(list), list, index);
 #endif
+    if (TINYPY_LIST_SIZE(list) < TINYPY_LIST_OBJECT(list)->allocated / 2U) {
+        tinypy_internal_list_shrink_to_fit(TINYPY_VALUE_VM(list), list);
+    }
     TINYPY_DECREF(previous);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -510,22 +516,22 @@ tinypy_value_t *tinypy_list_pop(tinypy_value_t *list, size_t index) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_list_clear(tinypy_value_t *list) {
-    size_t item_count;
-    size_t index;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
+    tinypy_value_t **items = TINYPY_LIST_OBJECT(list)->items;
+    size_t item_count = TINYPY_SIZED_SIZE(list);
+    size_t allocated = TINYPY_LIST_OBJECT(list)->allocated;
 
-    if (TINYPY_SIZED_SIZE(list) == 0) {
-        return;
-    }
-
-    item_count = TINYPY_SIZED_SIZE(list);
+    TINYPY_LIST_OBJECT(list)->items = NULL;
+    TINYPY_LIST_OBJECT(list)->allocated = 0U;
     TINYPY_LIST_OBJECT(list)->base.size = 0U;
     TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    __tinypy_internal_cycle_diagnostics_list_clear(TINYPY_VALUE_VM(list), list);
+    __tinypy_internal_cycle_diagnostics_list_clear(vm, list);
 #endif
-    for (index = 0U; index < item_count; ++index) {
-        tinypy_value_t *item = TINYPY_LIST_OBJECT(list)->items[index];
-        TINYPY_LIST_OBJECT(list)->items[index] = NULL;
-        TINYPY_DECREF(item);
+    for (size_t index = 0U; index < item_count; ++index) {
+        TINYPY_DECREF(items[index]);
+    }
+    if (items != NULL) {
+        tinypy_internal_vm_deallocate(vm, items, allocated * sizeof(*items));
     }
 }

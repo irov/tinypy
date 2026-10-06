@@ -209,7 +209,7 @@ class ClassicCustomRepresentation:
 
 assert repr(ClassicRepresentation).startswith("<class %s.ClassicRepresentation at 0x" % __name__)
 assert repr(ClassicRepresentation).endswith(">")
-assert str(ClassicRepresentation) == repr(ClassicRepresentation)
+assert str(ClassicRepresentation) == "%s.ClassicRepresentation" % __name__
 assert repr(ClassicRepresentation()).startswith("<%s.ClassicRepresentation instance at 0x" % __name__)
 assert repr(ClassicCustomRepresentation).startswith("<class %s.ClassicCustomRepresentation at 0x" % __name__)
 assert repr(ClassicCustomRepresentation()) == "custom repr"

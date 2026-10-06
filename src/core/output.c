@@ -130,7 +130,7 @@ void tinypy_internal_output_set_soft_space(tinypy_value_t *target, tinypy_bool_t
     else if (TINYPY_VALUE_KIND(target) != TINYPY_VALUE_INSTANCE) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
         tinypy_error_t *error = NULL;
-        tinypy_value_t *value = tinypy_bool_from_i32(vm, soft_space);
+        tinypy_value_t *value = tinypy_integer_from_i64(vm, soft_space != 0 ? INT64_C(1) : INT64_C(0));
 
         (void)tinypy_object_set_attr_value(target, vm->softspace_key, value, &error);
         TINYPY_DECREF(value);
@@ -144,7 +144,7 @@ void tinypy_internal_output_set_soft_space(tinypy_value_t *target, tinypy_bool_t
         tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(target);
 
         if (dict_slot != NULL) {
-            tinypy_value_t *value = tinypy_bool_from_i32(vm, soft_space);
+            tinypy_value_t *value = tinypy_integer_from_i64(vm, soft_space != 0 ? INT64_C(1) : INT64_C(0));
 
             tinypy_instance_set_attr(target, "softspace", 9U, value);
             TINYPY_DECREF(value);

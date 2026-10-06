@@ -90,6 +90,9 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_new_with_owner(tinypy_vm_t
     if (retain_owner != 0) {
         TINYPY_INCREF(&owner->base.base);
     }
+    else {
+        descriptor->owner_reference = tinypy_weakref_new(&owner->base.base, NULL, NULL);
+    }
     return &descriptor->base;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -107,6 +110,7 @@ tinypy_value_t *tinypy_internal_member_descriptor_new(tinypy_type_t *owner, tiny
     descriptor->field = (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_INSTANCE_SLOT;
     descriptor->writable = INT32_C(1);
     descriptor->owner_retained = INT32_C(0);
+    descriptor->owner_reference = tinypy_weakref_new(&owner->base.base, NULL, NULL);
     TINYPY_INCREF(name);
     return &descriptor->base;
 }
@@ -496,6 +500,15 @@ static tinypy_value_t *__tinypy_internal_property_init_method(tinypy_value_t *fu
     initialized_property->deleter = deleter;
     initialized_property->doc = doc;
     initialized_property->getter_doc = getter_doc;
+    if (self->type != &vm->types[TINYPY_VALUE_PROPERTY] && self_property->getter_doc != 0 && self_property->doc != NULL) {
+        tinypy_value_t *key = tinypy_string_from_bytes(vm, "__doc__", 7U);
+        tinypy_bool_t stored = tinypy_internal_object_set_attr_protocol_key(self, key, self_property->doc, out_error);
+        TINYPY_DECREF(key);
+        if (stored == 0) {
+            TINYPY_DECREF(initialized);
+            return NULL;
+        }
+    }
     TINYPY_DECREF(initialized);
     tinypy_value_t *result = tinypy_none_get(vm);
     return result;
@@ -528,15 +541,7 @@ static tinypy_value_t *__tinypy_internal_property_copy(tinypy_value_t *function,
     tinypy_value_t *getter = field == 0 ? replacement : property->getter;
     tinypy_value_t *setter = field == 1 ? replacement : property->setter;
     tinypy_value_t *deleter = field == 2 ? replacement : property->deleter;
-    tinypy_value_t *doc = property->doc;
-    tinypy_value_t *owned_doc = NULL;
-
-    if (field == 0 && property->getter_doc != 0) {
-        if (__tinypy_property_getter_doc(vm, getter, &owned_doc, out_error) == 0) {
-            return NULL;
-        }
-        doc = owned_doc;
-    }
+    tinypy_value_t *doc = property->getter_doc != 0 ? NULL : property->doc;
     tinypy_value_t *constructor_items[4] = {
         getter != NULL ? getter : &vm->none_object.base,
         setter != NULL ? setter : &vm->none_object.base,
@@ -546,9 +551,6 @@ static tinypy_value_t *__tinypy_internal_property_copy(tinypy_value_t *function,
     tinypy_value_t *return_value_1 = tinypy_call(&property->base.type->base.base, constructor_args, NULL, out_error);
 
     TINYPY_DECREF(constructor_args);
-    if (owned_doc != NULL) {
-        TINYPY_DECREF(owned_doc);
-    }
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -892,6 +894,12 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_delete_method(tinypy_value
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_c_descriptor_refresh_owner(tinypy_c_descriptor_object_t *descriptor) {
+    if (descriptor->owner_reference != NULL) {
+        descriptor->owner = (tinypy_type_t *)tinypy_weakref_get(descriptor->owner_reference);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_c_descriptor_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     static const char member_prefix[] = "<member '";
     static const char getset_prefix[] = "<attribute '";
@@ -917,6 +925,7 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_repr_method(tinypy_value_t
         return NULL;
     }
     descriptor = TINYPY_C_DESCRIPTOR_OBJECT(value);
+    __tinypy_internal_c_descriptor_refresh_owner(descriptor);
     prefix = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_MEMBER_DESCRIPTOR ? member_prefix : getset_prefix;
     prefix_size = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_MEMBER_DESCRIPTOR ? sizeof(member_prefix) - 1U : sizeof(getset_prefix) - 1U;
     static const char detached_owner[] = "<deleted type>";
@@ -996,6 +1005,7 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_metadata(tinypy_value_t *f
         return NULL;
     }
     tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(value);
+    __tinypy_internal_c_descriptor_refresh_owner(descriptor);
     if (user_data != NULL && descriptor->owner == NULL) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "descriptor owner type no longer exists", out_error);
         return NULL;
@@ -1020,6 +1030,9 @@ void tinypy_internal_c_descriptor_release_references(tinypy_value_t *value, tiny
     if (descriptor->owner_retained != 0) {
         visit(&descriptor->owner->base.base, user_data);
     }
+    if (descriptor->owner_reference != NULL) {
+        visit(descriptor->owner_reference, user_data);
+    }
     visit(descriptor->name, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1030,6 +1043,7 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor_value);
     (void)owner;
     TINYPY_CLEAR_ERROR(out_error);
+    __tinypy_internal_c_descriptor_refresh_owner(descriptor);
     if (instance == NULL) {
         TINYPY_INCREF(descriptor_value);
         return descriptor_value;
@@ -1343,6 +1357,7 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor_value);
     tinypy_internal_c_descriptor_field_e field = (tinypy_internal_c_descriptor_field_e)descriptor->field;
     TINYPY_CLEAR_ERROR(out_error);
+    __tinypy_internal_c_descriptor_refresh_owner(descriptor);
     if (descriptor->owner == NULL || tinypy_type_is_subtype(instance->type, descriptor->owner) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor does not apply to this object", out_error);
         return TINYPY_FALSE;
@@ -1422,6 +1437,10 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         }
         tinypy_value_t **slot = tinypy_internal_object_member_slot(instance, descriptor->index);
         tinypy_value_t *previous = *slot;
+        if (value == NULL && previous == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "slot attribute is not set", out_error);
+            return TINYPY_FALSE;
+        }
         if (value != NULL) {
             TINYPY_INCREF(value);
         }
@@ -1510,11 +1529,8 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "func_code must be a code object", out_error);
             return TINYPY_FALSE;
         }
-        tinypy_bool_t condition = function->closure != NULL;
-        if (condition != 0) {
-            tinypy_value_t *freevars = TINYPY_CODE_FREEVARS(value);
-            condition = TINYPY_TUPLE_SIZE(function->closure) != TINYPY_TUPLE_SIZE(freevars);
-        }
+        size_t closure_size = function->closure != NULL ? TINYPY_TUPLE_SIZE(function->closure) : 0U;
+        tinypy_bool_t condition = closure_size != TINYPY_TUPLE_SIZE(TINYPY_CODE_FREEVARS(value));
         if (condition) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "func_code has incompatible free variables", out_error);
             return TINYPY_FALSE;

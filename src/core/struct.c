@@ -354,13 +354,9 @@ static tinypy_value_t *__tinypy_struct_pack(tinypy_value_t *function, tinypy_val
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_struct_offset(tinypy_vm_t *vm, tinypy_value_t *value, size_t buffer_size, size_t required_size, const char *operation, size_t operation_size, size_t *out_offset, tinypy_error_t **out_error) {
-    int64_t signed_offset;
+static tinypy_bool_t __tinypy_struct_offset(tinypy_vm_t *vm, int64_t signed_offset, size_t buffer_size, size_t required_size, const char *operation, size_t operation_size, size_t *out_offset, tinypy_error_t **out_error) {
     size_t offset;
 
-    if (tinypy_internal_index_as_i64(value, &signed_offset, TINYPY_FALSE, out_error) == 0) {
-        return TINYPY_FALSE;
-    }
     if (signed_offset < 0) {
         uint64_t distance = (uint64_t)(-(signed_offset + 1)) + UINT64_C(1);
 
@@ -414,6 +410,7 @@ static tinypy_value_t *__tinypy_struct_pack_into(tinypy_value_t *function, tinyp
     const uint8_t *buffer_bytes;
     size_t buffer_size;
     size_t offset;
+    int64_t signed_offset;
     tinypy_value_t **pack_items;
     tinypy_value_t *pack_args;
     tinypy_value_t *packed;
@@ -432,12 +429,15 @@ static tinypy_value_t *__tinypy_struct_pack_into(tinypy_value_t *function, tinyp
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "pack expected a different number of items", out_error);
         return NULL;
     }
+    if (tinypy_internal_index_as_i64(TINYPY_TUPLE_GET(args, 2U), &signed_offset, TINYPY_FALSE, out_error) == 0) {
+        return NULL;
+    }
     if (tinypy_internal_bytes_view(buffer, &buffer_bytes, &buffer_size) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument must be read-write buffer", out_error);
         return NULL;
     }
     (void)buffer_bytes;
-    if (__tinypy_struct_offset(vm, TINYPY_TUPLE_GET(args, 2U), buffer_size, format.byte_size, "pack_into", 9U, &offset, out_error) == 0) {
+    if (__tinypy_struct_offset(vm, signed_offset, buffer_size, format.byte_size, "pack_into", 9U, &offset, out_error) == 0) {
         return NULL;
     }
     pack_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (format.item_count + 1U) * sizeof(*pack_items));
@@ -475,6 +475,7 @@ static tinypy_value_t *__tinypy_struct_unpack_from(tinypy_value_t *function, tin
     const uint8_t *buffer_bytes;
     size_t buffer_size;
     size_t offset = 0U;
+    int64_t signed_offset = INT64_C(0);
 
     if (__tinypy_struct_arguments(vm, args, kwargs, 2U, out_error) == 0 || TINYPY_TUPLE_SIZE(args) > 3U) {
         return NULL;
@@ -484,23 +485,15 @@ static tinypy_value_t *__tinypy_struct_unpack_from(tinypy_value_t *function, tin
     if (__tinypy_struct_parse_format(state, format_value, &format, out_error) == 0) {
         return NULL;
     }
+    if (TINYPY_TUPLE_SIZE(args) == 3U && tinypy_internal_index_as_i64(TINYPY_TUPLE_GET(args, 2U), &signed_offset, TINYPY_FALSE, out_error) == 0) {
+        return NULL;
+    }
     if (tinypy_internal_bytes_view(buffer, &buffer_bytes, &buffer_size) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unpack_from requires a string argument", out_error);
         return NULL;
     }
-    if (TINYPY_TUPLE_SIZE(args) == 3U) {
-        if (__tinypy_struct_offset(vm, TINYPY_TUPLE_GET(args, 2U), buffer_size, format.byte_size, "unpack_from", 11U, &offset, out_error) == 0) {
-            return NULL;
-        }
-    }
-    else if (format.byte_size > buffer_size) {
-        tinypy_value_t *zero = tinypy_integer_from_i64(vm, INT64_C(0));
-        tinypy_bool_t valid = __tinypy_struct_offset(vm, zero, buffer_size, format.byte_size, "unpack_from", 11U, &offset, out_error);
-
-        TINYPY_DECREF(zero);
-        if (valid == 0) {
-            return NULL;
-        }
+    if (__tinypy_struct_offset(vm, signed_offset, buffer_size, format.byte_size, "unpack_from", 11U, &offset, out_error) == 0) {
+        return NULL;
     }
     const uint8_t *selected_bytes = format.byte_size != 0U ? buffer_bytes + offset : NULL;
     tinypy_value_t *selected = tinypy_string_from_bytes(vm, selected_bytes, format.byte_size);

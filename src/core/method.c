@@ -3,6 +3,47 @@
 #include "internal.h"
 
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_method_receiver_error(tinypy_method_object_t *method, tinypy_value_t *receiver, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(&method->base);
+    tinypy_value_t *name = TINYPY_VALUE_KIND(method->function) == TINYPY_VALUE_FUNCTION ? TINYPY_FUNCTION_OBJECT(method->function)->name
+        : TINYPY_VALUE_KIND(method->function) == TINYPY_VALUE_NATIVE_FUNCTION ? TINYPY_NATIVE_FUNCTION_OBJECT(method->function)->name : NULL;
+    const char *function_name = name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING ? (const char *)TINYPY_TEXT_BYTES(name) : "?";
+    size_t function_size = name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING ? TINYPY_TEXT_BYTE_SIZE(name) : 1U;
+    size_t owner_size = 1U;
+    const char *owner_name = "?";
+    size_t receiver_size = 7U;
+    const char *receiver_name = "nothing";
+
+    if (TINYPY_VALUE_KIND(method->owner) == TINYPY_VALUE_CLASS) {
+        tinypy_value_t *class_name = TINYPY_CLASS_OBJECT(method->owner)->name;
+
+        owner_name = (const char *)TINYPY_TEXT_BYTES(class_name);
+        owner_size = TINYPY_TEXT_BYTE_SIZE(class_name);
+    }
+    else if (TINYPY_VALUE_KIND(method->owner) == TINYPY_VALUE_TYPE) {
+        owner_name = tinypy_type_name((tinypy_type_t *)method->owner, &owner_size);
+    }
+    if (receiver != NULL) {
+        if (TINYPY_VALUE_KIND(receiver) == TINYPY_VALUE_OLD_INSTANCE) {
+            tinypy_value_t *class_name = TINYPY_CLASS_OBJECT(TINYPY_OLD_INSTANCE_OBJECT(receiver)->class_object)->name;
+
+            receiver_name = (const char *)TINYPY_TEXT_BYTES(class_name);
+            receiver_size = TINYPY_TEXT_BYTE_SIZE(class_name);
+        }
+        else {
+            receiver_name = tinypy_type_name(receiver->type, &receiver_size);
+        }
+    }
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("unbound method "), {function_name, function_size},
+        TINYPY_MESSAGE_PART_LITERAL("() must be called with "), {owner_name, owner_size},
+        TINYPY_MESSAGE_PART_LITERAL(" instance as first argument (got "), {receiver_name, receiver_size},
+        {receiver != NULL ? " instance instead)" : " instead)", receiver != NULL ? 18U : 9U}
+    };
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+}
+
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_method_new(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *owner) {
     tinypy_method_object_t *method;
 
@@ -93,29 +134,17 @@ tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_val
         if (first != NULL && TINYPY_VALUE_KIND(method->owner) == TINYPY_VALUE_TYPE) {
             tinypy_type_t *owner_type = (tinypy_type_t *)method->owner;
 
-            tinypy_bool_t condition = (TINYPY_VALUE_KIND(first) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)first, owner_type) != 0);
-            if (condition == 0) {
-                tinypy_bool_t condition_2 = TINYPY_VALUE_KIND(first) != TINYPY_VALUE_TYPE;
-                if (condition_2 != 0) {
-                    const tinypy_type_t *type = tinypy_object_type(first);
-                    condition_2 = tinypy_type_is_subtype((tinypy_type_t *)type, owner_type) != 0;
-                }
-                condition = (condition_2);
-            }
-            valid_owner = condition;
+            valid_owner = tinypy_type_is_subtype(first->type, owner_type);
         }
         else if (first != NULL && TINYPY_VALUE_KIND(method->owner) == TINYPY_VALUE_CLASS) {
-            if (TINYPY_VALUE_KIND(first) == TINYPY_VALUE_CLASS) {
-                valid_owner = tinypy_class_is_subclass(first, method->owner);
-            }
-            else if (TINYPY_VALUE_KIND(first) == TINYPY_VALUE_OLD_INSTANCE) {
+            if (TINYPY_VALUE_KIND(first) == TINYPY_VALUE_OLD_INSTANCE) {
                 tinypy_value_t *old_instance_class = tinypy_old_instance_class(first);
                 valid_owner = tinypy_class_is_subclass(old_instance_class, method->owner);
             }
         }
 
         if (valid_owner == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unbound method requires an instance of its owner", out_error);
+            __tinypy_method_receiver_error(method, first, out_error);
             return NULL;
         }
         tinypy_value_t *return_value_1 = tinypy_call(method->function, args, kwargs, out_error);

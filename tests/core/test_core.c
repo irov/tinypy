@@ -2568,6 +2568,82 @@ static tinypy_value_t *__test_native_return_args(tinypy_value_t *function, tinyp
     return args;
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __test_stack_budget(void) {
+    static const char source[] =
+        "depth = 0\n"
+        "def descend(callback):\n"
+        "    global depth\n"
+        "    depth += 1\n"
+        "    return callback(callback)\n"
+        "descend(descend)\n";
+    static const char recovery[] = "answer = 6 * 7\n";
+    size_t profile;
+
+    for (profile = 0U; profile < 3U; ++profile) {
+        test_allocator_state_t state;
+        tinypy_allocator_t allocator;
+        tinypy_vm_config_t config;
+        tinypy_compile_options_t options;
+        tinypy_vm_t *vm;
+        tinypy_error_t *error = NULL;
+        tinypy_value_t *code;
+        tinypy_value_t *globals;
+        tinypy_value_t *result;
+        tinypy_value_t *key;
+
+        (void)memset(&state, 0, sizeof(state));
+        allocator = __test_make_allocator(&state);
+        config = __test_make_config(&allocator);
+        if (profile == 0U) {
+            config.max_stack_bytes = 64U * 1024U;
+        }
+        else if (profile == 2U) {
+            /* An older config must not read the appended budget field. */
+            config.struct_size = (uint32_t)offsetof(tinypy_vm_config_t, max_stack_bytes);
+            config.max_stack_bytes = 1U;
+        }
+        vm = tinypy_vm_create(&config);
+        TEST_CHECK(vm != NULL);
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "stack.py", sizeof("stack.py") - 1U, &options, &error);
+        TEST_CHECK(code != NULL);
+        TEST_CHECK(error == NULL);
+        globals = tinypy_dict_new(vm);
+        result = tinypy_eval_code(code, globals, NULL, &error);
+        TEST_CHECK(result == NULL);
+        TEST_CHECK(error != NULL);
+        TEST_CHECK(tinypy_error_kind(error) == TINYPY_ERROR_RUNTIME);
+        tinypy_error_release(error);
+        error = NULL;
+        tinypy_vm_clear_error(vm);
+        tinypy_release(code);
+#if defined(_MSC_VER) || defined(__GNUC__) || defined(__clang__)
+        if (profile == 0U) {
+            key = tinypy_string_from_bytes(vm, "depth", 5U);
+            /* The byte budget must stop recursion before the depth limit. */
+            TEST_CHECK(tinypy_integer_as_i64(tinypy_dict_get(globals, key)) < 990);
+            tinypy_release(key);
+        }
+#endif
+        code = tinypy_compile_source(vm, recovery, sizeof(recovery) - 1U, "recover.py", sizeof("recover.py") - 1U, &options, &error);
+        TEST_CHECK(code != NULL);
+        result = tinypy_eval_code(code, globals, NULL, &error);
+        TEST_CHECK(result != NULL);
+        TEST_CHECK(error == NULL);
+        key = tinypy_string_from_bytes(vm, "answer", 6U);
+        TEST_CHECK(tinypy_integer_as_i64(tinypy_dict_get(globals, key)) == 42);
+        tinypy_release(key);
+        tinypy_release(result);
+        tinypy_release(code);
+        tinypy_dict_clear(globals);
+        tinypy_release(globals);
+        tinypy_vm_destroy(vm);
+        TEST_CHECK(state.outstanding_allocations == 0U);
+        TEST_CHECK(state.outstanding_bytes == 0U);
+    }
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_container_heap_limits(void) {
     static const char source[] =
         "list_failed = False\n"
@@ -3429,6 +3505,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "operator_numeric") == 0) {
         int return_value_19 = __test_operator_numeric_runtime();
         return return_value_19;
+    }
+    if (strcmp(argv[1], "stack_budget") == 0) {
+        int result = __test_stack_budget();
+        return result;
     }
     if (strcmp(argv[1], "container_heap_limits") == 0) {
         int return_value_20 = __test_container_heap_limits();

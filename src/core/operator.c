@@ -277,6 +277,14 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
 static size_t __tinypy_operator_trim_digits(const uint16_t *digits, size_t count);
 
 static void __tinypy_operator_long_multiply_schoolbook(uint16_t *output, size_t output_capacity, const uint16_t *left, size_t left_count, const uint16_t *right, size_t right_count) {
+    if (left_count > right_count) {
+        const uint16_t *digits = left;
+        size_t count = left_count;
+        left = right;
+        left_count = right_count;
+        right = digits;
+        right_count = count;
+    }
     size_t left_index;
 
     for (left_index = 0U; left_index < left_count; ++left_index) {
@@ -1383,7 +1391,7 @@ tinypy_value_t *tinypy_invert(tinypy_value_t *value, tinypy_error_t **out_error)
         return return_value_2;
     }
     if (kind == TINYPY_VALUE_LONG) {
-        tinypy_value_t *negative = tinypy_negative(value, out_error);
+        tinypy_value_t *negative = tinypy_internal_unary_builtin(value, 1, out_error);
         tinypy_value_t *one;
         tinypy_value_t *result;
 
@@ -1391,7 +1399,7 @@ tinypy_value_t *tinypy_invert(tinypy_value_t *value, tinypy_error_t **out_error)
             return NULL;
         }
         one = tinypy_integer_from_i64(vm, 1);
-        result = tinypy_subtract(negative, one, out_error);
+        result = tinypy_internal_operator_builtin(negative, one, 1, out_error);
         TINYPY_DECREF(one);
         TINYPY_DECREF(negative);
         return result;
@@ -1459,9 +1467,8 @@ static tinypy_value_t *__tinypy_operator_coerce_binary(tinypy_value_t *left, tin
         TINYPY_DECREF(coerced);
         return NULL;
     }
-    if (vm->evaluation_depth >= vm->recursion_limit) {
+    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded after coercion", out_error) == 0) {
         TINYPY_DECREF(coerced);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "maximum recursion depth exceeded after coercion", out_error);
         *out_handled = INT32_C(1);
         return NULL;
     }
@@ -1531,6 +1538,18 @@ static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, ti
     }
     if (reverse_first == 0 && try_reflected != 0 && tinypy_internal_object_has_special_override(right, reverse_name, reverse_name_size) != 0) {
         tinypy_value_t *result;
+
+        if (__tinypy_operator_is_number(TINYPY_VALUE_KIND(left)) != 0 && tinypy_internal_object_has_special_override(left, name, name_size) == 0) {
+            *out_handled = INT32_C(1);
+            result = __tinypy_operator_call_special(left, name, name_size, right, out_error);
+            if (result == NULL) {
+                return NULL;
+            }
+            if (result != &vm->not_implemented_object.base) {
+                return result;
+            }
+            TINYPY_DECREF(result);
+        }
 
         *out_handled = INT32_C(1);
         result = __tinypy_operator_call_special(right, reverse_name, reverse_name_size, left, out_error);
@@ -2707,7 +2726,7 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
     TINYPY_INCREF(base);
     while (exponent != 0U) {
         if ((exponent & 1U) != 0U) {
-            tinypy_value_t *multiplied = tinypy_multiply(result, base, out_error);
+            tinypy_value_t *multiplied = tinypy_internal_operator_builtin(result, base, 2, out_error);
 
             TINYPY_DECREF(result);
             if (multiplied == NULL) {
@@ -2718,7 +2737,7 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
         }
         exponent >>= 1U;
         if (exponent != 0U) {
-            tinypy_value_t *squared = tinypy_multiply(base, base, out_error);
+            tinypy_value_t *squared = tinypy_internal_operator_builtin(base, base, 2, out_error);
 
             TINYPY_DECREF(base);
             if (squared == NULL) {
@@ -2797,6 +2816,10 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
     tinypy_bool_t prefer_long;
 
     TINYPY_CLEAR_ERROR(out_error);
+    if (base_kind == TINYPY_VALUE_COMPLEX || exponent_kind == TINYPY_VALUE_COMPLEX) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "complex modulo", out_error);
+        return NULL;
+    }
     if (__tinypy_operator_is_integer(base_kind) == 0 || __tinypy_operator_is_integer(exponent_kind) == 0 || __tinypy_operator_is_integer(modulus_kind) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "pow() 3rd argument requires integer operands", out_error);
         return NULL;
@@ -2820,7 +2843,7 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
     }
     result = prefer_long != 0 ? tinypy_long_from_i64(vm, INT64_C(1)) : tinypy_integer_from_i64(vm, INT64_C(1));
     {
-        tinypy_value_t *reduced = tinypy_remainder(result, modulus_value, out_error);
+        tinypy_value_t *reduced = tinypy_internal_operator_builtin(result, modulus_value, 6, out_error);
 
         TINYPY_DECREF(result);
         if (reduced == NULL) {
@@ -2828,7 +2851,7 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
         }
         result = reduced;
     }
-    base = tinypy_remainder(base_value, modulus_value, out_error);
+    base = tinypy_internal_operator_builtin(base_value, modulus_value, 6, out_error);
     if (base == NULL) {
         TINYPY_DECREF(result);
         return NULL;
@@ -2849,7 +2872,7 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
             tinypy_value_t *square_reduced;
 
             if ((digit & (UINT16_C(1) << bit_index)) != 0U) {
-                tinypy_value_t *multiplied = tinypy_multiply(result, base, out_error);
+                tinypy_value_t *multiplied = tinypy_internal_operator_builtin(result, base, 2, out_error);
                 tinypy_value_t *reduced;
 
                 if (multiplied == NULL) {
@@ -2857,7 +2880,7 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
                     TINYPY_DECREF(result);
                     return NULL;
                 }
-                reduced = tinypy_remainder(multiplied, modulus_value, out_error);
+                reduced = tinypy_internal_operator_builtin(multiplied, modulus_value, 6, out_error);
                 TINYPY_DECREF(multiplied);
                 if (reduced == NULL) {
                     TINYPY_DECREF(base);
@@ -2870,13 +2893,13 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
             if (digit_index + 1U == exponent.count && bit_index + 1U == bits_in_digit) {
                 break;
             }
-            squared = tinypy_multiply(base, base, out_error);
+            squared = tinypy_internal_operator_builtin(base, base, 2, out_error);
             if (squared == NULL) {
                 TINYPY_DECREF(base);
                 TINYPY_DECREF(result);
                 return NULL;
             }
-            square_reduced = tinypy_remainder(squared, modulus_value, out_error);
+            square_reduced = tinypy_internal_operator_builtin(squared, modulus_value, 6, out_error);
             TINYPY_DECREF(squared);
             if (square_reduced == NULL) {
                 TINYPY_DECREF(base);

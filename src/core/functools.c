@@ -195,16 +195,21 @@ static tinypy_value_t *__tinypy_partial_setstate_method(tinypy_value_t *function
     if (TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_NONE) {
         TINYPY_INCREF(dict);
     }
-    TINYPY_DECREF(partial->callable);
-    TINYPY_DECREF(partial->args);
-    TINYPY_DECREF(partial->keywords);
-    if (partial->dict != NULL) {
-        TINYPY_DECREF(partial->dict);
-    }
+    tinypy_value_t *old_callable = partial->callable;
+    tinypy_value_t *old_args = partial->args;
+    tinypy_value_t *old_keywords = partial->keywords;
+    tinypy_value_t *old_dict = partial->dict;
+
     partial->callable = callable;
     partial->args = stored_args;
     partial->keywords = keywords;
     partial->dict = TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_NONE ? dict : NULL;
+    TINYPY_DECREF(old_callable);
+    TINYPY_DECREF(old_args);
+    TINYPY_DECREF(old_keywords);
+    if (old_dict != NULL) {
+        TINYPY_DECREF(old_dict);
+    }
     if (owned_keywords != NULL) {
         TINYPY_DECREF(owned_keywords);
     }

@@ -299,8 +299,8 @@ tinypy_value_t *tinypy_internal_code_create(tinypy_type_t *type, tinypy_value_t 
     if (__tinypy_code_integer(vm, TINYPY_TUPLE_GET(args, 10U), &integers[4], out_error) == 0) {
         return NULL;
     }
-    if (integers[0] < 0 || integers[1] < 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code() argcount and nlocals must not be negative", out_error);
+    if (integers[0] < 0 || integers[1] < 0 || integers[2] < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code() argcount, nlocals and stacksize must not be negative", out_error);
         return NULL;
     }
     if (TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 4U)) != TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 5U)) != TINYPY_VALUE_TUPLE || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 6U)) != TINYPY_VALUE_TUPLE || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 7U)) != TINYPY_VALUE_TUPLE || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 8U)) != TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 9U)) != TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 11U)) != TINYPY_VALUE_STRING) {

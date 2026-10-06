@@ -11,6 +11,19 @@ typedef struct tinypy_dict_lookup_t {
     size_t index;
     tinypy_bool_t found;
 } tinypy_dict_lookup_t;
+/* Code caches borrow values; VM-wide generations prevent dictionary address reuse
+   or content swaps from making an old borrowed value look current. */
+static void __tinypy_internal_dict_modified(tinypy_value_t *dict) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
+
+    TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
+    vm->dict_cache_epoch += UINT64_C(1);
+    if (vm->dict_cache_epoch == 0U) {
+        vm->dict_cache_exhausted = TINYPY_TRUE;
+    }
+    TINYPY_DICT_OBJECT(dict)->cache_version = vm->dict_cache_epoch;
+}
+//////////////////////////////////////////////////////////////////////////
 static inline size_t __tinypy_internal_dict_table_size(size_t capacity) {
     return capacity * sizeof(tinypy_dict_entry_t);
 }
@@ -136,7 +149,8 @@ restart:
             if (compared == 0) {
                 return TINYPY_FALSE;
             }
-            if (TINYPY_DICT_OBJECT(dict)->table != entries || entry->key != stored_key) {
+            if (TINYPY_DICT_OBJECT(dict)->table != entries || entry->key != stored_key
+                || (first_dummy != SIZE_MAX && TINYPY_DICT_ENTRY_IS_DUMMY(&entries[first_dummy]) == 0)) {
                 goto restart;
             }
             if (equal != 0) {
@@ -396,9 +410,38 @@ void tinypy_internal_dict_destroy(tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_dict_initialize_empty(tinypy_value_t *dict) {
+    __tinypy_internal_dict_modified(dict);
+    TINYPY_DICT_OBJECT(dict)->mutation_version = UINT64_C(0);
     TINYPY_DICT_OBJECT(dict)->table = TINYPY_DICT_OBJECT(dict)->small_table;
     TINYPY_DICT_OBJECT(dict)->popitem_finger = 0U;
     TINYPY_DICT_OBJECT(dict)->mask = TINYPY_DICT_MIN_SIZE - 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_dict_copy(tinypy_value_t *source, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(source);
+    tinypy_value_t *result = tinypy_dict_new(vm);
+    size_t used = TINYPY_DICT_SIZE(source);
+
+    if (tinypy_internal_dict_reserve_checked(vm, result, used, out_error) == 0) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    tinypy_dict_entry_t *entries = TINYPY_DICT_OBJECT(result)->table;
+    size_t capacity = TINYPY_DICT_CAPACITY(result);
+    for (size_t index = 0U; index <= TINYPY_DICT_OBJECT(source)->mask; ++index) {
+        tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(source)->table[index];
+        if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
+            TINYPY_INCREF(entry->key);
+            TINYPY_INCREF(entry->value);
+            __tinypy_internal_dict_insert_clean(entries, capacity, entry->hash, entry->key, entry->value);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+            __tinypy_internal_cycle_diagnostics_dict_set(vm, result, entry->key, entry->value, 1);
+#endif
+        }
+    }
+    TINYPY_DICT_OBJECT(result)->used = used;
+    TINYPY_DICT_OBJECT(result)->fill = used;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *right) {
@@ -412,9 +455,6 @@ void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *ri
     size_t used = left_dict->used;
     size_t mask = left_dict->mask;
     tinypy_dict_entry_t *table = left_dict->table;
-    uint64_t mutation_version = left_dict->mutation_version;
-    tinypy_bool_t type_dictionary = left_dict->type_dictionary;
-    tinypy_type_t *type_owner = left_dict->type_owner;
 
     if (left_small != 0) {
         (void)memcpy(left_small_table, left_dict->small_table, sizeof(left_small_table));
@@ -425,9 +465,6 @@ void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *ri
     left_dict->fill = right_dict->fill;
     left_dict->used = right_dict->used;
     left_dict->mask = right_dict->mask;
-    left_dict->mutation_version = right_dict->mutation_version;
-    left_dict->type_dictionary = right_dict->type_dictionary;
-    left_dict->type_owner = right_dict->type_owner;
     if (right_small != 0) {
         (void)memcpy(left_dict->small_table, right_small_table, sizeof(right_small_table));
         left_dict->table = left_dict->small_table;
@@ -438,15 +475,20 @@ void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *ri
     right_dict->fill = fill;
     right_dict->used = used;
     right_dict->mask = mask;
-    right_dict->mutation_version = mutation_version;
-    right_dict->type_dictionary = type_dictionary;
-    right_dict->type_owner = type_owner;
     if (left_small != 0) {
         (void)memcpy(right_dict->small_table, left_small_table, sizeof(left_small_table));
         right_dict->table = right_dict->small_table;
     }
     else {
         right_dict->table = table;
+    }
+    __tinypy_internal_dict_modified(left);
+    __tinypy_internal_dict_modified(right);
+    if (left_dict->type_dictionary != 0) {
+        tinypy_internal_type_modified(left_dict->type_owner);
+    }
+    if (right_dict->type_dictionary != 0) {
+        tinypy_internal_type_modified(right_dict->type_owner);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -562,7 +604,11 @@ tinypy_value_t *tinypy_internal_dict_get_index_hint(const tinypy_vm_t *vm, const
     }
     const tinypy_dict_entry_t *entry = &dict_object->table[index];
     tinypy_bool_t equal;
-    if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry) || __tinypy_internal_dict_keys_equal(vm, entry->key, key, &equal, NULL) == 0 || equal == 0) {
+    /* The hint is only a fast path when comparison cannot call Python. */
+    if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) == 0
+        || (entry->key != key && (entry->key->type != key->type
+            || (key->type != &vm->types[TINYPY_VALUE_STRING] && key->type != &vm->types[TINYPY_VALUE_UNICODE])))
+        || __tinypy_internal_dict_keys_equal(vm, entry->key, key, &equal, NULL) == 0 || equal == 0) {
         return NULL;
     }
     return entry->value;
@@ -613,16 +659,16 @@ tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_valu
     if (__tinypy_internal_dict_lookup(vm, dict, key, hash, &lookup, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
-    }
 
     if (lookup.found != 0) {
         TINYPY_INCREF(value);
         tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
         tinypy_value_t *previous = entry->value;
         entry->value = value;
-        TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
+        if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
+            tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
+        }
+        __tinypy_internal_dict_modified(dict);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_dict_set(vm, dict, entry->key, value, 0);
 #endif
@@ -654,7 +700,10 @@ tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_valu
     entry->key = key;
     entry->value = value;
     TINYPY_DICT_OBJECT(dict)->used += 1U;
-    TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
+    if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
+        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
+    }
+    __tinypy_internal_dict_modified(dict);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_dict_set(vm, dict, entry->key, value, 1);
 #endif
@@ -683,8 +732,12 @@ static tinypy_bool_t __tinypy_internal_dict_set_pair(tinypy_value_t *target, tin
         }
         tinypy_value_t *key = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(pair, 0U) : TINYPY_LIST_GET(pair, 0U);
         tinypy_value_t *value = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(pair, 1U) : TINYPY_LIST_GET(pair, 1U);
-        tinypy_bool_t return_value_1 = tinypy_internal_dict_set_checked(vm, target, key, value, out_error);
-        return return_value_1;
+        TINYPY_INCREF(key);
+        TINYPY_INCREF(value);
+        tinypy_bool_t inserted = tinypy_internal_dict_set_checked(vm, target, key, value, out_error);
+        TINYPY_DECREF(value);
+        TINYPY_DECREF(key);
+        return inserted;
     }
 
     tinypy_value_t *iterator = tinypy_iter(pair, out_error);
@@ -909,17 +962,17 @@ tinypy_bool_t tinypy_internal_dict_delete_index(tinypy_vm_t *vm, tinypy_value_t 
     if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
         return TINYPY_FALSE;
     }
-    if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
-    }
     owned_key = entry->key;
     owned_value = entry->value;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_dict_delete(vm, dict, entry->key);
 #endif
     TINYPY_DICT_ENTRY_MARK_DUMMY(entry, vm);
+    if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
+        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
+    }
     TINYPY_DICT_OBJECT(dict)->used -= 1U;
-    TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
+    __tinypy_internal_dict_modified(dict);
     if (out_key != NULL) {
         *out_key = owned_key;
     }
@@ -955,9 +1008,6 @@ void tinypy_dict_clear(tinypy_value_t *dict) {
     if (TINYPY_DICT_OBJECT(dict)->used == 0U) {
         return;
     }
-    if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
-    }
 
     entries = TINYPY_DICT_OBJECT(dict)->table;
     capacity = TINYPY_DICT_CAPACITY(dict);
@@ -978,7 +1028,10 @@ void tinypy_dict_clear(tinypy_value_t *dict) {
     TINYPY_DICT_OBJECT(dict)->mask = TINYPY_DICT_MIN_SIZE - 1U;
     TINYPY_DICT_OBJECT(dict)->used = 0U;
     TINYPY_DICT_OBJECT(dict)->fill = 0U;
-    TINYPY_DICT_OBJECT(dict)->mutation_version += UINT64_C(1);
+    __tinypy_internal_dict_modified(dict);
+    if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
+        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
+    }
     iterator = release_entries;
     iterator_end = release_entries + capacity;
     for (; iterator != iterator_end; ++iterator) {

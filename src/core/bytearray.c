@@ -197,12 +197,13 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_bytearray_index(tinypy_vm_t *vm, tinypy_value_t *key, size_t size, size_t *out_index, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_bytearray_index(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_value_t *value, size_t *out_index, tinypy_error_t **out_error) {
     int64_t index;
 
-    if (tinypy_internal_index_as_i64(key, &index, TINYPY_FALSE, out_error) == 0) {
+    if (tinypy_internal_index_as_i64(key, &index, TINYPY_TRUE, out_error) == 0) {
         return TINYPY_FALSE;
     }
+    size_t size = TINYPY_SIZED_SIZE(value);
     if (index < 0) {
         uint64_t distance = (uint64_t)(-(index + INT64_C(1))) + UINT64_C(1);
 
@@ -349,6 +350,12 @@ void tinypy_internal_bytearray_destroy(tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_bytearray_swap_contents(tinypy_value_t *left, tinypy_value_t *right) {
+    if (TINYPY_BYTEARRAY_OBJECT(left)->exports != 0U) {
+        if (TINYPY_SIZED_SIZE(left) != 0U) {
+            (void)memcpy(TINYPY_BYTEARRAY_OBJECT(left)->bytes, TINYPY_BYTEARRAY_OBJECT(right)->bytes, TINYPY_SIZED_SIZE(left));
+        }
+        return;
+    }
     size_t size = TINYPY_SIZED_SIZE(left);
     size_t capacity = TINYPY_BYTEARRAY_OBJECT(left)->capacity;
     uint8_t *bytes = TINYPY_BYTEARRAY_OBJECT(left)->bytes;
@@ -398,6 +405,11 @@ tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_val
         if (encoded == NULL) {
             return NULL;
         }
+        if (TINYPY_VALUE_KIND(encoded) != TINYPY_VALUE_STRING) {
+            TINYPY_DECREF(encoded);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "encoder did not return a string", out_error);
+            return NULL;
+        }
         tinypy_value_t *result = __tinypy_bytearray_from_bytes_checked(vm, TINYPY_TEXT_BYTES(encoded), TINYPY_TEXT_BYTE_SIZE(encoded), out_error);
         TINYPY_DECREF(encoded);
         return result;
@@ -444,7 +456,6 @@ ptrdiff_t tinypy_internal_bytearray_length(tinypy_value_t *value, tinypy_error_t
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_bytearray_get_item(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    size_t size = TINYPY_SIZED_SIZE(value);
     size_t index;
 
     if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE) {
@@ -452,7 +463,8 @@ tinypy_value_t *tinypy_internal_bytearray_get_item(tinypy_value_t *value, tinypy
         tinypy_value_t *result;
         size_t selected_index;
 
-        if (tinypy_internal_slice_indices(key, size, &slice, out_error) == 0) {
+        if (tinypy_internal_slice_unpack(key, &slice, out_error) == 0
+            || tinypy_internal_slice_adjust_indices(vm, TINYPY_SIZED_SIZE(value), &slice, out_error) == 0) {
             return NULL;
         }
         if (slice.length == 0U) {
@@ -472,7 +484,7 @@ tinypy_value_t *tinypy_internal_bytearray_get_item(tinypy_value_t *value, tinypy
         }
         return result;
     }
-    if (__tinypy_bytearray_index(vm, key, size, &index, out_error) == 0) {
+    if (__tinypy_bytearray_index(vm, key, value, &index, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_3 = tinypy_integer_from_i64(vm, (int64_t)TINYPY_BYTEARRAY_OBJECT(value)->bytes[index]);
@@ -490,11 +502,18 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
         size_t replacement_size = 0U;
         size_t deletion_index;
 
-        if (tinypy_internal_slice_indices(key, size, &slice, out_error) == 0) {
+        if (tinypy_internal_slice_unpack(key, &slice, out_error) == 0) {
             return TINYPY_FALSE;
         }
         if (item != NULL) {
             if (__tinypy_bytearray_collect(vm, item, &replacement, &replacement_size, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+            size = TINYPY_SIZED_SIZE(value);
+            if (tinypy_internal_slice_adjust_indices(vm, size, &slice, out_error) == 0) {
+                if (replacement != NULL) {
+                    tinypy_internal_vm_deallocate(vm, replacement, replacement_size);
+                }
                 return TINYPY_FALSE;
             }
             if (slice.step != 1 && replacement_size == 0U) {
@@ -536,6 +555,12 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
                 return TINYPY_TRUE;
             }
         }
+        if (item == NULL) {
+            size = TINYPY_SIZED_SIZE(value);
+            if (tinypy_internal_slice_adjust_indices(vm, size, &slice, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+        }
         if (slice.length != 0U && tinypy_internal_bytearray_resize_allowed(value, size - slice.length, out_error) == 0) {
             return TINYPY_FALSE;
         }
@@ -555,18 +580,22 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
         }
         return TINYPY_TRUE;
     }
-    if (__tinypy_bytearray_index(vm, key, size, &index, out_error) == 0) {
+    uint8_t byte = 0U;
+    if (item != NULL && __tinypy_bytearray_item(vm, item, &byte, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (__tinypy_bytearray_index(vm, key, value, &index, out_error) == 0) {
         return TINYPY_FALSE;
     }
     if (item == NULL) {
-        if (tinypy_internal_bytearray_resize_allowed(value, size - 1U, out_error) == 0) {
+        if (tinypy_internal_bytearray_resize_allowed(value, TINYPY_SIZED_SIZE(value) - 1U, out_error) == 0) {
             return TINYPY_FALSE;
         }
         __tinypy_bytearray_delete_index(value, index);
         return TINYPY_TRUE;
     }
-    tinypy_bool_t return_value_1 = __tinypy_bytearray_item(vm, item, &TINYPY_BYTEARRAY_OBJECT(value)->bytes[index], out_error);
-    return return_value_1;
+    TINYPY_BYTEARRAY_OBJECT(value)->bytes[index] = byte;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_bytearray_string(tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -755,12 +784,24 @@ static tinypy_value_t *__tinypy_bytearray_inplace_add_method(tinypy_value_t *fun
     if (tinypy_internal_bytearray_resize_allowed(left, left_size + right_size, out_error) == 0) {
         return NULL;
     }
+    uint8_t *snapshot = NULL;
+    if (right_size != 0U) {
+        snapshot = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, right_size, out_error);
+        if (snapshot == NULL) {
+            return NULL;
+        }
+        (void)memcpy(snapshot, right_bytes, right_size);
+    }
     if (__tinypy_bytearray_reserve_checked(left, left_size + right_size, out_error) == 0) {
+        if (snapshot != NULL) {
+            tinypy_internal_vm_deallocate(vm, snapshot, right_size);
+        }
         return NULL;
     }
     uint8_t *left_bytes = TINYPY_BYTEARRAY_OBJECT(left)->bytes;
     if (right_size != 0U) {
-        (void)memcpy(left_bytes + left_size, right_bytes, right_size);
+        (void)memcpy(left_bytes + left_size, snapshot, right_size);
+        tinypy_internal_vm_deallocate(vm, snapshot, right_size);
     }
     TINYPY_SIZED_SIZE(left) = left_size + right_size;
     TINYPY_INCREF(left);
@@ -889,26 +930,6 @@ static tinypy_value_t *__tinypy_bytearray_extend_method(tinypy_value_t *function
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_bytearray_bound(tinypy_value_t *value, size_t size, int64_t fallback, tinypy_bool_t clamp_high, int64_t *out_bound, tinypy_error_t **out_error) {
-    int64_t bound;
-
-    if (value == NULL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
-        *out_bound = fallback;
-        return TINYPY_TRUE;
-    }
-    if (tinypy_internal_index_as_i64(value, &bound, TINYPY_TRUE, out_error) == 0) {
-        return TINYPY_FALSE;
-    }
-    if (bound < 0) {
-        bound = bound < -(int64_t)size ? 0 : bound + (int64_t)size;
-    }
-    if (clamp_high != 0 && (uint64_t)bound > (uint64_t)size) {
-        bound = (int64_t)size;
-    }
-    *out_bound = bound;
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     const uint8_t *needle;
@@ -930,18 +951,35 @@ static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, 
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "substring must support the buffer interface", out_error);
         return NULL;
     }
-    size = TINYPY_SIZED_SIZE(value);
     argument_count = TINYPY_TUPLE_SIZE(args);
     tinypy_value_t *start_value = argument_count >= 3U ? TINYPY_TUPLE_GET(args, 2U) : NULL;
-    if (__tinypy_bytearray_bound(start_value, size, 0, TINYPY_FALSE, &start, out_error) == 0) {
+    stop_value = argument_count >= 4U ? TINYPY_TUPLE_GET(args, 3U) : NULL;
+    start = INT64_C(0);
+    stop = INT64_MAX;
+    if (start_value != NULL && TINYPY_VALUE_KIND(start_value) != TINYPY_VALUE_NONE && tinypy_internal_index_as_i64(start_value, &start, TINYPY_TRUE, out_error) == 0) {
         return NULL;
     }
-    stop_value = argument_count >= 4U ? TINYPY_TUPLE_GET(args, 3U) : NULL;
-    if (__tinypy_bytearray_bound(stop_value, size, (int64_t)size, TINYPY_TRUE, &stop, out_error) == 0) {
+    if (stop_value != NULL && TINYPY_VALUE_KIND(stop_value) != TINYPY_VALUE_NONE && tinypy_internal_index_as_i64(stop_value, &stop, TINYPY_TRUE, out_error) == 0) {
         return NULL;
+    }
+    /* Bounds may run Python code: reacquire both buffers and their lengths. */
+    size = TINYPY_SIZED_SIZE(value);
+    if (tinypy_internal_bytes_view(item, &needle, &needle_size) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "substring must support the buffer interface", out_error);
+        return NULL;
+    }
+    if (start < INT64_C(0)) {
+        start = start < -(int64_t)size ? INT64_C(0) : start + (int64_t)size;
+    }
+    if (stop < INT64_C(0)) {
+        stop = stop < -(int64_t)size ? INT64_C(0) : stop + (int64_t)size;
+    }
+    if ((uint64_t)stop > (uint64_t)size) {
+        stop = (int64_t)size;
     }
     if (start <= stop && needle_size <= (size_t)(stop - start)) {
-        found = tinypy_internal_find_bytes(TINYPY_BYTEARRAY_OBJECT(value)->bytes + (size_t)start, (size_t)(stop - start), needle, needle_size, TINYPY_FALSE);
+        const uint8_t *haystack = TINYPY_BYTEARRAY_OBJECT(value)->bytes;
+        found = tinypy_internal_find_bytes(haystack != NULL ? haystack + (size_t)start : NULL, (size_t)(stop - start), needle, needle_size, TINYPY_FALSE);
         if (found >= 0) {
             found += (ptrdiff_t)start;
         }

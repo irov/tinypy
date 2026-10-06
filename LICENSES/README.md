@@ -17,3 +17,6 @@ original attribution is intentionally retained.
 
 The applicable Python Software Foundation license is reproduced in
 `PSF-2.0.txt` in this directory.
+
+Unmodified CPython 2.7.18 test modules under `tests/upstream/vendor/cpython`
+come from the same snapshot and are covered by that license.

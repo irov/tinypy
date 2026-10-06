@@ -228,7 +228,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     tinypy_value_t *result;
     tinypy_error_t *error = NULL;
 
-    if (value->type->has_finalizer == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_old_instance_has_special(value, "__del__", 7U) == 0)) {
+    if (value->type->has_finalizer == 0 && value->type->has_classic_mro == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_old_instance_has_special(value, "__del__", 7U) == 0)) {
         return TINYPY_FALSE;
     }
     value->ref = 1;
@@ -273,6 +273,43 @@ static tinypy_bool_t __tinypy_internal_value_finalize_generator(tinypy_value_t *
     return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_value_release_contents(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_type_t *type = value->type;
+
+    tinypy_bool_t cache_native = type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION]
+        && TINYPY_NATIVE_FUNCTION_OBJECT(value)->self != NULL
+        && TINYPY_NATIVE_FUNCTION_OBJECT(value)->finalize == NULL;
+    vm->release_depth += 1U;
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE) {
+        tinypy_internal_type_lookup_cache_invalidate(vm);
+        tinypy_internal_type_detach((tinypy_type_t *)value);
+    }
+    if (type != NULL && type->release_references != NULL) {
+        type->release_references(value, __tinypy_internal_release_visit, NULL);
+    }
+    if (type == &vm->types[TINYPY_VALUE_FRAME] && vm->state == TINYPY_VM_STATE_LIVE && vm->frame_free_count < TINYPY_FRAME_FREE_LIST_MAX) {
+        tinypy_internal_frame_free_list_push(vm, value);
+        vm->release_depth -= 1U;
+        return;
+    }
+    if (type == &vm->types[TINYPY_VALUE_METHOD] && vm->state == TINYPY_VM_STATE_LIVE && vm->method_free_count < TINYPY_METHOD_FREE_LIST_MAX) {
+        tinypy_internal_method_free_list_push(vm, value);
+        vm->release_depth -= 1U;
+        return;
+    }
+    if (cache_native != 0 && vm->state == TINYPY_VM_STATE_LIVE && vm->native_method_free_count < TINYPY_NATIVE_METHOD_FREE_LIST_MAX) {
+        tinypy_internal_native_method_free_list_push(vm, value);
+        vm->release_depth -= 1U;
+        return;
+    }
+    tinypy_internal_value_destroy(value);
+    if (type != NULL) {
+        __tinypy_internal_release_visit(&type->base.base, NULL);
+    }
+    vm->release_depth -= 1U;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = value->type;
@@ -291,31 +328,33 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     if (type->weakref_offset != 0U) {
         tinypy_internal_weakref_clear(value);
     }
-    if (type->has_finalizer != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+    if (type->has_finalizer != 0 || type->has_classic_mro != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
         if (__tinypy_internal_value_finalize(value) != 0) {
             return;
         }
     }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE) {
-        tinypy_internal_type_lookup_cache_invalidate(vm);
-        tinypy_internal_type_detach((tinypy_type_t *)value);
+    /* Finalizers may replace __class__ and create new weak references. */
+    type = value->type;
+    if (type->weakref_offset != 0U) {
+        tinypy_internal_weakref_clear(value);
     }
-    if (type != NULL && type->release_references != NULL) {
-        type->release_references(value, __tinypy_internal_release_visit, NULL);
-    }
-    if (type == &vm->types[TINYPY_VALUE_FRAME] && vm->state == TINYPY_VM_STATE_LIVE && vm->frame_free_count < TINYPY_FRAME_FREE_LIST_MAX) {
-        tinypy_internal_frame_free_list_push(vm, value);
+    /* Only already-finalized zero-ref objects are deferred. Their ref word
+       temporarily links the queue; no registry or extra allocation is needed. */
+    if (vm->release_depth >= 32U) {
+        value->ref = (tinypy_ref_t)(uintptr_t)vm->pending_releases;
+        vm->pending_releases = value;
         return;
     }
-    if (type == &vm->types[TINYPY_VALUE_METHOD] && vm->state == TINYPY_VM_STATE_LIVE && vm->method_free_count < TINYPY_METHOD_FREE_LIST_MAX) {
-        tinypy_internal_method_free_list_push(vm, value);
-        return;
-    }
-    tinypy_internal_value_destroy(value);
-    if (type != NULL) {
-        __tinypy_internal_release_visit(&type->base.base, NULL);
+    __tinypy_internal_value_release_contents(value);
+    while (vm->release_depth == 0U && vm->pending_releases != NULL) {
+        tinypy_value_t *pending = vm->pending_releases;
+
+        vm->pending_releases = (tinypy_value_t *)(uintptr_t)pending->ref;
+        pending->ref = 0;
+        __tinypy_internal_value_release_contents(pending);
     }
 }
+
 //////////////////////////////////////////////////////////////////////////
 void tinypy_release(tinypy_value_t *value) {
     TINYPY_DECREF(value);

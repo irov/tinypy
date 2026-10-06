@@ -246,8 +246,17 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
             tinypy_value_t *exception_args;
 
             if (count >= 3U) {
-                tinypy_value_t *const *tuple_items = tinypy_internal_tuple_items(args);
-                exception_args = tinypy_tuple_from_items(vm, &tuple_items[2], 1U);
+                tinypy_value_t *argument = TINYPY_TUPLE_GET(args, 2U);
+                if (TINYPY_VALUE_KIND(argument) == TINYPY_VALUE_TUPLE) {
+                    exception_args = argument;
+                    TINYPY_INCREF(exception_args);
+                }
+                else if (TINYPY_VALUE_KIND(argument) == TINYPY_VALUE_NONE) {
+                    exception_args = tinypy_tuple_from_items(vm, NULL, 0U);
+                }
+                else {
+                    exception_args = tinypy_tuple_from_items(vm, &argument, 1U);
+                }
             }
             else {
                 exception_args = tinypy_tuple_from_items(vm, NULL, 0U);
@@ -269,9 +278,17 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
             TINYPY_INCREF(exception);
         }
         else {
-            tinypy_value_t *exception_args = item != NULL && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE
-                                                 ? tinypy_tuple_from_items(vm, &item, 1U)
-                                                 : tinypy_tuple_from_items(vm, NULL, 0U);
+            tinypy_value_t *exception_args;
+
+            if (item != NULL && TINYPY_VALUE_KIND(item) == TINYPY_VALUE_TUPLE) {
+                exception_args = item;
+                TINYPY_INCREF(exception_args);
+            }
+            else {
+                exception_args = item != NULL && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE
+                                     ? tinypy_tuple_from_items(vm, &item, 1U)
+                                     : tinypy_tuple_from_items(vm, NULL, 0U);
+            }
 
             exception = tinypy_call(exception_argument, exception_args, NULL, out_error);
             TINYPY_DECREF(exception_args);

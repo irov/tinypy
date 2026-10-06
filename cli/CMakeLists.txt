@@ -86,4 +86,29 @@ if(BUILD_TESTING)
     add_test(NAME cli_stress_compiler COMMAND tinypy_console --stats ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_stress.py compiler 10)
     add_test(NAME cli_stress_churn COMMAND tinypy_console --stats ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_stress.py churn 10)
     add_test(NAME cli_stress_memory COMMAND tinypy_console --stats ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_stress.py memory 1000)
+
+    # Python 3 coordinates processes; the Python 2.7 test programs run in tinypy.
+    find_package(Python3 3.7 COMPONENTS Interpreter REQUIRED)
+    set(tinypy_upstream_runner ${PROJECT_SOURCE_DIR}/tests/upstream/run_tests.py)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/tests/upstream/manifest.json)
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} ${tinypy_upstream_runner} --list-modules
+        RESULT_VARIABLE tinypy_upstream_result
+        OUTPUT_VARIABLE tinypy_upstream_modules
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT tinypy_upstream_result EQUAL 0)
+        message(FATAL_ERROR "Unable to read the upstream test manifest")
+    endif()
+    string(REPLACE "\n" ";" tinypy_upstream_modules "${tinypy_upstream_modules}")
+    foreach(module IN LISTS tinypy_upstream_modules)
+        string(REPLACE "." "_" test_suffix "${module}")
+        add_test(
+            NAME upstream_${test_suffix}
+            COMMAND ${Python3_EXECUTABLE} ${tinypy_upstream_runner} --tinypy $<TARGET_FILE:tinypy_console> --module ${module}
+        )
+        set_tests_properties(upstream_${test_suffix} PROPERTIES LABELS "upstream" TIMEOUT 120)
+    endforeach()
+    add_test(NAME upstream_adapter_assertions COMMAND tinypy_console --stats ${PROJECT_SOURCE_DIR}/tests/upstream/check_adapter.py)
+    set_tests_properties(upstream_adapter_assertions PROPERTIES LABELS "upstream")
 endif()

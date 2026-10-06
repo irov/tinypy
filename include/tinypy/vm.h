@@ -55,6 +55,12 @@ typedef struct tinypy_vm_config_t {
     uint64_t feature_flags;
     int32_t optimize_level;
     tinypy_bool_t cycle_diagnostics;
+
+    /* Native stack budget for recursive evaluation, measured from its entry.
+     * Zero selects 1 MiB. Set below the available thread stack, with room
+     * for host callbacks and exception unwinding. GCC, Clang and MSVC support
+     * this guard; other compilers retain the Python recursion-depth guard. */
+    size_t max_stack_bytes;
 } tinypy_vm_config_t;
 
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config);

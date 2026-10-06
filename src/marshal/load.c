@@ -78,46 +78,69 @@ static tinypy_allocator_t __tinypy_marshal_vm_allocator(tinypy_vm_t *vm) {
     return allocator;
 }
 //////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_marshal_cache_index(const tinypy_marshal_object_t *source, size_t capacity) {
+    uintptr_t hash = (uintptr_t)source >> 4U;
+    hash ^= hash >> 16U;
+    return (size_t)hash & (capacity - 1U);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_marshal_cache_find(const tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source) {
-    size_t index;
-
-    for (index = 0U; index < materializer->cache_size; ++index) {
+    if (materializer->cache_capacity == 0U) {
+        return NULL;
+    }
+    size_t index = __tinypy_marshal_cache_index(source, materializer->cache_capacity);
+    while (materializer->cache[index].source != NULL) {
         if (materializer->cache[index].source == source) {
             return materializer->cache[index].value;
         }
+        index = (index + 1U) & (materializer->cache_capacity - 1U);
     }
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_marshal_cache_append(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t *value) {
-    size_t old_size;
-    size_t new_capacity;
-    size_t new_size;
-
-    if (materializer->cache_size == materializer->cache_capacity) {
-        old_size = materializer->cache_capacity * sizeof(*materializer->cache);
-        new_capacity = materializer->cache_capacity == 0U ? 16U : materializer->cache_capacity * 2U;
-        new_size = new_capacity * sizeof(*materializer->cache);
-        if (materializer->cache == NULL) {
-            materializer->cache = (tinypy_marshal_runtime_cache_entry_t *)tinypy_internal_vm_allocate(materializer->vm, new_size);
+static tinypy_bool_t __tinypy_marshal_cache_append(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t *value) {
+    if (materializer->cache_size >= materializer->cache_capacity / 2U) {
+        if (materializer->cache_capacity > SIZE_MAX / sizeof(*materializer->cache) / 2U) {
+            return TINYPY_FALSE;
         }
-        else {
-            materializer->cache = (tinypy_marshal_runtime_cache_entry_t *)tinypy_internal_vm_reallocate(materializer->vm, materializer->cache, old_size, new_size);
+        size_t new_capacity = materializer->cache_capacity == 0U ? 16U : materializer->cache_capacity * 2U;
+        size_t new_size = new_capacity * sizeof(*materializer->cache);
+        tinypy_marshal_runtime_cache_entry_t *entries = (tinypy_marshal_runtime_cache_entry_t *)tinypy_internal_vm_allocate(materializer->vm, new_size);
+        (void)memset(entries, 0, new_size);
+        for (size_t index = 0U; index < materializer->cache_capacity; ++index) {
+            tinypy_marshal_runtime_cache_entry_t *entry = &materializer->cache[index];
+            if (entry->source != NULL) {
+                size_t position = __tinypy_marshal_cache_index(entry->source, new_capacity);
+                while (entries[position].source != NULL) {
+                    position = (position + 1U) & (new_capacity - 1U);
+                }
+                entries[position] = *entry;
+            }
         }
+        if (materializer->cache != NULL) {
+            tinypy_internal_vm_deallocate(materializer->vm, materializer->cache, materializer->cache_capacity * sizeof(*materializer->cache));
+        }
+        materializer->cache = entries;
         materializer->cache_capacity = new_capacity;
     }
-
-    materializer->cache[materializer->cache_size].source = source;
-    materializer->cache[materializer->cache_size].value = value;
+    size_t index = __tinypy_marshal_cache_index(source, materializer->cache_capacity);
+    while (materializer->cache[index].source != NULL) {
+        index = (index + 1U) & (materializer->cache_capacity - 1U);
+    }
+    materializer->cache[index].source = source;
+    materializer->cache[index].value = value;
     materializer->cache_size += 1U;
     TINYPY_INCREF(value);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_marshal_cache_destroy(tinypy_marshal_materializer_t *materializer) {
     size_t index;
 
-    for (index = 0U; index < materializer->cache_size; ++index) {
-        TINYPY_DECREF(materializer->cache[index].value);
+    for (index = 0U; index < materializer->cache_capacity; ++index) {
+        if (materializer->cache[index].value != NULL) {
+            TINYPY_DECREF(materializer->cache[index].value);
+        }
     }
     if (materializer->cache != NULL) {
         tinypy_internal_vm_deallocate(materializer->vm, materializer->cache, materializer->cache_capacity * sizeof(*materializer->cache));
@@ -202,7 +225,7 @@ static tinypy_marshal_result_e __tinypy_marshal_validate_code_fields(tinypy_mars
             return TINYPY_MARSHAL_INVALID_CODE;
         }
     }
-    if (source_code->argcount < 0 || source_code->nlocals < 0 || (size_t)source_code->nlocals != TINYPY_TUPLE_SIZE(fields[3])) {
+    if (source_code->argcount < 0 || source_code->nlocals < 0 || source_code->stacksize < 0 || (size_t)source_code->nlocals != TINYPY_TUPLE_SIZE(fields[3])) {
         __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_CODE, wire_type, "code object nlocals does not match its variable names");
         return TINYPY_MARSHAL_INVALID_CODE;
     }
@@ -313,7 +336,11 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         *out_value = tinypy_string_from_bytes(materializer->vm, bytes, size);
         if (interned != 0) {
             tinypy_internal_string_set_interned(*out_value, 1);
-            __tinypy_marshal_cache_append(materializer, source, *out_value);
+            if (__tinypy_marshal_cache_append(materializer, source, *out_value) == 0) {
+                TINYPY_DECREF(*out_value);
+                *out_value = NULL;
+                return TINYPY_MARSHAL_BYTE_LIMIT;
+            }
         }
         else if (size > 1U) {
             tinypy_internal_string_set_interned(*out_value, 0);
