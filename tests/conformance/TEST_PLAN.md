@@ -7,14 +7,16 @@ domain. [coverage.json](coverage.json) assigns the existing fixtures to domains;
 [the coordinator](../run_validation.py) verifies their inventories and runs all
 acceptance layers together.
 
-The tenth-audit inventory contains 36 finite runtime matrices with 297,856
+The eleventh-audit inventory contains 40 finite runtime matrices with 337,542
 outcomes per profile. The ninth-pass additions cover metadata/receiver arguments
 (325), numeric arguments and snapshots (995), container arguments and error
 phases (3,756), and function construction/reduction/saved frames (1,026).
 The tenth pass adds buffer arguments (7,456), iterator metadata (5,232),
 native wrappers (1,556) and supported Struct parser/state/cache behavior (5,986).
-The portable inventory contains 45 project-authored modules with 1,409 cases
-and 210 selected vendor cases, totaling 1,619. These are declared coverage
+The eleventh pass adds live-buffer lifetime/character views (7,524), text
+arguments/padding/codecs (26,217), native readiness (913) and weakref protocols
+(5,032). The portable inventory contains 49 project-authored modules with 1,538
+cases and 210 selected vendor cases, totaling 1,748. These are declared coverage
 counts; completed profile acceptance comes from the coordinator's report.
 
 ## Choosing variants
@@ -38,6 +40,9 @@ tests cover callbacks that affect later observations.
 | Generator control | New/paused/finished/running, next/send/throw/close, explicit StopIteration payload, requested exception type, constructor failure, handlers/with/finally and post-failure recovery |
 | Regular expressions | Valid byte/Unicode patterns, empty matches, captures/names, branches/repeats/lookarounds, exact/subclass/legacy-buffer subjects, independent bounds, scanner progress/metadata, negative/zero/positive counts and replacement callbacks |
 | Buffer | Read-only/writable, bytearray/legacy buffer/memoryview where accepted, outstanding export, child view, overlap, offset and size boundaries |
+| Buffer lifetime | Requested versus current bounds, shrink/grow/regrow, nested root ownership, raw versus encoded Unicode view, cached first hash, owner/self repr roles, numeric valid/invalid prefixes before NUL |
+| Native readiness | Isolated cold first write/delete, nonwarming operations, successful/failed first reads, shared type state across instances, safe scalar/nullable direct fields, physical member/getset kind |
+| Weakrefs | Exact/subtype construction, explicit new/init/call, basic ref/proxy reuse, callability changes, callback/list order, supported referent kinds, live/dead lookup, cached empty frozenset, generator callback-before-finally |
 | Compiler | exec/eval/single, optimize 0/1/2, explicit/inherited futures, bytes/Unicode, newline/CRLF, valid syntax and parser/AST/symbol/codegen errors |
 | Compiler folding | Mixed numeric constants, signed zero, widened long, complex and extreme finite float values; byte/Unicode/tuple operations, invalid folds, indexing and shifts, repetition around the 20-item fold threshold, constant type separation and all supported future combinations |
 | Future inheritance | All 32 caller future combinations × 32 explicit combinations × inherit/dont-inherit × exec/eval/single × byte/Unicode source; compare complete code shape and executed value/result types |
@@ -108,6 +113,9 @@ __get__ binding. Verify missing/wrong receiver priority, keyword rejection
 before arity and conversions, and parsed versus unpacked versus wrapper
 messages. Use valid receivers for conversion and mutation callbacks; after
 failure, inspect state and perform an independent successful operation.
+Native C API calls must preserve the same VM exception with an explicit error
+output and with `out_error == NULL`; a receiver fallback must not replace a
+preceding parser error. Exercise arity and keyword failures and then recovery.
 For slice replacement, distinguish failure while obtaining an iterator from
 failure while consuming it, preserving user exception identity where required.
 
@@ -125,6 +133,10 @@ reuse. Compare address/hash invariants within each process. Record cold first
 writes separately from namespace-ready writes: CPython's lazy type readiness
 can change the exact exception class/message, and a warmed product cannot prove
 that cold behavior.
+Schedule nonwarming rows before the first read in a fresh process, then observe
+the shared type transition. Keep safe direct-field checks distinct from ordinary
+attribute lookup. Numeric field descriptors require physical member/getset kind,
+metadata, readonly and wrong-receiver checks as well as returned values.
 
 Iterator metadata products enumerate exact/subtype bytearray/list/tuple/text,
 classic and new-style indexed sequences, missing/raising/wrong-result length
@@ -136,8 +148,24 @@ result of listreverseiterator's direct hint separately.
 Buffer argument products cover bound and unbound methods, keywords/counts,
 readonly versus writable views, legacy slice conversion, bytearray scalar and
 buffer validation order, lazy tuple-prefix validation and post-failure state.
-Physical capacity, seeded hashes and address-bearing representations use stated
-invariants; these rows do not prove physical-layout or representation parity.
+Physical capacity and seeded hashes use stated invariants. Buffer lifetime rows
+compare complete repr grammar and within-process owner/self address roles,
+preserving offset and requested size. Resize a retained bytearray owner below
+and above those bounds; nested views must observe the root without losing their
+requested ranges. Distinguish cached first hash from current bytes, raw Unicode
+code units from encoded character views, implicit versus explicit numeric base,
+and valid/invalid prefixes before an embedded NUL. Parser/conversion errors and
+callback identity remain exact.
+
+Weakref products separate base ref, subtype ref and callable/noncallable proxy
+construction and explicit __new__/__init__/__call__. Test class validation before
+referent arity, keyword rejection phases, cached basics and newest-first callback
+references. Cover supported function/method/generator/set/frozenset lifetimes,
+fresh subtype values and retained exact empty frozensets. A repr callback can
+change the reference state: compare the state reread after lookup and preserve
+the handled exception. Dead-reference dictionary removal performs one lookup;
+KeyError/subclasses alone are suppressed, while other errors propagate and a
+subsequent successful operation confirms recovery.
 
 Struct products stay within the supported d/repeat/prefix formats. Cover module
 cache versus compiled-instance payload, byte subtype identity, Unicode ASCII
@@ -279,6 +307,11 @@ receives one argument in the former case. Test parser validation before registry
 search and callback invocation. For SRE capture results, observe each actual
 subject slice rather than only the returned text. Returned text identity needs
 separate byte/Unicode and exact/subtype cases, including canonical empty Unicode.
+Encoder character-buffer coercion and decoder raw-buffer acquisition have
+different error-parser priorities. Use nullable, subtype, Unicode and NUL errors
+names, builtin handler metadata and exact registry keys that bypass subtype
+hash/equality hooks. Padding checks width before fill, byte versus Unicode fill
+conversion, one character versus one byte, and subtype signed-margin behavior.
 
 For sys output, use event lists to observe softspace reads and writes, writer
 lookup, repr/str and the initial/final newline. A callback can replace stdout or

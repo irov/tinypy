@@ -159,7 +159,11 @@ VM хранит собственные постоянные значения:
 - integers от `-1023` до `1024`;
 - positive float zero;
 - пустую byte string;
-- пустой tuple.
+- пустой tuple;
+- пустой exact `frozenset`, лениво закреплённый после первого Python construction.
+
+Python `frozenset()` и construction из пустого iterable переиспользуют этот
+объект; subtypes и C API `tinypy_frozenset_new` создают отдельные значения.
 
 Они имеют обычный refcount и базовую owned reference самой VM; специального
 immortal refcount sentinel нет.
@@ -181,6 +185,20 @@ Runtime реализует:
 - `type`, metaclasses, C3 MRO, custom `mro()` и `super`;
 - descriptors, properties, class/static methods и `__slots__`;
 - weak references и explicit finalization behavior.
+
+Functions, bound Python methods, generators, set и frozenset поддерживают
+weak references. У генератора weakref callbacks выполняются перед `finally`
+при закрытии во время уничтожения. Basic ref/proxy caches сохраняют порядок
+references и callbacks; изменение callable protocol referent не создаёт второй
+basic proxy. Lookup из `_remove_dead_weakref` выполняется один раз и подавляет
+только `KeyError`, включая subclasses.
+
+Legacy `buffer` хранит запрошенные offset и size, а доступ ограничивает их
+текущей длиной owner. Уменьшение и последующее увеличение bytearray owner не
+теряют исходные bounds; nested views удерживают общий root owner. Первый hash
+кешируется. Raw Unicode buffer содержит native code units; character-buffer
+conversion использует default encoding и отдельно применяет bounds к этим
+байтам, удерживая owner во время codec callbacks.
 
 Type slots возвращают прямой semantic result. Неверный slot input нарушает C
 precondition и имеет undefined behavior. Python exceptions используются только
@@ -295,6 +313,12 @@ type `builtin_function_or_method`; metadata используют стандар�
 descriptors, а их free list учитывает фактический type owner. Bytearray iteration
 использует `bytearray_iterator`; str/unicode subtype iteration сохраняет generic
 `__getitem__` и `__len__` protocols.
+Method-wrapper и method-descriptor сохраняют Python-visible cold/warm metadata
+errors: первое безопасное attribute read отмечает общий type как ready;
+предшествующие set/delete не выполняют этот переход. Eager VM names и
+регистрация namespace не меняются. Numeric real/imag/numerator/denominator
+поля имеют соответствующие C member/getset descriptor kinds, включая readonly
+и wrong-receiver diagnostics.
 Фиксированные codec aliases сравниваются с presets с сохранением нормализации;
 проверки имён, у которых Python 2 учитывает только префикс до NUL, сохраняют
 это поведение.

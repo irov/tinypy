@@ -1,12 +1,14 @@
 # Runtime review closure — 2026-10-08
 
-The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 949
-portable regressions across ten passes and a repeatable four-profile matrix.
-Its tenth-pass inventory has 1,619 selected cases, 36 finite runtime matrices
-with 297,856 outcomes per profile, and 11,586 compiler comparisons per profile
-(46,344 across four). These totals passed aggregate acceptance in all four
-profiles on macOS arm64. The preceding seventh-, eighth- and ninth-pass reports remain
-historical baselines. The future
+The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 1,078
+portable regressions across eleven passes and a repeatable four-profile matrix.
+The eleventh-pass inventory requires 1,748 selected cases, 40 finite runtime
+matrices with 337,542 outcomes per profile, and 11,610 compiler comparisons per
+profile (46,440 across four). All 258 stages passed on macOS arm64 in Debug,
+Release, ASan/UBSan and Release LTO, with independent source reviews and a
+matching post-run source/test/SPEC fingerprint. The tenth-pass run below
+remains a historical aggregate baseline. The preceding seventh-, eighth- and ninth-pass reports also retain
+their historical counts. The future
 variant and acceptance plan is in [TEST_PLAN.md](../conformance/TEST_PLAN.md).
 The explicit CPython pending-C-exception boundary is recorded in the audit.
 The original
@@ -17,8 +19,8 @@ worktree, including the earlier portable-corpus fixes. Its prototypes were
 reviewed individually, not applied as one patch. CPython **2.7.18** is the
 behavioral oracle; Python 3 runs only the process coordinator. All actionable
 implementation items in this review have been addressed. Existing profile
-contracts and evidence limits are identified explicitly below. The remaining cold-start
-metadata observation is identified for the next audit; this statement
+contracts and evidence limits are identified explicitly below. The eleventh pass
+also corrects the cold-start metadata observation from the tenth pass; this statement
 about the supplied review is not a claim of arbitrary-program equivalence.
 
 **Fixed** below means the relevant implementation changed or the correction
@@ -29,7 +31,64 @@ reproduced. The supplied crashing scripts, custom nopool build and crafted
 bytecode/regex programs were not run. A passing sanitizer suite does not
 establish equivalence to that separate historical investigation.
 
-## Tenth-pass follow-up
+## Eleventh-pass follow-up — accepted
+
+Four independently authored modules add 129 portable witnesses: 27
+[buffer lifetime](local/test_buffer_lifetime_audit.py), 34
+[text arguments](local/test_text_arguments_audit.py), 30
+[native readiness](local/test_native_readiness_audit.py) and 38
+[weakref protocols](local/test_weakref_protocol_audit.py). Their four guarded
+products add 39,686 outcomes (7,524 + 26,217 + 913 + 5,032). Focused strict Debug
+comparisons match CPython 2.7.18 exactly, with quiet reference streams and zero
+outstanding tinypy allocations. Independent peer reviews check the final
+ownership, parser order and exception-state paths.
+
+| Family | Concrete correction and observation |
+| --- | --- |
+| Buffer lifetime | Requested bounds survive owner resize; nested views flatten to the retained root owner. Complete repr checks owner/self roles, and hashing retains the first computed value. Raw Unicode bytes remain separate from the encoded legacy character-buffer view. Numeric buffer conversions retain int/long/float parser and NUL/explicit-base error priority. |
+| Text arguments | Shared native argument styles preserve receiver/count/keyword errors. Unicode padding converts character buffers, validates one character and retains width-before-fill order; byte padding accepts one byte only. Subtype center preserves separately clamped signed margins. Join translates only iterator-acquisition TypeError, while iteration and other callback errors retain identity. Private formatter spans preserve fresh result identity. |
+| Codec arguments | Guaranteed encoder/decoder entries preserve nullable errors, typed/NUL name diagnostics, builtin handler metadata and source/error parser priority. Parsed registry names use exact string keys without subtype hash/equality hooks. Encoders consume character-buffer views; decoders retain raw bytes. The product observes the existing guaranteed codec entries and does not claim standard-library stream reader/writer classes. |
+| Native readiness | Cold/warm metadata errors track first safe attribute access and remain shared by instances of the actual type. Native C descriptor metadata and numeric real/imag/numerator/denominator fields use physical member/getset descriptors, canonical values, receiver validation and readonly error priority. |
+| Weakrefs | Constructor/new/init/call/module parsers preserve class/referent/keyword/count priority. Basic-reference/proxy caches retain list/callback order across callability changes. Repr and Unicode proxy dispatch preserve reference lookup behavior; dead-reference deletion performs one lookup and suppresses only KeyError. Function/method/generator/set weakref slots, generator callback-before-finally order and exact empty-frozenset identity retain lifetime semantics. |
+
+The frozen inventory requires 49 project-authored modules with 1,538 cases plus
+210 selected vendor cases: 1,748 Debug/sanitize PASS, or 1,744 Release/LTO PASS
+with the existing four detector SKIP. It declares 89 native/runtime groups,
+159 CTest registrations, 177 checked-in compiler inputs, 3,693 generated compiler
+inputs and 741 VM name presets. The complete aggregate passed all 258 stages
+in 288.3 recorded stage seconds. The report is
+`.temp/validation-eleventh-audit-accepted/report.json`; its source/test/SPEC
+SHA-256 matches the post-run worktree:
+`ce236d1dd1fd8dd64333947c4f5bab72a65b55fe84a91558478d245f214cf4b0`.
+All 90 host/API/runner checks pass. No compiler warnings or ASan/UBSan diagnostics
+occurred; Apple ASan uses `detect_leaks=0`, with independent per-process
+allocator accounting. This is bounded local acceptance on macOS arm64.
+
+The existing native embedding group also compares ten weakref descriptor
+arity/keyword/control failures with an explicit error output and with
+`out_error == NULL`, checking the VM exception, successful recovery and allocator
+balance. A parser failure now returns before receiver fallback can replace it.
+
+Address-bearing buffer/weakref representations are checked against the
+referent/owner/self objects in the same process; only those address roles are
+substituted for comparison. Buffer and weakref hash observations retain their within-process
+relationships rather than imposing a shared interpreter seed. Native readiness
+products use ordinary safe operations and safe scalar/nullable direct fields;
+they do not claim coverage of CPython getter paths requiring a ready type.
+No new skip, expected failure, detector adaptation or SPEC boundary is added.
+Python-visible validation and callback behavior remain active in Release.
+
+Primary references:
+[bufferobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/bufferobject.c),
+[stringobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/stringobject.c),
+[unicodeobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/unicodeobject.c),
+[getargs.c](https://github.com/python/cpython/blob/v2.7.18/Python/getargs.c),
+[codecs.c](https://github.com/python/cpython/blob/v2.7.18/Python/codecs.c),
+[descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c),
+[object.c](https://github.com/python/cpython/blob/v2.7.18/Objects/object.c) and
+[weakrefobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/weakrefobject.c).
+
+## Historical tenth-pass follow-up
 
 Four independently authored modules add 110 portable witnesses: 25 wrapper
 metadata, 27 iterator metadata, 28 buffer arguments and 30 Struct arguments/state.
@@ -132,16 +191,17 @@ The accepted full run checked 147 CTest registrations, 153 checked-in compiler
 sources and 730 VM name presets. Release/LTO retain 1,409 portable passes and
 four detector skips; Debug requires all 1,413 cases.
 
-## Continuing metadata audit
+## Historical cold metadata observation — corrected in the eleventh pass
 
-The tenth pass corrects method-wrapper and bytearray_iterator type identity;
-both are now directly tested. An isolated cold first metadata write still
+The tenth pass corrected method-wrapper and bytearray_iterator type identity;
+both are directly tested. Its isolated cold first metadata write observation
 reflects CPython's lazy type readiness: wrapper __name__ assignment changes
 from generic TypeError before any metadata read to getset AttributeError after
-it. Method-descriptor errors likewise change after readiness. Tinypy eagerly
-initializes these types and currently reports the ready descriptor error in
-both states. The warmed product states its precondition; it does not normalize
-or prove the cold behavior. See the remaining observation in
+it. Method-descriptor errors likewise change after readiness. The tenth-pass
+runtime eagerly initialized these types and reported the ready descriptor error
+in both states. Its warmed product states that precondition and does not prove
+the cold behavior. The eleventh-pass native-readiness cases now retain both
+states and their transitions without changing the historical result. See
 [DEEP_AUDIT.md](../conformance/DEEP_AUDIT.md), with the primary object.c and
 descrobject.c paths. No new exclusion, skip or SPEC boundary was added.
 Bounded ordinary programs and stable buffer mutations provide finite evidence;
@@ -314,9 +374,11 @@ These are explicit scope decisions, rather than pending implementation items:
   historical marshal fuzz count are not current acceptance evidence. Source
   hardening and the ordinary sanitizer/allocator suites are labeled separately.
 
-## Validation and measured limits
+## Historical validation and measured limits
 
-macOS arm64, Apple Clang, current worktree:
+Earlier review snapshot on macOS arm64 with Apple Clang. The counts and
+measurements below are retained as historical evidence; current eleventh-pass
+requirements and accepted aggregate results are recorded above.
 
 - Debug, Release, unoptimized Debug ASan/UBSan and Release LTO:
   **114/114 CTest** in each profile, including debugger, loader/verifier,

@@ -6,6 +6,7 @@
 tinypy_value_t *tinypy_internal_generator_from_frame(tinypy_value_t *frame) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(frame);
     tinypy_generator_object_t *generator = (tinypy_generator_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_GENERATOR, sizeof(*generator));
+    generator->weakrefs = NULL;
     generator->frame = frame;
     generator->code = TINYPY_FRAME_OBJECT(frame)->code;
     TINYPY_INCREF(frame);

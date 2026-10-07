@@ -88,7 +88,14 @@ typedef enum tinypy_internal_c_descriptor_field_e {
     TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_OWNER = 81,
     TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_DOC = 82,
     TINYPY_INTERNAL_C_DESCRIPTOR_STRUCT_FORMAT = 83,
-    TINYPY_INTERNAL_C_DESCRIPTOR_STRUCT_SIZE = 84
+    TINYPY_INTERNAL_C_DESCRIPTOR_STRUCT_SIZE = 84,
+    TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_NAME = 85,
+    TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_OWNER = 86,
+    TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC = 87,
+    TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_REAL = 88,
+    TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_IMAG = 89,
+    TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_NUMERATOR = 90,
+    TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_DENOMINATOR = 91
 } tinypy_internal_c_descriptor_field_e;
 
 //////////////////////////////////////////////////////////////////////////
@@ -164,7 +171,7 @@ static void __tinypy_internal_c_descriptor_readonly(tinypy_vm_t *vm, tinypy_erro
 static void __tinypy_internal_c_descriptor_receiver_error(tinypy_c_descriptor_object_t *descriptor, tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&descriptor->base);
 
-    if (descriptor->owner != NULL && descriptor->field >= (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && descriptor->field <= (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_STRUCT_SIZE) {
+    if (descriptor->owner != NULL && descriptor->field >= (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && descriptor->field <= (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_DENOMINATOR) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(descriptor->name),
             TINYPY_MESSAGE_PART_LITERAL("' for '"), {descriptor->owner->name, descriptor->owner->name_size},
@@ -1029,28 +1036,6 @@ static tinypy_value_t *__tinypy_internal_property_delete_method(tinypy_value_t *
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_c_descriptor_metadata(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    if (__tinypy_internal_descriptor_method_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
-        return NULL;
-    }
-    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_GETSET_DESCRIPTOR && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_MEMBER_DESCRIPTOR) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor metadata requires a C descriptor", out_error);
-        return NULL;
-    }
-    tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(value);
-    __tinypy_internal_c_descriptor_refresh_owner(descriptor);
-    if (user_data != NULL && descriptor->owner == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "descriptor owner type no longer exists", out_error);
-        return NULL;
-    }
-    tinypy_value_t *result = user_data == NULL ? descriptor->name : &descriptor->owner->base.base;
-
-    return TINYPY_RET(result);
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_c_descriptor_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(value);
     if (descriptor->owner_retained != 0) {
@@ -1076,6 +1061,26 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
     if (descriptor->owner == NULL || tinypy_type_is_subtype(instance->type, descriptor->owner) == 0) {
         __tinypy_internal_c_descriptor_receiver_error(descriptor, instance, out_error);
         return NULL;
+    }
+    if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_REAL && field <= TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_DENOMINATOR) {
+        tinypy_value_t *result = tinypy_internal_numeric_field(instance, (int32_t)field - (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_REAL, out_error);
+
+        return result;
+    }
+    if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC) {
+        tinypy_c_descriptor_object_t *source = TINYPY_C_DESCRIPTOR_OBJECT(instance);
+
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC) {
+            return TINYPY_RET_NONE(vm);
+        }
+        __tinypy_internal_c_descriptor_refresh_owner(source);
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_OWNER && source->owner == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "descriptor owner type no longer exists", out_error);
+            return NULL;
+        }
+        tinypy_value_t *result = field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_NAME ? source->name : &source->owner->base.base;
+
+        return TINYPY_RET(result);
     }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_DOC) {
         tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(instance);
@@ -1410,7 +1415,7 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         return TINYPY_FALSE;
     }
     if (descriptor->writable == 0) {
-        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME || (TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR && field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_STRUCT_SIZE)) {
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME || field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC || (TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR && field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_DENOMINATOR)) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("attribute '"), {(const char *)TINYPY_TEXT_BYTES(descriptor->name), TINYPY_TEXT_BYTE_SIZE(descriptor->name)},
                 TINYPY_MESSAGE_PART_LITERAL("' of '"), {descriptor->owner->name, descriptor->owner->name_size},
@@ -1763,10 +1768,12 @@ void tinypy_internal_initialize_descriptor_types(tinypy_vm_t *vm) {
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_MEMBER_DESCRIPTOR]), vm->internal_special_set_key, __tinypy_internal_c_descriptor_set_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_MEMBER_DESCRIPTOR]), vm->internal_special_delete_key, __tinypy_internal_c_descriptor_delete_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_MEMBER_DESCRIPTOR]), vm->internal_special_repr_key, __tinypy_internal_c_descriptor_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_GETSET_DESCRIPTOR]), vm->internal_special_name_key, __tinypy_internal_c_descriptor_metadata, NULL, NULL);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_GETSET_DESCRIPTOR]), vm->internal_special_objclass_key, __tinypy_internal_c_descriptor_metadata, (void *)(intptr_t)1, NULL);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_MEMBER_DESCRIPTOR]), vm->internal_special_name_key, __tinypy_internal_c_descriptor_metadata, NULL, NULL);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_MEMBER_DESCRIPTOR]), vm->internal_special_objclass_key, __tinypy_internal_c_descriptor_metadata, (void *)(intptr_t)1, NULL);
+    tinypy_type_t *descriptor_types[] = {&vm->types[TINYPY_VALUE_GETSET_DESCRIPTOR], &vm->types[TINYPY_VALUE_MEMBER_DESCRIPTOR]};
+    for (size_t index = 0U; index < sizeof(descriptor_types) / sizeof(descriptor_types[0]); ++index) {
+        __tinypy_internal_builtin_descriptor_set(vm, descriptor_types[index], TINYPY_VALUE_MEMBER_DESCRIPTOR, vm->internal_special_name_key, TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_NAME, TINYPY_FALSE);
+        __tinypy_internal_builtin_descriptor_set(vm, descriptor_types[index], TINYPY_VALUE_MEMBER_DESCRIPTOR, vm->internal_special_objclass_key, TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_OWNER, TINYPY_FALSE);
+        __tinypy_internal_builtin_descriptor_set(vm, descriptor_types[index], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_special_doc_key, TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC, TINYPY_FALSE);
+    }
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_PROPERTY], vm->internal_getter_key, __tinypy_internal_property_getter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_PROPERTY], vm->internal_setter_key, __tinypy_internal_property_setter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_PROPERTY], vm->internal_deleter_key, __tinypy_internal_property_deleter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
@@ -1878,6 +1885,20 @@ void tinypy_internal_initialize_struct_descriptors(tinypy_type_t *type) {
 
     __tinypy_internal_builtin_descriptor_set(vm, type, TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_format_key, TINYPY_INTERNAL_C_DESCRIPTOR_STRUCT_FORMAT, TINYPY_FALSE);
     __tinypy_internal_builtin_descriptor_set(vm, type, TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_size_key, TINYPY_INTERNAL_C_DESCRIPTOR_STRUCT_SIZE, TINYPY_FALSE);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_initialize_numeric_descriptors(tinypy_vm_t *vm) {
+    tinypy_value_t *names[] = {vm->internal_real_key, vm->internal_imag_key, vm->internal_numerator_key, vm->internal_denominator_key};
+    tinypy_type_t *types[] = {&vm->types[TINYPY_VALUE_INTEGER], &vm->types[TINYPY_VALUE_LONG], &vm->types[TINYPY_VALUE_FLOAT], &vm->types[TINYPY_VALUE_COMPLEX]};
+
+    for (size_t index = 0U; index < sizeof(types) / sizeof(types[0]); ++index) {
+        tinypy_value_type_e kind = index == 3U ? TINYPY_VALUE_MEMBER_DESCRIPTOR : TINYPY_VALUE_GETSET_DESCRIPTOR;
+        size_t count = index < 2U ? 4U : 2U;
+
+        for (size_t field = 0U; field < count; ++field) {
+            __tinypy_internal_builtin_descriptor_set(vm, types[index], kind, names[field], (tinypy_internal_c_descriptor_field_e)((int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_REAL + (int32_t)field), TINYPY_FALSE);
+        }
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_exception_descriptors(tinypy_type_t *type) {

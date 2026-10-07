@@ -25,6 +25,7 @@ static tinypy_value_t *__tinypy_set_allocate_type(tinypy_type_t *type) {
     tinypy_vm_t *vm = type->vm;
     tinypy_set_object_t *set = (tinypy_set_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
 
+    set->weakrefs = NULL;
     set->dict = tinypy_dict_new(vm);
     set->finger = 0U;
     return &set->base;
@@ -37,6 +38,7 @@ static tinypy_value_t *__tinypy_set_allocate_type_checked(tinypy_type_t *type, t
     if (set == NULL) {
         return NULL;
     }
+    set->weakrefs = NULL;
     set->dict = tinypy_internal_dict_new_checked(vm, out_error);
     if (set->dict == NULL) {
         TINYPY_DECREF(&set->base);
@@ -53,6 +55,7 @@ static tinypy_value_t *__tinypy_set_allocate(tinypy_vm_t *vm, tinypy_bool_t froz
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_set_initialize_empty(tinypy_value_t *value) {
+    TINYPY_SET_OBJECT(value)->weakrefs = NULL;
     TINYPY_SET_OBJECT(value)->dict = tinypy_dict_new(TINYPY_VALUE_VM(value));
     TINYPY_SET_OBJECT(value)->finger = 0U;
 }
@@ -1403,6 +1406,16 @@ static tinypy_value_t *__tinypy_set_iter_method(tinypy_value_t *function, tinypy
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_set_cached_empty_frozenset(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    if (vm->empty_frozenset == NULL) {
+        vm->empty_frozenset = __tinypy_set_allocate_type_checked(&vm->types[TINYPY_VALUE_FROZENSET], out_error);
+        if (vm->empty_frozenset == NULL) {
+            return NULL;
+        }
+    }
+    return TINYPY_RET(vm->empty_frozenset);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_set_create_common(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
 
@@ -1419,6 +1432,11 @@ static tinypy_value_t *__tinypy_set_create_common(tinypy_type_t *type, tinypy_va
         return NULL;
     }
     if (TINYPY_TUPLE_SIZE(args) == 0U) {
+        if (type == &vm->types[TINYPY_VALUE_FROZENSET]) {
+            tinypy_value_t *result = __tinypy_set_cached_empty_frozenset(vm, out_error);
+
+            return result;
+        }
         tinypy_value_t *return_value_1 = __tinypy_set_allocate_type_checked(type, out_error);
         return return_value_1;
     }
@@ -1433,6 +1451,10 @@ static tinypy_value_t *__tinypy_set_create_common(tinypy_type_t *type, tinypy_va
     if (tinypy_internal_set_update_iterable(return_value_2, item, out_error) == 0) {
         TINYPY_DECREF(return_value_2);
         return NULL;
+    }
+    if (type == &vm->types[TINYPY_VALUE_FROZENSET] && tinypy_set_size(return_value_2) == 0U) {
+        TINYPY_DECREF(return_value_2);
+        return_value_2 = __tinypy_set_cached_empty_frozenset(vm, out_error);
     }
     return return_value_2;
 }

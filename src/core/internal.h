@@ -95,6 +95,7 @@ typedef struct tinypy_intern_entry_t {
 #define TINYPY_TYPE_FLAG_TYPE_SUBCLASS UINT64_C(8)
 #define TINYPY_TYPE_FLAG_ABSTRACT UINT64_C(16)
 #define TINYPY_TYPE_FLAG_PYTHON_HEAP UINT64_C(32)
+#define TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY UINT64_C(64)
 #define TINYPY_VM_STATE_LIVE UINT32_C(0x5450594c)
 #define TINYPY_VM_STATE_DESTROYING UINT32_C(0x54505944)
 #define TINYPY_BUILTIN_TYPE_COUNT ((size_t)TINYPY_VALUE_NATIVE_INSTANCE)
@@ -699,6 +700,11 @@ typedef struct tinypy_intern_entry_t {
     X(internal_hexversion_key, "hexversion", 1) \
     X(internal_id_key, "id", 1) \
     X(internal_ignore_key, "ignore", 1) \
+    X(internal_strict_errors_key, "strict_errors", 1) \
+    X(internal_ignore_errors_key, "ignore_errors", 1) \
+    X(internal_replace_errors_key, "replace_errors", 1) \
+    X(internal_xmlcharrefreplace_errors_key, "xmlcharrefreplace_errors", 1) \
+    X(internal_backslashreplace_errors_key, "backslashreplace_errors", 1) \
     X(internal_im_class_key, "im_class", 1) \
     X(internal_im_func_key, "im_func", 1) \
     X(internal_im_self_key, "im_self", 1) \
@@ -1284,6 +1290,7 @@ typedef struct tinypy_set_object_t {
     tinypy_hash_t hash;
     tinypy_bool_t hash_computed;
     size_t finger;
+    tinypy_value_t *weakrefs;
 } tinypy_set_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_output_stream_object_t {
@@ -1297,6 +1304,8 @@ typedef struct tinypy_buffer_object_t {
     tinypy_value_t *owner;
     size_t offset;
     size_t size;
+    tinypy_hash_t hash;
+    tinypy_bool_t hash_computed;
 } tinypy_buffer_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_bytearray_object_t {
@@ -1458,6 +1467,7 @@ typedef struct tinypy_function_object_t {
     tinypy_value_t *name;
     tinypy_value_t *dict;
     tinypy_value_t *module;
+    tinypy_value_t *weakrefs;
 } tinypy_function_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_iterator_object_t {
@@ -1497,6 +1507,7 @@ typedef struct tinypy_method_object_t {
     tinypy_value_t *function;
     tinypy_value_t *self;
     tinypy_value_t *owner;
+    tinypy_value_t *weakrefs;
 } tinypy_method_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_cell_object_t {
@@ -1585,6 +1596,7 @@ typedef struct tinypy_generator_object_t {
     tinypy_bool_t running;
     tinypy_bool_t finished;
     tinypy_bool_t started;
+    tinypy_value_t *weakrefs;
 } tinypy_generator_object_t;
 //////////////////////////////////////////////////////////////////////////
 #define TINYPY_INTEGER_VALUE(value) \
@@ -1830,6 +1842,7 @@ struct tinypy_vm_t {
     tinypy_string_object_t empty_string_object;
     tinypy_value_t *empty_unicode;
     tinypy_tuple_object_t empty_tuple_object;
+    tinypy_value_t *empty_frozenset;
     tinypy_value_t *string_char_cache[256];
     tinypy_value_t *unicode_char_cache[256];
 };
@@ -2407,6 +2420,8 @@ tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinyp
 void tinypy_internal_initialize_container_types(tinypy_vm_t *vm);
 void tinypy_internal_initialize_slice_type(tinypy_vm_t *vm);
 void tinypy_internal_initialize_numeric_types(tinypy_vm_t *vm);
+tinypy_value_t *tinypy_internal_numeric_field(tinypy_value_t *value, int32_t field, tinypy_error_t **out_error);
+void tinypy_internal_initialize_numeric_descriptors(tinypy_vm_t *vm);
 void tinypy_internal_initialize_string_types(tinypy_vm_t *vm);
 void tinypy_internal_initialize_constructor_types(tinypy_vm_t *vm);
 void tinypy_internal_constructor_add_builtin_new(tinypy_type_t *type);
@@ -2441,6 +2456,8 @@ tinypy_value_t *tinypy_internal_buffer_get_item(tinypy_value_t *value, tinypy_va
 ptrdiff_t tinypy_internal_buffer_length(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_buffer_repr(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_buffer_string(tinypy_value_t *value, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_buffer_character_string(tinypy_value_t *value, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_string_argument_text(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_bool_t unicode, tinypy_error_t **out_error);
 void tinypy_internal_initialize_buffer_type(tinypy_vm_t *vm);
 void tinypy_internal_initialize_memoryview_type(tinypy_vm_t *vm);
 tinypy_bool_t tinypy_internal_memoryview_check(const tinypy_value_t *value);

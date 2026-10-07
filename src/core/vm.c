@@ -117,6 +117,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         tinypy_internal_set_release_references, NULL);
     vm->types[TINYPY_VALUE_SET].iter = tinypy_internal_set_iter;
     vm->types[TINYPY_VALUE_SET].create = tinypy_internal_set_create;
+    vm->types[TINYPY_VALUE_SET].weakref_offset = offsetof(tinypy_set_object_t, weakrefs);
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_FROZENSET], &vm->types[TINYPY_VALUE_TYPE], "frozenset", 9U,
         sizeof(tinypy_set_object_t), 0U,
@@ -124,6 +125,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         tinypy_internal_set_release_references, NULL);
     vm->types[TINYPY_VALUE_FROZENSET].iter = tinypy_internal_set_iter;
     vm->types[TINYPY_VALUE_FROZENSET].create = tinypy_internal_frozenset_create;
+    vm->types[TINYPY_VALUE_FROZENSET].weakref_offset = offsetof(tinypy_set_object_t, weakrefs);
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_OUTPUT_STREAM], &vm->types[TINYPY_VALUE_TYPE], "tinypy.output", 13U,
         sizeof(tinypy_output_stream_object_t), 0U,
@@ -145,6 +147,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         tinypy_internal_function_release_references, NULL);
     vm->types[TINYPY_VALUE_FUNCTION].call = tinypy_internal_function_call;
     vm->types[TINYPY_VALUE_FUNCTION].descriptor_get = tinypy_internal_function_descriptor_get;
+    vm->types[TINYPY_VALUE_FUNCTION].weakref_offset = offsetof(tinypy_function_object_t, weakrefs);
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_ITERATOR], &vm->types[TINYPY_VALUE_TYPE], "iterator", 8U,
         sizeof(tinypy_iterator_object_t), 0U,
@@ -161,6 +164,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
     vm->types[TINYPY_VALUE_METHOD].descriptor_get = tinypy_internal_method_descriptor_get;
     vm->types[TINYPY_VALUE_METHOD].rich_compare = tinypy_internal_method_compare;
     vm->types[TINYPY_VALUE_METHOD].create = tinypy_internal_method_create;
+    vm->types[TINYPY_VALUE_METHOD].weakref_offset = offsetof(tinypy_method_object_t, weakrefs);
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_CELL], &vm->types[TINYPY_VALUE_TYPE], "cell", 4U,
         sizeof(tinypy_cell_object_t), 0U,
@@ -228,6 +232,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         tinypy_internal_generator_release_references, NULL);
     vm->types[TINYPY_VALUE_GENERATOR].iter = tinypy_internal_generator_iter;
     vm->types[TINYPY_VALUE_GENERATOR].next = tinypy_internal_generator_next;
+    vm->types[TINYPY_VALUE_GENERATOR].weakref_offset = offsetof(tinypy_generator_object_t, weakrefs);
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_XRANGE], &vm->types[TINYPY_VALUE_TYPE], "xrange", 6U,
         sizeof(tinypy_xrange_object_t), 0U,
@@ -1593,6 +1598,7 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph, tinypy_boo
     size_t index;
 
     __tinypy_shutdown_add(graph, vm->empty_unicode);
+    __tinypy_shutdown_add(graph, vm->empty_frozenset);
     __tinypy_shutdown_add(graph, vm->modules);
     __tinypy_shutdown_add(graph, vm->builtins);
     __tinypy_shutdown_add(graph, vm->codec_module);

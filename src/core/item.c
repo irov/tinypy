@@ -55,7 +55,13 @@ tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_
         }
         return converted;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument required", out_error);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index")
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////

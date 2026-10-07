@@ -2,6 +2,8 @@
 
 #include "internal.h"
 
+#include <stdio.h>
+
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_buffer_supported(const tinypy_value_t *value) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
@@ -32,18 +34,43 @@ static const uint8_t *__tinypy_buffer_owner_view(const tinypy_value_t *owner, si
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static const uint8_t *__tinypy_buffer_constrained_view(const uint8_t *bytes, size_t owner_size, size_t offset, size_t requested_size, size_t *out_size) {
+    if (offset >= owner_size) {
+        *out_size = 0U;
+        return bytes != NULL ? bytes + owner_size : NULL;
+    }
+    owner_size -= offset;
+    *out_size = requested_size == TINYPY_BUFFER_TO_END || requested_size > owner_size ? owner_size : requested_size;
+    return bytes != NULL ? bytes + offset : NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_buffer_from_object(tinypy_value_t *object, size_t offset, size_t size) {
-    size_t owner_size;
-
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
+
+    if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_BUFFER) {
+        tinypy_buffer_object_t *source = TINYPY_BUFFER_OBJECT(object);
+
+        if (source->size != TINYPY_BUFFER_TO_END) {
+            size_t available = offset < source->size ? source->size - offset : 0U;
+
+            if (size == TINYPY_BUFFER_TO_END || size > available) {
+                size = available;
+            }
+        }
+        offset += source->offset;
+        object = source->owner;
+    }
     if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_UNICODE) {
+        size_t owner_size;
+
         (void)tinypy_internal_unicode_native_buffer(object, TINYPY_FALSE, &owner_size, NULL);
     }
-    (void)__tinypy_buffer_owner_view(object, &owner_size);
     tinypy_buffer_object_t *buffer = (tinypy_buffer_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_BUFFER, sizeof(*buffer));
     buffer->owner = object;
     buffer->offset = offset;
     buffer->size = size;
+    buffer->hash = (tinypy_hash_t)0;
+    buffer->hash_computed = TINYPY_FALSE;
     TINYPY_INCREF(object);
     return &buffer->base;
 }
@@ -54,13 +81,8 @@ const void *tinypy_buffer_view(const tinypy_value_t *value, size_t *out_size) {
 
     const tinypy_buffer_object_t *buffer = TINYPY_BUFFER_OBJECT((tinypy_value_t *)value);
     bytes = __tinypy_buffer_owner_view(buffer->owner, &owner_size);
-    if (buffer->offset >= owner_size) {
-        *out_size = 0U;
-        return bytes != NULL ? bytes + owner_size : NULL;
-    }
-    owner_size -= buffer->offset;
-    *out_size = buffer->size == TINYPY_BUFFER_TO_END || buffer->size > owner_size ? owner_size : buffer->size;
-    return bytes != NULL ? bytes + buffer->offset : NULL;
+    const uint8_t *result = __tinypy_buffer_constrained_view(bytes, owner_size, buffer->offset, buffer->size, out_size);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_buffer_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
@@ -106,7 +128,6 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
     if (TINYPY_VALUE_KIND(owner) == TINYPY_VALUE_UNICODE && tinypy_internal_unicode_native_buffer(owner, TINYPY_TRUE, &owner_size, out_error) == NULL) {
         return NULL;
     }
-    (void)__tinypy_buffer_owner_view(owner, &owner_size);
     if (offset < 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "offset must be zero or positive", out_error);
         return NULL;
@@ -114,14 +135,6 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
     if (requested_size < -1) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "size must be zero or positive", out_error);
         return NULL;
-    }
-    /* An offset past the end yields an empty buffer and a size beyond the
-       end is clamped, as get_buf does. */
-    if ((uint64_t)offset > (uint64_t)owner_size) {
-        offset = (int64_t)owner_size;
-    }
-    if (requested_size >= 0 && (uint64_t)requested_size > (uint64_t)(owner_size - (size_t)offset)) {
-        requested_size = (int64_t)(owner_size - (size_t)offset);
     }
     tinypy_value_t *return_value_1 = tinypy_buffer_from_object(owner, (size_t)offset, requested_size < 0 ? TINYPY_BUFFER_TO_END : (size_t)requested_size);
     return return_value_1;
@@ -237,11 +250,49 @@ tinypy_value_t *tinypy_internal_buffer_string(tinypy_value_t *value, tinypy_erro
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_buffer_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
-    (void)value;
-    TINYPY_CLEAR_ERROR(out_error);
+tinypy_value_t *tinypy_internal_buffer_character_string(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, "<read-only buffer>", 18U);
+    tinypy_buffer_object_t *buffer = TINYPY_BUFFER_OBJECT(value);
+    size_t offset = buffer->offset;
+    size_t requested_size = buffer->size;
+    tinypy_value_t *owner = TINYPY_RET(buffer->owner);
+    const uint8_t *bytes;
+    size_t size;
+
+    if (TINYPY_VALUE_KIND(owner) == TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, owner, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+
+        TINYPY_DECREF(owner);
+        if (encoded == NULL) {
+            return NULL;
+        }
+        owner = encoded;
+    }
+    bytes = __tinypy_buffer_owner_view(owner, &size);
+    bytes = __tinypy_buffer_constrained_view(bytes, size, offset, requested_size, &size);
+    tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(vm, bytes, size, out_error);
+
+    TINYPY_DECREF(owner);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_buffer_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_buffer_object_t *buffer = TINYPY_BUFFER_OBJECT(value);
+    char text[192U];
+    int written;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (buffer->size == TINYPY_BUFFER_TO_END) {
+        written = snprintf(text, sizeof(text), "<read-only buffer for %p, size -1, offset %zu at %p>", (void *)buffer->owner, buffer->offset, (void *)value);
+    } else {
+        written = snprintf(text, sizeof(text), "<read-only buffer for %p, size %zu, offset %zu at %p>", (void *)buffer->owner, buffer->size, buffer->offset, (void *)value);
+    }
+    if (written < 0 || (size_t)written >= sizeof(text)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "buffer representation is too large", out_error);
+        return NULL;
+    }
+    tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, text, (size_t)written);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

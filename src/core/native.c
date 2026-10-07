@@ -472,6 +472,7 @@ static tinypy_hash_t __tinypy_native_function_hash_slot(tinypy_value_t *value, t
     tinypy_hash_t hash;
 
     if (value->type == vm->native_method_descriptor_type || value->type == vm->native_wrapper_descriptor_type) {
+        value->type->flags &= ~TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
         hash = (tinypy_hash_t)((uintptr_t)value >> 4U);
     }
     else {
@@ -532,6 +533,9 @@ void tinypy_internal_initialize_native_descriptor_types(tinypy_vm_t *vm) {
         type->hash = __tinypy_native_function_hash_slot;
         type->create = NULL;
         type->flags = (type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
+        if (index == 0U || index == 2U) {
+            type->flags |= TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
+        }
         *types[index] = type;
     }
 }

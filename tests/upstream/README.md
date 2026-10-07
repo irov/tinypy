@@ -1,8 +1,8 @@
 # Portable Python 2 tests
 
 This corpus vendors 20 complete CPython 2.7.18 modules with 221 discovered
-cases, of which 210 are selected, and adds forty-five project-authored
-modules with 1,409 cases. The selected inventory contains 1,619 cases.
+cases, of which 210 are selected, and adds forty-nine project-authored
+modules with 1,538 cases. The selected inventory contains 1,748 cases.
 Upstream files are byte-for-byte unchanged.
 `manifest.json` records source commits, paths, SHA-256 hashes, case names and
 explicit reasons for excluding originals outside the tinypy corpus. Locally authored modules
@@ -21,7 +21,9 @@ Sources:
   metadata identity, numeric snapshots, FunctionType construction, reduction
   protocols and saved-frame exception fields. The tenth pass adds native wrapper
   and iterator metadata, buffer/bytearray method arguments and Struct compiled
-  state/cache/parser behavior.
+  state/cache/parser behavior. The eleventh pass adds 129 cases: 27 live-buffer
+  lifetime/character-view cases, 34 text argument/padding/codec cases, 30 native
+  readiness/physical numeric-descriptor cases and 38 weakref protocol cases.
   Their vectors and expectations are validated on CPython 2.7.18.
 - CPython license and copyright notices: `LICENSES/PSF-2.0.txt`
   relative to the repository root, or
@@ -133,11 +135,13 @@ Whole modules needing additional libraries or source cleanup were not copied:
 | IronPython tests | iptest and CLR-specific infrastructure |
 | MicroPython tests | Select and validate Python 2-compatible cases from a Python 3 corpus |
 
-Acceptance requires all 1,615 ordinary active cases to pass on tinypy and the
+Acceptance requires all 1,744 ordinary active cases to pass on tinypy and the
 CPython 2.7.18 reference. Debug must additionally pass the four diagnostic
-adaptations (1,619 PASS); Release must report 1,615 PASS and 4 expected SKIP.
+adaptations (1,748 PASS); Release must report 1,744 PASS and 4 expected SKIP.
 These counts describe the selected inventory and required results; the generated
-report establishes which profiles completed acceptance.
+report establishes which profiles completed acceptance. The eleventh-pass
+aggregate passed all 258 stages in Debug, Release, ASan/UBSan and Release LTO
+on macOS arm64. Historical completed reports retain their original counts.
 The full build/oracle/compiler matrix has
 one entry point documented in [tests/README.md](../README.md); its finite
 coverage model and latest audit are under [conformance](../conformance/DEEP_AUDIT.md).

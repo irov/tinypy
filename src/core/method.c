@@ -86,6 +86,7 @@ tinypy_value_t *tinypy_method_new(tinypy_value_t *function, tinypy_value_t *self
     else {
         method = (tinypy_method_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_METHOD, sizeof(*method));
     }
+    method->weakrefs = NULL;
     method->function = function;
     method->self = self;
     method->owner = owner;

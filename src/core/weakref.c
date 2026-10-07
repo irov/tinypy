@@ -2,6 +2,8 @@
 
 #include "internal.h"
 
+#include <stdio.h>
+
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t **tinypy_internal_weakref_head_slot(tinypy_value_t *value) {
     if (value->type->weakref_offset != 0U) {
@@ -43,16 +45,25 @@ static tinypy_value_t *__tinypy_weakref_new_with_type(tinypy_type_t *type, tinyp
     tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(object);
 
     if (head_slot == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot create weak reference to this object", out_error);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("cannot create weak reference to '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(object),
+            TINYPY_MESSAGE_PART_LITERAL("' object")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
         return NULL;
     }
     if (callback == NULL && (type == &vm->types[TINYPY_VALUE_WEAKREF] || type == vm->weak_proxy_type || type == vm->callable_weak_proxy_type)) {
         tinypy_value_t *current = *head_slot;
 
-        while (current != NULL) {
+        for (size_t index = 0U; index < 2U && current != NULL; ++index) {
             tinypy_weakref_object_t *candidate = TINYPY_WEAKREF_OBJECT(current);
 
-            if (current->type == type && candidate->callback == NULL) {
+            if (candidate->callback != NULL || (current->type != &vm->types[TINYPY_VALUE_WEAKREF] && current->type != vm->weak_proxy_type && current->type != vm->callable_weak_proxy_type)) {
+                break;
+            }
+            if (current->type == type || (type != &vm->types[TINYPY_VALUE_WEAKREF] && current->type != &vm->types[TINYPY_VALUE_WEAKREF])) {
                 return TINYPY_RET(current);
             }
             current = candidate->next;
@@ -64,14 +75,34 @@ static tinypy_value_t *__tinypy_weakref_new_with_type(tinypy_type_t *type, tinyp
     }
     weakref->object = object;
     weakref->callback = callback;
-    weakref->next = *head_slot;
     if (callback != NULL) {
         TINYPY_INCREF(callback);
     }
-    if (*head_slot != NULL) {
-        TINYPY_WEAKREF_OBJECT(*head_slot)->previous = &weakref->base;
+    tinypy_value_t *previous = NULL;
+    tinypy_value_t *current = *head_slot;
+    if (callback != NULL || type != &vm->types[TINYPY_VALUE_WEAKREF]) {
+        if (current != NULL && current->type == &vm->types[TINYPY_VALUE_WEAKREF] && TINYPY_WEAKREF_OBJECT(current)->callback == NULL) {
+            previous = current;
+            current = TINYPY_WEAKREF_OBJECT(current)->next;
+        }
+        if ((callback != NULL || (type != vm->weak_proxy_type && type != vm->callable_weak_proxy_type))
+            && current != NULL && (current->type == vm->weak_proxy_type || current->type == vm->callable_weak_proxy_type)
+            && TINYPY_WEAKREF_OBJECT(current)->callback == NULL) {
+            previous = current;
+            current = TINYPY_WEAKREF_OBJECT(current)->next;
+        }
     }
-    *head_slot = &weakref->base;
+    weakref->previous = previous;
+    weakref->next = current;
+    if (current != NULL) {
+        TINYPY_WEAKREF_OBJECT(current)->previous = &weakref->base;
+    }
+    if (previous != NULL) {
+        TINYPY_WEAKREF_OBJECT(previous)->next = &weakref->base;
+    }
+    else {
+        *head_slot = &weakref->base;
+    }
     return &weakref->base;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -178,11 +209,22 @@ void tinypy_internal_weakref_destroy(tinypy_value_t *value) {
     __tinypy_weakref_unlink(TINYPY_WEAKREF_OBJECT(value));
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_weakref_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_weakref_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *name = tinypy_native_function_name(function);
     size_t count = TINYPY_TUPLE_SIZE(args);
 
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || count < minimum || count > maximum) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref function received invalid arguments", out_error);
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_TEXT(name),
+            TINYPY_MESSAGE_PART_LITERAL("() takes no keyword arguments")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
+        return TINYPY_FALSE;
+    }
+    if (count < minimum || count > maximum) {
+        tinypy_internal_make_arity_error(vm, (const char *)TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name), count, minimum, maximum, style, out_error);
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;
@@ -191,7 +233,9 @@ static tinypy_bool_t __tinypy_weakref_arguments(tinypy_vm_t *vm, tinypy_value_t 
 tinypy_value_t *tinypy_internal_weakref_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_value_t *callback = NULL;
 
-    if (__tinypy_weakref_arguments(type->vm, args, kwargs, 1U, 2U, out_error) == 0) {
+    size_t count = TINYPY_TUPLE_SIZE(args);
+    if (count < 1U || count > 2U) {
+        tinypy_internal_make_arity_error(type->vm, "__new__", 7U, count, 1U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error);
         return NULL;
     }
     tinypy_bool_t condition = TINYPY_TUPLE_SIZE(args) == 2U;
@@ -204,13 +248,28 @@ tinypy_value_t *tinypy_internal_weakref_create(tinypy_type_t *type, tinypy_value
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *return_value_1 = __tinypy_weakref_new_with_type(type, item, callback, out_error);
+    if (return_value_1 != NULL && kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        TINYPY_DECREF(return_value_1);
+        tinypy_internal_make_vm_error(type->vm, TINYPY_ERROR_TYPE, "ref() does not take keyword arguments", out_error);
+        return NULL;
+    }
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_weakref_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
 
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 0U, 0U, out_error) == 0) {
+    size_t count = TINYPY_TUPLE_SIZE(args) + (kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U);
+    if (count != 0U) {
+        char count_bytes[TINYPY_MESSAGE_SIZE_BUFFER];
+        size_t count_size = tinypy_internal_format_size(count_bytes, count);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("__call__() takes at most 0 arguments ("),
+            {count_bytes, count_size},
+            TINYPY_MESSAGE_PART_LITERAL(" given)")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
         return NULL;
     }
     tinypy_value_t *object = TINYPY_WEAKREF_OBJECT(callable)->object;
@@ -492,7 +551,13 @@ static tinypy_value_t *__tinypy_weakref_proxy_absolute(tinypy_value_t *proxy, ti
         TINYPY_DECREF(method);
         return result;
     }
-    tinypy_internal_make_vm_error(TINYPY_VALUE_VM(proxy), TINYPY_ERROR_TYPE, "bad operand for abs", out_error);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("bad operand type for abs(): '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(object),
+        TINYPY_MESSAGE_PART_LITERAL("'")
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -595,10 +660,11 @@ static tinypy_value_t *__tinypy_weakref_proxy_binary_method(tinypy_value_t *func
     intptr_t operation = (intptr_t)user_data;
     size_t maximum = operation == TINYPY_WEAKREF_PROXY_POWER || operation == TINYPY_WEAKREF_PROXY_POWER + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET ? 3U : 2U;
 
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 2U, maximum, out_error) == 0 || __tinypy_weakref_is_proxy(vm, TINYPY_TUPLE_GET(args, 0U)) == 0) {
-        if (out_error == NULL || *out_error == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak proxy operation requires a proxy", out_error);
-        }
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, maximum - 1U, maximum == 3U ? TINYPY_ARITY_STYLE_UNPACK : TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    if (__tinypy_weakref_is_proxy(vm, TINYPY_TUPLE_GET(args, 0U)) == TINYPY_FALSE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak proxy operation requires a proxy", out_error);
         return NULL;
     }
     tinypy_value_t *self_object = __tinypy_weakref_proxy_referent(TINYPY_TUPLE_GET(args, 0U), out_error);
@@ -653,10 +719,11 @@ static tinypy_value_t *__tinypy_weakref_proxy_binary_method(tinypy_value_t *func
 static tinypy_value_t *__tinypy_weakref_proxy_unary_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0 || __tinypy_weakref_is_proxy(vm, TINYPY_TUPLE_GET(args, 0U)) == 0) {
-        if (out_error == NULL || *out_error == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak proxy operation requires a proxy", out_error);
-        }
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    if (__tinypy_weakref_is_proxy(vm, TINYPY_TUPLE_GET(args, 0U)) == TINYPY_FALSE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak proxy operation requires a proxy", out_error);
         return NULL;
     }
     tinypy_value_t *proxy = TINYPY_TUPLE_GET(args, 0U);
@@ -703,12 +770,40 @@ static tinypy_value_t *__tinypy_weakref_new_method(tinypy_value_t *function, tin
 
     (void)user_data;
     (void)kwargs;
-    if (__tinypy_weakref_arguments(vm, args, NULL, 2U, 3U, out_error) == 0) {
+    if (TINYPY_TUPLE_SIZE(args) == 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref.__new__(): not enough arguments", out_error);
         return NULL;
     }
     tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(type_value) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype((tinypy_type_t *)type_value, &vm->types[TINYPY_VALUE_WEAKREF]) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref.__new__ requires a weakref subtype", out_error);
+    if (TINYPY_VALUE_KIND(type_value) != TINYPY_VALUE_TYPE) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("weakref.__new__(X): X is not a type object ("),
+            TINYPY_MESSAGE_PART_TYPE_NAME(type_value),
+            TINYPY_MESSAGE_PART_LITERAL(")")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        return NULL;
+    }
+    tinypy_type_t *type = (tinypy_type_t *)type_value;
+    if (tinypy_type_is_subtype(type, &vm->types[TINYPY_VALUE_WEAKREF]) == TINYPY_FALSE) {
+        size_t name_size = type->name_size < 200U ? type->name_size : 200U;
+        const char *end = (const char *)memchr(type->name, 0, name_size);
+        if (end != NULL) {
+            name_size = (size_t)(end - type->name);
+        }
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("weakref.__new__("),
+            {type->name, name_size},
+            TINYPY_MESSAGE_PART_LITERAL("): "),
+            {type->name, name_size},
+            TINYPY_MESSAGE_PART_LITERAL(" is not a subtype of weakref")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
+        return NULL;
+    }
+    if (tinypy_internal_native_method_arguments(function, args, NULL, 1U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_bool_t condition_2 = TINYPY_TUPLE_SIZE(args) == 3U;
@@ -728,7 +823,13 @@ static tinypy_value_t *__tinypy_weakref_init_method(tinypy_value_t *function, ti
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 2U, 3U, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "ref() does not take keyword arguments", out_error);
+        return NULL;
+    }
+    size_t count = TINYPY_TUPLE_SIZE(args) - 1U;
+    if (count < 1U || count > 2U) {
+        tinypy_internal_make_arity_error(vm, "__init__", 8U, count, 1U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error);
         return NULL;
     }
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
@@ -739,7 +840,7 @@ static tinypy_value_t *__tinypy_weakref_hash_method(tinypy_value_t *function, ti
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -755,30 +856,81 @@ static tinypy_value_t *__tinypy_weakref_hash_method(tinypy_value_t *function, ti
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_weakref_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    char text[256];
+
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *object = TINYPY_WEAKREF_OBJECT(self)->object;
+    if (__tinypy_weakref_is_proxy(vm, self) != TINYPY_FALSE) {
+        tinypy_value_t *target = object != NULL ? object : &vm->none_object.base;
+
+        (void)snprintf(text, sizeof(text), "<weakproxy at %p to %.100s at %p>", (void *)self, target->type->name, (void *)target);
+    }
+    else if (object == NULL) {
+        (void)snprintf(text, sizeof(text), "<weakref at %p; dead>", (void *)self);
+    }
+    else {
+        tinypy_internal_exception_state_t state;
+        tinypy_error_t *name_error = NULL;
+
+        TINYPY_INCREF(object);
+        tinypy_internal_exception_preserve_begin(vm, &state);
+        tinypy_value_t *name = tinypy_internal_object_get_attr_key(object, vm->internal_special_name_key, &name_error);
+        TINYPY_DECREF(object);
+        object = TINYPY_WEAKREF_OBJECT(self)->object;
+        if (object == NULL) {
+            object = &vm->none_object.base;
+        }
+        if (name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING) {
+            (void)snprintf(text, sizeof(text), "<weakref at %p; to '%.50s' at %p (%s)>", (void *)self, object->type->name, (void *)object, (const char *)TINYPY_TEXT_BYTES(name));
+        }
+        else {
+            (void)snprintf(text, sizeof(text), "<weakref at %p; to '%.50s' at %p>", (void *)self, object->type->name, (void *)object);
+        }
+        if (name != NULL) {
+            TINYPY_DECREF(name);
+        }
+        if (name_error != NULL) {
+            tinypy_error_release(name_error);
+        }
+        tinypy_internal_exception_preserve_end(vm, &state);
+    }
+    tinypy_value_t *result = tinypy_string_from_bytes(vm, text, strlen(text));
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_call_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0 || tinypy_type_is_subtype(TINYPY_TUPLE_GET(args, 0U)->type, &vm->types[TINYPY_VALUE_WEAKREF]) == 0) {
-        if (out_error == NULL || *out_error == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref.__call__ requires a weak reference", out_error);
-        }
+    if (tinypy_internal_native_method_arguments(function, args, NULL, 0U, SIZE_MAX, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
-    tinypy_value_t *result = tinypy_internal_weakref_call(TINYPY_TUPLE_GET(args, 0U), empty, NULL, out_error);
+    if (tinypy_type_is_subtype(TINYPY_TUPLE_GET(args, 0U)->type, &vm->types[TINYPY_VALUE_WEAKREF]) == TINYPY_FALSE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref.__call__ requires a weak reference", out_error);
+        return NULL;
+    }
+    tinypy_value_t *call_args = tinypy_tuple_from_items(vm, tinypy_internal_tuple_items(args) + 1U, TINYPY_TUPLE_SIZE(args) - 1U);
+    tinypy_value_t *result = tinypy_internal_weakref_call(TINYPY_TUPLE_GET(args, 0U), call_args, kwargs, out_error);
 
-    TINYPY_DECREF(empty);
+    TINYPY_DECREF(call_args);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_compare_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0 || tinypy_type_is_subtype(TINYPY_TUPLE_GET(args, 0U)->type, &vm->types[TINYPY_VALUE_WEAKREF]) == 0) {
-        if (out_error == NULL || *out_error == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref comparison requires a weak reference", out_error);
-        }
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    if (tinypy_type_is_subtype(TINYPY_TUPLE_GET(args, 0U)->type, &vm->types[TINYPY_VALUE_WEAKREF]) == TINYPY_FALSE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref comparison requires a weak reference", out_error);
         return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_internal_weakref_compare(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), (int32_t)(intptr_t)user_data, out_error);
@@ -789,10 +941,11 @@ static tinypy_value_t *__tinypy_weakref_proxy_delete_attribute_method(tinypy_val
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0 || __tinypy_weakref_is_proxy(vm, TINYPY_TUPLE_GET(args, 0U)) == 0) {
-        if (out_error == NULL || *out_error == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak proxy deletion requires a proxy", out_error);
-        }
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    if (__tinypy_weakref_is_proxy(vm, TINYPY_TUPLE_GET(args, 0U)) == TINYPY_FALSE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak proxy deletion requires a proxy", out_error);
         return NULL;
     }
     tinypy_value_t *object = __tinypy_weakref_proxy_referent(TINYPY_TUPLE_GET(args, 0U), out_error);
@@ -801,6 +954,29 @@ static tinypy_value_t *__tinypy_weakref_proxy_delete_attribute_method(tinypy_val
     }
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_weakref_proxy_unicode_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *object = __tinypy_weakref_proxy_referent(TINYPY_TUPLE_GET(args, 0U), out_error);
+    if (object == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *method = tinypy_internal_object_get_attr_key(object, vm->internal_special_unicode_key, out_error);
+    if (method == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
+    tinypy_value_t *result = tinypy_call(method, empty, NULL, out_error);
+
+    TINYPY_DECREF(empty);
+    TINYPY_DECREF(method);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_type_t *__tinypy_weakref_proxy_type_new(tinypy_value_t *name, tinypy_bool_t callable) {
@@ -861,6 +1037,10 @@ static tinypy_type_t *__tinypy_weakref_proxy_type_new(tinypy_value_t *name, tiny
     type->flags = (type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
     tinypy_type_set_attr_key(type, type->vm->internal_special_hash_key, &vm->none_object.base);
     tinypy_internal_type_add_method(type, vm->internal_special_delattr_key, __tinypy_weakref_proxy_delete_attribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_weakref_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    if (callable == TINYPY_FALSE) {
+        tinypy_internal_type_add_method(type, vm->internal_special_unicode_key, __tinypy_weakref_proxy_unicode_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_METHOD);
+    }
     for (size_t index = 0U; index < sizeof(binary_methods) / sizeof(binary_methods[0]); ++index) {
         tinypy_value_t *method_name = binary_methods[index].name;
         tinypy_internal_type_add_method(type, method_name, __tinypy_weakref_proxy_binary_method, (void *)binary_methods[index].operation, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
@@ -919,6 +1099,7 @@ void tinypy_internal_initialize_weakref_type(tinypy_vm_t *vm) {
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_WEAKREF], vm->internal_special_init_key, __tinypy_weakref_init_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_WEAKREF], vm->internal_special_call_key, __tinypy_weakref_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_WEAKREF], vm->internal_special_hash_key, __tinypy_weakref_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_WEAKREF], vm->internal_special_repr_key, __tinypy_weakref_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     for (size_t index = 0U; index < sizeof(comparison_names) / sizeof(comparison_names[0]); ++index) {
         tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_WEAKREF], comparison_names[index], __tinypy_weakref_compare_method, (void *)(intptr_t)index, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
@@ -929,7 +1110,7 @@ static tinypy_value_t *__tinypy_weakref_count_function(tinypy_value_t *function,
     int64_t count = INT64_C(0);
 
     (void)user_data;
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (__tinypy_weakref_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
@@ -947,7 +1128,7 @@ static tinypy_value_t *__tinypy_weakref_list_function(tinypy_value_t *function, 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (__tinypy_weakref_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
@@ -969,7 +1150,7 @@ static tinypy_value_t *__tinypy_weakref_proxy_function(tinypy_value_t *function,
     tinypy_value_t *callback = NULL;
 
     (void)user_data;
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 1U, 2U, out_error) == 0) {
+    if (__tinypy_weakref_arguments(function, args, kwargs, 1U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error) == 0) {
         return NULL;
     }
     tinypy_bool_t condition_3 = TINYPY_TUPLE_SIZE(args) == 2U;
@@ -990,20 +1171,44 @@ static tinypy_value_t *__tinypy_weakref_remove_function(tinypy_value_t *function
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
+    if (__tinypy_weakref_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *dict = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *key = TINYPY_TUPLE_GET(args, 1U);
     if (TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_DICT) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weakref removal requires a dictionary", out_error);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("_remove_dead_weakref() argument 1 must be dict, not "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(dict)
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
         return NULL;
     }
-    tinypy_value_t *candidate = tinypy_dict_get_optional(dict, key);
+    tinypy_value_t *candidate;
+    size_t index;
+    if (tinypy_internal_dict_get_optional_index_checked(vm, dict, key, &index, &candidate, out_error) == TINYPY_FALSE) {
+        if (vm->raised_type != NULL && TINYPY_VALUE_KIND(vm->raised_type) == TINYPY_VALUE_TYPE
+            && tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_KEY_ERROR]) != TINYPY_FALSE) {
+            if (out_error != NULL && *out_error != NULL) {
+                tinypy_error_release(*out_error);
+                *out_error = NULL;
+            }
+            tinypy_internal_exception_clear_raised(vm);
+            tinypy_value_t *result = TINYPY_RET_NONE(vm);
+
+            return result;
+        }
+        return NULL;
+    }
 
     if (candidate != NULL) {
-        if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_WEAKREF && TINYPY_WEAKREF_OBJECT(candidate)->object == NULL) {
-            tinypy_dict_delete(dict, key);
+        if (TINYPY_VALUE_KIND(candidate) != TINYPY_VALUE_WEAKREF) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "not a weakref", out_error);
+            return NULL;
+        }
+        if (TINYPY_WEAKREF_OBJECT(candidate)->object == NULL) {
+            (void)tinypy_internal_dict_delete_index(vm, dict, index, NULL, NULL);
         }
     }
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);

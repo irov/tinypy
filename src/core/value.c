@@ -352,11 +352,11 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
         vm->integer_free_count += 1U;
         return;
     }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GENERATOR && __tinypy_internal_value_finalize_generator(value) != 0) {
-        return;
-    }
     if (type->weakref_offset != 0U) {
         tinypy_internal_weakref_clear(value);
+    }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GENERATOR && __tinypy_internal_value_finalize_generator(value) != 0) {
+        return;
     }
     if (vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_epoch != vm->type_lookup_cache_epoch || vm->type_lookup_cache_epoch == 0U || type->has_finalizer != 0 || type->has_classic_mro != 0 || type->has_custom_mro != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE)) {
         if (__tinypy_internal_value_finalize(value) != 0) {

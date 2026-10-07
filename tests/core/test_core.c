@@ -3343,7 +3343,114 @@ static int32_t __test_container_heap_limits(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __test_weakref_optional_error_outputs(void) {
+    test_allocator_state_t allocator_state;
+    tinypy_error_t *error = NULL;
+    tinypy_bool_t matching_errors = TINYPY_TRUE;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *target = tinypy_set_new(vm);
+    tinypy_value_t *reference = tinypy_weakref_new(target, NULL, &error);
+    tinypy_value_t *module = tinypy_import_module(vm, "_weakref", 8U, NULL, NULL, 0, &error);
+    tinypy_value_t *factory = tinypy_module_get_value(module, "proxy", 5U);
+    tinypy_value_t *factory_args = tinypy_tuple_from_items(vm, &target, 1U);
+    tinypy_value_t *proxy = tinypy_call(factory, factory_args, NULL, &error);
+    tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *keywords = tinypy_dict_new(vm);
+    tinypy_value_t *name = tinypy_string_from_bytes(vm, "missing", 7U);
+
+    TEST_CHECK(reference != NULL && module != NULL && factory != NULL && proxy != NULL && error == NULL);
+    tinypy_dict_set(keywords, name, target);
+    const struct {
+        tinypy_value_t *receiver;
+        const char *name;
+        size_t name_size;
+        size_t argument_count;
+    } methods[] = {
+        {proxy, "__or__", 6U, 1U},
+        {proxy, "__nonzero__", 11U, 0U},
+        {reference, "__eq__", 6U, 1U},
+        {proxy, "__delattr__", 11U, 1U},
+        {reference, "__call__", 8U, 0U}
+    };
+
+    /* The same ordinary descriptor call must retain its parser exception
+       whether the embedding caller requests an owned diagnostic or not. */
+    for (size_t index = 0U; index < sizeof(methods) / sizeof(methods[0]); ++index) {
+        tinypy_value_t *descriptor = tinypy_type_get_attr(tinypy_object_type(methods[index].receiver), methods[index].name, methods[index].name_size);
+
+        TEST_CHECK(descriptor != NULL);
+        for (size_t shape = 0U; shape < 2U; ++shape) {
+            tinypy_value_t *items[2] = {methods[index].receiver, name};
+            size_t count = shape == 0U ? (methods[index].argument_count == 0U ? 2U : 1U) : methods[index].argument_count + 1U;
+            tinypy_value_t *arguments = tinypy_tuple_from_items(vm, items, count);
+            tinypy_value_t *kwargs = shape == 0U ? NULL : keywords;
+            tinypy_value_t *result = tinypy_call(descriptor, arguments, kwargs, &error);
+
+            TEST_CHECK(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+            tinypy_value_t *expected_type = tinypy_vm_raised_exception_type(vm);
+            tinypy_value_t *expected_exception = tinypy_vm_raised_exception(vm);
+
+            TEST_CHECK(expected_type != NULL && expected_exception != NULL);
+            tinypy_retain(expected_exception);
+            tinypy_error_release(error);
+            error = NULL;
+            tinypy_vm_clear_error(vm);
+            tinypy_value_t *expected_args = tinypy_object_get_attr(expected_exception, "args", 4U, &error);
+
+            TEST_CHECK(expected_args != NULL && error == NULL && tinypy_tuple_size(expected_args) == 1U);
+            tinypy_release(expected_exception);
+            result = tinypy_call(descriptor, arguments, kwargs, NULL);
+            TEST_CHECK(result == NULL && tinypy_vm_has_error(vm) != 0);
+            tinypy_value_t *actual_exception = tinypy_vm_raised_exception(vm);
+
+            TEST_CHECK(actual_exception != NULL);
+            matching_errors = tinypy_vm_raised_exception_type(vm) == expected_type && matching_errors != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
+            tinypy_retain(actual_exception);
+            tinypy_vm_clear_error(vm);
+            tinypy_value_t *actual_args = tinypy_object_get_attr(actual_exception, "args", 4U, &error);
+
+            TEST_CHECK(actual_args != NULL && error == NULL && tinypy_tuple_size(actual_args) == 1U);
+            size_t expected_size;
+            size_t actual_size;
+            const void *expected_message = tinypy_string_view(tinypy_tuple_get(expected_args, 0U), &expected_size);
+            const void *actual_message = tinypy_string_view(tinypy_tuple_get(actual_args, 0U), &actual_size);
+            tinypy_bool_t same_message = expected_size == actual_size && memcmp(expected_message, actual_message, expected_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+            if (same_message == TINYPY_FALSE) {
+                (void)fprintf(stderr, "weakref optional error output: %s %s changed diagnostic\n", methods[index].name, shape == 0U ? "count" : "keyword");
+                matching_errors = TINYPY_FALSE;
+            }
+            tinypy_release(actual_args);
+            tinypy_release(actual_exception);
+            tinypy_release(expected_args);
+            tinypy_release(arguments);
+            result = tinypy_call(reference, empty, NULL, NULL);
+            TEST_CHECK(result == target && tinypy_vm_has_error(vm) == 0);
+            tinypy_release(result);
+        }
+    }
+    tinypy_release(name);
+    tinypy_release(keywords);
+    tinypy_release(empty);
+    tinypy_release(proxy);
+    tinypy_release(factory_args);
+    tinypy_release(module);
+    tinypy_release(reference);
+    tinypy_release(target);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U && allocator_state.outstanding_bytes == 0U);
+    TEST_CHECK(matching_errors != TINYPY_FALSE);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_native_embedding(void) {
+    int32_t optional_error_result = __test_weakref_optional_error_outputs();
+
+    TEST_CHECK(optional_error_result == 0);
     test_allocator_state_t allocator_state;
     test_native_state_t native_state;
     tinypy_allocator_t allocator;

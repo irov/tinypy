@@ -5,15 +5,22 @@
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_codecs_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_codecs_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *name = tinypy_native_function_name(function);
     size_t count = TINYPY_TUPLE_SIZE(args);
 
-    if (count < minimum || count > maximum) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "codec function received the wrong number of arguments", out_error);
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_TEXT(name),
+            TINYPY_MESSAGE_PART_LITERAL("() takes no keyword arguments"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return TINYPY_FALSE;
     }
-    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "codec function does not accept keyword arguments", out_error);
+    if (count < minimum || count > maximum) {
+        tinypy_internal_make_arity_error(vm, (const char *)TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name), count, minimum, maximum, style, out_error);
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;
@@ -84,7 +91,7 @@ static tinypy_value_t *__tinypy_codecs_register(tinypy_value_t *function, tinypy
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     (void)user_data;
 
-    if (__tinypy_codecs_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (__tinypy_codecs_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *search = TINYPY_TUPLE_GET(args, 0U);
@@ -106,13 +113,15 @@ static tinypy_value_t *__tinypy_codecs_lookup(tinypy_value_t *function, tinypy_v
     tinypy_value_t *cache;
     tinypy_value_t *search_path;
 
-    if (__tinypy_codecs_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (__tinypy_codecs_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *name = TINYPY_TUPLE_GET(args, 0U);
-    if (tinypy_internal_codecs_validate_name(vm, name, out_error) == 0) {
+    tinypy_value_t *argument_names[] = {vm->internal_encoding_key};
+    tinypy_value_t *values[1];
+    if (tinypy_internal_constructor_optional_arguments(vm, "lookup", 6U, args, NULL, argument_names, 1U, UINT32_C(1), values, out_error) == TINYPY_FALSE) {
         return NULL;
     }
+    tinypy_value_t *name = values[0];
     tinypy_value_t *normalized = __tinypy_codecs_normalize(vm, name);
     cache = vm->codec_cache;
     tinypy_value_t *cached = tinypy_dict_get_optional(cache, normalized);
@@ -179,6 +188,10 @@ static tinypy_value_t *__tinypy_codecs_text_input(tinypy_vm_t *vm, tinypy_value_
     const uint8_t *bytes;
     size_t size;
 
+    if (decode == TINYPY_FALSE) {
+        tinypy_value_t *result = tinypy_internal_string_argument_text(vm, input, TINYPY_TRUE, out_error);
+        return result;
+    }
     if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
         return TINYPY_RET(input);
     }
@@ -201,7 +214,7 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
     tinypy_bool_t final = TINYPY_FALSE;
     size_t consumed;
 
-    if (__tinypy_codecs_arguments(vm, args, kwargs, 1U, maximum, out_error) == 0) {
+    if (__tinypy_codecs_arguments(function, args, kwargs, 1U, maximum, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *source = TINYPY_TUPLE_GET(args, 0U);
@@ -217,16 +230,42 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
         }
     }
     else {
-        if (source_kind != TINYPY_VALUE_STRING && source_kind != TINYPY_VALUE_UNICODE && ((decode == 0 && source_kind != TINYPY_VALUE_BUFFER) || tinypy_internal_bytes_view(source, &source_bytes, &source_size) == 0)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, decode != 0 ? "decoder requires a string or buffer" : "encoder requires a string or unicode", out_error);
+        if (decode != TINYPY_FALSE && source_kind != TINYPY_VALUE_STRING && source_kind != TINYPY_VALUE_UNICODE && tinypy_internal_bytes_view(source, &source_bytes, &source_size) == TINYPY_FALSE) {
+            tinypy_bool_t heap_type = (source->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_TEXT(tinypy_native_function_name(function)),
+                {heap_type != TINYPY_FALSE ? "() argument 1 must be convertible to a buffer, not " : "() argument 1 must be string or buffer, not ", heap_type != TINYPY_FALSE ? 51U : 44U},
+                {source_kind == TINYPY_VALUE_NONE ? "None" : source->type->name, source_kind == TINYPY_VALUE_NONE ? 4U : source->type->name_size},
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
             return NULL;
         }
         input = TINYPY_RET(source);
     }
     if (TINYPY_TUPLE_SIZE(args) >= 2U) {
         errors = TINYPY_TUPLE_GET(args, 1U);
-        if (tinypy_internal_codecs_validate_name(vm, errors, out_error) == 0) {
-            goto cleanup_input;
+        tinypy_value_type_e errors_kind = TINYPY_VALUE_KIND(errors);
+        if (errors_kind == TINYPY_VALUE_NONE) {
+            errors = NULL;
+        }
+        else {
+            tinypy_bool_t is_text = errors_kind == TINYPY_VALUE_STRING || errors_kind == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
+            tinypy_bool_t contains_null = is_text != TINYPY_FALSE && memchr(TINYPY_TEXT_BYTES(errors), 0, TINYPY_TEXT_BYTE_SIZE(errors)) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+
+            if (is_text == TINYPY_FALSE || contains_null != TINYPY_FALSE) {
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_TEXT(tinypy_native_function_name(function)),
+                    TINYPY_MESSAGE_PART_LITERAL("() argument 2 must be string"),
+                    {contains_null != TINYPY_FALSE ? " without null bytes or None, not " : " or None, not ", contains_null != TINYPY_FALSE ? 33U : 14U},
+                    TINYPY_MESSAGE_PART_TYPE_NAME(errors),
+                };
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+                goto cleanup_input;
+            }
+            if (tinypy_internal_codecs_validate_name(vm, errors, out_error) == TINYPY_FALSE) {
+                goto cleanup_input;
+            }
         }
     }
     if (TINYPY_TUPLE_SIZE(args) == 3U) {
@@ -289,7 +328,7 @@ static tinypy_value_t *__tinypy_codecs_hex(tinypy_value_t *function, tinypy_valu
     uint8_t *output;
     size_t index;
 
-    if (__tinypy_codecs_arguments(vm, args, kwargs, 1U, 2U, out_error) == 0) {
+    if (__tinypy_codecs_arguments(function, args, kwargs, 1U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     input = TINYPY_TUPLE_GET(args, 0U);
@@ -466,20 +505,33 @@ static tinypy_value_t *__tinypy_codecs_register_error(tinypy_value_t *function, 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     (void)user_data;
 
-    if (__tinypy_codecs_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
+    if (__tinypy_codecs_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *name = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *handler = TINYPY_TUPLE_GET(args, 1U);
-    if (tinypy_internal_codecs_validate_name(vm, name, out_error) == 0) {
+    tinypy_value_t *argument_names[] = {vm->internal_encoding_key, vm->internal_object_key};
+    tinypy_value_t *values[2];
+    if (tinypy_internal_constructor_optional_arguments(vm, "register_error", 14U, args, NULL, argument_names, 2U, UINT32_C(1), values, out_error) == TINYPY_FALSE) {
         return NULL;
     }
+    tinypy_value_t *name = values[0];
+    tinypy_value_t *handler = values[1];
     if (handler->type->call == NULL && tinypy_internal_object_has_special_key(handler, vm->internal_special_call_key) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "error handler must be callable", out_error);
         return NULL;
     }
     tinypy_value_t *codecs_module_value = vm->codec_errors;
-    tinypy_dict_set(codecs_module_value, name, handler);
+    tinypy_value_t *key = name->type == &vm->types[TINYPY_VALUE_STRING]
+        ? TINYPY_RET(name)
+        : tinypy_internal_string_from_bytes_checked(vm, TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name), out_error);
+    if (key == NULL) {
+        return NULL;
+    }
+    tinypy_bool_t registered = tinypy_internal_dict_set_checked(vm, codecs_module_value, key, handler, out_error);
+
+    TINYPY_DECREF(key);
+    if (registered == TINYPY_FALSE) {
+        return NULL;
+    }
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
@@ -487,22 +539,18 @@ static tinypy_value_t *__tinypy_codecs_register_error(tinypy_value_t *function, 
 static tinypy_value_t *__tinypy_codecs_lookup_error(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     (void)user_data;
-    tinypy_value_t *handler;
 
-    if (__tinypy_codecs_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (__tinypy_codecs_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *name = TINYPY_TUPLE_GET(args, 0U);
-    if (tinypy_internal_codecs_validate_name(vm, name, out_error) == 0) {
+    tinypy_value_t *argument_names[] = {vm->internal_encoding_key};
+    tinypy_value_t *values[1];
+    if (tinypy_internal_constructor_optional_arguments(vm, "lookup_error", 12U, args, NULL, argument_names, 1U, UINT32_C(1), values, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *errors = vm->codec_errors;
-    handler = tinypy_dict_get_optional(errors, name);
-    if (handler == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_LOOKUP, "unknown error handler name", out_error);
-        return NULL;
-    }
-    return TINYPY_RET(handler);
+    tinypy_value_t *name = values[0];
+    tinypy_value_t *result = tinypy_internal_codecs_lookup_error(vm, name, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_codecs_lookup_error(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error) {
@@ -515,9 +563,22 @@ tinypy_value_t *tinypy_internal_codecs_lookup_error(tinypy_vm_t *vm, tinypy_valu
         return NULL;
     }
     errors = vm->codec_errors;
-    handler = tinypy_dict_get_optional(errors, name);
+    tinypy_value_t *key = name->type == &vm->types[TINYPY_VALUE_STRING]
+        ? TINYPY_RET(name)
+        : tinypy_internal_string_from_bytes_checked(vm, TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name), out_error);
+    if (key == NULL) {
+        return NULL;
+    }
+    handler = tinypy_dict_get_optional(errors, key);
+    TINYPY_DECREF(key);
     if (handler == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_LOOKUP, "unknown error handler name", out_error);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("unknown error handler name '"),
+            TINYPY_MESSAGE_PART_TEXT(name),
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_LOOKUP, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
     }
     return TINYPY_RET(handler);
@@ -533,7 +594,7 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
     int64_t first;
     int64_t last;
 
-    if (__tinypy_codecs_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (__tinypy_codecs_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
@@ -697,6 +758,7 @@ static void __tinypy_codecs_cache_builtin(tinypy_vm_t *vm, tinypy_value_t *modul
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm) {
     tinypy_value_t *const error_names[5] = {vm->internal_codec_strict_name, vm->internal_ignore_key, vm->internal_replace_key, vm->internal_xmlcharrefreplace_key, vm->internal_backslashreplace_key};
+    tinypy_value_t *const function_names[5] = {vm->internal_strict_errors_key, vm->internal_ignore_errors_key, vm->internal_replace_errors_key, vm->internal_xmlcharrefreplace_errors_key, vm->internal_backslashreplace_errors_key};
     tinypy_value_t *const utf8_aliases[] = {vm->internal_utf_hyphen_8_key, vm->internal_codec_utf8_name, vm->internal_utf_8_key, vm->internal_u8_key, vm->internal_utf_key};
     tinypy_value_t *const ascii_aliases[] = {vm->internal_codec_ascii_name, vm->internal_codec_646_key, vm->internal_us_hyphen_ascii_key, vm->internal_iso646_hyphen_us_key, vm->internal_ansi_x3_dot_4_1968_key, vm->internal_ansi_hyphen_x3_dot_4_hyphen_1968_key};
     tinypy_value_t *const latin1_aliases[] = {vm->internal_codec_latin1_name, vm->internal_latin1_key, vm->internal_latin_1_key, vm->internal_iso_hyphen_8859_hyphen_1_key, vm->internal_iso8859_hyphen_1_key, vm->internal_iso_8859_hyphen_1_key, vm->internal_cp819_key, vm->internal_l1_key};
@@ -777,7 +839,7 @@ void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm) {
     for (index = 0U; index < 5U; ++index) {
         tinypy_value_t *key;
 
-        function = tinypy_native_function_new_key(error_names[index], __tinypy_codecs_error_handler, (void *)(intptr_t)index, NULL);
+        function = tinypy_native_function_new_key(function_names[index], __tinypy_codecs_error_handler, (void *)(intptr_t)index, NULL);
         key = TINYPY_RET(error_names[index]);
         tinypy_value_t *codecs_module_value = vm->codec_errors;
         tinypy_dict_set(codecs_module_value, key, function);

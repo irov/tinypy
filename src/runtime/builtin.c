@@ -707,6 +707,10 @@ static tinypy_value_t *__tinypy_builtin_getattr(tinypy_value_t *function, tinypy
     }
     tinypy_value_t *object = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *name_value = TINYPY_TUPLE_GET(args, 1U);
+    if (TINYPY_VALUE_KIND(name_value) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(name_value) != TINYPY_VALUE_UNICODE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "getattr(): attribute name must be string", out_error);
+        return NULL;
+    }
     if (__tinypy_builtin_text_view(vm, name_value, &name, &name_size, out_error) == 0) {
         return NULL;
     }

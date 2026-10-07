@@ -419,11 +419,16 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
     }
     case TINYPY_VALUE_BUFFER: {
         const tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-        size_t size;
-        const uint8_t *bytes = (const uint8_t *)tinypy_buffer_view(value, &size);
+        tinypy_buffer_object_t *buffer = TINYPY_BUFFER_OBJECT((tinypy_value_t *)value);
 
-        tinypy_hash_t return_value_4 = tinypy_internal_hash_bytes(vm, bytes, size);
-        return return_value_4;
+        if (buffer->hash_computed == 0) {
+            size_t size;
+            const uint8_t *bytes = (const uint8_t *)tinypy_buffer_view(value, &size);
+
+            buffer->hash = tinypy_internal_hash_bytes(vm, bytes, size);
+            buffer->hash_computed = TINYPY_TRUE;
+        }
+        return buffer->hash;
     }
     case TINYPY_VALUE_TUPLE:
         function_result = __tinypy_internal_hash_tuple(value, out_error);

@@ -85,14 +85,8 @@ static tinypy_value_t *__tinypy_numeric_bit_length_method(tinypy_value_t *functi
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_numeric_field_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    intptr_t field = (intptr_t)user_data;
-
-    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
-        return NULL;
-    }
-    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
+tinypy_value_t *tinypy_internal_numeric_field(tinypy_value_t *value, int32_t field, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     if (kind == TINYPY_VALUE_COMPLEX) {
         double component = field == 0 ? TINYPY_COMPLEX_OBJECT(value)->real : TINYPY_COMPLEX_OBJECT(value)->imaginary;
@@ -898,10 +892,6 @@ void tinypy_internal_initialize_numeric_types(tinypy_vm_t *vm) {
         tinypy_internal_type_add_method((integer_types[index]), vm->internal_special_getnewargs_key, __tinypy_numeric_getnewargs_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         tinypy_internal_type_add_method((integer_types[index]), vm->internal_special_cmp_key, __tinypy_numeric_cmp_method, (void *)(intptr_t)(index == 0U ? TINYPY_VALUE_INTEGER : TINYPY_VALUE_LONG), NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         tinypy_internal_type_add_method((integer_types[index]), vm->internal_special_coerce_key, __tinypy_numeric_coerce_method, (void *)(intptr_t)(index == 0U ? TINYPY_VALUE_INTEGER : TINYPY_VALUE_LONG), NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-        tinypy_internal_type_add_property((integer_types[index]), vm->internal_real_key, __tinypy_numeric_field_method, (void *)0, NULL);
-        tinypy_internal_type_add_property((integer_types[index]), vm->internal_imag_key, __tinypy_numeric_field_method, (void *)1, NULL);
-        tinypy_internal_type_add_property((integer_types[index]), vm->internal_numerator_key, __tinypy_numeric_field_method, (void *)2, NULL);
-        tinypy_internal_type_add_property((integer_types[index]), vm->internal_denominator_key, __tinypy_numeric_field_method, (void *)3, NULL);
     }
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_conjugate_key, __tinypy_numeric_conjugate_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_is_integer_key, __tinypy_float_is_integer_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
@@ -913,11 +903,8 @@ void tinypy_internal_initialize_numeric_types(tinypy_vm_t *vm) {
     tinypy_internal_type_add_class_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_fromhex_key, __tinypy_float_fromhex_method, NULL, NULL);
     tinypy_internal_type_add_class_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_special_getformat_key, __tinypy_float_getformat_method, NULL, NULL);
     tinypy_internal_type_add_class_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_special_setformat_key, __tinypy_float_setformat_method, NULL, NULL);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_real_key, __tinypy_numeric_field_method, (void *)0, NULL);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_imag_key, __tinypy_numeric_field_method, (void *)1, NULL);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_conjugate_key, __tinypy_numeric_conjugate_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_special_getnewargs_key, __tinypy_numeric_getnewargs_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_special_coerce_key, __tinypy_numeric_coerce_method, (void *)(intptr_t)TINYPY_VALUE_COMPLEX, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_real_key, __tinypy_numeric_field_method, (void *)0, NULL);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_imag_key, __tinypy_numeric_field_method, (void *)1, NULL);
+    tinypy_internal_initialize_numeric_descriptors(vm);
 }

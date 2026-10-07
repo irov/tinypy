@@ -11,6 +11,7 @@ tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *global
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
 
     tinypy_function_object_t *function = (tinypy_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_FUNCTION, sizeof(*function));
+    function->weakrefs = NULL;
     function->code = code;
     function->globals = globals;
     function->defaults = defaults;
