@@ -76,7 +76,12 @@ typedef enum tinypy_internal_c_descriptor_field_e {
     TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT = 69,
     TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_MODULE = 70,
     TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_ABSTRACT_METHODS = 71,
-    TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC = 72
+    TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC = 72,
+    TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_ENCODING = 73,
+    TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_OBJECT = 74,
+    TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_REASON = 75,
+    TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_START = 76,
+    TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_END = 77
 } tinypy_internal_c_descriptor_field_e;
 
 //////////////////////////////////////////////////////////////////////////
@@ -799,6 +804,7 @@ static tinypy_value_t *__tinypy_internal_descriptor_get_method(tinypy_value_t *f
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *descriptor;
     tinypy_value_t *instance;
+    tinypy_value_t *owner_value;
     tinypy_type_t *owner;
     size_t count;
 
@@ -813,26 +819,29 @@ static tinypy_value_t *__tinypy_internal_descriptor_get_method(tinypy_value_t *f
         instance = NULL;
     }
     if (count == 3U) {
-        tinypy_value_t *owner_value = TINYPY_TUPLE_GET(args, 2U);
-
-        if (TINYPY_VALUE_KIND(owner_value) != TINYPY_VALUE_TYPE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor owner must be a type", out_error);
-            return NULL;
-        }
-        owner = (tinypy_type_t *)owner_value;
+        owner_value = TINYPY_TUPLE_GET(args, 2U);
     }
     else if (instance != NULL) {
-        owner = instance->type;
+        owner_value = &instance->type->base.base;
     }
     else {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor requires an instance or owner", out_error);
         return NULL;
     }
+    if (instance == NULL && TINYPY_VALUE_KIND(owner_value) == TINYPY_VALUE_NONE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__get__(None, None) is invalid", out_error);
+        return NULL;
+    }
+    owner = TINYPY_VALUE_KIND(owner_value) == TINYPY_VALUE_TYPE ? (tinypy_type_t *)owner_value : (instance != NULL ? instance->type : &vm->types[TINYPY_VALUE_INSTANCE]);
     if (TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_FUNCTION) {
-        tinypy_value_t *return_value_1 = tinypy_internal_function_descriptor_get(descriptor, instance, owner, out_error);
+        tinypy_value_t *return_value_1 = tinypy_method_new(descriptor, instance, owner_value);
         return return_value_1;
     }
     if (TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_METHOD) {
+        if (TINYPY_VALUE_KIND(owner_value) != TINYPY_VALUE_TYPE) {
+            TINYPY_INCREF(descriptor);
+            return descriptor;
+        }
         tinypy_value_t *return_value_2 = tinypy_internal_method_descriptor_get(descriptor, instance, owner, out_error);
         return return_value_2;
     }
@@ -845,7 +854,15 @@ static tinypy_value_t *__tinypy_internal_descriptor_get_method(tinypy_value_t *f
         return return_value_4;
     }
     if (TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_CLASS_METHOD) {
-        tinypy_value_t *return_value_5 = tinypy_internal_class_method_get(descriptor, instance, owner, out_error);
+        if (TINYPY_VALUE_KIND(owner_value) == TINYPY_VALUE_NONE) {
+            owner_value = &instance->type->base.base;
+        }
+        tinypy_value_t *callable = TINYPY_CALLABLE_DESCRIPTOR_OBJECT(descriptor)->callable;
+        if (callable == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "uninitialized classmethod object", out_error);
+            return NULL;
+        }
+        tinypy_value_t *return_value_5 = tinypy_method_new(callable, owner_value, &owner_value->type->base.base);
         return return_value_5;
     }
     if (TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_GETSET_DESCRIPTOR || TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_MEMBER_DESCRIPTOR) {
@@ -1174,6 +1191,17 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         }
         TINYPY_INCREF(payload->message);
         return payload->message;
+    }
+    if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_ENCODING && field <= TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_END) {
+        tinypy_internal_unicode_error_payload_t *payload = (tinypy_internal_unicode_error_payload_t *)tinypy_native_instance_payload(instance);
+
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_START || field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_END) {
+            tinypy_value_t *result = tinypy_integer_from_i64(vm, field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_START ? payload->start : payload->end);
+            return result;
+        }
+        tinypy_value_t *value = field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_ENCODING ? payload->encoding : (field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_OBJECT ? payload->object : payload->reason);
+        tinypy_value_t *result = __tinypy_internal_c_descriptor_optional(vm, value);
+        return result;
     }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_FUNCTION && field <= TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_OWNER) {
         tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(instance);
@@ -1508,6 +1536,49 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         TINYPY_DECREF(key);
         return stored;
     }
+    if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_ENCODING && field <= TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_END) {
+        tinypy_internal_unicode_error_payload_t *payload = (tinypy_internal_unicode_error_payload_t *)tinypy_native_instance_payload(instance);
+
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_START || field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_END) {
+            int64_t *position = field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_START ? &payload->start : &payload->end;
+            int64_t integer;
+            tinypy_bool_t converted;
+
+            if (value == NULL) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can't delete numeric attribute", out_error);
+                return TINYPY_FALSE;
+            }
+            tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+            if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG) {
+                converted = tinypy_internal_index_as_i64(value, &integer, TINYPY_FALSE, out_error);
+            }
+            else {
+                tinypy_bool_t handled;
+                tinypy_value_t *number = tinypy_internal_call_conversion(value, "__int__", 7U, &handled, out_error);
+
+                converted = TINYPY_FALSE;
+                if (handled == 0) {
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "an integer is required", out_error);
+                }
+                else if (number != NULL) {
+                    kind = TINYPY_VALUE_KIND(number);
+                    if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG) {
+                        converted = tinypy_internal_index_as_i64(number, &integer, TINYPY_FALSE, out_error);
+                    }
+                    else {
+                        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ returned a non-integer", out_error);
+                    }
+                    TINYPY_DECREF(number);
+                }
+            }
+            *position = converted != 0 ? integer : INT64_C(-1);
+            return converted;
+        }
+        tinypy_value_t **slot = field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_ENCODING ? &payload->encoding : (field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_OBJECT ? &payload->object : &payload->reason);
+
+        __tinypy_internal_c_descriptor_replace(slot, value);
+        return TINYPY_TRUE;
+    }
     if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_TRACE) {
         tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT(instance);
 
@@ -1719,6 +1790,20 @@ void tinypy_internal_initialize_descriptor_types(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_exception_descriptors(tinypy_type_t *type) {
+    if (type->native_payload_size == sizeof(tinypy_internal_unicode_error_payload_t)) {
+        static const char *const names[5] = {"encoding", "object", "reason", "start", "end"};
+        static const size_t sizes[5] = {8U, 6U, 6U, 5U, 3U};
+        tinypy_vm_t *vm = type->vm;
+        size_t first = type == vm->exception_types[TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR] ? 1U : 0U;
+
+        for (size_t index = first; index < 5U; ++index) {
+            tinypy_value_t *descriptor = __tinypy_internal_c_descriptor_new_with_owner(vm, TINYPY_VALUE_MEMBER_DESCRIPTOR, type, names[index], sizes[index], (tinypy_internal_c_descriptor_field_e)((size_t)TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_ENCODING + index), TINYPY_TRUE, TINYPY_FALSE);
+
+            tinypy_type_set_attr(type, names[index], sizes[index], descriptor);
+            TINYPY_DECREF(descriptor);
+        }
+        return;
+    }
     tinypy_value_t *args = __tinypy_internal_c_descriptor_new_with_owner(type->vm, TINYPY_VALUE_GETSET_DESCRIPTOR, type, "args", 4U, TINYPY_INTERNAL_C_DESCRIPTOR_EXCEPTION_ARGS, TINYPY_TRUE, TINYPY_FALSE);
     tinypy_value_t *message = __tinypy_internal_c_descriptor_new_with_owner(type->vm, TINYPY_VALUE_GETSET_DESCRIPTOR, type, "message", 7U, TINYPY_INTERNAL_C_DESCRIPTOR_EXCEPTION_MESSAGE, TINYPY_TRUE, TINYPY_FALSE);
 

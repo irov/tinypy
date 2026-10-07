@@ -439,42 +439,24 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_error_t *iteration_error = NULL;
-    tinypy_value_t *iterator = tinypy_iter(value, &iteration_error);
-
-    if (iterator == NULL) {
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else if (iteration_error != NULL) {
-            tinypy_error_release(iteration_error);
-        }
-        return NULL;
-    }
     tinypy_value_t *items = tinypy_list_from_items(vm, NULL, 0U);
-    for (;;) {
-        tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
+    tinypy_value_t *iterator = NULL;
 
-        if (item == NULL) {
-            break;
-        }
-        if (tinypy_internal_list_append_checked(items, item, out_error) == 0) {
-            TINYPY_DECREF(item);
-            TINYPY_DECREF(iterator);
+    if (value->type != &vm->types[TINYPY_VALUE_LIST] && value->type != &vm->types[TINYPY_VALUE_TUPLE]) {
+        iterator = tinypy_iter(value, out_error);
+        if (iterator == NULL) {
             TINYPY_DECREF(items);
             return NULL;
         }
-        TINYPY_DECREF(item);
+        value = iterator;
     }
-    TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
+    tinypy_bool_t collected = tinypy_internal_list_extend_iterable(items, value, out_error);
+
+    if (iterator != NULL) {
+        TINYPY_DECREF(iterator);
+    }
+    if (collected == 0) {
         TINYPY_DECREF(items);
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
         return NULL;
     }
     return items;
@@ -487,14 +469,32 @@ static tinypy_bool_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_v
     tinypy_value_t *const *replacement_items;
     tinypy_bool_t replaced;
 
-    /* Materializing the iterable may run arbitrary code that mutates the
-       list, so the slice is normalized against the size seen afterwards. */
-    tinypy_value_t *replacement = __tinypy_item_collect_iterable(value, out_error);
+    if (tinypy_internal_slice_unpack(slice, &indices, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    /* Contiguous assignment retains the offsets normalized before the
+       replacement iterator runs, then clamps them to the live list. */
+    if (tinypy_internal_slice_adjust_indices(vm, TINYPY_LIST_SIZE(list), &indices, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *replacement = value == list
+                                      ? tinypy_list_from_items(vm, TINYPY_LIST_OBJECT(list)->items, TINYPY_LIST_SIZE(list))
+                                      : __tinypy_item_collect_iterable(value, out_error);
     if (replacement == NULL) {
         return TINYPY_FALSE;
     }
-    if (tinypy_internal_slice_unpack(slice, &indices, out_error) == 0
-        || tinypy_internal_slice_adjust_indices(TINYPY_VALUE_VM(list), TINYPY_LIST_SIZE(list), &indices, out_error) == 0) {
+    size_t size = TINYPY_LIST_SIZE(list);
+    tinypy_bool_t adjust = indices.step == 1;
+
+    if (indices.length != 0U && indices.step != 1) {
+        int64_t last = indices.start + (int64_t)(indices.length - 1U) * indices.step;
+
+        adjust = (uint64_t)indices.start >= (uint64_t)size || (uint64_t)last >= (uint64_t)size;
+        if (adjust != 0 && indices.stop == -1) {
+            indices.stop = INT64_MIN;
+        }
+    }
+    if (adjust != 0 && tinypy_internal_slice_adjust_indices(vm, size, &indices, out_error) == 0) {
         TINYPY_DECREF(replacement);
         return TINYPY_FALSE;
     }

@@ -3,11 +3,11 @@
 macOS arm64 validation on 2026-10-07, after runtime compatibility fixes:
 
 - 20 byte-for-byte unchanged CPython 2.7.18 modules: 221 discovered cases, including inherited methods; 210 selected.
-- Eight project-authored Python 2.7 modules: 460 discovered and selected cases.
-- All 666 ordinary active cases pass on tinypy and external CPython 2.7.18.
+- Nineteen project-authored Python 2.7 modules: 745 discovered and selected cases.
+- All 951 ordinary active cases pass on tinypy and external CPython 2.7.18.
 - Four ownership-sensitive cases use Debug detector adaptations and are skipped in Release.
 - Seven tuple-cache identity variants are excluded; four CPython-specific originals have local replacements.
-- Total: 681 discovered, 11 excluded originals, 670 selected cases; Debug has 670 PASS, Release has 666 PASS / 4 SKIP. No DEFER remains.
+- Total: 966 discovered, 11 excluded originals, 955 selected cases; Debug has 955 PASS, Release has 951 PASS / 4 SKIP. No DEFER remains.
 - Every tinypy case runs independently with zero outstanding allocator memory.
 - The assertion adapter passes its positive and negative checks under both interpreters.
 - No expected-failure annotations or relaxed runtime expectations were added.
@@ -28,6 +28,17 @@ the same inherited malformed-iterator check.
 | `local.test_review_regressions` | 109 | 109 | Long conversion, custom MRO, intern sharing/lifetime, caches, finalizers, subtype factories, imports, builtins namespaces, numeric/codec/container protocols, sorting, finally, exception state, deletion/reversed and length-hint protocols |
 | `local.test_evaluation_semantics` | 25 | 25 | Evaluation order, scope, decorators, control-flow unwinding, context managers and generators |
 | `local.test_container_semantics` | 31 | 31 | Iteration, list/set/bytearray partial updates and reinitialization, constructor keywords, subclass representation, slices, mappings and properties |
+| `local.test_container_deep` | 41 | 41 | Integer conversion, callback mutation, self-extension, set atomicity, one-lookup setdefault, direct/operator dispatch and reversed metadata |
+| `local.test_numeric_text_deep` | 29 | 29 | Text conversion, codec buffers/keywords/incremental decoding, formatting, float-format state and supported struct argument/buffer protocols |
+| `local.test_object_eval_deep` | 39 | 39 | Descriptors, super/proxies/subclasses, Unicode names, generator exception triples, adaptive exception construction and reinitialization |
+| `local.test_compiler_edges` | 7 | 7 | Compile argument conversion/order, legacy source buffers, mode normalization and exact syntax metadata |
+| `local.test_container_edges` | 30 | 30 | Buffer/slice conversion order, callback mutation, dict-values membership, iterator state and memoryview exports |
+| `local.test_text_numeric_edges` | 21 | 21 | Float overrides, format-spec Unicode, character buffers, partition identity, search/count ordering and join iteration |
+| `local.test_object_edges` | 26 | 26 | Keyword equality/hash, code/default snapshots, star argument order/keys protocol, native UnicodeError state/format/lifetime |
+| `local.test_comparison_deep` | 37 | 37 | Three-way/rich dispatch, NotImplemented retries, child-result identity, list mutation, buffer comparisons, hash/truth/length conversion and native-slot expectation |
+| `local.test_type_deep` | 27 | 27 | Generic/canonical slots, descriptor names, namespace/base callbacks and identity, metaclass constructor forms, variable-layout rejection, weakrefs and slotnames |
+| `local.test_control_deep` | 13 | 13 | Explicit StopIteration type/payload, throw constructor failures, close/reentry and locals mapping protocols |
+| `local.test_sre_deep` | 15 | 15 | Bounds/counts, keywords, conversion order, buffer/slice types, groups, scanner metadata and host helper forwarding |
 
 The local modules use independently authored test bodies and operand vectors,
 with all expectations checked on CPython 2.7.18.
@@ -90,27 +101,38 @@ this change does not add cyclic GC or the CPython `_testcapi` ABI.
 
 ## Completed checks
 
-| Profile | Active cases | Skipped cases | CTest |
+| Profile | Active cases | Skipped cases | Native/runtime CTest |
 | --- | --- | --- | --- |
-| Debug with cycle diagnostics | 670 PASS | 0 | 114/114 PASS |
-| Release | 666 PASS | 4 | 114/114 PASS |
-| Debug with cycle diagnostics, ASan and UBSan | 670 PASS | 0 | 114/114 PASS |
-| Release with LTO | 666 PASS | 4 | 114/114 PASS |
+| Debug with cycle diagnostics | 955 PASS | 0 | 89/89 PASS |
+| Release | 951 PASS | 4 | 89/89 PASS |
+| Debug with cycle diagnostics, ASan and UBSan | 955 PASS | 0 | 89/89 PASS |
+| Release with LTO | 951 PASS | 4 | 89/89 PASS |
 
-All 81 pre-existing CTests pass in each profile. New registrations comprise 28
-corpus modules, the assertion adapter, native stack/heap budget, intern-lifetime
-and locale tests. The native-stack-budget test checks an explicit byte budget,
+All 129 CTest registrations are validated against an exact inventory in each
+profile: 89 native/runtime tests, 39 portable-module wrappers and the assertion
+adapter. The matrix runs native/runtime CTest and executes the portable corpus
+separately with the external oracle, plus the adapter. Native marshal, artifact,
+opcode and bytecode-verifier tests now participate in all profiles.
+The native-stack-budget test checks an explicit byte budget,
 default/older-config behavior, RuntimeError,
 recovery and zero outstanding allocations. No AddressSanitizer or
 UndefinedBehaviorSanitizer diagnostics occurred. UBSan used
-`UBSAN_OPTIONS=halt_on_error=1`; sanitizer Debug remains unoptimized.
+`UBSAN_OPTIONS=halt_on_error=1`; sanitizer Debug remains unoptimized. Apple
+ASan does not support LeakSanitizer, so macOS uses `detect_leaks=0`; this is
+recorded in the report. Per-case tinypy allocator balance is checked independently.
 
 The earlier runtime closure's compiler differential passed for 35 Python 2 vendor, local and adapter sources
 at optimize levels 0, 1 and 2: 105 byte-identical marshal-v2 outputs against
-CPython 2.7.18. The current tool/API and coordinator suite passed 45/45, including
+CPython 2.7.18. The current tool/API and coordinator suite passed 78/78, including
 exclusion/discovery validation and rejection of explicitly requested excluded
 cases. Runtime builds completed
 with the repository's strict warnings-as-errors flags.
+
+The complete latest audit compares 214,701 unique runtime outcomes and 4,197
+marshal-v2 outputs per profile (16,788 total), including dynamic compile error
+metadata. [DEEP_AUDIT.md](../conformance/DEEP_AUDIT.md) records fixes and the
+explicit extra-keyword pending-C-exception boundary; that tinypy policy is
+tested in the native runtime fixture rather than claimed as an oracle match.
 
 These checks cover the listed corpus and native tests; they do not prove full
 Python 2 compatibility or acceptance of an embedded application. Rerun the

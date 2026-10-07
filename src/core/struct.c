@@ -1,5 +1,6 @@
 #include "internal.h"
 
+#include <math.h>
 #include <string.h>
 
 typedef enum tinypy_struct_byte_order_e {
@@ -10,9 +11,17 @@ typedef enum tinypy_struct_byte_order_e {
 
 typedef struct tinypy_struct_format_t {
     tinypy_struct_byte_order_e byte_order;
+    tinypy_bool_t native_format;
     size_t item_count;
     size_t byte_size;
 } tinypy_struct_format_t;
+
+typedef struct tinypy_struct_buffer_t {
+    const uint8_t *bytes;
+    size_t size;
+    tinypy_value_t *encoded;
+    tinypy_value_t *export_owner;
+} tinypy_struct_buffer_t;
 
 #define TINYPY_STRUCT_CACHE_SIZE 32U
 
@@ -62,6 +71,7 @@ static tinypy_bool_t __tinypy_struct_parse_format_uncached(tinypy_vm_t *vm, tiny
         return TINYPY_FALSE;
     }
     out_format->byte_order = TINYPY_STRUCT_NATIVE_ENDIAN;
+    out_format->native_format = TINYPY_TRUE;
     out_format->item_count = 0U;
     out_format->byte_size = 0U;
 #if SIZE_MAX > INT64_MAX
@@ -71,6 +81,7 @@ static tinypy_bool_t __tinypy_struct_parse_format_uncached(tinypy_vm_t *vm, tiny
         uint8_t prefix = bytes[index];
 
         if (prefix == (uint8_t)'<' || prefix == (uint8_t)'>' || prefix == (uint8_t)'!' || prefix == (uint8_t)'=' || prefix == (uint8_t)'@') {
+            out_format->native_format = prefix == (uint8_t)'@' ? TINYPY_TRUE : TINYPY_FALSE;
             if (prefix == (uint8_t)'<') {
                 out_format->byte_order = TINYPY_STRUCT_LITTLE_ENDIAN;
             }
@@ -235,15 +246,33 @@ static tinypy_bool_t __tinypy_struct_as_double(tinypy_vm_t *vm, tinypy_value_t *
         *out_value = tinypy_float_as_double(value);
         return TINYPY_TRUE;
     }
-    if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
+    if ((kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) && tinypy_internal_object_has_special_override(value, "__float__", 9U) == 0) {
         *out_value = (double)TINYPY_INTEGER_VALUE(value);
         return TINYPY_TRUE;
     }
-    if (kind == TINYPY_VALUE_LONG) {
+    if (kind == TINYPY_VALUE_LONG && tinypy_internal_object_has_special_override(value, "__float__", 9U) == 0) {
         tinypy_error_t *conversion_error = NULL;
 
         if (tinypy_long_as_double(value, out_value, &conversion_error) != 0) {
             return TINYPY_TRUE;
+        }
+        if (conversion_error != NULL) {
+            tinypy_error_release(conversion_error);
+        }
+        tinypy_vm_clear_error(vm);
+    }
+    else {
+        tinypy_bool_t handled;
+        tinypy_error_t *conversion_error = NULL;
+        tinypy_value_t *converted = tinypy_internal_call_conversion(value, "__float__", 9U, &handled, &conversion_error);
+
+        if (converted != NULL) {
+            if (TINYPY_VALUE_KIND(converted) == TINYPY_VALUE_FLOAT) {
+                *out_value = tinypy_float_as_double(converted);
+                TINYPY_DECREF(converted);
+                return TINYPY_TRUE;
+            }
+            TINYPY_DECREF(converted);
         }
         if (conversion_error != NULL) {
             tinypy_error_release(conversion_error);
@@ -270,12 +299,75 @@ static tinypy_value_t *__tinypy_struct_calcsize(tinypy_value_t *function, tinypy
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_struct_encode_double(tinypy_vm_t *vm, const tinypy_struct_format_t *format, tinypy_value_t *item, uint8_t *bytes, tinypy_error_t **out_error) {
+    double value;
+    uint64_t bits;
+
+    if (__tinypy_struct_as_double(vm, item, &value, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (format->native_format == 0 && vm->double_format_unknown != 0) {
+        if (isfinite(value) == 0) {
+            tinypy_internal_exception_raise_system_error(vm, "frexp() result out of range", out_error);
+            return TINYPY_FALSE;
+        }
+        if (value == 0.0) {
+            bits = UINT64_C(0);
+        }
+        else {
+            (void)memcpy(&bits, &value, sizeof(bits));
+        }
+    }
+    else {
+        (void)memcpy(&bits, &value, sizeof(bits));
+    }
+    __tinypy_struct_write_u64(bytes, bits, format->byte_order);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_struct_buffer_acquire(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_bool_t writable, tinypy_struct_buffer_t *buffer, tinypy_error_t **out_error) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    (void)memset(buffer, 0, sizeof(*buffer));
+    if (writable != 0 && kind != TINYPY_VALUE_BYTEARRAY && (tinypy_internal_memoryview_check(value) == 0 || tinypy_internal_memoryview_is_readonly(value) != 0)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument must be read-write buffer", out_error);
+        return TINYPY_FALSE;
+    }
+    if (writable == 0 && kind == TINYPY_VALUE_NONE) {
+        return TINYPY_TRUE;
+    }
+    if (kind == TINYPY_VALUE_UNICODE) {
+        buffer->encoded = tinypy_internal_text_codec(vm, value, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+        if (buffer->encoded == NULL) {
+            return TINYPY_FALSE;
+        }
+        value = buffer->encoded;
+    }
+    if (tinypy_internal_bytes_view(value, &buffer->bytes, &buffer->size) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument must be string or buffer", out_error);
+        return TINYPY_FALSE;
+    }
+    if (kind == TINYPY_VALUE_BYTEARRAY) {
+        buffer->export_owner = value;
+        TINYPY_BYTEARRAY_OBJECT(value)->exports += 1U;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_struct_buffer_release(tinypy_struct_buffer_t *buffer) {
+    if (buffer->export_owner != NULL) {
+        TINYPY_BYTEARRAY_OBJECT(buffer->export_owner)->exports -= 1U;
+    }
+    if (buffer->encoded != NULL) {
+        TINYPY_DECREF(buffer->encoded);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_unpack(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
-    const uint8_t *bytes;
-    size_t byte_size;
+    tinypy_struct_buffer_t buffer;
     size_t index;
 
     if (__tinypy_struct_arguments(vm, args, kwargs, 2U, out_error) == 0 || TINYPY_TUPLE_SIZE(args) != 2U) {
@@ -286,24 +378,37 @@ static tinypy_value_t *__tinypy_struct_unpack(tinypy_value_t *function, tinypy_v
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
-    if (tinypy_internal_bytes_view(item, &bytes, &byte_size) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unpack requires a string argument", out_error);
-        return NULL;
-    }
-    if (byte_size != format.byte_size) {
+    tinypy_error_t *buffer_error = NULL;
+    tinypy_bool_t acquired = __tinypy_struct_buffer_acquire(vm, item, TINYPY_FALSE, &buffer, &buffer_error);
+    if (acquired == 0 || TINYPY_VALUE_KIND(item) == TINYPY_VALUE_NONE || buffer.size != format.byte_size) {
+        if (buffer_error != NULL) {
+            tinypy_error_release(buffer_error);
+            tinypy_vm_clear_error(vm);
+        }
+        __tinypy_struct_buffer_release(&buffer);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unpack requires a string argument of the exact format size", out_error);
         return NULL;
     }
     if (format.item_count == 0U) {
         tinypy_value_t *return_value_1 = tinypy_tuple_from_items(vm, NULL, 0U);
+        __tinypy_struct_buffer_release(&buffer);
         return return_value_1;
     }
     tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, format.item_count * sizeof(*items));
     for (index = 0U; index < format.item_count; ++index) {
-        uint64_t bits = __tinypy_struct_read_u64(bytes + index * 8U, format.byte_order);
+        uint64_t bits = __tinypy_struct_read_u64(buffer.bytes + index * 8U, format.byte_order);
         double value;
 
         (void)memcpy(&value, &bits, sizeof(value));
+        if (format.native_format == 0 && vm->double_format_unknown != 0 && isfinite(value) == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "can't unpack IEEE 754 special value on non-IEEE platform", out_error);
+            for (size_t previous = 0U; previous < index; ++previous) {
+                TINYPY_DECREF(items[previous]);
+            }
+            tinypy_internal_vm_deallocate(vm, items, format.item_count * sizeof(*items));
+            __tinypy_struct_buffer_release(&buffer);
+            return NULL;
+        }
         items[index] = tinypy_float_from_double(vm, value);
     }
     tinypy_value_t *result = tinypy_tuple_from_items(vm, items, format.item_count);
@@ -311,6 +416,7 @@ static tinypy_value_t *__tinypy_struct_unpack(tinypy_value_t *function, tinypy_v
         TINYPY_DECREF(items[index]);
     }
     tinypy_internal_vm_deallocate(vm, items, format.item_count * sizeof(*items));
+    __tinypy_struct_buffer_release(&buffer);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -338,16 +444,11 @@ static tinypy_value_t *__tinypy_struct_pack(tinypy_value_t *function, tinypy_val
     }
     bytes = (uint8_t *)tinypy_internal_vm_allocate(vm, format.byte_size);
     for (index = 0U; index < format.item_count; ++index) {
-        double value;
-        uint64_t bits;
-
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, index + 1U);
-        if (__tinypy_struct_as_double(vm, item, &value, out_error) == 0) {
+        if (__tinypy_struct_encode_double(vm, &format, item, bytes + index * 8U, out_error) == 0) {
             tinypy_internal_vm_deallocate(vm, bytes, format.byte_size);
             return NULL;
         }
-        (void)memcpy(&bits, &value, sizeof(bits));
-        __tinypy_struct_write_u64(bytes + index * 8U, bits, format.byte_order);
     }
     tinypy_value_t *result = tinypy_string_from_bytes(vm, bytes, format.byte_size);
     tinypy_internal_vm_deallocate(vm, bytes, format.byte_size);
@@ -403,18 +504,44 @@ too_small: {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_struct_pack_offset(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    tinypy_bool_t result;
+
+    if (kind == TINYPY_VALUE_LONG) {
+        result = tinypy_internal_index_as_i64(value, out_value, TINYPY_FALSE, out_error);
+        return result;
+    }
+    if (kind == TINYPY_VALUE_FLOAT) {
+        tinypy_bool_t handled = TINYPY_FALSE;
+        tinypy_value_t *converted = tinypy_internal_call_conversion(value, "__int__", 7U, &handled, out_error);
+
+        if (handled == 0 || converted == NULL) {
+            return TINYPY_FALSE;
+        }
+        kind = TINYPY_VALUE_KIND(converted);
+        if (kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG && kind != TINYPY_VALUE_BOOL) {
+            TINYPY_DECREF(converted);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ method should return an integer", out_error);
+            return TINYPY_FALSE;
+        }
+        result = tinypy_internal_index_as_i64(converted, out_value, TINYPY_FALSE, out_error);
+        TINYPY_DECREF(converted);
+        return result;
+    }
+    result = tinypy_internal_integer_as_ssize(value, out_value, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_pack_into(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
-    const uint8_t *buffer_bytes;
-    size_t buffer_size;
+    tinypy_struct_buffer_t buffer_view;
     size_t offset;
     int64_t signed_offset;
-    tinypy_value_t **pack_items;
-    tinypy_value_t *pack_args;
-    tinypy_value_t *packed;
-    tinypy_value_t *result;
+    tinypy_value_t *result = NULL;
     size_t index;
 
     if (__tinypy_struct_arguments(vm, args, kwargs, 3U, out_error) == 0) {
@@ -429,42 +556,28 @@ static tinypy_value_t *__tinypy_struct_pack_into(tinypy_value_t *function, tinyp
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "pack expected a different number of items", out_error);
         return NULL;
     }
-    if (tinypy_internal_index_as_i64(TINYPY_TUPLE_GET(args, 2U), &signed_offset, TINYPY_FALSE, out_error) == 0) {
+    if (__tinypy_struct_buffer_acquire(vm, buffer, TINYPY_TRUE, &buffer_view, out_error) == 0) {
         return NULL;
     }
-    if (tinypy_internal_bytes_view(buffer, &buffer_bytes, &buffer_size) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument must be read-write buffer", out_error);
-        return NULL;
+    if (__tinypy_struct_pack_offset(TINYPY_TUPLE_GET(args, 2U), &signed_offset, out_error) == 0) {
+        goto cleanup;
     }
-    (void)buffer_bytes;
-    if (__tinypy_struct_offset(vm, signed_offset, buffer_size, format.byte_size, "pack_into", 9U, &offset, out_error) == 0) {
-        return NULL;
+    if (__tinypy_struct_offset(vm, signed_offset, buffer_view.size, format.byte_size, "pack_into", 9U, &offset, out_error) == 0) {
+        goto cleanup;
     }
-    pack_items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, (format.item_count + 1U) * sizeof(*pack_items));
-    pack_items[0] = format_value;
-    for (index = 0U; index != format.item_count; ++index) {
-        pack_items[index + 1U] = TINYPY_TUPLE_GET(args, index + 3U);
+    if (format.byte_size != 0U) {
+        (void)memset((uint8_t *)buffer_view.bytes + offset, 0, format.byte_size);
     }
-    pack_args = tinypy_tuple_from_items(vm, pack_items, format.item_count + 1U);
-    tinypy_internal_vm_deallocate(vm, pack_items, (format.item_count + 1U) * sizeof(*pack_items));
-    packed = __tinypy_struct_pack(function, pack_args, NULL, state, out_error);
-    TINYPY_DECREF(pack_args);
-    if (packed == NULL) {
-        return NULL;
-    }
-    tinypy_value_t *start = tinypy_integer_from_i64(vm, (int64_t)offset);
-    tinypy_value_t *stop = tinypy_integer_from_i64(vm, (int64_t)(offset + format.byte_size));
-    tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
-    tinypy_bool_t assigned = tinypy_set_item(buffer, slice, packed, out_error);
-
-    TINYPY_DECREF(slice);
-    TINYPY_DECREF(stop);
-    TINYPY_DECREF(start);
-    TINYPY_DECREF(packed);
-    if (assigned == 0) {
-        return NULL;
+    for (index = 0U; index < format.item_count; ++index) {
+        tinypy_value_t *item = TINYPY_TUPLE_GET(args, index + 3U);
+        if (__tinypy_struct_encode_double(vm, &format, item, (uint8_t *)buffer_view.bytes + offset + index * 8U, out_error) == 0) {
+            goto cleanup;
+        }
     }
     result = tinypy_none_get(vm);
+
+cleanup:
+    __tinypy_struct_buffer_release(&buffer_view);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -472,37 +585,85 @@ static tinypy_value_t *__tinypy_struct_unpack_from(tinypy_value_t *function, tin
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
-    const uint8_t *buffer_bytes;
-    size_t buffer_size;
+    tinypy_struct_buffer_t buffer_view;
+    tinypy_value_t *buffer = TINYPY_TUPLE_SIZE(args) >= 2U ? TINYPY_TUPLE_GET(args, 1U) : NULL;
+    tinypy_value_t *offset_value = TINYPY_TUPLE_SIZE(args) >= 3U ? TINYPY_TUPLE_GET(args, 2U) : NULL;
+    tinypy_value_t *result = NULL;
     size_t offset = 0U;
     int64_t signed_offset = INT64_C(0);
 
-    if (__tinypy_struct_arguments(vm, args, kwargs, 2U, out_error) == 0 || TINYPY_TUPLE_SIZE(args) > 3U) {
+    if (TINYPY_TUPLE_SIZE(args) < 1U || TINYPY_TUPLE_SIZE(args) > 3U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unpack_from received invalid arguments", out_error);
         return NULL;
     }
     tinypy_value_t *format_value = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *buffer = TINYPY_TUPLE_GET(args, 1U);
     if (__tinypy_struct_parse_format(state, format_value, &format, out_error) == 0) {
         return NULL;
     }
-    if (TINYPY_TUPLE_SIZE(args) == 3U && tinypy_internal_index_as_i64(TINYPY_TUPLE_GET(args, 2U), &signed_offset, TINYPY_FALSE, out_error) == 0) {
+    if (kwargs != NULL) {
+        tinypy_dict_entry_t *iterator;
+        tinypy_dict_entry_t *end = TINYPY_DICT_ITERATOR_END(kwargs);
+
+        for (iterator = TINYPY_DICT_ITERATOR_BEGIN(kwargs); iterator != end; ++iterator) {
+            if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
+                tinypy_value_t *key = iterator->key;
+                tinypy_value_type_e kind = TINYPY_VALUE_KIND(key);
+                tinypy_value_t **argument = NULL;
+
+                if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
+                    if (TINYPY_TEXT_BYTE_SIZE(key) == 6U && memcmp(TINYPY_TEXT_BYTES(key), "buffer", 6U) == 0) {
+                        argument = &buffer;
+                    }
+                    else if (TINYPY_TEXT_BYTE_SIZE(key) == 6U && memcmp(TINYPY_TEXT_BYTES(key), "offset", 6U) == 0) {
+                        argument = &offset_value;
+                    }
+                }
+                if (argument == NULL || *argument != NULL) {
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unpack_from received an invalid or duplicate keyword", out_error);
+                    return NULL;
+                }
+                *argument = iterator->value;
+            }
+        }
+    }
+    if (buffer == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unpack_from requires a buffer argument", out_error);
         return NULL;
     }
-    if (tinypy_internal_bytes_view(buffer, &buffer_bytes, &buffer_size) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unpack_from requires a string argument", out_error);
+    if (__tinypy_struct_buffer_acquire(vm, buffer, TINYPY_FALSE, &buffer_view, out_error) == 0) {
         return NULL;
     }
-    if (__tinypy_struct_offset(vm, signed_offset, buffer_size, format.byte_size, "unpack_from", 11U, &offset, out_error) == 0) {
-        return NULL;
+    if (offset_value != NULL && tinypy_internal_integer_as_ssize(offset_value, &signed_offset, out_error) == 0) {
+        goto cleanup;
     }
-    const uint8_t *selected_bytes = format.byte_size != 0U ? buffer_bytes + offset : NULL;
+    if (TINYPY_VALUE_KIND(buffer) == TINYPY_VALUE_NONE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unpack_from requires a buffer argument", out_error);
+        goto cleanup;
+    }
+    if (TINYPY_VALUE_KIND(buffer) == TINYPY_VALUE_BUFFER) {
+        size_t current_size;
+
+        /* Legacy buffers do not export their bytearray owner. Refresh its
+         * address after callbacks while retaining the acquired view bound. */
+        (void)tinypy_internal_bytes_view(buffer, &buffer_view.bytes, &current_size);
+        if (current_size < buffer_view.size) {
+            buffer_view.size = current_size;
+        }
+    }
+    if (__tinypy_struct_offset(vm, signed_offset, buffer_view.size, format.byte_size, "unpack_from", 11U, &offset, out_error) == 0) {
+        goto cleanup;
+    }
+    const uint8_t *selected_bytes = format.byte_size != 0U ? buffer_view.bytes + offset : NULL;
     tinypy_value_t *selected = tinypy_string_from_bytes(vm, selected_bytes, format.byte_size);
     tinypy_value_t *unpack_items[2] = {format_value, selected};
     tinypy_value_t *unpack_args = tinypy_tuple_from_items(vm, unpack_items, 2U);
-    tinypy_value_t *result = __tinypy_struct_unpack(function, unpack_args, NULL, state, out_error);
+    result = __tinypy_struct_unpack(function, unpack_args, NULL, state, out_error);
 
     TINYPY_DECREF(unpack_args);
     TINYPY_DECREF(selected);
+
+cleanup:
+    __tinypy_struct_buffer_release(&buffer_view);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -558,7 +719,8 @@ static tinypy_value_t *__tinypy_struct_object_method(tinypy_value_t *function, t
     size_t item_count;
     size_t index;
 
-    if (__tinypy_struct_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    tinypy_bool_t unpack_from = name_size == 11U && memcmp(name, "unpack_from", 11U) == 0;
+    if (__tinypy_struct_arguments(vm, args, unpack_from != 0 ? NULL : kwargs, 1U, out_error) == 0) {
         return NULL;
     }
     format_value = tinypy_object_get_attr(TINYPY_TUPLE_GET(args, 0U), "_format", 7U, out_error);
@@ -584,7 +746,7 @@ static tinypy_value_t *__tinypy_struct_object_method(tinypy_value_t *function, t
         result = __tinypy_struct_pack_into(function, call_args, NULL, state, out_error);
     }
     else {
-        result = __tinypy_struct_unpack_from(function, call_args, NULL, state, out_error);
+        result = __tinypy_struct_unpack_from(function, call_args, kwargs, state, out_error);
     }
     TINYPY_DECREF(call_args);
     return result;

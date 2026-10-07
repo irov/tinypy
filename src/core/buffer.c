@@ -65,45 +65,6 @@ void tinypy_internal_buffer_release_references(tinypy_value_t *value, tinypy_rel
     visit(TINYPY_BUFFER_OBJECT(value)->owner, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_buffer_integer_as_i64(tinypy_value_t *value, int64_t *out_value) {
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-
-    if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
-        *out_value = TINYPY_INTEGER_VALUE(value);
-        return TINYPY_TRUE;
-    }
-    if (kind == TINYPY_VALUE_LONG) {
-        const uint16_t *digits = TINYPY_LONG_OBJECT(value)->digits;
-        size_t count = TINYPY_LONG_DIGIT_COUNT(value);
-        uint64_t magnitude = UINT64_C(0);
-        uint64_t limit = TINYPY_LONG_SIGN(value) < 0 ? (uint64_t)INT64_MAX + UINT64_C(1) : (uint64_t)INT64_MAX;
-        size_t index;
-
-        if (count > 5U) {
-            return TINYPY_FALSE;
-        }
-        for (index = count; index != 0U; index -= 1U) {
-            magnitude = (magnitude << 15U) | digits[index - 1U];
-        }
-        if (magnitude > limit) {
-            return TINYPY_FALSE;
-        }
-        *out_value = TINYPY_LONG_SIGN(value) < 0
-                         ? (magnitude == (uint64_t)INT64_MAX + UINT64_C(1) ? INT64_MIN : -(int64_t)magnitude)
-                         : (int64_t)magnitude;
-        return TINYPY_TRUE;
-    }
-    return TINYPY_FALSE;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_buffer_constructor_integer(tinypy_vm_t *vm, tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
-    if (__tinypy_buffer_integer_as_i64(value, out_value) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "buffer offset and size must be integers", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t argument_count = TINYPY_TUPLE_SIZE(args);
@@ -116,14 +77,10 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
         return NULL;
     }
     tinypy_value_t *owner = TINYPY_TUPLE_GET(args, 0U);
-    if (__tinypy_buffer_supported(owner) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not support the buffer interface", out_error);
-        return NULL;
-    }
     tinypy_bool_t condition = argument_count >= 2U;
     if (condition != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
-        condition = __tinypy_buffer_constructor_integer(vm, item, &offset, out_error) == 0;
+        condition = tinypy_internal_integer_as_ssize(item, &offset, out_error) == 0;
     }
     if (condition) {
         return NULL;
@@ -131,9 +88,13 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
     tinypy_bool_t condition_2 = argument_count >= 3U;
     if (condition_2 != 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 2U);
-        condition_2 = __tinypy_buffer_constructor_integer(vm, item, &requested_size, out_error) == 0;
+        condition_2 = tinypy_internal_integer_as_ssize(item, &requested_size, out_error) == 0;
     }
     if (condition_2) {
+        return NULL;
+    }
+    if (__tinypy_buffer_supported(owner) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not support the buffer interface", out_error);
         return NULL;
     }
     (void)__tinypy_buffer_owner_view(owner, &owner_size);
@@ -165,13 +126,15 @@ ptrdiff_t tinypy_internal_buffer_length(tinypy_value_t *value, tinypy_error_t **
     return (ptrdiff_t)size;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_buffer_normalize_index(tinypy_vm_t *vm, tinypy_value_t *key, size_t size, size_t *out_index, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_buffer_normalize_index(tinypy_value_t *value, tinypy_value_t *key, size_t *out_index, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     int64_t index;
+    size_t size;
 
-    if (__tinypy_buffer_integer_as_i64(key, &index) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "buffer index must be an integer", out_error);
+    if (tinypy_internal_index_as_i64(key, &index, TINYPY_TRUE, out_error) == 0) {
         return TINYPY_FALSE;
     }
+    (void)tinypy_buffer_view(value, &size);
     if (index < 0) {
         uint64_t distance = (uint64_t)(-(index + 1)) + UINT64_C(1);
 
@@ -191,113 +154,41 @@ out_of_range:
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_buffer_slice_bound(tinypy_value_t *value, int64_t fallback, int64_t *out_value) {
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
-        *out_value = fallback;
-        return TINYPY_TRUE;
-    }
-    tinypy_bool_t return_value_1 = __tinypy_buffer_integer_as_i64(value, out_value);
-    return return_value_1;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_buffer_slice(tinypy_value_t *value, tinypy_value_t *slice, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_internal_slice_indices_t indices;
     size_t size;
-    const uint8_t *bytes = (const uint8_t *)tinypy_buffer_view(value, &size);
-    int64_t step;
-    int64_t start;
-    int64_t stop;
-    size_t length = 0U;
+    const uint8_t *bytes;
     uint8_t *selected;
     int64_t source;
     size_t index;
 
-    tinypy_value_t *slice_step = tinypy_slice_step(slice);
-    if (__tinypy_buffer_slice_bound(slice_step, INT64_C(1), &step) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice indices must be integers", out_error);
+    if (tinypy_internal_slice_unpack(slice, &indices, out_error) == 0) {
         return NULL;
     }
-    if (step == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "slice step cannot be zero", out_error);
+    bytes = (const uint8_t *)tinypy_buffer_view(value, &size);
+    if (tinypy_internal_slice_adjust_indices(vm, size, &indices, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *slice_start = tinypy_slice_start(slice);
-    if (__tinypy_buffer_slice_bound(slice_start, step < 0 ? (int64_t)size - 1 : 0, &start) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice indices must be integers", out_error);
-        return NULL;
+    if (indices.length == 0U) {
+        tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(vm, NULL, 0U, out_error);
+
+        return result;
     }
-    tinypy_value_t *slice_stop = tinypy_slice_stop(slice);
-    if (__tinypy_buffer_slice_bound(slice_stop, step < 0 ? -1 : (int64_t)size, &stop) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice indices must be integers", out_error);
-        return NULL;
+    if (indices.step == 1 || indices.length == 1U) {
+        tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(vm, bytes + (size_t)indices.start, indices.length, out_error);
+
+        return result;
     }
-    if (start < 0) {
-        start += (int64_t)size;
-    }
-    tinypy_bool_t condition_5 = stop < 0;
-    if (condition_5 != 0) {
-        tinypy_bool_t condition_6 = step < 0;
-        if (condition_6 != 0) {
-            tinypy_value_t *slice_stop_2 = tinypy_slice_stop(slice);
-            condition_6 = TINYPY_VALUE_KIND(slice_stop_2) == TINYPY_VALUE_NONE;
-        }
-        condition_5 = !(condition_6);
-    }
-    if (condition_5) {
-        stop += (int64_t)size;
-    }
-    if (step > 0) {
-        if (start < 0) {
-            start = 0;
-        }
-        if (stop < 0) {
-            stop = 0;
-        }
-        if (start > (int64_t)size) {
-            start = (int64_t)size;
-        }
-        if (stop > (int64_t)size) {
-            stop = (int64_t)size;
-        }
-        if (start < stop) {
-            length = (size_t)(1 + (stop - start - 1) / step);
-        }
-    }
-    else {
-        if (start < -1) {
-            start = -1;
-        }
-        if (stop < -1) {
-            stop = -1;
-        }
-        if (start >= (int64_t)size) {
-            start = (int64_t)size - 1;
-        }
-        if (stop >= (int64_t)size) {
-            stop = (int64_t)size - 1;
-        }
-        if (stop < start) {
-            uint64_t distance = (uint64_t)(-(step + INT64_C(1))) + UINT64_C(1);
-            length = (size_t)(UINT64_C(1) + (uint64_t)(start - stop - INT64_C(1)) / distance);
-        }
-    }
-    if (length == 0U) {
-        tinypy_value_t *return_value_1 = tinypy_internal_string_from_bytes_checked(vm, NULL, 0U, out_error);
-        return return_value_1;
-    }
-    if (step == 1 || length == 1U) {
-        tinypy_value_t *return_value_2 = tinypy_internal_string_from_bytes_checked(vm, bytes + (size_t)start, length, out_error);
-        return return_value_2;
-    }
-    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, length, length, &selected, out_error);
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, indices.length, indices.length, &selected, out_error);
     if (result == NULL) {
         return NULL;
     }
-    source = start;
-    for (index = 0U; index < length; ++index) {
+    source = indices.start;
+    for (index = 0U; index < indices.length; ++index) {
         selected[index] = bytes[(size_t)source];
-        if (index + 1U < length) {
-            source += step;
+        if (index + 1U < indices.length) {
+            source += indices.step;
         }
     }
     return result;
@@ -314,10 +205,10 @@ tinypy_value_t *tinypy_internal_buffer_get_item(tinypy_value_t *value, tinypy_va
         tinypy_value_t *return_value_1 = __tinypy_buffer_slice(value, key, out_error);
         return return_value_1;
     }
-    bytes = (const uint8_t *)tinypy_buffer_view(value, &size);
-    if (__tinypy_buffer_normalize_index(vm, key, size, &index, out_error) == 0) {
+    if (__tinypy_buffer_normalize_index(value, key, &index, out_error) == 0) {
         return NULL;
     }
+    bytes = (const uint8_t *)tinypy_buffer_view(value, &size);
     tinypy_value_t *return_value_2 = tinypy_string_from_bytes(vm, bytes + index, 1U);
     return return_value_2;
 }
@@ -368,6 +259,10 @@ static tinypy_value_t *__tinypy_buffer_concat(tinypy_value_t *left, tinypy_value
         return result;
     }
     left_bytes = (const uint8_t *)tinypy_buffer_view(left, &left_size);
+    if (left_size == 0U) {
+        TINYPY_INCREF(right);
+        return right;
+    }
     right_bytes = __tinypy_buffer_owner_view(right, &right_size);
     if (right_size > SIZE_MAX - left_size || left_size + right_size >= (size_t)PTRDIFF_MAX) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "concatenated buffer is too large", out_error);
@@ -629,6 +524,13 @@ tinypy_bool_t tinypy_internal_memoryview_check(const tinypy_value_t *value) {
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_memoryview_is_readonly(const tinypy_value_t *value) {
+    const tinypy_internal_memoryview_payload_t *payload = __tinypy_memoryview_const_payload(value);
+    tinypy_bool_t result = payload->readonly;
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 const uint8_t *tinypy_internal_memoryview_view(const tinypy_value_t *value, size_t *out_size) {
     const tinypy_internal_memoryview_payload_t *payload = __tinypy_memoryview_const_payload(value);
     const uint8_t *bytes;
@@ -839,7 +741,7 @@ static void __tinypy_memoryview_not_implemented(tinypy_vm_t *vm, tinypy_error_t 
 static tinypy_bool_t __tinypy_memoryview_index(tinypy_value_t *instance, tinypy_value_t *key, size_t size, size_t *out_index, tinypy_error_t **out_error) {
     int64_t index;
 
-    if (tinypy_internal_index_as_i64(key, &index, TINYPY_FALSE, out_error) == 0) {
+    if (tinypy_internal_index_as_i64(key, &index, TINYPY_TRUE, out_error) == 0) {
         return TINYPY_FALSE;
     }
     if (index < 0) {
@@ -906,19 +808,16 @@ static tinypy_bool_t __tinypy_memoryview_set(tinypy_value_t *instance, void *pay
     }
     const uint8_t *replacement;
     size_t replacement_size;
-    if (tinypy_internal_bytes_view(value, &replacement, &replacement_size) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "memoryview assignment requires a byte string", out_error);
-        return TINYPY_FALSE;
-    }
+    size_t index = 0U;
+    tinypy_internal_slice_indices_t slice;
+    tinypy_bool_t is_slice = TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE;
     size_t owner_offset = 0U;
     tinypy_value_t *owner = __tinypy_memoryview_writable_owner(instance, &owner_offset);
     if (owner == NULL) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot modify read-only memory", out_error);
         return TINYPY_FALSE;
     }
-    if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE) {
-        tinypy_internal_slice_indices_t slice;
-
+    if (is_slice != 0) {
         if (tinypy_internal_slice_indices(key, size, &slice, out_error) == 0) {
             return TINYPY_FALSE;
         }
@@ -926,8 +825,16 @@ static tinypy_bool_t __tinypy_memoryview_set(tinypy_value_t *instance, void *pay
             __tinypy_memoryview_not_implemented(vm, out_error);
             return TINYPY_FALSE;
         }
-        (void)tinypy_internal_bytes_view(value, &replacement, &replacement_size);
-        uint8_t *owner_bytes = TINYPY_BYTEARRAY_OBJECT(owner)->bytes + owner_offset;
+    }
+    else if (__tinypy_memoryview_index(instance, key, size, &index, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (tinypy_internal_bytes_view(value, &replacement, &replacement_size) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "memoryview assignment requires a byte string", out_error);
+        return TINYPY_FALSE;
+    }
+    uint8_t *owner_bytes = TINYPY_BYTEARRAY_OBJECT(owner)->bytes + owner_offset;
+    if (is_slice != 0) {
         if (replacement_size != slice.length) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "cannot modify size of memoryview object", out_error);
             return TINYPY_FALSE;
@@ -937,12 +844,6 @@ static tinypy_bool_t __tinypy_memoryview_set(tinypy_value_t *instance, void *pay
         }
         return TINYPY_TRUE;
     }
-    size_t index;
-    if (__tinypy_memoryview_index(instance, key, size, &index, out_error) == 0) {
-        return TINYPY_FALSE;
-    }
-    (void)tinypy_internal_bytes_view(value, &replacement, &replacement_size);
-    uint8_t *owner_bytes = TINYPY_BYTEARRAY_OBJECT(owner)->bytes + owner_offset;
     if (replacement_size != 1U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "memoryview assignment requires a single byte", out_error);
         return TINYPY_FALSE;

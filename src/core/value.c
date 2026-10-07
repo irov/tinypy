@@ -763,6 +763,9 @@ void tinypy_internal_type_release_references(tinypy_value_t *value, tinypy_relea
     if (type->bases != NULL) {
         visit(type->bases, user_data);
     }
+    if (type->own_slot_names != NULL) {
+        visit(type->own_slot_names, user_data);
+    }
     if (type->subclasses != NULL) {
         visit(type->subclasses, user_data);
     }

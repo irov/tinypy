@@ -37,6 +37,36 @@ assert keywords(**KeyMapping()) == (42, 2, [])
 assert error_text(lambda: len(**3)) == "TypeError: len() argument after ** must be a mapping, not int"
 
 
+# Explicit tinypy error-state policy: CPython 2.7 ignores this insertion error
+# and can return a result with a pending C exception. Do not copy that state.
+keyword_events = []
+
+
+class FailingExtraKeyword(str):
+    fail = False
+
+    def __hash__(self):
+        if self.fail:
+            keyword_events.append('hash')
+            raise ValueError('extra keyword hash')
+        return str.__hash__(self)
+
+
+def checked_extra_keyword(**received):
+    keyword_events.append('body')
+    return received
+
+
+extra_key = FailingExtraKeyword('extra')
+extra_keywords = {extra_key: 17}
+extra_key.fail = True
+assert error_text(lambda: checked_extra_keyword(**extra_keywords)) == 'ValueError: extra keyword hash'
+assert keyword_events == ['hash']
+del extra_keywords, extra_key
+assert checked_extra_keyword(extra=19) == {'extra': 19}
+assert keyword_events == ['hash', 'body']
+
+
 class Mixed(Old, object):
     pass
 

@@ -70,7 +70,7 @@ static tinypy_ast_identifier_t __new_identifier(const char *n, tinypy_compile_ct
 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __ast_error(const tinypy_cst_node_t *n, const char *errstr) {
-    tinypy_internal_compiler_error(n->context, TINYPY_ERROR_SYNTAX, errstr, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1, n->context->out_error);
+    tinypy_internal_compiler_semantic_error(n->context, errstr, TINYPY_AST_LINE_NUMBER(n), TINYPY_TRUE);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -443,7 +443,7 @@ static tinypy_bool_t __set_context(tinypy_ast_builder_t *c, tinypy_ast_expressio
         const char *parts[] = {prefix, expr_name};
         size_t part_sizes[] = {strlen(prefix), strlen(expr_name)};
 
-        tinypy_internal_compiler_error_parts(n->context, TINYPY_ERROR_SYNTAX, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
+        tinypy_internal_compiler_semantic_error_parts(n->context, parts, part_sizes, sizeof(parts) / sizeof(parts[0]), TINYPY_AST_LINE_NUMBER(n), TINYPY_TRUE);
         return TINYPY_FALSE;
     }
 

@@ -1,5 +1,14 @@
 # Runtime review closure — 2026-10-07
 
+The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 285
+portable regressions and a repeatable four-profile matrix. Its final corpus
+has 955 selected cases; finite runtime matrices cover 214,701 outcomes, and
+compiler comparison covers 16,788 outputs across the profiles. The future
+variant and acceptance plan is in [TEST_PLAN.md](../conformance/TEST_PLAN.md).
+The explicit CPython pending-C-exception boundary is recorded in the audit.
+The original
+review findings and their historical evidence are retained below.
+
 The supplied review described `62db39e`. This follow-up checks the current
 worktree, including the earlier portable-corpus fixes. Its prototypes were
 reviewed individually, not applied as one patch. CPython **2.7.18** is the
@@ -54,7 +63,7 @@ establish equivalence to that separate historical investigation.
 | Partial state replacement | Hardened: publish all new owned fields before releasing old ones. |
 | Native finalizers and debugger callbacks | Hardened: preserve the pending exception around callback entry. Live-VM native finalizers report ignored errors while the object and its children are retained; destruction proceeds only after the callback and any resurrection check. |
 | Bytearray item/slice/find/in-place addition and memoryview indexing | Hardened: materialize conversions and replacements before rereading current storage; retain exported storage and snapshot overlapping additions. |
-| `_struct` offsets | Hardened: convert offsets before acquiring the buffer view. Ordinary supported double formats are covered. |
+| `_struct` offsets | Superseded by the deep audit: acquire and retain the buffer export before offset/numeric callbacks, matching CPython's resize blocking and observation of in-place changes; release it on every exit. Supported offset protocols and error ordering have oracle regressions. |
 | Overridden encode result; codec module mutation/search growth | Hardened: validate encode result types; retain a private VM codec registry; search with owned callbacks and live bounds. |
 | Negative buffer slice magnitude; Unicode expandtabs | Hardened/fixed: avoid signed negation overflow; account for removed tabs and avoid null-buffer arithmetic. |
 | Non-ASCII Unicode format specification | Fixed: require ASCII decoding before builtin format parsing; custom format methods retain their original specification. |

@@ -25,11 +25,11 @@ def reference_command(reference: Path, optimize: int, script: Path) -> List[str]
     return command
 
 
-def run_command(command: Sequence[str]) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def run_command(command: Sequence[str], timeout: float = 30) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
 
 
-def validate_reference(reference: Path) -> None:
+def validate_reference(reference: Path, timeout: float = 30) -> None:
     command = [
         str(reference),
         "-E",
@@ -37,7 +37,7 @@ def validate_reference(reference: Path) -> None:
         "-c",
         "import sys; sys.stdout.write('%d.%d.%d' % sys.version_info[:3])",
     ]
-    result = run_command(command)
+    result = run_command(command, timeout)
     expected = ".".join(str(part) for part in REFERENCE_VERSION).encode("ascii")
     if result.returncode != 0:
         raise RuntimeError(
@@ -91,6 +91,7 @@ def compare_case(
     logical: str,
     mode: str,
     optimize: int,
+    timeout: float = 30,
 ) -> Optional[str]:
     identity = hashlib.sha256(
         ("%d\0%s\0%s" % (optimize, mode, logical)).encode("utf-8")
@@ -101,13 +102,17 @@ def compare_case(
     expected_command.extend(
         ["compile", str(source), str(expected_path), logical, mode]
     )
-    expected_result = run_command(expected_command)
+    expected_result = run_command(expected_command, timeout)
     if expected_result.returncode != 0:
         return "mode=%s optimize=%d %s: reference compile failed: %s" % (
             mode,
             optimize,
             logical,
             decode_process_error(expected_result),
+        )
+    if expected_result.stdout or expected_result.stderr:
+        return "mode=%s optimize=%d %s: reference compiler produced unexpected output: stdout=%r stderr=%r" % (
+            mode, optimize, logical, expected_result.stdout, expected_result.stderr,
         )
     actual_result = run_command(
         [
@@ -117,7 +122,7 @@ def compare_case(
             logical,
             mode,
             str(optimize),
-        ]
+        ], timeout
     )
     if actual_result.returncode != 0:
         return "mode=%s optimize=%d %s: tinypy compile failed: %s" % (
@@ -126,13 +131,17 @@ def compare_case(
             logical,
             decode_process_error(actual_result),
         )
+    if actual_result.stdout or actual_result.stderr:
+        return "mode=%s optimize=%d %s: tinypy compiler produced unexpected output: stdout=%r stderr=%r" % (
+            mode, optimize, logical, actual_result.stdout, actual_result.stderr,
+        )
     if expected_path.read_bytes() == actual_path.read_bytes():
         expected_path.unlink()
         actual_path.unlink()
         return None
     compare_result = run_command(
         reference_command(reference, optimize, reference_script)
-        + ["compare", str(expected_path), str(actual_path)]
+        + ["compare", str(expected_path), str(actual_path)], timeout
     )
     difference = decode_process_error(compare_result)
     if compare_result.stdout:
@@ -150,8 +159,10 @@ def execute(arguments: argparse.Namespace, work_dir: Path) -> int:
             "reference compiler script does not exist: %s"
             % arguments.reference_script
         )
-    validate_reference(arguments.reference)
+    validate_reference(arguments.reference, arguments.timeout)
     sources = collect_sources(arguments.source_root, arguments.logical_root)
+    if not sources:
+        raise RuntimeError("compiler corpus is empty")
     if arguments.expected_count is not None and len(sources) != arguments.expected_count:
         raise RuntimeError(
             "expected %d source files, found %d"
@@ -177,6 +188,7 @@ def execute(arguments: argparse.Namespace, work_dir: Path) -> int:
                 logical,
                 mode,
                 optimize,
+                arguments.timeout,
             )
             for source, logical, mode, optimize in cases
         ]
@@ -231,6 +243,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--jobs", type=int, default=max(1, os.cpu_count() or 1))
     parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument("--work-dir", type=Path)
+    parser.add_argument("--timeout", type=float, default=30, help="maximum seconds per compiler subprocess")
     arguments = parser.parse_args()
     if arguments.optimize is None:
         arguments.optimize = [0, 1, 2]
@@ -240,6 +253,8 @@ def parse_arguments() -> argparse.Namespace:
         parser.error("--jobs must be at least 1")
     if arguments.progress_every < 1:
         parser.error("--progress-every must be at least 1")
+    if arguments.timeout <= 0:
+        parser.error("--timeout must be positive")
     return arguments
 
 
@@ -251,7 +266,7 @@ def main() -> int:
             return execute(arguments, arguments.work_dir)
         with tempfile.TemporaryDirectory(prefix="tinypy-differential-") as directory:
             return execute(arguments, Path(directory))
-    except (OSError, RuntimeError) as exception:
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exception:
         print("differential compiler check failed: %s" % exception, file=sys.stderr)
         return 2
 

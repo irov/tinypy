@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build and run the standalone C99 marshal reader tests.
 
-This intentionally does not modify the root CMake graph while the marshal
-subsystem is developed independently. All generated files stay below build/.
+This separately builds and symbol-audits the codec without the runtime core.
+The same native tests are also registered in CTest. Generated files stay below
+the requested build directory.
 """
 
 from __future__ import annotations

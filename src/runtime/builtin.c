@@ -289,7 +289,12 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
         if (result == NULL) {
             return NULL;
         }
-        if (__tinypy_builtin_integer_as_i64(vm, result, &length, out_error) == 0) {
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_INTEGER) {
+            TINYPY_DECREF(result);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__len__() should return an int", out_error);
+            return NULL;
+        }
+        if (tinypy_internal_number_as_i64(result, &length, out_error) == 0) {
             TINYPY_DECREF(result);
             return NULL;
         }
@@ -361,13 +366,13 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
         if (result == NULL) {
             return NULL;
         }
-        if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_INTEGER && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_LONG) {
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_INTEGER) {
             TINYPY_DECREF(result);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__len__ returned a non-integer", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__len__() should return an int", out_error);
             return NULL;
         }
         int64_t length;
-        if (__tinypy_builtin_integer_as_i64(vm, result, &length, out_error) == 0) {
+        if (tinypy_internal_number_as_i64(result, &length, out_error) == 0) {
             TINYPY_DECREF(result);
             return NULL;
         }
@@ -716,10 +721,21 @@ static tinypy_value_t *__tinypy_builtin_hasattr(tinypy_value_t *function, tinypy
     if (__tinypy_builtin_text_view(vm, item_2, &name, &name_size, out_error) == 0) {
         return NULL;
     }
+    tinypy_value_t *encoded_name = NULL;
+    if (TINYPY_VALUE_KIND(item_2) == TINYPY_VALUE_UNICODE) {
+        encoded_name = tinypy_internal_object_encode_attribute_name(item_2, out_error);
+        if (encoded_name == NULL) {
+            return NULL;
+        }
+        item_2 = encoded_name;
+    }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *attribute = tinypy_internal_object_get_attr_key(item, item_2, out_error);
     tinypy_bool_t found = attribute != NULL;
 
+    if (encoded_name != NULL) {
+        TINYPY_DECREF(encoded_name);
+    }
     if (attribute != NULL) {
         TINYPY_DECREF(attribute);
     }
@@ -753,7 +769,7 @@ static tinypy_value_t *__tinypy_builtin_setattr(tinypy_value_t *function, tinypy
     }
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 2U);
-    if (tinypy_object_set_attr(item_2, name, name_size, item_3, out_error) == 0) {
+    if (tinypy_object_set_attr_value(item_2, item, item_3, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_none_get(vm);
@@ -774,7 +790,7 @@ static tinypy_value_t *__tinypy_builtin_delattr(tinypy_value_t *function, tinypy
         return NULL;
     }
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-    if (tinypy_object_delete_attr(item_2, name, name_size, out_error) == 0) {
+    if (tinypy_internal_object_delete_attr_protocol_key(item_2, item, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_none_get(vm);
@@ -804,9 +820,12 @@ static tinypy_value_t *__tinypy_builtin_next(tinypy_value_t *function, tinypy_va
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *result = tinypy_next(item, &iteration_error);
+    tinypy_value_t *result = tinypy_internal_next_raw(item, &iteration_error);
     if (result != NULL) {
         return result;
+    }
+    if (TINYPY_TUPLE_SIZE(args) == 2U) {
+        (void)tinypy_internal_exception_consume_stop_iteration(vm, &iteration_error);
     }
     if (iteration_error != NULL) {
         if (out_error != NULL) {
@@ -2130,9 +2149,7 @@ static tinypy_value_t *__tinypy_builtin_coerce(tinypy_value_t *function, tinypy_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_cmp(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    int32_t equal;
-    int32_t less;
-    int32_t greater;
+    int32_t order;
 
     (void)user_data;
     if (__tinypy_builtin_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(function, args, 2U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error) == 0) {
@@ -2140,33 +2157,11 @@ static tinypy_value_t *__tinypy_builtin_cmp(tinypy_value_t *function, tinypy_val
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
-    if ((TINYPY_VALUE_KIND(left) == TINYPY_VALUE_SET || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_FROZENSET) &&
-        (TINYPY_VALUE_KIND(right) == TINYPY_VALUE_SET || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_FROZENSET)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot compare sets using cmp()", out_error);
+    if (tinypy_internal_compare_three_way(left, right, &order, out_error) == 0) {
         return NULL;
     }
-    equal = left == right ? 1 : tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
-    if (equal < 0) {
-        return NULL;
-    }
-    if (equal != 0) {
-        tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, INT64_C(0));
-        return return_value_1;
-    }
-    less = tinypy_compare_bool(left, right, TINYPY_COMPARE_LESS, out_error);
-    if (less < 0) {
-        return NULL;
-    }
-    if (less != 0) {
-        tinypy_value_t *return_value_2 = tinypy_integer_from_i64(vm, INT64_C(-1));
-        return return_value_2;
-    }
-    greater = tinypy_compare_bool(left, right, TINYPY_COMPARE_GREATER, out_error);
-    if (greater < 0) {
-        return NULL;
-    }
-    tinypy_value_t *return_value_3 = tinypy_integer_from_i64(vm, greater != 0 ? INT64_C(1) : (int64_t)tinypy_internal_comparison_fallback_order(left, right));
-    return return_value_3;
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)order);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_hash(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -2573,10 +2568,10 @@ static tinypy_value_t *__tinypy_builtin_round(tinypy_value_t *function, tinypy_v
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_FLOAT) {
         number = TINYPY_FLOAT_OBJECT(value)->value;
     }
-    else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_INTEGER) {
+    else if ((TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_INTEGER) && tinypy_internal_object_has_special_override(value, "__float__", 9U) == 0) {
         number = (double)TINYPY_INTEGER_VALUE(value);
     }
-    else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG) {
+    else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG && tinypy_internal_object_has_special_override(value, "__float__", 9U) == 0) {
         if (tinypy_long_as_double(value, &number, out_error) == 0) {
             return NULL;
         }
@@ -3332,6 +3327,46 @@ static tinypy_value_t *__tinypy_builtin_repr(tinypy_value_t *function, tinypy_va
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_builtin_compile_string(tinypy_value_t *value, const char *argument, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    tinypy_value_t *encoded;
+
+    if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
+        tinypy_message_part_t type_name = TINYPY_MESSAGE_PART_TYPE_NAME(value);
+        if (kind == TINYPY_VALUE_NONE) {
+            type_name.bytes = "None";
+            type_name.size = 4U;
+        }
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("compile() argument "),
+            {argument, 1U},
+            TINYPY_MESSAGE_PART_LITERAL(" must be string, not "),
+            type_name,
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    encoded = tinypy_internal_object_encode_attribute_name(value, out_error);
+    if (encoded == NULL) {
+        return NULL;
+    }
+    size_t size;
+    const uint8_t *bytes = tinypy_string_view(encoded, &size);
+    if (size != 0U && memchr(bytes, '\0', size) != NULL) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("compile() argument "),
+            {argument, 1U},
+            TINYPY_MESSAGE_PART_LITERAL(" must be string without null bytes, not "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        };
+        TINYPY_DECREF(encoded);
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    return encoded;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_builtin_compile_mode(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_compile_mode_e *out_mode, tinypy_error_t **out_error) {
     const char *bytes;
     size_t size;
@@ -3349,9 +3384,66 @@ static tinypy_bool_t __tinypy_builtin_compile_mode(tinypy_vm_t *vm, tinypy_value
         *out_mode = TINYPY_COMPILE_SINGLE;
     }
     else {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "compile() mode must be 'exec', 'eval' or 'single'", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "compile() arg 3 must be 'exec', 'eval' or 'single'", out_error);
         return TINYPY_FALSE;
     }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_builtin_compile_integer(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    tinypy_value_t *converted = value;
+    int64_t integer;
+
+    if (kind == TINYPY_VALUE_FLOAT) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument expected, got float", out_error);
+        return TINYPY_FALSE;
+    }
+    if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && value->type != &vm->types[TINYPY_VALUE_LONG]) {
+        if (tinypy_internal_object_has_special(value, "__int__", 7U) == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "an integer is required", out_error);
+            return TINYPY_FALSE;
+        }
+        tinypy_value_t *method = tinypy_internal_object_get_special(value, "__int__", 7U, out_error);
+        if (method == NULL) {
+            return TINYPY_FALSE;
+        }
+        tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
+        converted = tinypy_call(method, empty, NULL, out_error);
+        TINYPY_DECREF(empty);
+        TINYPY_DECREF(method);
+        if (converted == NULL) {
+            return TINYPY_FALSE;
+        }
+        kind = TINYPY_VALUE_KIND(converted);
+        if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ method should return an integer", out_error);
+            TINYPY_DECREF(converted);
+            return TINYPY_FALSE;
+        }
+    }
+    else {
+        TINYPY_INCREF(converted);
+    }
+    if (kind == TINYPY_VALUE_LONG) {
+        tinypy_error_t *conversion_error = NULL;
+        if (tinypy_internal_index_as_i64(converted, &integer, TINYPY_FALSE, &conversion_error) == 0) {
+            tinypy_error_release(conversion_error);
+            TINYPY_DECREF(converted);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "Python int too large to convert to C long", out_error);
+            return TINYPY_FALSE;
+        }
+    }
+    if (kind != TINYPY_VALUE_LONG) {
+        integer = tinypy_integer_as_i64(converted);
+    }
+    TINYPY_DECREF(converted);
+    if (integer < INT32_MIN || integer > INT32_MAX) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, integer < INT32_MIN ? "signed integer is less than minimum" : "signed integer is greater than maximum", out_error);
+        return TINYPY_FALSE;
+    }
+    *out_value = integer;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3368,7 +3460,15 @@ static tinypy_bool_t __tinypy_builtin_source_view(tinypy_vm_t *vm, tinypy_value_
         *out_unicode = 1;
         return TINYPY_TRUE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "compile() source must be a string", out_error);
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BYTEARRAY || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BUFFER) {
+        const uint8_t *bytes;
+        if (tinypy_internal_bytes_view(value, &bytes, out_size) != 0) {
+            *out_source = bytes;
+            *out_unicode = 0;
+            return TINYPY_TRUE;
+        }
+    }
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected a readable buffer object", out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3386,6 +3486,9 @@ static tinypy_value_t *__tinypy_builtin_compile(tinypy_value_t *function, tinypy
     int64_t flags = 0;
     int64_t dont_inherit = 0;
     tinypy_bool_t source_is_unicode;
+    tinypy_value_t *filename_value;
+    tinypy_value_t *mode_value;
+    tinypy_value_t *result = NULL;
     const uint32_t obsolete_flags = UINT32_C(0x10);
     const uint32_t supported_flags = (uint32_t)(TINYPY_COMPILE_FLAG_DONT_IMPLY_DEDENT | TINYPY_COMPILE_FLAG_FUTURE_DIVISION | TINYPY_COMPILE_FLAG_FUTURE_ABSOLUTE_IMPORT | TINYPY_COMPILE_FLAG_FUTURE_WITH_STATEMENT | TINYPY_COMPILE_FLAG_FUTURE_PRINT_FUNCTION | TINYPY_COMPILE_FLAG_FUTURE_UNICODE_LITERALS);
 
@@ -3393,24 +3496,35 @@ static tinypy_value_t *__tinypy_builtin_compile(tinypy_value_t *function, tinypy
     if (__tinypy_builtin_named_arguments(vm, args, kwargs, parameter_names, parameter_name_sizes, 5U, 3U, arguments, out_error) == 0) {
         return NULL;
     }
-    if (__tinypy_builtin_source_view(vm, arguments[0], &source, &source_size, &source_is_unicode, out_error) == 0) {
+    filename_value = __tinypy_builtin_compile_string(arguments[1], "2", out_error);
+    if (filename_value == NULL) {
         return NULL;
     }
-    if (__tinypy_builtin_text_view(vm, arguments[1], &filename, &filename_size, out_error) == 0) {
+    mode_value = __tinypy_builtin_compile_string(arguments[2], "3", out_error);
+    if (mode_value == NULL) {
+        TINYPY_DECREF(filename_value);
         return NULL;
     }
-    if (__tinypy_builtin_compile_mode(vm, arguments[2], &mode, out_error) == 0) {
-        return NULL;
+    filename = (const char *)tinypy_string_view(filename_value, &filename_size);
+    if (arguments[3] != NULL && __tinypy_builtin_compile_integer(arguments[3], &flags, out_error) == 0) {
+        goto done;
     }
-    if (arguments[3] != NULL && __tinypy_builtin_integer_as_i64(vm, arguments[3], &flags, out_error) == 0) {
-        return NULL;
+    if (arguments[4] != NULL && __tinypy_builtin_compile_integer(arguments[4], &dont_inherit, out_error) == 0) {
+        goto done;
     }
-    if (arguments[4] != NULL && __tinypy_builtin_integer_as_i64(vm, arguments[4], &dont_inherit, out_error) == 0) {
-        return NULL;
+    if (__tinypy_builtin_compile_mode(vm, mode_value, &mode, out_error) == 0) {
+        goto done;
     }
     if (flags < 0 || (uint64_t)flags > UINT32_MAX || ((uint32_t)flags & ~(supported_flags | obsolete_flags)) != 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "compile(): unrecognised flags", out_error);
-        return NULL;
+        goto done;
+    }
+    if (__tinypy_builtin_source_view(vm, arguments[0], &source, &source_size, &source_is_unicode, out_error) == 0) {
+        goto done;
+    }
+    if (source_size != 0U && memchr(source, '\0', source_size) != NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "compile() expected string without null bytes", out_error);
+        goto done;
     }
     tinypy_compile_options_init(&options, mode);
     if (tinypy_internal_compile_options_inherit_frame(vm, &options) == 0) {
@@ -3418,8 +3532,11 @@ static tinypy_value_t *__tinypy_builtin_compile(tinypy_value_t *function, tinypy
     }
     options.flags = (uint32_t)flags & supported_flags;
     options.dont_inherit = dont_inherit != 0 ? 1 : 0;
-    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, filename, filename_size, &options, out_error);
-    return return_value_1;
+    result = tinypy_internal_compiler_compile_source(vm, source, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, filename, filename_size, &options, out_error);
+done:
+    TINYPY_DECREF(mode_value);
+    TINYPY_DECREF(filename_value);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_builtin_ensure_builtins(tinypy_vm_t *vm, tinypy_value_t *globals) {

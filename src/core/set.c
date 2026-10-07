@@ -455,14 +455,18 @@ static tinypy_bool_t __tinypy_set_difference_update_iterable(tinypy_value_t *set
     }
     for (;;) {
         tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
+        tinypy_bool_t deleted;
 
         if (item == NULL) {
             break;
         }
-        if (tinypy_set_discard(set, item, out_error) == 0) {
+        if (tinypy_internal_dict_delete_optional_checked(TINYPY_VALUE_VM(set), TINYPY_SET_OBJECT(set)->dict, item, &deleted, out_error) == 0) {
             TINYPY_DECREF(item);
             TINYPY_DECREF(iterator);
             return TINYPY_FALSE;
+        }
+        if (deleted != 0) {
+            TINYPY_SET_OBJECT(set)->hash_computed = 0;
         }
         TINYPY_DECREF(item);
     }
@@ -764,9 +768,6 @@ static tinypy_value_t *__tinypy_set_inplace_method(tinypy_value_t *function, tin
 
     if (operation == TINYPY_SET_BINARY_OR) {
         updated = tinypy_internal_set_update_iterable(self, other, out_error);
-    }
-    else if (operation == TINYPY_SET_BINARY_AND) {
-        updated = __tinypy_set_intersection_update_set(self, other, out_error);
     }
     else if (operation == TINYPY_SET_BINARY_SUBTRACT) {
         updated = __tinypy_set_difference_update_set(self, other, out_error);
@@ -1098,29 +1099,15 @@ static tinypy_value_t *__tinypy_set_update_method(tinypy_value_t *function, tiny
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_set_intersection_update_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *const *iterator;
-    tinypy_value_t *const *iterator_end;
+    tinypy_value_t *result = __tinypy_set_intersection_method(function, args, kwargs, user_data, out_error);
 
-    (void)user_data;
-    if (__tinypy_set_method_arguments(vm, args, kwargs, 1U, SIZE_MAX, out_error) == 0) {
+    if (result == NULL) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    iterator = TINYPY_TUPLE_ITERATOR_BEGIN(args) + 1;
-    iterator_end = TINYPY_TUPLE_ITERATOR_END(args);
-    for (; iterator != iterator_end; ++iterator) {
-        tinypy_value_t *item = *iterator;
-        tinypy_value_t *other = __tinypy_set_normalize(item, out_error);
 
-        if (other == NULL) {
-            return NULL;
-        }
-        if (__tinypy_set_intersection_update_set(self, other, out_error) == 0) {
-            TINYPY_DECREF(other);
-            return NULL;
-        }
-        TINYPY_DECREF(other);
-    }
+    tinypy_internal_set_swap_contents(self, result);
+    TINYPY_DECREF(result);
     tinypy_value_t *return_value_1 = __tinypy_set_none(vm);
     return return_value_1;
 }
@@ -1221,6 +1208,49 @@ static tinypy_value_t *__tinypy_set_issuperset_method(tinypy_value_t *function, 
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_set_isdisjoint_iterable(tinypy_value_t *self, tinypy_value_t *source, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
+    tinypy_value_t *iterator = tinypy_iter(source, out_error);
+
+    if (iterator == NULL) {
+        return NULL;
+    }
+    tinypy_error_t *iteration_error = NULL;
+    for (;;) {
+        tinypy_value_t *key = tinypy_next(iterator, &iteration_error);
+        tinypy_bool_t found;
+
+        if (key == NULL) {
+            break;
+        }
+        tinypy_bool_t checked = tinypy_internal_dict_contains_checked(vm, TINYPY_SET_OBJECT(self)->dict, key, &found, out_error);
+
+        TINYPY_DECREF(key);
+        if (checked == 0 || found != 0) {
+            TINYPY_DECREF(iterator);
+            if (checked == 0) {
+                return NULL;
+            }
+            tinypy_value_t *result = tinypy_bool_from_i32(vm, 0);
+
+            return result;
+        }
+    }
+    TINYPY_DECREF(iterator);
+    if (iteration_error != NULL) {
+        if (out_error != NULL) {
+            *out_error = iteration_error;
+        }
+        else {
+            tinypy_error_release(iteration_error);
+        }
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_bool_from_i32(vm, 1);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_set_isdisjoint_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *dict;
@@ -1236,6 +1266,22 @@ static tinypy_value_t *__tinypy_set_isdisjoint_method(tinypy_value_t *function, 
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
+    if (self == item) {
+        tinypy_value_t *result = tinypy_bool_from_i32(vm, tinypy_set_size(self) == 0U ? 1 : 0);
+
+        return result;
+    }
+    if (item->type != &vm->types[TINYPY_VALUE_SET] && item->type != &vm->types[TINYPY_VALUE_FROZENSET]) {
+        tinypy_value_t *result = __tinypy_set_isdisjoint_iterable(self, item, out_error);
+
+        return result;
+    }
+    if (tinypy_set_size(self) > tinypy_set_size(item)) {
+        tinypy_value_t *smaller = item;
+
+        item = self;
+        self = smaller;
+    }
     tinypy_value_t *other = __tinypy_set_normalize(item, out_error);
     if (other == NULL) {
         return NULL;

@@ -786,7 +786,9 @@ static int32_t __test_control_flow_errors(void) {
     TEST_CHECK(__test_verify(pop_block, sizeof(pop_block), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_BLOCK_STACK_UNDERFLOW);
     TEST_CHECK(__test_verify(break_outside, sizeof(break_outside), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_BREAK_OUTSIDE_LOOP);
     TEST_CHECK(__test_verify(continue_outside, sizeof(continue_outside), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_CONTINUE_OUTSIDE_LOOP);
-    TEST_CHECK(__test_verify(end_finally, sizeof(end_finally), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW);
+    /* The verified finally marker is checked before the value-stack shape. */
+    TEST_CHECK(__test_verify(end_finally, sizeof(end_finally), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE);
+    TEST_CHECK(result.error_offset == 0U);
     TEST_CHECK(__test_verify(block_mismatch, sizeof(block_mismatch), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_BLOCK_STACK_MISMATCH);
     TEST_CHECK(result.error_offset == 16U);
     TEST_CHECK(__test_verify(missing_with_cleanup, sizeof(missing_with_cleanup), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE);

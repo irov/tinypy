@@ -298,7 +298,7 @@ static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinyp
     if (method == NULL) {
         return INT32_C(-1);
     }
-    if (TINYPY_VALUE_KIND(method) == TINYPY_VALUE_NONE) {
+    if (TINYPY_VALUE_KIND(method) == TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
             TINYPY_MESSAGE_PART_TYPE_NAME(mutable_value),
@@ -318,12 +318,25 @@ static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinyp
         return INT32_C(-1);
     }
     tinypy_value_type_e result_kind = TINYPY_VALUE_KIND(result);
-    if (result_kind != TINYPY_VALUE_BOOL && result_kind != TINYPY_VALUE_INTEGER && result_kind != TINYPY_VALUE_LONG) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && result_kind != TINYPY_VALUE_BOOL && result_kind != TINYPY_VALUE_INTEGER && result_kind != TINYPY_VALUE_LONG) {
         TINYPY_DECREF(result);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__hash__ returned a non-integer", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__hash__() should return an int", out_error);
         return INT32_C(-1);
     }
-    *out_hash = tinypy_internal_hash_value(result, out_error);
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        *out_hash = tinypy_internal_hash_value(result, out_error);
+    }
+    else if (result_kind == TINYPY_VALUE_LONG) {
+        *out_hash = tinypy_internal_hash_builtin_value(result, out_error);
+    }
+    else {
+        int64_t integer;
+        if (tinypy_internal_number_as_i64(result, &integer, out_error) == 0) {
+            TINYPY_DECREF(result);
+            return INT32_C(-1);
+        }
+        *out_hash = integer == INT64_C(-1) ? (tinypy_hash_t)-2 : (tinypy_hash_t)integer;
+    }
     TINYPY_DECREF(result);
     tinypy_bool_t failed = out_error != NULL && *out_error != NULL;
 

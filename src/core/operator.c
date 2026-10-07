@@ -1993,6 +1993,12 @@ tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tin
         }
     }
     if (__tinypy_operator_is_number(left_kind) == 0 || __tinypy_operator_is_number(right_kind) == 0) {
+        if (left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE || left_kind == TINYPY_VALUE_TUPLE || left_kind == TINYPY_VALUE_LIST ||
+            right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE || right_kind == TINYPY_VALUE_TUPLE || right_kind == TINYPY_VALUE_LIST) {
+            tinypy_value_t *unsupported = __tinypy_operator_multiply_unsupported(vm, left, right, out_error);
+
+            return unsupported;
+        }
         special = __tinypy_operator_regular_binary(left, right, "__mul__", 7U, "__rmul__", 8U, &handled, out_error);
         if (handled != 0) {
             return special;

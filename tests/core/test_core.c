@@ -1255,6 +1255,13 @@ static int32_t __test_hash_and_equality(void) {
     iterated = tinypy_next(iterator, &error);
     TEST_CHECK(iterated == integer && error == NULL);
     tinypy_release(iterated);
+    iterated = tinypy_next(iterator, &error);
+    TEST_CHECK(iterated == string && error == NULL);
+    tinypy_release(iterated);
+    TEST_CHECK(tinypy_next(iterator, &error) == NULL && error == NULL);
+    TEST_CHECK(tinypy_vm_raised_exception(vm) == NULL);
+    TEST_CHECK(tinypy_next(iterator, &error) == NULL && error == NULL);
+    TEST_CHECK(tinypy_vm_raised_exception(vm) == NULL);
     tinypy_release(iterator);
     tinypy_release(iter_args);
     tinypy_release(iter_method);
@@ -3088,12 +3095,12 @@ static int32_t __test_native_embedding(void) {
     TEST_CHECK(native_state.compare_order_count == 3U);
     TEST_CHECK(native_state.compare_order[0] == 2 && native_state.compare_order[1] == 1 && native_state.compare_order[2] == 2);
     native_state.compare_order_count = 0U;
-    /* try_rich_compare asks the right operand's slot as well once the left
-       one answers NotImplemented, even for a single type. */
+    /* PyObject_RichCompare first tries the equal-type fast slot, then
+       try_rich_compare asks both operands after NotImplemented. */
     TEST_CHECK(tinypy_compare_bool(instance, other_instance, TINYPY_COMPARE_EQUAL, &error) == 0);
     TEST_CHECK(error == NULL);
-    TEST_CHECK(native_state.compare_order_count == 2U);
-    TEST_CHECK(native_state.compare_order[0] == 2 && native_state.compare_order[1] == 2);
+    TEST_CHECK(native_state.compare_order_count == 3U);
+    TEST_CHECK(native_state.compare_order[0] == 2 && native_state.compare_order[1] == 2 && native_state.compare_order[2] == 2);
 
     value = tinypy_integer_from_i64(vm, 7);
     native_result = tinypy_add(instance, value, &error);

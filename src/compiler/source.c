@@ -267,7 +267,10 @@ void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind
     }
     ctx->failed = 1;
     __tinypy_compiler_source_line(ctx, line_number, &line_bytes, &line_size);
-    tinypy_internal_make_vm_error_location(ctx->vm, error_kind, message, ctx->logical_filename, ctx->filename_size, line_number, column_offset, line_bytes, line_size, out_error);
+    if (line_number == 0 && ctx->source.size == 0U) {
+        line_bytes = "";
+    }
+    tinypy_internal_make_vm_error_location(ctx->vm, error_kind, message, ctx->logical_filename, ctx->filename_size, line_number, column_offset, line_bytes, line_size, TINYPY_TRUE, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, int32_t column_offset) {
@@ -294,19 +297,15 @@ void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_erro
     tinypy_internal_compiler_error(ctx, error_kind, message, line_number, column_offset, ctx->out_error);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number) {
-    const char *line_bytes = NULL;
-    size_t line_size = 0U;
-
+void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number, tinypy_bool_t include_location) {
     if (ctx->failed != 0) {
         return;
     }
     ctx->failed = 1;
-    __tinypy_compiler_source_line(ctx, line_number, &line_bytes, &line_size);
-    tinypy_internal_make_vm_error_location(ctx->vm, TINYPY_ERROR_SYNTAX, message, ctx->logical_filename, ctx->filename_size, line_number, 0, line_bytes, line_size, ctx->out_error);
+    tinypy_internal_make_vm_error_location(ctx->vm, TINYPY_ERROR_SYNTAX, message, ctx->logical_filename, ctx->filename_size, line_number, -1, NULL, 0U, include_location, ctx->out_error);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number) {
+void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, tinypy_bool_t include_location) {
     size_t message_size = 0U;
     size_t index;
     size_t offset = 0U;
@@ -335,7 +334,7 @@ void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, co
         offset += part_sizes[index];
     }
     message[offset] = '\0';
-    tinypy_internal_compiler_semantic_error(ctx, message, line_number);
+    tinypy_internal_compiler_semantic_error(ctx, message, line_number, include_location);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number) {
@@ -411,20 +410,28 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         latin1 = 0;
     }
     if (__tinypy_compiler_encoding_cookie(input + input_offset, source_size - input_offset, &cookie, &cookie_size, &cookie_line) != 0) {
-        if (ctx->source_is_unicode != 0) {
-            tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SYNTAX, "encoding declaration in Unicode string", cookie_line, 1, out_error);
-            return TINYPY_FALSE;
-        }
+        ctx->source_encoding_declared = TINYPY_TRUE;
         if (__tinypy_compiler_is_latin1_cookie(cookie, cookie_size) != 0) {
-            latin1 = 1;
+            if (ctx->source_is_unicode == 0) {
+                latin1 = 1;
+            }
         }
         else if (__tinypy_compiler_is_ascii_cookie(cookie, cookie_size) != 0) {
-            ascii = 1;
-            latin1 = 0;
+            if (ctx->source_is_unicode == 0) {
+                ascii = 1;
+                latin1 = 0;
+            }
         }
         else {
             if (__tinypy_compiler_is_utf8_cookie(cookie, cookie_size) == 0) {
-                tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SYNTAX, "unknown source encoding", cookie_line, 1, out_error);
+                const char *parts[] = {"unknown encoding: ", (const char *)cookie};
+                size_t sizes[] = {18U, cookie_size};
+                tinypy_internal_compiler_error_parts(ctx, TINYPY_ERROR_SYNTAX, parts, sizes, 2U, 0, 0);
+                /* Python's tokenizer reports no location; the C diagnostic retains the cookie line. */
+                if (out_error != NULL && *out_error != NULL) {
+                    (*out_error)->line_number = cookie_line;
+                    (*out_error)->column_offset = 1;
+                }
                 return TINYPY_FALSE;
             }
             latin1 = 0;
@@ -471,7 +478,7 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
             output_size += 1U;
         }
     }
-    if ((ctx->options.flags & (uint32_t)TINYPY_COMPILE_FLAG_DONT_IMPLY_DEDENT) == 0U && (output_size == 0U || output[output_size - 1U] != '\n')) {
+    if (ctx->options.mode == TINYPY_COMPILE_EXEC && (output_size == 0U || output[output_size - 1U] != '\n')) {
         output[output_size] = '\n';
         output_size += 1U;
     }

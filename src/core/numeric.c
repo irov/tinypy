@@ -669,12 +669,26 @@ static tinypy_value_t *__tinypy_float_fromhex_method(tinypy_value_t *function, t
     }
     tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *source = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_t *encoded = NULL;
     if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE || (TINYPY_VALUE_KIND(source) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(source) != TINYPY_VALUE_UNICODE)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "fromhex() requires one string argument", out_error);
         return NULL;
     }
+    if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_UNICODE) {
+        encoded = tinypy_internal_text_codec(vm, source, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+        if (encoded == NULL) {
+            return NULL;
+        }
+        source = encoded;
+    }
     if (__tinypy_float_parse_hex(vm, TINYPY_TEXT_BYTES(source), TINYPY_TEXT_BYTE_SIZE(source), &number, out_error) == 0) {
+        if (encoded != NULL) {
+            TINYPY_DECREF(encoded);
+        }
         return NULL;
+    }
+    if (encoded != NULL) {
+        TINYPY_DECREF(encoded);
     }
     tinypy_value_t *result = tinypy_float_from_double(vm, number);
     if ((tinypy_type_t *)class_value == &vm->types[TINYPY_VALUE_FLOAT]) {
@@ -792,9 +806,22 @@ static tinypy_value_t *__tinypy_float_getformat_method(tinypy_value_t *function,
         return NULL;
     }
     tinypy_value_t *kind = TINYPY_TUPLE_GET(args, 1U);
-    if (TINYPY_VALUE_KIND(kind) != TINYPY_VALUE_STRING || (TINYPY_TEXT_BYTE_SIZE(kind) != 5U && TINYPY_TEXT_BYTE_SIZE(kind) != 6U) || (memcmp(TINYPY_TEXT_BYTES(kind), "float", 5U) != 0 && memcmp(TINYPY_TEXT_BYTES(kind), "double", 6U) != 0)) {
+    if (TINYPY_VALUE_KIND(kind) != TINYPY_VALUE_STRING) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "float.__getformat__ requires a string", out_error);
+        return NULL;
+    }
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(kind);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(kind);
+    tinypy_bool_t single_precision = size >= 5U && memcmp(bytes, "float", 5U) == 0 && (size == 5U || bytes[5U] == 0);
+    tinypy_bool_t double_precision = size >= 6U && memcmp(bytes, "double", 6U) == 0 && (size == 6U || bytes[6U] == 0);
+
+    if (single_precision == 0 && double_precision == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unknown float format", out_error);
         return NULL;
+    }
+    if (single_precision != 0 ? vm->float_format_unknown : vm->double_format_unknown) {
+        tinypy_value_t *result = tinypy_string_from_bytes(vm, "unknown", 7U);
+        return result;
     }
     const char *format = *((const uint8_t *)&byteorder_probe) == 1U ? "IEEE, little-endian" : "IEEE, big-endian";
     tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, format, strlen(format));
@@ -812,7 +839,10 @@ static tinypy_value_t *__tinypy_float_setformat_method(tinypy_value_t *function,
     }
     tinypy_value_t *kind = TINYPY_TUPLE_GET(args, 1U);
     tinypy_value_t *format_value = TINYPY_TUPLE_GET(args, 2U);
-    if (TINYPY_VALUE_KIND(kind) != TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(format_value) != TINYPY_VALUE_STRING || ((TINYPY_TEXT_BYTE_SIZE(kind) != 5U || memcmp(TINYPY_TEXT_BYTES(kind), "float", 5U) != 0) && (TINYPY_TEXT_BYTE_SIZE(kind) != 6U || memcmp(TINYPY_TEXT_BYTES(kind), "double", 6U) != 0))) {
+    if (tinypy_internal_codecs_validate_name(vm, kind, out_error) == 0 || tinypy_internal_codecs_validate_name(vm, format_value, out_error) == 0) {
+        return NULL;
+    }
+    if ((TINYPY_TEXT_BYTE_SIZE(kind) != 5U || memcmp(TINYPY_TEXT_BYTES(kind), "float", 5U) != 0) && (TINYPY_TEXT_BYTE_SIZE(kind) != 6U || memcmp(TINYPY_TEXT_BYTES(kind), "double", 6U) != 0)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unknown float format", out_error);
         return NULL;
     }
@@ -823,6 +853,12 @@ static tinypy_value_t *__tinypy_float_setformat_method(tinypy_value_t *function,
     if (unknown == 0 && native == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "can only set the native float format", out_error);
         return NULL;
+    }
+    if (TINYPY_TEXT_BYTE_SIZE(kind) == 5U) {
+        vm->float_format_unknown = unknown;
+    }
+    else {
+        vm->double_format_unknown = unknown;
     }
     tinypy_value_t *return_value_1 = tinypy_none_get(vm);
     return return_value_1;

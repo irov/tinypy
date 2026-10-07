@@ -5,6 +5,7 @@
 #include "internal.h"
 
 #include <limits.h>
+#include <math.h>
 #include <string.h>
 
 #define TINYPY_MARSHAL_DUMP_DEFAULT_BYTES ((size_t)67108864U)
@@ -118,7 +119,16 @@ static tinypy_bool_t __tinypy_marshal_dump_size32(tinypy_marshal_dump_writer_t *
 static tinypy_bool_t __tinypy_marshal_dump_double(tinypy_marshal_dump_writer_t *writer, double value) {
     uint64_t bits;
 
-    (void)memcpy(&bits, &value, sizeof(bits));
+    if (writer->vm->double_format_unknown != 0 && isfinite(value) == 0) {
+        __tinypy_marshal_dump_fail(writer, TINYPY_MARSHAL_INVALID_FLOAT, "can't pack IEEE 754 special value on non-IEEE platform");
+        return TINYPY_FALSE;
+    }
+    if (writer->vm->double_format_unknown != 0 && value == 0.0) {
+        bits = UINT64_C(0);
+    }
+    else {
+        (void)memcpy(&bits, &value, sizeof(bits));
+    }
     tinypy_bool_t return_value_1 = __tinypy_marshal_dump_i64(writer, (int64_t)bits);
     return return_value_1;
 }

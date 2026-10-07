@@ -662,29 +662,7 @@ tinypy_bool_t tinypy_internal_dict_set_checked(tinypy_vm_t *vm, tinypy_value_t *
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, tinypy_error_t **out_error) {
-    tinypy_dict_lookup_t lookup;
-
-    if (__tinypy_internal_dict_lookup(vm, dict, key, hash, &lookup, out_error) == 0) {
-        return TINYPY_FALSE;
-    }
-
-    if (lookup.found != 0) {
-        TINYPY_INCREF(value);
-        tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
-        tinypy_value_t *previous = entry->value;
-        entry->value = value;
-        if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-            tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
-        }
-        __tinypy_internal_dict_modified(dict);
-#if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        __tinypy_internal_cycle_diagnostics_dict_set(vm, dict, entry->key, value, 0);
-#endif
-        TINYPY_DECREF(previous);
-        return TINYPY_TRUE;
-    }
-
+static tinypy_bool_t __tinypy_internal_dict_insert_lookup(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, size_t index, tinypy_error_t **out_error) {
     if (__tinypy_internal_dict_needs_resize(dict)) {
         /* The new capacity follows the live entry count, not the old capacity,
            so a table full of deleted slots shrinks back the way dictresize
@@ -696,12 +674,12 @@ tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_valu
         if (__tinypy_internal_dict_resize(vm, dict, minimum, TINYPY_TRUE, out_error) == 0) {
             return TINYPY_FALSE;
         }
-        lookup.index = __tinypy_internal_dict_clean_index(dict, hash);
+        index = __tinypy_internal_dict_clean_index(dict, hash);
     }
 
     TINYPY_INCREF(key);
     TINYPY_INCREF(value);
-    tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
+    tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[index];
     if (TINYPY_DICT_ENTRY_IS_EMPTY(entry)) {
         TINYPY_DICT_OBJECT(dict)->fill += 1U;
     }
@@ -717,6 +695,57 @@ tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_valu
     __tinypy_internal_cycle_diagnostics_dict_set(vm, dict, entry->key, value, 1);
 #endif
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, tinypy_error_t **out_error) {
+    tinypy_dict_lookup_t lookup;
+
+    if (__tinypy_internal_dict_lookup(vm, dict, key, hash, &lookup, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (lookup.found != 0) {
+        TINYPY_INCREF(value);
+        tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[lookup.index];
+        tinypy_value_t *previous = entry->value;
+        entry->value = value;
+        if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
+            tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
+        }
+        __tinypy_internal_dict_modified(dict);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_dict_set(vm, dict, entry->key, value, 0);
+#endif
+        TINYPY_DECREF(previous);
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t result = __tinypy_internal_dict_insert_lookup(vm, dict, key, value, hash, lookup.index, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_dict_setdefault_checked(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *default_value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
+    tinypy_hash_t hash;
+    tinypy_dict_lookup_t lookup;
+
+    if (__tinypy_internal_dict_hash_key(vm, key, &hash, out_error) == 0) {
+        return NULL;
+    }
+    if (__tinypy_internal_dict_lookup(vm, dict, key, hash, &lookup, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *result;
+    if (lookup.found != 0) {
+        result = TINYPY_DICT_OBJECT(dict)->table[lookup.index].value;
+    }
+    else {
+        if (__tinypy_internal_dict_insert_lookup(vm, dict, key, default_value, hash, lookup.index, out_error) == 0) {
+            return NULL;
+        }
+        result = default_value;
+    }
+    TINYPY_INCREF(result);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_dict_iteration_error(tinypy_error_t *iteration_error, tinypy_error_t **out_error) {
@@ -801,7 +830,7 @@ done:
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy_value_t *source, tinypy_value_t *keys_method, tinypy_error_t **out_error) {
+tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy_value_t *source, tinypy_value_t *keys_method, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
     tinypy_value_t *empty_args = tinypy_tuple_from_items(vm, NULL, 0U);
     tinypy_value_t *keys = tinypy_call(keys_method, empty_args, NULL, out_error);
@@ -896,7 +925,7 @@ tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_va
         return TINYPY_FALSE;
     }
     if (mapping_status > 0) {
-        tinypy_bool_t result = __tinypy_internal_dict_update_mapping(target, source, keys_method, out_error);
+        tinypy_bool_t result = tinypy_internal_dict_update_mapping(target, source, keys_method, out_error);
         TINYPY_DECREF(keys_method);
         return result;
     }

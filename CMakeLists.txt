@@ -178,6 +178,28 @@ endif()
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)
 
+    foreach(subsystem IN ITEMS opcode bytecode_verify)
+        add_executable(tinypy_${subsystem}_tests tests/bytecode/test_${subsystem}.c)
+        target_link_libraries(tinypy_${subsystem}_tests PRIVATE tinypy::tinypy)
+        target_include_directories(tinypy_${subsystem}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/bytecode)
+        target_compile_features(tinypy_${subsystem}_tests PRIVATE c_std_11)
+        set_target_properties(tinypy_${subsystem}_tests PROPERTIES C_EXTENSIONS OFF C_STANDARD 11 C_STANDARD_REQUIRED YES)
+        tinypy_enable_test_assertions(tinypy_${subsystem}_tests)
+        tinypy_enable_strict_warnings(tinypy_${subsystem}_tests)
+        add_test(NAME bytecode_${subsystem} COMMAND tinypy_${subsystem}_tests)
+    endforeach()
+
+    foreach(subsystem IN ITEMS marshal artifact)
+        add_executable(tinypy_${subsystem}_tests tests/${subsystem}/test_${subsystem}.c)
+        target_link_libraries(tinypy_${subsystem}_tests PRIVATE tinypy::tinypy)
+        target_include_directories(tinypy_${subsystem}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/artifact)
+        target_compile_features(tinypy_${subsystem}_tests PRIVATE c_std_11)
+        set_target_properties(tinypy_${subsystem}_tests PROPERTIES C_EXTENSIONS OFF C_STANDARD 11 C_STANDARD_REQUIRED YES)
+        tinypy_enable_test_assertions(tinypy_${subsystem}_tests)
+        tinypy_enable_strict_warnings(tinypy_${subsystem}_tests)
+        add_test(NAME ${subsystem}_codec COMMAND tinypy_${subsystem}_tests)
+    endforeach()
+
     add_executable(tinypy_core_tests
         tests/core/test_core.c
     )

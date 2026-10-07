@@ -1,0 +1,42 @@
+{
+  "contract": "SPEC.md; CPython 2.7.18 observable semantics within the declared embedding scope",
+  "profiles": ["debug", "release", "sanitize", "lto"],
+  "axes": {
+    "compiler_modes": ["exec", "eval", "single"],
+    "compiler_optimization": [0, 1, 2],
+    "numeric_types": ["bool", "int", "long", "float", "complex"],
+    "sequence_types": ["list", "tuple", "str", "unicode", "bytearray", "buffer"],
+    "protocol_variants": ["exact builtin", "subclass", "classic class", "new style class", "missing method", "wrong result", "raising callback", "mutation during callback"],
+    "arguments": ["positional", "keyword", "omitted", "duplicate", "extra", "zero", "negative", "boundary", "overflow"],
+    "observations": ["value", "result type", "identity where specified", "exception class", "exception message where specified", "callback order", "partial mutation", "lifetime", "allocator balance"]
+  },
+  "domains": [
+    {"name": "numeric", "modules": ["local.test_numeric_protocols", "local.test_numeric_text_deep", "local.test_text_numeric_edges"], "tests": ["tests/conformance/runtime_matrix.py", "tests/conformance/text_numeric_edges_matrix.py", "tests/runtime/fixtures/numeric_semantics_runtime.py"]},
+    {"name": "text_and_codecs", "modules": ["local.test_percent_format", "local.test_numeric_text_deep", "local.test_text_numeric_edges"], "tests": ["tests/conformance/text_format_matrix.py", "tests/conformance/text_numeric_edges_matrix.py", "tests/runtime/fixtures/string_methods.py", "tests/runtime/fixtures/text_semantics_runtime.py", "tests/runtime/fixtures/codecs_runtime.py"]},
+    {"name": "containers_and_iterators", "modules": ["local.test_container_semantics", "local.test_container_deep", "local.test_container_edges"], "tests": ["tests/conformance/runtime_matrix.py", "tests/runtime/fixtures/container_methods.py", "tests/runtime/fixtures/set_runtime.py", "tests/runtime/fixtures/dict_view_runtime.py", "tests/runtime/fixtures/bytearray_runtime.py", "tests/runtime/fixtures/buffer_runtime.py"]},
+    {"name": "types_and_descriptors", "modules": ["local.test_binding", "local.test_object_protocols", "local.test_object_eval_deep", "local.test_object_edges", "local.test_type_deep"], "tests": ["tests/conformance/type_slots_matrix.py", "tests/runtime/fixtures/type_protocol_runtime.py", "tests/runtime/fixtures/metaclass_runtime.py", "tests/runtime/fixtures/slots_runtime.py", "tests/runtime/fixtures/old_class_runtime.py"]},
+    {"name": "evaluation_and_control_flow", "modules": ["local.test_evaluation_semantics", "local.test_runtime_regressions", "local.test_object_eval_deep", "local.test_control_deep"], "tests": ["tests/conformance/control_matrix.py", "tests/runtime/fixtures/control_flow_runtime.py", "tests/runtime/fixtures/statement_semantics_runtime.py", "tests/runtime/fixtures/with_statement.py"]},
+    {"name": "functions_and_generators", "modules": ["local.test_object_eval_deep", "local.test_object_edges", "local.test_control_deep"], "tests": ["tests/conformance/control_matrix.py", "tests/runtime/fixtures/call_semantics_runtime.py", "tests/runtime/fixtures/generator.py", "tests/runtime/fixtures/functools_runtime.py"]},
+    {"name": "exceptions", "modules": ["local.test_object_eval_deep", "local.test_object_edges", "local.test_control_deep"], "tests": ["tests/runtime/fixtures/exception_finally.py", "tests/runtime/fixtures/exception_reraise.py", "tests/runtime/fixtures/exception_nested.py", "tests/runtime/fixtures/exception_custom.py"]},
+    {"name": "builtins_and_imports", "modules": ["local.test_review_regressions"], "tests": ["tests/runtime/fixtures/builtin_semantics_runtime.py", "tests/runtime/fixtures/import_semantics_runtime.py", "tests/runtime/run_import_fixture.py"]},
+    {"name": "weakrefs_and_finalizers", "modules": ["local.test_review_regressions"], "tests": ["tests/runtime/fixtures/weakref_runtime.py", "tests/runtime/fixtures/finalizer_runtime.py", "tests/upstream/cycle_cases.py"]},
+    {"name": "bundled_modules", "modules": ["local.test_sre_deep"], "tests": ["tests/conformance/sre_matrix.py", "tests/runtime/fixtures/sre_runtime.py", "tests/runtime/fixtures/struct_runtime.py", "tests/runtime/fixtures/sys_runtime.py"]},
+    {"name": "comparisons_truth_and_hash", "modules": ["local.test_comparison_deep"], "tests": ["tests/conformance/comparison_matrix.py", "tests/core/test_core.c"]},
+    {"name": "compiler", "modules": ["local.test_compiler_edges"], "tests": ["tests/conformance/compiler_cases.py", "tests/conformance/compile_matrix.py", "tests/compiler/test_compiler.c", "tests/compiler/run_differential.py", "tests/fuzz/fuzz_compiler.c"]},
+    {"name": "bytecode_verification", "modules": [], "tests": ["tests/bytecode/test_opcode.c", "tests/bytecode/test_bytecode_verify.c", "tests/runtime/test_load_code.c"]},
+    {"name": "marshal_and_artifact", "modules": [], "tests": ["tests/marshal/test_marshal.c", "tests/artifact/test_artifact.c"]},
+    {"name": "embedding_memory_and_limits", "modules": [], "tests": ["tests/core/test_core.c", "tests/runtime/test_load_code.c", "tools/audit_core_symbols.py", "tests/tools/test_public_api_naming.py"]},
+    {"name": "test_infrastructure", "modules": [], "tests": ["tests/tools/test_upstream_runner.py", "tests/tools/test_validation_runner.py", "tests/upstream/check_adapter.py"]}
+  ],
+  "declared_boundaries": [
+    "Finite product domains and regression witnesses are enumerated; unbounded Python programs cannot be exhaustively enumerated.",
+    "No cyclic garbage collector; exactly the manifest detector adaptations run in Debug and skip in Release.",
+    "No CPython C extension ABI, filesystem, process, socket or thread services supplied by the core.",
+    "Core text codecs are ASCII, Latin-1, UTF-8 and hex; additional codecs require host registration.",
+    "_struct formats are restricted by SPEC.md; external standard-library modules require the embedding host.",
+    "Cache identity, detached descriptor ownership, escaped frame fast locals and code-object invariants follow the documented SPEC.md boundaries.",
+    "Local macOS arm64 results do not prove other ABIs, platforms, device integration or arbitrary host callbacks.",
+    "Regex template parsing and expansion require host re._subx/re._expand; local tests verify helper forwarding, not the external parser.",
+    "Extra-keyword insertion errors propagate immediately; CPython 2.7.18's result with a pending C exception is not emulated (SPEC.md Errors)."
+  ]
+}

@@ -204,6 +204,8 @@ Python-visible bundled surface намеренно ограничен memory-only
 - `_struct` гарантирует формат `d` с repeat counts и byte-order prefixes, а
   также `Struct`, `pack`, `unpack`, `pack_into` и `unpack_from`; `_struct.error`
   является `ValueError`;
+- `_sre` исполняет Python 2.7 regex programs; разбор replacement templates и
+  `Match.expand` используют `re._subx` и `re._expand`, предоставленные host;
 - filesystem-backed standard library, source-encoding discovery, process
   metadata, environment-dependent `sys` paths и standard I/O input не
   эмулируются. Их предоставляет host либо импортированный memory artifact.
@@ -469,6 +471,13 @@ Recoverable categories включают:
 - host module resolution failure.
 
 Error одновременно устанавливает корректное Python exception state в VM.
+
+При связывании дополнительных `**kwargs` ошибка `__hash__` или сравнения
+ключа немедленно передаётся вызывающему коду; тело функции не выполняется.
+CPython 2.7.18 в этой ветке игнорирует ошибку вставки в dict и может вернуть
+результат с pending C exception. Такое некорректное состояние tinypy не
+воспроизводит. Это исключение из сравнения с oracle проверяется отдельной
+runtime-регрессией во всех build profiles.
 
 ## 13. Marshal и artifacts
 

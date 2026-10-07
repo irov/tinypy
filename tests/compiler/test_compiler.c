@@ -345,6 +345,7 @@ static int32_t __test_source_decoding(void) {
     code = tinypy_compile_source(vm, unknown_cookie, sizeof(unknown_cookie) - 1U, "unknown.py", 10U, &options, &error);
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
     assert(tinypy_error_line_number(error) == 2);
+    assert(tinypy_error_column_offset(error) == 1);
     tinypy_error_release(error);
     error = NULL;
     code = tinypy_compile_source(vm, embedded_nul, sizeof(embedded_nul), "nul.py", 6U, &options, &error);

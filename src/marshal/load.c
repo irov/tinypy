@@ -2,6 +2,7 @@
 
 #include "internal.h"
 
+#include <math.h>
 #include <string.h>
 
 typedef struct tinypy_marshal_runtime_cache_entry_t {
@@ -309,6 +310,10 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         return TINYPY_MARSHAL_OK;
     case TINYPY_MARSHAL_TYPE_FLOAT: {
         double float_value = tinypy_marshal_float_value(source);
+        if (materializer->vm->double_format_unknown != 0 && tinypy_marshal_object_wire_type(source) == (uint8_t)'g' && isfinite(float_value) == 0) {
+            __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_FLOAT, (uint8_t)'g', "can't unpack IEEE 754 special value on non-IEEE platform");
+            return TINYPY_MARSHAL_INVALID_FLOAT;
+        }
         *out_value = tinypy_float_from_double(materializer->vm, float_value);
         return TINYPY_MARSHAL_OK;
     }
@@ -317,6 +322,10 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         double imaginary;
 
         tinypy_marshal_complex_value(source, &real, &imaginary);
+        if (materializer->vm->double_format_unknown != 0 && tinypy_marshal_object_wire_type(source) == (uint8_t)'y' && (isfinite(real) == 0 || isfinite(imaginary) == 0)) {
+            __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_FLOAT, (uint8_t)'y', "can't unpack IEEE 754 special value on non-IEEE platform");
+            return TINYPY_MARSHAL_INVALID_FLOAT;
+        }
         *out_value = tinypy_complex_from_doubles(materializer->vm, real, imaginary);
     }
         return TINYPY_MARSHAL_OK;

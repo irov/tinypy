@@ -630,7 +630,7 @@ static tinypy_bool_t __tinypy_eval_exception_instance_of(tinypy_vm_t *vm, tinypy
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_type, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 /* Follows exec_statement in CPython 2.7, including the tuple form and the
    write-back of the frame's locals after a plain exec. */
@@ -677,7 +677,7 @@ static tinypy_bool_t __tinypy_eval_exec_statement(tinypy_vm_t *vm, tinypy_frame_
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code object passed to exec may not contain free variables", out_error);
             return TINYPY_FALSE;
         }
-        execution_result = __tinypy_eval_code_bound(source, execution_globals, execution_locals, NULL, NULL, 0U, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, out_error);
+        execution_result = __tinypy_eval_code_bound(source, execution_globals, execution_locals, NULL, NULL, 0U, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, NULL, out_error);
     }
     else {
         tinypy_compile_options_t options;
@@ -734,9 +734,19 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exceptions must be old-style classes or derived from BaseException, not NoneType", out_error);
             goto cleanup;
         }
-        tinypy_internal_exception_restore_raised_from_handled(vm);
-        reason = vm->raised_traceback != NULL ? TINYPY_EVAL_REASON_RERAISE : TINYPY_EVAL_REASON_EXCEPTION;
-        goto cleanup;
+        if (__tinypy_eval_exception_instance_of(vm, vm->handled_value, vm->handled_type) != 0) {
+            tinypy_internal_exception_restore_raised_from_handled(vm);
+            reason = vm->raised_traceback != NULL ? TINYPY_EVAL_REASON_RERAISE : TINYPY_EVAL_REASON_EXCEPTION;
+            goto cleanup;
+        }
+        raise_type = vm->handled_type;
+        raise_value = vm->handled_value;
+        traceback = vm->handled_traceback;
+        TINYPY_INCREF(raise_type);
+        TINYPY_INCREF(raise_value);
+        if (traceback != NULL) {
+            TINYPY_INCREF(traceback);
+        }
     }
     if (traceback != NULL && TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_NONE) {
         TINYPY_DECREF(traceback);
@@ -812,7 +822,12 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         goto cleanup;
     }
-    tinypy_internal_exception_set_raised(vm, exception, traceback);
+    if (__tinypy_eval_exception_class(vm, raise_type) != 0 && __tinypy_eval_exception_instance_of(vm, exception, raise_type) == 0) {
+        tinypy_internal_exception_set_raised_type(vm, raise_type, exception, traceback);
+    }
+    else {
+        tinypy_internal_exception_set_raised(vm, exception, traceback);
+    }
     if (traceback != NULL) {
         reason = TINYPY_EVAL_REASON_RERAISE;
     }
@@ -876,7 +891,7 @@ static tinypy_eval_reason_e __tinypy_eval_end_finally(tinypy_vm_t *vm, tinypy_fr
         tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
         tinypy_value_t *traceback = __tinypy_eval_pop_owned(frame);
 
-        if (__tinypy_eval_exception_instance(vm, value) == 0 || (TINYPY_VALUE_KIND(traceback) != TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(traceback) != TINYPY_VALUE_TRACEBACK)) {
+        if (TINYPY_VALUE_KIND(traceback) != TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(traceback) != TINYPY_VALUE_TRACEBACK) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "END_FINALLY received invalid exception state", out_error);
             reason = TINYPY_EVAL_REASON_EXCEPTION;
         }
@@ -885,7 +900,7 @@ static tinypy_eval_reason_e __tinypy_eval_end_finally(tinypy_vm_t *vm, tinypy_fr
             if (TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK) {
                 raised_traceback = traceback;
             }
-            tinypy_internal_exception_set_raised(vm, value, raised_traceback);
+            tinypy_internal_exception_set_raised_type(vm, top, value, raised_traceback);
                 reason = TINYPY_EVAL_REASON_RERAISE;
         }
         TINYPY_DECREF(traceback);
@@ -1417,6 +1432,48 @@ static void __tinypy_eval_raise_lost_exception(tinypy_vm_t *vm, tinypy_error_t *
     tinypy_internal_exception_raise_kind(vm, kind, message);
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_eval_normalize_raised(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    tinypy_internal_exception_state_t state;
+    tinypy_value_t *args;
+
+    if (__tinypy_eval_exception_instance_of(vm, vm->raised_value, vm->raised_type) != 0) {
+        return;
+    }
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    __tinypy_eval_clear_diagnostic(out_error);
+    if (TINYPY_VALUE_KIND(state.value) == TINYPY_VALUE_NONE) {
+        args = tinypy_tuple_from_items(vm, NULL, 0U);
+    }
+    else if (TINYPY_VALUE_KIND(state.value) == TINYPY_VALUE_TUPLE) {
+        args = state.value;
+        TINYPY_INCREF(args);
+    }
+    else {
+        args = tinypy_tuple_from_items(vm, &state.value, 1U);
+    }
+    tinypy_value_t *value = tinypy_call(state.type, args, NULL, out_error);
+
+    TINYPY_DECREF(args);
+    if (value != NULL) {
+        tinypy_internal_exception_set_raised_type(vm, state.type, value, state.traceback);
+        TINYPY_DECREF(value);
+    }
+    else {
+        if (vm->raised_value == NULL) {
+            __tinypy_eval_raise_lost_exception(vm, out_error);
+        }
+        if (vm->raised_traceback == NULL && state.traceback != NULL) {
+            vm->raised_traceback = state.traceback;
+            TINYPY_INCREF(state.traceback);
+        }
+    }
+    TINYPY_DECREF(state.type);
+    TINYPY_DECREF(state.value);
+    if (state.traceback != NULL) {
+        TINYPY_DECREF(state.traceback);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_unwind_reason(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_eval_reason_e *reason, size_t *out_instruction_offset, tinypy_value_t **in_out_result, tinypy_error_t **out_error) {
     if (*reason == TINYPY_EVAL_REASON_EXCEPTION) {
         if (vm->raised_value == NULL) {
@@ -1449,6 +1506,7 @@ static tinypy_bool_t __tinypy_eval_unwind_reason(tinypy_vm_t *vm, tinypy_frame_o
         if (block.type == TINYPY_OP_SETUP_FINALLY || (block.type == TINYPY_OP_SETUP_EXCEPT && *reason == TINYPY_EVAL_REASON_EXCEPTION) || block.type == TINYPY_OP_SETUP_WITH) {
             if (*reason == TINYPY_EVAL_REASON_EXCEPTION) {
                 if (block.type == TINYPY_OP_SETUP_EXCEPT || block.type == TINYPY_OP_SETUP_WITH) {
+                    __tinypy_eval_normalize_raised(vm, out_error);
                     tinypy_internal_exception_set_handled_from_raised(vm);
                     __tinypy_eval_push_exception_triple(vm, frame, vm->handled_type, vm->handled_value, vm->handled_traceback);
                 }
@@ -1551,45 +1609,6 @@ static void __tinypy_eval_decode_trusted(const uint8_t *bytecode, size_t instruc
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_eval_call_append_iterable(tinypy_value_t *arguments, tinypy_value_t *iterable, tinypy_error_t **out_error) {
-    tinypy_error_t *iteration_error = NULL;
-    tinypy_value_t *iterator = tinypy_iter(iterable, &iteration_error);
-
-    if (iterator == NULL) {
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else if (iteration_error != NULL) {
-            tinypy_error_release(iteration_error);
-        }
-        return TINYPY_FALSE;
-    }
-    for (;;) {
-        tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
-
-        if (item == NULL) {
-            break;
-        }
-        if (tinypy_internal_list_append_checked(arguments, item, out_error) == 0) {
-            TINYPY_DECREF(item);
-            TINYPY_DECREF(iterator);
-            return TINYPY_FALSE;
-        }
-        TINYPY_DECREF(item);
-    }
-    TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 /* Names a callable for messages the way PyEval_GetFuncName and
    PyEval_GetFuncDesc do. */
 static void __tinypy_eval_callable_name(tinypy_value_t *callable, tinypy_message_part_t *out_name, tinypy_message_part_t *out_description) {
@@ -1647,81 +1666,55 @@ static tinypy_bool_t __tinypy_eval_keyword_name_valid(tinypy_value_t *key) {
     return valid;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_eval_call_merge_keywords(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_eval_call_keyword_mapping(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *source, tinypy_error_t **out_error) {
     tinypy_message_part_t name;
     tinypy_message_part_t description;
-    tinypy_value_t *mapping = source;
-    tinypy_bool_t merged = TINYPY_FALSE;
+    tinypy_value_t *mapping;
+    tinypy_value_t *keys_method = NULL;
+    tinypy_error_t *mapping_error = NULL;
+    int32_t mapping_status;
+    tinypy_bool_t attribute_error;
 
-    if (TINYPY_VALUE_KIND(source) != TINYPY_VALUE_DICT) {
-        if (tinypy_internal_object_is_mapping(vm, source) == 0) {
-            __tinypy_eval_callable_name(callable, &name, &description);
-            tinypy_message_part_t parts[] = {
-                name,
-                description,
-                TINYPY_MESSAGE_PART_LITERAL(" argument after ** must be a mapping, not "),
-                TINYPY_MESSAGE_PART_TYPE_NAME(source),
-            };
-
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-            return TINYPY_FALSE;
-        }
+    if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_DICT) {
+        tinypy_value_t *result = tinypy_internal_dict_copy(source, out_error);
+        return result;
+    }
+    mapping_status = tinypy_internal_object_get_optional_attr_key(source, vm->keys_key, &keys_method, &mapping_error);
+    if (mapping_status > 0) {
         mapping = tinypy_dict_new(vm);
-        if (tinypy_internal_dict_update_from(mapping, source, out_error) == 0) {
-            TINYPY_DECREF(mapping);
-            return TINYPY_FALSE;
-        }
-    }
-    if (mapping == source) {
-        mapping = tinypy_internal_dict_copy(source, out_error);
-        if (mapping == NULL) {
-            return TINYPY_FALSE;
-        }
-    }
-    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(mapping);
-    tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(mapping);
-    for (; iterator != iterator_end; ++iterator) {
-        if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-            continue;
-        }
-        if (__tinypy_eval_keyword_name_valid(iterator->key) == 0) {
-            __tinypy_eval_callable_name(callable, &name, &description);
-            tinypy_message_part_t parts[] = {
-                name,
-                description,
-                TINYPY_MESSAGE_PART_LITERAL(" keywords must be strings"),
-            };
+        tinypy_bool_t updated = tinypy_internal_dict_update_mapping(mapping, source, keys_method, &mapping_error);
 
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-            goto cleanup;
+        TINYPY_DECREF(keys_method);
+        if (updated != 0) {
+            return mapping;
         }
-        tinypy_bool_t contains;
-        if (tinypy_internal_dict_contains_checked(vm, target, iterator->key, &contains, out_error) == 0) {
-            goto cleanup;
-        }
-        if (contains != 0) {
-            __tinypy_eval_callable_name(callable, &name, &description);
-            tinypy_message_part_t parts[] = {
-                name,
-                description,
-                TINYPY_MESSAGE_PART_LITERAL(" got multiple values for keyword argument '"),
-                TINYPY_MESSAGE_PART_TEXT(iterator->key),
-                TINYPY_MESSAGE_PART_LITERAL("'"),
-            };
-
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-            goto cleanup;
-        }
-        if (tinypy_internal_dict_set_checked(vm, target, iterator->key, iterator->value, out_error) == 0) {
-            goto cleanup;
-        }
-    }
-    merged = TINYPY_TRUE;
-cleanup:
-    if (mapping != source) {
         TINYPY_DECREF(mapping);
     }
-    return merged;
+    attribute_error = vm->raised_type != NULL && TINYPY_VALUE_KIND(vm->raised_type) == TINYPY_VALUE_TYPE
+        ? tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_ATTRIBUTE_ERROR])
+        : (mapping_error != NULL && tinypy_error_kind(mapping_error) == TINYPY_ERROR_ATTRIBUTE);
+    if (mapping_status == 0 || attribute_error != 0) {
+        if (mapping_error != NULL) {
+            tinypy_error_release(mapping_error);
+        }
+        tinypy_vm_clear_error(vm);
+        __tinypy_eval_callable_name(callable, &name, &description);
+        tinypy_message_part_t parts[] = {
+            name,
+            description,
+            TINYPY_MESSAGE_PART_LITERAL(" argument after ** must be a mapping, not "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(source),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    }
+    else if (out_error != NULL) {
+        *out_error = mapping_error;
+    }
+    else if (mapping_error != NULL) {
+        tinypy_error_release(mapping_error);
+    }
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t argument, tinypy_bool_t has_varargs, tinypy_bool_t has_var_keywords, tinypy_error_t **out_error) {
@@ -1746,43 +1739,101 @@ static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_ob
 
         direct_bound_function = method->self != NULL && method->function->type == &vm->types[TINYPY_VALUE_FUNCTION];
     }
-    if (has_varargs != 0) {
-        tinypy_value_t *arguments = tinypy_list_from_items(vm, first + 1U, positional_count);
-        tinypy_value_t *iterable = first[1U + positional_count + keyword_count * 2U];
+    if (has_var_keywords != 0) {
+        size_t mapping_offset = 1U + positional_count + keyword_count * 2U + (has_varargs != 0 ? 1U : 0U);
 
-        if (__tinypy_eval_call_append_iterable(arguments, iterable, out_error) == 0) {
-            TINYPY_DECREF(arguments);
+        kwargs = __tinypy_eval_call_keyword_mapping(vm, first[0], first[mapping_offset], out_error);
+        if (kwargs == NULL) {
             result = NULL;
             goto cleanup;
         }
-        size_t list_size = TINYPY_LIST_SIZE(arguments);
-        args = tinypy_tuple_from_items(vm, TINYPY_LIST_OBJECT(arguments)->items, list_size);
-        TINYPY_DECREF(arguments);
+    }
+    if (has_varargs != 0) {
+        tinypy_value_t *iterable = first[1U + positional_count + keyword_count * 2U];
+        tinypy_value_t *star = iterable;
+
+        if (TINYPY_VALUE_KIND(iterable) != TINYPY_VALUE_TUPLE) {
+            tinypy_error_t *conversion_error = NULL;
+            tinypy_value_t *constructor_args = tinypy_tuple_from_items(vm, &iterable, 1U);
+
+            star = tinypy_internal_tuple_create(&vm->types[TINYPY_VALUE_TUPLE], constructor_args, NULL, &conversion_error);
+            TINYPY_DECREF(constructor_args);
+            if (star == NULL) {
+                if (conversion_error != NULL && tinypy_error_kind(conversion_error) == TINYPY_ERROR_TYPE && TINYPY_VALUE_KIND(iterable) != TINYPY_VALUE_GENERATOR) {
+                    tinypy_message_part_t name;
+                    tinypy_message_part_t description;
+
+                    tinypy_error_release(conversion_error);
+                    tinypy_vm_clear_error(vm);
+                    __tinypy_eval_callable_name(first[0], &name, &description);
+                    tinypy_message_part_t parts[] = {
+                        name,
+                        description,
+                        TINYPY_MESSAGE_PART_LITERAL(" argument after * must be an iterable, not "),
+                        TINYPY_MESSAGE_PART_TYPE_NAME(iterable),
+                    };
+
+                    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+                }
+                else if (out_error != NULL) {
+                    *out_error = conversion_error;
+                }
+                else if (conversion_error != NULL) {
+                    tinypy_error_release(conversion_error);
+                }
+                result = NULL;
+                goto cleanup;
+            }
+        }
+        args = tinypy_internal_tuple_join_items_checked(vm, NULL, first + 1U, positional_count, tinypy_internal_tuple_items(star), TINYPY_TUPLE_SIZE(star), out_error);
+        if (star != iterable) {
+            TINYPY_DECREF(star);
+        }
+        if (args == NULL) {
+            result = NULL;
+            goto cleanup;
+        }
     }
     else if (direct_function == 0 && direct_bound_function == 0 && direct_native == 0) {
         args = tinypy_tuple_from_items(vm, first + 1U, positional_count);
     }
     if ((keyword_count != 0U || has_var_keywords != 0)
         && ((direct_function == 0 && direct_bound_function == 0) || has_var_keywords != 0)) {
-        kwargs = tinypy_dict_new(vm);
-        for (index = 0U; index < keyword_count; ++index) {
-            tinypy_value_t *key = first[1U + positional_count + index * 2U];
-            tinypy_value_t *value = first[2U + positional_count + index * 2U];
+        if (kwargs == NULL) {
+            kwargs = tinypy_dict_new(vm);
+        }
+        for (index = keyword_count; index != 0U; --index) {
+            tinypy_value_t *key = first[1U + positional_count + (index - 1U) * 2U];
+            tinypy_value_t *value = first[2U + positional_count + (index - 1U) * 2U];
 
             if (__tinypy_eval_keyword_name_valid(key) == 0) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
                 result = NULL;
                 goto cleanup;
             }
-            if (tinypy_internal_dict_set_checked(vm, kwargs, key, value, out_error) == 0) {
+            tinypy_bool_t contains;
+            if (tinypy_internal_dict_contains_checked(vm, kwargs, key, &contains, out_error) == 0) {
                 result = NULL;
                 goto cleanup;
             }
-        }
-        if (has_var_keywords != 0) {
-            size_t mapping_offset = 1U + positional_count + keyword_count * 2U + (has_varargs != 0 ? 1U : 0U);
+            if (contains != 0) {
+                tinypy_message_part_t name;
+                tinypy_message_part_t description;
 
-            if (__tinypy_eval_call_merge_keywords(vm, first[0], kwargs, first[mapping_offset], out_error) == 0) {
+                __tinypy_eval_callable_name(first[0], &name, &description);
+                tinypy_message_part_t parts[] = {
+                    name,
+                    description,
+                    TINYPY_MESSAGE_PART_LITERAL(" got multiple values for keyword argument '"),
+                    TINYPY_MESSAGE_PART_TEXT(key),
+                    TINYPY_MESSAGE_PART_LITERAL("'"),
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+                result = NULL;
+                goto cleanup;
+            }
+            if (tinypy_internal_dict_set_checked(vm, kwargs, key, value, out_error) == 0) {
                 result = NULL;
                 goto cleanup;
             }
@@ -1898,25 +1949,48 @@ static tinypy_value_t *__tinypy_eval_parameter_indices(tinypy_vm_t *vm, tinypy_v
     return code_object->parameter_indices;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_eval_bind_keyword(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_function_object_t *function, tinypy_value_t *extra_keywords, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *parameter_index_value;
+static tinypy_bool_t __tinypy_eval_bind_keyword(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *extra_keywords, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *code = frame->code;
+    size_t parameter_index = SIZE_MAX;
+
 
     if (__tinypy_eval_keyword_name_valid(key) == 0) {
         tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(function->code)),
+            TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(code)),
             TINYPY_MESSAGE_PART_LITERAL("() keywords must be strings"),
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return TINYPY_FALSE;
     }
-    parameter_index_value = tinypy_dict_get_optional(__tinypy_eval_parameter_indices(vm, function->code), key);
-    if (parameter_index_value != NULL) {
-        size_t parameter_index = (size_t)TINYPY_INTEGER_VALUE(parameter_index_value);
+    if (key->type == &vm->types[TINYPY_VALUE_STRING] || key->type == &vm->types[TINYPY_VALUE_UNICODE]) {
+        tinypy_value_t *parameter_index_value = tinypy_dict_get_optional(__tinypy_eval_parameter_indices(vm, code), key);
 
+        if (parameter_index_value != NULL) {
+            parameter_index = (size_t)TINYPY_INTEGER_VALUE(parameter_index_value);
+        }
+    }
+    else {
+        size_t arg_count = (size_t)TINYPY_CODE_ARG_COUNT(code);
+        tinypy_value_t *names = TINYPY_CODE_VARNAMES(code);
+
+        /* Keyword subtypes compare to every formal name without hashing. */
+        for (size_t index = 0U; index < arg_count; ++index) {
+            int32_t comparison = tinypy_compare_bool(key, TINYPY_TUPLE_GET(names, index), TINYPY_COMPARE_EQUAL, out_error);
+
+            if (comparison < 0) {
+                return TINYPY_FALSE;
+            }
+            if (comparison != 0) {
+                parameter_index = index;
+                break;
+            }
+        }
+    }
+    if (parameter_index != SIZE_MAX) {
         if (frame->locals_plus[parameter_index] != NULL) {
             tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(function->code)),
+                TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(code)),
                 TINYPY_MESSAGE_PART_LITERAL("() got multiple values for keyword argument '"),
                 TINYPY_MESSAGE_PART_TEXT(key),
                 TINYPY_MESSAGE_PART_LITERAL("'"),
@@ -1930,22 +2004,11 @@ static tinypy_bool_t __tinypy_eval_bind_keyword(tinypy_vm_t *vm, tinypy_frame_ob
         return TINYPY_TRUE;
     }
     if (extra_keywords != NULL) {
-        if (tinypy_dict_contains(extra_keywords, key) != 0) {
-            tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(function->code)),
-                TINYPY_MESSAGE_PART_LITERAL("() got multiple values for keyword argument '"),
-                TINYPY_MESSAGE_PART_TEXT(key),
-                TINYPY_MESSAGE_PART_LITERAL("'"),
-            };
-
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-            return TINYPY_FALSE;
-        }
-        tinypy_dict_set(extra_keywords, key, value);
-        return TINYPY_TRUE;
+        tinypy_bool_t result = tinypy_internal_dict_set_checked(vm, extra_keywords, key, value, out_error);
+        return result;
     }
     tinypy_message_part_t parts[] = {
-        TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(function->code)),
+        TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(code)),
         TINYPY_MESSAGE_PART_LITERAL("() got an unexpected keyword argument '"),
         TINYPY_MESSAGE_PART_TEXT(key),
         TINYPY_MESSAGE_PART_LITERAL("'"),
@@ -1957,13 +2020,13 @@ static tinypy_bool_t __tinypy_eval_bind_keyword(tinypy_vm_t *vm, tinypy_frame_ob
 //////////////////////////////////////////////////////////////////////////
 /* "<name>() takes <qualifier> N argument(s) (M given)", as PyEval_EvalCodeEx
    reports arity mismatches. */
-static void __tinypy_eval_make_arity_error(tinypy_vm_t *vm, tinypy_function_object_t *function, const char *qualifier, size_t qualifier_size, size_t expected, size_t given, tinypy_error_t **out_error) {
+static void __tinypy_eval_make_arity_error(tinypy_vm_t *vm, tinypy_value_t *code, const char *qualifier, size_t qualifier_size, size_t expected, size_t given, tinypy_error_t **out_error) {
     char expected_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
     char given_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
     size_t expected_size = tinypy_internal_format_size(expected_buffer, expected);
     size_t given_size = tinypy_internal_format_size(given_buffer, given);
     tinypy_message_part_t parts[] = {
-        TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(function->code)),
+        TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(code)),
         TINYPY_MESSAGE_PART_LITERAL("() takes "),
         {qualifier, qualifier_size},
         {expected_buffer, expected_size},
@@ -1981,14 +2044,17 @@ static void __tinypy_eval_make_arity_error(tinypy_vm_t *vm, tinypy_function_obje
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_error_t **out_error) {
-    size_t arg_count = (size_t)TINYPY_CODE_ARG_COUNT(function->code);
+    tinypy_value_t *code = frame->code;
+    tinypy_value_t *defaults = function->defaults;
+    size_t arg_count = (size_t)TINYPY_CODE_ARG_COUNT(code);
     size_t positional_count = item_count;
-    size_t default_count = function->defaults != NULL ? TINYPY_TUPLE_SIZE(function->defaults) : 0U;
+    size_t default_count = defaults != NULL ? TINYPY_TUPLE_SIZE(defaults) : 0U;
     size_t first_default;
     size_t index;
-    tinypy_bool_t has_varargs = (TINYPY_CODE_FLAGS(function->code) & TINYPY_CODE_VARARGS) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-    tinypy_bool_t has_var_keywords = (TINYPY_CODE_FLAGS(function->code) & TINYPY_CODE_VAR_KEYWORDS) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t has_varargs = (TINYPY_CODE_FLAGS(code) & TINYPY_CODE_VARARGS) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t has_var_keywords = (TINYPY_CODE_FLAGS(code) & TINYPY_CODE_VAR_KEYWORDS) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *extra_keywords = NULL;
+    tinypy_bool_t result = TINYPY_FALSE;
 
     size_t default_offset = default_count > arg_count ? default_count - arg_count : 0U;
     default_count -= default_offset;
@@ -2000,7 +2066,7 @@ static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_
             char given_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
             size_t given_size = tinypy_internal_format_size(given_buffer, given);
             tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(function->code)),
+                TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(code)),
                 TINYPY_MESSAGE_PART_LITERAL("() takes no arguments ("),
                 {given_buffer, given_size},
                 TINYPY_MESSAGE_PART_LITERAL(" given)"),
@@ -2014,12 +2080,15 @@ static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_
         size_t given = positional_count + keyword_count + (kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U);
 
         if (default_count != 0U) {
-            __tinypy_eval_make_arity_error(vm, function, "at most ", 8U, arg_count, given, out_error);
+            __tinypy_eval_make_arity_error(vm, code, "at most ", 8U, arg_count, given, out_error);
         }
         else {
-            __tinypy_eval_make_arity_error(vm, function, "exactly ", 8U, arg_count, given, out_error);
+            __tinypy_eval_make_arity_error(vm, code, "exactly ", 8U, arg_count, given, out_error);
         }
         return TINYPY_FALSE;
+    }
+    if (defaults != NULL) {
+        TINYPY_INCREF(defaults);
     }
     for (index = 0U; index < positional_count && index < arg_count; ++index) {
         frame->locals_plus[index] = items[index];
@@ -2039,25 +2108,25 @@ static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_
     if (kwargs != NULL) {
         tinypy_value_t *snapshot = tinypy_internal_dict_copy(kwargs, out_error);
         if (snapshot == NULL) {
-            return TINYPY_FALSE;
+            goto cleanup;
         }
         tinypy_bool_t bound = TINYPY_TRUE;
         for (size_t position = 0U; position <= TINYPY_DICT_OBJECT(snapshot)->mask; ++position) {
             tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(snapshot)->table[position];
             if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry)
-                && __tinypy_eval_bind_keyword(vm, frame, function, extra_keywords, entry->key, entry->value, out_error) == 0) {
+                && __tinypy_eval_bind_keyword(vm, frame, extra_keywords, entry->key, entry->value, out_error) == 0) {
                 bound = TINYPY_FALSE;
                 break;
             }
         }
         TINYPY_DECREF(snapshot);
         if (bound == 0) {
-            return TINYPY_FALSE;
+            goto cleanup;
         }
     }
     for (index = 0U; index < keyword_count; ++index) {
-        if (__tinypy_eval_bind_keyword(vm, frame, function, extra_keywords, keyword_items[index * 2U], keyword_items[index * 2U + 1U], out_error) == 0) {
-            return TINYPY_FALSE;
+        if (__tinypy_eval_bind_keyword(vm, frame, extra_keywords, keyword_items[index * 2U], keyword_items[index * 2U + 1U], out_error) == 0) {
+            goto cleanup;
         }
     }
 
@@ -2075,17 +2144,22 @@ static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_
                 }
             }
             if (has_varargs != 0 || default_count != 0U) {
-                __tinypy_eval_make_arity_error(vm, function, "at least ", 9U, first_default, given, out_error);
+                __tinypy_eval_make_arity_error(vm, code, "at least ", 9U, first_default, given, out_error);
             }
             else {
-                __tinypy_eval_make_arity_error(vm, function, "exactly ", 8U, first_default, given, out_error);
+                __tinypy_eval_make_arity_error(vm, code, "exactly ", 8U, first_default, given, out_error);
             }
-            return TINYPY_FALSE;
+            goto cleanup;
         }
-        frame->locals_plus[index] = TINYPY_TUPLE_GET(function->defaults, default_offset + index - first_default);
+        frame->locals_plus[index] = TINYPY_TUPLE_GET(defaults, default_offset + index - first_default);
         TINYPY_INCREF(frame->locals_plus[index]);
     }
-    return TINYPY_TRUE;
+    result = TINYPY_TRUE;
+cleanup:
+    if (defaults != NULL) {
+        TINYPY_DECREF(defaults);
+    }
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_bind_exact_positional(tinypy_frame_object_t *frame, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, size_t keyword_count) {
@@ -2147,7 +2221,7 @@ static void __tinypy_eval_initialize_cells(tinypy_vm_t *vm, tinypy_frame_object_
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_function_object_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_type, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error) {
     tinypy_vm_t *vm;
     tinypy_value_t *frame_value;
     tinypy_frame_object_t *frame;
@@ -2233,7 +2307,12 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
 #endif
 
     if (throw_value != NULL) {
-        tinypy_internal_exception_set_raised(vm, throw_value, throw_traceback);
+        if (throw_type != NULL) {
+            tinypy_internal_exception_set_raised_type(vm, throw_type, throw_value, throw_traceback);
+        }
+        else {
+            tinypy_internal_exception_set_raised(vm, throw_value, throw_traceback);
+        }
         reason = TINYPY_EVAL_REASON_EXCEPTION;
         (void)__tinypy_eval_unwind_reason(vm, frame, &reason, &instruction_offset, &result, out_error);
     }
@@ -3463,7 +3542,7 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
 tinypy_value_t *tinypy_eval_code(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
     tinypy_internal_exception_clear_raised(vm);
-    tinypy_value_t *return_value_1 = __tinypy_eval_code_bound(code, globals, locals, NULL, NULL, 0U, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_eval_code_bound(code, globals, locals, NULL, NULL, 0U, NULL, NULL, 0U, NULL, NULL, NULL, NULL, NULL, NULL, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3505,7 +3584,7 @@ static tinypy_value_t *__tinypy_eval_function_items_keywords(tinypy_value_t *fun
             TINYPY_DECREF(frame_value);
             return NULL;
         }
-        if (TINYPY_TUPLE_SIZE(TINYPY_CODE_CELLVARS(function->code)) != 0U || TINYPY_TUPLE_SIZE(TINYPY_CODE_FREEVARS(function->code)) != 0U) {
+        if (TINYPY_TUPLE_SIZE(TINYPY_CODE_CELLVARS(frame->code)) != 0U || TINYPY_TUPLE_SIZE(TINYPY_CODE_FREEVARS(frame->code)) != 0U) {
             __tinypy_eval_initialize_cells(vm, frame, function);
         }
         if (frame->back != NULL) {
@@ -3528,12 +3607,12 @@ static tinypy_value_t *__tinypy_eval_function_items_keywords(tinypy_value_t *fun
         TINYPY_DECREF(frame_value);
     }
     else {
-        result = __tinypy_eval_code_bound(function->code, function->globals, NULL, function, items, item_count, kwargs, keyword_items, keyword_count, NULL, NULL, NULL, NULL, NULL, out_error);
+        result = __tinypy_eval_code_bound(function->code, function->globals, NULL, function, items, item_count, kwargs, keyword_items, keyword_count, NULL, NULL, NULL, NULL, NULL, NULL, out_error);
     }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_eval_generator_resume(tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = __tinypy_eval_code_bound(NULL, NULL, NULL, NULL, NULL, 0U, NULL, NULL, 0U, generator, send_value, throw_value, throw_traceback, out_yielded, out_error);
+tinypy_value_t *tinypy_internal_eval_generator_resume(tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_type, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error) {
+    tinypy_value_t *return_value_1 = __tinypy_eval_code_bound(NULL, NULL, NULL, NULL, NULL, 0U, NULL, NULL, 0U, generator, send_value, throw_type, throw_value, throw_traceback, out_yielded, out_error);
     return return_value_1;
 }

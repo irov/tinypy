@@ -1,5 +1,6 @@
 #include "tinypy/tinypy.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -195,6 +196,168 @@ static int32_t __test_fixture(tinypy_vm_t *vm) {
 
     int32_t return_value_1 = __test_load_bytes(vm, bytes, sizeof(bytes), "embedded fixture");
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_code_with_constant(tinypy_vm_t *vm, tinypy_value_t *constant) {
+    tinypy_value_t *bytecode = tinypy_string_from_bytes(vm, "d\0\0S", 4U);
+    tinypy_value_t *consts = tinypy_tuple_from_items(vm, &constant, 1U);
+    tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *filename = tinypy_string_from_bytes(vm, "format.py", 9U);
+    tinypy_value_t *name = tinypy_string_from_bytes(vm, "module", 6U);
+    tinypy_value_t *lnotab = tinypy_string_from_bytes(vm, "", 0U);
+    tinypy_value_t *code = tinypy_code_new(0, 0, 1, TINYPY_CODE_NO_FREE, bytecode, consts, empty, empty, empty, empty, filename, name, 1, lnotab);
+
+    tinypy_release(lnotab);
+    tinypy_release(name);
+    tinypy_release(filename);
+    tinypy_release(empty);
+    tinypy_release(consts);
+    tinypy_release(bytecode);
+    return code;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_unknown_double_format(tinypy_vm_t *vm) {
+    tinypy_value_t *float_name = tinypy_string_from_bytes(vm, "float", 5U);
+    tinypy_value_t *float_type = tinypy_dict_get(tinypy_vm_builtins(vm), float_name);
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *method = tinypy_object_get_attr(float_type, "__setformat__", 13U, &error);
+    tinypy_value_t *items[2];
+    tinypy_value_t *args;
+    tinypy_value_t *result;
+    int32_t success;
+
+    items[0] = tinypy_string_from_bytes(vm, "double", 6U);
+    items[1] = tinypy_string_from_bytes(vm, "unknown", 7U);
+    args = tinypy_tuple_from_items(vm, items, 2U);
+    result = method != NULL ? tinypy_call(method, args, NULL, &error) : NULL;
+    success = result != NULL && error == NULL;
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    if (result != NULL) {
+        tinypy_release(result);
+    }
+    if (method != NULL) {
+        tinypy_release(method);
+    }
+    tinypy_release(args);
+    tinypy_release(items[1]);
+    tinypy_release(items[0]);
+    tinypy_release(float_name);
+    return success;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_marshal_float_format_policy(void) {
+    static const struct {
+        int32_t complex_value;
+        double real;
+        double imaginary;
+    } rows[] = {
+        {0, 0.0, 0.0}, {0, -0.0, 0.0}, {0, 1.25, 0.0},
+        {0, INFINITY, 0.0}, {0, -INFINITY, 0.0}, {0, NAN, 0.0},
+        {1, -0.0, -0.0}, {1, 1.25, -2.5},
+        {1, INFINITY, 1.0}, {1, 1.0, INFINITY},
+        {1, -INFINITY, 1.0}, {1, 1.0, -INFINITY},
+        {1, NAN, 1.0}, {1, 1.0, NAN}
+    };
+    test_allocator_state_t state;
+    tinypy_vm_t *native_vm;
+    tinypy_vm_t *unknown_vm;
+    uint8_t native_bytes[256];
+    uint8_t unknown_bytes[256];
+    uint8_t legacy_bytes[256];
+    size_t index;
+    int32_t success;
+
+    /* CPython 2.7's forced unknown double format rejects binary special
+     * values, clears the sign when dumping zero, and retains it on load.
+     * The supported marshal interface here is the code-object C API. */
+    (void)memset(&state, 0, sizeof(state));
+    native_vm = __test_vm_create(&state);
+    unknown_vm = __test_vm_create(&state);
+    success = native_vm != NULL && unknown_vm != NULL && __test_unknown_double_format(unknown_vm) != 0;
+    for (index = 0U; success != 0 && index < sizeof(rows) / sizeof(rows[0]); index += 1U) {
+        tinypy_value_t *native_constant = rows[index].complex_value != 0 ? tinypy_complex_from_doubles(native_vm, rows[index].real, rows[index].imaginary) : tinypy_float_from_double(native_vm, rows[index].real);
+        tinypy_value_t *unknown_constant = rows[index].complex_value != 0 ? tinypy_complex_from_doubles(unknown_vm, rows[index].real, rows[index].imaginary) : tinypy_float_from_double(unknown_vm, rows[index].real);
+        tinypy_value_t *native_code = __test_code_with_constant(native_vm, native_constant);
+        tinypy_value_t *unknown_code = __test_code_with_constant(unknown_vm, unknown_constant);
+        tinypy_value_t *loaded_code = NULL;
+        tinypy_marshal_error_t error;
+        size_t native_size = 0U;
+        size_t unknown_size = 0U;
+        tinypy_bool_t finite = isfinite(rows[index].real) != 0 && isfinite(rows[index].imaginary) != 0;
+        tinypy_marshal_result_e expected = finite != 0 ? TINYPY_MARSHAL_OK : TINYPY_MARSHAL_INVALID_FLOAT;
+        tinypy_marshal_result_e native_result = tinypy_marshal_dump_code_v2(native_code, native_bytes, sizeof(native_bytes), &native_size, NULL, &error);
+        tinypy_marshal_result_e dump_result = tinypy_marshal_dump_code_v2(unknown_code, unknown_bytes, sizeof(unknown_bytes), &unknown_size, NULL, &error);
+        tinypy_marshal_result_e load_result = tinypy_marshal_load_code_v2(unknown_vm, native_bytes, native_size, NULL, &loaded_code, &error);
+
+        success = native_result == TINYPY_MARSHAL_OK && dump_result == expected && load_result == expected;
+        if (loaded_code != NULL) {
+            tinypy_value_t *loaded_constant = tinypy_tuple_get(tinypy_code_consts(loaded_code), 0U);
+            double real;
+            double imaginary = 0.0;
+
+            if (rows[index].complex_value != 0) {
+                tinypy_complex_as_doubles(loaded_constant, &real, &imaginary);
+            }
+            else {
+                real = tinypy_float_as_double(loaded_constant);
+            }
+            success = success != 0 && real == rows[index].real && imaginary == rows[index].imaginary && (signbit(real) != 0) == (signbit(rows[index].real) != 0) && (signbit(imaginary) != 0) == (signbit(rows[index].imaginary) != 0);
+            tinypy_release(loaded_code);
+            loaded_code = NULL;
+        }
+        if (success != 0 && finite != 0) {
+            load_result = tinypy_marshal_load_code_v2(native_vm, unknown_bytes, unknown_size, NULL, &loaded_code, &error);
+            success = load_result == TINYPY_MARSHAL_OK;
+            if (loaded_code != NULL) {
+                tinypy_value_t *loaded_constant = tinypy_tuple_get(tinypy_code_consts(loaded_code), 0U);
+                double real;
+                double imaginary = 0.0;
+
+                if (rows[index].complex_value != 0) {
+                    tinypy_complex_as_doubles(loaded_constant, &real, &imaginary);
+                }
+                else {
+                    real = tinypy_float_as_double(loaded_constant);
+                }
+                success = success != 0 && real == rows[index].real && imaginary == rows[index].imaginary && (real != 0.0 || signbit(real) == 0) && (imaginary != 0.0 || signbit(imaginary) == 0);
+                tinypy_release(loaded_code);
+            }
+        }
+        if (success != 0 && rows[index].real == INFINITY && rows[index].imaginary == 0.0) {
+            /* One constant follows the code header, bytecode string and
+             * tuple header at offset 31; replace binary g with legacy f. */
+            success = native_size > 40U && native_bytes[31] == (uint8_t)'g';
+            if (success != 0) {
+                (void)memcpy(legacy_bytes, native_bytes, 31U);
+                (void)memcpy(legacy_bytes + 31U, "f\x03inf", 5U);
+                (void)memcpy(legacy_bytes + 36U, native_bytes + 40U, native_size - 40U);
+                loaded_code = NULL;
+                load_result = tinypy_marshal_load_code_v2(unknown_vm, legacy_bytes, native_size - 4U, NULL, &loaded_code, &error);
+                success = load_result == TINYPY_MARSHAL_OK;
+                if (loaded_code != NULL) {
+                    tinypy_value_t *loaded_constant = tinypy_tuple_get(tinypy_code_consts(loaded_code), 0U);
+                    success = success != 0 && tinypy_float_as_double(loaded_constant) == INFINITY;
+                    tinypy_release(loaded_code);
+                }
+            }
+        }
+        tinypy_release(unknown_code);
+        tinypy_release(native_code);
+        tinypy_release(unknown_constant);
+        tinypy_release(native_constant);
+        if (success == 0) {
+            (void)fprintf(stderr, "marshal float-format policy failed at row %zu\n", index);
+        }
+    }
+    tinypy_vm_destroy(unknown_vm);
+    tinypy_vm_destroy(native_vm);
+    if (state.outstanding_allocations != 0U || state.outstanding_bytes != 0U) {
+        (void)fprintf(stderr, "marshal float-format policy leaked VM allocations\n");
+        success = 0;
+    }
+    return success;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_file(tinypy_vm_t *vm, const char *path) {
@@ -554,7 +717,7 @@ int main(int argc, char **argv) {
         }
         return success != 0 ? 0 : 1;
     }
-    if (__test_fixture(vm) == 0) {
+    if (__test_fixture(vm) == 0 || __test_marshal_float_format_policy() == 0) {
         return 1;
     }
     if (state.outstanding_allocations != base_allocations) {

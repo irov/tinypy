@@ -68,33 +68,11 @@ int32_t tinypy_internal_dict_view_contains(tinypy_value_t *value, tinypy_value_t
         TINYPY_DECREF(dict_value);
         return equal;
     }
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_dict_entry_t *entries = TINYPY_DICT_ITERATOR_BEGIN(view->dict);
-    size_t capacity = TINYPY_DICT_OBJECT(view->dict)->mask + 1U;
-    uint64_t version = TINYPY_DICT_OBJECT(view->dict)->mutation_version;
-    size_t index;
+    tinypy_value_t *iterator = tinypy_internal_dict_iterator_new(view->dict, (int32_t)TINYPY_DICT_VIEW_VALUES);
+    int32_t contains = tinypy_contains(iterator, item, out_error);
 
-    for (index = 0U; index < capacity; ++index) {
-        if (TINYPY_DICT_ENTRY_IS_ACTIVE(&entries[index])) {
-            tinypy_value_t *dict_value = entries[index].value;
-            int32_t equal;
-
-            TINYPY_INCREF(dict_value);
-            equal = dict_value == item ? 1 : tinypy_compare_bool(dict_value, item, TINYPY_COMPARE_EQUAL, out_error);
-            TINYPY_DECREF(dict_value);
-            if (equal < 0) {
-                return INT32_C(-1);
-            }
-            if (TINYPY_DICT_OBJECT(view->dict)->mutation_version != version || TINYPY_DICT_OBJECT(view->dict)->table != entries) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "dictionary changed size during iteration", out_error);
-                return INT32_C(-1);
-            }
-            if (equal != 0) {
-                return INT32_C(1);
-            }
-        }
-    }
-    return INT32_C(0);
+    TINYPY_DECREF(iterator);
+    return contains;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_dict_view_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {

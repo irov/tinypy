@@ -42,11 +42,11 @@ tinypy_value_t *tinypy_generator_send(tinypy_value_t *generator_value, tinypy_va
         return NULL;
     }
     if (generator->started == 0 && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_NONE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot send a non-None value to a just-started generator", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can't send non-None value to a just-started generator", out_error);
         return NULL;
     }
     generator->running = 1;
-    tinypy_value_t *result = tinypy_internal_eval_generator_resume(generator, value, NULL, NULL, &yielded, out_error);
+    tinypy_value_t *result = tinypy_internal_eval_generator_resume(generator, value, NULL, NULL, NULL, &yielded, out_error);
     generator->running = 0;
     generator->started = 1;
     if (yielded != 0) {
@@ -59,17 +59,10 @@ tinypy_value_t *tinypy_generator_send(tinypy_value_t *generator_value, tinypy_va
         TINYPY_DECREF(result);
         return NULL;
     }
-    if (vm->raised_value != NULL && tinypy_type_is_subtype(vm->raised_value->type, vm->exception_types[TINYPY_EXCEPTION_STOP_ITERATION]) != 0) {
-        tinypy_internal_exception_clear_raised(vm);
-        if (out_error != NULL && *out_error != NULL) {
-            tinypy_error_release(*out_error);
-            *out_error = NULL;
-        }
-    }
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_generator_throw(tinypy_value_t *generator_value, tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_generator_throw(tinypy_value_t *generator_value, tinypy_value_t *exception_type, tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {
     tinypy_value_t *result;
     tinypy_bool_t yielded = TINYPY_FALSE;
 
@@ -81,13 +74,18 @@ tinypy_value_t *tinypy_generator_throw(tinypy_value_t *generator_value, tinypy_v
         return NULL;
     }
     if (generator->finished != 0) {
-        tinypy_internal_exception_set_raised(vm, exception, traceback);
+        if (exception_type != NULL) {
+            tinypy_internal_exception_set_raised_type(vm, exception_type, exception, traceback);
+        }
+        else {
+            tinypy_internal_exception_set_raised(vm, exception, traceback);
+        }
         tinypy_internal_exception_make_diagnostic(vm, out_error);
         return NULL;
     }
     tinypy_value_t *none = tinypy_none_get(vm);
     generator->running = 1;
-    result = tinypy_internal_eval_generator_resume(generator, none, exception, traceback, &yielded, out_error);
+    result = tinypy_internal_eval_generator_resume(generator, none, exception_type, exception, traceback, &yielded, out_error);
     generator->running = 0;
     generator->started = 1;
     TINYPY_DECREF(none);
@@ -102,6 +100,11 @@ tinypy_value_t *tinypy_generator_throw(tinypy_value_t *generator_value, tinypy_v
         return NULL;
     }
     return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_generator_throw(tinypy_value_t *generator_value, tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_generator_throw(generator_value, NULL, exception, traceback, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_generator_discard_error(tinypy_vm_t *vm, tinypy_error_t **out_error) {
@@ -135,8 +138,8 @@ tinypy_bool_t tinypy_generator_close(tinypy_value_t *generator_value, tinypy_err
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "generator ignored GeneratorExit", out_error);
         return TINYPY_FALSE;
     }
-    if (vm->raised_value != NULL) {
-        if (tinypy_type_is_subtype(vm->raised_value->type, vm->exception_types[TINYPY_EXCEPTION_GENERATOR_EXIT]) != 0 || tinypy_type_is_subtype(vm->raised_value->type, vm->exception_types[TINYPY_EXCEPTION_STOP_ITERATION]) != 0) {
+    if (vm->raised_type != NULL) {
+        if (TINYPY_VALUE_KIND(vm->raised_type) == TINYPY_VALUE_TYPE && (tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_GENERATOR_EXIT]) != 0 || tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_STOP_ITERATION]) != 0)) {
             __tinypy_generator_discard_error(vm, out_error);
             return TINYPY_TRUE;
         }
@@ -171,7 +174,7 @@ static tinypy_value_t *__tinypy_generator_next_method(tinypy_value_t *function, 
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *result = tinypy_next(item, &iteration_error);
+    tinypy_value_t *result = tinypy_internal_next_raw(item, &iteration_error);
     if (result != NULL) {
         return result;
     }
@@ -203,6 +206,31 @@ static tinypy_value_t *__tinypy_generator_send_method(tinypy_value_t *function, 
     }
     tinypy_internal_exception_raise_stop_iteration(vm, out_error);
     return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_generator_throw_constructor_error(tinypy_value_t *generator, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(generator);
+    tinypy_internal_exception_state_t state;
+    tinypy_value_t *result;
+
+    if (vm->raised_value == NULL) {
+        return NULL;
+    }
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    if (out_error != NULL && *out_error != NULL) {
+        tinypy_error_release(*out_error);
+        *out_error = NULL;
+    }
+    result = __tinypy_generator_throw(generator, state.type, state.value, state.traceback, out_error);
+    TINYPY_DECREF(state.type);
+    TINYPY_DECREF(state.value);
+    if (state.traceback != NULL) {
+        TINYPY_DECREF(state.traceback);
+    }
+    if (result == NULL && vm->raised_value == NULL) {
+        tinypy_internal_exception_raise_stop_iteration(vm, out_error);
+    }
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -264,7 +292,9 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
             exception = tinypy_call(exception_argument, exception_args, NULL, out_error);
             TINYPY_DECREF(exception_args);
             if (exception == NULL) {
-                return NULL;
+                tinypy_value_t *failure_result = __tinypy_generator_throw_constructor_error(generator, out_error);
+
+                return failure_result;
             }
         }
     }
@@ -293,11 +323,17 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
             exception = tinypy_call(exception_argument, exception_args, NULL, out_error);
             TINYPY_DECREF(exception_args);
             if (exception == NULL) {
-                return NULL;
+                tinypy_value_t *failure_result = __tinypy_generator_throw_constructor_error(generator, out_error);
+
+                return failure_result;
             }
         }
     }
-    else if ((tinypy_type_is_subtype(exception_argument->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0 || TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_OLD_INSTANCE) && count == 2U) {
+    else if (tinypy_type_is_subtype(exception_argument->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0 || TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_OLD_INSTANCE) {
+        if (count >= 3U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 2U)) != TINYPY_VALUE_NONE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "instance exception may not have a separate value", out_error);
+            return NULL;
+        }
         exception = exception_argument;
         TINYPY_INCREF(exception);
     }
@@ -305,7 +341,11 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exceptions must be old-style classes or derived from BaseException", out_error);
         return NULL;
     }
-    result = tinypy_generator_throw(generator, exception, traceback, out_error);
+    tinypy_value_t *exception_type = NULL;
+    if (TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype(exception->type, (tinypy_type_t *)exception_argument) == 0) {
+        exception_type = exception_argument;
+    }
+    result = __tinypy_generator_throw(generator, exception_type, exception, traceback, out_error);
     TINYPY_DECREF(exception);
     if (result != NULL || vm->raised_value != NULL) {
         return result;
@@ -416,7 +456,10 @@ void tinypy_internal_initialize_generator_types(tinypy_vm_t *vm) {
     for (index = 0U; index < TINYPY_ITERATOR_TYPE_COUNT; ++index) {
         __tinypy_generator_type_set(vm, vm->iterator_types[index], "next", 4U, __tinypy_generator_next_method);
         __tinypy_generator_type_set(vm, vm->iterator_types[index], "__iter__", 8U, __tinypy_generator_iter_method);
-        if (index != (size_t)TINYPY_ITERATOR_TYPE_CALLABLE) {
+        if (index == (size_t)TINYPY_ITERATOR_TYPE_LIST_REVERSE) {
+            __tinypy_generator_type_set(vm, vm->iterator_types[index], "__length_hint__", 15U, __tinypy_reversed_length_hint_method);
+        }
+        else if (index != (size_t)TINYPY_ITERATOR_TYPE_CALLABLE) {
             __tinypy_generator_type_set(vm, vm->iterator_types[index], "__length_hint__", 15U, __tinypy_iterator_length_hint_method);
         }
     }

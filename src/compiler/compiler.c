@@ -149,11 +149,15 @@ static tinypy_cst_node_t *__tinypy_compiler_parse(tinypy_compile_ctx_t *ctx, int
     tinypy_cst_node_t *tree = tinypy_internal_parse_source(ctx, (const char *)ctx->source.bytes, ctx->source.size, ctx->logical_filename, &__tinypy_parser_grammar, compiler_parser_start, &detail, &flags);
     *out_parser_flags = flags;
     if (tree != NULL) {
+        if (ctx->source_is_unicode != 0 && ctx->source_encoding_declared != 0) {
+            tinypy_internal_compiler_semantic_error(ctx, "encoding declaration in Unicode string", 0, TINYPY_TRUE);
+            return NULL;
+        }
         return tree;
     }
     tinypy_error_kind_e compiler_parser_error_kind = __tinypy_compiler_parser_error_kind(detail.result, detail.token, detail.expected);
     const char *compiler_parser_error_message = __tinypy_compiler_parser_error_message(detail.result, detail.token, detail.expected);
-    tinypy_internal_compiler_error(ctx, compiler_parser_error_kind, compiler_parser_error_message, detail.line_number > 0 ? detail.line_number : 1, detail.offset >= 0 ? detail.offset : 1, out_error);
+    tinypy_internal_compiler_error(ctx, compiler_parser_error_kind, compiler_parser_error_message, detail.line_number, detail.offset, out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////

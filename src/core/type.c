@@ -640,13 +640,14 @@ static void __tinypy_internal_mro_conflict_error(tinypy_vm_t *vm, const tinypy_m
     tinypy_internal_vm_deallocate(vm, parts, part_capacity * sizeof(*parts));
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, tinypy_value_t *const *bases, size_t base_count, size_t *out_count, size_t *out_allocation_size, tinypy_error_t **out_error) {
+static tinypy_value_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, tinypy_value_t *const *bases, size_t base_count, tinypy_value_t *bases_source, size_t *out_count, size_t *out_allocation_size, tinypy_error_t **out_error) {
     tinypy_mro_sequence_t *sequences = NULL;
     tinypy_value_t **storage = NULL;
     tinypy_value_t **result = NULL;
     size_t sequence_count;
     size_t sequence_size;
-    size_t total_items = base_count;
+    size_t total_items = 0U;
+    tinypy_value_t *declared = NULL;
     size_t storage_size;
     size_t result_capacity;
     size_t result_size;
@@ -664,17 +665,12 @@ static tinypy_value_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, tinypy_value
         total_items += __tinypy_internal_mro_entry_bound(bases[index]);
     }
     storage_size = total_items * sizeof(*storage);
-    result_capacity = total_items + 1U;
-    result_size = result_capacity * sizeof(*result);
 
     sequences = (tinypy_mro_sequence_t *)tinypy_internal_vm_allocate(
         vm, sequence_size);
     storage = (tinypy_value_t **)tinypy_internal_vm_allocate(
         vm, storage_size);
-    result = (tinypy_value_t **)tinypy_internal_vm_allocate(
-        vm, result_size);
     (void)memset(sequences, 0, sequence_size);
-    result[0] = NULL;
 
     for (index = 0U; index < base_count; ++index) {
         tinypy_mro_sequence_t *sequence = &sequences[index];
@@ -692,13 +688,48 @@ static tinypy_value_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, tinypy_value
                 sequence->items[mro_index] = __tinypy_internal_type_mro_value_at((const tinypy_type_t *)bases[index], mro_index);
             }
         }
+        for (size_t position = 0U; position < sequence->size; ++position) {
+            TINYPY_INCREF(sequence->items[position]);
+        }
         storage_offset += sequence->size;
     }
-    sequences[base_count].items = &storage[storage_offset];
-    sequences[base_count].size = base_count;
-    for (index = 0U; index < base_count; ++index) {
-        sequences[base_count].items[index] = bases[index];
+    declared = tinypy_list_from_items(vm, NULL, 0U);
+    if (bases_source != NULL) {
+        TINYPY_INCREF(bases_source);
+        tinypy_bool_t extended = tinypy_internal_list_extend_iterable(declared, bases_source, out_error);
+        TINYPY_DECREF(bases_source);
+        if (extended == 0) {
+            goto error;
+        }
     }
+    else if (tinypy_internal_list_extend_checked(declared, bases, base_count, out_error) == 0) {
+        goto error;
+    }
+    for (index = 0U; index < TINYPY_LIST_SIZE(declared); ++index) {
+        tinypy_value_t *base = TINYPY_LIST_GET(declared, index);
+
+        for (size_t earlier = 0U; earlier < index; ++earlier) {
+            if (TINYPY_LIST_GET(declared, earlier) == base) {
+                tinypy_value_t *name = tinypy_object_get_attr(base, "__name__", 8U, out_error);
+                if (name == NULL) {
+                    goto error;
+                }
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("duplicate base class "),
+                    {(const char *)TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name)},
+                };
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
+                TINYPY_DECREF(name);
+                goto error;
+            }
+        }
+    }
+    sequences[base_count].items = TINYPY_LIST_OBJECT(declared)->items;
+    sequences[base_count].size = TINYPY_LIST_SIZE(declared);
+    result_capacity = total_items + TINYPY_LIST_SIZE(declared) + 1U;
+    result_size = result_capacity * sizeof(*result);
+    result = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, result_size);
+    result[0] = NULL;
 
     for (;;) {
         tinypy_value_t *candidate = NULL;
@@ -727,14 +758,12 @@ static tinypy_value_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, tinypy_value
         }
         if (candidate == NULL) {
             __tinypy_internal_mro_conflict_error(vm, sequences, sequence_count, out_error);
-            __tinypy_internal_mro_free(
-                vm, sequences, sequence_size, storage, storage_size,
-                result, result_size);
-            return NULL;
+            goto error;
         }
 
         result_count += 1U;
         result[result_count] = candidate;
+        TINYPY_INCREF(candidate);
         for (sequence_index = 0U;
              sequence_index < sequence_count;
              ++sequence_index) {
@@ -746,13 +775,28 @@ static tinypy_value_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, tinypy_value
         }
     }
 
-    tinypy_internal_vm_deallocate(
-        vm, storage, storage_size);
+    for (index = 0U; index < storage_offset; ++index) {
+        TINYPY_DECREF(storage[index]);
+    }
+    TINYPY_DECREF(declared);
+    tinypy_internal_vm_deallocate(vm, storage, storage_size);
     tinypy_internal_vm_deallocate(
         vm, sequences, sequence_size);
     *out_count = result_count;
     *out_allocation_size = result_size;
     return result;
+error:
+    for (index = 1U; index <= result_count; ++index) {
+        TINYPY_DECREF(result[index]);
+    }
+    for (index = 0U; index < storage_offset; ++index) {
+        TINYPY_DECREF(storage[index]);
+    }
+    if (declared != NULL) {
+        TINYPY_DECREF(declared);
+    }
+    __tinypy_internal_mro_free(vm, sequences, sequence_size, storage, storage_size, result, result != NULL ? result_size : 0U);
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_internal_validate_bases(tinypy_vm_t *vm, tinypy_value_t *const *bases, size_t base_count, tinypy_error_t **out_error) {
@@ -761,23 +805,10 @@ static tinypy_bool_t __tinypy_internal_validate_bases(tinypy_vm_t *vm, tinypy_va
 
     for (index = 0U; index < base_count; ++index) {
         tinypy_value_t *base = bases[index];
-        size_t earlier;
 
         if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_TYPE && TINYPY_VALUE_KIND(base) != TINYPY_VALUE_CLASS) {
             __tinypy_internal_type_error(vm, "bases must be types", out_error);
             return TINYPY_FALSE;
-        }
-        for (earlier = 0U; earlier < index; ++earlier) {
-            if (bases[earlier] == base) {
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("duplicate base class "),
-                    {NULL, 0U},
-                };
-
-                __tinypy_internal_mro_entry_name(base, &parts[1].bytes, &parts[1].size);
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
-                return TINYPY_FALSE;
-            }
         }
         if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_TYPE) {
             continue;
@@ -848,15 +879,15 @@ static tinypy_value_t *__tinypy_internal_type_mangle_slot_name(tinypy_vm_t *vm, 
     size_t mangled_size;
 
     if (size < 3U || bytes[0] != '_' || bytes[1] != '_' || (bytes[size - 2U] == '_' && bytes[size - 1U] == '_')) {
-        tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, bytes, size);
-        return return_value_1;
+        TINYPY_INCREF(slot_name);
+        return slot_name;
     }
     while (class_start < class_name_size && class_name[class_start] == '_') {
         class_start += 1U;
     }
     if (class_start == class_name_size) {
-        tinypy_value_t *return_value_2 = tinypy_string_from_bytes(vm, bytes, size);
-        return return_value_2;
+        TINYPY_INCREF(slot_name);
+        return slot_name;
     }
     mangled_size = 1U + class_name_size - class_start + size;
     mangled = (uint8_t *)tinypy_internal_vm_allocate(vm, mangled_size);
@@ -868,92 +899,130 @@ static tinypy_value_t *__tinypy_internal_type_mangle_slot_name(tinypy_vm_t *vm, 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_type_parse_slots(tinypy_vm_t *vm, const char *class_name, size_t class_name_size, tinypy_value_t *namespace_dict, int32_t *out_declared, int32_t *out_dict, int32_t *out_weakref, tinypy_error_t **out_error) {
-    tinypy_value_t *declaration = __tinypy_internal_type_namespace_value(vm, namespace_dict, "__slots__", 9U);
+static tinypy_value_t *__tinypy_internal_type_parse_slots(tinypy_vm_t *vm, const char *class_name, size_t class_name_size, const tinypy_type_t *layout_base, tinypy_value_t *namespace_dict, int32_t *out_declared, int32_t *out_dict, int32_t *out_weakref, tinypy_error_t **out_error) {
+    tinypy_value_t *declaration = namespace_dict != NULL ? __tinypy_internal_type_namespace_value(vm, namespace_dict, "__slots__", 9U) : NULL;
+    tinypy_value_t *inputs = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_value_t *names = tinypy_list_from_items(vm, NULL, 0U);
-    size_t input_size = 0U;
+    tinypy_value_t *result = NULL;
+    size_t input_size;
     size_t index;
 
     *out_declared = declaration != NULL ? INT32_C(1) : INT32_C(0);
     *out_dict = INT32_C(0);
     *out_weakref = INT32_C(0);
-    if (declaration == NULL) {
-        TINYPY_DECREF(names);
-        tinypy_value_t *return_value_1 = tinypy_tuple_from_items(vm, NULL, 0U);
-        return return_value_1;
+    if (declaration != NULL) {
+        TINYPY_INCREF(declaration);
+        tinypy_bool_t materialized;
+
+        if (TINYPY_VALUE_KIND(declaration) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(declaration) == TINYPY_VALUE_UNICODE) {
+            materialized = tinypy_internal_list_append_checked(inputs, declaration, out_error);
+        }
+        else {
+            materialized = tinypy_internal_list_extend_iterable(inputs, declaration, out_error);
+        }
+        TINYPY_DECREF(declaration);
+        if (materialized == 0) {
+            goto cleanup;
+        }
     }
-    if (TINYPY_VALUE_KIND(declaration) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(declaration) == TINYPY_VALUE_UNICODE) {
-        input_size = 1U;
+    input_size = TINYPY_LIST_SIZE(inputs);
+    if (input_size != 0U && (layout_base->layout_kind == TINYPY_VALUE_LONG || layout_base->layout_kind == TINYPY_VALUE_STRING || layout_base->layout_kind == TINYPY_VALUE_TUPLE || layout_base->layout_kind == TINYPY_VALUE_TYPE)) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("nonempty __slots__ not supported for subtype of '"),
+            {layout_base->name, layout_base->name_size},
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        goto cleanup;
     }
-    else if (TINYPY_VALUE_KIND(declaration) == TINYPY_VALUE_TUPLE) {
-        input_size = TINYPY_TUPLE_SIZE(declaration);
-    }
-    else if (TINYPY_VALUE_KIND(declaration) == TINYPY_VALUE_LIST) {
-        input_size = TINYPY_LIST_SIZE(declaration);
-    }
-    else {
-        TINYPY_DECREF(names);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__slots__ must be a string or a sequence of strings", out_error);
-        return NULL;
+    /* Python 2 encodes every Unicode entry before validating any name. */
+    for (index = 0U; index < input_size; ++index) {
+        tinypy_value_t *entry = TINYPY_LIST_GET(inputs, index);
+
+        if (TINYPY_VALUE_KIND(entry) == TINYPY_VALUE_UNICODE) {
+            tinypy_value_t *encoded = tinypy_internal_object_encode_attribute_name(entry, out_error);
+
+            if (encoded == NULL) {
+                goto cleanup;
+            }
+            tinypy_list_set(inputs, index, encoded);
+            TINYPY_DECREF(encoded);
+        }
     }
     for (index = 0U; index < input_size; ++index) {
-        tinypy_value_t *source = input_size == 1U && (TINYPY_VALUE_KIND(declaration) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(declaration) == TINYPY_VALUE_UNICODE)
-                                     ? declaration
-                                     : (TINYPY_VALUE_KIND(declaration) == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(declaration, index) : TINYPY_LIST_GET(declaration, index));
+        tinypy_value_t *entry = TINYPY_LIST_GET(inputs, index);
         tinypy_value_t *name;
 
-        if (TINYPY_VALUE_KIND(source) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(source) != TINYPY_VALUE_UNICODE) {
-            TINYPY_DECREF(names);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__slots__ entries must be strings", out_error);
-            return NULL;
+        if (TINYPY_VALUE_KIND(entry) != TINYPY_VALUE_STRING) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("__slots__ items must be strings, not '"),
+                TINYPY_MESSAGE_PART_TYPE_NAME(entry),
+                TINYPY_MESSAGE_PART_LITERAL("'"),
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            goto cleanup;
         }
-        if (__tinypy_internal_type_slot_name_equal(source, "__dict__", 8U) != 0) {
-            if (*out_dict != 0) {
-                TINYPY_DECREF(names);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__dict__ slot is duplicated", out_error);
-                return NULL;
+        const uint8_t *bytes = TINYPY_TEXT_BYTES(entry);
+        size_t size = TINYPY_TEXT_BYTE_SIZE(entry);
+        tinypy_bool_t valid = size != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+        for (size_t position = 0U; position < size; ++position) {
+            uint8_t character = bytes[position];
+            tinypy_bool_t alpha = (character >= (uint8_t)'a' && character <= (uint8_t)'z') || (character >= (uint8_t)'A' && character <= (uint8_t)'Z');
+            tinypy_bool_t digit = character >= (uint8_t)'0' && character <= (uint8_t)'9';
+
+            if (alpha == 0 && character != (uint8_t)'_' && (position == 0U || digit == 0)) {
+                valid = TINYPY_FALSE;
+                break;
+            }
+        }
+        if (valid == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__slots__ must be identifiers", out_error);
+            goto cleanup;
+        }
+        if (__tinypy_internal_type_slot_name_equal(entry, "__dict__", 8U) != 0) {
+            if (*out_dict != 0 || layout_base->has_instance_dict != 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__dict__ slot disallowed: we already got one", out_error);
+                goto cleanup;
             }
             *out_dict = INT32_C(1);
             continue;
         }
-        if (__tinypy_internal_type_slot_name_equal(source, "__weakref__", 11U) != 0) {
-            if (*out_weakref != 0) {
-                TINYPY_DECREF(names);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__weakref__ slot is duplicated", out_error);
-                return NULL;
+        if (__tinypy_internal_type_slot_name_equal(entry, "__weakref__", 11U) != 0) {
+            if (*out_weakref != 0 || layout_base->weakref_offset != 0U) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__weakref__ slot disallowed: either we already got one, or __itemsize__ != 0", out_error);
+                goto cleanup;
             }
             *out_weakref = INT32_C(1);
             continue;
         }
-        name = __tinypy_internal_type_mangle_slot_name(vm, class_name, class_name_size, source);
-        tinypy_value_t *const *iterator = TINYPY_LIST_ITERATOR_BEGIN(names);
-        tinypy_value_t *const *iterator_end = TINYPY_LIST_ITERATOR_END(names);
-        for (; iterator != iterator_end; ++iterator) {
-            tinypy_value_t *item = *iterator;
-            if (tinypy_internal_equal_value(item, name, 1) != 0) {
-                TINYPY_DECREF(name);
-                TINYPY_DECREF(names);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__slots__ entry is duplicated", out_error);
-                return NULL;
-            }
-        }
-        if (tinypy_internal_list_append_checked(names, name, out_error) == 0) {
-            TINYPY_DECREF(name);
-            TINYPY_DECREF(names);
-            return NULL;
-        }
+        name = __tinypy_internal_type_mangle_slot_name(vm, class_name, class_name_size, entry);
+        tinypy_bool_t appended = tinypy_internal_list_append_checked(names, name, out_error);
+
         TINYPY_DECREF(name);
+        if (appended == 0) {
+            goto cleanup;
+        }
     }
-    size_t list_size = TINYPY_LIST_SIZE(names);
-    tinypy_value_t **items = list_size != 0U ? (tinypy_value_t **)tinypy_internal_vm_allocate(vm, list_size * sizeof(*items)) : NULL;
-    for (index = 0U; index < list_size; ++index) {
-        items[index] = TINYPY_LIST_GET(names, index);
+    if (TINYPY_LIST_SIZE(names) > 1U) {
+        tinypy_value_t *sort = tinypy_object_get_attr(names, "sort", 4U, out_error);
+        if (sort == NULL) {
+            goto cleanup;
+        }
+        tinypy_value_t *sort_args = tinypy_tuple_from_items(vm, NULL, 0U);
+        tinypy_value_t *sorted = tinypy_call(sort, sort_args, NULL, out_error);
+        TINYPY_DECREF(sort_args);
+        TINYPY_DECREF(sort);
+        if (sorted == NULL) {
+            goto cleanup;
+        }
+        TINYPY_DECREF(sorted);
     }
-    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, list_size);
-    if (items != NULL) {
-        tinypy_internal_vm_deallocate(vm, items, list_size * sizeof(*items));
-    }
+    result = tinypy_tuple_from_items(vm, TINYPY_LIST_OBJECT(names)->items, TINYPY_LIST_SIZE(names));
+cleanup:
     TINYPY_DECREF(names);
+    TINYPY_DECREF(inputs);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1157,7 +1226,7 @@ tinypy_value_t *tinypy_internal_type_compute_mro(tinypy_type_t *type, tinypy_err
     for (index = 0U; index < base_count; ++index) {
         bases[index] = __tinypy_internal_type_base_value_at(type, index);
     }
-    merged = __tinypy_internal_c3_merge(vm, bases, base_count, &merged_count, &merged_size, out_error);
+    merged = __tinypy_internal_c3_merge(vm, bases, base_count, type->bases, &merged_count, &merged_size, out_error);
     tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
     if (merged == NULL) {
         return NULL;
@@ -1167,6 +1236,9 @@ tinypy_value_t *tinypy_internal_type_compute_mro(tinypy_type_t *type, tinypy_err
     if (tinypy_internal_list_extend_checked(mro, merged, merged_count + 1U, out_error) == 0) {
         TINYPY_DECREF(mro);
         mro = NULL;
+    }
+    for (index = 1U; index <= merged_count; ++index) {
+        TINYPY_DECREF(merged[index]);
     }
     tinypy_internal_vm_deallocate(vm, merged, merged_size);
     return mro;
@@ -1292,21 +1364,15 @@ static tinypy_bool_t __tinypy_internal_type_equivalent_layout(const tinypy_type_
 //////////////////////////////////////////////////////////////////////////
 /* same_slots_added in Python 2.7: siblings that add identical slots. */
 static tinypy_bool_t __tinypy_internal_type_same_slots_added(const tinypy_type_t *left, const tinypy_type_t *right) {
-    tinypy_vm_t *vm = left->vm;
-    tinypy_value_t *key;
-    tinypy_value_t *left_slots;
-    tinypy_value_t *right_slots;
     tinypy_bool_t same = TINYPY_TRUE;
 
     if (left->basic_size != right->basic_size || left->slot_count != right->slot_count || left->dict_offset != right->dict_offset || left->weakref_offset != right->weakref_offset) {
         return TINYPY_FALSE;
     }
-    key = tinypy_string_from_bytes(vm, "__slots__", 9U);
-    left_slots = tinypy_internal_dict_get_optional(vm, left->dict, key);
-    right_slots = tinypy_internal_dict_get_optional(vm, right->dict, key);
-    TINYPY_DECREF(key);
-    if (left_slots != NULL && right_slots != NULL) {
-        same = tinypy_compare_bool(left_slots, right_slots, TINYPY_COMPARE_EQUAL, NULL) > 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    if (left->own_slot_names != NULL && right->own_slot_names != NULL) {
+        int32_t order = INT32_C(0);
+
+        same = tinypy_internal_compare_three_way(left->own_slot_names, right->own_slot_names, &order, NULL) != 0 && order == INT32_C(0) ? TINYPY_TRUE : TINYPY_FALSE;
     }
     return same;
 }
@@ -1540,7 +1606,7 @@ rollback:
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, int32_t configured_instance_dict, int32_t configured_weakrefs, tinypy_error_t **out_error) {
+static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *const *bases, size_t base_count, tinypy_value_t *bases_source, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, int32_t configured_instance_dict, int32_t configured_weakrefs, tinypy_error_t **out_error) {
     tinypy_value_t *default_base = NULL;
     tinypy_value_t *const *actual_bases = bases;
     size_t actual_base_count = base_count;
@@ -1565,11 +1631,6 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
 
     TINYPY_CLEAR_ERROR(out_error);
 
-    if (name_size != 0U && memchr(name, '\0', name_size) != NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "type name must not contain null characters", out_error);
-        return NULL;
-    }
-
     if (actual_base_count == 0U) {
         default_base = &vm->types[TINYPY_VALUE_INSTANCE].base.base;
         actual_bases = &default_base;
@@ -1590,18 +1651,24 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
     if (layout_base == NULL || metaclass == NULL) {
         return NULL;
     }
-    if (metaclass == &vm->types[TINYPY_VALUE_TYPE]) {
-        mro_types = __tinypy_internal_c3_merge(
-            vm, actual_bases, actual_base_count,
-            &mro_tail_count, &mro_workspace_size, out_error);
-        if (mro_types == NULL) {
-            return NULL;
+    own_slots = __tinypy_internal_type_parse_slots(vm, name, name_size, layout_base, namespace_dict, &slots_declared, &dict_slot, &weakref_slot, out_error);
+    if (own_slots == NULL) {
+        if (mro_types != NULL) {
+            tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
         }
+        return NULL;
     }
+    if (name_size != 0U && memchr(name, '\0', name_size) != NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "type name must not contain null characters", out_error);
+        TINYPY_DECREF(own_slots);
+        return NULL;
+    }
+
     /* The type owns a private copy of the namespace, as type_new does in
        Python 2.7: the caller's dictionary must stay independent of the type. */
     dict = tinypy_dict_new(vm);
     if (namespace_dict != NULL && tinypy_internal_dict_update_from(dict, namespace_dict, out_error) == 0) {
+        TINYPY_DECREF(own_slots);
         TINYPY_DECREF(dict);
         if (mro_types != NULL) {
             tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
@@ -1634,6 +1701,7 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
     TINYPY_DECREF(doc_key);
     TINYPY_DECREF(module_key);
     if (metadata_ok == 0) {
+        TINYPY_DECREF(own_slots);
         TINYPY_DECREF(dict);
         if (mro_types != NULL) {
             tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
@@ -1647,14 +1715,6 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
 
         tinypy_dict_set(dict, vm->special_new_key, descriptor);
         TINYPY_DECREF(descriptor);
-    }
-    own_slots = __tinypy_internal_type_parse_slots(vm, name, name_size, dict, &slots_declared, &dict_slot, &weakref_slot, out_error);
-    if (own_slots == NULL) {
-        TINYPY_DECREF(dict);
-        if (mro_types != NULL) {
-            tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
-        }
-        return NULL;
     }
     if (layout_base->layout_kind == TINYPY_VALUE_TUPLE && TINYPY_TUPLE_SIZE(own_slots) != 0U) {
         TINYPY_DECREF(own_slots);
@@ -1693,7 +1753,7 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
     inherited_slot_count = layout_base->slot_count;
     type->slot_count = inherited_slot_count + TINYPY_TUPLE_SIZE(own_slots);
     tinypy_bool_t add_instance_dict = configured_instance_dict >= 0 ? (configured_instance_dict != 0 ? TINYPY_TRUE : TINYPY_FALSE) : (slots_declared == 0 || dict_slot != 0 ? TINYPY_TRUE : TINYPY_FALSE);
-    tinypy_bool_t add_weakrefs = configured_weakrefs >= 0 ? (configured_weakrefs != 0 ? TINYPY_TRUE : TINYPY_FALSE) : (slots_declared == 0 || weakref_slot != 0 ? TINYPY_TRUE : TINYPY_FALSE);
+    tinypy_bool_t add_weakrefs = configured_weakrefs >= 0 ? (configured_weakrefs != 0 ? TINYPY_TRUE : TINYPY_FALSE) : ((slots_declared == 0 && instance_kind != TINYPY_VALUE_LONG && instance_kind != TINYPY_VALUE_STRING && instance_kind != TINYPY_VALUE_TUPLE) || weakref_slot != 0 ? TINYPY_TRUE : TINYPY_FALSE);
 
     type->has_instance_dict = layout_base->has_instance_dict != 0 || add_instance_dict != 0 ? INT32_C(1) : INT32_C(0);
     type->layout_kind = instance_kind;
@@ -1811,18 +1871,18 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
     type->name = (const char *)TINYPY_STRING_OBJECT(name_object)->bytes;
     type->name_size = name_size;
 
-    bases_tuple = tinypy_tuple_from_items(
-        vm, actual_bases, actual_base_count);
-
-    if (mro_types != NULL) {
-        mro_types[0] = &type->base.base;
-        mro_tuple = tinypy_internal_tuple_from_borrowed_items(vm, mro_types, mro_tail_count + 1U);
-        for (index = 1U; index < mro_tail_count + 1U; ++index) {
-            TINYPY_INCREF(mro_types[index]);
-        }
+    if (bases_source != NULL && base_count != 0U) {
+        bases_tuple = bases_source;
+        TINYPY_INCREF(bases_tuple);
+    }
+    else {
+        bases_tuple = tinypy_tuple_from_items(vm, actual_bases, actual_base_count);
     }
 
+
     type->name_object = name_object;
+    type->own_slot_names = own_slots;
+    TINYPY_INCREF(own_slots);
     type->dict = dict;
     TINYPY_DICT_OBJECT(type->dict)->type_dictionary = INT32_C(1);
     TINYPY_DICT_OBJECT(type->dict)->type_owner = type;
@@ -1847,11 +1907,13 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
         if (__tinypy_internal_type_namespace_value(vm, type->dict, (const char *)bytes, byte_size) != NULL) {
             continue;
         }
-        descriptor = tinypy_internal_member_descriptor_new(type, slot_name, inherited_slot_count + slot_index);
-        tinypy_dict_set(type->dict, slot_name, descriptor);
+        tinypy_value_t *key = tinypy_string_from_bytes(vm, bytes, byte_size);
+        descriptor = tinypy_internal_member_descriptor_new(type, key, inherited_slot_count + slot_index);
+        tinypy_dict_set(type->dict, key, descriptor);
         TINYPY_DECREF(descriptor);
+        TINYPY_DECREF(key);
     }
-    if (type->has_instance_dict != 0 && layout_base->has_instance_dict == 0) {
+    if (type->has_instance_dict != 0 && layout_base->has_instance_dict == 0 && __tinypy_internal_type_namespace_value(vm, type->dict, "__dict__", 8U) == NULL) {
         tinypy_value_t *key = tinypy_string_from_bytes(vm, "__dict__", 8U);
         tinypy_value_t *descriptor = tinypy_internal_instance_dict_descriptor_new(type);
 
@@ -1859,7 +1921,7 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
         TINYPY_DECREF(descriptor);
         TINYPY_DECREF(key);
     }
-    if (type->weakref_offset != 0U && layout_base->weakref_offset == 0U) {
+    if (type->weakref_offset != 0U && layout_base->weakref_offset == 0U && __tinypy_internal_type_namespace_value(vm, type->dict, "__weakref__", 11U) == NULL) {
         tinypy_value_t *key = tinypy_string_from_bytes(vm, "__weakref__", 11U);
         tinypy_value_t *descriptor = tinypy_internal_instance_weakref_descriptor_new(type);
 
@@ -1868,6 +1930,16 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
         TINYPY_DECREF(key);
     }
     TINYPY_DECREF(own_slots);
+    if (metaclass == &vm->types[TINYPY_VALUE_TYPE]) {
+        mro_types = __tinypy_internal_c3_merge(vm, TINYPY_TUPLE_ITEMS(type->bases), TINYPY_TUPLE_SIZE(type->bases), type->bases, &mro_tail_count, &mro_workspace_size, out_error);
+        if (mro_types == NULL) {
+            TINYPY_DECREF(&type->base.base);
+            return NULL;
+        }
+        mro_types[0] = &type->base.base;
+        type->mro = tinypy_internal_tuple_from_borrowed_items(vm, mro_types, mro_tail_count + 1U);
+        __tinypy_internal_type_refresh_classic_mro(type);
+    }
     if (mro_types == NULL) {
         type->bases_updating = TINYPY_TRUE;
         type->mro = __tinypy_internal_rebase_mro(type, out_error);
@@ -1902,7 +1974,7 @@ static tinypy_type_t *__tinypy_internal_type_new_from_types(tinypy_vm_t *vm, con
             values[index] = (tinypy_value_t *)&bases[index]->base.base;
         }
     }
-    result = __tinypy_internal_type_new(vm, name, name_size, values, base_count, explicit_metaclass, namespace_dict, configured_instance_dict, configured_weakrefs, out_error);
+    result = __tinypy_internal_type_new(vm, name, name_size, values, base_count, NULL, explicit_metaclass, namespace_dict, configured_instance_dict, configured_weakrefs, out_error);
     if (values != NULL) {
         tinypy_internal_vm_deallocate(vm, values, base_count * sizeof(*values));
     }
@@ -1912,7 +1984,16 @@ static tinypy_type_t *__tinypy_internal_type_new_from_types(tinypy_vm_t *vm, con
 /* Creates a Python-visible class from a bases tuple whose entries may be
    classic classes, the way type(name, bases, dict) accepts them. */
 tinypy_type_t *tinypy_internal_type_new_from_values(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
-    tinypy_type_t *result = __tinypy_internal_type_new(vm, name, name_size, bases, base_count, explicit_metaclass, namespace_dict, -1, -1, out_error);
+    tinypy_type_t *result = __tinypy_internal_type_new(vm, name, name_size, bases, base_count, NULL, explicit_metaclass, namespace_dict, -1, -1, out_error);
+
+    if (result != NULL) {
+        result->flags |= TINYPY_TYPE_FLAG_PYTHON_HEAP;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_type_t *tinypy_internal_type_new_from_tuple(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *bases, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
+    tinypy_type_t *result = __tinypy_internal_type_new(vm, name, name_size, TINYPY_TUPLE_ITEMS(bases), TINYPY_TUPLE_SIZE(bases), bases, explicit_metaclass, namespace_dict, -1, -1, out_error);
 
     if (result != NULL) {
         result->flags |= TINYPY_TYPE_FLAG_PYTHON_HEAP;
