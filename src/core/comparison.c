@@ -669,39 +669,28 @@ static tinypy_bool_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_valu
         return TINYPY_TRUE;
     }
     if ((left_kind == TINYPY_VALUE_SET || left_kind == TINYPY_VALUE_FROZENSET) && (right_kind == TINYPY_VALUE_SET || right_kind == TINYPY_VALUE_FROZENSET)) {
-        tinypy_bool_t equal;
+        tinypy_bool_t subset = TINYPY_FALSE;
+        tinypy_bool_t reversed = operation == TINYPY_COMPARE_GREATER || operation == TINYPY_COMPARE_GREATER_EQUAL;
+        tinypy_value_t *smaller = reversed != 0 ? right : left;
+        tinypy_value_t *larger = reversed != 0 ? left : right;
+        tinypy_bool_t strict = operation == TINYPY_COMPARE_LESS || operation == TINYPY_COMPARE_GREATER;
 
-        if (tinypy_internal_set_equal_checked(left, right, &equal, out_error) == 0) {
+        if ((strict == 0 || tinypy_set_size(smaller) < tinypy_set_size(larger)) &&
+            tinypy_internal_set_is_subset_checked(smaller, larger, &subset, out_error) == 0) {
             return TINYPY_FALSE;
         }
-        if (equal != 0) {
-            *out_order = 0;
-            return TINYPY_TRUE;
+        if (operation == TINYPY_COMPARE_LESS) {
+            *out_order = subset != 0 ? -1 : 0;
         }
-        if (tinypy_set_size(left) < tinypy_set_size(right)) {
-            tinypy_bool_t left_subset;
-
-            if (tinypy_internal_set_is_subset_checked(left, right, &left_subset, out_error) == 0) {
-                return TINYPY_FALSE;
-            }
-            if (left_subset != 0) {
-                *out_order = -1;
-                return TINYPY_TRUE;
-            }
+        else if (operation == TINYPY_COMPARE_LESS_EQUAL) {
+            *out_order = subset != 0 ? 0 : 1;
         }
-        else if (tinypy_set_size(left) > tinypy_set_size(right)) {
-            tinypy_bool_t right_subset;
-
-            if (tinypy_internal_set_is_subset_checked(right, left, &right_subset, out_error) == 0) {
-                return TINYPY_FALSE;
-            }
-            if (right_subset != 0) {
-                *out_order = 1;
-                return TINYPY_TRUE;
-            }
+        else if (operation == TINYPY_COMPARE_GREATER) {
+            *out_order = subset != 0 ? 1 : 0;
         }
-        *out_order = 0;
-        *out_unordered = 1;
+        else {
+            *out_order = subset != 0 ? 0 : -1;
+        }
         return TINYPY_TRUE;
     }
     if (left_kind == TINYPY_VALUE_DICT && right_kind == TINYPY_VALUE_DICT) {

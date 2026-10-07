@@ -259,7 +259,7 @@ static tinypy_value_t *__tinypy_internal_set_iterator_next(tinypy_value_t *value
     }
     if ((uint64_t)TINYPY_DICT_OBJECT(iterator->iterable)->used != iterator->expected_state) {
         iterator->expected_state = UINT64_MAX;
-        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_RUNTIME, "set changed size during iteration", out_error);
+        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_RUNTIME, "Set changed size during iteration", out_error);
         return NULL;
     }
     tinypy_value_t *return_value_1 = __tinypy_internal_iterator_next_dict(iterator, out_error);

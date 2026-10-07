@@ -1195,7 +1195,7 @@ static tinypy_value_t *__tinypy_builtin_sorted(tinypy_value_t *function, tinypy_
         return NULL;
     }
     if (hint == INT64_C(-1)) {
-        tinypy_internal_exception_raise_system_error(vm, "negative __length_hint__ result", out_error);
+        tinypy_internal_exception_raise_system_error(vm, "error return without exception set", out_error);
         TINYPY_DECREF(list);
         TINYPY_DECREF(iterator);
         return NULL;

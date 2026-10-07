@@ -20,6 +20,24 @@ void tinypy_internal_partial_release_references(tinypy_value_t *value, tinypy_re
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_functools_copy_keywords(tinypy_value_t *source, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(source);
+    tinypy_value_t *result = tinypy_internal_dict_new_checked(vm, out_error);
+
+    if (result == NULL) {
+        return NULL;
+    }
+    TINYPY_INCREF(source);
+    tinypy_bool_t copied = tinypy_internal_dict_update_from(result, source, "NULL result without error in PyObject_Call", out_error);
+
+    TINYPY_DECREF(source);
+    if (copied == 0) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t argument_count = TINYPY_TUPLE_SIZE(args);
@@ -45,7 +63,7 @@ tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value
         selected_value = tinypy_tuple_from_items(vm, &tuple_items[1], argument_count - 1U);
     }
     partial->args = selected_value;
-    partial->keywords = kwargs != NULL ? tinypy_internal_dict_copy(kwargs, out_error) : tinypy_dict_new(vm);
+    partial->keywords = kwargs != NULL ? __tinypy_functools_copy_keywords(kwargs, out_error) : tinypy_dict_new(vm);
     if (partial->keywords == NULL) {
         TINYPY_DECREF(&partial->base);
         return NULL;
@@ -71,12 +89,12 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
         }
     }
     else {
-        combined_kwargs = tinypy_internal_dict_copy(partial->keywords, out_error);
+        combined_kwargs = __tinypy_functools_copy_keywords(partial->keywords, out_error);
         if (combined_kwargs == NULL) {
             TINYPY_DECREF(combined_args);
             return NULL;
         }
-        if (call_keyword_count != 0U && tinypy_internal_dict_update_from(combined_kwargs, kwargs, out_error) == 0) {
+        if (call_keyword_count != 0U && tinypy_internal_dict_update_from(combined_kwargs, kwargs, "NULL result without error in PyObject_Call", out_error) == 0) {
             TINYPY_DECREF(combined_kwargs);
             TINYPY_DECREF(combined_args);
             return NULL;
@@ -195,7 +213,7 @@ static tinypy_value_t *__tinypy_partial_setstate_method(tinypy_value_t *function
         keywords = tinypy_dict_new(vm);
     }
     else if (keywords->type != &vm->types[TINYPY_VALUE_DICT]) {
-        keywords = tinypy_internal_dict_copy(keywords, out_error);
+        keywords = __tinypy_functools_copy_keywords(keywords, out_error);
         if (keywords == NULL) {
             TINYPY_DECREF(stored_args);
             return NULL;

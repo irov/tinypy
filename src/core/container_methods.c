@@ -127,7 +127,7 @@ static tinypy_value_t *__tinypy_container_sequence_get(tinypy_value_t *sequence,
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_value_t *iterable, tinypy_error_t **out_error) {
+tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_value_t *iterable, const char *negative_hint_message, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
 
     if (iterable->type == &vm->types[TINYPY_VALUE_LIST]) {
@@ -142,7 +142,7 @@ tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_
     if (list == iterable) {
         tinypy_value_t *snapshot = tinypy_list_from_items(vm, NULL, 0U);
 
-        if (tinypy_internal_list_extend_iterable(snapshot, iterable, out_error) == 0) {
+        if (tinypy_internal_list_extend_iterable(snapshot, iterable, negative_hint_message, out_error) == 0) {
             TINYPY_DECREF(snapshot);
             return TINYPY_FALSE;
         }
@@ -163,7 +163,9 @@ tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_
         return TINYPY_FALSE;
     }
     if (hint == INT64_C(-1)) {
-        tinypy_internal_exception_raise_system_error(vm, "negative __length_hint__ result", out_error);
+        if (negative_hint_message != NULL) {
+            tinypy_internal_exception_raise_system_error(vm, negative_hint_message, out_error);
+        }
         TINYPY_DECREF(iterator);
         return TINYPY_FALSE;
     }
@@ -227,7 +229,7 @@ static tinypy_value_t *__tinypy_list_extend_method(tinypy_value_t *function, tin
     }
     tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *iterable = TINYPY_TUPLE_GET(args, 1U);
-    if (tinypy_internal_list_extend_iterable(list, iterable, out_error) == 0) {
+    if (tinypy_internal_list_extend_iterable(list, iterable, "error return without exception set", out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
@@ -243,7 +245,7 @@ static tinypy_value_t *__tinypy_list_inplace_add_method(tinypy_value_t *function
     }
     tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *iterable = TINYPY_TUPLE_GET(args, 1U);
-    if (tinypy_internal_list_extend_iterable(list, iterable, out_error) == 0) {
+    if (tinypy_internal_list_extend_iterable(list, iterable, "error return without exception set", out_error) == 0) {
         return NULL;
     }
     return TINYPY_RET(list);
@@ -1398,7 +1400,7 @@ static tinypy_value_t *__tinypy_dict_copy_method(tinypy_value_t *function, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_dict_update_from(tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error) {
-    tinypy_bool_t return_value_1 = tinypy_internal_dict_update_from(target, source, out_error);
+    tinypy_bool_t return_value_1 = tinypy_internal_dict_update_from(target, source, "error return without exception set", out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1532,7 +1534,7 @@ static tinypy_value_t *__tinypy_container_setitem_method(tinypy_value_t *functio
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 3U, 3U, out_error) == 0) {
         return NULL;
     }
-    if (tinypy_internal_set_item_builtin(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), out_error) == 0) {
+    if (tinypy_internal_set_item_builtin(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), TINYPY_FALSE, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
@@ -1955,7 +1957,7 @@ static tinypy_value_t *__tinypy_container_setslice_method(tinypy_value_t *functi
     if (slice == NULL) {
         return NULL;
     }
-    tinypy_bool_t assigned = tinypy_internal_set_item_builtin(TINYPY_TUPLE_GET(args, 0U), slice, TINYPY_TUPLE_GET(args, 3U), out_error);
+    tinypy_bool_t assigned = tinypy_internal_set_item_builtin(TINYPY_TUPLE_GET(args, 0U), slice, TINYPY_TUPLE_GET(args, 3U), TINYPY_TRUE, out_error);
     TINYPY_DECREF(slice);
     if (assigned == 0) {
         return NULL;

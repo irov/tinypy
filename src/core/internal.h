@@ -2023,7 +2023,7 @@ tinypy_value_t *tinypy_internal_list_from_items_checked(tinypy_vm_t *vm, tinypy_
 tinypy_value_t *tinypy_internal_dict_new_checked(tinypy_vm_t *vm, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_list_reserve_checked(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_list_extend_checked(tinypy_value_t *list, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error);
-tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_value_t *iterable, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_value_t *iterable, const char *negative_hint_message, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_list_append_checked(tinypy_value_t *list, tinypy_value_t *item, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_list_insert_checked(tinypy_value_t *list, size_t index, tinypy_value_t *item, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, size_t start, size_t count, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error);
@@ -2053,7 +2053,7 @@ tinypy_bool_t tinypy_internal_dict_lookup_hash_checked(const tinypy_vm_t *vm, co
 tinypy_bool_t tinypy_internal_dict_contains_checked(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_bool_t *out_contains, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_set_checked(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, tinypy_error_t **out_error);
-tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_value_t *source, const char *negative_hint_message, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy_value_t *source, tinypy_value_t *keys_method, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_delete_optional_checked(tinypy_vm_t *vm, tinypy_value_t *dict, const tinypy_value_t *key, tinypy_bool_t *out_deleted, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_compare_builtin_value(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error);
@@ -2071,7 +2071,7 @@ tinypy_value_t *tinypy_internal_get_slice(tinypy_value_t *container, tinypy_valu
 tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_delete_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_get_item_builtin(tinypy_value_t *container, tinypy_value_t *key, tinypy_error_t **out_error);
-tinypy_bool_t tinypy_internal_set_item_builtin(tinypy_value_t *container, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_set_item_builtin(tinypy_value_t *container, tinypy_value_t *key, tinypy_value_t *value, tinypy_bool_t legacy_slice, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_delete_item_builtin(tinypy_value_t *container, tinypy_value_t *key, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_delete_index(tinypy_vm_t *vm, tinypy_value_t *dict, size_t index, tinypy_value_t **out_key, tinypy_value_t **out_value);
 tinypy_value_t *tinypy_internal_dict_get_optional_index(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, size_t *out_index, tinypy_value_t **out_stored_key);

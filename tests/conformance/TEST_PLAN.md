@@ -29,12 +29,16 @@ tests cover callbacks that affect later observations.
 | Regular expressions | Valid byte/Unicode patterns, empty matches, captures/names, branches/repeats/lookarounds, exact/subclass/legacy-buffer subjects, independent bounds, scanner progress/metadata, negative/zero/positive counts and replacement callbacks |
 | Buffer | Read-only/writable, bytearray/legacy buffer/memoryview where accepted, outstanding export, child view, overlap, offset and size boundaries |
 | Compiler | exec/eval/single, optimize 0/1/2, explicit/inherited futures, bytes/Unicode, newline/CRLF, valid syntax and parser/AST/symbol/codegen errors |
+| Compiler folding | Mixed numeric constants, signed zero, widened long, complex and extreme finite float values; byte/Unicode/tuple operations, invalid folds, indexing and shifts, repetition around the 20-item fold threshold, constant type separation and all supported future combinations |
+| Future inheritance | All 32 caller future combinations × 32 explicit combinations × inherit/dont-inherit × exec/eval/single × byte/Unicode source; compare complete code shape and executed value/result types |
 | Source decoders | Default byte encoding, ASCII/Latin-1/UTF-8 cookie and BOM, bytes/Unicode input, LF/CR/CRLF, byte versus Unicode/raw literal, escape spans before/after non-ASCII text, decoder-versus-parser error precedence |
 | Native keyword parser | String/Unicode/subtype names, equality True/False/raising Exception/BaseException, prior handled exception, duplicate/missing/unknown names, per-parameter conversion and raw-name validation order |
 | Descriptor construction | Accessor None/omitted/replacement, exact/subtype property, doc callback sees published state, Exception/BaseException doc lookup, callable-descriptor binding and argument-error priority |
 | Brace formatting | Byte/Unicode receiver, automatic/manual numbering, attribute/item paths, decimal indices, conversion before nested specs, converted text subclass format hook, original builtin format-spec identity, parser error and iterator recovery |
 | Execution namespaces | eval/exec source/code/tuple forms, globals dict subtype versus custom locals, builtin insertion/error precedence, LOAD_NAME suppression versus LOAD_GLOBAL propagation, cold/warm name cache and collision callbacks, global versus local assignment/deletion |
 | Functional consumers | Partial construction/call/state conversion and replacement order, stored keyword hashes, enumerate/xrange numeric conversion, reversed length and terminal states, reduce accumulator lifetime and retained call-argument tuples |
+| Stateful operator dispatch | Classic left/right coercion, replaced operands, same-type/strict-subtype direction, successful/NotImplemented/raising inplace hooks, binary versus ternary power, reflected method descriptors and ignored lookup errors |
+| Iterable materialization | Negative hints -1/-2/-3, constructor/reinitialization versus method error boundaries, direct versus syntax assignment, modern versus legacy slice bounds before/after callbacks, input errors distinguished from collector-owned errors |
 | Modules and introspection | Allocation-only module state, initialization/reinitialization keywords, lazy builtins dictionary, vars/dir protocol reads, spoofed class and metaclass instance checks, retained module dictionary and teardown callbacks |
 | State | Fresh/reinitialized object, partial progress, failed operation followed by recovery, per-VM state and separate VM isolation |
 | Lifetime | Retained input across callback, removed input, finalizer/weakref notification, borrowed versus owned reference, zero allocator balance |
@@ -47,6 +51,16 @@ Test Python 2 conversion protocols separately: `__int__`, `__index__`,
 `__float__`, truth and length conversion are not interchangeable. Stored builtin
 subtype values sometimes bypass overrides, while other entry points invoke
 them. Direct slot calls and operator dispatch also need separate witnesses.
+Classic binary operators must cover the left coercion/hook before the right
+coercion/hook, replacement operands, reflected ordering and inplace fallback.
+For builtin subclasses, distinguish a rejected numeric slot from a sequence
+concatenation/repetition fallback, and observe reflected-method descriptor
+lookup and comparison. Returning NotImplemented from an inplace hook must
+not repeat that hook.
+Binary and ternary power need separate products: an explicit None modulus uses
+binary dispatch, while an actual third operand follows Python 2 coercion and
+promotion rules. Check descriptor lookup errors without replacing a prior
+handled exception or a user-raised exception that has the same diagnostic text.
 
 ## Stateful callback scenarios
 
@@ -118,6 +132,24 @@ argument parsers may suppress keyword lookup errors as CPython does; checked
 function-binding dictionary insertion retains its separately documented policy.
 For `dict.fromkeys`, distinguish exact dict/set cached hashes from subclass
 iteration and alternative writable objects returned by the constructor.
+Apply the same exact-versus-subclass distinction to set construction/update:
+cached-hash traversal is independent of the generic iterator contract. Retain
+keys across comparison callbacks and observe the current source storage after
+bounded mutation. Test duplicate/equality/hash failures and partial progress.
+Repeat these cases for subset ordering and all set algebra entry points; equal
+sizes and reversed operands change the probe direction. Partial keyword copying
+must keep collision callbacks, source ownership and callback-visible state
+replacement observable. Avoid unrelated colliding keys whose bucket order would
+make the trace depend on an unspecified physical dictionary layout.
+
+Negative length hints have different Python 2 error boundaries for constructors,
+methods and direct list slice slots. Check their exception classes, selected
+stable messages, mutation and recovery independently. For internal diagnostics
+that embed a CPython C source filename and line, assert the reason and callback
+state without requiring that build-specific location. Legacy list slicing
+normalizes bounds after replacement materialization; modern slice assignment
+normalizes before it. Cover omitted, negative, large and stepped bounds with
+callbacks that grow the destination.
 
 Warm a name cache before repeating callback-sensitive lookups. Colliding custom
 keys must still compare on every lookup, including misses that fall back to
@@ -181,6 +213,15 @@ marshal-v2 bytes at optimize 0/1/2; the separate runtime composition product
 uses bounded loops and compares 2,048 executions, callback traces and suspended
 generator unwind states. Neither compiler byte equality nor execution equality
 substitutes for the other layer.
+
+The optimizer corpus adds 2,040 valid sources: 680 bounded numeric-operation
+tuples, 432 sequence-operation tuples, 96 subscript tuples, 240 repetition
+tuples, 120 shift tuples, 88 unary tuples, 256 constant-type pairs and 128
+future/body tuples. An independent host inventory checks every filename.
+Invalid operand combinations remain syntactically valid: a failed fold must
+retain the runtime operation. Powers are bounded to avoid creating enormous
+constants. Future inheritance has a separate 12,288-row execution matrix;
+generated source compilation alone cannot test a caller's inherited flags.
 
 Callback-sensitive products must identify which entry points read a builtin
 subtype's stored payload and which invoke its conversion hooks. Record cached

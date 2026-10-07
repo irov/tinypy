@@ -433,10 +433,12 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, const char *negative_hint_message, tinypy_bool_t *out_aborted, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *items = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_value_t *iterator = NULL;
+
+    *out_aborted = TINYPY_FALSE;
 
     if (value->type != &vm->types[TINYPY_VALUE_LIST] && value->type != &vm->types[TINYPY_VALUE_TUPLE]) {
         iterator = tinypy_iter(value, out_error);
@@ -446,19 +448,31 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, tin
         }
         value = iterator;
     }
-    tinypy_bool_t collected = tinypy_internal_list_extend_iterable(items, value, out_error);
+    tinypy_error_t *collection_error = NULL;
+    tinypy_bool_t collected = tinypy_internal_list_extend_iterable(items, value, negative_hint_message, &collection_error);
 
     if (iterator != NULL) {
         TINYPY_DECREF(iterator);
     }
     if (collected == 0) {
+        /* A NULL diagnostic permits only the helper's hint -1 abort. User
+           exceptions remain owned errors, even with the same SystemError text. */
+        *out_aborted = negative_hint_message == NULL && collection_error == NULL;
+        if (collection_error != NULL) {
+            if (out_error != NULL) {
+                *out_error = collection_error;
+            }
+            else {
+                tinypy_error_release(collection_error);
+            }
+        }
         TINYPY_DECREF(items);
         return NULL;
     }
     return items;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_value_t *slice, tinypy_value_t *value, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_value_t *slice, tinypy_value_t *value, tinypy_bool_t ignore_negative_hint, tinypy_bool_t legacy_slice, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
     tinypy_internal_slice_indices_t indices;
     size_t replacement_size;
@@ -468,16 +482,18 @@ static tinypy_bool_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_v
     if (tinypy_internal_slice_unpack(slice, &indices, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    /* Contiguous assignment retains the offsets normalized before the
-       replacement iterator runs, then clamps them to the live list. */
-    if (tinypy_internal_slice_adjust_indices(vm, TINYPY_LIST_SIZE(list), &indices, out_error) == 0) {
+    /* Mapping slices normalize before collecting the replacement. Legacy
+       sequence slices keep raw nonnegative offsets until collection ends. */
+    if (legacy_slice == 0 && tinypy_internal_slice_adjust_indices(vm, TINYPY_LIST_SIZE(list), &indices, out_error) == 0) {
         return TINYPY_FALSE;
     }
+    tinypy_bool_t aborted = TINYPY_FALSE;
+    const char *negative_hint_message = ignore_negative_hint != 0 ? NULL : "error return without exception set";
     tinypy_value_t *replacement = value == list
                                       ? tinypy_list_from_items(vm, TINYPY_LIST_OBJECT(list)->items, TINYPY_LIST_SIZE(list))
-                                      : __tinypy_item_collect_iterable(value, out_error);
+                                      : __tinypy_item_collect_iterable(value, negative_hint_message, &aborted, out_error);
     if (replacement == NULL) {
-        return TINYPY_FALSE;
+        return aborted;
     }
     size_t size = TINYPY_LIST_SIZE(list);
     tinypy_bool_t adjust = indices.step == 1;
@@ -777,6 +793,23 @@ tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
     }
+    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_LIST) {
+        int64_t low;
+        int64_t high;
+
+        if (__tinypy_item_legacy_slice_bounds(container, start, stop, &low, &high, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        tinypy_value_t *low_value = tinypy_integer_from_i64(vm, low < 0 ? 0 : low);
+        tinypy_value_t *high_value = tinypy_integer_from_i64(vm, high < 0 ? 0 : high);
+
+        slice = tinypy_slice_new(vm, low_value, high_value, NULL);
+        TINYPY_DECREF(high_value);
+        TINYPY_DECREF(low_value);
+        stored = __tinypy_item_list_set_slice(container, slice, value, TINYPY_FALSE, TINYPY_TRUE, out_error);
+        TINYPY_DECREF(slice);
+        return stored;
+    }
     slice = __tinypy_item_fallback_slice(container, start, stop, out_error);
     if (slice == NULL) {
         return TINYPY_FALSE;
@@ -821,7 +854,7 @@ tinypy_value_t *tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_set_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_value_t *value, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_set_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_value_t *value, tinypy_bool_t dispatch_special, tinypy_bool_t legacy_slice, tinypy_error_t **out_error) {
     tinypy_value_type_e kind;
     size_t index;
 
@@ -852,7 +885,7 @@ static tinypy_bool_t __tinypy_set_item(tinypy_value_t *container, tinypy_value_t
     }
     if (kind == TINYPY_VALUE_LIST) {
         if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE) {
-            tinypy_bool_t return_value_3 = __tinypy_item_list_set_slice(container, key, value, out_error);
+            tinypy_bool_t return_value_3 = __tinypy_item_list_set_slice(container, key, value, dispatch_special == 0, legacy_slice, out_error);
             return return_value_3;
         }
         if (__tinypy_item_list_index(container, key, &index, out_error) == 0) {
@@ -875,14 +908,14 @@ static tinypy_bool_t __tinypy_set_item(tinypy_value_t *container, tinypy_value_t
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_set_item_builtin(tinypy_value_t *container, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_bool_t result = __tinypy_set_item(container, key, value, TINYPY_FALSE, out_error);
+tinypy_bool_t tinypy_internal_set_item_builtin(tinypy_value_t *container, tinypy_value_t *key, tinypy_value_t *value, tinypy_bool_t legacy_slice, tinypy_error_t **out_error) {
+    tinypy_bool_t result = __tinypy_set_item(container, key, value, TINYPY_FALSE, legacy_slice, out_error);
 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_set_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_bool_t result = __tinypy_set_item(container, key, value, TINYPY_TRUE, out_error);
+    tinypy_bool_t result = __tinypy_set_item(container, key, value, TINYPY_TRUE, TINYPY_FALSE, out_error);
 
     return result;
 }

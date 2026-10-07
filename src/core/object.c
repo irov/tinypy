@@ -1283,7 +1283,7 @@ static tinypy_bool_t __tinypy_descriptor_set_value(tinypy_vm_t *vm, tinypy_value
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor does not support assignment", out_error);
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "__set__", out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1318,7 +1318,7 @@ static tinypy_bool_t __tinypy_descriptor_delete_value(tinypy_vm_t *vm, tinypy_va
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor does not support deletion", out_error);
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "__delete__", out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////

@@ -7,6 +7,21 @@
 #include <math.h>
 #include <string.h>
 
+typedef tinypy_value_t *(*tinypy_operator_binary_impl_t)(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_add_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_subtract_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_multiply_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_divide_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_floor_divide_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_true_divide_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_remainder_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_power_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_left_shift_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_right_shift_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_bit_and_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_bit_xor_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_operator_bit_or_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error);
+
 #define TINYPY_LONG_BASE UINT32_C(32768)
 #define TINYPY_LONG_MASK UINT32_C(32767)
 
@@ -58,14 +73,14 @@ static tinypy_value_t *__tinypy_operator_unsupported(tinypy_vm_t *vm, tinypy_val
 }
 //////////////////////////////////////////////////////////////////////////
 /* Sequence repetition by anything but an index gets its own wording. */
-static tinypy_value_t *__tinypy_operator_multiply_unsupported(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_multiply_unsupported(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
     tinypy_bool_t left_sequence = left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE || left_kind == TINYPY_VALUE_TUPLE || left_kind == TINYPY_VALUE_LIST ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_bool_t right_sequence = right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE || right_kind == TINYPY_VALUE_TUPLE || right_kind == TINYPY_VALUE_LIST ? TINYPY_TRUE : TINYPY_FALSE;
 
     if (left_sequence == 0 && right_sequence == 0) {
-        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, "*", out_error);
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
         return unsupported;
     }
     tinypy_message_part_t parts[] = {
@@ -1430,6 +1445,19 @@ static tinypy_value_t *__tinypy_operator_call_special(tinypy_value_t *receiver, 
     tinypy_value_t *method = tinypy_internal_object_get_special_key(receiver, name, out_error);
 
     if (method == NULL) {
+        if (TINYPY_VALUE_KIND(receiver) == TINYPY_VALUE_OLD_INSTANCE &&
+            ((out_error != NULL && *out_error != NULL && tinypy_error_kind(*out_error) == TINYPY_ERROR_ATTRIBUTE) ||
+             (vm->raised_type != NULL && TINYPY_VALUE_KIND(vm->raised_type) == TINYPY_VALUE_TYPE &&
+              tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_ATTRIBUTE_ERROR]) != 0))) {
+            if (out_error != NULL && *out_error != NULL) {
+                tinypy_error_release(*out_error);
+                *out_error = NULL;
+            }
+            tinypy_vm_clear_error(vm);
+            tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
+
+            return result;
+        }
         return NULL;
     }
     tinypy_value_t *args = tinypy_tuple_from_items(vm, &argument, 1U);
@@ -1439,86 +1467,111 @@ static tinypy_value_t *__tinypy_operator_call_special(tinypy_value_t *receiver, 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Classic classes coerce before the operator hook runs: a __coerce__ that
-   moves both operands to another type re-runs the operation on the pair, the
-   way half_binop does in Python 2.7. */
-/* half_binop in Python 2.7: a classic instance may coerce the pair before
-   the operator hook runs; a __coerce__ that moves the receiver to another
-   type re-runs the operation on the coerced pair. */
-static tinypy_value_t *__tinypy_operator_coerce_binary(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t swapped, tinypy_binary_slot_t operation, tinypy_bool_t *out_handled, tinypy_error_t **out_error) {
+/* Each classic half coerces and calls its own hook before the other half. */
+static tinypy_value_t *__tinypy_operator_classic_half(tinypy_value_t *left, tinypy_value_t *right, tinypy_value_t *name, tinypy_bool_t swapped, tinypy_binary_slot_t operation, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_value_t *coerced;
     tinypy_value_t *first;
     tinypy_value_t *second;
     tinypy_value_t *result;
 
-    if (operation == NULL || TINYPY_VALUE_KIND(left) != TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_old_instance_has_special_key(left, vm->internal_special_coerce_key) == 0) {
-        return NULL;
-    }
     coerced = __tinypy_operator_call_special(left, vm->internal_special_coerce_key, right, out_error);
     if (coerced == NULL) {
-        *out_handled = INT32_C(1);
         return NULL;
     }
     if (TINYPY_VALUE_KIND(coerced) == TINYPY_VALUE_NONE || TINYPY_VALUE_KIND(coerced) == TINYPY_VALUE_NOT_IMPLEMENTED) {
         TINYPY_DECREF(coerced);
-        return NULL;
+        result = __tinypy_operator_call_special(left, name, right, out_error);
+        return result;
     }
     if (TINYPY_VALUE_KIND(coerced) != TINYPY_VALUE_TUPLE || TINYPY_TUPLE_SIZE(coerced) != 2U) {
         TINYPY_DECREF(coerced);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "coercion should return None or 2-tuple", out_error);
-        *out_handled = INT32_C(1);
         return NULL;
     }
     first = TINYPY_TUPLE_GET(coerced, 0U);
     second = TINYPY_TUPLE_GET(coerced, 1U);
     if (first->type == left->type) {
+        result = __tinypy_operator_call_special(first, name, second, out_error);
         TINYPY_DECREF(coerced);
-        return NULL;
+        return result;
     }
     if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded after coercion", out_error) == 0) {
         TINYPY_DECREF(coerced);
-        *out_handled = INT32_C(1);
         return NULL;
     }
-    TINYPY_INCREF(first);
-    TINYPY_INCREF(second);
-    TINYPY_DECREF(coerced);
     vm->evaluation_depth += 1U;
     result = swapped != 0 ? operation(second, first, out_error) : operation(first, second, out_error);
     vm->evaluation_depth -= 1U;
-    TINYPY_DECREF(second);
-    TINYPY_DECREF(first);
-    *out_handled = INT32_C(1);
+    TINYPY_DECREF(coerced);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* method_is_overloaded: the subclass defines its own reflected method. */
-static tinypy_bool_t __tinypy_operator_reflected_overloaded(tinypy_value_t *left, tinypy_value_t *right, tinypy_value_t *reverse_name) {
-    if (right->type == left->type || tinypy_type_is_subtype(right->type, left->type) == 0 || tinypy_internal_object_has_special_override_key(right, reverse_name) == 0) {
+static tinypy_bool_t __tinypy_operator_reflected_overloaded(tinypy_value_t *left, tinypy_value_t *right, tinypy_value_t *name, tinypy_value_t *reverse_name) {
+    if (right->type == left->type || tinypy_type_is_subtype(right->type, left->type) == 0) {
         return TINYPY_FALSE;
     }
-    tinypy_bool_t overloaded = tinypy_type_get_attr_key(right->type, reverse_name) != tinypy_type_get_attr_key(left->type, reverse_name) ? TINYPY_TRUE : TINYPY_FALSE;
+    if (tinypy_internal_object_has_special_override_key(left, name) == 0 && tinypy_internal_object_has_special_override_key(left, reverse_name) == 0) {
+        tinypy_bool_t result = tinypy_internal_object_has_special_override_key(right, reverse_name);
 
+        return result;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_internal_exception_state_t state;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *left_method = NULL;
+    tinypy_value_t *right_method;
+    tinypy_bool_t overloaded = TINYPY_FALSE;
+
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    tinypy_value_t *type = TINYPY_RET(&right->type->base.base);
+    right_method = tinypy_object_get_attr_value(type, reverse_name, &error);
+    TINYPY_DECREF(type);
+    if (right_method == NULL) {
+        goto cleanup;
+    }
+    type = TINYPY_RET(&left->type->base.base);
+    left_method = tinypy_object_get_attr_value(type, reverse_name, &error);
+    TINYPY_DECREF(type);
+    if (left_method == NULL) {
+        overloaded = TINYPY_TRUE;
+        goto cleanup;
+    }
+    int32_t different = tinypy_compare_bool(left_method, right_method, TINYPY_COMPARE_NOT_EQUAL, &error);
+
+    overloaded = different > 0 ? TINYPY_TRUE : TINYPY_FALSE;
+cleanup:
+    if (left_method != NULL) {
+        TINYPY_DECREF(left_method);
+    }
+    if (right_method != NULL) {
+        TINYPY_DECREF(right_method);
+    }
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    tinypy_internal_exception_preserve_end(vm, &state);
     return overloaded;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, tinypy_value_t *right, tinypy_value_t *name, tinypy_value_t *reverse_name, tinypy_binary_slot_t operation, tinypy_bool_t *out_handled, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, tinypy_value_t *right, tinypy_value_t *name, tinypy_value_t *reverse_name, const char *symbol, tinypy_binary_slot_t operation, tinypy_bool_t *out_handled, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_bool_t reverse_first = __tinypy_operator_reflected_overloaded(left, right, reverse_name);
+    tinypy_bool_t reverse_first = __tinypy_operator_reflected_overloaded(left, right, name, reverse_name);
+    tinypy_bool_t left_override = tinypy_internal_object_has_special_override_key(left, name);
+    tinypy_bool_t right_override = tinypy_internal_object_has_special_override_key(right, reverse_name);
+    tinypy_bool_t left_classic = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t right_classic = TINYPY_VALUE_KIND(right) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
+    tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
+    tinypy_bool_t left_number = __tinypy_operator_is_number(left_kind) != 0 || left_kind == TINYPY_VALUE_SET || left_kind == TINYPY_VALUE_FROZENSET ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t right_number = __tinypy_operator_is_number(right_kind) != 0 || right_kind == TINYPY_VALUE_SET || right_kind == TINYPY_VALUE_FROZENSET ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t numeric_dispatch = (left_override != 0 || right_override != 0) && left_number != 0 && right_number != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     /* Two operands of one new-style type never try the reflected method,
        as SLOT1BINFULL does; classic instances always do. */
     tinypy_bool_t try_reflected = right->type != left->type || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
 
     *out_handled = INT32_C(0);
-    tinypy_value_t *coerced = __tinypy_operator_coerce_binary(left, right, TINYPY_FALSE, operation, out_handled, out_error);
-    if (*out_handled != 0) {
-        return coerced;
-    }
-    coerced = __tinypy_operator_coerce_binary(right, left, TINYPY_TRUE, operation, out_handled, out_error);
-    if (*out_handled != 0) {
-        return coerced;
-    }
     if (reverse_first != 0) {
         tinypy_value_t *result;
 
@@ -1532,11 +1585,12 @@ static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, ti
         }
         TINYPY_DECREF(result);
     }
-    if (tinypy_internal_object_has_special_override_key(left, name) != 0) {
+    if (left_classic != 0 || left_override != 0 ||
+        (numeric_dispatch != 0 && tinypy_internal_object_has_special_key(left, name) != 0)) {
         tinypy_value_t *result;
 
         *out_handled = INT32_C(1);
-        result = __tinypy_operator_call_special(left, name, right, out_error);
+        result = left_classic != 0 ? __tinypy_operator_classic_half(left, right, name, TINYPY_FALSE, operation, out_error) : __tinypy_operator_call_special(left, name, right, out_error);
         if (result == NULL) {
             return NULL;
         }
@@ -1545,10 +1599,12 @@ static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, ti
         }
         TINYPY_DECREF(result);
     }
-    if (reverse_first == 0 && try_reflected != 0 && tinypy_internal_object_has_special_override_key(right, reverse_name) != 0) {
+    if (reverse_first == 0 && try_reflected != 0 &&
+        (right_classic != 0 || right_override != 0 ||
+         (numeric_dispatch != 0 && tinypy_internal_object_has_special_key(right, reverse_name) != 0))) {
         tinypy_value_t *result;
 
-        if (__tinypy_operator_is_number(TINYPY_VALUE_KIND(left)) != 0 && tinypy_internal_object_has_special_override_key(left, name) == 0) {
+        if (numeric_dispatch == 0 && __tinypy_operator_is_number(TINYPY_VALUE_KIND(left)) != 0 && left_override == 0) {
             *out_handled = INT32_C(1);
             result = __tinypy_operator_call_special(left, name, right, out_error);
             if (result == NULL) {
@@ -1561,7 +1617,7 @@ static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, ti
         }
 
         *out_handled = INT32_C(1);
-        result = __tinypy_operator_call_special(right, reverse_name, left, out_error);
+        result = right_classic != 0 ? __tinypy_operator_classic_half(right, left, reverse_name, TINYPY_TRUE, operation, out_error) : __tinypy_operator_call_special(right, reverse_name, left, out_error);
         if (result == NULL) {
             return NULL;
         }
@@ -1569,6 +1625,11 @@ static tinypy_value_t *__tinypy_operator_special_binary(tinypy_value_t *left, ti
             return result;
         }
         TINYPY_DECREF(result);
+    }
+    if (numeric_dispatch != 0) {
+        *out_handled = INT32_C(1);
+        tinypy_value_t *result = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
+        return result;
     }
     *out_handled = INT32_C(0);
     return NULL;
@@ -1864,7 +1925,7 @@ static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t 
     }
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_add(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_add_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_value_type_e left_kind;
     tinypy_value_type_e right_kind;
     tinypy_bool_t handled;
@@ -1872,7 +1933,7 @@ tinypy_value_t *tinypy_add(tinypy_value_t *left, tinypy_value_t *right, tinypy_e
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_add_key, vm->internal_special_radd_key, tinypy_add, &handled, out_error);
+    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_add_key, vm->internal_special_radd_key, symbol, tinypy_add, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -1906,20 +1967,26 @@ tinypy_value_t *tinypy_add(tinypy_value_t *left, tinypy_value_t *right, tinypy_e
         if (handled != 0) {
             return special;
         }
-        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, "+", out_error);
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
         return unsupported;
     }
     tinypy_value_t *return_value_3 = __tinypy_operator_numeric_add(vm, left, right, 0, out_error);
     return return_value_3;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_subtract(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_add(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_add_impl(left, right, "+", out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_subtract_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_bool_t handled;
     tinypy_value_t *native_result;
 
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_sub_key, vm->internal_special_rsub_key, tinypy_subtract, &handled, out_error);
+    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_sub_key, vm->internal_special_rsub_key, symbol, tinypy_subtract, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -1933,7 +2000,7 @@ tinypy_value_t *tinypy_subtract(tinypy_value_t *left, tinypy_value_t *right, tin
             if (handled != 0) {
                 return special;
             }
-            tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, "-", out_error);
+            tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
             return unsupported;
         }
         tinypy_value_t *return_value_1 = tinypy_internal_set_binary(left, right, INT32_C(3), out_error);
@@ -1944,12 +2011,20 @@ tinypy_value_t *tinypy_subtract(tinypy_value_t *left, tinypy_value_t *right, tin
         if (handled != 0) {
             return special;
         }
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
+        return unsupported;
     }
     tinypy_value_t *return_value_2 = __tinypy_operator_numeric_add(vm, left, right, 1, out_error);
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_subtract(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_subtract_impl(left, right, "-", out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_multiply_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_value_type_e left_kind;
     tinypy_value_type_e right_kind;
@@ -1958,7 +2033,7 @@ tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tin
     tinypy_value_t *native_result;
 
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_mul_key, vm->internal_special_rmul_key, tinypy_multiply, &handled, out_error);
+    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_mul_key, vm->internal_special_rmul_key, symbol, tinypy_multiply, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -1993,7 +2068,7 @@ tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tin
     if (__tinypy_operator_is_number(left_kind) == 0 || __tinypy_operator_is_number(right_kind) == 0) {
         if (left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE || left_kind == TINYPY_VALUE_TUPLE || left_kind == TINYPY_VALUE_LIST ||
             right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE || right_kind == TINYPY_VALUE_TUPLE || right_kind == TINYPY_VALUE_LIST) {
-            tinypy_value_t *unsupported = __tinypy_operator_multiply_unsupported(vm, left, right, out_error);
+            tinypy_value_t *unsupported = __tinypy_operator_multiply_unsupported(vm, left, right, symbol, out_error);
 
             return unsupported;
         }
@@ -2001,7 +2076,7 @@ tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tin
         if (handled != 0) {
             return special;
         }
-        tinypy_value_t *unsupported = __tinypy_operator_multiply_unsupported(vm, left, right, out_error);
+        tinypy_value_t *unsupported = __tinypy_operator_multiply_unsupported(vm, left, right, symbol, out_error);
         return unsupported;
     }
     if (left_kind == TINYPY_VALUE_COMPLEX || right_kind == TINYPY_VALUE_COMPLEX) {
@@ -2037,8 +2112,14 @@ tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tin
         tinypy_value_t *return_value_6 = __tinypy_operator_long_multiply_views(vm, &left_view, &right_view, out_error);
         return return_value_6;
     }
-    tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, "*", out_error);
+    tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
     return unsupported;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_multiply(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_multiply_impl(left, right, "*", out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_operator_float_divmod(double dividend, double divisor, double *out_floor, double *out_remainder) {
@@ -2338,14 +2419,14 @@ static tinypy_value_t *__tinypy_operator_divide(tinypy_value_t *left, tinypy_val
     return unsupported;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_divide_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_bool_t handled;
     tinypy_value_t *special;
     tinypy_value_t *native_result;
 
     TINYPY_CLEAR_ERROR(out_error);
-    special = __tinypy_operator_special_binary(left, right, vm->internal_special_div_key, vm->internal_special_rdiv_key, tinypy_divide, &handled, out_error);
+    special = __tinypy_operator_special_binary(left, right, vm->internal_special_div_key, vm->internal_special_rdiv_key, symbol, tinypy_divide, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -2353,51 +2434,84 @@ tinypy_value_t *tinypy_divide(tinypy_value_t *left, tinypy_value_t *right, tinyp
     if (handled != 0) {
         return native_result;
     }
+    if (__tinypy_operator_is_number(TINYPY_VALUE_KIND(left)) == 0 || __tinypy_operator_is_number(TINYPY_VALUE_KIND(right)) == 0) {
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
+        return unsupported;
+    }
     tinypy_value_t *return_value_1 = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_CLASSIC, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_operator_inplace_binary(tinypy_value_t *left, tinypy_value_t *right, tinypy_binary_slot_t inplace_slot, tinypy_value_t *special_name, tinypy_binary_slot_t fallback, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_divide_impl(left, right, "/", out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_classic_binary(tinypy_value_t *left, tinypy_value_t *right, tinypy_value_t *name, tinypy_value_t *reverse_name, tinypy_binary_slot_t operation, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_value_t *result = __tinypy_operator_classic_half(left, right, name, TINYPY_FALSE, operation, out_error);
+
+    if (result == NULL || result != &vm->not_implemented_object.base) {
+        return result;
+    }
+    if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_OLD_INSTANCE) {
+        return result;
+    }
+    TINYPY_DECREF(result);
+    result = __tinypy_operator_classic_half(right, left, reverse_name, TINYPY_TRUE, operation, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_inplace_binary(tinypy_value_t *left, tinypy_value_t *right, tinypy_binary_slot_t inplace_slot, tinypy_value_t *special_name, tinypy_value_t *name, tinypy_value_t *reverse_name, const char *symbol, tinypy_binary_slot_t operation, tinypy_binary_slot_t normal_operation, tinypy_operator_binary_impl_t fallback, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_bool_t classic = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t power = special_name == vm->internal_special_ipow_key ? TINYPY_TRUE : TINYPY_FALSE;
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (tinypy_internal_object_has_special_override_key(left, special_name) != 0) {
-        tinypy_value_t *result = __tinypy_operator_call_special(left, special_name, right, out_error);
+    if (classic != 0 || tinypy_internal_object_has_special_override_key(left, special_name) != 0) {
+        tinypy_value_t *result = classic != 0 ? __tinypy_operator_classic_half(left, right, special_name, TINYPY_FALSE, operation, out_error) : __tinypy_operator_call_special(left, special_name, right, out_error);
 
-        if (result == NULL) {
-            return NULL;
-        }
-        if (result != &vm->not_implemented_object.base) {
+        if (result == NULL || result != &vm->not_implemented_object.base) {
             return result;
         }
         TINYPY_DECREF(result);
+        if (classic != 0) {
+            /* instance_iop tries its normal classic slot before binary_iop1 retries. */
+            result = __tinypy_operator_classic_binary(left, right, name, reverse_name, normal_operation, out_error);
+            if (result == NULL || result != &vm->not_implemented_object.base) {
+                return result;
+            }
+            TINYPY_DECREF(result);
+        }
+        if (power != 0) {
+            /* Python 2's ternary inplace-power slot has no binary retry. */
+            result = __tinypy_operator_unsupported(vm, left, right, "** or pow()", out_error);
+            return result;
+        }
+        result = fallback(left, right, symbol, out_error);
+        return result;
     }
     if (inplace_slot != NULL) {
         tinypy_value_t *result = inplace_slot(left, right, out_error);
 
-        if (result == NULL) {
-            return NULL;
-        }
-        if (result != &vm->not_implemented_object.base) {
+        if (result == NULL || result != &vm->not_implemented_object.base) {
             return result;
         }
         TINYPY_DECREF(result);
-        tinypy_value_t *return_value_1 = fallback(left, right, out_error);
-        return return_value_1;
+        result = fallback(left, right, symbol, out_error);
+        return result;
     }
     if (tinypy_internal_object_has_special_key(left, special_name) != 0) {
         tinypy_value_t *result = __tinypy_operator_call_special(left, special_name, right, out_error);
 
-        if (result == NULL) {
-            return NULL;
-        }
-        if (result != &vm->not_implemented_object.base) {
+        if (result == NULL || result != &vm->not_implemented_object.base) {
             return result;
         }
         TINYPY_DECREF(result);
     }
-    tinypy_value_t *return_value_2 = fallback(left, right, out_error);
-    return return_value_2;
+    tinypy_value_t *result = fallback(left, right, symbol, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_add(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
@@ -2405,7 +2519,7 @@ tinypy_value_t *tinypy_inplace_add(tinypy_value_t *left, tinypy_value_t *right, 
     tinypy_binary_slot_t slot;
 
     slot = left->type->number_slots != NULL ? left->type->number_slots->inplace_add : NULL;
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, slot, vm->internal_special_iadd_key, tinypy_add, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, slot, vm->internal_special_iadd_key, vm->internal_special_add_key, vm->internal_special_radd_key, "+=", tinypy_inplace_add, tinypy_add, __tinypy_operator_add_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2414,7 +2528,7 @@ tinypy_value_t *tinypy_inplace_subtract(tinypy_value_t *left, tinypy_value_t *ri
     tinypy_binary_slot_t slot;
 
     slot = left->type->number_slots != NULL ? left->type->number_slots->inplace_subtract : NULL;
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, slot, vm->internal_special_isub_key, tinypy_subtract, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, slot, vm->internal_special_isub_key, vm->internal_special_sub_key, vm->internal_special_rsub_key, "-=", tinypy_inplace_subtract, tinypy_subtract, __tinypy_operator_subtract_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2423,7 +2537,7 @@ tinypy_value_t *tinypy_inplace_multiply(tinypy_value_t *left, tinypy_value_t *ri
     tinypy_binary_slot_t slot;
 
     slot = left->type->number_slots != NULL ? left->type->number_slots->inplace_multiply : NULL;
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, slot, vm->internal_special_imul_key, tinypy_multiply, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, slot, vm->internal_special_imul_key, vm->internal_special_mul_key, vm->internal_special_rmul_key, "*=", tinypy_inplace_multiply, tinypy_multiply, __tinypy_operator_multiply_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2432,99 +2546,119 @@ tinypy_value_t *tinypy_inplace_divide(tinypy_value_t *left, tinypy_value_t *righ
     tinypy_binary_slot_t slot;
 
     slot = left->type->number_slots != NULL ? left->type->number_slots->inplace_divide : NULL;
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, slot, vm->internal_special_idiv_key, tinypy_divide, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, slot, vm->internal_special_idiv_key, vm->internal_special_div_key, vm->internal_special_rdiv_key, "/=", tinypy_inplace_divide, tinypy_divide, __tinypy_operator_divide_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_floor_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ifloordiv_key, tinypy_floor_divide, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ifloordiv_key, vm->internal_special_floordiv_key, vm->internal_special_rfloordiv_key, "//=", tinypy_inplace_floor_divide, tinypy_floor_divide, __tinypy_operator_floor_divide_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_true_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_itruediv_key, tinypy_true_divide, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_itruediv_key, vm->internal_special_truediv_key, vm->internal_special_rtruediv_key, "/=", tinypy_inplace_true_divide, tinypy_true_divide, __tinypy_operator_true_divide_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_remainder(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_imod_key, tinypy_remainder, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_imod_key, vm->internal_special_mod_key, vm->internal_special_rmod_key, "%=", tinypy_inplace_remainder, tinypy_remainder, __tinypy_operator_remainder_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_power(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ipow_key, tinypy_power, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ipow_key, vm->internal_special_pow_key, vm->internal_special_rpow_key, "** or pow()", tinypy_inplace_power, tinypy_power, __tinypy_operator_power_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_left_shift(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ilshift_key, tinypy_left_shift, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ilshift_key, vm->internal_special_lshift_key, vm->internal_special_rlshift_key, "<<=", tinypy_inplace_left_shift, tinypy_left_shift, __tinypy_operator_left_shift_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_right_shift(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_irshift_key, tinypy_right_shift, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_irshift_key, vm->internal_special_rshift_key, vm->internal_special_rrshift_key, ">>=", tinypy_inplace_right_shift, tinypy_right_shift, __tinypy_operator_right_shift_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_bit_and(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_iand_key, tinypy_bit_and, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_iand_key, vm->internal_special_and_key, vm->internal_special_rand_key, "&=", tinypy_inplace_bit_and, tinypy_bit_and, __tinypy_operator_bit_and_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_bit_xor(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ixor_key, tinypy_bit_xor, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ixor_key, vm->internal_special_xor_key, vm->internal_special_rxor_key, "^=", tinypy_inplace_bit_xor, tinypy_bit_xor, __tinypy_operator_bit_xor_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_inplace_bit_or(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ior_key, tinypy_bit_or, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_operator_inplace_binary(left, right, NULL, vm->internal_special_ior_key, vm->internal_special_or_key, vm->internal_special_ror_key, "|=", tinypy_inplace_bit_or, tinypy_bit_or, __tinypy_operator_bit_or_impl, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_floor_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_floor_divide_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_bool_t handled;
     tinypy_value_t *special;
 
     TINYPY_CLEAR_ERROR(out_error);
-    special = __tinypy_operator_special_binary(left, right, vm->internal_special_floordiv_key, vm->internal_special_rfloordiv_key, tinypy_floor_divide, &handled, out_error);
+    special = __tinypy_operator_special_binary(left, right, vm->internal_special_floordiv_key, vm->internal_special_rfloordiv_key, symbol, tinypy_floor_divide, &handled, out_error);
     if (handled != 0) {
         return special;
+    }
+    if (__tinypy_operator_is_number(TINYPY_VALUE_KIND(left)) == 0 || __tinypy_operator_is_number(TINYPY_VALUE_KIND(right)) == 0) {
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
+        return unsupported;
     }
     tinypy_value_t *return_value_1 = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_FLOOR, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_true_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_floor_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_floor_divide_impl(left, right, "//", out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_true_divide_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_bool_t handled;
     tinypy_value_t *special;
 
     TINYPY_CLEAR_ERROR(out_error);
-    special = __tinypy_operator_special_binary(left, right, vm->internal_special_truediv_key, vm->internal_special_rtruediv_key, tinypy_true_divide, &handled, out_error);
+    special = __tinypy_operator_special_binary(left, right, vm->internal_special_truediv_key, vm->internal_special_rtruediv_key, symbol, tinypy_true_divide, &handled, out_error);
     if (handled != 0) {
         return special;
+    }
+    if (__tinypy_operator_is_number(TINYPY_VALUE_KIND(left)) == 0 || __tinypy_operator_is_number(TINYPY_VALUE_KIND(right)) == 0) {
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
+        return unsupported;
     }
     tinypy_value_t *return_value_1 = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_TRUE, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_remainder(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_true_divide(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_true_divide_impl(left, right, "/", out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_remainder_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_bool_t handled;
     tinypy_value_t *special;
 
     TINYPY_CLEAR_ERROR(out_error);
-    special = __tinypy_operator_special_binary(left, right, vm->internal_special_mod_key, vm->internal_special_rmod_key, tinypy_remainder, &handled, out_error);
+    special = __tinypy_operator_special_binary(left, right, vm->internal_special_mod_key, vm->internal_special_rmod_key, symbol, tinypy_remainder, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -2532,8 +2666,18 @@ tinypy_value_t *tinypy_remainder(tinypy_value_t *left, tinypy_value_t *right, ti
         tinypy_value_t *return_value_1 = tinypy_internal_string_percent(left, right, out_error);
         return return_value_1;
     }
+    if (__tinypy_operator_is_number(TINYPY_VALUE_KIND(left)) == 0 || __tinypy_operator_is_number(TINYPY_VALUE_KIND(right)) == 0) {
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
+        return unsupported;
+    }
     tinypy_value_t *return_value_2 = __tinypy_operator_divide(left, right, TINYPY_OPERATOR_DIVISION_REMAINDER, out_error);
     return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_remainder(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_remainder_impl(left, right, "%", out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_divmod(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
@@ -2546,7 +2690,7 @@ tinypy_value_t *tinypy_divmod(tinypy_value_t *left, tinypy_value_t *right, tinyp
     tinypy_value_t *result;
 
     TINYPY_CLEAR_ERROR(out_error);
-    special = __tinypy_operator_special_binary(left, right, vm->internal_special_divmod_key, vm->internal_special_rdivmod_key, tinypy_divmod, &handled, out_error);
+    special = __tinypy_operator_special_binary(left, right, vm->internal_special_divmod_key, vm->internal_special_rdivmod_key, "divmod()", tinypy_divmod, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -2776,17 +2920,23 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_power_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_bool_t handled;
     tinypy_value_t *special;
 
     TINYPY_CLEAR_ERROR(out_error);
-    special = __tinypy_operator_special_binary(left, right, vm->internal_special_pow_key, vm->internal_special_rpow_key, tinypy_power, &handled, out_error);
+    special = __tinypy_operator_special_binary(left, right, vm->internal_special_pow_key, vm->internal_special_rpow_key, symbol, tinypy_power, &handled, out_error);
     if (handled != 0) {
         return special;
     }
     tinypy_value_t *result = __tinypy_operator_power_builtin(left, right, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_power(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_power_impl(left, right, "** or pow()", out_error);
 
     return result;
 }
@@ -2952,43 +3102,287 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_power_modulo(tinypy_value_t *base_value, tinypy_value_t *exponent_value, tinypy_value_t *modulus_value, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(base_value);
+typedef enum tinypy_operator_power_slot_e {
+    TINYPY_OPERATOR_POWER_NONE,
+    TINYPY_OPERATOR_POWER_PYTHON,
+    TINYPY_OPERATOR_POWER_CLASSIC,
+    TINYPY_OPERATOR_POWER_INTEGER,
+    TINYPY_OPERATOR_POWER_LONG,
+    TINYPY_OPERATOR_POWER_FLOAT,
+    TINYPY_OPERATOR_POWER_COMPLEX,
+    TINYPY_OPERATOR_POWER_NATIVE
+} tinypy_operator_power_slot_e;
+//////////////////////////////////////////////////////////////////////////
+typedef struct tinypy_operator_power_slot_t {
+    tinypy_operator_power_slot_e kind;
+    tinypy_ternary_slot_t native;
+} tinypy_operator_power_slot_t;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_operator_power_slot_t __tinypy_operator_power_slot(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_operator_power_slot_t slot = {TINYPY_OPERATOR_POWER_NONE, NULL};
 
-    TINYPY_CLEAR_ERROR(out_error);
-    if (base_value->type->number_slots != NULL && base_value->type->number_slots->power != NULL) {
-        tinypy_value_t *return_value_1 = base_value->type->number_slots->power(base_value, exponent_value, modulus_value, out_error);
-        return return_value_1;
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        slot.kind = TINYPY_OPERATOR_POWER_CLASSIC;
     }
-    if (tinypy_internal_object_has_special_key(base_value, vm->internal_special_pow_key) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(base_value, vm->internal_special_pow_key, out_error);
-        tinypy_value_t *arguments[2] = {exponent_value, modulus_value};
-        tinypy_value_t *args;
-        tinypy_value_t *result;
+    else if (tinypy_internal_object_has_special_override_key(value, vm->internal_special_pow_key) != 0 || tinypy_internal_object_has_special_override_key(value, vm->internal_special_rpow_key) != 0) {
+        slot.kind = TINYPY_OPERATOR_POWER_PYTHON;
+    }
+    else if (value->type->number_slots != NULL && value->type->number_slots->power != NULL) {
+        slot.kind = TINYPY_OPERATOR_POWER_NATIVE;
+        slot.native = value->type->number_slots->power;
+    }
+    else {
+        switch (TINYPY_VALUE_KIND(value)) {
+        case TINYPY_VALUE_BOOL:
+        case TINYPY_VALUE_INTEGER: slot.kind = TINYPY_OPERATOR_POWER_INTEGER; break;
+        case TINYPY_VALUE_LONG: slot.kind = TINYPY_OPERATOR_POWER_LONG; break;
+        case TINYPY_VALUE_FLOAT: slot.kind = TINYPY_OPERATOR_POWER_FLOAT; break;
+        case TINYPY_VALUE_COMPLEX: slot.kind = TINYPY_OPERATOR_POWER_COMPLEX; break;
+        default: break;
+        }
+    }
+    return slot;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_operator_power_slots_equal(tinypy_operator_power_slot_t left, tinypy_operator_power_slot_t right) {
+    tinypy_bool_t result = left.kind == right.kind && left.native == right.native ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_call_power_slot(tinypy_operator_power_slot_t slot, tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(base);
+
+    if (slot.kind == TINYPY_OPERATOR_POWER_NATIVE) {
+        tinypy_value_t *result = slot.native(base, exponent, modulus, out_error);
+
+        return result;
+    }
+    if (slot.kind == TINYPY_OPERATOR_POWER_PYTHON || slot.kind == TINYPY_OPERATOR_POWER_CLASSIC) {
+        tinypy_operator_power_slot_t base_slot = __tinypy_operator_power_slot(base);
+
+        if (slot.kind == TINYPY_OPERATOR_POWER_PYTHON && base_slot.kind != TINYPY_OPERATOR_POWER_PYTHON) {
+            tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
+
+            return result;
+        }
+        tinypy_value_t *method = tinypy_internal_object_get_special_key(base, vm->internal_special_pow_key, out_error);
+        tinypy_value_t *arguments[2] = {exponent, modulus};
 
         if (method == NULL) {
             return NULL;
         }
-        args = tinypy_tuple_from_items(vm, arguments, 2U);
-        result = tinypy_call(method, args, NULL, out_error);
+        tinypy_value_t *args = tinypy_tuple_from_items(vm, arguments, 2U);
+        tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
         TINYPY_DECREF(args);
         TINYPY_DECREF(method);
+        return result;
+    }
+    if (slot.kind == TINYPY_OPERATOR_POWER_FLOAT) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "pow() 3rd argument not allowed unless all arguments are integers", out_error);
+        return NULL;
+    }
+    if (slot.kind == TINYPY_OPERATOR_POWER_COMPLEX) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "complex modulo", out_error);
+        return NULL;
+    }
+    tinypy_bool_t integer_pair = (TINYPY_VALUE_KIND(base) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(base) == TINYPY_VALUE_BOOL) &&
+        (TINYPY_VALUE_KIND(exponent) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(exponent) == TINYPY_VALUE_BOOL) ? TINYPY_TRUE : TINYPY_FALSE;
+    if (slot.kind == TINYPY_OPERATOR_POWER_INTEGER && integer_pair != 0 && TINYPY_INTEGER_VALUE(exponent) < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "pow() 2nd argument cannot be negative when 3rd argument specified", out_error);
+        return NULL;
+    }
+    tinypy_bool_t applicable = slot.kind == TINYPY_OPERATOR_POWER_INTEGER ?
+        (integer_pair != 0 && (TINYPY_VALUE_KIND(modulus) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(modulus) == TINYPY_VALUE_BOOL) ? TINYPY_TRUE : TINYPY_FALSE) :
+        (slot.kind == TINYPY_OPERATOR_POWER_LONG && __tinypy_operator_is_integer(TINYPY_VALUE_KIND(base)) != 0 && __tinypy_operator_is_integer(TINYPY_VALUE_KIND(exponent)) != 0 && __tinypy_operator_is_integer(TINYPY_VALUE_KIND(modulus)) != 0 ? TINYPY_TRUE : TINYPY_FALSE);
+    if (applicable != 0) {
+        tinypy_value_t *result = tinypy_internal_power_modulo_builtin(base, exponent, modulus, out_error);
+
+        return result;
+    }
+    tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_operator_checktypes(tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    tinypy_bool_t result = (value->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U || value->type->number_slots != NULL ||
+        __tinypy_operator_is_number(kind) != 0 || kind == TINYPY_VALUE_OLD_INSTANCE || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The pair owns its operands; successful coercion replaces both references. */
+static tinypy_bool_t __tinypy_operator_power_coerce(tinypy_value_t **left, tinypy_value_t **right, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(*left);
+    size_t index;
+
+    if ((*left)->type == (*right)->type && __tinypy_operator_checktypes(*left) == 0) {
+        return TINYPY_TRUE;
+    }
+    for (index = 0U; index != 2U; ++index) {
+        tinypy_value_t *receiver = index == 0U ? *left : *right;
+        tinypy_value_t *argument = index == 0U ? *right : *left;
+
+        if (TINYPY_VALUE_KIND(receiver) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(receiver, vm->internal_special_coerce_key) == 0) {
+            continue;
+        }
+        tinypy_value_t *pair = __tinypy_operator_call_special(receiver, vm->internal_special_coerce_key, argument, out_error);
+
+        if (pair == NULL) {
+            return TINYPY_FALSE;
+        }
+        if (TINYPY_VALUE_KIND(pair) == TINYPY_VALUE_NOT_IMPLEMENTED || (TINYPY_VALUE_KIND(receiver) == TINYPY_VALUE_OLD_INSTANCE && TINYPY_VALUE_KIND(pair) == TINYPY_VALUE_NONE)) {
+            TINYPY_DECREF(pair);
+            continue;
+        }
+        if (TINYPY_VALUE_KIND(pair) != TINYPY_VALUE_TUPLE || TINYPY_TUPLE_SIZE(pair) != 2U) {
+            TINYPY_DECREF(pair);
+            return TINYPY_FALSE;
+        }
+        tinypy_value_t *first = TINYPY_RET(TINYPY_TUPLE_GET(pair, index));
+        tinypy_value_t *second = TINYPY_RET(TINYPY_TUPLE_GET(pair, 1U - index));
+
+        TINYPY_DECREF(pair);
+        TINYPY_DECREF(*left);
+        TINYPY_DECREF(*right);
+        *left = first;
+        *right = second;
+        return TINYPY_TRUE;
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_power_unsupported(tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(base);
+    const tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("unsupported operand type(s) for pow(): '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(base),
+        TINYPY_MESSAGE_PART_LITERAL("', '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(exponent),
+        TINYPY_MESSAGE_PART_LITERAL("', '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(modulus),
+        TINYPY_MESSAGE_PART_LITERAL("'")
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_power_legacy(tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(base);
+    tinypy_value_t *first = TINYPY_RET(base);
+    tinypy_value_t *second = TINYPY_RET(exponent);
+    tinypy_value_t *first_next = NULL;
+    tinypy_value_t *second_next = NULL;
+    tinypy_value_t *third_next = NULL;
+    tinypy_value_t *third_final = NULL;
+    tinypy_value_t *result;
+
+    if (__tinypy_operator_power_coerce(&first, &second, out_error) == 0) {
+        goto unsupported;
+    }
+    first_next = TINYPY_RET(first);
+    third_next = TINYPY_RET(modulus);
+    if (__tinypy_operator_power_coerce(&first_next, &third_next, out_error) == 0) {
+        goto unsupported;
+    }
+    second_next = TINYPY_RET(second);
+    third_final = TINYPY_RET(third_next);
+    if (__tinypy_operator_power_coerce(&second_next, &third_final, out_error) == 0) {
+        goto unsupported;
+    }
+    tinypy_operator_power_slot_t slot = __tinypy_operator_power_slot(first_next);
+
+    if (slot.kind == TINYPY_OPERATOR_POWER_NONE) {
+        goto unsupported;
+    }
+    result = __tinypy_operator_call_power_slot(slot, first_next, second_next, third_final, out_error);
+    goto cleanup;
+unsupported:
+    if (out_error != NULL && *out_error != NULL) {
+        tinypy_error_release(*out_error);
+        *out_error = NULL;
+    }
+    tinypy_vm_clear_error(vm);
+    result = __tinypy_operator_power_unsupported(first, second, modulus, out_error);
+cleanup:
+    if (third_final != NULL) {
+        TINYPY_DECREF(third_final);
+    }
+    if (second_next != NULL) {
+        TINYPY_DECREF(second_next);
+    }
+    if (third_next != NULL) {
+        TINYPY_DECREF(third_next);
+    }
+    if (first_next != NULL) {
+        TINYPY_DECREF(first_next);
+    }
+    TINYPY_DECREF(second);
+    TINYPY_DECREF(first);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_power_modulo(tinypy_value_t *base_value, tinypy_value_t *exponent_value, tinypy_value_t *modulus_value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(base_value);
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(modulus_value) == TINYPY_VALUE_NONE) {
+        tinypy_value_t *result = tinypy_power(base_value, exponent_value, out_error);
+
+        return result;
+    }
+    tinypy_operator_power_slot_t slots[3] = {__tinypy_operator_power_slot(base_value), __tinypy_operator_power_slot(exponent_value), {TINYPY_OPERATOR_POWER_NONE, NULL}};
+    tinypy_bool_t reverse_first = base_value->type != exponent_value->type &&
+        __tinypy_operator_power_slots_equal(slots[0], slots[1]) == 0 && tinypy_type_is_subtype(exponent_value->type, base_value->type) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_operator_power_slot_t order[2] = {slots[reverse_first != 0 ? 1U : 0U], slots[reverse_first != 0 ? 0U : 1U]};
+    size_t index;
+
+    if (base_value->type == exponent_value->type || __tinypy_operator_power_slots_equal(slots[0], slots[1]) != 0) {
+        order[1].kind = TINYPY_OPERATOR_POWER_NONE;
+    }
+    for (index = 0U; index != 3U; ++index) {
+        tinypy_operator_power_slot_t slot;
+
+        if (index != 2U) {
+            slot = order[index];
+        }
+        else {
+            slot = __tinypy_operator_power_slot(modulus_value);
+            if (__tinypy_operator_power_slots_equal(slot, slots[0]) != 0 || __tinypy_operator_power_slots_equal(slot, slots[1]) != 0) {
+                continue;
+            }
+        }
+        if (slot.kind == TINYPY_OPERATOR_POWER_NONE) {
+            continue;
+        }
+        tinypy_value_t *result = __tinypy_operator_call_power_slot(slot, base_value, exponent_value, modulus_value, out_error);
+
         if (result == NULL || result != &vm->not_implemented_object.base) {
             return result;
         }
         TINYPY_DECREF(result);
     }
-    tinypy_value_t *return_value_2 = tinypy_internal_power_modulo_builtin(base_value, exponent_value, modulus_value, out_error);
-    return return_value_2;
+    if (__tinypy_operator_checktypes(base_value) == 0 || __tinypy_operator_checktypes(exponent_value) == 0 || __tinypy_operator_checktypes(modulus_value) == 0) {
+        tinypy_value_t *result = __tinypy_operator_power_legacy(base_value, exponent_value, modulus_value, out_error);
+
+        return result;
+    }
+    tinypy_value_t *result = __tinypy_operator_power_unsupported(base_value, exponent_value, modulus_value, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_left_shift(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_left_shift_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     size_t shift;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_bool_t handled;
-    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_lshift_key, vm->internal_special_rlshift_key, tinypy_left_shift, &handled, out_error);
+    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_lshift_key, vm->internal_special_rlshift_key, symbol, tinypy_left_shift, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -2999,7 +3393,7 @@ tinypy_value_t *tinypy_left_shift(tinypy_value_t *left, tinypy_value_t *right, t
         condition_6 = __tinypy_operator_is_integer(kind_2) == 0;
     }
     if (condition_6) {
-        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, "<<", out_error);
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
         return unsupported;
     }
     if (__tinypy_operator_shift_count(vm, right, &shift, out_error) == 0) {
@@ -3009,13 +3403,19 @@ tinypy_value_t *tinypy_left_shift(tinypy_value_t *left, tinypy_value_t *right, t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_right_shift(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_left_shift(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_left_shift_impl(left, right, "<<", out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_right_shift_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     size_t shift;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_bool_t handled;
-    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_rshift_key, vm->internal_special_rrshift_key, tinypy_right_shift, &handled, out_error);
+    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_rshift_key, vm->internal_special_rrshift_key, symbol, tinypy_right_shift, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -3026,7 +3426,7 @@ tinypy_value_t *tinypy_right_shift(tinypy_value_t *left, tinypy_value_t *right, 
         condition_7 = __tinypy_operator_is_integer(kind_2) == 0;
     }
     if (condition_7) {
-        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, ">>", out_error);
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
         return unsupported;
     }
     if (__tinypy_operator_shift_count(vm, right, &shift, out_error) == 0) {
@@ -3036,12 +3436,18 @@ tinypy_value_t *tinypy_right_shift(tinypy_value_t *left, tinypy_value_t *right, 
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_bit_and(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_right_shift(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_right_shift_impl(left, right, ">>", out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_bit_and_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
 
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_bool_t handled;
-    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_and_key, vm->internal_special_rand_key, tinypy_bit_and, &handled, out_error);
+    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_and_key, vm->internal_special_rand_key, symbol, tinypy_bit_and, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -3051,7 +3457,7 @@ tinypy_value_t *tinypy_bit_and(tinypy_value_t *left, tinypy_value_t *right, tiny
             if (handled != 0) {
                 return special;
             }
-            tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, "&", out_error);
+            tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
             return unsupported;
         }
         tinypy_value_t *return_value_1 = tinypy_internal_set_binary(left, right, INT32_C(0), out_error);
@@ -3062,17 +3468,25 @@ tinypy_value_t *tinypy_bit_and(tinypy_value_t *left, tinypy_value_t *right, tiny
         if (handled != 0) {
             return special;
         }
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
+        return unsupported;
     }
     tinypy_value_t *return_value_2 = __tinypy_operator_integer_bitwise(vm, left, right, 0, out_error);
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_bit_xor(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_bit_and(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_bit_and_impl(left, right, "&", out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_bit_xor_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
 
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_bool_t handled;
-    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_xor_key, vm->internal_special_rxor_key, tinypy_bit_xor, &handled, out_error);
+    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_xor_key, vm->internal_special_rxor_key, symbol, tinypy_bit_xor, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -3082,7 +3496,7 @@ tinypy_value_t *tinypy_bit_xor(tinypy_value_t *left, tinypy_value_t *right, tiny
             if (handled != 0) {
                 return special;
             }
-            tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, "^", out_error);
+            tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
             return unsupported;
         }
         tinypy_value_t *return_value_1 = tinypy_internal_set_binary(left, right, INT32_C(1), out_error);
@@ -3093,17 +3507,25 @@ tinypy_value_t *tinypy_bit_xor(tinypy_value_t *left, tinypy_value_t *right, tiny
         if (handled != 0) {
             return special;
         }
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
+        return unsupported;
     }
     tinypy_value_t *return_value_2 = __tinypy_operator_integer_bitwise(vm, left, right, 1, out_error);
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_bit_or(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_bit_xor(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_bit_xor_impl(left, right, "^", out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_bit_or_impl(tinypy_value_t *left, tinypy_value_t *right, const char *symbol, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
 
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_bool_t handled;
-    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_or_key, vm->internal_special_ror_key, tinypy_bit_or, &handled, out_error);
+    tinypy_value_t *special = __tinypy_operator_special_binary(left, right, vm->internal_special_or_key, vm->internal_special_ror_key, symbol, tinypy_bit_or, &handled, out_error);
     if (handled != 0) {
         return special;
     }
@@ -3113,7 +3535,7 @@ tinypy_value_t *tinypy_bit_or(tinypy_value_t *left, tinypy_value_t *right, tinyp
             if (handled != 0) {
                 return special;
             }
-            tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, "|", out_error);
+            tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
             return unsupported;
         }
         tinypy_value_t *return_value_1 = tinypy_internal_set_binary(left, right, INT32_C(2), out_error);
@@ -3124,9 +3546,17 @@ tinypy_value_t *tinypy_bit_or(tinypy_value_t *left, tinypy_value_t *right, tinyp
         if (handled != 0) {
             return special;
         }
+        tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, symbol, out_error);
+        return unsupported;
     }
     tinypy_value_t *return_value_2 = __tinypy_operator_integer_bitwise(vm, left, right, 2, out_error);
     return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_bit_or(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_operator_bit_or_impl(left, right, "|", out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_multiply_builtin(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
@@ -3160,7 +3590,7 @@ static tinypy_value_t *__tinypy_operator_multiply_builtin(tinypy_value_t *left, 
         }
     }
     if (__tinypy_operator_is_number(left_kind) == 0 || __tinypy_operator_is_number(right_kind) == 0) {
-        tinypy_value_t *unsupported = __tinypy_operator_multiply_unsupported(vm, left, right, out_error);
+        tinypy_value_t *unsupported = __tinypy_operator_multiply_unsupported(vm, left, right, "*", out_error);
         return unsupported;
     }
     if (left_kind == TINYPY_VALUE_COMPLEX || right_kind == TINYPY_VALUE_COMPLEX) {

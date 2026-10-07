@@ -1,7 +1,7 @@
 # Deep conformance audit — 2026-10-07
 
 The supported contract is [SPEC.md](../../SPEC.md), with external CPython
-2.7.18 as the observable-behavior oracle. Six audit passes added 565 independently
+2.7.18 as the observable-behavior oracle. Seven audit passes added 652 independently
 authored portable cases: the initial 109, 84 boundary/callback cases,
 and 92 comparison/type/generator/regex cases (37 comparisons, 27 types,
 13 control flow and 15 SRE), followed by 87 constructor/iterator/descriptor/
@@ -9,7 +9,9 @@ decoder cases (24 text protocols, 33 builtins, 17 descriptors and 13 compiler
 diagnostics), followed by 110 formatting/function/namespace/introspection cases
 (24 brace-formatting, 30 functional consumers, 25 namespace and 31 attribute
 protocol cases), followed by 83 direct-slot and stateful callback cases
-(37 containers, 30 numeric/codecs and 16 attributes/descriptors).
+(37 containers, 30 numeric/codecs and 16 attributes/descriptors), followed by
+87 operator/coercion and materialization/state cases (28 operators,
+37 containers and 22 descriptors/functions/set-order/slice cases).
 Every ordinary selected case passes on both runtimes.
 These counts are regression witnesses, not a count of distinct defects.
 
@@ -62,6 +64,12 @@ These counts are regression witnesses, not a count of distinct defects.
 | Codec callback lifetime | One conversion retains its resolved handler and reusable exception; callbacks use Python 2 integer position conversion, preserve original input bounds and updated error metadata, release tuple/position in oracle order and raise the original error for unencodable replacements; builtin handlers read native UnicodeError payloads without attribute overrides |
 | Attribute protocol dispatch | Exact-string metadata fast paths preserve string-subclass hash/equality lookup; function data descriptors precede dictionary shadows, generic lookup errors are suppressed without stale pending state; types canonicalize mutation keys after custom metaclass hooks and publish names before releasing old values; Python call attributes use bound wrappers/class/proxy lookup while the native embedding fallback remains unchanged |
 | Diagnostics and native fields | Shared invalid-int-result errors, complex conversion errors, list index/pop, codec handler/position, join/SRE and type metadata mutation diagnostics match; UnicodeTranslateError exposes its encoding descriptor with None |
+| Operator dispatch and coercion | Classic halves coerce and invoke their hooks in order; replacement receivers and operand order are retained; reflected descriptor lookup/comparison preserves suppressed-error state; numeric-subclass NotImplemented cannot fall through to raw payload operations; inplace hooks run once and retain augmented error symbols; explicit-None power is binary, while actual ternary power follows slot/coercion/promotion rules |
+| Materialized dictionary pairs | Exact tuple/list pairs use stored values; other inputs and sequence subtypes fully drain their iterators before length validation; iterator hints, late failures, indexed diagnostics and partial updates remain observable |
+| Cached-hash container state | Exact dictionary-to-set transfers reuse cached hashes; dictionary/set operations reacquire current source storage after bounded callbacks; intersection observes original inputs, symmetric update exposes partial progress, and subset ordering uses one correctly oriented lookup |
+| Partial copy callbacks | Keyword copying keeps collision callbacks, retains the source through state replacement, and observes the callable selected after copying; failures prevent the call |
+| Iterable and slice error boundaries | Hint -1 produces the consumer-specific Python 2 error or direct list-slot no-op; tuple hint -2/-3 reports a controlled internal-argument error; user-raised exceptions retain identity; legacy list slice bounds normalize after materialization while modern slice bounds normalize before it |
+| Function fields and missing protocols | Function field aliases enforce exact setter/deletion diagnostics and compatible closure sizes; missing property/descriptor operations raise the Python 2 AttributeError; classic dynamic __call__ lookup and ordinary noncallable diagnostics preserve callback/error state |
 
 Python-visible conversion failures, error ordering and callbacks remain active
 in Release. This work does not add cyclic GC or change the documented ownership
@@ -98,6 +106,21 @@ call result and allocator balance are checked; Python-facing functions, methods,
 builtin functions, partials, classic classes, weakrefs and callable proxies use
 their normal descriptor or attribute paths. The new tests were independently
 reviewed and rerun against fresh strict Debug builds before aggregate validation.
+
+The seventh pass adds three authored modules and four permanent matrices.
+Operator products distinguish classic coercion, reflected descriptors, inplace
+fallback and ternary power; container products distinguish cached-hash traversal
+from generic iteration and record partial state. Descriptor/function products
+also check set ordering and modern/legacy slice materialization. Implementations,
+owned references and callback/error state were independently reviewed, then
+the new products were rerun against fresh strict Debug builds.
+
+Length-hint -1 cases retain their stable consumer-specific errors, including
+direct list-slot no-op behavior. Tuple hints -2/-3 assert SystemError and the
+reason `bad argument to internal function`, without copying the oracle's
+build-specific C source filename/line into tinypy. User-raised exceptions with
+identical diagnostic text retain their own identity. These are ordinary
+regressions, with no new skip or contract exclusion.
 
 SRE products use ordinary valid programs generated from project-authored
 patterns by CPython 2.7.18's regex compiler. Replacement-template parsing and
@@ -148,22 +171,34 @@ as an oracle match. [SPEC.md](../../SPEC.md#14-errors) records this boundary.
 | Numeric subtype payloads, codec handler state/positions, join and SRE callbacks | 1,019 |
 | Attribute-name protocols, function descriptor shadows, type mutation and call wrappers | 808 |
 | Ordered nested statement/action pairs, branch/suppression states and generator drivers | 2,048 |
-| **Total unique runtime outcomes** | **234,209** |
+| All caller/explicit future flags × inheritance policy × source mode/form | 12,288 |
+| Binary/inplace/classic/coercion/ternary/reflected-descriptor dispatch | 11,538 |
+| Materialized pairs, cached hashes, set algebra, partial state and negative hints | 4,784 |
+| Descriptor/function fields, set ordering and iterable/slice state | 1,446 |
+| **Total unique runtime outcomes** | **264,265** |
 
 Operands include integer widening, long, bool, float, complex, infinity, NaN,
-subnormal and maximum finite doubles. All twenty matrices compare complete stdout to
+subnormal and maximum finite doubles. All twenty-four matrices compare complete stdout to
 the oracle and verify unique identities, exact cardinality and zero outstanding
 tinypy allocations. They compare exception classes; protocol regressions also
 assert callback order, mutation, identity and selected exception messages.
 
-The generated compiler corpus contains 813 `exec`, 420 `eval` and 420 `single`
+The generated compiler corpus contains 2,853 `exec`, 420 `eval` and 420 `single`
 sources. It includes 320 ordered control-wrapper/action tuples, 25 nested
 closure/argument tuples and 24 line-gap/instruction-run tuples. An independent
 host assertion checks every tuple's filename; a separate bounded runtime product
 checks control execution and suspended unwind traces.
-Each source is checked at optimize 0/1/2. Another 138 checked-in vendor, local,
+It also includes 2,040 folding/future sources: 680 numeric binary, 432 sequence
+binary, 96 subscript, 240 repeat, 120 shift, 88 unary, 256 constant-type and
+128 future-feature rows. Products remain bounded around integer widening,
+signed zero, extreme finite floats and the 20-item sequence-folding limit;
+failed folds remain valid runtime expressions. Independent host checks assert
+every generated filename, not just the totals. A separate 12,288-row runtime
+matrix verifies all caller/explicit future combinations, code shape and
+execution results.
+Each source is checked at optimize 0/1/2. Another 145 checked-in vendor, local,
 runtime and matrix sources undergo three-level `exec` comparison. This gives
-5,373 byte-identical marshal-v2 comparisons per profile, 21,492 across all four.
+11,514 byte-identical marshal-v2 comparisons per profile, 46,056 across all four.
 No compiler mismatch was found in these inputs.
 
 Three explicitly identified attribute-product rows coalesce consecutive identical
@@ -352,25 +387,25 @@ they describe these local lookup workloads, not application performance.
 
 ## Final validation
 
-The default [matrix runner](../run_validation.py) completed all 158 stages on
+The default [matrix runner](../run_validation.py) completed all 178 stages on
 macOS arm64. C and C99 standalone builds used strict warnings-as-errors.
 
 | Profile | Native/runtime CTest | Portable oracle cases | Runtime outcomes | Compiler comparisons |
 | --- | --- | --- | --- | --- |
-| Debug, detector on | 89 PASS | 1,235 PASS | 234,209 identical | 5,373 identical |
-| Release | 89 PASS | 1,231 PASS / 4 diagnostic SKIP | 234,209 identical | 5,373 identical |
-| Unoptimized Debug, ASan/UBSan | 89 PASS | 1,235 PASS | 234,209 identical | 5,373 identical |
-| Release, LTO | 89 PASS | 1,231 PASS / 4 diagnostic SKIP | 234,209 identical | 5,373 identical |
+| Debug, detector on | 89 PASS | 1,322 PASS | 264,265 identical | 11,514 identical |
+| Release | 89 PASS | 1,318 PASS / 4 diagnostic SKIP | 264,265 identical | 11,514 identical |
+| Unoptimized Debug, ASan/UBSan | 89 PASS | 1,322 PASS | 264,265 identical | 11,514 identical |
+| Release, LTO | 89 PASS | 1,318 PASS / 4 diagnostic SKIP | 264,265 identical | 11,514 identical |
 
-All 140 CTest registrations were checked against the exact inventory. Portable
+All 143 CTest registrations were checked against the exact inventory. Portable
 cases are run separately with the external oracle; their CTest wrappers are
 not counted again as executed native tests. Host/API/runner acceptance checks
-passed 89/89. Standalone marshal/artifact and core symbol audits passed in all
+passed 90/90. Standalone marshal/artifact and core symbol audits passed in all
 profiles. No ASan/UBSan diagnostics occurred. Apple ASan lacks LeakSanitizer;
 macOS records `detect_leaks=0`, while allocator balance is checked independently.
 
 Logs, per-case portable results, JUnit results and the aggregate source/test
-SHA-256 are in `.temp/validation-sixth-audit-accepted/report.json` and its linked artifacts. The
+SHA-256 are in `.temp/validation-seventh-audit-accepted/report.json` and its linked artifacts. The
 report rejects incomplete discovery, native/portable skips outside the four
 allowed Release adaptations, inconsistent summaries, empty compiler corpora,
 changed inputs and timeouts. The input fingerprint includes the normative
@@ -382,8 +417,8 @@ semantics have separate runtime fixtures, including `sys_runtime.py`. Timed-out
 stage process trees are stopped.
 
 The final accepted source/test SHA-256 is
-`e8bb0fc9efaa60edf5d53ba258b450542d511e45c18f81df3abbe1e799c191e7`.
-The post-run fingerprint matched; all 158 recorded stages have PASS status.
+`b53d0f39f63a7be761d45e73108e58a8d967610841ee8186be5d5920d601d324`.
+The post-run fingerprint matched; all 178 recorded stages have PASS status.
 The object-dispatch, native-wrapper classification, exception-registration and
 VM `_WIN32` branches also passed
 standalone strict C11 syntax checking on macOS; this does not constitute a
@@ -401,7 +436,7 @@ this is a local microbenchmark, not an application performance guarantee.
 fixtures; [TEST_PLAN.md](TEST_PLAN.md) defines applicable variant axes, callback
 states, lifetime checks and future acceptance gates. [tests/README.md](../README.md)
 describes adding regression witnesses and running the full matrix. Confirmed
-supported-scope discrepancies from all six audit passes are fixed; the one explicit
+supported-scope discrepancies from all seven audit passes are fixed; the one explicit
 CPython pending-error boundary is described above. The finite products are exhaustive
 for their operand lists; arbitrary Python programs, callbacks, host extensions
 and other ABIs remain unbounded. Declared SPEC limitations stay explicit.

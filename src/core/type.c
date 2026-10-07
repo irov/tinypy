@@ -708,7 +708,7 @@ static tinypy_value_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, tinypy_value
     declared = tinypy_list_from_items(vm, NULL, 0U);
     if (bases_source != NULL) {
         TINYPY_INCREF(bases_source);
-        tinypy_bool_t extended = tinypy_internal_list_extend_iterable(declared, bases_source, out_error);
+        tinypy_bool_t extended = tinypy_internal_list_extend_iterable(declared, bases_source, "NULL result without error in PyObject_Call", out_error);
         TINYPY_DECREF(bases_source);
         if (extended == 0) {
             goto error;
@@ -906,7 +906,7 @@ static tinypy_value_t *__tinypy_internal_type_parse_slots(tinypy_vm_t *vm, const
             materialized = tinypy_internal_list_append_checked(inputs, declaration, out_error);
         }
         else {
-            materialized = tinypy_internal_list_extend_iterable(inputs, declaration, out_error);
+            materialized = tinypy_internal_list_extend_iterable(inputs, declaration, "NULL result without error in PyObject_Call", out_error);
         }
         TINYPY_DECREF(declaration);
         if (materialized == 0) {
@@ -1663,7 +1663,7 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_value_t *internal_name_k
     /* The type owns a private copy of the namespace, as type_new does in
        Python 2.7: the caller's dictionary must stay independent of the type. */
     dict = tinypy_dict_new(vm);
-    if (namespace_dict != NULL && tinypy_internal_dict_update_from(dict, namespace_dict, out_error) == 0) {
+    if (namespace_dict != NULL && tinypy_internal_dict_update_from(dict, namespace_dict, "NULL result without error in PyObject_Call", out_error) == 0) {
         TINYPY_DECREF(own_slots);
         TINYPY_DECREF(dict);
         if (mro_types != NULL) {

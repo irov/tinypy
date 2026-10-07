@@ -114,7 +114,7 @@ class CompilerCorpusAcceptance(unittest.TestCase):
             path = Path(directory)
             counts = RUNNER.write_corpus(path)
             expected = {source.relative_to(path): source.read_bytes() for source in path.rglob('*.py')}
-            self.assertEqual(counts, {'exec': 813, 'eval': 420, 'single': 420})
+            self.assertEqual(counts, {'exec': 2853, 'eval': 420, 'single': 420})
             self.assertEqual(RUNNER.write_corpus(path), counts)
             self.assertEqual({source.relative_to(path): source.read_bytes() for source in path.rglob('*.py')}, expected)
             (path / 'stale.py').write_text('pass\n')
@@ -135,6 +135,30 @@ class CompilerCorpusAcceptance(unittest.TestCase):
             RUNNER.write_corpus(path)
             actual = {source.name for source in (path / 'exec').glob('*.py')
                       if source.name.startswith(('control_', 'closure_', 'line_'))}
+            self.assertEqual(actual, expected)
+
+    def test_optimizer_corpus_covers_every_declared_axis(self):
+        expected = {'fold_binary_%d_%d_%d.py' % (left, right, operation)
+                    for left in range(10) for right in range(10) for operation in range(7)
+                    if operation != 6 or right not in (6, 8)}
+        expected.update('fold_sequence_%d_%d_%d.py' % (left, right, operation)
+                        for left in range(12) for right in range(12) for operation in range(3))
+        expected.update('fold_subscript_%d_%d.py' % (value, index)
+                        for value in range(12) for index in range(8))
+        expected.update('fold_repeat_%d_%d_%d.py' % (value, count, reverse)
+                        for value in range(12) for count in range(10) for reverse in range(2))
+        expected.update('fold_shift_%d_%d_%d.py' % (value, count, operation)
+                        for value in range(10) for count in range(6) for operation in range(2))
+        expected.update('fold_unary_%d_%d.py' % (value, operation)
+                        for value in range(22) for operation in range(4))
+        expected.update('fold_constant_%d_%d.py' % (left, right)
+                        for left in range(16) for right in range(16))
+        expected.update('fold_future_%d_%d.py' % (mask, body)
+                        for mask in range(32) for body in range(4))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            RUNNER.write_corpus(path)
+            actual = {source.name for source in (path / 'exec').glob('fold_*.py')}
             self.assertEqual(actual, expected)
 
     def test_compiler_subprocess_timeout_is_enforced(self):

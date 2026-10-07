@@ -1475,7 +1475,7 @@ static tinypy_value_t *__tinypy_string_join_method(tinypy_value_t *function, tin
         return NULL;
     }
     tinypy_value_t *sequence = tinypy_list_from_items(vm, NULL, 0U);
-    tinypy_bool_t collected = tinypy_internal_list_extend_iterable(sequence, iterator, out_error);
+    tinypy_bool_t collected = tinypy_internal_list_extend_iterable(sequence, iterator, "error return without exception set", out_error);
 
     TINYPY_DECREF(iterator);
     if (collected == 0) {

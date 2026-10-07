@@ -80,6 +80,32 @@ tinypy_value_t *tinypy_internal_function_call(tinypy_value_t *callable, tinypy_v
 static tinypy_value_t *__tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(callable) == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_value_t *method = NULL;
+        int32_t found = tinypy_internal_object_get_optional_attr_key(callable, vm->internal_special_call_key, &method, out_error);
+
+        if (found < 0) {
+            return NULL;
+        }
+        if (found != 0) {
+            tinypy_value_t *result = tinypy_call(method, args, kwargs, out_error);
+
+            TINYPY_DECREF(method);
+            return result;
+        }
+        tinypy_value_t *name_value = tinypy_class_name(tinypy_old_instance_class(callable));
+        const char *name = (const char *)TINYPY_TEXT_BYTES(name_value);
+        size_t name_size = TINYPY_TEXT_BYTE_SIZE(name_value);
+        size_t limit = name_size < 200U ? name_size : 200U;
+        const char *terminator = (const char *)memchr(name, '\0', limit);
+        tinypy_message_part_t parts[] = {
+            {name, terminator != NULL ? (size_t)(terminator - name) : limit},
+            TINYPY_MESSAGE_PART_LITERAL(" instance has no __call__ method")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, 2U, out_error);
+        return NULL;
+    }
     if ((callable->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override_key(callable, vm->internal_special_call_key) != 0) {
         tinypy_value_t *method = tinypy_internal_object_get_special_key(callable, vm->internal_special_call_key, out_error);
         tinypy_value_t *result;
@@ -112,7 +138,15 @@ static tinypy_value_t *__tinypy_call(tinypy_value_t *callable, tinypy_value_t *a
         }
         return NULL;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object is not callable", out_error);
+    size_t name_size = callable->type->name_size < 200U ? callable->type->name_size : 200U;
+    const char *terminator = (const char *)memchr(callable->type->name, '\0', name_size);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+        {callable->type->name, terminator != NULL ? (size_t)(terminator - callable->type->name) : name_size},
+        TINYPY_MESSAGE_PART_LITERAL("' object is not callable")
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////

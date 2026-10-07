@@ -1022,7 +1022,7 @@ static tinypy_value_t *__tinypy_constructor_sequence_to_list(tinypy_vm_t *vm, ti
         return NULL;
     }
     if (hint == INT64_C(-1) || (default_hint == INT64_C(10) && hint < 0)) {
-        tinypy_internal_exception_raise_system_error(vm, "negative __length_hint__ result", out_error);
+        tinypy_internal_exception_raise_system_error(vm, hint == INT64_C(-1) ? "NULL result without error in PyObject_Call" : "bad argument to internal function", out_error);
         TINYPY_DECREF(iterator);
         TINYPY_DECREF(result);
         return NULL;
@@ -1782,7 +1782,7 @@ tinypy_value_t *tinypy_internal_tuple_create(tinypy_type_t *type, tinypy_value_t
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_constructor_dict_update(tinypy_value_t *result, tinypy_value_t *source, tinypy_error_t **out_error) {
-    tinypy_bool_t return_value_1 = tinypy_internal_dict_update_from(result, source, out_error);
+    tinypy_bool_t return_value_1 = tinypy_internal_dict_update_from(result, source, "NULL result without error in PyObject_Call", out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1983,7 +1983,7 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
             return NULL;
         }
         tinypy_list_clear(self);
-        if (source != NULL && tinypy_internal_list_extend_iterable(self, source, out_error) == 0) {
+        if (source != NULL && tinypy_internal_list_extend_iterable(self, source, "NULL result without error in PyObject_Call", out_error) == 0) {
             TINYPY_DECREF(constructor_args);
             return NULL;
         }

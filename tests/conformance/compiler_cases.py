@@ -61,6 +61,60 @@ def composition_cases():
     return result
 
 
+def optimizer_cases():
+    result = {}
+    numbers = ('0', '-1', '2', '-0.0', '1.5', '2L',
+               '9223372036854775808L', '1j', '1e300', '1e-300')
+    for left_index, left in enumerate(numbers):
+        for right_index, right in enumerate(numbers):
+            for operation_index, operation in enumerate(('+', '-', '*', '/', '//', '%', '**')):
+                # Keep powers bounded. Invalid operations remain valid source:
+                # failed folds must leave the runtime operation in the bytecode.
+                if operation == '**' and right in ('9223372036854775808L', '1e300'):
+                    continue
+                name = 'exec/fold_binary_%d_%d_%d.py' % (left_index, right_index, operation_index)
+                result[name] = 'x=(%s)%s(%s)\n' % (left, operation, right)
+    sequences = ('""', '"a"', '"a_"', '"<x>"', '"%s"', '"%c"',
+                 'u""', 'u"a"', 'u"\\u00e9"', '()', '(1,)', '(1,2)')
+    for left_index, left in enumerate(sequences):
+        for right_index, right in enumerate(sequences):
+            for operation_index, operation in enumerate(('+', '*', '%')):
+                name = 'exec/fold_sequence_%d_%d_%d.py' % (left_index, right_index, operation_index)
+                result[name] = 'x=(%s)%s(%s)\n' % (left, operation, right)
+        for index_index, index in enumerate(('-2', '-1', '0', '1', '2', '5L',
+                                             '1.0', '9223372036854775808L')):
+            result['exec/fold_subscript_%d_%d.py' % (left_index, index_index)] = 'x=(%s)[%s]\n' % (left, index)
+        for count_index, count in enumerate(('-2', '-1', '0', '1', '20', '21',
+                                             '-2L', '0L', '20L', '21L')):
+            for reverse in (0, 1):
+                operands = (count, left) if reverse else (left, count)
+                result['exec/fold_repeat_%d_%d_%d.py' % (left_index, count_index, reverse)] = 'x=(%s)*(%s)\n' % operands
+    for value_index, value in enumerate(numbers):
+        for count_index, count in enumerate(('-1', '0', '1', '63', '64', '65')):
+            for operation_index, operation in enumerate(('<<', '>>')):
+                result['exec/fold_shift_%d_%d_%d.py' % (value_index, count_index, operation_index)] = 'x=(%s)%s(%s)\n' % (value, operation, count)
+    for value_index, value in enumerate(numbers + sequences):
+        for operation_index, template in enumerate(('+%s', '-%s', '~%s', '`%s`')):
+            result['exec/fold_unary_%d_%d.py' % (value_index, operation_index)] = 'x=' + template % ('(' + value + ')') + '\n'
+    constants = ('0', '0L', '0.0', '-0.0', '0j', '-0j', '1', '1L',
+                 '1.0', '1j', '""', 'u""', '"a"', 'u"a"', 'None', 'True')
+    for left_index, left in enumerate(constants):
+        for right_index, right in enumerate(constants):
+            name = 'exec/fold_constant_%d_%d.py' % (left_index, right_index)
+            result[name] = 'a=%s\nb=%s\nc=(%s,%s)\nd=(%s,%s)\n' % (left, right, left, right, right, left)
+    futures = ('division', 'absolute_import', 'with_statement', 'print_function', 'unicode_literals')
+    bodies = ('x=5/2\ny="a"+u"b"\n',
+              'def f(a=5/2):\n return a, "a"\n',
+              'class C(object):\n "doc"\n def f(self):\n  return 5/2,"a"\n',
+              'assert 5/2,"a"\n')
+    for mask in range(32):
+        names = [name for index, name in enumerate(futures) if mask & (1 << index)]
+        header = 'from __future__ import ' + ','.join(names) + '\n' if names else ''
+        for body_index, body in enumerate(bodies):
+            result['exec/fold_future_%d_%d.py' % (mask, body_index)] = header + body
+    return result
+
+
 def cases():
     expressions = []
     literals = ['-3', '0', '2', '5L', '1.25', '(1+2j)']
@@ -116,6 +170,7 @@ def cases():
     for index, source in enumerate(statements):
         result['exec/statement_%04d.py' % index] = source
     result.update(composition_cases())
+    result.update(optimizer_cases())
     return result
 
 

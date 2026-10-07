@@ -1,8 +1,8 @@
 # Portable Python 2 tests
 
 This corpus vendors 20 complete CPython 2.7.18 modules with 221 discovered
-cases, of which 210 are selected, and adds thirty project-authored
-modules with 1,025 cases. Upstream files are byte-for-byte unchanged.
+cases, of which 210 are selected, and adds thirty-three project-authored
+modules with 1,112 cases. Upstream files are byte-for-byte unchanged.
 `manifest.json` records source commits, paths, SHA-256 hashes, case names and
 explicit reasons for excluding originals outside the tinypy corpus. Locally authored modules
 have an explicit origin marker and a complete case list; their source is

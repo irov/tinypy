@@ -289,7 +289,7 @@ tinypy_value_t *tinypy_internal_property_get(tinypy_value_t *descriptor, tinypy_
         return TINYPY_RET(descriptor);
     }
     if (property->getter == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "unreadable property", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "unreadable attribute", out_error);
         return NULL;
     }
     if (property->getter->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
@@ -311,7 +311,7 @@ tinypy_bool_t tinypy_internal_property_set(tinypy_value_t *descriptor, tinypy_va
 
     TINYPY_CLEAR_ERROR(out_error);
     if (callable == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, value != NULL ? "property has no setter" : "property has no deleter", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, value != NULL ? "can't set attribute" : "can't delete attribute", out_error);
         return TINYPY_FALSE;
     }
     items[0] = instance;
@@ -1569,18 +1569,28 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
     tinypy_function_object_t *function = TINYPY_FUNCTION_OBJECT(instance);
     switch (field) {
     case TINYPY_INTERNAL_C_DESCRIPTOR_FUNCTION_CODE:
-        if (value == NULL) {
-            __tinypy_internal_c_descriptor_readonly(vm, out_error);
-            return TINYPY_FALSE;
-        }
-        if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_CODE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "func_code must be a code object", out_error);
+        if (value == NULL || TINYPY_VALUE_KIND(value) != TINYPY_VALUE_CODE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__code__ must be set to a code object", out_error);
             return TINYPY_FALSE;
         }
         size_t closure_size = function->closure != NULL ? TINYPY_TUPLE_SIZE(function->closure) : 0U;
-        tinypy_bool_t condition = closure_size != TINYPY_TUPLE_SIZE(TINYPY_CODE_FREEVARS(value));
+        size_t free_count = TINYPY_TUPLE_SIZE(TINYPY_CODE_FREEVARS(value));
+        tinypy_bool_t condition = closure_size != free_count;
         if (condition) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "func_code has incompatible free variables", out_error);
+            const char *name = (const char *)TINYPY_TEXT_BYTES(function->name);
+            size_t name_size = TINYPY_TEXT_BYTE_SIZE(function->name);
+            const char *terminator = (const char *)memchr(name, '\0', name_size);
+            char closure_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+            char free_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+            size_t closure_text_size = tinypy_internal_format_size(closure_buffer, closure_size);
+            size_t free_text_size = tinypy_internal_format_size(free_buffer, free_count);
+            tinypy_message_part_t parts[] = {
+                {name, terminator != NULL ? (size_t)(terminator - name) : name_size},
+                TINYPY_MESSAGE_PART_LITERAL("() requires a code object with "), {closure_buffer, closure_text_size},
+                TINYPY_MESSAGE_PART_LITERAL(" free vars, not "), {free_buffer, free_text_size}
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, 5U, out_error);
             return TINYPY_FALSE;
         }
         __tinypy_internal_c_descriptor_replace(&function->code, value);
@@ -1590,14 +1600,14 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
             value = NULL;
         }
         if (value != NULL && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_TUPLE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "func_defaults must be a tuple", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__defaults__ must be set to a tuple object", out_error);
             return TINYPY_FALSE;
         }
         __tinypy_internal_c_descriptor_replace(&function->defaults, value);
         return TINYPY_TRUE;
     case TINYPY_INTERNAL_C_DESCRIPTOR_FUNCTION_NAME:
         if (value == NULL || TINYPY_VALUE_KIND(value) != TINYPY_VALUE_STRING) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "func_name must be a string", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__name__ must be set to a string object", out_error);
             return TINYPY_FALSE;
         }
         __tinypy_internal_c_descriptor_replace(&function->name, value);
@@ -1613,8 +1623,12 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         TINYPY_DECREF(value);
         return TINYPY_TRUE;
     case TINYPY_INTERNAL_C_DESCRIPTOR_FUNCTION_DICT:
-        if (value == NULL || TINYPY_VALUE_KIND(value) != TINYPY_VALUE_DICT) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "func_dict must be a dictionary", out_error);
+        if (value == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function's dictionary may not be deleted", out_error);
+            return TINYPY_FALSE;
+        }
+        if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_DICT) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "setting function's dictionary to a non-dict", out_error);
             return TINYPY_FALSE;
         }
         __tinypy_internal_c_descriptor_replace(&function->dict, value);
