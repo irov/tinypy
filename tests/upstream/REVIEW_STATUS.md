@@ -1,11 +1,11 @@
-# Runtime review closure — 2026-10-07
+# Runtime review closure — 2026-10-08
 
-The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 839
-portable regressions across nine passes and a repeatable four-profile matrix.
-Its ninth-pass inventory has 1,509 selected cases, 32 finite runtime matrices
-with 277,626 outcomes per profile, and 11,562 compiler comparisons per profile
-(46,248 across four). These totals passed aggregate acceptance in all four
-profiles on macOS arm64. The preceding seventh- and eighth-pass reports remain
+The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 949
+portable regressions across ten passes and a repeatable four-profile matrix.
+Its tenth-pass inventory has 1,619 selected cases, 36 finite runtime matrices
+with 297,856 outcomes per profile, and 11,586 compiler comparisons per profile
+(46,344 across four). These totals passed aggregate acceptance in all four
+profiles on macOS arm64. The preceding seventh-, eighth- and ninth-pass reports remain
 historical baselines. The future
 variant and acceptance plan is in [TEST_PLAN.md](../conformance/TEST_PLAN.md).
 The explicit CPython pending-C-exception boundary is recorded in the audit.
@@ -17,8 +17,8 @@ worktree, including the earlier portable-corpus fixes. Its prototypes were
 reviewed individually, not applied as one patch. CPython **2.7.18** is the
 behavioral oracle; Python 3 runs only the process coordinator. All actionable
 implementation items in this review have been addressed. Existing profile
-contracts and evidence limits are identified explicitly below. Two subsequent
-metadata observations remain identified for the next audit; this statement
+contracts and evidence limits are identified explicitly below. The remaining cold-start
+metadata observation is identified for the next audit; this statement
 about the supplied review is not a claim of arbitrary-program equivalence.
 
 **Fixed** below means the relevant implementation changed or the correction
@@ -29,7 +29,35 @@ reproduced. The supplied crashing scripts, custom nopool build and crafted
 bytecode/regex programs were not run. A passing sanitizer suite does not
 establish equivalence to that separate historical investigation.
 
-## Ninth-pass follow-up
+## Tenth-pass follow-up
+
+Four independently authored modules add 110 portable witnesses: 25 wrapper
+metadata, 27 iterator metadata, 28 buffer arguments and 30 Struct arguments/state.
+The four guarded products add 20,230 outcomes (1,556 + 5,232 + 7,456 + 5,986).
+Corrections cover native metadata/binding/hash/comparison/free-list ownership,
+bytearray iterator taxonomy and generic text-subtype item/length protocols,
+canonical buffer/bytearray parser diagnostics and supported Struct compiled
+payload/cache/format/keyword/reinitialization behavior. A positive public C API
+witness covers native hash callback failure with an omitted error output.
+Independent source review also corrects original Unicode-buffer ownership
+through codec/offset callbacks; no unsafe lifetime reproducer was executed.
+
+The complete four-profile run passed all 238 stages in 287.5 recorded stage
+seconds. Debug/sanitize pass 1,619 portable cases; Release/LTO pass 1,615 with
+four expected detector SKIP. Every profile passes 89 native/runtime tests,
+297,856 runtime observations and 11,586 compiler comparisons. Inventories cover
+155 CTest registrations, 169 checked-in compiler sources and 736 VM names;
+all 90 host checks pass. No DEFER or new skip was added. The accepted source/test
+SHA-256 is `55397ff2e2b6829ad2ee857c45d18d565b0ca8183997eb02a8de8570975864ed`, matching the post-run
+fingerprint. Report: `.temp/validation-tenth-audit-accepted/report.json`.
+ASan/UBSan emit no diagnostics; Apple ASan uses detect_leaks=0 with independent
+zero allocator balance. Explicit physical/hash/address/NotImplemented fallback
+invariants and the remaining cold first-write metadata observation are detailed
+in [DEEP_AUDIT.md](../conformance/DEEP_AUDIT.md). Python-visible semantic checks
+remain active in Release; finite local coverage does not prove arbitrary-program
+or device/other-ABI equivalence.
+
+## Historical ninth-pass follow-up
 
 Four independently authored modules add 96 portable cases: 14
 [metadata arguments](local/test_metadata_arguments_audit.py), 25
@@ -106,16 +134,16 @@ four detector skips; Debug requires all 1,413 cases.
 
 ## Continuing metadata audit
 
-Two subsequent observations are recorded for the next audit rather than counted
-as fixes: bound builtin slot wrappers use `builtin_function_or_method` instead
-of CPython's `method-wrapper`, and bytearray iterators use `iterator` instead of
-`bytearray_iterator`. The ninth-pass receiver product checks binding/name/self
-protocols, not wrapper metatype; its native-name product omits bytearray iterators.
-The active registrations are in [vm.c](../../src/core/vm.c), with reference
-definitions in
-[descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c)
-and [bytearrayobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/bytearrayobject.c).
-These observations are not new skips, normalization rules or SPEC exclusions.
+The tenth pass corrects method-wrapper and bytearray_iterator type identity;
+both are now directly tested. An isolated cold first metadata write still
+reflects CPython's lazy type readiness: wrapper __name__ assignment changes
+from generic TypeError before any metadata read to getset AttributeError after
+it. Method-descriptor errors likewise change after readiness. Tinypy eagerly
+initializes these types and currently reports the ready descriptor error in
+both states. The warmed product states its precondition; it does not normalize
+or prove the cold behavior. See the remaining observation in
+[DEEP_AUDIT.md](../conformance/DEEP_AUDIT.md), with the primary object.c and
+descrobject.c paths. No new exclusion, skip or SPEC boundary was added.
 Bounded ordinary programs and stable buffer mutations provide finite evidence;
 arbitrary callbacks/programs, malformed inputs and other host ABIs remain outside
 that evidence.

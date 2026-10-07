@@ -270,7 +270,7 @@ void tinypy_internal_native_method_free_list_finalize(tinypy_vm_t *vm) {
         tinypy_native_function_object_t *method = vm->native_method_free_list;
         vm->native_method_free_list = method->function != NULL ? TINYPY_NATIVE_FUNCTION_OBJECT(method->function) : NULL;
         vm->native_method_free_count -= 1U;
-        vm->types[TINYPY_VALUE_NATIVE_FUNCTION].base.base.ref -= 1;
+        method->base.type->base.base.ref -= 1;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_value_unregister(vm, &method->base);
 #endif
@@ -292,18 +292,27 @@ tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *d
     (void)owner;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+    tinypy_type_t *method_type = descriptor->type == vm->native_wrapper_descriptor_type && vm->native_method_wrapper_type != NULL ? vm->native_method_wrapper_type : &vm->types[TINYPY_VALUE_NATIVE_FUNCTION];
     tinypy_native_function_object_t *method;
     if (vm->native_method_free_list != NULL) {
         method = vm->native_method_free_list;
         vm->native_method_free_list = method->function != NULL ? TINYPY_NATIVE_FUNCTION_OBJECT(method->function) : NULL;
         vm->native_method_free_count -= 1U;
+        if (method->base.type != method_type) {
+            method->base.type->base.base.ref -= 1;
+            method_type->base.base.ref += 1;
+            method->base.type = method_type;
+        }
         method->base.ref = 1;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_value_reuse(vm, &method->base);
 #endif
     }
     else {
-        method = (tinypy_native_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_NATIVE_FUNCTION, sizeof(*method));
+        method = (tinypy_native_function_object_t *)tinypy_internal_object_allocate_checked(vm, method_type, sizeof(*method), out_error);
+        if (method == NULL) {
+            return NULL;
+        }
     }
 
     method->name = function->name;
@@ -323,53 +332,6 @@ tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *d
     TINYPY_INCREF(method->function);
     TINYPY_INCREF(method->self);
     return &method->base;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_native_function_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_error_t **out_error) {
-    size_t count = TINYPY_TUPLE_SIZE(args);
-
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || count < minimum || count > maximum || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_NATIVE_FUNCTION) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "builtin function method received invalid arguments", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_native_function_attribute_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    if (__tinypy_native_function_method_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
-        return NULL;
-    }
-    tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(TINYPY_TUPLE_GET(args, 0U));
-    intptr_t field = (intptr_t)user_data;
-    tinypy_value_t *result;
-
-    if (field == 0) {
-        result = native->name;
-    }
-    else if (field == 1) {
-        result = native->self;
-    }
-    else if (field == 2) {
-        result = native->self == NULL ? native->module : NULL;
-        if (result == NULL && native->self == NULL) {
-            result = TINYPY_RET(vm->internal_builtin_module_name);
-            return result;
-        }
-    }
-    else if (field == 3) {
-        result = native->owner != NULL ? &native->owner->base.base : NULL;
-    }
-    else {
-        tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
-        return return_value_1;
-    }
-    if (result == NULL) {
-        result = TINYPY_RET_NONE(vm);
-        return result;
-    }
-    return TINYPY_RET(result);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_native_function_call_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -393,12 +355,13 @@ static tinypy_value_t *__tinypy_native_function_call_method(tinypy_value_t *func
 static tinypy_value_t *__tinypy_native_function_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     static const char function_prefix[] = "<built-in function ";
     static const char method_prefix[] = "<built-in method ";
+    static const char wrapper_prefix[] = "<method-wrapper '";
     static const char method_middle[] = " of ";
     static const char object_middle[] = " object at ";
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_native_function_method_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(TINYPY_TUPLE_GET(args, 0U));
@@ -411,6 +374,11 @@ static tinypy_value_t *__tinypy_native_function_repr_method(tinypy_value_t *func
     char pointer_text[2U + sizeof(uintptr_t) * 2U + 1U];
     size_t pointer_size = 0U;
     size_t total_size;
+    tinypy_bool_t bound_wrapper = native->base.type == vm->native_method_wrapper_type;
+    if (bound_wrapper != 0) {
+        prefix = wrapper_prefix;
+        prefix_size = sizeof(wrapper_prefix) - 1U;
+    }
 
     if (native->owner != NULL && native->self == NULL) {
         static const char method_descriptor_prefix[] = "<method '";
@@ -463,7 +431,7 @@ static tinypy_value_t *__tinypy_native_function_repr_method(tinypy_value_t *func
             return NULL;
         }
         pointer_size = (size_t)pointer_length;
-        size_t fixed_size = prefix_size + (sizeof(method_middle) - 1U) + (sizeof(object_middle) - 1U) + pointer_size + 1U;
+        size_t fixed_size = prefix_size + (sizeof(method_middle) - 1U) + (sizeof(object_middle) - 1U) + pointer_size + 1U + (bound_wrapper != 0 ? 1U : 0U);
         if (name_size > SIZE_MAX - fixed_size || type_name_size > SIZE_MAX - fixed_size - name_size) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "builtin method representation is too large", out_error);
             return NULL;
@@ -482,6 +450,9 @@ static tinypy_value_t *__tinypy_native_function_repr_method(tinypy_value_t *func
     (void)memcpy(output + offset, name, name_size);
     offset += name_size;
     if (native->self != NULL) {
+        if (bound_wrapper != 0) {
+            output[offset++] = (uint8_t)'\'';
+        }
         (void)memcpy(output + offset, method_middle, sizeof(method_middle) - 1U);
         offset += sizeof(method_middle) - 1U;
         (void)memcpy(output + offset, type_name, type_name_size);
@@ -495,31 +466,53 @@ static tinypy_value_t *__tinypy_native_function_repr_method(tinypy_value_t *func
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_hash_t __tinypy_native_function_hash_slot(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_hash_t hash;
+
+    if (value->type == vm->native_method_descriptor_type || value->type == vm->native_wrapper_descriptor_type) {
+        hash = (tinypy_hash_t)((uintptr_t)value >> 4U);
+    }
+    else {
+        tinypy_value_t *previous_raised = vm->raised_value;
+        tinypy_hash_t receiver_hash = native->self != NULL ? tinypy_internal_hash_value(native->self, out_error) : 0;
+        if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
+            return (tinypy_hash_t)0;
+        }
+        if (value->type == vm->native_method_wrapper_type) {
+            uint32_t descriptor_hash = (uint32_t)((uintptr_t)native->function >> 4U);
+            uint32_t combined = descriptor_hash ^ (uint32_t)receiver_hash;
+            hash = (tinypy_hash_t)(int32_t)combined;
+        }
+        else {
+            hash = receiver_hash ^ (tinypy_hash_t)(((uintptr_t)native->callback >> 4U) ^ ((uintptr_t)native->user_data >> 4U));
+        }
+    }
+    return hash == (tinypy_hash_t)-1 ? (tinypy_hash_t)-2 : hash;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_native_function_hash_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_native_function_method_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
-    tinypy_hash_t hash = (tinypy_hash_t)((uintptr_t)TINYPY_TUPLE_GET(args, 0U) >> 4U);
-    if (hash == (tinypy_hash_t)-1) {
-        hash = (tinypy_hash_t)-2;
+    tinypy_value_t *previous_raised = vm->raised_value;
+    tinypy_hash_t hash = __tinypy_native_function_hash_slot(TINYPY_TUPLE_GET(args, 0U), out_error);
+    if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
+        return NULL;
     }
     tinypy_value_t *result = tinypy_integer_from_i64(vm, hash);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_hash_t __tinypy_native_function_hash_slot(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_hash_t hash = (tinypy_hash_t)((uintptr_t)value >> 4U);
-
-    (void)out_error;
-    return hash == (tinypy_hash_t)-1 ? (tinypy_hash_t)-2 : hash;
-}
+static tinypy_value_t *__tinypy_native_function_compare_slot(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_native_descriptor_types(tinypy_vm_t *vm) {
-    tinypy_type_t **types[] = {&vm->native_method_descriptor_type, &vm->native_wrapper_descriptor_type};
-    tinypy_value_t *const names[] = {vm->internal_method_descriptor_key, vm->internal_wrapper_descriptor_key};
+    tinypy_type_t **types[] = {&vm->native_method_descriptor_type, &vm->native_wrapper_descriptor_type, &vm->native_method_wrapper_type};
+    tinypy_value_t *const names[] = {vm->internal_method_descriptor_key, vm->internal_wrapper_descriptor_key, vm->internal_method_wrapper_key};
 
     for (size_t index = 0U; index < sizeof(types) / sizeof(types[0]); ++index) {
         tinypy_type_t *type = tinypy_internal_type_new_configured(names[index], NULL, 0U, NULL, NULL, TINYPY_FALSE, TINYPY_FALSE, NULL);
@@ -534,7 +527,8 @@ void tinypy_internal_initialize_native_descriptor_types(tinypy_vm_t *vm) {
         type->traverse_references = tinypy_internal_native_function_release_references;
         type->destroy = tinypy_internal_native_function_destroy;
         type->call = tinypy_internal_native_function_call;
-        type->descriptor_get = tinypy_internal_native_function_descriptor_get;
+        type->descriptor_get = index == 2U ? NULL : tinypy_internal_native_function_descriptor_get;
+        type->rich_compare = index == 2U ? __tinypy_native_function_compare_slot : NULL;
         type->hash = __tinypy_native_function_hash_slot;
         type->create = NULL;
         type->flags = (type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
@@ -550,7 +544,7 @@ static tinypy_value_t *__tinypy_native_descriptor_get_method(tinypy_value_t *fun
     tinypy_type_t *owner;
 
     (void)user_data;
-    if (__tinypy_native_function_method_arguments(vm, args, kwargs, 2U, 3U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error) == 0) {
         return NULL;
     }
     descriptor = TINYPY_TUPLE_GET(args, 0U);
@@ -559,37 +553,112 @@ static tinypy_value_t *__tinypy_native_descriptor_get_method(tinypy_value_t *fun
     if (TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_NONE) {
         instance = NULL;
     }
-    if (count == 3U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 2U)) != TINYPY_VALUE_NONE) {
-        if (TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 2U)) != TINYPY_VALUE_TYPE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor owner must be a type", out_error);
-            return NULL;
-        }
-        owner = (tinypy_type_t *)TINYPY_TUPLE_GET(args, 2U);
+    if (instance == NULL && (count == 2U || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 2U)) == TINYPY_VALUE_NONE)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__get__(None, None) is invalid", out_error);
+        return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_internal_native_function_descriptor_get(descriptor, instance, owner, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_native_function_compare_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    if (__tinypy_native_function_method_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *result = tinypy_internal_compare_builtin_value(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), (tinypy_compare_operation_e)(intptr_t)user_data, out_error);
+    tinypy_value_t *result = __tinypy_native_function_compare_slot(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), (int32_t)(intptr_t)user_data, out_error);
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_native_function_compare_three_way(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_native_function_object_t *a = TINYPY_NATIVE_FUNCTION_OBJECT(left);
+    tinypy_native_function_object_t *b = TINYPY_NATIVE_FUNCTION_OBJECT(right);
+
+    if (left->type == vm->native_method_wrapper_type) {
+        if (a->function == b->function) {
+            tinypy_bool_t result = tinypy_internal_compare_three_way(a->self, b->self, out_order, out_error);
+            return result;
+        }
+        *out_order = (uintptr_t)a->function < (uintptr_t)b->function ? -1 : 1;
+    }
+    else if (a->self != b->self) {
+        *out_order = (uintptr_t)a->self < (uintptr_t)b->self ? -1 : 1;
+    }
+    else if (a->callback == b->callback && a->user_data == b->user_data) {
+        *out_order = 0;
+    }
+    else {
+        size_t a_size;
+        size_t b_size;
+        const char *a_name = tinypy_string_view(a->name, &a_size);
+        const char *b_name = tinypy_string_view(b->name, &b_size);
+        size_t common_size = a_size < b_size ? a_size : b_size;
+        int order = memcmp(a_name, b_name, common_size);
+
+        *out_order = order < 0 || (order == 0 && a_size < b_size) ? -1 : 1;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_native_function_compare_slot(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    int32_t order;
+    tinypy_bool_t result;
+
+    if (left->type != right->type || (left->type != vm->native_method_wrapper_type && left->type != &vm->types[TINYPY_VALUE_NATIVE_FUNCTION])) {
+        return TINYPY_RET_NOT_IMPLEMENTED(vm);
+    }
+    if (left->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION]) {
+        if (operation != TINYPY_COMPARE_EQUAL && operation != TINYPY_COMPARE_NOT_EQUAL) {
+            return TINYPY_RET_NOT_IMPLEMENTED(vm);
+        }
+        tinypy_native_function_object_t *a = TINYPY_NATIVE_FUNCTION_OBJECT(left);
+        tinypy_native_function_object_t *b = TINYPY_NATIVE_FUNCTION_OBJECT(right);
+        result = a->self == b->self && a->callback == b->callback && a->user_data == b->user_data;
+        if (operation == TINYPY_COMPARE_NOT_EQUAL) {
+            result = result == 0;
+        }
+    }
+    else {
+        if (tinypy_internal_native_function_compare_three_way(left, right, &order, out_error) == 0) {
+            return NULL;
+        }
+        switch (operation) {
+        case TINYPY_COMPARE_LESS: result = order < 0; break;
+        case TINYPY_COMPARE_LESS_EQUAL: result = order <= 0; break;
+        case TINYPY_COMPARE_EQUAL: result = order == 0; break;
+        case TINYPY_COMPARE_NOT_EQUAL: result = order != 0; break;
+        case TINYPY_COMPARE_GREATER: result = order > 0; break;
+        default: result = order >= 0; break;
+        }
+    }
+    tinypy_value_t *value = tinypy_bool_from_i32(vm, result);
+    return value;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_native_function_cmp_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_native_function_method_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
-    int64_t order = left == right ? INT64_C(0) : ((uintptr_t)left < (uintptr_t)right ? INT64_C(-1) : INT64_C(1));
+    if (left->type != right->type) {
+        tinypy_message_part_t parts[] = {
+            {left->type->name, left->type->name_size}, TINYPY_MESSAGE_PART_LITERAL(".__cmp__(x,y) requires y to be a '"),
+            {left->type->name, left->type->name_size}, TINYPY_MESSAGE_PART_LITERAL("', not a '"),
+            {right->type->name, right->type->name_size}, TINYPY_MESSAGE_PART_LITERAL("'")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 6U, out_error);
+        return NULL;
+    }
+    int32_t order;
+    if (tinypy_internal_native_function_compare_three_way(left, right, &order, out_error) == 0) {
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_integer_from_i64(vm, order);
     return result;
 }
@@ -607,11 +676,7 @@ void tinypy_internal_initialize_native_function_type(tinypy_vm_t *vm) {
         {vm->internal_special_ge_key, TINYPY_COMPARE_GREATER_EQUAL}};
 
     tinypy_type_t *function_type = &vm->types[TINYPY_VALUE_NATIVE_FUNCTION];
-    tinypy_type_t *descriptor_types[] = {vm->native_method_descriptor_type, vm->native_wrapper_descriptor_type};
-
-    tinypy_internal_type_add_property(function_type, vm->internal_special_name_key, __tinypy_native_function_attribute_method, (void *)0, NULL);
-    tinypy_internal_type_add_property(function_type, vm->internal_special_self_key, __tinypy_native_function_attribute_method, (void *)1, NULL);
-    tinypy_internal_type_add_property(function_type, vm->internal_special_module_key, __tinypy_native_function_attribute_method, (void *)2, NULL);
+    tinypy_type_t *descriptor_types[] = {vm->native_method_descriptor_type, vm->native_wrapper_descriptor_type, vm->native_method_wrapper_type};
     tinypy_internal_type_add_method(function_type, vm->internal_special_call_key, __tinypy_native_function_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(function_type, vm->internal_special_repr_key, __tinypy_native_function_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(function_type, vm->internal_special_hash_key, __tinypy_native_function_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
@@ -623,20 +688,19 @@ void tinypy_internal_initialize_native_function_type(tinypy_vm_t *vm) {
     for (size_t type_index = 0U; type_index < sizeof(descriptor_types) / sizeof(descriptor_types[0]); ++type_index) {
         tinypy_type_t *type = descriptor_types[type_index];
 
-        tinypy_internal_type_add_property(type, vm->internal_special_name_key, __tinypy_native_function_attribute_method, (void *)0, NULL);
-        tinypy_internal_type_add_property(type, vm->internal_special_objclass_key, __tinypy_native_function_attribute_method, (void *)3, NULL);
-        tinypy_internal_type_add_property(type, vm->internal_special_doc_key, __tinypy_native_function_attribute_method, (void *)4, NULL);
         tinypy_internal_type_add_method(type, vm->internal_special_call_key, __tinypy_native_function_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-        tinypy_internal_type_add_method(type, vm->internal_special_get_key, __tinypy_native_descriptor_get_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        if (type != vm->native_method_wrapper_type) {
+            tinypy_internal_type_add_method(type, vm->internal_special_get_key, __tinypy_native_descriptor_get_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        }
         tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_native_function_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         tinypy_internal_type_add_method(type, vm->internal_special_hash_key, __tinypy_native_function_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-        tinypy_internal_type_add_method(type, vm->internal_special_cmp_key, __tinypy_native_function_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-        for (size_t index = 0U; index < sizeof(comparisons) / sizeof(comparisons[0]); ++index) {
-            tinypy_value_t *method_name = comparisons[index].name;
-            tinypy_internal_type_add_method(type, method_name, __tinypy_native_function_compare_method, (void *)(intptr_t)comparisons[index].operation, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        if (type == vm->native_method_wrapper_type) {
+            tinypy_internal_type_add_method(type, vm->internal_special_cmp_key, __tinypy_native_function_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
     }
     vm->types[TINYPY_VALUE_NATIVE_FUNCTION].hash = __tinypy_native_function_hash_slot;
+    vm->types[TINYPY_VALUE_NATIVE_FUNCTION].rich_compare = __tinypy_native_function_compare_slot;
+    tinypy_internal_initialize_native_function_descriptors(vm);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_function_name(const tinypy_value_t *function) {

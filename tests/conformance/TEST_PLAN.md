@@ -7,12 +7,14 @@ domain. [coverage.json](coverage.json) assigns the existing fixtures to domains;
 [the coordinator](../run_validation.py) verifies their inventories and runs all
 acceptance layers together.
 
-The ninth-audit inventory contains 32 finite runtime matrices with 277,626
-outcomes per profile. Its four additions cover metadata/receiver arguments
+The tenth-audit inventory contains 36 finite runtime matrices with 297,856
+outcomes per profile. The ninth-pass additions cover metadata/receiver arguments
 (325), numeric arguments and snapshots (995), container arguments and error
 phases (3,756), and function construction/reduction/saved frames (1,026).
-The portable inventory contains 41 project-authored modules with 1,299 cases
-and 210 selected vendor cases, totaling 1,509. These are declared coverage
+The tenth pass adds buffer arguments (7,456), iterator metadata (5,232),
+native wrappers (1,556) and supported Struct parser/state/cache behavior (5,986).
+The portable inventory contains 45 project-authored modules with 1,409 cases
+and 210 selected vendor cases, totaling 1,619. These are declared coverage
 counts; completed profile acceptance comes from the coordinator's report.
 
 ## Choosing variants
@@ -114,6 +116,39 @@ and qualified representations. Test classic assignment separately from heap
 type construction and builtin read-only metadata; Unicode/NUL validation and
 subtype names must retain their own error and identity behavior. Avoid comparing
 process addresses when checking native type or descriptor representations.
+
+Native metadata products distinguish method-wrapper, builtin C methods,
+method_descriptor and wrapper_descriptor. Enumerate their member/getset fields,
+read/write/delete and direct descriptor receiver checks, binding, call arity,
+comparison/hash callbacks, handled-error recovery and alternating free-list
+reuse. Compare address/hash invariants within each process. Record cold first
+writes separately from namespace-ready writes: CPython's lazy type readiness
+can change the exact exception class/message, and a warmed product cannot prove
+that cold behavior.
+
+Iterator metadata products enumerate exact/subtype bytearray/list/tuple/text,
+classic and new-style indexed sequences, missing/raising/wrong-result length
+hooks, active/exhausted states, bounded shrink/grow and hint-callback reentry.
+Direct bytearray hints can be negative after shrink; structural consumers clamp
+their allocation hint. Check str/unicode subtype item/length hooks and the long
+result of listreverseiterator's direct hint separately.
+
+Buffer argument products cover bound and unbound methods, keywords/counts,
+readonly versus writable views, legacy slice conversion, bytearray scalar and
+buffer validation order, lazy tuple-prefix validation and post-failure state.
+Physical capacity, seeded hashes and address-bearing representations use stated
+invariants; these rows do not prove physical-layout or representation parity.
+
+Struct products stay within the supported d/repeat/prefix formats. Cover module
+cache versus compiled-instance payload, byte subtype identity, Unicode ASCII
+conversion, NUL suffixes, omitted/duplicate/unknown keywords and buffer/offset
+conversion priority. Verify failed reinitialization state, readonly format/size
+getsets, immutable base type and writable subtype instance dictionaries, and
+weakref release. Allocation-only __new__ witnesses inspect metadata and then
+initialize before pack/unpack; they never execute uninitialized compiled state.
+The exact _struct.error class follows its declared ValueError alias; preserve
+other exception classes and callback traces. Physical __sizeof__ bytes use the
+stated result-type/positive-size invariant.
 
 FunctionType tests separate dictionary equality lookup from final C-string
 keyword validation, including embedded NUL names and False/raising equality

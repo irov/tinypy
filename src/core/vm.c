@@ -1638,6 +1638,9 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph, tinypy_boo
     if (vm->native_wrapper_descriptor_type != NULL) {
         __tinypy_shutdown_add(graph, &vm->native_wrapper_descriptor_type->base.base);
     }
+    if (vm->native_method_wrapper_type != NULL) {
+        __tinypy_shutdown_add(graph, &vm->native_method_wrapper_type->base.base);
+    }
     for (index = 0U; index < 256U; ++index) {
         __tinypy_shutdown_add(graph, vm->string_char_cache[index]);
         __tinypy_shutdown_add(graph, vm->unicode_char_cache[index]);

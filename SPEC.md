@@ -289,6 +289,12 @@ borrowed preset без аллокации и изменения refcount; index 
 `TINYPY_SPECIAL_OPERATOR_COUNT`. Отдельный массив строк и дополнительные
 владеющие ссылки для операторов не создаются. AUTO wrapper classification
 сравнивает полный key с preset, включая raw/Unicode fallback и embedded NUL.
+Bound builtin slots имеют отдельный VM type `method-wrapper`, сохраняя общий
+native-function payload и public value kind. Обычные bound C methods сохраняют
+type `builtin_function_or_method`; metadata используют стандартные member/getset
+descriptors, а их free list учитывает фактический type owner. Bytearray iteration
+использует `bytearray_iterator`; str/unicode subtype iteration сохраняет generic
+`__getitem__` и `__len__` protocols.
 Фиксированные codec aliases сравниваются с presets с сохранением нормализации;
 проверки имён, у которых Python 2 учитывает только префикс до NUL, сохраняют
 это поведение.
@@ -344,7 +350,11 @@ Python-visible bundled surface намеренно ограничен memory-only
   encodings должен предоставить host search function;
 - `_struct` гарантирует формат `d` с repeat counts и byte-order prefixes, а
   также `Struct`, `pack`, `unpack`, `pack_into` и `unpack_from`; `_struct.error`
-  является `ValueError`;
+  является `ValueError`. `Struct` хранит compiled format в native payload,
+  предоставляет readonly `format`/`size` getsets и поддерживает weakrefs без
+  instance dictionary. Unicode format преобразуется в ASCII, embedded NUL
+  завершает parsed format. Module calls используют bounded format cache на
+  100 entries; instance methods используют собственный compiled snapshot;
 - `_sre` исполняет Python 2.7 regex programs; разбор replacement templates и
   `Match.expand` используют `re._subx` и `re._expand`, предоставленные host;
 - filesystem-backed standard library, source-encoding discovery, process

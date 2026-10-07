@@ -2122,6 +2122,14 @@ static tinypy_value_t *__tinypy_constructor_object_delattr_method(tinypy_value_t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_type_add_object_attribute_methods(tinypy_type_t *type) {
+    tinypy_vm_t *vm = type->vm;
+
+    tinypy_internal_type_add_method(type, vm->internal_special_getattribute_key, __tinypy_constructor_object_getattribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_setattr_key, __tinypy_constructor_object_setattr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_delattr_key, __tinypy_constructor_object_delattr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_object_hash_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -3532,9 +3540,7 @@ void tinypy_internal_initialize_constructor_types(tinypy_vm_t *vm) {
     tinypy_internal_type_add_static_method((&vm->types[TINYPY_VALUE_INSTANCE]), vm->internal_special_new_key, __tinypy_constructor_object_new_method, NULL, NULL);
     tinypy_internal_type_add_static_method((&vm->types[TINYPY_VALUE_INVALID]), vm->internal_special_new_key, __tinypy_constructor_basestring_new_method, NULL, NULL);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_INSTANCE]), vm->internal_special_init_key, __tinypy_constructor_object_init_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_INSTANCE]), vm->internal_special_getattribute_key, __tinypy_constructor_object_getattribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_INSTANCE]), vm->internal_special_setattr_key, __tinypy_constructor_object_setattr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_INSTANCE]), vm->internal_special_delattr_key, __tinypy_constructor_object_delattr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_object_attribute_methods(&vm->types[TINYPY_VALUE_INSTANCE]);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_INSTANCE]), vm->internal_special_hash_key, __tinypy_constructor_object_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_INSTANCE]), vm->internal_special_format_key, __tinypy_constructor_object_format_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_class_method((&vm->types[TINYPY_VALUE_INSTANCE]), vm->internal_special_subclasshook_key, __tinypy_constructor_object_subclasshook_method, NULL, NULL);

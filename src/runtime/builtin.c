@@ -3905,6 +3905,7 @@ static tinypy_value_t *__tinypy_builtin_eval(tinypy_value_t *function, tinypy_va
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_builtin_register_with_user_data(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data) {
     tinypy_value_t *function = tinypy_native_function_new_key(name, callback, user_data, NULL);
+    TINYPY_NATIVE_FUNCTION_OBJECT(function)->module = TINYPY_RET(vm->internal_builtin_module_name);
 
     tinypy_dict_set(vm->builtins, name, function);
     TINYPY_DECREF(function);

@@ -307,7 +307,7 @@ static void __tinypy_internal_value_release_contents(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = value->type;
 
-    tinypy_bool_t cache_native = type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION]
+    tinypy_bool_t cache_native = (type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] || type == vm->native_method_wrapper_type)
         && TINYPY_NATIVE_FUNCTION_OBJECT(value)->self != NULL
         && TINYPY_NATIVE_FUNCTION_OBJECT(value)->finalize == NULL;
     vm->release_depth += 1U;

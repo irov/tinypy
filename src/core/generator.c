@@ -446,23 +446,9 @@ static tinypy_value_t *__tinypy_reversed_length_hint_method(tinypy_value_t *func
     if (out_error != NULL && *out_error != NULL) {
         return NULL;
     }
-    tinypy_value_t *return_value = tinypy_integer_from_i64(vm, (int64_t)hint);
-    return return_value;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_iterator_length_hint_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    (void)user_data;
-    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
-        return NULL;
-    }
-    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(self) != TINYPY_VALUE_ITERATOR) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__length_hint__ requires an iterator", out_error);
-        return NULL;
-    }
-    tinypy_value_t *return_value = tinypy_integer_from_i64(vm, (int64_t)tinypy_internal_iterator_size_hint(TINYPY_ITERATOR_OBJECT(self)));
+    tinypy_value_t *return_value = self->type == vm->iterator_types[TINYPY_ITERATOR_TYPE_LIST_REVERSE]
+                                      ? tinypy_long_from_i64(vm, (int64_t)hint)
+                                      : tinypy_integer_from_i64(vm, (int64_t)hint);
     return return_value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -477,7 +463,7 @@ void tinypy_internal_initialize_generator_types(tinypy_vm_t *vm) {
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_GENERATOR]), vm->internal_special_repr_key, __tinypy_generator_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ITERATOR]), vm->internal_special_next_key, __tinypy_generator_next_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ITERATOR]), vm->internal_special_iter_key, __tinypy_generator_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ITERATOR]), vm->internal_special_length_hint_key, __tinypy_iterator_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ITERATOR]), vm->internal_special_length_hint_key, tinypy_internal_iterator_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     for (index = 0U; index < TINYPY_ITERATOR_TYPE_COUNT; ++index) {
         tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_next_key, __tinypy_generator_next_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_iter_key, __tinypy_generator_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
@@ -485,7 +471,7 @@ void tinypy_internal_initialize_generator_types(tinypy_vm_t *vm) {
             tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_length_hint_key, __tinypy_reversed_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
         else if (index != (size_t)TINYPY_ITERATOR_TYPE_CALLABLE) {
-            tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_length_hint_key, __tinypy_iterator_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+            tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_length_hint_key, tinypy_internal_iterator_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
     }
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ENUMERATE]), vm->internal_special_next_key, __tinypy_generator_next_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

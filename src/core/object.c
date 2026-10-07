@@ -359,6 +359,18 @@ static tinypy_value_t *__tinypy_object_get_type_special_dict(tinypy_value_t *val
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_object_immutable_type_error(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *name = __tinypy_object_get_type_special_name(value);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("can't set attributes of built-in/extension type '"),
+        TINYPY_MESSAGE_PART_TEXT(name), TINYPY_MESSAGE_PART_LITERAL("'")
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+    TINYPY_DECREF(name);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_get_type_special_bases(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = (tinypy_type_t *)value;
@@ -1145,6 +1157,11 @@ tinypy_bool_t tinypy_internal_object_has_special_override_key(tinypy_value_t *va
     if ((size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && value->type == &vm->types[kind]) {
         return TINYPY_FALSE;
     }
+    /* Immutable VM-native descriptor types share the native-function payload,
+       but their own slots are built-ins rather than Python overrides. */
+    if (value->type == vm->native_method_descriptor_type || value->type == vm->native_wrapper_descriptor_type || value->type == vm->native_method_wrapper_type) {
+        return TINYPY_FALSE;
+    }
     attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
     if (attribute == NULL) {
         return TINYPY_FALSE;
@@ -1673,7 +1690,7 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
         size_t name_size = 0U;
 
         if ((type->flags & TINYPY_TYPE_FLAG_IMMUTABLE) != 0U) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type attributes are read-only", out_error);
+            __tinypy_object_immutable_type_error(value, out_error);
             return TINYPY_FALSE;
         }
         if (__tinypy_object_key_text(key, &name, &name_size) != 0) {
@@ -1703,6 +1720,15 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_MODULE) {
         tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, TINYPY_MODULE_OBJECT(value)->dict, key, attribute_value, out_error);
         return stored;
+    }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_FUNCTION) {
+        size_t name_size = 0U;
+        const char *name = NULL;
+
+        if (__tinypy_object_key_text(key, &name, &name_size) != 0) {
+            __tinypy_object_make_attribute_error(value, name, name_size, out_error);
+            return TINYPY_FALSE;
+        }
     }
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object attributes are read-only", out_error);
     return TINYPY_FALSE;
@@ -1886,7 +1912,7 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
         size_t name_size = 0U;
 
         if ((type->flags & TINYPY_TYPE_FLAG_IMMUTABLE) != 0U) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type attributes are read-only", out_error);
+            __tinypy_object_immutable_type_error(value, out_error);
             return TINYPY_FALSE;
         }
         if (__tinypy_object_key_text(key, &name, &name_size) != 0 && (TINYPY_NAME_EQ(key, vm->internal_special_name_key) != 0 || TINYPY_NAME_EQ(key, vm->internal_special_module_key) != 0 || __tinypy_object_type_metadata_read_only(key) != 0)) {

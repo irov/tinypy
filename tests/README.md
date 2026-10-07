@@ -31,9 +31,9 @@ The run includes:
    previously standalone opcode and bytecode-verifier tests.
 3. Every selected portable case against external CPython 2.7.18, with discovery
    validation, exact source hashes for unchanged vendor modules, and zero
-   allocator balance for each tinypy process. The inventory contains 41
-   project-authored modules with 1,299 cases and 210 selected vendor cases,
-   for 1,509 selected cases in total.
+   allocator balance for each tinypy process. The inventory contains 45
+   project-authored modules with 1,409 cases and 210 selected vendor cases,
+   for 1,619 selected cases in total.
 4. A fixed matrix of 15,040 numeric and sequence outcomes. It compares values,
    result types and exception classes, including division, reflected builtin
    numeric combinations, infinities, NaN, subnormal/maximum finite doubles,
@@ -63,7 +63,10 @@ The run includes:
    995 numeric-method argument/snapshot observations, 3,756 container-method
    argument/constructor/error-phase observations and 1,026 function-construction,
    reduction and saved-frame observations.
-   Total: 277,626 unique outcomes per profile across thirty-two matrices.
+   The tenth audit adds 7,456 buffer/bytearray argument observations,
+   5,232 iterator metadata/hint observations, 1,556 native wrapper metadata
+   observations and 5,986 supported Struct parser/state/cache observations.
+   Total: 297,856 unique outcomes per profile across thirty-six matrices.
    Every identity must be unique, with a positive
    declared cardinality.
 5. 3,693 generated valid source inputs: 2,853 `exec`, 420 `eval`, 420 `single`.
@@ -88,7 +91,7 @@ The run includes:
 The portable report is rejected for missing/duplicate cases, ordinary skips,
 DEFER, reference failures, or inconsistent counts. Only the four declared
 ownership-cycle adaptations may skip in Release; Debug must exercise the
-detector. Acceptance requires 1,509 PASS in Debug and 1,505 PASS with those
+detector. Acceptance requires 1,619 PASS in Debug and 1,615 PASS with those
 four expected detector SKIP results in Release. These are inventory requirements;
 the generated report records which profiles completed acceptance.
 Python-visible conversion errors, callbacks and error ordering remain

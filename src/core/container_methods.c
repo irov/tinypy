@@ -1926,7 +1926,7 @@ static tinypy_value_t *__tinypy_container_format_method(tinypy_value_t *function
 }
 //////////////////////////////////////////////////////////////////////////
 /* Legacy slice slots receive C integer bounds and clamp negatives to zero. */
-static tinypy_value_t *__tinypy_container_legacy_slice(tinypy_value_t *args, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_internal_legacy_slice_new(tinypy_value_t *args, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(args);
     int64_t bounds[2];
 
@@ -1959,7 +1959,7 @@ static tinypy_value_t *__tinypy_container_getslice_method(tinypy_value_t *functi
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *slice = __tinypy_container_legacy_slice(args, out_error);
+    tinypy_value_t *slice = tinypy_internal_legacy_slice_new(args, out_error);
     if (slice == NULL) {
         return NULL;
     }
@@ -1975,7 +1975,7 @@ static tinypy_value_t *__tinypy_container_setslice_method(tinypy_value_t *functi
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 3U, 3U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *slice = __tinypy_container_legacy_slice(args, out_error);
+    tinypy_value_t *slice = tinypy_internal_legacy_slice_new(args, out_error);
     if (slice == NULL) {
         return NULL;
     }
@@ -1995,7 +1995,7 @@ static tinypy_value_t *__tinypy_container_delslice_method(tinypy_value_t *functi
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *slice = __tinypy_container_legacy_slice(args, out_error);
+    tinypy_value_t *slice = tinypy_internal_legacy_slice_new(args, out_error);
     if (slice == NULL) {
         return NULL;
     }

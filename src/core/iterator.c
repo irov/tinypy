@@ -48,6 +48,9 @@ static tinypy_value_t *__tinypy_internal_iterator_new(tinypy_value_t *iterable) 
     case TINYPY_VALUE_DICT:
         type = vm->iterator_types[TINYPY_ITERATOR_TYPE_DICT_KEY];
         break;
+    case TINYPY_VALUE_BYTEARRAY:
+        type = vm->iterator_types[TINYPY_ITERATOR_TYPE_BYTEARRAY];
+        break;
     default:
         break;
     }
@@ -602,7 +605,7 @@ static tinypy_bool_t __tinypy_length_hint_length_result(tinypy_value_t *value, t
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(result);
 
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER) {
-        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "__len__ should return an int", out_error);
+        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "__len__() should return an int", out_error);
         return TINYPY_FALSE;
     }
     tinypy_bool_t converted = tinypy_internal_number_as_ssize(result, out_length, out_error);
@@ -704,6 +707,66 @@ length_unavailable:
 
     TINYPY_DECREF(result);
     return converted;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_iterator_length_hint_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    int64_t hint = (int64_t)tinypy_internal_iterator_size_hint(iterator);
+
+    if (iterator->base.type == vm->iterator_types[TINYPY_ITERATOR_TYPE_BYTEARRAY] && iterator->iterable != NULL) {
+        hint = (int64_t)TINYPY_SIZED_SIZE(iterator->iterable) - (int64_t)iterator->index;
+    }
+
+    if (iterator->mode == INT32_C(4) && iterator->iterable != NULL) {
+        tinypy_value_t *source = TINYPY_RET(iterator->iterable);
+        tinypy_length_slot_t length_slot = source->type->sequence_slots != NULL ? source->type->sequence_slots->length : NULL;
+        int64_t length = 0;
+        tinypy_bool_t valid = TINYPY_FALSE;
+
+        if (tinypy_internal_object_has_special_override_key(source, vm->internal_special_length_key) != TINYPY_FALSE || length_slot == NULL) {
+            if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_key(source, vm->internal_special_length_key) != TINYPY_FALSE) {
+                tinypy_value_t *result = __tinypy_length_hint_call(source, vm->internal_special_length_key, NULL, out_error);
+
+                if (result != NULL) {
+                    valid = __tinypy_length_hint_length_result(source, result, &length, out_error);
+                    TINYPY_DECREF(result);
+                }
+            }
+            else {
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("object of type '"),
+                    TINYPY_MESSAGE_PART_TYPE_NAME(source),
+                    TINYPY_MESSAGE_PART_LITERAL("' has no len()"),
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            }
+        }
+        else {
+            length = (int64_t)length_slot(source, out_error);
+            valid = length >= 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        }
+        if (valid != TINYPY_FALSE && length < 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__() should return >= 0", out_error);
+            valid = TINYPY_FALSE;
+        }
+        if (valid != TINYPY_FALSE) {
+            hint = (uint64_t)length > (uint64_t)iterator->index ? length - (int64_t)iterator->index : INT64_C(0);
+        }
+        TINYPY_DECREF(source);
+        if (valid == TINYPY_FALSE) {
+            return NULL;
+        }
+    }
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, hint);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_iterator_integer(tinypy_vm_t *vm, tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
@@ -1254,7 +1317,8 @@ void tinypy_internal_initialize_iterator_types(tinypy_vm_t *vm) {
         vm->internal_setiterator_key,
         vm->internal_rangeiterator_key,
         vm->internal_callable_hyphen_iterator_key,
-        vm->internal_listreverseiterator_key};
+        vm->internal_listreverseiterator_key,
+        vm->internal_bytearray_iterator_key};
     static tinypy_next_slot_t const next_slots[TINYPY_ITERATOR_TYPE_COUNT] = {
         __tinypy_internal_list_iterator_next,
         __tinypy_internal_tuple_iterator_next,
@@ -1264,7 +1328,8 @@ void tinypy_internal_initialize_iterator_types(tinypy_vm_t *vm) {
         __tinypy_internal_set_iterator_next,
         __tinypy_internal_range_iterator_next,
         tinypy_internal_iterator_next,
-        tinypy_internal_reversed_next};
+        tinypy_internal_reversed_next,
+        tinypy_internal_iterator_next};
     tinypy_type_t *xrange_type = &vm->types[TINYPY_VALUE_XRANGE];
     size_t index;
 
@@ -1335,6 +1400,10 @@ static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispat
     kind = TINYPY_VALUE_KIND(value);
     if (kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_DICT || kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_BYTEARRAY) {
         tinypy_value_t *return_value_2 = __tinypy_internal_iterator_new(value);
+
+        if ((kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) && value->type != &vm->types[kind]) {
+            TINYPY_ITERATOR_OBJECT(return_value_2)->mode = INT32_C(4);
+        }
         return return_value_2;
     }
     if (dispatch_special != 0 && tinypy_internal_object_has_special_key(value, vm->internal_special_iter_key) != 0) {

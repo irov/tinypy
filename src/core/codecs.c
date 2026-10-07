@@ -148,7 +148,10 @@ static tinypy_value_t *__tinypy_codecs_lookup(tinypy_value_t *function, tinypy_v
         TINYPY_DECREF(result);
     }
     TINYPY_DECREF(normalized);
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_LOOKUP, "unknown encoding", out_error);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("unknown encoding: "), TINYPY_MESSAGE_PART_TEXT(name),
+    };
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_LOOKUP, parts, sizeof(parts) / sizeof(parts[0]), out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////

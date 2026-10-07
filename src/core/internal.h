@@ -837,6 +837,8 @@ typedef struct tinypy_intern_entry_t {
     X(internal_weakref_key, "weakref", 1) \
     X(internal_future_with_statement_key, "with_statement", 1) \
     X(internal_wrapper_descriptor_key, "wrapper_descriptor", 1) \
+    X(internal_method_wrapper_key, "method-wrapper", 1) \
+    X(internal_bytearray_iterator_key, "bytearray_iterator", 1) \
     X(internal_writelines_key, "writelines", 1) \
     X(internal_xmlcharrefreplace_key, "xmlcharrefreplace", 1) \
     X(internal_xrange_key, "xrange", 1) \
@@ -1085,6 +1087,7 @@ typedef enum tinypy_iterator_type_index_e {
     TINYPY_ITERATOR_TYPE_RANGE,
     TINYPY_ITERATOR_TYPE_CALLABLE,
     TINYPY_ITERATOR_TYPE_LIST_REVERSE,
+    TINYPY_ITERATOR_TYPE_BYTEARRAY,
     TINYPY_ITERATOR_TYPE_COUNT
 } tinypy_iterator_type_index_e;
 //////////////////////////////////////////////////////////////////////////
@@ -1752,6 +1755,7 @@ struct tinypy_vm_t {
     tinypy_type_t *callable_weak_proxy_type;
     tinypy_type_t *native_method_descriptor_type;
     tinypy_type_t *native_wrapper_descriptor_type;
+    tinypy_type_t *native_method_wrapper_type;
 
     tinypy_sequence_slots_t buffer_sequence_slots;
     tinypy_mapping_slots_t buffer_mapping_slots;
@@ -1878,6 +1882,13 @@ typedef enum tinypy_arity_style_e {
 } tinypy_arity_style_e;
 void tinypy_internal_make_arity_error(tinypy_vm_t *vm, const char *name, size_t name_size, size_t count, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_legacy_slice_new(tinypy_value_t *args, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_iterator_length_hint_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error);
+void tinypy_internal_initialize_native_function_descriptors(tinypy_vm_t *vm);
+tinypy_bool_t tinypy_internal_native_function_compare_three_way(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error);
+void tinypy_internal_initialize_struct_descriptors(tinypy_type_t *type);
+void tinypy_internal_type_add_object_attribute_methods(tinypy_type_t *type);
+tinypy_value_t *tinypy_internal_struct_get_field(tinypy_value_t *instance, tinypy_value_t *name, tinypy_error_t **out_error);
 void tinypy_internal_make_vm_error_location(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size, tinypy_bool_t include_location, tinypy_error_t **out_error);
 
 tinypy_bool_t tinypy_internal_value_belongs_to(const tinypy_vm_t *vm, const tinypy_value_t *value);

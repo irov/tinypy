@@ -3514,6 +3514,42 @@ static int32_t __test_native_embedding(void) {
     native_state.hash_error = 0;
     tinypy_release(call_args);
 
+    /* Public hashing and calling permit an omitted error output. A bound
+       wrapper must propagate its receiver's callback failure through the VM. */
+    {
+        tinypy_value_t *descriptor = tinypy_type_get_attr(python_base, "__repr__", 8U);
+        tinypy_value_t *bind = tinypy_object_get_attr(descriptor, "__get__", 7U, &error);
+        tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &instance, 1U);
+        tinypy_value_t *wrapper = tinypy_call(bind, arguments, NULL, &error);
+
+        TEST_CHECK(wrapper != NULL && error == NULL);
+        tinypy_value_t *hash_method = tinypy_object_get_attr(wrapper, "__hash__", 8U, &error);
+
+        TEST_CHECK(hash_method != NULL && error == NULL);
+        native_state.hash_error = 1;
+        TEST_CHECK(tinypy_hash(wrapper) == (tinypy_hash_t)0);
+        TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+        TEST_CHECK(tinypy_vm_raised_exception(vm) != NULL);
+        tinypy_vm_clear_error(vm);
+        tinypy_value_t *hash_result = tinypy_call(hash_method, args, NULL, NULL);
+
+        TEST_CHECK(hash_result == NULL);
+        TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+        TEST_CHECK(tinypy_vm_raised_exception(vm) != NULL);
+        tinypy_vm_clear_error(vm);
+        native_state.hash_error = 0;
+        tinypy_hash_t expected_hash = tinypy_hash(wrapper);
+        hash_result = tinypy_call(hash_method, args, NULL, NULL);
+        TEST_CHECK(hash_result != NULL);
+        TEST_CHECK(tinypy_integer_as_i64(hash_result) == expected_hash);
+        TEST_CHECK(tinypy_vm_has_error(vm) == 0);
+        tinypy_release(hash_result);
+        tinypy_release(hash_method);
+        tinypy_release(wrapper);
+        tinypy_release(arguments);
+        tinypy_release(bind);
+    }
+
     value = tinypy_negative(instance, &error);
     TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == -73);
     TEST_CHECK(error == NULL);

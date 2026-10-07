@@ -1,7 +1,7 @@
-# Deep conformance audit — 2026-10-07
+# Deep conformance audit — 2026-10-08
 
 The supported contract is [SPEC.md](../../SPEC.md), with external CPython
-2.7.18 as the observable-behavior oracle. Nine audit passes added 839 independently
+2.7.18 as the observable-behavior oracle. Ten audit passes added 949 independently
 authored portable cases: the initial 109, 84 boundary/callback cases,
 and 92 comparison/type/generator/regex cases (37 comparisons, 27 types,
 13 control flow and 15 SRE), followed by 87 constructor/iterator/descriptor/
@@ -14,8 +14,10 @@ protocol cases), followed by 83 direct-slot and stateful callback cases
 37 containers and 22 descriptors/functions/set-order/slice cases), followed by
 91 buffer/text/import/print/generator/sys cases (20 buffers, 28 text/codecs/SRE,
 24 execution state and 19 sys state), followed by 96 native-argument and
-introspection cases (14 metadata, 25 numeric, 31 container and 26 introspection).
-The ninth-pass witnesses and their four finite products pass CPython and
+introspection cases (14 metadata, 25 numeric, 31 container and 26 introspection),
+followed by 110 wrapper/iterator/buffer/Struct cases (25 wrappers, 27 iterators,
+28 buffers and 30 Struct).
+The tenth-pass witnesses and their four finite products pass CPython and
 tinypy comparisons in all four profiles. Aggregate acceptance is recorded below.
 These counts are regression witnesses, not a count of distinct defects.
 
@@ -32,6 +34,10 @@ These counts are regression witnesses, not a count of distinct defects.
 | Codecs | Supported buffer inputs; subtype override bypass; low-level arity; UTF-8 partial prefixes, `final`, consumed counts and callback order; registered UTF-8 decoder finalization |
 | Float format and marshal | Per-VM format state; native versus standard struct policy; binary marshal float/complex nonfinite failures and signed-zero behavior; legacy text float loading retains its separate policy |
 | Struct buffers | Numeric conversion callbacks, partial writes, raw buffer writes, export lifetime across offset/float callbacks, cleanup on failure, Unicode/legacy bounds and unpack-from keywords |
+| Native metadata | Distinct method-wrapper type with the existing native payload; genuine member/getset metadata, writable/deletable builtin module, binding receiver checks, comparison/hash callbacks and actual-type free-list ownership |
+| Iterator metadata | bytearray_iterator type; generic indexed hint uses current source length and callback-updated index; text subtype iteration honors hooks; direct signed bytearray and long listreverse hints retain their separate semantics |
+| Buffer arguments | Canonical method arity, keyword/count/conversion order, readonly legacy slices, memoryview object keyword, bytearray buffer and scalar diagnostics, tuple-prefix short circuit and actual subtype names |
+| Struct state | Native compiled payload and readonly fields; bounded module cache; format identity/ASCII/NUL parsing, keyword priority, failed reinit state, no base instance dictionary and weakref release |
 | Super and descriptors | Unbound None, reported-class proxies, strict-subclass rebinding through its constructor, validation before mutation, arbitrary descriptor owner handling and None-owner rules |
 | Attributes | Unicode names encode before get/set/delete hooks and hasattr suppression; custom lookup hooks also receive their own method names |
 | Generators and exceptions | Throwing an existing instance with None; requested exception type/value/traceback preserved separately, including adaptive constructors and normalization before handlers/bare raise; correct reinitialization of message, errno/filename, exit code and syntax fields |
@@ -172,6 +178,36 @@ SPEC exclusion was added. Primary references include
 [classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c)
 and [frameobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/frameobject.c).
 
+
+The tenth pass adds four authored modules:
+[wrapper metadata](../upstream/local/test_wrapper_metadata_audit.py) (25 cases),
+[iterator metadata](../upstream/local/test_iterator_metadata_audit.py) (27),
+[buffer arguments](../upstream/local/test_buffer_arguments_audit.py) (28) and
+[Struct arguments/state](../upstream/local/test_struct_arguments_audit.py) (30).
+Their guarded finite products add 20,230 outcomes: 1,556 wrappers, 5,232
+iterators, 7,456 buffers and 5,986 Struct. Method-wrapper reuses the native
+payload and canonical descriptor/arity paths; cached methods account for the
+actual type's owning reference. Public C embedding tests verify VM callback
+hash errors with an omitted error output. Struct stores a compiled payload and
+uses a bounded module cache, retaining original format/Unicode-buffer objects
+through callbacks. The original Unicode buffer lifetime correction was checked
+in source and ordinary fixtures; no borrowed-lifetime invalidation reproducer
+was run.
+
+The new products compare error classes/messages and callback traces exactly,
+except for the documented SPEC _struct.error alias. Buffer capacity, seeded
+hashes, address-bearing repr and Struct physical size use explicit invariants.
+Six wrapper comparison rows whose __cmp__ returns NotImplemented check cmp
+antisymmetry for process-dependent fallback order; they do not assert the named
+operator's raw address-dependent result. Documentation text is not compared.
+Cold first-write readiness is a separate remaining observation below. All
+in-file IDs/cardinalities and the aggregate inventory are checked. No new skip,
+detector adaptation or SPEC exclusion was added. Primary references:
+[descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c),
+[iterobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/iterobject.c),
+[bytearrayobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/bytearrayobject.c)
+and [_struct.c](https://github.com/python/cpython/blob/v2.7.18/Modules/_struct.c).
+
 Print/displayhook exchange and integer parsing were independently checked
 against [CPython fileobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/fileobject.c),
 [sysmodule.c](https://github.com/python/cpython/blob/v2.7.18/Python/sysmodule.c)
@@ -243,7 +279,11 @@ as an oracle match. [SPEC.md](../../SPEC.md#14-errors) records this boundary.
 | Numeric direct-slot arguments, snapshots and Unicode format specifications | 995 |
 | Native container/wrapper arguments, keywords and iterator constructors | 3,756 |
 | FunctionType keywords, reduction, cached slot names and saved frame fields | 1,026 |
-| **Total unique runtime outcomes** | **277,626** |
+| Native wrapper fields/binding/callbacks and mixed method caches | 1,556 |
+| Iterator taxonomy, direct methods, hints and bounded state changes | 5,232 |
+| Buffer/bytearray/memoryview methods, constructors and parser diagnostics | 7,456 |
+| Supported Struct formats, argument/keyword parsers, cache and reinit state | 5,986 |
+| **Total unique runtime outcomes** | **297,856** |
 
 Operands include integer widening, long, bool, float, complex, infinity, NaN,
 subnormal and maximum finite doubles. All thirty-two matrices compare complete stdout to
@@ -264,10 +304,10 @@ failed folds remain valid runtime expressions. Independent host checks assert
 every generated filename, not just the totals. A separate 12,288-row runtime
 matrix verifies all caller/explicit future combinations, code shape and
 execution results.
-Each source is checked at optimize 0/1/2. Another 161 checked-in vendor, local,
+Each source is checked at optimize 0/1/2. Another 169 checked-in vendor, local,
 runtime and matrix sources undergo three-level `exec` comparison. This gives
-11,562 marshal-v2 comparisons per profile, 46,248 across all four. These are
-the ninth-pass inventory totals, accepted in the complete four-profile run.
+11,586 marshal-v2 comparisons per profile, 46,344 across all four. These are
+the tenth-pass inventory totals, accepted in the complete four-profile run.
 
 Three explicitly identified attribute-product rows coalesce consecutive identical
 unsuccessful `module.__dict__` equality probes with a pure False result. Dictionary
@@ -283,7 +323,7 @@ is unavailable. Core filesystem access remains outside the embedding contract.
 
 ## VM name presets
 
-The VM registry now contains 734 persistent names, including class/module
+The VM registry now contains 736 persistent names, including class/module
 metadata, fixed protocol names, keyword parameters, codecs and compiler labels,
 module-local methods, builtin type/exception names and `__future__` features.
 Every fixed production name is created at VM startup and uses an `internal_`
@@ -314,6 +354,7 @@ The seventh-pass accepted build checked 729 presets. The eighth-pass inventory
 adds the displayhook underscore key to the same registry; all four profiles
 passed the preset checks. The ninth pass adds the two short SRE type names,
 qualified scanner name and qualified partial name, reusing the same registry.
+The tenth pass adds method-wrapper and bytearray_iterator names to that registry.
 
 `TINYPY_RET(value)` returns the same non-null object with one added reference,
 using a portable inline helper so the expression is evaluated once. Its VM
@@ -454,7 +495,36 @@ fields. The raw unknown-name direct miss was 1.6% slower. Hits/misses matched
 in every run. Results and all samples are in `.temp/builtin-metadata-benchmark.json`;
 they describe these local lookup workloads, not application performance.
 
-## Accepted validation — ninth pass
+## Accepted validation — tenth pass
+
+The default [matrix runner](../run_validation.py) completed all 238 stages on
+macOS arm64 with strict warnings-as-errors. Recorded stage time was 287.5 seconds.
+
+| Profile | Native/runtime CTest | Portable oracle cases | Runtime outcomes | Compiler comparisons |
+| --- | --- | --- | --- | --- |
+| Debug, detector on | 89 PASS | 1,619 PASS | 297,856 matching | 11,586 identical |
+| Release | 89 PASS | 1,615 PASS / 4 diagnostic SKIP | 297,856 matching | 11,586 identical |
+| Unoptimized Debug, ASan/UBSan | 89 PASS | 1,619 PASS | 297,856 matching | 11,586 identical |
+| Release, LTO | 89 PASS | 1,615 PASS / 4 diagnostic SKIP | 297,856 matching | 11,586 identical |
+
+The exact inventory contains 155 CTest registrations: 89 native/runtime tests,
+65 portable-module wrappers and the adapter. Portable cases execute separately
+with the oracle and are not counted twice. All 90 host/API/runner checks pass.
+Compiler inputs contain 169 checked-in and 3,693 generated sources, each checked
+at optimization levels 0/1/2; four profiles compare 46,344 marshal payloads.
+Standalone marshal/artifact, core symbols and 736 VM presets pass in each profile.
+No ASan/UBSan diagnostics occurred; Apple ASan uses detect_leaks=0 and independent
+per-process allocator accounting establishes the reported zero balance.
+
+The accepted report is `.temp/validation-tenth-audit-accepted/report.json`.
+All 238 stages have PASS status, and a post-run fingerprint matches:
+`55397ff2e2b6829ad2ee857c45d18d565b0ca8183997eb02a8de8570975864ed`.
+The report enforces exact inventories, unique IDs/cardinalities, quiet reference
+streams, profile-specific skips and unchanged source/test/SPEC inputs. No DEFER
+or new skip was added. The finite-product normalizations and cold metadata
+observation remain explicit above and below; this is bounded local acceptance.
+
+## Historical accepted validation — ninth pass
 
 The default [matrix runner](../run_validation.py) completed all 218 stages on
 macOS arm64 with strict warnings-as-errors. Recorded stage time was 312.7 seconds.
@@ -539,7 +609,7 @@ this is a local microbenchmark, not an application performance guarantee.
 fixtures; [TEST_PLAN.md](TEST_PLAN.md) defines applicable variant axes, callback
 states, lifetime checks and future acceptance gates. [tests/README.md](../README.md)
 describes adding regression witnesses and running the full matrix. Confirmed
-supported-scope corrections from all nine passes have their recorded bounded
+supported-scope corrections from all ten passes have their recorded bounded
 evidence and complete four-profile acceptance.
 The one explicit CPython pending-error boundary is described above. The finite
 products enumerate their listed operand combinations; arbitrary Python programs,
@@ -548,17 +618,22 @@ limitations stay explicit.
 
 The two eighth-pass metadata observations (qualified SRE short names and
 classic class NUL-name diagnostics) are corrected by the ninth pass.
-Two further observations remain for the next audit. A bound builtin slot wrapper
-has type name `builtin_function_or_method` in tinypy, whereas CPython exposes
-`method-wrapper`. The receiver product checks binding, name, self and rejection
-protocols; it does not claim wrapper-metatype equivalence. Also,
-`type(iter(bytearray('x'))).__name__` is `iterator` in tinypy versus
-`bytearray_iterator` in CPython. The native-name product does not include this
-iterator. The active registrations are in [vm.c](../../src/core/vm.c), compared
-with [CPython descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c)
-and [bytearrayobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/bytearrayobject.c).
-Neither observation is counted as a corrected witness, hidden by normalization
-or declared a SPEC exclusion.
+The tenth pass corrects the two ninth-pass observations: bound builtin slots
+now expose `method-wrapper`, and bytearray iterators expose `bytearray_iterator`.
+Both actual types are included in permanent metadata and iterator products.
+
+One further cold-start metadata discrepancy remains explicit. In an isolated
+CPython process, assigning to a method-wrapper's `__name__` before any namespace
+or metadata read raises TypeError with the generic read-only diagnostic. After
+reading `__name__`, it raises AttributeError naming the getset. Method-descriptor
+cold/warm writes likewise change the diagnostic. Tinypy eagerly initializes
+these types and currently uses the ready descriptor's error in both states.
+The wrapper product explicitly reads the namespace before writes, so its PASS
+is evidence for that ready state only. This observation is not normalized,
+excluded from SPEC or counted as a corrected witness. Reference:
+[object.c](https://github.com/python/cpython/blob/v2.7.18/Objects/object.c)
+(`PyObject_SetAttr` versus readiness in `PyObject_GenericGetAttr`) and
+[descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c).
 
 Builtin documentation strings remain abbreviated; these products verify
 descriptor/documentation behavior with authored values and do not assert full

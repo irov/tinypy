@@ -1566,6 +1566,11 @@ static tinypy_bool_t __tinypy_comparison_three_way_inner(tinypy_value_t *left, t
         *out_order = 0;
         return TINYPY_TRUE;
     }
+    if (left->type == right->type && (left->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] || left->type == vm->native_method_wrapper_type)) {
+        tinypy_bool_t result = tinypy_internal_native_function_compare_three_way(left, right, out_order, out_error);
+
+        return result;
+    }
     if (left->type == right->type) {
         if (kind == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(left, vm->internal_special_cmp_key) != 0) {
             if (__tinypy_comparison_try_three_way_pair(left, right, out_order, &ordered, out_error) == 0) {

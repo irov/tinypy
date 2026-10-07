@@ -2355,6 +2355,14 @@ tinypy_value_t *tinypy_internal_type_call(tinypy_value_t *callable, tinypy_value
     tinypy_value_t *initializer;
     tinypy_value_t *initialize_result;
 
+    if (type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] || type == vm->native_method_descriptor_type || type == vm->native_wrapper_descriptor_type || type == vm->native_method_wrapper_type) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("cannot create '"), {type->name, type->name_size}, TINYPY_MESSAGE_PART_LITERAL("' instances")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        return NULL;
+    }
     if (vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0) {
         tinypy_value_t *return_value_1 = tinypy_internal_exception_instantiate(type, args, kwargs, out_error);
         return return_value_1;
