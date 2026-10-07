@@ -16,10 +16,9 @@ static const uint8_t *__tinypy_buffer_owner_view(const tinypy_value_t *owner, si
         function_result = (const uint8_t *)tinypy_string_view(owner, out_size);
         return function_result;
     case TINYPY_VALUE_UNICODE: {
-        size_t code_points;
-
-        const uint8_t *return_value_1 = (const uint8_t *)tinypy_unicode_utf8_view(owner, out_size, &code_points);
-        return return_value_1;
+        *out_size = TINYPY_SIZED_SIZE(owner) * sizeof(uint32_t);
+        const uint8_t *result = *out_size != 0U ? (const uint8_t *)TINYPY_UNICODE_OBJECT(owner)->native_buffer : TINYPY_UNICODE_OBJECT(owner)->utf8;
+        return result;
     }
     case TINYPY_VALUE_BUFFER:
         function_result = (const uint8_t *)tinypy_buffer_view(owner, out_size);
@@ -37,6 +36,9 @@ tinypy_value_t *tinypy_buffer_from_object(tinypy_value_t *object, size_t offset,
     size_t owner_size;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
+    if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_UNICODE) {
+        (void)tinypy_internal_unicode_native_buffer(object, TINYPY_FALSE, &owner_size, NULL);
+    }
     (void)__tinypy_buffer_owner_view(object, &owner_size);
     tinypy_buffer_object_t *buffer = (tinypy_buffer_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_BUFFER, sizeof(*buffer));
     buffer->owner = object;
@@ -94,7 +96,10 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
         return NULL;
     }
     if (__tinypy_buffer_supported(owner) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not support the buffer interface", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "buffer object expected", out_error);
+        return NULL;
+    }
+    if (TINYPY_VALUE_KIND(owner) == TINYPY_VALUE_UNICODE && tinypy_internal_unicode_native_buffer(owner, TINYPY_TRUE, &owner_size, out_error) == NULL) {
         return NULL;
     }
     (void)__tinypy_buffer_owner_view(owner, &owner_size);
@@ -131,6 +136,10 @@ static tinypy_bool_t __tinypy_buffer_normalize_index(tinypy_value_t *value, tiny
     int64_t index;
     size_t size;
 
+    if (tinypy_internal_object_has_special_key(key, vm->internal_special_index_key) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sequence index must be integer", out_error);
+        return TINYPY_FALSE;
+    }
     if (tinypy_internal_index_as_i64(key, &index, TINYPY_TRUE, out_error) == 0) {
         return TINYPY_FALSE;
     }
@@ -150,7 +159,7 @@ static tinypy_bool_t __tinypy_buffer_normalize_index(tinypy_value_t *value, tiny
     *out_index = (size_t)index;
     return TINYPY_TRUE;
 out_of_range:
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "buffer index is out of range", out_error);
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "buffer index out of range", out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -254,12 +263,15 @@ static tinypy_value_t *__tinypy_buffer_concat(tinypy_value_t *left, tinypy_value
     uint8_t *output;
 
     if (__tinypy_buffer_supported(right) == 0) {
-        tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
-        return result;
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bad argument type for built-in operation", out_error);
+        return NULL;
     }
     left_bytes = (const uint8_t *)tinypy_buffer_view(left, &left_size);
     if (left_size == 0U) {
         return TINYPY_RET(right);
+    }
+    if (TINYPY_VALUE_KIND(right) == TINYPY_VALUE_UNICODE && tinypy_internal_unicode_native_buffer(right, TINYPY_TRUE, &right_size, out_error) == NULL) {
+        return NULL;
     }
     right_bytes = __tinypy_buffer_owner_view(right, &right_size);
     if (right_size > SIZE_MAX - left_size || left_size + right_size >= (size_t)PTRDIFF_MAX) {
@@ -288,6 +300,15 @@ static tinypy_value_t *__tinypy_buffer_repeat(tinypy_value_t *buffer, tinypy_val
     int64_t count;
     uint8_t *output;
 
+    if (tinypy_internal_object_has_special_key(count_value, vm->internal_special_index_key) == 0) {
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(count_value),
+            TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index")
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
     if (tinypy_internal_index_as_i64(count_value, &count, TINYPY_FALSE, out_error) == 0) {
         if (out_error == NULL || *out_error == NULL) {
             tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
@@ -731,6 +752,16 @@ static void __tinypy_memoryview_not_implemented(tinypy_vm_t *vm, tinypy_error_t 
 static tinypy_bool_t __tinypy_memoryview_index(tinypy_value_t *instance, tinypy_value_t *key, size_t size, size_t *out_index, tinypy_error_t **out_error) {
     int64_t index;
 
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(instance);
+    if (tinypy_internal_object_has_special_key(key, vm->internal_special_index_key) == 0) {
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("cannot index memory using \""),
+            TINYPY_MESSAGE_PART_TYPE_NAME(key),
+            TINYPY_MESSAGE_PART_LITERAL("\"")
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return TINYPY_FALSE;
+    }
     if (tinypy_internal_index_as_i64(key, &index, TINYPY_TRUE, out_error) == 0) {
         return TINYPY_FALSE;
     }
@@ -820,7 +851,12 @@ static tinypy_bool_t __tinypy_memoryview_set(tinypy_value_t *instance, void *pay
         return TINYPY_FALSE;
     }
     if (tinypy_internal_bytes_view(value, &replacement, &replacement_size) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "memoryview assignment requires a byte string", out_error);
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(value),
+            TINYPY_MESSAGE_PART_LITERAL("' does not have the buffer interface")
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return TINYPY_FALSE;
     }
     uint8_t *owner_bytes = TINYPY_BYTEARRAY_OBJECT(owner)->bytes + owner_offset;
@@ -835,7 +871,7 @@ static tinypy_bool_t __tinypy_memoryview_set(tinypy_value_t *instance, void *pay
         return TINYPY_TRUE;
     }
     if (replacement_size != 1U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "memoryview assignment requires a single byte", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "cannot modify size of memoryview object", out_error);
         return TINYPY_FALSE;
     }
     owner_bytes[index] = replacement[0];

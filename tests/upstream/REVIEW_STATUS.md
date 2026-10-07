@@ -1,9 +1,11 @@
 # Runtime review closure — 2026-10-07
 
-The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 652
-portable regressions and a repeatable four-profile matrix. Its final corpus
-has 1,322 selected cases; finite runtime matrices cover 264,265 outcomes, and
-compiler comparison covers 46,056 outputs across the profiles. The future
+The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 743
+portable regressions across eight passes and a repeatable four-profile matrix.
+Its eighth-pass inventory has 1,413 selected cases, 28 finite runtime matrices
+with 271,524 outcomes per profile, and 11,538 compiler comparisons per profile
+(46,152 across four). These totals passed aggregate acceptance in all four profiles on macOS arm64.
+The preceding seventh-pass report remains a historical baseline. The future
 variant and acceptance plan is in [TEST_PLAN.md](../conformance/TEST_PLAN.md).
 The explicit CPython pending-C-exception boundary is recorded in the audit.
 The original
@@ -14,7 +16,9 @@ worktree, including the earlier portable-corpus fixes. Its prototypes were
 reviewed individually, not applied as one patch. CPython **2.7.18** is the
 behavioral oracle; Python 3 runs only the process coordinator. All actionable
 implementation items in this review have been addressed. Existing profile
-contracts and evidence limits are identified explicitly below.
+contracts and evidence limits are identified explicitly below. Two subsequent
+metadata observations remain identified for the next audit; this statement
+about the supplied review is not a claim of arbitrary-program equivalence.
 
 **Fixed** below means the relevant implementation changed or the correction
 was already present. Ordinary regression tests and the existing native suite
@@ -23,6 +27,54 @@ correction was checked in source; the historical crash itself was not
 reproduced. The supplied crashing scripts, custom nopool build and crafted
 bytecode/regex programs were not run. A passing sanitizer suite does not
 establish equivalence to that separate historical investigation.
+
+## Eighth-pass follow-up
+
+Four independently authored modules add 91 portable cases: 20
+[buffer state](local/test_buffer_state_audit.py), 28
+[text/codec/SRE state](local/test_text_state_audit.py), 24
+[execution state](local/test_execution_state_audit.py) and 19
+[sys state](local/test_sys_state_audit.py). Their four finite products add
+7,259 outcomes (2,068 + 3,842 + 622 + 727). Focused CPython 2.7.18 and fresh
+strict Debug comparisons pass, with quiet reference streams and zero outstanding
+tinypy allocations; scoped ownership and error-state changes received independent
+source review. All 198 stages of the complete four-profile run passed in
+458.8 recorded stage seconds. The accepted source/test SHA-256 is
+`640ba0ae6184abd44ddec7b38eace07e39236da9bfc0b8fd7ef0aff91073b678`; the post-run fingerprint matched.
+The detailed report is `.temp/validation-eighth-audit-accepted/report.json`.
+
+| Family | Concrete correction |
+| --- | --- |
+| Buffers/bytearrays | Legacy Unicode buffers expose native wide-character bytes and retain owners through child views; bound/count callbacks precede current storage snapshots; join drains and pins items before validation and reads the current separator; memoryview and fromhex diagnostics retain tested precedence. |
+| Text/codecs | No-op and partition identities follow the reference; character-buffer diagnostics, search/count conversions and parser order match; generic codec callbacks distinguish omitted from explicit errors and suppress keyword lookup failures without losing handled state. |
+| SRE | Keyword validation precedes missing subjects; bounds precede current subject-length callbacks; callable replacements precede template detection; supported group/result slices propagate errors and recover. Products use ordinary valid regex programs. |
+| Import/execution | Fromlist and __all__ use indexed access; cached nonmodules expose generic attributes/namespaces; star publication keeps partial state; loading precedes fromlist truth; cached absolute imports avoid unnecessary metadata reads; ordered __import__ parsing retains arguments and uses Python 2 C-int conversion. |
+| Print/generators | Softspace exchanges before conversion and suppresses attribute failures; an owned writer is resolved before str; original text controls trailing whitespace state. Generator native argument errors preserve reusable frames and caller exception state. |
+| Sys | Frame depth and recursion limits use the reference integer protocols/ranges; getsizeof uses type special-method binding and a TypeError-only default; displayhook preserves softspace/repr/writer/underscore order and missing-stream behavior. |
+
+Primary references for the latter families include
+[CPython sysmodule.c](https://github.com/python/cpython/blob/v2.7.18/Python/sysmodule.c),
+[fileobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/fileobject.c),
+[intobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/intobject.c),
+[ceval.c](https://github.com/python/cpython/blob/v2.7.18/Python/ceval.c) and
+[import.c](https://github.com/python/cpython/blob/v2.7.18/Python/import.c).
+The accepted full run checked 147 CTest registrations, 153 checked-in compiler
+sources and 730 VM name presets. Release/LTO retain 1,409 portable passes and
+four detector skips; Debug requires all 1,413 cases.
+
+Two observations are recorded for the next audit rather than counted as fixes:
+native SRE type `__name__` retains `_sre.SRE_Pattern`/`_sre.SRE_Match` in tinypy
+instead of the reference's unqualified names; classic class `__name__` containing
+NUL raises CPython TypeError (`__name__ must not contain null bytes`) versus
+tinypy ValueError (`__name__ must not contain null characters`). The active
+branches are [vm.c](../../src/core/vm.c) and [class.c](../../src/core/class.c),
+with reference definitions in
+[_sre.c](https://github.com/python/cpython/blob/v2.7.18/Modules/_sre.c) and
+[classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c).
+These observations are not new skips, normalization rules or SPEC exclusions.
+Bounded ordinary programs and stable buffer mutations provide finite evidence;
+arbitrary callbacks/programs, malformed inputs and other host ABIs remain outside
+that evidence.
 
 ## Critical items from section 1
 

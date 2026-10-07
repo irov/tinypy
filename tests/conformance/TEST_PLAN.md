@@ -46,6 +46,10 @@ tests cover callbacks that affect later observations.
 | Builtin attribute dispatch | Shared immutable string metadata supplies preset IDs without hashing; function tables retain descriptor/custom-hook priority and alias semantics; zero IDs and absent handlers, subtype/plain copies and growing strings clear metadata; raw/Unicode metadata keys, allocation-free reference reuse, full-span embedded-NUL collision probes, no dynamic key insertion, independent VM ownership and eager dispatch registry/capacity/handler coverage checks; standalone Release benchmark compares direct dispatch and complete C attribute lookup |
 | Nested control | Ordered pairs of plain/if/while/for/except/finally/with/multiple-with wrappers, record/return/break/continue/raise/yield actions, true/false branch inputs, suppressing/propagating context managers, generator drain/throw/close and final frame state |
 | Codec callback state | Exact/subtype tuple and Unicode replacement, independent int/index/float position protocols, handler registry replacement, cached exception identity, mutation of error metadata/object, replacement encoding failure, return-tuple/position finalizers and failure recovery |
+| Text method state | Bounds and scalar conversions before needle validation, contextual character-buffer errors, subtype identity on unchanged results, native versus Python callback slicing of captured groups |
+| Codec invocation | Encoding omitted/default/explicit, errors omitted versus explicit, one versus two callback arguments, keyword parser ordering, ASCII normalization of Unicode names and exact byte-string arguments |
+| Import sequence protocol | Indexed fromlist/__all__ versus iterator, ignored __path__/member lookup errors versus propagated __all__ errors, byte versus Unicode names, star-prefix recursion, missing-module error before fromlist truth, lazy host importer metadata |
+| Sys and output state | Negative frame depths, int versus index conversion, C-int bounds, special __sizeof__ lookup and numeric results, TypeError-only default, softspace getter/setter exchange, write lookup before str/repr, replaced stdout and builtin module, initial/final newline and prior handled exception |
 
 Test Python 2 conversion protocols separately: `__int__`, `__index__`,
 `__float__`, truth and length conversion are not interchangeable. Stored builtin
@@ -180,6 +184,28 @@ failure products so the oracle's reported positions remain deterministic.
 Builtin documentation text is abbreviated; use authored doc values when testing
 property/doc dispatch rather than treating external documentation prose as a
 semantic oracle.
+
+Legacy Unicode buffers expose native code-unit bytes rather than UTF-8 bytes.
+Cover ASCII, non-ASCII, non-BMP and surrogate code units, Unicode subtypes,
+offsets and sizes. Record the reference Unicode width and endianness. Retain
+owners across exported views and verify lazy storage is reclaimed at shutdown.
+For bytearray text methods, record scalar conversions before the receiver and
+argument snapshots. Join must exhaust its iterable before copying the current
+separator and items; use bounded same-length callback mutations.
+
+For custom codecs, distinguish omitted errors from explicit errors: the callback
+receives one argument in the former case. Test parser validation before registry
+search and callback invocation. For SRE capture results, observe each actual
+subject slice rather than only the returned text. Returned text identity needs
+separate byte/Unicode and exact/subtype cases, including canonical empty Unicode.
+
+For sys output, use event lists to observe softspace reads and writes, writer
+lookup, repr/str and the initial/final newline. A callback can replace stdout or
+the writer, so check which object is pinned and which subsequent operation reads
+the current registry. Suppressed softspace errors must preserve an outer handler.
+Physical allocation sizes and GC headers are implementation dependent; getsizeof
+products compare special lookup, conversion, relative custom sizes, defaults and
+errors instead of requiring CPython's object layout.
 
 ## Adding and maintaining coverage
 

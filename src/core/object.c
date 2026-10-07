@@ -68,6 +68,10 @@ static void __tinypy_object_make_attribute_error(tinypy_value_t *value, const ch
     size_t offset = 0U;
     char *message;
 
+    const char *name_nul = (const char *)memchr(name, 0, name_size);
+    if (name_nul != NULL) {
+        name_size = (size_t)(name_nul - name);
+    }
     if (kind == TINYPY_VALUE_PARTIAL && value->type == &vm->types[TINYPY_VALUE_PARTIAL]) {
         owner_name = "functools.partial";
         owner_name_size = sizeof("functools.partial") - 1U;

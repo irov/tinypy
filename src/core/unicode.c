@@ -176,6 +176,41 @@ void tinypy_internal_unicode_destroy(tinypy_value_t *value) {
         tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), unicode->index_offsets, table_count * sizeof(*unicode->index_offsets));
         unicode->index_offsets = NULL;
     }
+    if (unicode->native_buffer != NULL) {
+        tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), unicode->native_buffer, TINYPY_SIZED_SIZE(value) * sizeof(*unicode->native_buffer));
+        unicode->native_buffer = NULL;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, tinypy_bool_t checked, size_t *out_size, tinypy_error_t **out_error) {
+    tinypy_unicode_object_t *unicode = TINYPY_UNICODE_OBJECT(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    size_t count = TINYPY_SIZED_SIZE(value);
+
+    if (count > (size_t)PTRDIFF_MAX / sizeof(*unicode->native_buffer)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "Unicode buffer is too large", out_error);
+        return NULL;
+    }
+    *out_size = count * sizeof(*unicode->native_buffer);
+    if (count == 0U) {
+        return unicode->utf8;
+    }
+    if (unicode->native_buffer == NULL) {
+        uint32_t *native = checked != 0
+            ? (uint32_t *)tinypy_internal_vm_allocate_checked(vm, *out_size, out_error)
+            : (uint32_t *)tinypy_internal_vm_allocate(vm, *out_size);
+        if (native == NULL) {
+            return NULL;
+        }
+        size_t byte_offset = 0U;
+        size_t index;
+
+        for (index = 0U; index < count; ++index) {
+            byte_offset += tinypy_internal_utf8_decode(unicode->utf8 + byte_offset, unicode->byte_size - byte_offset, &native[index]);
+        }
+        unicode->native_buffer = native;
+    }
+    return (const uint8_t *)unicode->native_buffer;
 }
 
 //////////////////////////////////////////////////////////////////////////

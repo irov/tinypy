@@ -55,7 +55,9 @@ The run includes:
    4,784 container/partial observations and 1,446 descriptor/function/set-order/
    slice observations. Future inheritance adds 12,288 caller/explicit flag,
    inheritance-policy, source-mode and byte/Unicode combinations.
-   Total: 264,265 unique outcomes per profile across twenty-four matrices.
+   Buffer state adds 2,068 observations; text/codec/SRE state adds 3,842;
+   import/print/generator state adds 622 and sys/size/displayhook state adds 727.
+   Total: 271,524 unique outcomes per profile across twenty-eight matrices.
    Every identity must be unique, with a positive
    declared cardinality.
 5. 3,693 generated valid source inputs: 2,853 `exec`, 420 `eval`, 420 `single`.

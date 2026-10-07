@@ -5,6 +5,16 @@
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_item_invalid_index_result(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_error_t **out_error) {
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("__index__ returned non-(int,long) (type "),
+        TINYPY_MESSAGE_PART_TYPE_NAME(result),
+        TINYPY_MESSAGE_PART_LITERAL(")")
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
@@ -33,8 +43,8 @@ tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_
         }
         kind = TINYPY_VALUE_KIND(converted);
         if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
+            __tinypy_item_invalid_index_result(vm, converted, out_error);
             TINYPY_DECREF(converted);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__index__ returned a non-integer", out_error);
             return NULL;
         }
         if (kind == TINYPY_VALUE_BOOL) {
@@ -103,8 +113,8 @@ tinypy_bool_t tinypy_internal_index_as_i64(tinypy_value_t *value, int64_t *out_i
         }
         kind = TINYPY_VALUE_KIND(converted);
         if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
+            __tinypy_item_invalid_index_result(vm, converted, out_error);
             TINYPY_DECREF(converted);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__index__ returned a non-integer", out_error);
             return TINYPY_FALSE;
         }
         tinypy_bool_t result = tinypy_internal_index_as_i64(converted, out_index, clamp_overflow, out_error);

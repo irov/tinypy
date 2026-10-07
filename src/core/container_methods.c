@@ -83,6 +83,14 @@ tinypy_bool_t tinypy_internal_number_as_ssize(tinypy_value_t *value, int64_t *ou
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG) {
         tinypy_bool_t result = tinypy_internal_index_as_i64(value, out_value, TINYPY_FALSE, out_error);
+        if (result == TINYPY_FALSE && kind == TINYPY_VALUE_LONG) {
+            if (out_error != NULL && *out_error != NULL) {
+                tinypy_error_release(*out_error);
+                *out_error = NULL;
+            }
+            tinypy_internal_exception_clear_raised(TINYPY_VALUE_VM(value));
+            tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_OVERFLOW, "long int too large to convert to int", out_error);
+        }
         return result;
     }
     tinypy_bool_t result = tinypy_internal_number_as_i64(value, out_value, out_error);

@@ -164,12 +164,47 @@ static tinypy_bool_t __tinypy_generator_method_arguments(tinypy_vm_t *vm, tinypy
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_generator_bound_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_bool_t wrapper, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *name = TINYPY_NATIVE_FUNCTION_OBJECT(function)->name;
+    size_t count = TINYPY_TUPLE_SIZE(args);
+    size_t supplied = count != 0U ? count - 1U : 0U;
+
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_message_part_t parts[] = {
+            {wrapper != TINYPY_FALSE ? "wrapper " : "", wrapper != TINYPY_FALSE ? 8U : 0U},
+            TINYPY_MESSAGE_PART_TEXT(name),
+            {wrapper != TINYPY_FALSE ? " doesn't take keyword arguments" : "() takes no keyword arguments", wrapper != TINYPY_FALSE ? sizeof(" doesn't take keyword arguments") - 1U : sizeof("() takes no keyword arguments") - 1U},
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        return TINYPY_FALSE;
+    }
+    if (count == 0U || supplied < minimum || supplied > maximum) {
+        if (wrapper != TINYPY_FALSE) {
+            char count_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+            size_t count_size = tinypy_internal_format_size(count_buffer, supplied);
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("expected 0 arguments, got "),
+                {count_buffer, count_size},
+            };
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
+        }
+        else {
+            tinypy_internal_make_arity_error(vm, (const char *)TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name), supplied, minimum, maximum, style, out_error);
+        }
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_generator_next_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_error_t *iteration_error = NULL;
 
     (void)user_data;
-    if (__tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (TINYPY_TUPLE_SIZE(args) != 0U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) == TINYPY_VALUE_GENERATOR
+        ? __tinypy_generator_bound_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, TINYPY_TRUE, out_error) == TINYPY_FALSE
+        : __tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
@@ -194,7 +229,7 @@ static tinypy_value_t *__tinypy_generator_send_method(tinypy_value_t *function, 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_generator_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (__tinypy_generator_bound_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, TINYPY_FALSE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
@@ -241,8 +276,7 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
 
     (void)user_data;
     count = TINYPY_TUPLE_SIZE(args);
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || count < 2U || count > 4U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "generator.throw received invalid arguments", out_error);
+    if (__tinypy_generator_bound_arguments(function, args, kwargs, 1U, 3U, TINYPY_ARITY_STYLE_UNPACK, TINYPY_FALSE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *generator = TINYPY_TUPLE_GET(args, 0U);
@@ -255,7 +289,7 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
     if (condition) {
         traceback = TINYPY_TUPLE_GET(args, 3U);
         if (TINYPY_VALUE_KIND(traceback) != TINYPY_VALUE_TRACEBACK) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "throw traceback must be a traceback", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "throw() third argument must be a traceback object", out_error);
             return NULL;
         }
     }
@@ -332,7 +366,11 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
         exception = TINYPY_RET(exception_argument);
     }
     else {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exceptions must be old-style classes or derived from BaseException", out_error);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("exceptions must be classes, or instances, not "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(exception_argument),
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
         return NULL;
     }
     tinypy_value_t *exception_type = NULL;
@@ -352,7 +390,7 @@ static tinypy_value_t *__tinypy_generator_close_method(tinypy_value_t *function,
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (__tinypy_generator_bound_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, TINYPY_FALSE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
@@ -367,7 +405,9 @@ static tinypy_value_t *__tinypy_generator_iter_method(tinypy_value_t *function, 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (TINYPY_TUPLE_SIZE(args) != 0U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) == TINYPY_VALUE_GENERATOR
+        ? __tinypy_generator_bound_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, TINYPY_TRUE, out_error) == TINYPY_FALSE
+        : __tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_RET(TINYPY_TUPLE_GET(args, 0U));

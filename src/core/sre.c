@@ -1211,6 +1211,50 @@ static tinypy_bool_t __tinypy_sre_subject_supported(tinypy_value_t *text) {
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_sre_subject_length(tinypy_vm_t *vm, tinypy_value_t *string, size_t *out_size, tinypy_error_t **out_error) {
+    if (__tinypy_sre_subject_supported(string) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected string or buffer", out_error);
+        return TINYPY_FALSE;
+    }
+    size_t size = __tinypy_sre_text_size(string);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(string);
+
+    if (kind != TINYPY_VALUE_UNICODE && tinypy_internal_object_has_special_override_key(string, vm->internal_special_length_key) != 0) {
+        tinypy_value_t *method = tinypy_internal_object_get_special_key(string, vm->internal_special_length_key, out_error);
+        tinypy_value_t *arguments;
+        tinypy_value_t *result;
+        int64_t reported_size;
+
+        if (method == NULL) {
+            return TINYPY_FALSE;
+        }
+        arguments = TINYPY_RET_EMPTY_TUPLE(vm);
+        result = tinypy_call(method, arguments, NULL, out_error);
+        TINYPY_DECREF(arguments);
+        TINYPY_DECREF(method);
+        if (result == NULL) {
+            return TINYPY_FALSE;
+        }
+        tinypy_bool_t converted = tinypy_internal_number_as_ssize(result, &reported_size, out_error);
+
+        TINYPY_DECREF(result);
+        if (converted == 0) {
+            return TINYPY_FALSE;
+        }
+        if (reported_size < 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__ returned a negative value", out_error);
+            return TINYPY_FALSE;
+        }
+        if (kind != TINYPY_VALUE_STRING && size != (uint64_t)reported_size) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "buffer size mismatch", out_error);
+            return TINYPY_FALSE;
+        }
+        size = (size_t)reported_size;
+    }
+    *out_size = size;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_sre_argument_integer(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_FLOAT) {
         tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "integer argument expected, got float", out_error);
@@ -1561,7 +1605,9 @@ static tinypy_bool_t __tinypy_sre_bounds(tinypy_sre_pattern_object_t *pattern, t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected string or buffer", out_error);
         return TINYPY_FALSE;
     }
-    size = __tinypy_sre_text_size(string);
+    if (__tinypy_sre_subject_length(vm, string, &size, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
     *out_pos = pos < 0 ? 0U : ((uint64_t)pos > size ? size : (size_t)pos);
     *out_endpos = endpos < 0 ? 0U : ((uint64_t)endpos > size ? size : (size_t)endpos);
     return TINYPY_TRUE;
@@ -1626,6 +1672,10 @@ static tinypy_value_t *__tinypy_sre_match_group_value(tinypy_sre_match_object_t 
     start = match->marks[(index - 1U) * 2U];
     end = match->marks[(index - 1U) * 2U + 1U];
     if (start == SIZE_MAX || end == SIZE_MAX) {
+        if (default_value == NULL) {
+            tinypy_value_t *empty = __tinypy_sre_empty_like(vm, match->string, out_error);
+            return empty;
+        }
         return TINYPY_RET(default_value);
     }
     if (end < start) {
@@ -1842,34 +1892,19 @@ static tinypy_value_t *__tinypy_sre_pattern_findall(tinypy_value_t *function, ti
             item = __tinypy_sre_text_slice(vm, string, match->start, match->end, out_error);
         }
         else if (pattern->groups == 1U) {
-            tinypy_value_t *empty = __tinypy_sre_empty_like(vm, string, out_error);
-
-            if (empty == NULL) {
-                TINYPY_DECREF(match_value);
-                TINYPY_DECREF(result);
-                return NULL;
-            }
-            item = __tinypy_sre_match_group_value(match, 1U, empty, out_error);
-            TINYPY_DECREF(empty);
+            item = __tinypy_sre_match_group_value(match, 1U, NULL, out_error);
         }
         else {
-            tinypy_value_t *empty = __tinypy_sre_empty_like(vm, string, out_error);
-            if (empty == NULL) {
-                TINYPY_DECREF(match_value);
-                TINYPY_DECREF(result);
-                return NULL;
-            }
             tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, pattern->groups * sizeof(*items));
             size_t index;
 
             for (index = 0U; index < pattern->groups; ++index) {
-                items[index] = __tinypy_sre_match_group_value(match, index + 1U, empty, out_error);
+                items[index] = __tinypy_sre_match_group_value(match, index + 1U, NULL, out_error);
                 if (items[index] == NULL) {
                     while (index != 0U) {
                         TINYPY_DECREF(items[--index]);
                     }
                     tinypy_internal_vm_deallocate(vm, items, pattern->groups * sizeof(*items));
-                    TINYPY_DECREF(empty);
                     TINYPY_DECREF(match_value);
                     TINYPY_DECREF(result);
                     return NULL;
@@ -1880,7 +1915,6 @@ static tinypy_value_t *__tinypy_sre_pattern_findall(tinypy_value_t *function, ti
                 TINYPY_DECREF(items[index]);
             }
             tinypy_internal_vm_deallocate(vm, items, pattern->groups * sizeof(*items));
-            TINYPY_DECREF(empty);
         }
         if (item == NULL) {
             TINYPY_DECREF(match_value);
@@ -1961,7 +1995,9 @@ static tinypy_value_t *__tinypy_sre_pattern_sub_expanded(tinypy_value_t *functio
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "replacement must be a string or callable", out_error);
         return NULL;
     }
-    string_size = __tinypy_sre_text_size(string);
+    if (__tinypy_sre_subject_length(vm, string, &string_size, out_error) == 0) {
+        return NULL;
+    }
     pieces = tinypy_list_from_items(vm, NULL, 0U);
     while (pos <= string_size && (limit == 0 || (limit > 0 && substitutions < (uint64_t)limit))) {
         tinypy_value_t *match_value = __tinypy_sre_execute(pattern, string, pos, string_size, INT32_C(1), out_error);
@@ -2194,10 +2230,22 @@ static tinypy_value_t *__tinypy_sre_call_re_helper(tinypy_vm_t *vm, tinypy_value
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_sre_template_is_literal(tinypy_value_t *replacement) {
-    const uint8_t *bytes = TINYPY_TEXT_BYTES(replacement);
-    size_t size = TINYPY_TEXT_BYTE_SIZE(replacement);
+static tinypy_bool_t __tinypy_sre_template_is_literal(tinypy_value_t *replacement, size_t size) {
+    const uint8_t *bytes;
     size_t index;
+
+    if (TINYPY_VALUE_KIND(replacement) == TINYPY_VALUE_UNICODE) {
+        bytes = TINYPY_TEXT_BYTES(replacement);
+        size = TINYPY_TEXT_BYTE_SIZE(replacement);
+    }
+    else {
+        size_t byte_size;
+
+        (void)tinypy_internal_bytes_view(replacement, &bytes, &byte_size);
+        if (size > byte_size) {
+            size = byte_size;
+        }
+    }
 
     for (index = 0U; index < size; ++index) {
         if (bytes[index] == (uint8_t)'\\') {
@@ -2339,7 +2387,9 @@ static tinypy_value_t *__tinypy_sre_pattern_split(tinypy_value_t *function, tiny
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected string or buffer", out_error);
         return NULL;
     }
-    string_size = __tinypy_sre_text_size(string);
+    if (__tinypy_sre_subject_length(vm, string, &string_size, out_error) == 0) {
+        return NULL;
+    }
     result = tinypy_list_from_items(vm, NULL, 0U);
     while (pos <= string_size && (limit == 0 || (limit > 0 && splits < (uint64_t)limit))) {
         tinypy_value_t *match_value = __tinypy_sre_execute(pattern, string, pos, string_size, INT32_C(1), out_error);
@@ -2498,6 +2548,21 @@ static tinypy_value_t *__tinypy_sre_pattern_scanner(tinypy_value_t *function, ti
     size_t pos;
     size_t endpos;
 
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_message_part_t parts[] = {
+            {user_data != NULL ? "finditer" : "scanner", user_data != NULL ? 8U : 7U},
+            TINYPY_MESSAGE_PART_LITERAL("() takes no keyword arguments")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
+        return NULL;
+    }
+    size_t argument_count = TINYPY_TUPLE_SIZE(args);
+    if (argument_count < 2U || argument_count > 4U) {
+        tinypy_internal_make_arity_error(vm, "scanner", 7U, argument_count != 0U ? argument_count - 1U : 0U, 1U, 3U, TINYPY_ARITY_STYLE_PARSED, out_error);
+        return NULL;
+    }
+
     tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 2U, 4U, out_error) == 0;
     if (condition == 0) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
@@ -2550,10 +2615,19 @@ static tinypy_value_t *__tinypy_sre_pattern_sub(tinypy_value_t *function, tinypy
         return return_value_1;
     }
     replacement = TINYPY_TUPLE_GET(args, 1U);
-    tinypy_bool_t template_text = TINYPY_VALUE_KIND(replacement) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(replacement) == TINYPY_VALUE_UNICODE;
-    if (template_text == 0 || __tinypy_sre_template_is_literal(replacement) != 0 || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_SRE_PATTERN) {
+    tinypy_bool_t callable = replacement->type->call != NULL || tinypy_internal_object_has_special_key(replacement, vm->internal_special_call_key) != 0;
+    if (callable != 0 || __tinypy_sre_subject_supported(replacement) == 0 || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_SRE_PATTERN) {
         tinypy_value_t *return_value_2 = __tinypy_sre_pattern_sub_expanded(function, args, kwargs, user_data, out_error);
         return return_value_2;
+    }
+    size_t template_size;
+
+    if (__tinypy_sre_subject_length(vm, replacement, &template_size, out_error) == 0) {
+        return NULL;
+    }
+    if (__tinypy_sre_template_is_literal(replacement, template_size) != 0) {
+        tinypy_value_t *literal = __tinypy_sre_pattern_sub_expanded(function, args, kwargs, user_data, out_error);
+        return literal;
     }
     tinypy_value_t *helper_items[2] = {TINYPY_TUPLE_GET(args, 0U), replacement};
 
@@ -2604,10 +2678,37 @@ static tinypy_value_t *__tinypy_sre_keyword_method(tinypy_value_t *function, tin
     size_t positional_count = TINYPY_TUPLE_SIZE(args) != 0U ? TINYPY_TUPLE_SIZE(args) - 1U : 0U;
     size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
     size_t field_count = spec->count + (spec->has_alias != 0 ? 1U : 0U);
+    size_t remaining_keywords = keyword_count;
     size_t index;
 
     if (TINYPY_TUPLE_SIZE(args) == 0U || positional_count + keyword_count > spec->count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "SRE method received invalid arguments", out_error);
+        tinypy_value_t *function_name = tinypy_native_function_name(function);
+        size_t count = positional_count + keyword_count;
+
+        if (spec->has_alias != 0) {
+            tinypy_value_t *actual = tinypy_integer_from_i64(vm, (int64_t)count);
+            tinypy_value_t *actual_text = tinypy_object_str(actual, out_error);
+            char maximum = (char)('0' + spec->count);
+
+            TINYPY_DECREF(actual);
+            if (actual_text == NULL) {
+                return NULL;
+            }
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_TEXT(function_name),
+                TINYPY_MESSAGE_PART_LITERAL("() takes at most "),
+                {&maximum, 1U},
+                TINYPY_MESSAGE_PART_LITERAL(" positional arguments ("),
+                TINYPY_MESSAGE_PART_TEXT(actual_text),
+                TINYPY_MESSAGE_PART_LITERAL(" given)")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 6U, out_error);
+            TINYPY_DECREF(actual_text);
+        }
+        else {
+            tinypy_internal_make_arity_error(vm, (const char *)TINYPY_TEXT_BYTES(function_name), TINYPY_TEXT_BYTE_SIZE(function_name), count, spec->required, spec->count, TINYPY_ARITY_STYLE_PARSED, out_error);
+        }
         return NULL;
     }
     for (index = 0U; index < field_count; ++index) {
@@ -2618,17 +2719,38 @@ static tinypy_value_t *__tinypy_sre_keyword_method(tinypy_value_t *function, tin
         tinypy_value_t *value = NULL;
 
         if (kwargs != NULL) {
-            value = tinypy_dict_get_optional(kwargs, parameters[index]);
+            value = remaining_keywords != 0U ? tinypy_internal_constructor_keyword_optional(kwargs, parameters[index]) : NULL;
+            if (value != NULL) {
+                remaining_keywords -= 1U;
+            }
         }
         if (index < positional_count) {
             if (value != NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "SRE argument given by name and position", out_error);
+                char position = (char)('1' + index);
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("Argument given by name ('"),
+                    TINYPY_MESSAGE_PART_TEXT(parameters[index]),
+                    TINYPY_MESSAGE_PART_LITERAL("') and position ("),
+                    {&position, 1U},
+                    TINYPY_MESSAGE_PART_LITERAL(")")
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
                 goto cleanup;
             }
             value = TINYPY_TUPLE_GET(args, index + 1U);
         }
         if (value == NULL && index < spec->required) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "required SRE argument not found", out_error);
+            char position = (char)('1' + index);
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("Required argument '"),
+                TINYPY_MESSAGE_PART_TEXT(parameters[index]),
+                TINYPY_MESSAGE_PART_LITERAL("' (pos "),
+                {&position, 1U},
+                TINYPY_MESSAGE_PART_LITERAL(") not found")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
             goto cleanup;
         }
         if (value != NULL) {
@@ -2657,30 +2779,15 @@ static tinypy_value_t *__tinypy_sre_keyword_method(tinypy_value_t *function, tin
             items[index + 1U] = value;
         }
     }
-    if (spec->has_alias != 0) {
-        if (alias != NULL) {
-            if (items[1] != NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "SRE string argument given more than once", out_error);
-                goto cleanup;
-            }
-            items[1] = alias;
-            alias = NULL;
-        }
-        if (items[1] == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "required SRE string argument not found", out_error);
-            goto cleanup;
-        }
-    }
-    if (kwargs != NULL) {
+    if (remaining_keywords != 0U) {
         size_t position = 0U;
         tinypy_value_t *key;
         tinypy_value_t *value;
 
         while (tinypy_dict_next(kwargs, &position, &key, &value) != 0) {
             tinypy_bool_t recognized = TINYPY_FALSE;
-            tinypy_value_type_e kind = TINYPY_VALUE_KIND(key);
 
-            if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
+            if (TINYPY_VALUE_KIND(key) != TINYPY_VALUE_STRING) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
                 goto cleanup;
             }
@@ -2691,9 +2798,35 @@ static tinypy_value_t *__tinypy_sre_keyword_method(tinypy_value_t *function, tin
                 }
             }
             if (recognized == 0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "invalid keyword argument for SRE method", out_error);
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("'"),
+                    TINYPY_MESSAGE_PART_TEXT(key),
+                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function")
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
                 goto cleanup;
             }
+        }
+    }
+    if (spec->has_alias != 0) {
+        if (alias != NULL) {
+            if (items[1] != NULL) {
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("Argument given by name ('"),
+                    TINYPY_MESSAGE_PART_TEXT(parameters[spec->count]),
+                    TINYPY_MESSAGE_PART_LITERAL("') and position (1)")
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+                goto cleanup;
+            }
+            items[1] = alias;
+            alias = NULL;
+        }
+        if (items[1] == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Required argument 'string' (pos 1) not found", out_error);
+            goto cleanup;
         }
     }
     for (index = 1U; index <= spec->count; ++index) {

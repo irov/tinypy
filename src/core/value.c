@@ -124,6 +124,7 @@ tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tin
         }
         else if (kind == TINYPY_VALUE_UNICODE) {
             TINYPY_UNICODE_OBJECT(result)->index_offsets = NULL;
+            TINYPY_UNICODE_OBJECT(result)->native_buffer = NULL;
         }
         TINYPY_DECREF(value);
         return result;
@@ -146,6 +147,7 @@ tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tin
     }
     else if (kind == TINYPY_VALUE_UNICODE) {
         TINYPY_UNICODE_OBJECT(result)->index_offsets = NULL;
+        TINYPY_UNICODE_OBJECT(result)->native_buffer = NULL;
     }
     TINYPY_DECREF(value);
     return result;
@@ -417,6 +419,11 @@ static inline size_t __tinypy_internal_text_allocation_size(tinypy_value_type_e 
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_text_allocate_uninitialized(tinypy_vm_t *vm, tinypy_value_type_e type, size_t byte_size, size_t code_point_count, uint8_t **out_bytes, tinypy_bool_t checked, tinypy_error_t **out_error) {
+    if (type == TINYPY_VALUE_UNICODE && byte_size == 0U && vm->empty_unicode != NULL) {
+        *out_bytes = TINYPY_UNICODE_OBJECT(vm->empty_unicode)->utf8;
+        tinypy_value_t *empty = TINYPY_RET_EMPTY_UNICODE(vm);
+        return empty;
+    }
     size_t allocation_size = __tinypy_internal_text_allocation_size(type, byte_size);
     uint8_t *payload;
     tinypy_value_t *value;
@@ -442,6 +449,7 @@ static tinypy_value_t *__tinypy_internal_text_allocate_uninitialized(tinypy_vm_t
         TINYPY_SIZED_SIZE(value) = code_point_count;
         TINYPY_UNICODE_OBJECT(value)->byte_size = byte_size;
         TINYPY_UNICODE_OBJECT(value)->index_offsets = NULL;
+        TINYPY_UNICODE_OBJECT(value)->native_buffer = NULL;
         payload = TINYPY_UNICODE_OBJECT(value)->utf8;
     }
     payload[byte_size] = 0U;

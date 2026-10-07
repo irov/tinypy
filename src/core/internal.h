@@ -266,6 +266,7 @@ typedef struct tinypy_intern_entry_t {
     X(internal_reverse_key, "reverse", 1) \
     X(internal_cmp_key, "cmp", 1) \
     X(internal_default_key, "default", 1) \
+    X(internal_underscore_key, "_", 1) \
     X(internal_object_key, "object", 1) \
     X(internal_end_key, "end", 1) \
     X(internal_reason_key, "reason", 1) \
@@ -1212,6 +1213,7 @@ typedef struct tinypy_unicode_object_t {
     tinypy_hash_t hash;
     tinypy_bool_t hash_computed;
     size_t *index_offsets;
+    uint32_t *native_buffer;
     uint8_t utf8[];
 } tinypy_unicode_object_t;
 //////////////////////////////////////////////////////////////////////////
@@ -1650,6 +1652,7 @@ static inline tinypy_value_t *__tinypy_internal_value_ret(tinypy_value_t *value)
 #define TINYPY_RET_ELLIPSIS(vm) TINYPY_RET(&(vm)->ellipsis_object.base)
 #define TINYPY_RET_EMPTY_TUPLE(vm) TINYPY_RET(&(vm)->empty_tuple_object.base.base)
 #define TINYPY_RET_EMPTY_STRING(vm) TINYPY_RET(&(vm)->empty_string_object.base.base)
+#define TINYPY_RET_EMPTY_UNICODE(vm) TINYPY_RET((vm)->empty_unicode)
 #define TINYPY_DECREF(value) \
     do { \
         tinypy_value_t *__tinypy_decref_value = (value); \
@@ -1817,6 +1820,7 @@ struct tinypy_vm_t {
     tinypy_integer_object_t integer_constants[TINYPY_INTEGER_CONSTANT_COUNT];
     tinypy_float_object_t float_zero_object;
     tinypy_string_object_t empty_string_object;
+    tinypy_value_t *empty_unicode;
     tinypy_tuple_object_t empty_tuple_object;
     tinypy_value_t *string_char_cache[256];
     tinypy_value_t *unicode_char_cache[256];
@@ -1877,6 +1881,7 @@ size_t tinypy_internal_utf8_invalid_span(const uint8_t *bytes, size_t size);
 size_t tinypy_internal_utf8_encode(uint32_t code_point, uint8_t bytes[4]);
 size_t tinypy_internal_unicode_byte_offset(tinypy_value_t *value, size_t character_index);
 size_t tinypy_internal_unicode_character_index(tinypy_value_t *value, size_t byte_offset);
+const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, tinypy_bool_t checked, size_t *out_size, tinypy_error_t **out_error);
 void tinypy_internal_unicode_destroy(tinypy_value_t *value);
 uint32_t tinypy_internal_unicode_lower(uint32_t code_point);
 uint32_t tinypy_internal_unicode_upper(uint32_t code_point);
@@ -2193,8 +2198,7 @@ void tinypy_internal_initialize_output_type(tinypy_vm_t *vm);
 tinypy_bool_t tinypy_internal_output_write(tinypy_value_t *target, const void *bytes, size_t size, tinypy_error_t **out_error);
 void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object);
 tinypy_bool_t tinypy_internal_output_write_value(tinypy_value_t *target, tinypy_value_t *text, tinypy_error_t **out_error);
-tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target);
-void tinypy_internal_output_set_soft_space(tinypy_value_t *target, tinypy_bool_t soft_space);
+tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target, tinypy_bool_t new_flag);
 void tinypy_internal_type_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_type_destroy(tinypy_value_t *value);
 void tinypy_internal_type_lookup_cache_invalidate(tinypy_vm_t *vm);

@@ -171,78 +171,43 @@ tinypy_bool_t tinypy_internal_output_write_value(tinypy_value_t *target, tinypy_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
-    tinypy_value_type_e kind;
-
-    kind = TINYPY_VALUE_KIND(target);
-    if (kind == TINYPY_VALUE_OUTPUT_STREAM) {
-        tinypy_bool_t return_value_1 = TINYPY_OUTPUT_STREAM_OBJECT(target)->soft_space;
-        return return_value_1;
-    }
-    if (kind != TINYPY_VALUE_INSTANCE) {
-        /* Any object with a write method may carry softspace, as the print
-           statement reads it through the attribute protocol in Python 2.7. */
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-        tinypy_error_t *error = NULL;
-        tinypy_value_t *value;
-        int32_t status = tinypy_internal_object_get_optional_attr_key(target, vm->internal_softspace_key, &value, &error);
-        int32_t soft_space = 0;
-
-        if (status > 0) {
-            soft_space = tinypy_truth(value, &error);
-            TINYPY_DECREF(value);
-        }
-        if (error != NULL) {
-            tinypy_error_release(error);
-            tinypy_vm_clear_error(vm);
-        }
-        return soft_space > 0 ? TINYPY_TRUE : TINYPY_FALSE;
-    }
-    if (kind == TINYPY_VALUE_INSTANCE) {
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-        tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(target);
-        tinypy_value_t *value = dict_slot != NULL && *dict_slot != NULL ? tinypy_dict_get_optional(*dict_slot, vm->internal_softspace_key) : NULL;
-        tinypy_bool_t soft_space = TINYPY_FALSE;
-
-        if (value != NULL) {
-            tinypy_value_type_e value_kind = TINYPY_VALUE_KIND(value);
-
-            if (value_kind == TINYPY_VALUE_BOOL || value_kind == TINYPY_VALUE_INTEGER) {
-                soft_space = TINYPY_INTEGER_VALUE(value) != 0 ? INT32_C(1) : INT32_C(0);
-            }
-        }
-        return soft_space;
-    }
-    return TINYPY_FALSE;
-}
-//////////////////////////////////////////////////////////////////////////
-void tinypy_internal_output_set_soft_space(tinypy_value_t *target, tinypy_bool_t soft_space) {
+tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target, tinypy_bool_t new_flag) {
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_OUTPUT_STREAM) {
-        TINYPY_OUTPUT_STREAM_OBJECT(target)->soft_space = soft_space != 0 ? INT32_C(1) : INT32_C(0);
-    }
-    else if (TINYPY_VALUE_KIND(target) != TINYPY_VALUE_INSTANCE) {
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-        tinypy_error_t *error = NULL;
-        tinypy_value_t *value = tinypy_integer_from_i64(vm, soft_space != 0 ? INT64_C(1) : INT64_C(0));
+        tinypy_output_stream_object_t *stream = TINYPY_OUTPUT_STREAM_OBJECT(target);
+        tinypy_bool_t previous = stream->soft_space;
 
-        (void)tinypy_object_set_attr_value(target, vm->internal_softspace_key, value, &error);
+        stream->soft_space = new_flag != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
+        return previous;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
+    tinypy_internal_exception_state_t state;
+    tinypy_error_t *error = NULL;
+    tinypy_bool_t previous = TINYPY_FALSE;
+
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    tinypy_value_t *value = tinypy_object_get_attr_value(target, vm->internal_softspace_key, &error);
+
+    if (value != NULL) {
+        tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+        if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
+            previous = TINYPY_INTEGER_VALUE(value) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        }
         TINYPY_DECREF(value);
-        if (error != NULL) {
-            tinypy_error_release(error);
-            tinypy_vm_clear_error(vm);
-        }
     }
-    else {
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-        tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(target);
-
-        if (dict_slot != NULL) {
-            tinypy_value_t *value = tinypy_integer_from_i64(vm, soft_space != 0 ? INT64_C(1) : INT64_C(0));
-
-            tinypy_instance_set_attr_key(target, vm->internal_softspace_key, value);
-            TINYPY_DECREF(value);
-        }
+    if (error != NULL) {
+        tinypy_error_release(error);
+        error = NULL;
     }
+    tinypy_internal_exception_clear_raised(vm);
+    value = tinypy_integer_from_i64(vm, new_flag != TINYPY_FALSE ? INT64_C(1) : INT64_C(0));
+    (void)tinypy_object_set_attr_value(target, vm->internal_softspace_key, value, &error);
+    TINYPY_DECREF(value);
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    tinypy_internal_exception_preserve_end(vm, &state);
+    return previous;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_output_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {

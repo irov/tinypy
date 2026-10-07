@@ -458,29 +458,56 @@ static tinypy_bool_t __tinypy_eval_print_whitespace(uint8_t character) {
 static tinypy_bool_t __tinypy_eval_print_item(tinypy_vm_t *vm, tinypy_value_t *target, tinypy_value_t *item, tinypy_error_t **out_error) {
     tinypy_value_type_e item_kind = TINYPY_VALUE_KIND(item);
     tinypy_value_t *text;
+    tinypy_value_t *writer = NULL;
     const uint8_t *bytes;
     size_t size;
 
+    if (tinypy_internal_output_soft_space(target, TINYPY_FALSE) != TINYPY_FALSE
+        && tinypy_internal_output_write(target, " ", 1U, out_error) == TINYPY_FALSE) {
+        return TINYPY_FALSE;
+    }
+    if (TINYPY_VALUE_KIND(target) != TINYPY_VALUE_OUTPUT_STREAM) {
+        writer = tinypy_object_get_attr_value(target, vm->internal_write_key, out_error);
+        if (writer == NULL) {
+            return TINYPY_FALSE;
+        }
+    }
     if (item->type == &vm->types[TINYPY_VALUE_STRING] || item_kind == TINYPY_VALUE_UNICODE) {
         text = TINYPY_RET(item);
     }
     else {
         text = tinypy_object_str(item, out_error);
         if (text == NULL) {
+            if (writer != NULL) {
+                TINYPY_DECREF(writer);
+            }
             return TINYPY_FALSE;
         }
     }
     bytes = TINYPY_TEXT_BYTES(text);
     size = TINYPY_TEXT_BYTE_SIZE(text);
-    if (tinypy_internal_output_soft_space(target) != 0) {
-        if (tinypy_internal_output_write(target, " ", 1U, out_error) == 0) {
-            TINYPY_DECREF(text);
-            return TINYPY_FALSE;
+    tinypy_bool_t written;
+    if (writer != NULL) {
+        tinypy_value_t *args = tinypy_tuple_from_items(vm, &text, 1U);
+        tinypy_value_t *result = tinypy_call(writer, args, NULL, out_error);
+
+        TINYPY_DECREF(args);
+        TINYPY_DECREF(writer);
+        written = result != NULL;
+        if (result != NULL) {
+            TINYPY_DECREF(result);
         }
     }
-    if (tinypy_internal_output_write_value(target, text, out_error) == 0) {
+    else {
+        written = tinypy_internal_output_write_value(target, text, out_error);
+    }
+    if (written == TINYPY_FALSE) {
         TINYPY_DECREF(text);
         return TINYPY_FALSE;
+    }
+    if (item_kind == TINYPY_VALUE_STRING || item_kind == TINYPY_VALUE_UNICODE) {
+        bytes = TINYPY_TEXT_BYTES(item);
+        size = TINYPY_TEXT_BYTE_SIZE(item);
     }
     /* PRINT_ITEM keeps the soft space unless a text item ends in whitespace
        other than a plain space; other objects always set it. */
@@ -498,7 +525,9 @@ static tinypy_bool_t __tinypy_eval_print_item(tinypy_vm_t *vm, tinypy_value_t *t
     else if (item_kind == TINYPY_VALUE_STRING && size != 0U && bytes[size - 1U] != (uint8_t)' ' && __tinypy_eval_print_whitespace(bytes[size - 1U]) != 0) {
         soft_space = TINYPY_FALSE;
     }
-    tinypy_internal_output_set_soft_space(target, soft_space);
+    if (soft_space != TINYPY_FALSE) {
+        (void)tinypy_internal_output_soft_space(target, TINYPY_TRUE);
+    }
     TINYPY_DECREF(text);
     return TINYPY_TRUE;
 }
@@ -507,7 +536,7 @@ static tinypy_bool_t __tinypy_eval_print_newline(tinypy_value_t *target, tinypy_
     if (tinypy_internal_output_write(target, "\n", 1U, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    tinypy_internal_output_set_soft_space(target, INT32_C(0));
+    (void)tinypy_internal_output_soft_space(target, TINYPY_FALSE);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
