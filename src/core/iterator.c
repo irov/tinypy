@@ -638,7 +638,7 @@ tinypy_bool_t tinypy_internal_length_hint(tinypy_value_t *value, int64_t default
         }
         TINYPY_DECREF(result);
         if (length < 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__ returned a negative value", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__() should return >= 0", out_error);
             return TINYPY_FALSE;
         }
         *out_hint = length;
@@ -682,7 +682,7 @@ tinypy_bool_t tinypy_internal_length_hint(tinypy_value_t *value, int64_t default
         }
         TINYPY_DECREF(result);
         if (length < 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__ returned a negative value", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__() should return >= 0", out_error);
             return TINYPY_FALSE;
         }
         *out_hint = length;

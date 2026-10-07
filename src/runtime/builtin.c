@@ -528,8 +528,6 @@ static tinypy_bool_t __tinypy_builtin_check_class(tinypy_vm_t *vm, tinypy_value_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_builtin_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_error_t **out_error);
-//////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_builtin_instance_check_impl(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
     tinypy_bool_t metaclass_result;
@@ -544,7 +542,7 @@ static int32_t __tinypy_builtin_instance_check_impl(tinypy_value_t *object, tiny
 
         for (; iterator != iterator_end; ++iterator) {
             tinypy_value_t *item = *iterator;
-            int32_t result = __tinypy_builtin_instance_check(object, item, subclass, out_error);
+            int32_t result = tinypy_internal_object_instance_check(object, item, subclass, out_error);
 
             if (result != 0) {
                 return result;
@@ -615,7 +613,7 @@ static int32_t __tinypy_builtin_instance_check_impl(tinypy_value_t *object, tiny
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_builtin_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_error_t **out_error) {
+int32_t tinypy_internal_object_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
 
     if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in instance check", out_error) == 0) {
@@ -637,15 +635,9 @@ static tinypy_value_t *__tinypy_builtin_isinstance(tinypy_value_t *function, tin
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
-    result = __tinypy_builtin_instance_check(item, item_2, 0, out_error);
+    result = tinypy_internal_object_instance_check(item, item_2, TINYPY_FALSE, out_error);
     tinypy_value_t *return_value_1 = result < 0 ? NULL : tinypy_bool_from_i32(vm, result);
     return return_value_1;
-}
-//////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_object_is_instance(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_error_t **out_error) {
-    int32_t result = __tinypy_builtin_instance_check(object, classinfo, TINYPY_FALSE, out_error);
-
-    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_issubclass(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -658,7 +650,7 @@ static tinypy_value_t *__tinypy_builtin_issubclass(tinypy_value_t *function, tin
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
-    result = __tinypy_builtin_instance_check(item, item_2, 1, out_error);
+    result = tinypy_internal_object_instance_check(item, item_2, TINYPY_TRUE, out_error);
     tinypy_value_t *return_value_1 = result < 0 ? NULL : tinypy_bool_from_i32(vm, result);
     return return_value_1;
 }

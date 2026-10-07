@@ -31,9 +31,9 @@ The run includes:
    previously standalone opcode and bytecode-verifier tests.
 3. Every selected portable case against external CPython 2.7.18, with discovery
    validation, exact source hashes for unchanged vendor modules, and zero
-   allocator balance for each tinypy process. The eleventh-pass inventory contains 49
-   project-authored modules with 1,538 cases and 210 selected vendor cases,
-   for 1,748 selected cases in total.
+   allocator balance for each tinypy process. The twelfth-pass inventory contains 52
+   project-authored modules with 1,594 cases and 210 selected vendor cases,
+   for 1,804 selected cases in total.
 4. A fixed matrix of 15,040 numeric and sequence outcomes. It compares values,
    result types and exception classes, including division, reflected builtin
    numeric combinations, infinities, NaN, subnormal/maximum finite doubles,
@@ -70,7 +70,9 @@ The run includes:
    26,217 text-method/parser/padding/codec observations, 913 cold/warm native
    readiness and physical numeric-descriptor observations, and 5,032 weakref
    parser/cache/callback/proxy observations.
-   Total: 337,542 unique outcomes per profile across forty matrices.
+   The twelfth pass adds 4,158 bytearray constructor/hint/mutation outcomes,
+   18,636 Unicode translation/codec callbacks and 681 direct descriptor calls.
+   Total: 361,017 unique outcomes per profile across forty-three matrices.
    Every identity must be unique, with a positive
    declared cardinality.
 5. 3,693 generated valid source inputs: 2,853 `exec`, 420 `eval`, 420 `single`.
@@ -89,29 +91,29 @@ The run includes:
    These compiler product sources must compile with quiet stdout and stderr on
    both interpreters; matching payloads cannot hide warnings or other diagnostics.
    Warning behavior is tested separately in runtime callback fixtures.
-   The checked-in compiler inventory contains 177 Python inputs, including all
-   four new local modules and four new products. Together with the generated
-   sources, optimization levels 0/1/2 require 11,610 compiler comparisons per
-   profile, or 46,440 across the default four profiles.
+   The checked-in compiler inventory contains 183 Python inputs, including all
+   three new local modules and three new products. Together with the generated
+   sources, optimization levels 0/1/2 require 11,628 compiler comparisons per
+   profile, or 46,512 across the default four profiles.
 6. Standalone marshal/artifact tests, sanitizer checks and symbol audits of
    those components and the core archive.
 
 The portable report is rejected for missing/duplicate cases, ordinary skips,
 DEFER, reference failures, or inconsistent counts. Only the four declared
 ownership-cycle adaptations may skip in Release; Debug must exercise the
-detector. Acceptance requires 1,748 PASS in Debug and 1,744 PASS with those
+detector. Acceptance requires 1,804 PASS in Debug and 1,800 PASS with those
 four expected detector SKIP results in Release. These are inventory requirements;
 the generated report records which profiles completed acceptance.
 Python-visible conversion errors, callbacks and error ordering remain
 part of Release acceptance. Diagnostic invariant checks can compile out.
-The CTest inventory is also exact: 89 native/runtime groups and 159 total
+The CTest inventory is also exact: 89 native/runtime groups and 162 total
 registrations, recorded in `conformance/native_cases.json`;
 JUnit results must contain every selected test and no skips. Timeouts stop the
 stage's process tree, preserving captured output and a failed report.
 Reverse inventories require every local test file and runtime matrix to be
 registered and assigned to a coverage domain.
 
-The eleventh-pass frozen inventory passed all 258 stages on macOS arm64 in
+The twelfth-pass frozen inventory passed all 273 stages on macOS arm64 in
 Debug, Release, ASan/UBSan and Release LTO. The source/test/SPEC fingerprint
 matches after the run. Results and the historical baselines are recorded in
 [REVIEW_STATUS.md](upstream/REVIEW_STATUS.md).

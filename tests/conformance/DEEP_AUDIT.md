@@ -1,7 +1,7 @@
 # Deep conformance audit — 2026-10-08
 
 The supported contract is [SPEC.md](../../SPEC.md), with external CPython
-2.7.18 as the observable-behavior oracle. Eleven audit passes added 1,078 independently
+2.7.18 as the observable-behavior oracle. Twelve audit passes added 1,134 independently
 authored portable cases: the initial 109, 84 boundary/callback cases,
 and 92 comparison/type/generator/regex cases (37 comparisons, 27 types,
 13 control flow and 15 SRE), followed by 87 constructor/iterator/descriptor/
@@ -17,17 +17,21 @@ protocol cases), followed by 83 direct-slot and stateful callback cases
 introspection cases (14 metadata, 25 numeric, 31 container and 26 introspection),
 followed by 110 wrapper/iterator/buffer/Struct cases (25 wrappers, 27 iterators,
 28 buffers and 30 Struct), followed by 129 lifetime/parser/readiness/weakref
-cases (27 buffers, 34 text, 30 native metadata and 38 weakrefs).
-The eleventh-pass witnesses and four new products pass CPython and tinypy
-comparisons in Debug, Release, ASan/UBSan and Release LTO, with independent
-source reviews. Aggregate acceptance is recorded below; the completed tenth
-pass is retained as historical evidence.
+cases (27 buffers, 34 text, 30 native metadata and 38 weakrefs), followed by
+56 bytearray/translation/direct-binding cases (24 bytearray, 15 Unicode/codecs
+and 17 descriptors). The twelfth-pass witnesses and three new products match
+CPython in focused strict Debug checks, with independent source reviews.
+Aggregate acceptance is recorded below; preceding completed passes remain
+as historical evidence.
 These counts are regression witnesses, not a count of distinct defects.
 
 ## Corrected behavior
 
 | Area | Confirmed corrections |
 | --- | --- |
+| Bytearray construction and state | Source hints after iterator acquisition, bound/unbound negative-hint errors, TypeError-only index fallback, codec invocation for byte strings, retained codec temporaries and entry-size snapshots before append/insert conversion callbacks. |
+| Unicode translation and codec callbacks | Repeated lookup after deleted runs, validation/release of discarded lookahead, end-only ignore/decode replacement, dynamic reported class/name diagnostics and strict hex codec error policy. |
+| Direct descriptor calls | Canonical parser/receiver errors, omitted/None method owner, classic/modern rebinding, metaclass subclass callbacks and bound-method identity; one shared instance/subclass algorithm. |
 | Live buffers | Retained requested bounds across resize/regrow, flattened root ownership, first-hash cache, complete owner/self repr roles and separate encoded character versus raw Unicode views; numeric prefix/NUL/base parser priority. |
 | Text and codecs | Native method calling conventions, width/fill conversion order, subtype center margins, join acquisition errors, fresh formatter spans, codec encoder/decoder parser priority, nullable error names and canonical registry keys. |
 | Native readiness | Cold/warm first-write errors and safe first-read transitions, shared type state, physical C descriptor metadata and numeric member/getset fields with readonly and receiver diagnostics. |
@@ -295,10 +299,13 @@ as an oracle match. [SPEC.md](../../SPEC.md#14-errors) records this boundary.
 | Text arguments, padding, join, character buffers and codec parsers/registry | 26,217 |
 | Cold/warm native metadata and physical numeric descriptor fields | 913 |
 | Weakref construction, basic caches, proxies, callbacks and dictionary removal | 5,032 |
-| **Total unique runtime outcomes** | **337,542** |
+| Bytearray constructor/reinit, source hints, codec and bounded growth callbacks | 4,158 |
+| Unicode translate mapping/lookahead, handler endpoints and codec diagnosis/policy | 18,636 |
+| Direct descriptor binding, owner/receiver/parser, subclass callbacks and recovery | 681 |
+| **Total unique runtime outcomes** | **361,017** |
 
 Operands include integer widening, long, bool, float, complex, infinity, NaN,
-subnormal and maximum finite doubles. All forty matrices compare complete stdout to
+subnormal and maximum finite doubles. All forty-three matrices compare complete stdout to
 the oracle and verify unique identities, exact cardinality and zero outstanding
 tinypy allocations. They compare exception classes; protocol regressions also
 assert callback order, mutation, identity and selected exception messages.
@@ -316,10 +323,10 @@ failed folds remain valid runtime expressions. Independent host checks assert
 every generated filename, not just the totals. A separate 12,288-row runtime
 matrix verifies all caller/explicit future combinations, code shape and
 execution results.
-Each source is checked at optimize 0/1/2. Another 177 checked-in vendor, local,
+Each source is checked at optimize 0/1/2. Another 183 checked-in vendor, local,
 runtime and matrix sources undergo three-level `exec` comparison. This gives
-11,610 marshal-v2 comparisons per profile, 46,440 across all four. These are
-the eleventh-pass required inventory totals; the aggregate report establishes
+11,628 marshal-v2 comparisons per profile, 46,512 across all four. These are
+the twelfth-pass required inventory totals; the aggregate report establishes
 completed profile acceptance.
 
 Three explicitly identified attribute-product rows coalesce consecutive identical
@@ -508,7 +515,35 @@ fields. The raw unknown-name direct miss was 1.6% slower. Hits/misses matched
 in every run. Results and all samples are in `.temp/builtin-metadata-benchmark.json`;
 they describe these local lookup workloads, not application performance.
 
-## Accepted validation — eleventh pass
+## Accepted validation — twelfth pass
+
+The default [matrix runner](../run_validation.py) completes all 273 stages on
+macOS arm64 with strict warnings-as-errors, in 303.7 recorded stage seconds.
+
+| Profile | Native/runtime CTest | Portable oracle cases | Runtime outcomes | Compiler comparisons |
+| --- | --- | --- | --- | --- |
+| Debug, detector on | 89 PASS | 1,804 PASS | 361,017 matching | 11,628 identical |
+| Release | 89 PASS | 1,800 PASS / 4 diagnostic SKIP | 361,017 matching | 11,628 identical |
+| Unoptimized Debug, ASan/UBSan | 89 PASS | 1,804 PASS | 361,017 matching | 11,628 identical |
+| Release, LTO | 89 PASS | 1,800 PASS / 4 diagnostic SKIP | 361,017 matching | 11,628 identical |
+
+The exact inventory contains 162 CTest registrations: 89 native/runtime tests,
+72 portable-module wrappers and the adapter. All 90 host/API/runner checks pass.
+Compiler inputs contain 183 checked-in and 3,693 generated sources at optimize
+0/1/2; four profiles compare 46,512 marshal payloads. Standalone marshal/artifact,
+core symbols, 741 eager VM presets and per-process allocator balance pass.
+No compiler warnings or ASan/UBSan diagnostics occurred; Apple ASan uses
+`detect_leaks=0` with independent allocator accounting.
+
+The accepted report is `.temp/validation-twelfth-audit-accepted/report.json`.
+All stages have PASS status and the post-run source/test/SPEC fingerprint matches:
+`3ed361ccb150ab16c3d24f09b2f978c3a3b869f0fd8dd19cbb50343d37ab0357`.
+The new modules/products are registered in both forward and reverse inventories
+and reviewed independently. No new skip, DEFER or SPEC exception was added.
+This is finite local acceptance; the continuing builtin leads are recorded in
+[REVIEW_STATUS.md](../upstream/REVIEW_STATUS.md#twelfth-pass-follow-up--accepted).
+
+## Historical accepted validation — eleventh pass
 
 The default [matrix runner](../run_validation.py) completed all 258 stages on
 macOS arm64 with strict warnings-as-errors. Recorded stage time was 288.3 seconds.

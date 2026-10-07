@@ -158,7 +158,7 @@ tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_val
         int32_t valid_owner = INT32_C(0);
 
         if (first != NULL) {
-            valid_owner = tinypy_internal_object_is_instance(first, method->owner, out_error);
+            valid_owner = tinypy_internal_object_instance_check(first, method->owner, TINYPY_FALSE, out_error);
             if (valid_owner < 0) {
                 return NULL;
             }

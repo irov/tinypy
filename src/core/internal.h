@@ -2406,7 +2406,7 @@ tinypy_bool_t tinypy_internal_exception_consume_stop_iteration(tinypy_vm_t *vm, 
 tinypy_bool_t tinypy_internal_exception_consume_kind(tinypy_vm_t *vm, tinypy_exception_type_index_e index, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_exception_prefix_raised(tinypy_vm_t *vm, tinypy_exception_type_index_e index, const char *prefix, size_t prefix_size, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_is_mapping(tinypy_vm_t *vm, tinypy_value_t *value);
-int32_t tinypy_internal_object_is_instance(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_error_t **out_error);
+int32_t tinypy_internal_object_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_error_t **out_error);
 void tinypy_internal_traceback_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_traceback_new(tinypy_value_t *frame, tinypy_value_t *next);
 void tinypy_internal_traceback_here(tinypy_vm_t *vm, tinypy_frame_object_t *frame);

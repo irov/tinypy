@@ -104,7 +104,7 @@ static tinypy_bool_t __tinypy_bytearray_item(tinypy_vm_t *vm, tinypy_value_t *va
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t *source, uint8_t **out_bytes, size_t *out_size, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t *source, const char *negative_hint_message, uint8_t **out_bytes, size_t *out_size, tinypy_error_t **out_error) {
     const uint8_t *view;
     size_t view_size;
     uint8_t *bytes = NULL;
@@ -129,6 +129,27 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
     tinypy_value_t *iterator = tinypy_iter(source, out_error);
     if (iterator == NULL) {
         return TINYPY_FALSE;
+    }
+    if (negative_hint_message != NULL) {
+        int64_t hint;
+
+        if (tinypy_internal_length_hint(source, INT64_C(32), &hint, out_error) == TINYPY_FALSE) {
+            TINYPY_DECREF(iterator);
+            return TINYPY_FALSE;
+        }
+        if (hint < 0) {
+            tinypy_internal_exception_raise_system_error(vm, hint == INT64_C(-1) ? negative_hint_message : "Negative size passed to PyByteArray_FromStringAndSize", out_error);
+            TINYPY_DECREF(iterator);
+            return TINYPY_FALSE;
+        }
+        if (hint != 0) {
+            capacity = (size_t)hint;
+            bytes = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, capacity, out_error);
+            if (bytes == NULL) {
+                TINYPY_DECREF(iterator);
+                return TINYPY_FALSE;
+            }
+        }
     }
     for (;;) {
         tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
@@ -199,7 +220,11 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
         }
         return TINYPY_FALSE;
     }
-    if (size != 0U && capacity != size) {
+    if (size == 0U && bytes != NULL) {
+        tinypy_internal_vm_deallocate(vm, bytes, capacity);
+        bytes = NULL;
+    }
+    else if (capacity != size) {
         uint8_t *resized = (uint8_t *)tinypy_internal_vm_reallocate_checked(vm, bytes, capacity, size, out_error);
 
         if (resized == NULL) {
@@ -513,10 +538,27 @@ tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_val
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "encoding or errors without a string argument", out_error);
         return NULL;
     }
-    if (source_kind == TINYPY_VALUE_BOOL || source_kind == TINYPY_VALUE_INTEGER || source_kind == TINYPY_VALUE_LONG || tinypy_internal_object_has_special_key(source, vm->internal_special_index_key) != 0) {
-        if (tinypy_internal_index_as_i64(source, &requested_size, TINYPY_FALSE, out_error) == 0) {
+    if (source_kind == TINYPY_VALUE_STRING && encoding != NULL) {
+        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, source, encoding, errors, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+
+        if (encoded == NULL) {
             return NULL;
         }
+        tinypy_value_t *result = __tinypy_bytearray_from_bytes_checked(vm, TINYPY_TEXT_BYTES(source), TINYPY_TEXT_BYTE_SIZE(source), out_error);
+
+        TINYPY_DECREF(encoded);
+        return result;
+    }
+    tinypy_bool_t has_count = TINYPY_FALSE;
+    if (source_kind == TINYPY_VALUE_BOOL || source_kind == TINYPY_VALUE_INTEGER || source_kind == TINYPY_VALUE_LONG || tinypy_internal_object_has_special_key(source, vm->internal_special_index_key) != 0) {
+        if (tinypy_internal_index_as_i64(source, &requested_size, TINYPY_FALSE, out_error) != TINYPY_FALSE) {
+            has_count = TINYPY_TRUE;
+        }
+        else if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error) == TINYPY_FALSE) {
+            return NULL;
+        }
+    }
+    if (has_count != TINYPY_FALSE) {
         if (requested_size < 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "negative count", out_error);
             return NULL;
@@ -535,7 +577,7 @@ tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_val
         }
         return result;
     }
-    if (__tinypy_bytearray_collect(vm, source, &bytes, &size, out_error) == 0) {
+    if (__tinypy_bytearray_collect(vm, source, NULL, &bytes, &size, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = __tinypy_bytearray_adopt_checked(vm, bytes, size, out_error);
@@ -582,10 +624,27 @@ tinypy_bool_t tinypy_internal_bytearray_initialize(tinypy_value_t *value, tinypy
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "encoding or errors without a string argument", out_error);
         return TINYPY_FALSE;
     }
-    if (source_kind == TINYPY_VALUE_BOOL || source_kind == TINYPY_VALUE_INTEGER || source_kind == TINYPY_VALUE_LONG || tinypy_internal_object_has_special_key(source, vm->internal_special_index_key) != 0) {
-        if (tinypy_internal_index_as_i64(source, &requested_size, TINYPY_FALSE, out_error) == 0) {
+    if (source_kind == TINYPY_VALUE_STRING && encoding != NULL) {
+        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, source, encoding, errors, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+
+        if (encoded == NULL) {
             return TINYPY_FALSE;
         }
+        tinypy_bool_t extended = __tinypy_bytearray_extend_iterable(value, source, out_error);
+
+        TINYPY_DECREF(encoded);
+        return extended;
+    }
+    tinypy_bool_t has_count = TINYPY_FALSE;
+    if (source_kind == TINYPY_VALUE_BOOL || source_kind == TINYPY_VALUE_INTEGER || source_kind == TINYPY_VALUE_LONG || tinypy_internal_object_has_special_key(source, vm->internal_special_index_key) != 0) {
+        if (tinypy_internal_index_as_i64(source, &requested_size, TINYPY_FALSE, out_error) != TINYPY_FALSE) {
+            has_count = TINYPY_TRUE;
+        }
+        else if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error) == TINYPY_FALSE) {
+            return TINYPY_FALSE;
+        }
+    }
+    if (has_count != TINYPY_FALSE) {
         if (requested_size < 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "negative count", out_error);
             return TINYPY_FALSE;
@@ -1023,12 +1082,12 @@ static tinypy_value_t *__tinypy_bytearray_append_method(tinypy_value_t *function
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == 0) {
         return NULL;
     }
+    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
+    size = TINYPY_SIZED_SIZE(value);
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
     if (__tinypy_bytearray_item(vm, item, &byte, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
-    size = TINYPY_SIZED_SIZE(value);
     if (size == SIZE_MAX) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
         return NULL;
@@ -1040,7 +1099,7 @@ static tinypy_value_t *__tinypy_bytearray_append_method(tinypy_value_t *function
         return NULL;
     }
     TINYPY_BYTEARRAY_OBJECT(value)->bytes[size] = byte;
-    TINYPY_SIZED_SIZE(value) += 1;
+    TINYPY_SIZED_SIZE(value) = size + 1U;
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
@@ -1056,7 +1115,8 @@ static tinypy_value_t *__tinypy_bytearray_extend_method(tinypy_value_t *function
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
-    if (__tinypy_bytearray_collect(vm, item, &extension, &extension_size, out_error) == 0) {
+    const char *negative_hint_message = TINYPY_NATIVE_FUNCTION_OBJECT(function)->self != NULL ? "error return without exception set" : "NULL result without error in PyObject_Call";
+    if (__tinypy_bytearray_collect(vm, item, negative_hint_message, &extension, &extension_size, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
@@ -1616,14 +1676,15 @@ static tinypy_value_t *__tinypy_bytearray_insert_method(tinypy_value_t *function
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
+    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
+    size_t size = TINYPY_SIZED_SIZE(value);
+
     if (__tinypy_bytearray_plain_index(TINYPY_TUPLE_GET(args, 1U), &index, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     if (__tinypy_bytearray_item(vm, TINYPY_TUPLE_GET(args, 2U), &byte, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
-    size_t size = TINYPY_SIZED_SIZE(value);
     if (size == SIZE_MAX) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
         return NULL;

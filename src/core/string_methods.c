@@ -2737,6 +2737,47 @@ cleanup:
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_unicode_translate_lookup(tinypy_vm_t *vm, tinypy_value_t *table, uint32_t code_point, tinypy_value_t **out_replacement, tinypy_error_t **out_error) {
+    tinypy_value_t *key = tinypy_integer_from_i64(vm, (int64_t)code_point);
+    tinypy_error_t *lookup_error = NULL;
+    tinypy_value_t *replacement = tinypy_get_item(table, key, &lookup_error);
+
+    TINYPY_DECREF(key);
+    *out_replacement = NULL;
+    if (replacement == NULL) {
+        if (lookup_error != NULL && (tinypy_error_kind(lookup_error) == TINYPY_ERROR_KEY || tinypy_error_kind(lookup_error) == TINYPY_ERROR_INDEX || tinypy_error_kind(lookup_error) == TINYPY_ERROR_LOOKUP)) {
+            tinypy_error_release(lookup_error);
+            tinypy_vm_clear_error(vm);
+            return TINYPY_TRUE;
+        }
+        if (out_error != NULL) {
+            *out_error = lookup_error;
+        }
+        else if (lookup_error != NULL) {
+            tinypy_error_release(lookup_error);
+        }
+        return TINYPY_FALSE;
+    }
+    tinypy_value_type_e replacement_kind = TINYPY_VALUE_KIND(replacement);
+
+    if (replacement_kind != TINYPY_VALUE_NONE && replacement_kind != TINYPY_VALUE_UNICODE) {
+        if (replacement_kind != TINYPY_VALUE_BOOL && replacement_kind != TINYPY_VALUE_INTEGER) {
+            TINYPY_DECREF(replacement);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "character mapping must return integer, None or unicode", out_error);
+            return TINYPY_FALSE;
+        }
+        int64_t mapped = TINYPY_INTEGER_VALUE(replacement);
+
+        if (mapped < 0 || mapped > INT64_C(0x10ffff)) {
+            TINYPY_DECREF(replacement);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "character mapping must be in range(0x%lx)", out_error);
+            return TINYPY_FALSE;
+        }
+    }
+    *out_replacement = replacement;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_unicode_translate_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *text;
@@ -2765,53 +2806,45 @@ static tinypy_value_t *__tinypy_unicode_translate_method(tinypy_value_t *functio
     while (offset < TINYPY_TEXT_BYTE_SIZE(text)) {
         uint32_t code_point;
         size_t width = __tinypy_string_next_code_point(text, offset, &code_point);
-        tinypy_value_t *key = tinypy_integer_from_i64(vm, (int64_t)code_point);
-        tinypy_error_t *lookup_error = NULL;
-        tinypy_value_t *replacement = tinypy_get_item(table, key, &lookup_error);
+        tinypy_value_t *replacement;
 
-        TINYPY_DECREF(key);
-        if (replacement == NULL) {
-            if (lookup_error != NULL && (tinypy_error_kind(lookup_error) == TINYPY_ERROR_KEY || tinypy_error_kind(lookup_error) == TINYPY_ERROR_INDEX || tinypy_error_kind(lookup_error) == TINYPY_ERROR_LOOKUP)) {
-                tinypy_error_release(lookup_error);
-                tinypy_vm_clear_error(vm);
-                __tinypy_string_builder_append(&builder, TINYPY_TEXT_BYTES(text) + offset, width);
-                offset += width;
-                continue;
-            }
+        if (__tinypy_unicode_translate_lookup(vm, table, code_point, &replacement, out_error) == TINYPY_FALSE) {
             __tinypy_string_builder_discard(&builder);
-            if (out_error != NULL) {
-                *out_error = lookup_error;
-            }
-            else if (lookup_error != NULL) {
-                tinypy_error_release(lookup_error);
-            }
             return NULL;
+        }
+        if (replacement == NULL) {
+            __tinypy_string_builder_append(&builder, TINYPY_TEXT_BYTES(text) + offset, width);
+            offset += width;
+            continue;
         }
         if (TINYPY_VALUE_KIND(replacement) == TINYPY_VALUE_NONE) {
             TINYPY_DECREF(replacement);
             offset += width;
+            while (offset < TINYPY_TEXT_BYTE_SIZE(text)) {
+                width = __tinypy_string_next_code_point(text, offset, &code_point);
+                if (__tinypy_unicode_translate_lookup(vm, table, code_point, &replacement, out_error) == TINYPY_FALSE) {
+                    __tinypy_string_builder_discard(&builder);
+                    return NULL;
+                }
+                if (replacement == NULL) {
+                    break;
+                }
+                tinypy_bool_t deleted = TINYPY_VALUE_KIND(replacement) == TINYPY_VALUE_NONE ? TINYPY_TRUE : TINYPY_FALSE;
+
+                TINYPY_DECREF(replacement);
+                if (deleted == TINYPY_FALSE) {
+                    break;
+                }
+                offset += width;
+            }
             continue;
         }
         if (TINYPY_VALUE_KIND(replacement) == TINYPY_VALUE_UNICODE) {
             __tinypy_string_builder_append(&builder, TINYPY_TEXT_BYTES(replacement), TINYPY_TEXT_BYTE_SIZE(replacement));
         }
         else {
-            int64_t mapped;
-            tinypy_value_type_e replacement_kind = TINYPY_VALUE_KIND(replacement);
+            int64_t mapped = TINYPY_INTEGER_VALUE(replacement);
 
-            if (replacement_kind != TINYPY_VALUE_BOOL && replacement_kind != TINYPY_VALUE_INTEGER) {
-                TINYPY_DECREF(replacement);
-                __tinypy_string_builder_discard(&builder);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "character mapping must return integer, None or unicode", out_error);
-                return NULL;
-            }
-            mapped = TINYPY_INTEGER_VALUE(replacement);
-            if (mapped < 0 || mapped > INT64_C(0x10ffff)) {
-                TINYPY_DECREF(replacement);
-                __tinypy_string_builder_discard(&builder);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "character mapping must be in range(0x%lx)", out_error);
-                return NULL;
-            }
             __tinypy_string_builder_code_point(&builder, (uint32_t)mapped);
         }
         TINYPY_DECREF(replacement);

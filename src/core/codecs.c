@@ -331,6 +331,24 @@ static tinypy_value_t *__tinypy_codecs_hex(tinypy_value_t *function, tinypy_valu
     if (__tinypy_codecs_arguments(function, args, kwargs, 1U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
+    if (TINYPY_TUPLE_SIZE(args) == 2U) {
+        int32_t strict = tinypy_compare_bool(TINYPY_TUPLE_GET(args, 1U), vm->internal_codec_strict_name, TINYPY_COMPARE_EQUAL, out_error);
+
+        if (strict < 0) {
+            return NULL;
+        }
+        if (strict == 0) {
+            tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
+            tinypy_value_t *exception = tinypy_exception_new(vm->exception_types[TINYPY_EXCEPTION_ASSERTION_ERROR], empty, out_error);
+
+            TINYPY_DECREF(empty);
+            if (exception != NULL) {
+                (void)tinypy_exception_raise(exception, NULL, out_error);
+                TINYPY_DECREF(exception);
+            }
+            return NULL;
+        }
+    }
     input = TINYPY_TUPLE_GET(args, 0U);
     if (__tinypy_codecs_require_text(vm, input, out_error) == 0) {
         return NULL;
@@ -584,6 +602,45 @@ tinypy_value_t *tinypy_internal_codecs_lookup_error(tinypy_vm_t *vm, tinypy_valu
     return TINYPY_RET(handler);
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_codecs_wrong_exception_type(tinypy_vm_t *vm, tinypy_value_t *item, tinypy_error_t **out_error) {
+    tinypy_value_t *reported_class = tinypy_object_get_attr_value(item, vm->internal_special_class_key, out_error);
+
+    if (reported_class == NULL) {
+        return;
+    }
+    tinypy_value_t *name = tinypy_object_get_attr_value(reported_class, vm->internal_special_name_key, out_error);
+
+    TINYPY_DECREF(reported_class);
+    if (name == NULL) {
+        return;
+    }
+    tinypy_value_t *text = tinypy_object_str(name, out_error);
+
+    TINYPY_DECREF(name);
+    if (text == NULL) {
+        return;
+    }
+    size_t size = TINYPY_TEXT_BYTE_SIZE(text);
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(text);
+
+    if (size > 400U) {
+        size = 400U;
+    }
+    const uint8_t *nul = (const uint8_t *)memchr(bytes, 0, size);
+
+    if (nul != NULL) {
+        size = (size_t)(nul - bytes);
+    }
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("don't know how to handle "),
+        {(const char *)bytes, size},
+        TINYPY_MESSAGE_PART_LITERAL(" in error callback"),
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    TINYPY_DECREF(text);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     intptr_t mode = (intptr_t)user_data;
@@ -610,12 +667,7 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
     tinypy_bool_t decode = tinypy_type_is_subtype(item->type, vm->exception_types[TINYPY_EXCEPTION_UNICODE_DECODE_ERROR]);
     tinypy_bool_t translate = tinypy_type_is_subtype(item->type, vm->exception_types[TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR]);
     if ((encode == 0 && decode == 0 && translate == 0) || ((mode == 3 || mode == 4) && encode == 0)) {
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("don't know how to handle "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(item),
-            TINYPY_MESSAGE_PART_LITERAL(" in error callback"),
-        };
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        __tinypy_codecs_wrong_exception_type(vm, item, out_error);
         return NULL;
     }
     tinypy_internal_unicode_error_payload_t *payload = (tinypy_internal_unicode_error_payload_t *)tinypy_native_instance_payload(item);
@@ -626,7 +678,7 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, decode != 0 ? "object attribute must be str" : "object attribute must be unicode", out_error);
         goto cleanup;
     }
-    first = payload->start;
+    first = mode == 1 || (mode == 2 && decode != 0) ? INT64_C(0) : payload->start;
     last = payload->end;
     /* Match the clamped UnicodeError accessors, before sizing any output. */
     int64_t length = (int64_t)TINYPY_SIZED_SIZE(object);

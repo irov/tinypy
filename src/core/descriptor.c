@@ -168,14 +168,37 @@ static void __tinypy_internal_c_descriptor_readonly(tinypy_vm_t *vm, tinypy_erro
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "readonly attribute", out_error);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_c_descriptor_receiver_error(tinypy_c_descriptor_object_t *descriptor, tinypy_value_t *instance, tinypy_error_t **out_error) {
+static void __tinypy_internal_c_descriptor_receiver_error(tinypy_c_descriptor_object_t *descriptor, tinypy_value_t *instance, tinypy_bool_t setting, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&descriptor->base);
 
-    if (descriptor->owner != NULL && descriptor->field >= (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && descriptor->field <= (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_DENOMINATOR) {
+    if (descriptor->owner != NULL) {
+        size_t name_size = TINYPY_TEXT_BYTE_SIZE(descriptor->name);
+        size_t owner_size = descriptor->owner->name_size;
+        size_t instance_size = instance->type->name_size;
+
+        if (setting != TINYPY_FALSE) {
+            name_size = name_size < 200U ? name_size : 200U;
+            owner_size = owner_size < 100U ? owner_size : 100U;
+            instance_size = instance_size < 100U ? instance_size : 100U;
+        }
+        const char *name_bytes = (const char *)TINYPY_TEXT_BYTES(descriptor->name);
+        const char *name_end = (const char *)memchr(name_bytes, 0, name_size);
+        const char *owner_end = (const char *)memchr(descriptor->owner->name, 0, owner_size);
+        const char *instance_end = (const char *)memchr(instance->type->name, 0, instance_size);
+
+        if (name_end != NULL) {
+            name_size = (size_t)(name_end - name_bytes);
+        }
+        if (owner_end != NULL) {
+            owner_size = (size_t)(owner_end - descriptor->owner->name);
+        }
+        if (instance_end != NULL) {
+            instance_size = (size_t)(instance_end - instance->type->name);
+        }
         tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(descriptor->name),
-            TINYPY_MESSAGE_PART_LITERAL("' for '"), {descriptor->owner->name, descriptor->owner->name_size},
-            TINYPY_MESSAGE_PART_LITERAL("' objects doesn't apply to '"), {instance->type->name, instance->type->name_size},
+            TINYPY_MESSAGE_PART_LITERAL("descriptor '"), {name_bytes, name_size},
+            TINYPY_MESSAGE_PART_LITERAL("' for '"), {descriptor->owner->name, owner_size},
+            TINYPY_MESSAGE_PART_LITERAL("' objects doesn't apply to '"), {instance->type->name, instance_size},
             TINYPY_MESSAGE_PART_LITERAL("' object")
         };
 
@@ -845,7 +868,7 @@ static tinypy_value_t *__tinypy_internal_descriptor_get_method(tinypy_value_t *f
     size_t count;
 
     (void)user_data;
-    if (__tinypy_internal_descriptor_method_arguments(vm, args, kwargs, 2U, 3U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     count = TINYPY_TUPLE_SIZE(args);
@@ -857,12 +880,8 @@ static tinypy_value_t *__tinypy_internal_descriptor_get_method(tinypy_value_t *f
     if (count == 3U) {
         owner_value = TINYPY_TUPLE_GET(args, 2U);
     }
-    else if (instance != NULL) {
-        owner_value = &instance->type->base.base;
-    }
     else {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor requires an instance or owner", out_error);
-        return NULL;
+        owner_value = &vm->none_object.base;
     }
     if (instance == NULL && TINYPY_VALUE_KIND(owner_value) == TINYPY_VALUE_NONE) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__get__(None, None) is invalid", out_error);
@@ -874,10 +893,22 @@ static tinypy_value_t *__tinypy_internal_descriptor_get_method(tinypy_value_t *f
         return return_value_1;
     }
     if (TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_METHOD) {
-        if (TINYPY_VALUE_KIND(owner_value) != TINYPY_VALUE_TYPE) {
+        tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(descriptor);
+
+        if (method->self != NULL) {
             return TINYPY_RET(descriptor);
         }
-        tinypy_value_t *return_value_2 = tinypy_internal_method_descriptor_get(descriptor, instance, owner, out_error);
+        if (TINYPY_VALUE_KIND(method->owner) != TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(owner_value) != TINYPY_VALUE_NONE) {
+            int32_t subclass = tinypy_internal_object_instance_check(owner_value, method->owner, TINYPY_TRUE, out_error);
+
+            if (subclass < 0) {
+                return NULL;
+            }
+            if (subclass == 0) {
+                return TINYPY_RET(descriptor);
+            }
+        }
+        tinypy_value_t *return_value_2 = tinypy_method_new(method->function, instance, owner_value);
         return return_value_2;
     }
     if (TINYPY_VALUE_KIND(descriptor) == TINYPY_VALUE_PROPERTY) {
@@ -912,7 +943,7 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_set_method(tinypy_value_t 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_internal_descriptor_method_arguments(vm, args, kwargs, 3U, 3U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *descriptor = TINYPY_TUPLE_GET(args, 0U);
@@ -931,7 +962,7 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_delete_method(tinypy_value
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_internal_descriptor_method_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *descriptor = TINYPY_TUPLE_GET(args, 0U);
@@ -968,7 +999,7 @@ static tinypy_value_t *__tinypy_internal_c_descriptor_repr_method(tinypy_value_t
     uint8_t *bytes;
 
     (void)user_data;
-    if (__tinypy_internal_descriptor_method_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
@@ -1010,7 +1041,7 @@ static tinypy_value_t *__tinypy_internal_property_set_method(tinypy_value_t *fun
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_internal_descriptor_method_arguments(vm, args, kwargs, 3U, 3U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     if (tinypy_internal_property_set(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), out_error) == 0) {
@@ -1025,7 +1056,7 @@ static tinypy_value_t *__tinypy_internal_property_delete_method(tinypy_value_t *
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_internal_descriptor_method_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     if (tinypy_internal_property_set(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), NULL, out_error) == 0) {
@@ -1059,7 +1090,7 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         return TINYPY_RET(descriptor_value);
     }
     if (descriptor->owner == NULL || tinypy_type_is_subtype(instance->type, descriptor->owner) == 0) {
-        __tinypy_internal_c_descriptor_receiver_error(descriptor, instance, out_error);
+        __tinypy_internal_c_descriptor_receiver_error(descriptor, instance, TINYPY_FALSE, out_error);
         return NULL;
     }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_REAL && field <= TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_DENOMINATOR) {
@@ -1411,7 +1442,7 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
     TINYPY_CLEAR_ERROR(out_error);
     __tinypy_internal_c_descriptor_refresh_owner(descriptor);
     if (descriptor->owner == NULL || tinypy_type_is_subtype(instance->type, descriptor->owner) == 0) {
-        __tinypy_internal_c_descriptor_receiver_error(descriptor, instance, out_error);
+        __tinypy_internal_c_descriptor_receiver_error(descriptor, instance, TINYPY_TRUE, out_error);
         return TINYPY_FALSE;
     }
     if (descriptor->writable == 0) {

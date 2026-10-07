@@ -1,18 +1,16 @@
 # Runtime review closure — 2026-10-08
 
-The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 1,078
-portable regressions across eleven passes and a repeatable four-profile matrix.
-The eleventh-pass inventory requires 1,748 selected cases, 40 finite runtime
-matrices with 337,542 outcomes per profile, and 11,610 compiler comparisons per
-profile (46,440 across four). All 258 stages passed on macOS arm64 in Debug,
+The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 1,134
+portable regressions across twelve passes and a repeatable four-profile matrix.
+The twelfth-pass inventory requires 1,804 selected cases, 43 finite runtime
+matrices with 361,017 outcomes per profile, and 11,628 compiler comparisons per
+profile (46,512 across four). All 273 stages passed on macOS arm64 in Debug,
 Release, ASan/UBSan and Release LTO, with independent source reviews and a
-matching post-run source/test/SPEC fingerprint. The tenth-pass run below
-remains a historical aggregate baseline. The preceding seventh-, eighth- and ninth-pass reports also retain
-their historical counts. The future
-variant and acceptance plan is in [TEST_PLAN.md](../conformance/TEST_PLAN.md).
-The explicit CPython pending-C-exception boundary is recorded in the audit.
-The original
-review findings and their historical evidence are retained below.
+matching post-run source/test/SPEC fingerprint. Previous accepted reports retain
+their historical counts. The future variant and acceptance plan is in
+[TEST_PLAN.md](../conformance/TEST_PLAN.md). The explicit CPython pending-C-exception
+boundary is recorded in the audit. Original findings and historical evidence
+remain below; bounded acceptance does not close the broader continuing audit.
 
 The supplied review described `62db39e`. This follow-up checks the current
 worktree, including the earlier portable-corpus fixes. Its prototypes were
@@ -31,7 +29,57 @@ reproduced. The supplied crashing scripts, custom nopool build and crafted
 bytecode/regex programs were not run. A passing sanitizer suite does not
 establish equivalence to that separate historical investigation.
 
-## Eleventh-pass follow-up — accepted
+## Twelfth-pass follow-up — accepted
+
+Three independently authored modules add 56 portable witnesses: 24
+[bytearray construction and state](local/test_sequence_constructor_audit.py), 15
+[Unicode and codec callbacks](local/test_unicode_methods_audit.py) and 17
+[direct descriptor calls](local/test_descriptor_call_audit.py). Their three guarded
+products add 23,475 outcomes (4,158 + 18,636 + 681). Focused strict Debug checks
+and independent peer reviews preserve CPython results, error identity, handled
+exception state, callback order and zero outstanding allocations.
+
+| Family | Concrete correction and observation |
+| --- | --- |
+| Bytearray | Extension obtains the iterator before reading a source hint; negative length versus hint errors and bound/unbound diagnostics remain distinct. Constructors/reinit fall back to iteration only after index TypeError. Byte-string encoding still invokes the codec and retains its temporary while copying the original bytes. Append/insert use the entry length before conversion callbacks, checked by defined growth witnesses. |
+| Unicode translation | Deleted runs look ahead and recheck the first retained character. Discarded lookup values are validated and released before retry; second results, lookup failures, mapping mutation and prior handled exceptions remain observable. |
+| Codec handlers | Ignore and decode replacement consume the clamped end without reading start. Wrong-type errors read reported class/name and str, including callbacks, NUL/truncation and user failures. Hex codecs compare errors to strict before source conversion and raise an empty-args AssertionError when false. |
+| Descriptors | Direct get/set/delete/repr methods reuse canonical native argument styles and receiver diagnostics. Omitted/None method owners remain None; classic/new-style rebinding and metaclass subclass checks preserve identity and errors. Instance/subclass consumers reuse one existing algorithm through a single internal helper. |
+
+The frozen inventory contains 52 project-authored modules with 1,594 cases plus
+210 selected vendor cases: 1,804 Debug/sanitize PASS, or 1,800 Release/LTO PASS
+with the existing four detector SKIP. Every profile also passes 89 native/runtime
+CTest groups, 43 products with 361,017 unique outcomes, and 11,628 compiler
+comparisons at optimize 0/1/2. All 90 host/API/runner checks pass. CTest registers
+162 entries; checked-in compiler inputs number 183, generated inputs 3,693,
+and eager VM presets remain 741.
+
+All 273 stages pass in 303.7 recorded stage seconds. The accepted report is
+`.temp/validation-twelfth-audit-accepted/report.json`; its source/test/SPEC SHA-256
+matches the post-run worktree:
+`3ed361ccb150ab16c3d24f09b2f978c3a3b869f0fd8dd19cbb50343d37ab0357`.
+Strict warnings-as-errors, standalone marshal/artifact, core symbols, allocator
+accounting and ASan/UBSan checks pass. Apple ASan uses `detect_leaks=0` with
+independent allocator accounting. No new skip, DEFER, expected failure, detector
+adaptation or SPEC boundary was added. Python-visible validation remains active
+in Release. These are finite local results on macOS arm64.
+
+Two root-builtins observations remain outside this prepared checkpoint: generic
+keyword rejection loses the builtin name, and min/max diagnostics differ while
+min releases a losing key before its item. Ordinary CPython/Tiny witnesses are
+in `.temp/twelfth-builtins/probe.py` with quiet reference streams and zero Tiny
+allocator balance. They need permanent regressions and a separate accepted patch;
+they are not exclusions from the supported contract.
+
+Primary references:
+[bytearrayobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/bytearrayobject.c),
+[unicodeobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/unicodeobject.c),
+[codecs.c](https://github.com/python/cpython/blob/v2.7.18/Python/codecs.c),
+[hex_codec.py](https://github.com/python/cpython/blob/v2.7.18/Lib/encodings/hex_codec.py),
+[classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c)
+and [descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c).
+
+## Historical eleventh-pass follow-up
 
 Four independently authored modules add 129 portable witnesses: 27
 [buffer lifetime](local/test_buffer_lifetime_audit.py), 34

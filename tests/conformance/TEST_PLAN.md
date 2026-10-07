@@ -7,7 +7,7 @@ domain. [coverage.json](coverage.json) assigns the existing fixtures to domains;
 [the coordinator](../run_validation.py) verifies their inventories and runs all
 acceptance layers together.
 
-The eleventh-audit inventory contains 40 finite runtime matrices with 337,542
+The twelfth-audit inventory contains 43 finite runtime matrices with 361,017
 outcomes per profile. The ninth-pass additions cover metadata/receiver arguments
 (325), numeric arguments and snapshots (995), container arguments and error
 phases (3,756), and function construction/reduction/saved frames (1,026).
@@ -15,9 +15,11 @@ The tenth pass adds buffer arguments (7,456), iterator metadata (5,232),
 native wrappers (1,556) and supported Struct parser/state/cache behavior (5,986).
 The eleventh pass adds live-buffer lifetime/character views (7,524), text
 arguments/padding/codecs (26,217), native readiness (913) and weakref protocols
-(5,032). The portable inventory contains 49 project-authored modules with 1,538
-cases and 210 selected vendor cases, totaling 1,748. These are declared coverage
-counts; completed profile acceptance comes from the coordinator's report.
+(5,032). The twelfth pass adds bytearray construction/hints/callback snapshots
+(4,158), Unicode translation and codec callbacks (18,636), and direct descriptor
+calls and optional owners (681). The portable inventory contains 52
+project-authored modules with 1,594 cases and 210 selected vendor cases,
+totaling 1,804. These are declared coverage counts; completed profile acceptance comes from the coordinator's report.
 
 ## Choosing variants
 
@@ -85,6 +87,27 @@ Binary and ternary power need separate products: an explicit None modulus uses
 binary dispatch, while an actual third operand follows Python 2 coercion and
 promotion rules. Check descriptor lookup errors without replacing a prior
 handled exception or a user-raised exception that has the same diagnostic text.
+
+Direct descriptor calls distinguish omitted owner, explicit None, classic and
+new-style owners, unrelated/invalid owners, and bound versus unbound method
+identity. Metaclass subclass checks must preserve callback results, error identity
+and a prior handled exception. Getter versus setter/deleter diagnostics retain
+their respective name limits and receiver-before-readonly ordering.
+
+Bytearray consumers separate constructor/reinit/index fallback from extension
+length hints. Obtain the iterator before consulting the source hint, distinguish
+negative __len__ from __length_hint__, and preserve bound/unbound diagnostics.
+Test codec invocation even when byte-string payload is unchanged; retain the
+encoded temporary until publication completes. Append/insert witnesses observe
+entry length before conversion callbacks using defined growth scenarios.
+
+Unicode translation enumerates exact/subtype receivers, mapping styles, deleted
+runs and first/second lookahead results. Observe repeated lookups, validation of
+discarded values, release before retry and callback-driven mapping changes.
+Codec handlers separate end-only ignore/decode-replace from span-consuming
+handlers; wrong-type errors observe reported __class__, __name__, str conversion,
+NUL/truncation and retained user exceptions. Hex codec errors == strict checks
+precede source conversion and preserve comparison/truth callbacks.
 
 ## Stateful callback scenarios
 

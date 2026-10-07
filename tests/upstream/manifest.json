@@ -2200,6 +2200,80 @@
         "WeakrefProtocolAudit.test_set_subclasses_inherit_weakref_slot",
         "WeakrefProtocolAudit.test_weakref_callback_precedes_generator_finally"
       ]
+    },
+    "local.test_sequence_constructor_audit": {
+      "path": "local/test_sequence_constructor_audit.py",
+      "origin": "project-authored",
+      "cases": [
+        "SequenceConstructorAudit.test_append_captures_length_before_value_callback_growth",
+        "SequenceConstructorAudit.test_append_failed_conversion_preserves_callback_growth_and_identity",
+        "SequenceConstructorAudit.test_byte_string_custom_encoder_is_called_and_output_is_discarded",
+        "SequenceConstructorAudit.test_byte_string_encoding_is_checked_even_when_payload_is_unchanged",
+        "SequenceConstructorAudit.test_byte_string_reinit_codec_failure_leaves_cleared_receiver",
+        "SequenceConstructorAudit.test_bytearray_hex_codec_rejects_non_strict_errors_before_conversion",
+        "SequenceConstructorAudit.test_constructor_and_reinit_do_not_request_length_hint",
+        "SequenceConstructorAudit.test_constructor_non_type_index_failure_preserves_identity",
+        "SequenceConstructorAudit.test_constructor_valid_index_takes_priority_over_iteration",
+        "SequenceConstructorAudit.test_constructor_wrong_index_result_falls_back_to_iteration",
+        "SequenceConstructorAudit.test_discarded_encoder_result_is_released_after_original_bytes_append",
+        "SequenceConstructorAudit.test_extend_empty_source_releases_positive_hint_storage",
+        "SequenceConstructorAudit.test_extend_hint_callback_growth_precedes_destination_append",
+        "SequenceConstructorAudit.test_extend_negative_hint_minus_one_aborts_before_iteration",
+        "SequenceConstructorAudit.test_extend_negative_length_fails_before_hint",
+        "SequenceConstructorAudit.test_extend_other_negative_hints_report_bytearray_allocation_reason",
+        "SequenceConstructorAudit.test_extend_preserves_user_hint_failure_identity",
+        "SequenceConstructorAudit.test_extend_uses_source_hint_after_obtaining_iterator",
+        "SequenceConstructorAudit.test_insert_captures_length_before_value_callback_growth",
+        "SequenceConstructorAudit.test_reinit_codec_callback_growth_is_kept_before_original_bytes",
+        "SequenceConstructorAudit.test_reinit_index_type_error_falls_back_after_clearing_receiver",
+        "SequenceConstructorAudit.test_slice_assignment_materialization_uses_index_fallback",
+        "SequenceConstructorAudit.test_unbound_extend_negative_hint_uses_call_diagnostic",
+        "SequenceConstructorAudit.test_unbound_insert_captures_length_before_index_callback_growth"
+      ]
+    },
+    "local.test_unicode_methods_audit": {
+      "path": "local/test_unicode_methods_audit.py",
+      "origin": "project-authored",
+      "cases": [
+        "UnicodeMethodsAudit.test_decode_replace_handler_only_uses_clamped_end",
+        "UnicodeMethodsAudit.test_hex_codec_requires_strict_errors_before_source_conversion",
+        "UnicodeMethodsAudit.test_ignore_handler_only_uses_clamped_end",
+        "UnicodeMethodsAudit.test_supported_error_handler_ignores_reported_class_override",
+        "UnicodeMethodsAudit.test_translate_lookahead_observes_mapping_mutation",
+        "UnicodeMethodsAudit.test_translate_missing_lookahead_is_looked_up_again",
+        "UnicodeMethodsAudit.test_translate_rechecks_first_character_after_deleted_run",
+        "UnicodeMethodsAudit.test_translate_releases_discarded_lookahead_before_retry",
+        "UnicodeMethodsAudit.test_translate_second_lookup_can_start_another_deleted_run",
+        "UnicodeMethodsAudit.test_translate_second_lookup_preserves_error_identity_and_outer_state",
+        "UnicodeMethodsAudit.test_translate_uses_second_lookup_result",
+        "UnicodeMethodsAudit.test_translate_validates_discarded_lookahead",
+        "UnicodeMethodsAudit.test_wrong_handler_type_c_string_name_limit",
+        "UnicodeMethodsAudit.test_wrong_handler_type_callback_failure_identity_and_recovery",
+        "UnicodeMethodsAudit.test_wrong_handler_type_reads_reported_class_and_name"
+      ]
+    },
+    "local.test_descriptor_call_audit": {
+      "path": "local/test_descriptor_call_audit.py",
+      "origin": "project-authored",
+      "cases": [
+        "DescriptorCallAudit.test_all_descriptor_getters_share_canonical_argument_errors",
+        "DescriptorCallAudit.test_bound_method_keeps_original_owner_and_receiver",
+        "DescriptorCallAudit.test_c_descriptor_errors_preserve_handler_and_field_state",
+        "DescriptorCallAudit.test_c_descriptor_set_delete_and_repr_argument_errors",
+        "DescriptorCallAudit.test_classic_method_implicit_owner_is_none",
+        "DescriptorCallAudit.test_classic_method_rebinds_to_classic_owner",
+        "DescriptorCallAudit.test_function_c_descriptor_receiver_errors_precede_readonly",
+        "DescriptorCallAudit.test_function_implicit_owner_is_none",
+        "DescriptorCallAudit.test_long_slot_receiver_diagnostics_keep_get_set_limits",
+        "DescriptorCallAudit.test_property_delete_argument_errors_skip_callbacks",
+        "DescriptorCallAudit.test_property_setter_argument_errors_skip_callbacks",
+        "DescriptorCallAudit.test_subclass_callback_error_preserves_handler_and_recovers",
+        "DescriptorCallAudit.test_unbound_method_explicit_none_owner_rebinds",
+        "DescriptorCallAudit.test_unbound_method_implicit_owner_is_none",
+        "DescriptorCallAudit.test_unbound_method_subclass_callback_controls_binding",
+        "DescriptorCallAudit.test_unbound_method_validates_explicit_owner",
+        "DescriptorCallAudit.test_unrelated_owner_keeps_unbound_method_identity"
+      ]
     }
   },
   "debug_cycle_cases": {
