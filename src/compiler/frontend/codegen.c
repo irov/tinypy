@@ -191,20 +191,16 @@ static tinypy_bool_t __tinypy_codegen_init(tinypy_codegen_t *c) {
     tinypy_vm_t *vm = c->c_arena->vm;
 
     c->c_stack = tinypy_list_from_items(vm, NULL, 0U);
-    c->c_none = tinypy_none_get(vm);
-    c->c_ellipsis = tinypy_ellipsis_get(vm);
-    c->c_doc_name = tinypy_string_from_bytes(vm, "__doc__", 7U);
-    c->c_module_name = tinypy_string_from_bytes(vm, "<module>", 8U);
-    c->c_lambda_name = tinypy_string_from_bytes(vm, "<lambda>", 8U);
-    c->c_genexpr_name = tinypy_string_from_bytes(vm, "<genexpr>", 9U);
-    c->c_setcomp_name = tinypy_string_from_bytes(vm, "<setcomp>", 9U);
-    c->c_dictcomp_name = tinypy_string_from_bytes(vm, "<dictcomp>", 10U);
-    c->c_empty_string = tinypy_string_from_bytes(vm, NULL, 0U);
-    c->c_assertion_error = tinypy_string_from_bytes(vm, "AssertionError", 14U);
-    tinypy_internal_string_set_interned(c->c_doc_name, 1);
-    tinypy_internal_string_set_interned(c->c_module_name, 1);
-    tinypy_internal_string_set_interned(c->c_lambda_name, 1);
-    tinypy_internal_string_set_interned(c->c_assertion_error, 1);
+    c->c_none = TINYPY_RET_NONE(vm);
+    c->c_ellipsis = TINYPY_RET_ELLIPSIS(vm);
+    c->c_doc_name = TINYPY_RET(vm->internal_special_doc_key);
+    c->c_module_name = TINYPY_RET(vm->internal_compiler_module_name);
+    c->c_lambda_name = TINYPY_RET(vm->internal_compiler_lambda_name);
+    c->c_genexpr_name = TINYPY_RET(vm->internal_compiler_genexpr_name);
+    c->c_setcomp_name = TINYPY_RET(vm->internal_compiler_setcomp_name);
+    c->c_dictcomp_name = TINYPY_RET(vm->internal_compiler_dictcomp_name);
+    c->c_empty_string = TINYPY_RET_EMPTY_STRING(vm);
+    c->c_assertion_error = TINYPY_RET(vm->internal_assertion_error_key);
     c->c_optimize = c->c_arena->options.optimize_level;
 
     return TINYPY_TRUE;
@@ -1285,6 +1281,7 @@ static tinypy_bool_t __tinypy_codegen_function(tinypy_codegen_t *c, tinypy_ast_s
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_statement_t s) {
+    tinypy_vm_t *vm = c->c_arena->vm;
     int32_t n, i;
     tinypy_ast_sequence_t *decos = s->v.ClassDef.decorator_list;
 
@@ -1306,7 +1303,7 @@ static tinypy_bool_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_stat
     }
     TINYPY_COMPILER_INCREF(s->v.ClassDef.name);
     TINYPY_COMPILER_XSETREF(c->u->u_private, s->v.ClassDef.name);
-    tinypy_value_t *str = __tinypy_frontend_string_from_owner(c->c_module_name, "__name__", 8U);
+    tinypy_value_t *str = TINYPY_RET(vm->internal_special_name_key);
     if (!str || !__tinypy_codegen_nameop(c, str, TINYPY_AST_CONTEXT_LOAD)) {
         TINYPY_COMPILER_XDECREF(str);
         __tinypy_codegen_exit_scope(c);
@@ -1314,7 +1311,7 @@ static tinypy_bool_t __tinypy_codegen_class(tinypy_codegen_t *c, tinypy_ast_stat
     }
 
     TINYPY_COMPILER_DECREF(str);
-    str = __tinypy_frontend_string_from_owner(c->c_module_name, "__module__", 10U);
+    str = TINYPY_RET(vm->internal_special_module_key);
     if (!str || !__tinypy_codegen_nameop(c, str, TINYPY_AST_CONTEXT_STORE)) {
         TINYPY_COMPILER_XDECREF(str);
         __tinypy_codegen_exit_scope(c);
@@ -1902,7 +1899,7 @@ static tinypy_bool_t __tinypy_codegen_from_import(tinypy_codegen_t *c, tinypy_as
 
     tinypy_bool_t condition_2 = s->lineno > c->c_future->line_number && s->v.ImportFrom.module;
     if (condition_2 != 0) {
-        condition_2 = !strcmp(TINYPY_COMPILER_STRING_AS_STRING(s->v.ImportFrom.module), "__future__");
+        condition_2 = TINYPY_NAME_EQ(s->v.ImportFrom.module, c->c_arena->vm->internal_future_module_name) != TINYPY_FALSE;
     }
     if (condition_2) {
         TINYPY_COMPILER_DECREF(names);

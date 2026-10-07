@@ -11,8 +11,7 @@
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_float_from_double(tinypy_vm_t *vm, double value) {
     if (value == 0.0 && signbit(value) == 0) {
-        tinypy_value_t *result = &vm->float_zero_object.base;
-        TINYPY_INCREF(result);
+        tinypy_value_t *result = TINYPY_RET(&vm->float_zero_object.base);
         return result;
     }
     tinypy_value_t *result = tinypy_internal_value_allocate(
@@ -281,13 +280,11 @@ static tinypy_value_t *__tinypy_numeric_coerce_method(tinypy_value_t *function, 
         compatible = other_kind == TINYPY_VALUE_BOOL || other_kind == TINYPY_VALUE_INTEGER || other_kind == TINYPY_VALUE_LONG || other_kind == TINYPY_VALUE_FLOAT || other_kind == TINYPY_VALUE_COMPLEX;
     }
     if (compatible == 0) {
-        tinypy_value_t *result = &vm->not_implemented_object.base;
-        TINYPY_INCREF(result);
+        tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return result;
     }
     if (other_kind == target || (target == TINYPY_VALUE_INTEGER && (other_kind == TINYPY_VALUE_BOOL || other_kind == TINYPY_VALUE_INTEGER))) {
-        converted = other;
-        TINYPY_INCREF(converted);
+        converted = TINYPY_RET(other);
     }
     else {
         tinypy_value_t *conversion_args = tinypy_tuple_from_items(vm, &other, 1U);
@@ -701,31 +698,6 @@ static tinypy_value_t *__tinypy_float_fromhex_method(tinypy_value_t *function, t
     return subclass_result;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_numeric_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
-    tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
-
-    tinypy_type_set_attr(type, name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_numeric_add_property(tinypy_type_t *type, const char *name, size_t name_size, intptr_t field) {
-    tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, __tinypy_numeric_field_method, (void *)field, NULL);
-    tinypy_value_t *property = tinypy_property_new(type->vm, function, NULL, NULL, NULL);
-
-    tinypy_type_set_attr(type, name, name_size, property);
-    TINYPY_DECREF(property);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_numeric_add_class_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
-    tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, NULL, NULL);
-    tinypy_value_t *descriptor = tinypy_class_method_new(function);
-
-    tinypy_type_set_attr(type, name, name_size, descriptor);
-    TINYPY_DECREF(descriptor);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_numeric_trunc_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -812,19 +784,19 @@ static tinypy_value_t *__tinypy_float_getformat_method(tinypy_value_t *function,
     }
     const uint8_t *bytes = TINYPY_TEXT_BYTES(kind);
     size_t size = TINYPY_TEXT_BYTE_SIZE(kind);
-    tinypy_bool_t single_precision = size >= 5U && memcmp(bytes, "float", 5U) == 0 && (size == 5U || bytes[5U] == 0);
-    tinypy_bool_t double_precision = size >= 6U && memcmp(bytes, "double", 6U) == 0 && (size == 6U || bytes[6U] == 0);
+    tinypy_bool_t single_precision = size >= 5U && memcmp(bytes, TINYPY_TEXT_BYTES(vm->internal_float_key), 5U) == 0 && (size == 5U || bytes[5U] == 0);
+    tinypy_bool_t double_precision = size >= 6U && memcmp(bytes, TINYPY_TEXT_BYTES(vm->internal_double_key), 6U) == 0 && (size == 6U || bytes[6U] == 0);
 
     if (single_precision == 0 && double_precision == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unknown float format", out_error);
         return NULL;
     }
     if (single_precision != 0 ? vm->float_format_unknown : vm->double_format_unknown) {
-        tinypy_value_t *result = tinypy_string_from_bytes(vm, "unknown", 7U);
+        tinypy_value_t *result = TINYPY_RET(vm->internal_unknown_key);
         return result;
     }
-    const char *format = *((const uint8_t *)&byteorder_probe) == 1U ? "IEEE, little-endian" : "IEEE, big-endian";
-    tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, format, strlen(format));
+    tinypy_value_t *format = *((const uint8_t *)&byteorder_probe) == 1U ? vm->internal_ieee_little_endian_key : vm->internal_ieee_big_endian_key;
+    tinypy_value_t *return_value_1 = TINYPY_RET(format);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -842,14 +814,13 @@ static tinypy_value_t *__tinypy_float_setformat_method(tinypy_value_t *function,
     if (tinypy_internal_codecs_validate_name(vm, kind, out_error) == 0 || tinypy_internal_codecs_validate_name(vm, format_value, out_error) == 0) {
         return NULL;
     }
-    if ((TINYPY_TEXT_BYTE_SIZE(kind) != 5U || memcmp(TINYPY_TEXT_BYTES(kind), "float", 5U) != 0) && (TINYPY_TEXT_BYTE_SIZE(kind) != 6U || memcmp(TINYPY_TEXT_BYTES(kind), "double", 6U) != 0)) {
+    if (TINYPY_NAME_EQ(kind, vm->internal_float_key) == TINYPY_FALSE && TINYPY_NAME_EQ(kind, vm->internal_double_key) == TINYPY_FALSE) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unknown float format", out_error);
         return NULL;
     }
-    const char *native_format = *((const uint8_t *)&byteorder_probe) == 1U ? "IEEE, little-endian" : "IEEE, big-endian";
-    size_t native_size = strlen(native_format);
-    tinypy_bool_t unknown = TINYPY_TEXT_BYTE_SIZE(format_value) == 7U && memcmp(TINYPY_TEXT_BYTES(format_value), "unknown", 7U) == 0;
-    tinypy_bool_t native = TINYPY_TEXT_BYTE_SIZE(format_value) == native_size && memcmp(TINYPY_TEXT_BYTES(format_value), native_format, native_size) == 0;
+    tinypy_value_t *native_format = *((const uint8_t *)&byteorder_probe) == 1U ? vm->internal_ieee_little_endian_key : vm->internal_ieee_big_endian_key;
+    tinypy_bool_t unknown = TINYPY_NAME_EQ(format_value, vm->internal_unknown_key) != TINYPY_FALSE;
+    tinypy_bool_t native = TINYPY_NAME_EQ(format_value, native_format) != TINYPY_FALSE;
     if (unknown == 0 && native == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "can only set the native float format", out_error);
         return NULL;
@@ -860,7 +831,7 @@ static tinypy_value_t *__tinypy_float_setformat_method(tinypy_value_t *function,
     else {
         vm->double_format_unknown = unknown;
     }
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -869,34 +840,34 @@ void tinypy_internal_initialize_numeric_types(tinypy_vm_t *vm) {
     size_t index;
 
     for (index = 0U; index < 2U; ++index) {
-        __tinypy_numeric_add_method(integer_types[index], "bit_length", 10U, __tinypy_numeric_bit_length_method, NULL);
-        __tinypy_numeric_add_method(integer_types[index], "conjugate", 9U, __tinypy_numeric_conjugate_method, NULL);
-        __tinypy_numeric_add_method(integer_types[index], "__trunc__", 9U, __tinypy_numeric_trunc_method, NULL);
-        __tinypy_numeric_add_method(integer_types[index], "__hex__", 7U, __tinypy_numeric_integer_base_method, (void *)(intptr_t)16);
-        __tinypy_numeric_add_method(integer_types[index], "__oct__", 7U, __tinypy_numeric_integer_base_method, (void *)(intptr_t)8);
-        __tinypy_numeric_add_method(integer_types[index], "__getnewargs__", 14U, __tinypy_numeric_getnewargs_method, NULL);
-        __tinypy_numeric_add_method(integer_types[index], "__cmp__", 7U, __tinypy_numeric_cmp_method, (void *)(intptr_t)(index == 0U ? TINYPY_VALUE_INTEGER : TINYPY_VALUE_LONG));
-        __tinypy_numeric_add_method(integer_types[index], "__coerce__", 10U, __tinypy_numeric_coerce_method, (void *)(intptr_t)(index == 0U ? TINYPY_VALUE_INTEGER : TINYPY_VALUE_LONG));
-        __tinypy_numeric_add_property(integer_types[index], "real", 4U, 0);
-        __tinypy_numeric_add_property(integer_types[index], "imag", 4U, 1);
-        __tinypy_numeric_add_property(integer_types[index], "numerator", 9U, 2);
-        __tinypy_numeric_add_property(integer_types[index], "denominator", 11U, 3);
+        tinypy_internal_type_add_method((integer_types[index]), vm->internal_bit_length_key, __tinypy_numeric_bit_length_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((integer_types[index]), vm->internal_conjugate_key, __tinypy_numeric_conjugate_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((integer_types[index]), vm->internal_special_trunc_key, __tinypy_numeric_trunc_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((integer_types[index]), vm->internal_special_hex_key, __tinypy_numeric_integer_base_method, (void *)(intptr_t)16, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((integer_types[index]), vm->internal_special_oct_key, __tinypy_numeric_integer_base_method, (void *)(intptr_t)8, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((integer_types[index]), vm->internal_special_getnewargs_key, __tinypy_numeric_getnewargs_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((integer_types[index]), vm->internal_special_cmp_key, __tinypy_numeric_cmp_method, (void *)(intptr_t)(index == 0U ? TINYPY_VALUE_INTEGER : TINYPY_VALUE_LONG), NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((integer_types[index]), vm->internal_special_coerce_key, __tinypy_numeric_coerce_method, (void *)(intptr_t)(index == 0U ? TINYPY_VALUE_INTEGER : TINYPY_VALUE_LONG), NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_property((integer_types[index]), vm->internal_real_key, __tinypy_numeric_field_method, (void *)0, NULL);
+        tinypy_internal_type_add_property((integer_types[index]), vm->internal_imag_key, __tinypy_numeric_field_method, (void *)1, NULL);
+        tinypy_internal_type_add_property((integer_types[index]), vm->internal_numerator_key, __tinypy_numeric_field_method, (void *)2, NULL);
+        tinypy_internal_type_add_property((integer_types[index]), vm->internal_denominator_key, __tinypy_numeric_field_method, (void *)3, NULL);
     }
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "conjugate", 9U, __tinypy_numeric_conjugate_method, NULL);
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "is_integer", 10U, __tinypy_float_is_integer_method, NULL);
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "as_integer_ratio", 16U, __tinypy_float_as_integer_ratio_method, NULL);
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "hex", 3U, __tinypy_float_hex_method, NULL);
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "__trunc__", 9U, __tinypy_numeric_trunc_method, NULL);
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "__getnewargs__", 14U, __tinypy_numeric_getnewargs_method, NULL);
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_FLOAT], "__coerce__", 10U, __tinypy_numeric_coerce_method, (void *)(intptr_t)TINYPY_VALUE_FLOAT);
-    __tinypy_numeric_add_class_method(&vm->types[TINYPY_VALUE_FLOAT], "fromhex", 7U, __tinypy_float_fromhex_method);
-    __tinypy_numeric_add_class_method(&vm->types[TINYPY_VALUE_FLOAT], "__getformat__", 13U, __tinypy_float_getformat_method);
-    __tinypy_numeric_add_class_method(&vm->types[TINYPY_VALUE_FLOAT], "__setformat__", 13U, __tinypy_float_setformat_method);
-    __tinypy_numeric_add_property(&vm->types[TINYPY_VALUE_FLOAT], "real", 4U, 0);
-    __tinypy_numeric_add_property(&vm->types[TINYPY_VALUE_FLOAT], "imag", 4U, 1);
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_COMPLEX], "conjugate", 9U, __tinypy_numeric_conjugate_method, NULL);
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_COMPLEX], "__getnewargs__", 14U, __tinypy_numeric_getnewargs_method, NULL);
-    __tinypy_numeric_add_method(&vm->types[TINYPY_VALUE_COMPLEX], "__coerce__", 10U, __tinypy_numeric_coerce_method, (void *)(intptr_t)TINYPY_VALUE_COMPLEX);
-    __tinypy_numeric_add_property(&vm->types[TINYPY_VALUE_COMPLEX], "real", 4U, 0);
-    __tinypy_numeric_add_property(&vm->types[TINYPY_VALUE_COMPLEX], "imag", 4U, 1);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_conjugate_key, __tinypy_numeric_conjugate_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_is_integer_key, __tinypy_float_is_integer_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_as_integer_ratio_key, __tinypy_float_as_integer_ratio_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_hex_key, __tinypy_float_hex_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_special_trunc_key, __tinypy_numeric_trunc_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_special_getnewargs_key, __tinypy_numeric_getnewargs_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_special_coerce_key, __tinypy_numeric_coerce_method, (void *)(intptr_t)TINYPY_VALUE_FLOAT, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_class_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_fromhex_key, __tinypy_float_fromhex_method, NULL, NULL);
+    tinypy_internal_type_add_class_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_special_getformat_key, __tinypy_float_getformat_method, NULL, NULL);
+    tinypy_internal_type_add_class_method((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_special_setformat_key, __tinypy_float_setformat_method, NULL, NULL);
+    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_real_key, __tinypy_numeric_field_method, (void *)0, NULL);
+    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_FLOAT]), vm->internal_imag_key, __tinypy_numeric_field_method, (void *)1, NULL);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_conjugate_key, __tinypy_numeric_conjugate_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_special_getnewargs_key, __tinypy_numeric_getnewargs_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_special_coerce_key, __tinypy_numeric_coerce_method, (void *)(intptr_t)TINYPY_VALUE_COMPLEX, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_real_key, __tinypy_numeric_field_method, (void *)0, NULL);
+    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_COMPLEX]), vm->internal_imag_key, __tinypy_numeric_field_method, (void *)1, NULL);
 }

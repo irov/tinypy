@@ -1,7 +1,5 @@
 #include "tinypy/tinypy.h"
-#if defined(TINYPY_CYCLE_DIAGNOSTICS)
 #include "../../src/core/internal.h"
-#endif
 
 #include <float.h>
 #include <math.h>
@@ -201,8 +199,8 @@ static int32_t __test_cycle_diagnostics(void) {
     tinypy_value_t *closure;
     tinypy_value_t *cell;
     tinypy_value_t *list_key;
-    tinypy_value_t *dict_key;
-    tinypy_value_t *function_key;
+    tinypy_value_t *internal_dict_key;
+    tinypy_value_t *internal_function_key;
 
     (void)memset(&allocator_state, 0, sizeof(allocator_state));
     (void)memset(&diagnostic_state, 0, sizeof(diagnostic_state));
@@ -272,11 +270,11 @@ static int32_t __test_cycle_diagnostics(void) {
     TEST_CHECK(error == NULL);
 
     list_key = tinypy_string_from_bytes(vm, "list_cycle", sizeof("list_cycle") - 1U);
-    dict_key = tinypy_string_from_bytes(vm, "dict_cycle", sizeof("dict_cycle") - 1U);
-    function_key = tinypy_string_from_bytes(vm, "cell_cycle", sizeof("cell_cycle") - 1U);
+    internal_dict_key = tinypy_string_from_bytes(vm, "dict_cycle", sizeof("dict_cycle") - 1U);
+    internal_function_key = tinypy_string_from_bytes(vm, "cell_cycle", sizeof("cell_cycle") - 1U);
     list = tinypy_dict_get(globals, list_key);
-    dict = tinypy_dict_get(globals, dict_key);
-    function = tinypy_dict_get(globals, function_key);
+    dict = tinypy_dict_get(globals, internal_dict_key);
+    function = tinypy_dict_get(globals, internal_function_key);
     tinypy_retain(list);
     tinypy_retain(dict);
     tinypy_retain(function);
@@ -301,8 +299,8 @@ static int32_t __test_cycle_diagnostics(void) {
     tinypy_release(function);
     tinypy_release(dict);
     tinypy_release(list);
-    tinypy_release(function_key);
-    tinypy_release(dict_key);
+    tinypy_release(internal_function_key);
+    tinypy_release(internal_dict_key);
     tinypy_release(list_key);
     tinypy_release(result);
     tinypy_release(globals);
@@ -2591,6 +2589,11 @@ typedef struct test_native_reduce_state_t {
     size_t calls;
 } test_native_reduce_state_t;
 //////////////////////////////////////////////////////////////////////////
+static void __test_native_registration_finalize(void *user_data) {
+    size_t *calls = (size_t *)user_data;
+    *calls += 1U;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__test_native_reduce_retain_args(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     test_native_reduce_state_t *state = (test_native_reduce_state_t *)user_data;
 
@@ -2684,9 +2687,29 @@ static int32_t __test_stack_budget(void) {
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_intern_lifetime(void) {
     static const char source[] =
+        "raw_name = '<lambda>'\n"
+        "folded_name = '<' + 'lambda>'\n"
+        "formatted_name = '<%s>' % 'lambda'\n"
+        "top = genexpr = setcomp = dictcomp = 1\n"
+        "compiler_cache_probe = 1\n"
+        "class SlotName(str):\n"
+        "    def __hash__(self):\n"
+        "        raise AssertionError('slot name hash callback')\n"
+        "    def __eq__(self, other):\n"
+        "        raise AssertionError('attribute name equality callback')\n"
+        "class Slotted(object):\n"
+        "    __slots__ = (SlotName('member'),)\n"
+        "slotted = Slotted()\n"
+        "slotted.member = 41\n"
+        "assert slotted.member == 41\n"
+        "assert type(Slotted.__dict__['member'].__name__) is str\n"
+        "del slotted, Slotted, SlotName\n"
         "def batch(seed):\n"
         "    for index in xrange(2000):\n"
-        "        intern('batch_%d_%d_' % (seed, index) + 'x' * 300)\n";
+        "        intern('batch_%d_%d_' % (seed, index) + 'x' * 300)\n"
+        "assert batch.func_code is batch.__code__\n"
+        "assert getattr(batch, u'func_code') is batch.__code__\n"
+        "assert getattr(batch, u'__code__') is batch.func_code\n";
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
@@ -2697,6 +2720,7 @@ static int32_t __test_intern_lifetime(void) {
     tinypy_value_t *function;
     tinypy_value_t *result;
     size_t warm_bytes = 0U;
+    size_t registration_finalizers = 0U;
 
     (void)memset(&state, 0, sizeof(state));
     allocator = __test_make_allocator(&state);
@@ -2704,9 +2728,399 @@ static int32_t __test_intern_lifetime(void) {
     tinypy_vm_t *vm = tinypy_vm_create(&config);
 
     TEST_CHECK(vm != NULL);
+    tinypy_vm_t *other_vm = tinypy_vm_create(&config);
+    TEST_CHECK(other_vm != NULL);
+    /* Core registration must use the eagerly initialized registry, without
+       creating the extension/test-only literal dictionary. */
+    TEST_CHECK(vm->internal_strings == NULL && other_vm->internal_strings == NULL);
+    TEST_CHECK(vm->internal_func_code_key != vm->internal_special_code_key);
+    size_t preset_allocations = state.allocation_calls;
+#define TEST_PRESET_NAME(field, name, intern_name) \
+    do { \
+        tinypy_value_t *preset = vm->field; \
+        tinypy_ref_t preset_refs = TINYPY_REFCNT(preset); \
+        TEST_CHECK(preset != other_vm->field); \
+        TEST_CHECK(TINYPY_STRING_OBJECT(preset)->internal_metadata != NULL); \
+        TEST_CHECK(TINYPY_STRING_OBJECT(preset)->internal_metadata == TINYPY_STRING_OBJECT(other_vm->field)->internal_metadata); \
+        TEST_CHECK(tinypy_internal_string_is_interned(preset) == intern_name); \
+        for (size_t repeat = 0U; repeat < 2U; ++repeat) { \
+            tinypy_value_t *owned_name = tinypy_internal_name_from_bytes(vm, name, sizeof(name) - 1U); \
+            TEST_CHECK(owned_name == preset); \
+            TEST_CHECK(TINYPY_REFCNT(preset) == preset_refs + 1); \
+            TEST_CHECK(TINYPY_VALUE_VM(owned_name) == vm); \
+            tinypy_release(owned_name); \
+            TEST_CHECK(TINYPY_REFCNT(preset) == preset_refs); \
+            if (intern_name != 0) { \
+                owned_name = tinypy_string_from_bytes(vm, name, sizeof(name) - 1U); \
+                TEST_CHECK(owned_name == preset && TINYPY_REFCNT(preset) == preset_refs + 1); \
+                tinypy_release(owned_name); \
+                owned_name = tinypy_internal_string_from_bytes_checked(vm, name, sizeof(name) - 1U, &error); \
+                TEST_CHECK(owned_name == preset && error == NULL); \
+                tinypy_release(owned_name); \
+                TEST_CHECK(TINYPY_REFCNT(preset) == preset_refs); \
+            } \
+        } \
+    } while (0);
+    TINYPY_INTERNAL_KEY_LIST(TEST_PRESET_NAME)
+#undef TEST_PRESET_NAME
+#define TEST_VM_VALUE(accessor, field) \
+    do { \
+        tinypy_value_t *preset = &vm->field; \
+        tinypy_ref_t preset_refs = TINYPY_REFCNT(preset); \
+        tinypy_value_t *owned_value = accessor(vm); \
+        TEST_CHECK(owned_value == preset); \
+        TEST_CHECK(owned_value != &other_vm->field); \
+        TEST_CHECK(TINYPY_REFCNT(preset) == preset_refs + 1); \
+        TEST_CHECK(TINYPY_VALUE_VM(owned_value) == vm); \
+        tinypy_release(owned_value); \
+        TEST_CHECK(TINYPY_REFCNT(preset) == preset_refs); \
+    } while (0)
+    TEST_VM_VALUE(TINYPY_RET_NONE, none_object.base);
+    TEST_VM_VALUE(TINYPY_RET_TRUE, true_object.base);
+    TEST_VM_VALUE(TINYPY_RET_FALSE, false_object.base);
+    TEST_VM_VALUE(TINYPY_RET_NOT_IMPLEMENTED, not_implemented_object.base);
+    TEST_VM_VALUE(TINYPY_RET_ELLIPSIS, ellipsis_object.base);
+    TEST_VM_VALUE(TINYPY_RET_EMPTY_TUPLE, empty_tuple_object.base.base);
+    TEST_VM_VALUE(TINYPY_RET_EMPTY_STRING, empty_string_object.base.base);
+#undef TEST_VM_VALUE
+    tinypy_value_t *operands[] = {vm->internal_special_doc_key, vm->internal_special_module_key};
+    size_t operand_index = 0U;
+    tinypy_ref_t operand_refs = TINYPY_REFCNT(operands[0]);
+    tinypy_value_t *owned_operand = TINYPY_RET(operands[operand_index++]);
+    TEST_CHECK(operand_index == 1U && owned_operand == operands[0]);
+    TEST_CHECK(TINYPY_REFCNT(operands[0]) == operand_refs + 1);
+    tinypy_release(owned_operand);
+    TEST_CHECK(TINYPY_REFCNT(operands[0]) == operand_refs);
+    tinypy_vm_t *vms[] = {vm, other_vm};
+    size_t vm_index = 0U;
+    tinypy_ref_t none_refs = TINYPY_REFCNT(&vm->none_object.base);
+    tinypy_value_t *owned_none = TINYPY_RET_NONE(vms[vm_index++]);
+    TEST_CHECK(vm_index == 1U && owned_none == &vm->none_object.base);
+    TEST_CHECK(TINYPY_REFCNT(owned_none) == none_refs + 1);
+    tinypy_release(owned_none);
+    TEST_CHECK(TINYPY_REFCNT(&vm->none_object.base) == none_refs);
+    for (size_t index = 0U; index < TINYPY_SPECIAL_OPERATOR_COUNT; ++index) {
+        tinypy_value_t *preset = tinypy_internal_object_special_operator_key(vm, index);
+        size_t name_size = TINYPY_TEXT_BYTE_SIZE(preset);
+        const char *name = (const char *)TINYPY_TEXT_BYTES(preset);
+        tinypy_ref_t preset_refs = TINYPY_REFCNT(preset);
+        tinypy_value_t *owned_name = tinypy_internal_name_from_bytes(vm, name, name_size);
+
+        TEST_CHECK(owned_name == preset);
+        TEST_CHECK(preset != tinypy_internal_object_special_operator_key(other_vm, index));
+        TEST_CHECK(tinypy_internal_object_special_operator_key(vm, index) == preset);
+        TEST_CHECK(TINYPY_REFCNT(preset) == preset_refs + 1);
+        tinypy_release(owned_name);
+        TEST_CHECK(TINYPY_REFCNT(preset) == preset_refs);
+    }
+    TEST_CHECK(state.allocation_calls == preset_allocations);
+    size_t intern_used = vm->intern_used;
+    for (size_t index = 0U; index < 32U; ++index) {
+        char generated[64];
+        int32_t generated_size = (int32_t)snprintf(generated, sizeof(generated), "ordinary-uncached-%zu", index);
+        TEST_CHECK(generated_size > 1 && (size_t)generated_size < sizeof(generated));
+        tinypy_value_t *ordinary = tinypy_string_from_bytes(vm, generated, (size_t)generated_size);
+        tinypy_value_t *ordinary_again = tinypy_string_from_bytes(vm, generated, (size_t)generated_size);
+        TEST_CHECK(ordinary != ordinary_again && vm->intern_used == intern_used);
+        TEST_CHECK(tinypy_internal_string_find(vm, generated, (size_t)generated_size) == NULL);
+        tinypy_release(ordinary_again);
+        tinypy_release(ordinary);
+    }
+    tinypy_type_t *buffer_type = &vm->types[TINYPY_VALUE_BUFFER];
+    tinypy_value_t *method_key = vm->internal_append_key;
+    tinypy_ref_t method_key_refs = TINYPY_REFCNT(method_key);
+    tinypy_value_t *key_method = tinypy_native_function_new_key(method_key, __test_native_return_args, NULL, NULL);
+    TEST_CHECK(TINYPY_NATIVE_FUNCTION_OBJECT(key_method)->name == method_key);
+    TEST_CHECK(TINYPY_REFCNT(method_key) == method_key_refs + 1);
+    tinypy_type_set_attr_key(buffer_type, method_key, key_method);
+    TEST_CHECK(TINYPY_REFCNT(method_key) == method_key_refs + 2);
+    TEST_CHECK(tinypy_type_get_attr_key(buffer_type, method_key) == key_method);
+    TEST_CHECK(tinypy_type_get_attr(buffer_type, "append", 6U) == key_method);
+    TEST_CHECK(key_method->type == vm->native_method_descriptor_type);
+    TEST_CHECK(TINYPY_NATIVE_FUNCTION_OBJECT(key_method)->owner == buffer_type);
+    tinypy_type_set_attr(buffer_type, "append", 6U, &vm->none_object.base);
+    TEST_CHECK(tinypy_type_get_attr_key(buffer_type, method_key) == &vm->none_object.base);
+    tinypy_release(key_method);
+    /* The dictionary and type lookup cache each retain the name. */
+    TEST_CHECK(TINYPY_REFCNT(method_key) == method_key_refs + 2);
+    TEST_CHECK(vm->intern_used == intern_used);
+    tinypy_value_t *buffer_len = tinypy_type_get_attr(&vm->types[TINYPY_VALUE_BUFFER], "__len__", 7U);
+    TEST_CHECK(buffer_len != NULL && TINYPY_NATIVE_FUNCTION_OBJECT(buffer_len)->name == vm->internal_special_length_key);
+    tinypy_value_t *class_key = tinypy_string_from_bytes(vm, "__class__tail", 9U);
+    tinypy_value_t *raw_class_key = tinypy_internal_string_from_bytes_uninterned(vm, "__class__", 9U);
+    tinypy_value_t *unicode_class_key = tinypy_unicode_from_utf8(vm, "__class__", 9U);
+    TEST_CHECK(class_key == vm->internal_special_class_key && raw_class_key != class_key && unicode_class_key != class_key);
+    TEST_CHECK(TINYPY_NAME_EQ(class_key, vm->internal_special_class_key) != 0);
+    TEST_CHECK(TINYPY_NAME_EQ(raw_class_key, vm->internal_special_class_key) != 0);
+    TEST_CHECK(TINYPY_NAME_EQ(unicode_class_key, vm->internal_special_class_key) != 0);
+    TEST_CHECK(TINYPY_NAME_EQ(class_key, vm->internal_special_dict_key) == 0);
+    TEST_CHECK(TINYPY_NAME_EQ(&vm->none_object.base, vm->internal_special_class_key) == 0);
+    TEST_CHECK(tinypy_internal_string_is_interned(raw_class_key) == 0);
+    TEST_CHECK(tinypy_internal_string_is_interned(class_key) != 0);
+    tinypy_value_t *builtin_class = tinypy_internal_object_builtin_attribute(&vm->none_object.base, raw_class_key);
+    TEST_CHECK(builtin_class == &vm->types[TINYPY_VALUE_NONE].base.base);
+    tinypy_release(builtin_class);
+    builtin_class = tinypy_internal_object_builtin_attribute(&vm->none_object.base, unicode_class_key);
+    TEST_CHECK(builtin_class == &vm->types[TINYPY_VALUE_NONE].base.base);
+    tinypy_release(builtin_class);
+    tinypy_release(unicode_class_key);
+    tinypy_release(raw_class_key);
+    tinypy_release(class_key);
+    static const char cached_name[] = "runtime_cached_name\0suffix";
+    tinypy_value_t *cached = tinypy_string_from_bytes(vm, cached_name, sizeof(cached_name) - 1U);
+    TEST_CHECK(tinypy_internal_string_intern(&cached, &error) != 0 && error == NULL);
+    tinypy_ref_t cached_refs = TINYPY_REFCNT(cached);
+    size_t cached_allocations = state.allocation_calls;
+    tinypy_value_t *cached_again = tinypy_string_from_bytes(vm, cached_name, sizeof(cached_name) - 1U);
+    TEST_CHECK(cached_again == cached && TINYPY_REFCNT(cached) == cached_refs + 1);
+    TEST_CHECK(state.allocation_calls == cached_allocations);
+    tinypy_release(cached_again);
+    tinypy_release(cached);
+    TEST_CHECK(tinypy_internal_string_find(vm, cached_name, sizeof(cached_name) - 1U) == NULL);
+    size_t literal_allocations = state.allocation_calls;
+    tinypy_ref_t doc_refs = TINYPY_REFCNT(vm->internal_special_doc_key);
+    TEST_CHECK(TINYPY_INTERNAL_STRING(vm, "__doc__") == vm->internal_special_doc_key);
+    TEST_CHECK(TINYPY_REFCNT(vm->internal_special_doc_key) == doc_refs && state.allocation_calls == literal_allocations);
+    TEST_CHECK(vm->internal_strings == NULL && other_vm->internal_strings == NULL);
+    tinypy_value_t *private_key = tinypy_string_from_bytes(vm, "private_literal\0tail", 20U);
+    TEST_CHECK(tinypy_internal_string_intern(&private_key, &error) != 0 && error == NULL);
+    tinypy_ref_t private_refs = TINYPY_REFCNT(private_key);
+    TEST_CHECK(TINYPY_INTERNAL_STRING(vm, "private_literal\0tail") == private_key);
+    TEST_CHECK(TINYPY_REFCNT(private_key) == private_refs + 1);
+    tinypy_release(private_key);
+    TEST_CHECK(tinypy_internal_string_find(vm, "private_literal\0tail", 20U) == private_key);
+    literal_allocations = state.allocation_calls;
+    private_refs = TINYPY_REFCNT(private_key);
+    for (size_t repeat = 0U; repeat < 3U; ++repeat) {
+        TEST_CHECK(TINYPY_INTERNAL_STRING(vm, "private_literal\0tail") == private_key);
+    }
+    TEST_CHECK(TINYPY_REFCNT(private_key) == private_refs && state.allocation_calls == literal_allocations);
+    TEST_CHECK(TINYPY_INTERNAL_STRING(other_vm, "private_literal\0tail") != private_key);
+    vm_index = 0U;
+    tinypy_value_t *literal_once = TINYPY_INTERNAL_STRING(vms[vm_index++], "literal_once");
+    TEST_CHECK(vm_index == 1U && TINYPY_VALUE_VM(literal_once) == vm);
+    tinypy_value_t *literal_top = TINYPY_INTERNAL_STRING(vm, "top");
+    TEST_CHECK(literal_top != vm->internal_compiler_symbol_top_name && tinypy_internal_string_is_interned(literal_top) != 0);
+    TEST_CHECK(tinypy_internal_string_is_interned(vm->internal_compiler_symbol_top_name) == 0);
+
+    tinypy_value_t *registration_name = tinypy_string_from_bytes(vm, "Registration", 12U);
+    TEST_CHECK(tinypy_internal_string_is_interned(registration_name) == 0);
+    tinypy_type_t *registration_type = tinypy_type_new_key(registration_name, NULL, 0U, NULL, NULL, &error);
+    TEST_CHECK(registration_type != NULL && error == NULL);
+    TEST_CHECK(registration_type->name_object == registration_name);
+    tinypy_native_type_spec_t registration_spec;
+    tinypy_native_type_spec_init(&registration_spec);
+    tinypy_type_t *native_key_type = tinypy_native_type_new_key(registration_name, NULL, 0U, NULL, &registration_spec, &error);
+    TEST_CHECK(native_key_type != NULL && error == NULL);
+    TEST_CHECK(native_key_type->name_object == registration_name);
+    tinypy_release(&native_key_type->base.base);
+    TEST_CHECK(tinypy_internal_string_is_interned(registration_name) == 0);
+    tinypy_release(registration_name);
+    tinypy_value_t *registration_keys[] = {
+        TINYPY_INTERNAL_STRING(vm, "native_auto"), TINYPY_INTERNAL_STRING(vm, "native_method"),
+        TINYPY_INTERNAL_STRING(vm, "native_wrapper"), TINYPY_INTERNAL_STRING(vm, "native_class"),
+        TINYPY_INTERNAL_STRING(vm, "native_static"), TINYPY_INTERNAL_STRING(vm, "native_property")};
+    /* Automatic wrapper classification reuses canonical keys and also accepts
+       raw/Unicode names; embedded NUL bytes prevent a false slot match. */
+    static const char wrapper_name[] = "__eq__";
+    tinypy_value_t *wrapper_keys[] = {
+        TINYPY_RET(vm->internal_special_eq_key),
+        tinypy_internal_string_from_bytes_uninterned(vm, wrapper_name, sizeof(wrapper_name) - 1U),
+        tinypy_unicode_from_utf8(vm, wrapper_name, sizeof(wrapper_name) - 1U)
+    };
+    for (size_t index = 0U; index < sizeof(wrapper_keys) / sizeof(wrapper_keys[0]); ++index) {
+        tinypy_value_t *wrapper = tinypy_native_function_new_key(vm->internal_special_eq_key, __test_native_return_args, NULL, NULL);
+        tinypy_type_set_attr_key(registration_type, wrapper_keys[index], wrapper);
+        TEST_CHECK(wrapper->type == vm->native_wrapper_descriptor_type);
+        TEST_CHECK(TINYPY_NATIVE_FUNCTION_OBJECT(wrapper)->owner == registration_type);
+        tinypy_release(wrapper);
+        tinypy_release(wrapper_keys[index]);
+    }
+    TEST_CHECK(tinypy_internal_dict_delete_optional(vm, registration_type->dict, vm->internal_special_eq_key) != TINYPY_FALSE);
+    static const char nonwrapper_name[] = "__eq__\0tail";
+    tinypy_value_t *nonwrapper_key = tinypy_internal_string_from_bytes_uninterned(vm, nonwrapper_name, sizeof(nonwrapper_name) - 1U);
+    tinypy_value_t *nonwrapper = tinypy_native_function_new_key(nonwrapper_key, __test_native_return_args, NULL, NULL);
+    tinypy_type_set_attr_key(registration_type, nonwrapper_key, nonwrapper);
+    TEST_CHECK(nonwrapper->type == vm->native_method_descriptor_type);
+    TEST_CHECK(tinypy_internal_dict_delete_optional(vm, registration_type->dict, nonwrapper_key) != TINYPY_FALSE);
+    tinypy_release(nonwrapper);
+    tinypy_release(nonwrapper_key);
+    for (size_t index = 0U; index < 3U; ++index) {
+        tinypy_internal_type_add_method(registration_type, registration_keys[index], __test_native_return_args, &registration_finalizers, __test_native_registration_finalize, (tinypy_native_descriptor_kind_e)index);
+        tinypy_value_t *registered = tinypy_type_get_attr_key(registration_type, registration_keys[index]);
+        TEST_CHECK(TINYPY_NATIVE_FUNCTION_OBJECT(registered)->name == registration_keys[index]);
+        TEST_CHECK(TINYPY_NATIVE_FUNCTION_OBJECT(registered)->owner == registration_type);
+        TEST_CHECK(TINYPY_NATIVE_FUNCTION_OBJECT(registered)->descriptor_kind == (tinypy_native_descriptor_kind_e)index);
+    }
+    tinypy_internal_type_add_class_method(registration_type, registration_keys[3], __test_native_return_args, &registration_finalizers, __test_native_registration_finalize);
+    tinypy_internal_type_add_static_method(registration_type, registration_keys[4], __test_native_return_args, &registration_finalizers, __test_native_registration_finalize);
+    tinypy_internal_type_add_property(registration_type, registration_keys[5], __test_native_return_args, &registration_finalizers, __test_native_registration_finalize);
+    tinypy_value_t *registration_instance = tinypy_instance_new(registration_type);
+    for (size_t index = 0U; index < 6U; ++index) {
+        tinypy_value_t *bound = tinypy_object_get_attr_value(registration_instance, registration_keys[index], &error);
+        TEST_CHECK(bound != NULL && error == NULL);
+        tinypy_value_t *arguments = index == 5U ? TINYPY_RET(bound) : tinypy_call(bound, &vm->empty_tuple_object.base.base, NULL, &error);
+        TEST_CHECK(arguments != NULL && error == NULL);
+        TEST_CHECK(tinypy_tuple_size(arguments) == (index == 4U ? 0U : 1U));
+        if (index != 4U) {
+            TEST_CHECK(tinypy_tuple_get(arguments, 0U) == (index == 3U ? &registration_type->base.base : registration_instance));
+        }
+        tinypy_release(arguments);
+        tinypy_release(bound);
+    }
+    /* Direct instance access keeps raw dictionary/type values. It must not
+       bind a method or invoke a property's getter/setter. */
+    TEST_CHECK(tinypy_instance_get_attr_key(registration_instance, registration_keys[0]) == tinypy_type_get_attr_key(registration_type, registration_keys[0]));
+    tinypy_instance_set_attr_key(registration_instance, registration_keys[5], &vm->true_object.base);
+    TEST_CHECK(tinypy_instance_get_attr_key(registration_instance, registration_keys[5]) == &vm->true_object.base);
+    TEST_CHECK(tinypy_instance_get_attr(registration_instance, "native_property", 15U) == &vm->true_object.base);
+    tinypy_value_t *property_result = tinypy_object_get_attr_value(registration_instance, registration_keys[5], &error);
+    TEST_CHECK(property_result != NULL && error == NULL && tinypy_tuple_size(property_result) == 1U);
+    TEST_CHECK(tinypy_tuple_get(property_result, 0U) == registration_instance);
+    tinypy_release(property_result);
+
+    tinypy_value_t *registration_module_name = tinypy_string_from_bytes(vm, "registration_module", 19U);
+    TEST_CHECK(tinypy_internal_string_is_interned(registration_module_name) == 0);
+    tinypy_value_t *registration_module = tinypy_module_new_key(registration_module_name);
+    TEST_CHECK(tinypy_module_name(registration_module) == registration_module_name);
+    TEST_CHECK(tinypy_internal_string_is_interned(registration_module_name) == 0);
+    tinypy_release(registration_module_name);
+    tinypy_internal_module_add_function(registration_module, literal_once, __test_native_return_args, &registration_finalizers, __test_native_registration_finalize);
+    tinypy_value_t *registered_function = tinypy_module_get_value(registration_module, "literal_once", 12U);
+    TEST_CHECK(registered_function != NULL && TINYPY_NATIVE_FUNCTION_OBJECT(registered_function)->name == literal_once);
+    TEST_CHECK(TINYPY_NATIVE_FUNCTION_OBJECT(registered_function)->module == tinypy_module_name(registration_module));
+    TEST_CHECK(tinypy_module_get_value_key(registration_module, literal_once) == registered_function);
+
+    /* Existing keys remain borrowed; embedded NUL bytes are part of the key.
+       Replacing a populated value must neither allocate nor retain the key
+       again, and the byte and key APIs must address the same entry. */
+    tinypy_value_t *binary_key = tinypy_string_from_bytes(vm, "value\0tail", 10U);
+    tinypy_ref_t binary_refs = TINYPY_REFCNT(binary_key);
+    tinypy_module_add_value_key(registration_module, binary_key, &vm->true_object.base);
+    tinypy_instance_set_attr_key(registration_instance, binary_key, &vm->true_object.base);
+    TEST_CHECK(TINYPY_REFCNT(binary_key) == binary_refs + 2);
+    size_t key_allocations = state.allocation_calls;
+    tinypy_module_add_value_key(registration_module, binary_key, &vm->false_object.base);
+    tinypy_instance_set_attr_key(registration_instance, binary_key, &vm->false_object.base);
+    TEST_CHECK(tinypy_module_get_value_key(registration_module, binary_key) == &vm->false_object.base);
+    TEST_CHECK(tinypy_instance_get_attr_key(registration_instance, binary_key) == &vm->false_object.base);
+    TEST_CHECK(state.allocation_calls == key_allocations);
+    TEST_CHECK(TINYPY_REFCNT(binary_key) == binary_refs + 2);
+    TEST_CHECK(tinypy_module_get_value(registration_module, "value\0tail", 10U) == &vm->false_object.base);
+    TEST_CHECK(tinypy_instance_get_attr(registration_instance, "value\0tail", 10U) == &vm->false_object.base);
+    TEST_CHECK(tinypy_module_get_value_key(registration_module, TINYPY_INTERNAL_STRING(vm, "missing_module_value")) == NULL);
+    tinypy_value_t *imported_sys = tinypy_import_module_key(vm->internal_sys_key, NULL, NULL, INT32_C(0), &error);
+    TEST_CHECK(imported_sys == vm->sys_module && error == NULL);
+    TEST_CHECK(tinypy_module_get_value_key(imported_sys, vm->internal_stdout_key) == tinypy_module_get_value(imported_sys, "stdout", 6U));
+    tinypy_release(imported_sys);
+    tinypy_release(registration_module);
+    tinypy_release(registration_instance);
+    TEST_CHECK(TINYPY_REFCNT(binary_key) == binary_refs);
+    TEST_CHECK(tinypy_internal_string_is_interned(binary_key) == 0);
+    tinypy_release(binary_key);
+    tinypy_release(&registration_type->base.base);
+    tinypy_vm_destroy(other_vm);
+    tinypy_value_t *prefix = tinypy_internal_name_from_bytes(vm, "__doc__tail", 7U);
+    tinypy_value_t *extended = tinypy_internal_name_from_bytes(vm, "__doc__tail", 11U);
+    size_t extended_size;
+    const void *extended_bytes = tinypy_string_view(extended, &extended_size);
+    TEST_CHECK(prefix == vm->internal_special_doc_key);
+    TEST_CHECK(extended != prefix && extended_size == 11U);
+    TEST_CHECK(memcmp(extended_bytes, "__doc__tail", extended_size) == 0);
+    tinypy_release(extended);
+    tinypy_release(prefix);
     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
-    code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "intern_lifetime.py", 18U, &options, &error);
+    code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "__doc__", 7U, &options, &error);
     TEST_CHECK(code != NULL && error == NULL);
+    /* Hash dispatch accepts raw and Unicode names without retaining them or
+       invoking Python callbacks, and collisions must verify the full span. */
+    static const char varnames_name[] = "co_varnames";
+    tinypy_value_t *raw_varnames = tinypy_internal_string_from_bytes_uninterned(vm, varnames_name, sizeof(varnames_name) - 1U);
+    tinypy_value_t *unicode_varnames = tinypy_unicode_from_utf8(vm, varnames_name, sizeof(varnames_name) - 1U);
+    TEST_CHECK(TINYPY_STRING_OBJECT(raw_varnames)->internal_metadata == NULL);
+    TEST_CHECK(TINYPY_STRING_OBJECT(vm->internal_co_varnames_key)->internal_metadata->builtin_attribute_id != 0U);
+    TEST_CHECK(TINYPY_STRING_OBJECT(vm->internal_stdout_key)->internal_metadata->builtin_attribute_id == 0U);
+    TEST_CHECK(tinypy_internal_object_builtin_attribute(code, vm->internal_stdout_key) == NULL);
+    TEST_CHECK(tinypy_internal_object_builtin_attribute(code, vm->internal_func_defaults_key) == NULL);
+    tinypy_value_t *varname_keys[] = {vm->internal_co_varnames_key, raw_varnames, unicode_varnames};
+    tinypy_ref_t varname_refs[] = {TINYPY_REFCNT(varname_keys[0]), TINYPY_REFCNT(varname_keys[1]), TINYPY_REFCNT(varname_keys[2])};
+    size_t dispatch_allocations = state.allocation_calls;
+    for (size_t index = 0U; index < sizeof(varname_keys) / sizeof(varname_keys[0]); ++index) {
+        tinypy_value_t *varnames = tinypy_internal_object_builtin_attribute(code, varname_keys[index]);
+        TEST_CHECK(varnames == tinypy_code_varnames(code));
+        TEST_CHECK(TINYPY_REFCNT(varname_keys[index]) == varname_refs[index]);
+        tinypy_release(varnames);
+    }
+    TEST_CHECK(state.allocation_calls == dispatch_allocations);
+    tinypy_value_t *interned_varnames = tinypy_internal_string_from_bytes_uninterned(vm, varnames_name, sizeof(varnames_name) - 1U);
+    TEST_CHECK(tinypy_internal_string_intern(&interned_varnames, &error) == TINYPY_TRUE && error == NULL);
+    TEST_CHECK(interned_varnames == vm->internal_co_varnames_key);
+    TEST_CHECK(TINYPY_STRING_OBJECT(interned_varnames)->internal_metadata == TINYPY_STRING_OBJECT(vm->internal_co_varnames_key)->internal_metadata);
+    tinypy_release(interned_varnames);
+
+    /* Immutable subtype copies and growable raw strings cannot inherit a
+       preset's dispatch metadata, even when they initially share its bytes. */
+    const tinypy_type_t *string_base = &vm->types[TINYPY_VALUE_STRING];
+    static const char subtype_name[] = "InternalName";
+    tinypy_type_t *string_subtype = tinypy_type_new(vm, subtype_name, sizeof(subtype_name) - 1U, &string_base, 1U, NULL, NULL, &error);
+    TEST_CHECK(string_subtype != NULL && error == NULL);
+    tinypy_value_t *owned_varnames = TINYPY_RET(vm->internal_co_varnames_key);
+    tinypy_value_t *subtype_varnames = tinypy_internal_immutable_subclass_copy(string_subtype, owned_varnames, &error);
+    TEST_CHECK(subtype_varnames != NULL && error == NULL);
+    TEST_CHECK(subtype_varnames->type == string_subtype && TINYPY_STRING_OBJECT(subtype_varnames)->internal_metadata == NULL);
+    tinypy_value_t *subtype_result = tinypy_internal_object_builtin_attribute(code, subtype_varnames);
+    TEST_CHECK(subtype_result == tinypy_code_varnames(code));
+    tinypy_release(subtype_result);
+    tinypy_value_t *plain_varnames = tinypy_internal_immutable_subclass_copy(&vm->types[TINYPY_VALUE_STRING], subtype_varnames, &error);
+    TEST_CHECK(plain_varnames != NULL && error == NULL && TINYPY_STRING_OBJECT(plain_varnames)->internal_metadata == NULL);
+    plain_varnames = tinypy_internal_string_concat_in_place(vm, plain_varnames, (const uint8_t *)"_tail", 5U);
+    TEST_CHECK(plain_varnames != NULL && TINYPY_STRING_OBJECT(plain_varnames)->internal_metadata == NULL);
+    TEST_CHECK(tinypy_internal_object_builtin_attribute(code, plain_varnames) == NULL);
+    tinypy_release(plain_varnames);
+    tinypy_release(&string_subtype->base.base);
+    tinypy_release(unicode_varnames);
+    tinypy_release(raw_varnames);
+    size_t dispatch_intern_used = vm->intern_used;
+    size_t collision_probes = 0U;
+    uint8_t collision_name[10] = {'c', 'o', '_', 'p', 'r', 'o', 'b', 'e', 0U, 0U};
+    for (size_t index = 0U; index <= UINT8_MAX; ++index) {
+        collision_name[9] = (uint8_t)index;
+        uint32_t name_hash = UINT32_C(2166136261);
+        for (size_t byte = 0U; byte < sizeof(collision_name); ++byte) {
+            name_hash = (name_hash ^ collision_name[byte]) * UINT32_C(16777619);
+        }
+        size_t slot = (size_t)name_hash & (TINYPY_INTERNAL_KEY_TABLE_SIZE - 1U);
+        if (vm->internal_key_table[slot] == NULL) {
+            continue;
+        }
+        collision_probes += 1U;
+        tinypy_value_t *collision_key = tinypy_internal_string_from_bytes_uninterned(vm, (const char *)collision_name, sizeof(collision_name));
+        tinypy_ref_t collision_refs = TINYPY_REFCNT(collision_key);
+        TEST_CHECK(tinypy_internal_object_builtin_attribute(code, collision_key) == NULL);
+        TEST_CHECK(TINYPY_REFCNT(collision_key) == collision_refs && vm->intern_used == dispatch_intern_used);
+        tinypy_release(collision_key);
+    }
+    TEST_CHECK(collision_probes != 0U);
+    TEST_CHECK(tinypy_internal_string_find(vm, "compiler_cache_probe", 20U) != NULL);
+    TEST_CHECK(tinypy_internal_string_is_interned(vm->internal_compiler_symbol_top_name) == 0);
+    TEST_CHECK(tinypy_internal_string_is_interned(vm->internal_compiler_symbol_genexpr_name) == 0);
+    TEST_CHECK(tinypy_internal_string_is_interned(vm->internal_compiler_symbol_setcomp_name) == 0);
+    TEST_CHECK(tinypy_internal_string_is_interned(vm->internal_compiler_symbol_dictcomp_name) == 0);
+    TEST_CHECK(tinypy_code_filename(code) != vm->internal_special_doc_key);
+    TEST_CHECK(tinypy_internal_string_is_interned(tinypy_code_filename(code)) == 0);
+    TEST_CHECK(tinypy_internal_string_is_interned(vm->internal_special_doc_key) != 0);
+    uint8_t serialized[4096];
+    uint8_t reserialized[4096];
+    size_t serialized_size;
+    size_t reserialized_size;
+    tinypy_value_t *loaded_code = NULL;
+    TEST_CHECK(tinypy_marshal_dump_code_v2(code, serialized, sizeof(serialized), &serialized_size, NULL, NULL) == TINYPY_MARSHAL_OK);
+    TEST_CHECK(tinypy_marshal_load_code_v2(vm, serialized, serialized_size, NULL, &loaded_code, NULL) == TINYPY_MARSHAL_OK);
+    TEST_CHECK(tinypy_internal_string_is_interned(tinypy_code_filename(loaded_code)) == 0);
+    TEST_CHECK(tinypy_internal_string_is_interned(vm->internal_special_doc_key) != 0);
+    TEST_CHECK(tinypy_marshal_dump_code_v2(loaded_code, reserialized, sizeof(reserialized), &reserialized_size, NULL, NULL) == TINYPY_MARSHAL_OK);
+    TEST_CHECK(serialized_size == reserialized_size && memcmp(serialized, reserialized, serialized_size) == 0);
+    tinypy_release(loaded_code);
     globals = tinypy_dict_new(vm);
     result = tinypy_eval_code(code, globals, NULL, &error);
     TEST_CHECK(result != NULL && error == NULL);
@@ -2737,6 +3151,7 @@ static int32_t __test_intern_lifetime(void) {
     tinypy_release(globals);
     tinypy_release(code);
     tinypy_vm_destroy(vm);
+    TEST_CHECK(registration_finalizers == 7U);
     TEST_CHECK(state.outstanding_bytes == 0U && state.outstanding_allocations == 0U);
     return 0;
 }
@@ -2810,9 +3225,9 @@ static int32_t __test_subtype_factory_limits(void) {
     tinypy_release(result);
     for (size_t index = 0U; index < sizeof(type_names) / sizeof(type_names[0]); ++index) {
         tinypy_value_t *type_key = tinypy_string_from_bytes(vm, type_names[index], strlen(type_names[index]));
-        tinypy_value_t *value_key = tinypy_string_from_bytes(vm, value_names[index], strlen(value_names[index]));
+        tinypy_value_t *internal_value_key = tinypy_string_from_bytes(vm, value_names[index], strlen(value_names[index]));
         tinypy_value_t *type = tinypy_dict_get(globals, type_key);
-        tinypy_value_t *value = tinypy_dict_get(globals, value_key);
+        tinypy_value_t *value = tinypy_dict_get(globals, internal_value_key);
         tinypy_value_t *args = tinypy_tuple_from_items(vm, &value, 1U);
 
         TEST_CHECK(type != NULL && value != NULL);
@@ -2825,7 +3240,7 @@ static int32_t __test_subtype_factory_limits(void) {
         tinypy_vm_clear_error(vm);
         tinypy_release(args);
         tinypy_release(type_key);
-        tinypy_release(value_key);
+        tinypy_release(internal_value_key);
     }
     tinypy_dict_clear(globals);
     tinypy_release(globals);

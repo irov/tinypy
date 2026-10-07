@@ -287,7 +287,7 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
     *out_value = NULL;
     switch (type) {
     case TINYPY_MARSHAL_TYPE_NONE:
-        *out_value = tinypy_none_get(materializer->vm);
+        *out_value = TINYPY_RET_NONE(materializer->vm);
         return TINYPY_MARSHAL_OK;
     case TINYPY_MARSHAL_TYPE_BOOL: {
         int32_t bool_value = (int32_t)tinypy_marshal_bool_value(source);
@@ -342,7 +342,9 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
                 return TINYPY_MARSHAL_OK;
             }
         }
-        *out_value = tinypy_string_from_bytes(materializer->vm, bytes, size);
+        *out_value = interned != 0
+            ? tinypy_string_from_bytes(materializer->vm, bytes, size)
+            : tinypy_internal_string_from_bytes_uninterned(materializer->vm, bytes, size);
         if (interned != 0) {
             if (tinypy_internal_string_intern(out_value, NULL) == 0) {
                 TINYPY_DECREF(*out_value);

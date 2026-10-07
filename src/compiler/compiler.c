@@ -358,7 +358,7 @@ static tinypy_value_t *__tinypy_compiler_run_source(tinypy_vm_t *vm, const void 
     }
     if (discard_result != 0) {
         TINYPY_DECREF(result);
-        result = tinypy_none_get(vm);
+        result = TINYPY_RET_NONE(vm);
     }
     return result;
 }

@@ -45,15 +45,22 @@ struct tinypy_module_artifact_t {
 };
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_module_new(tinypy_vm_t *vm, const char *name, size_t name_size);
+/* Borrowed byte-string name; the returned module retains it. */
+tinypy_value_t *tinypy_module_new_key(tinypy_value_t *name);
 /* Borrowed fields; NULL until initialized on an allocation-only Python module. */
 tinypy_value_t *tinypy_module_dict(const tinypy_value_t *module);
 tinypy_value_t *tinypy_module_name(const tinypy_value_t *module);
 void tinypy_module_swap_dict(tinypy_value_t *left, tinypy_value_t *right);
 void tinypy_module_add_value(tinypy_value_t *module, const char *name, size_t name_size, tinypy_value_t *value);
 tinypy_value_t *tinypy_module_get_value(tinypy_value_t *module, const char *name, size_t name_size);
+/* Borrowed same-VM keys; get returns a borrowed value. */
+void tinypy_module_add_value_key(tinypy_value_t *module, tinypy_value_t *name, tinypy_value_t *value);
+tinypy_value_t *tinypy_module_get_value_key(tinypy_value_t *module, tinypy_value_t *name);
 tinypy_value_t *tinypy_vm_modules(const tinypy_vm_t *vm);
 void tinypy_vm_set_module_finder(tinypy_vm_t *vm, tinypy_value_t *finder);
 tinypy_value_t *tinypy_vm_module_finder(const tinypy_vm_t *vm);
 tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *globals, tinypy_value_t *fromlist, int32_t level, tinypy_error_t **out_error);
+/* Borrows a byte-string module name; host path processing uses its bytes. */
+tinypy_value_t *tinypy_import_module_key(tinypy_value_t *name, tinypy_value_t *globals, tinypy_value_t *fromlist, int32_t level, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 #endif

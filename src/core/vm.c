@@ -477,72 +477,62 @@ static void __tinypy_internal_initialize_type_docs(tinypy_vm_t *vm) {
     size_t index;
 
     for (index = 0U; index < TINYPY_BUILTIN_TYPE_COUNT; ++index) {
-        tinypy_type_set_attr(&vm->types[index], "__doc__", 7U, &vm->none_object.base);
+        tinypy_type_set_attr_key(&vm->types[index], vm->internal_special_doc_key, &vm->none_object.base);
     }
     for (index = 0U; index < sizeof(docs) / sizeof(docs[0]); ++index) {
         size_t doc_size = strlen(docs[index].doc);
         tinypy_value_t *doc = tinypy_string_from_bytes(vm, docs[index].doc, doc_size);
 
-        tinypy_type_set_attr(&vm->types[docs[index].kind], "__doc__", 7U, doc);
+        tinypy_type_set_attr_key(&vm->types[docs[index].kind], vm->internal_special_doc_key, doc);
         TINYPY_DECREF(doc);
     }
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_builtin_set(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *value) {
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
-
-    tinypy_dict_set(vm->builtins, key, value);
-    TINYPY_DECREF(key);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_initialize_builtins(tinypy_vm_t *vm) {
     tinypy_value_t *false_value;
 
     vm->builtins = tinypy_dict_new(vm);
-    tinypy_value_t *none_value = tinypy_none_get(vm);
-    tinypy_value_t *true_value = tinypy_bool_from_i32(vm, 1);
-    false_value = tinypy_bool_from_i32(vm, 0);
-    __tinypy_internal_builtin_set(vm, "None", 4U, none_value);
-    __tinypy_internal_builtin_set(vm, "NotImplemented", 14U, &vm->not_implemented_object.base);
-    __tinypy_internal_builtin_set(vm, "True", 4U, true_value);
-    __tinypy_internal_builtin_set(vm, "False", 5U, false_value);
-    __tinypy_internal_builtin_set(vm, "__debug__", 9U, vm->optimize_level == 0 ? true_value : false_value);
-    __tinypy_internal_builtin_set(vm, "Ellipsis", 8U, &vm->ellipsis_object.base);
-    __tinypy_internal_builtin_set(vm, "object", 6U, &vm->types[TINYPY_VALUE_INSTANCE].base.base);
-    __tinypy_internal_builtin_set(vm, "type", 4U, &vm->types[TINYPY_VALUE_TYPE].base.base);
-    __tinypy_internal_builtin_set(vm, "bool", 4U, &vm->types[TINYPY_VALUE_BOOL].base.base);
-    __tinypy_internal_builtin_set(vm, "int", 3U, &vm->types[TINYPY_VALUE_INTEGER].base.base);
-    __tinypy_internal_builtin_set(vm, "long", 4U, &vm->types[TINYPY_VALUE_LONG].base.base);
-    __tinypy_internal_builtin_set(vm, "float", 5U, &vm->types[TINYPY_VALUE_FLOAT].base.base);
-    __tinypy_internal_builtin_set(vm, "complex", 7U, &vm->types[TINYPY_VALUE_COMPLEX].base.base);
-    __tinypy_internal_builtin_set(vm, "str", 3U, &vm->types[TINYPY_VALUE_STRING].base.base);
-    __tinypy_internal_builtin_set(vm, "bytes", 5U, &vm->types[TINYPY_VALUE_STRING].base.base);
-    __tinypy_internal_builtin_set(vm, "basestring", 10U, &vm->types[TINYPY_VALUE_INVALID].base.base);
-    __tinypy_internal_builtin_set(vm, "unicode", 7U, &vm->types[TINYPY_VALUE_UNICODE].base.base);
-    __tinypy_internal_builtin_set(vm, "tuple", 5U, &vm->types[TINYPY_VALUE_TUPLE].base.base);
-    __tinypy_internal_builtin_set(vm, "list", 4U, &vm->types[TINYPY_VALUE_LIST].base.base);
-    __tinypy_internal_builtin_set(vm, "dict", 4U, &vm->types[TINYPY_VALUE_DICT].base.base);
-    __tinypy_internal_builtin_set(vm, "set", 3U, &vm->types[TINYPY_VALUE_SET].base.base);
-    __tinypy_internal_builtin_set(vm, "frozenset", 9U, &vm->types[TINYPY_VALUE_FROZENSET].base.base);
-    __tinypy_internal_builtin_set(vm, "slice", 5U, &vm->types[TINYPY_VALUE_SLICE].base.base);
-    __tinypy_internal_builtin_set(vm, "staticmethod", 12U, &vm->types[TINYPY_VALUE_STATIC_METHOD].base.base);
-    __tinypy_internal_builtin_set(vm, "classmethod", 11U, &vm->types[TINYPY_VALUE_CLASS_METHOD].base.base);
-    __tinypy_internal_builtin_set(vm, "property", 8U, &vm->types[TINYPY_VALUE_PROPERTY].base.base);
-    __tinypy_internal_builtin_set(vm, "super", 5U, &vm->types[TINYPY_VALUE_SUPER].base.base);
-    __tinypy_internal_builtin_set(vm, "buffer", 6U, &vm->types[TINYPY_VALUE_BUFFER].base.base);
-    __tinypy_internal_builtin_set(vm, "memoryview", 10U, &vm->memoryview_type->base.base);
-    __tinypy_internal_builtin_set(vm, "bytearray", 9U, &vm->types[TINYPY_VALUE_BYTEARRAY].base.base);
-    __tinypy_internal_builtin_set(vm, "file", 4U, &vm->types[TINYPY_VALUE_FILE].base.base);
+    tinypy_value_t *none_value = TINYPY_RET_NONE(vm);
+    tinypy_value_t *true_value = TINYPY_RET_TRUE(vm);
+    false_value = TINYPY_RET_FALSE(vm);
+    tinypy_dict_set(vm->builtins, vm->internal_none_key, none_value);
+    tinypy_dict_set(vm->builtins, vm->internal_not_implemented_key, &vm->not_implemented_object.base);
+    tinypy_dict_set(vm->builtins, vm->internal_true_key, true_value);
+    tinypy_dict_set(vm->builtins, vm->internal_false_key, false_value);
+    tinypy_dict_set(vm->builtins, vm->internal_special_debug_key, vm->optimize_level == 0 ? true_value : false_value);
+    tinypy_dict_set(vm->builtins, vm->internal_ellipsis_key, &vm->ellipsis_object.base);
+    tinypy_dict_set(vm->builtins, vm->internal_object_key, &vm->types[TINYPY_VALUE_INSTANCE].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_type_key, &vm->types[TINYPY_VALUE_TYPE].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_bool_key, &vm->types[TINYPY_VALUE_BOOL].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_int_key, &vm->types[TINYPY_VALUE_INTEGER].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_long_key, &vm->types[TINYPY_VALUE_LONG].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_float_key, &vm->types[TINYPY_VALUE_FLOAT].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_complex_key, &vm->types[TINYPY_VALUE_COMPLEX].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_str_key, &vm->types[TINYPY_VALUE_STRING].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_bytes_key, &vm->types[TINYPY_VALUE_STRING].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_basestring_key, &vm->types[TINYPY_VALUE_INVALID].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_unicode_key, &vm->types[TINYPY_VALUE_UNICODE].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_tuple_key, &vm->types[TINYPY_VALUE_TUPLE].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_list_key, &vm->types[TINYPY_VALUE_LIST].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_dict_key, &vm->types[TINYPY_VALUE_DICT].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_set_key, &vm->types[TINYPY_VALUE_SET].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_frozenset_key, &vm->types[TINYPY_VALUE_FROZENSET].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_slice_key, &vm->types[TINYPY_VALUE_SLICE].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_staticmethod_key, &vm->types[TINYPY_VALUE_STATIC_METHOD].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_classmethod_key, &vm->types[TINYPY_VALUE_CLASS_METHOD].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_property_key, &vm->types[TINYPY_VALUE_PROPERTY].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_super_key, &vm->types[TINYPY_VALUE_SUPER].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_buffer_key, &vm->types[TINYPY_VALUE_BUFFER].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_memoryview_key, &vm->memoryview_type->base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_bytearray_key, &vm->types[TINYPY_VALUE_BYTEARRAY].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_file_key, &vm->types[TINYPY_VALUE_FILE].base.base);
     TINYPY_DECREF(false_value);
     TINYPY_DECREF(true_value);
     TINYPY_DECREF(none_value);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_register_module(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *module) {
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
-
-    tinypy_dict_set(vm->modules, key, module);
-    TINYPY_DECREF(key);
+void tinypy_internal_register_module(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_value_t *module) {
+    tinypy_dict_set(vm->modules, name, module);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_internal_sys_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_error_t **out_error) {
@@ -573,7 +563,7 @@ static tinypy_value_t *__tinypy_internal_sys_exc_info(tinypy_value_t *function, 
         return return_value_1;
     }
     for (index = 0U; index < 3U; ++index) {
-        none_values[index] = tinypy_none_get(vm);
+        none_values[index] = TINYPY_RET_NONE(vm);
     }
     tinypy_value_t *result = tinypy_tuple_from_items(vm, none_values, 3U);
     for (index = 0U; index < 3U; ++index) {
@@ -597,9 +587,9 @@ void tinypy_internal_sys_publish_handled_exception(tinypy_vm_t *vm) {
     type_value = vm->handled_type != NULL ? vm->handled_type : &vm->none_object.base;
     value_value = vm->handled_value != NULL ? vm->handled_value : &vm->none_object.base;
     traceback_value = vm->handled_traceback != NULL ? vm->handled_traceback : &vm->none_object.base;
-    tinypy_dict_set(sys_dict, vm->exc_type_key, type_value);
-    tinypy_dict_set(sys_dict, vm->exc_value_key, value_value);
-    tinypy_dict_set(sys_dict, vm->exc_traceback_key, traceback_value);
+    tinypy_dict_set(sys_dict, vm->internal_exc_type_key, type_value);
+    tinypy_dict_set(sys_dict, vm->internal_exc_value_key, value_value);
+    tinypy_dict_set(sys_dict, vm->internal_exc_traceback_key, traceback_value);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_sys_exc_clear(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -611,7 +601,7 @@ static tinypy_value_t *__tinypy_internal_sys_exc_clear(tinypy_value_t *function,
     }
     vm->handled_clear_epoch += UINT64_C(1);
     tinypy_internal_exception_clear_handled(vm);
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -645,8 +635,7 @@ static tinypy_value_t *__tinypy_internal_sys_getframe(tinypy_value_t *function, 
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "call stack is not deep enough", out_error);
         return NULL;
     }
-    TINYPY_INCREF(&frame->base.base);
-    return &frame->base.base;
+    return TINYPY_RET(&frame->base.base);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_sys_getrecursionlimit(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -684,7 +673,7 @@ static tinypy_value_t *__tinypy_internal_sys_setrecursionlimit(tinypy_value_t *f
         return NULL;
     }
     vm->recursion_limit = (size_t)limit;
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -696,7 +685,7 @@ static tinypy_value_t *__tinypy_internal_sys_getdefaultencoding(tinypy_value_t *
     if (__tinypy_internal_sys_arguments(vm, args, kwargs, 0U, 0U, out_error) == 0) {
         return NULL;
     }
-    result = tinypy_string_from_bytes(vm, "ascii", 5U);
+    result = TINYPY_RET(vm->internal_codec_ascii_name);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -732,7 +721,7 @@ static tinypy_value_t *__tinypy_internal_sys_displayhook(tinypy_value_t *functio
     }
     value = TINYPY_TUPLE_GET(args, 0U);
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
-        tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+        tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
         return return_value_1;
     }
     underscore = tinypy_internal_string_from_bytes_checked(vm, "_", 1U, out_error);
@@ -749,7 +738,7 @@ static tinypy_value_t *__tinypy_internal_sys_displayhook(tinypy_value_t *functio
         return NULL;
     }
     sys_module = vm->sys_module;
-    stdout_value = tinypy_dict_get_optional(TINYPY_MODULE_OBJECT(sys_module)->dict, vm->stdout_key);
+    stdout_value = tinypy_dict_get_optional(TINYPY_MODULE_OBJECT(sys_module)->dict, vm->internal_stdout_key);
     if (stdout_value == NULL) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "lost sys.stdout", out_error);
         TINYPY_DECREF(representation);
@@ -771,7 +760,7 @@ static tinypy_value_t *__tinypy_internal_sys_displayhook(tinypy_value_t *functio
         return NULL;
     }
     TINYPY_DECREF(underscore);
-    result = tinypy_none_get(vm);
+    result = TINYPY_RET_NONE(vm);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -784,22 +773,21 @@ static tinypy_value_t *__tinypy_future_feature_init(tinypy_value_t *function, ti
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_instance_set_attr(self, "optional", 8U, TINYPY_TUPLE_GET(args, 1U));
-    tinypy_instance_set_attr(self, "mandatory", 9U, TINYPY_TUPLE_GET(args, 2U));
-    tinypy_instance_set_attr(self, "compiler_flag", 13U, TINYPY_TUPLE_GET(args, 3U));
-    result = tinypy_none_get(vm);
+    tinypy_instance_set_attr_key(self, vm->internal_optional_key, TINYPY_TUPLE_GET(args, 1U));
+    tinypy_instance_set_attr_key(self, vm->internal_mandatory_key, TINYPY_TUPLE_GET(args, 2U));
+    tinypy_instance_set_attr_key(self, vm->internal_compiler_flag_key, TINYPY_TUPLE_GET(args, 3U));
+    result = TINYPY_RET_NONE(vm);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_future_feature_release(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    const char *name = (intptr_t)user_data == 0 ? "optional" : "mandatory";
-    size_t name_size = (intptr_t)user_data == 0 ? 8U : 9U;
+    tinypy_value_t *name = (intptr_t)user_data == 0 ? vm->internal_optional_key : vm->internal_mandatory_key;
 
     if (__tinypy_internal_sys_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *value = tinypy_object_get_attr(TINYPY_TUPLE_GET(args, 0U), name, name_size, out_error);
+    tinypy_value_t *value = tinypy_object_get_attr_value(TINYPY_TUPLE_GET(args, 0U), name, out_error);
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -818,9 +806,9 @@ static tinypy_value_t *__tinypy_future_feature_repr(tinypy_value_t *function, ti
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    optional = tinypy_object_get_attr(self, "optional", 8U, out_error);
-    mandatory = optional != NULL ? tinypy_object_get_attr(self, "mandatory", 9U, out_error) : NULL;
-    flag = mandatory != NULL ? tinypy_object_get_attr(self, "compiler_flag", 13U, out_error) : NULL;
+    optional = tinypy_object_get_attr_value(self, vm->internal_optional_key, out_error);
+    mandatory = optional != NULL ? tinypy_object_get_attr_value(self, vm->internal_mandatory_key, out_error) : NULL;
+    flag = mandatory != NULL ? tinypy_object_get_attr_value(self, vm->internal_compiler_flag_key, out_error) : NULL;
     if (flag == NULL) {
         goto cleanup;
     }
@@ -876,13 +864,6 @@ cleanup:
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_future_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
-    tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
-
-    tinypy_type_set_attr(type, name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_future_release_tuple(tinypy_vm_t *vm, int64_t major, int64_t minor, int64_t micro, const char *level, size_t level_size, int64_t serial) {
     tinypy_value_t *values[5];
     tinypy_value_t *result;
@@ -900,26 +881,25 @@ static tinypy_value_t *__tinypy_future_release_tuple(tinypy_vm_t *vm, int64_t ma
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_future_add_feature(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_type_t *feature_type, tinypy_value_t *names, const char *name, size_t name_size, tinypy_value_t *optional, tinypy_value_t *mandatory, int64_t flag) {
+static void __tinypy_future_add_feature(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_type_t *feature_type, tinypy_value_t *names, tinypy_value_t *name, tinypy_value_t *optional, tinypy_value_t *mandatory, int64_t flag) {
     tinypy_value_t *instance = tinypy_instance_new(feature_type);
     tinypy_value_t *flag_value = tinypy_integer_from_i64(vm, flag);
-    tinypy_value_t *name_value = tinypy_string_from_bytes(vm, name, name_size);
 
-    tinypy_instance_set_attr(instance, "optional", 8U, optional);
-    tinypy_instance_set_attr(instance, "mandatory", 9U, mandatory);
-    tinypy_instance_set_attr(instance, "compiler_flag", 13U, flag_value);
-    tinypy_module_add_value(module, name, name_size, instance);
-    (void)tinypy_internal_list_append_checked(names, name_value, NULL);
-    TINYPY_DECREF(name_value);
+    tinypy_instance_set_attr_key(instance, vm->internal_optional_key, optional);
+    tinypy_instance_set_attr_key(instance, vm->internal_mandatory_key, mandatory);
+    tinypy_instance_set_attr_key(instance, vm->internal_compiler_flag_key, flag_value);
+    tinypy_module_add_value_key(module, name, instance);
+    (void)tinypy_internal_list_append_checked(names, name, NULL);
     TINYPY_DECREF(flag_value);
     TINYPY_DECREF(instance);
 }
 //////////////////////////////////////////////////////////////////////////
 /* sys exposes several tuples whose members are also reachable by name, the
    way CPython struct sequences are. */
-static tinypy_value_t *__tinypy_internal_sys_named_tuple(tinypy_vm_t *vm, const char *type_name, size_t type_name_size, const char *const *field_names, const size_t *field_name_sizes, tinypy_value_t *const *values, size_t count) {
+static tinypy_value_t *__tinypy_internal_sys_named_tuple(tinypy_value_t *type_name, tinypy_value_t *const *field_names, tinypy_value_t *const *values, size_t count) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(type_name);
     const tinypy_type_t *bases[1] = {&vm->types[TINYPY_VALUE_TUPLE]};
-    tinypy_type_t *type = tinypy_type_new(vm, type_name, type_name_size, bases, 1U, NULL, NULL, NULL);
+    tinypy_type_t *type = tinypy_type_new_key(type_name, bases, 1U, NULL, NULL, NULL);
     tinypy_value_t *members = tinypy_tuple_from_items(vm, values, count);
     tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &members, 1U);
     tinypy_value_t *instance = tinypy_call(&type->base.base, arguments, NULL, NULL);
@@ -932,14 +912,13 @@ static tinypy_value_t *__tinypy_internal_sys_named_tuple(tinypy_vm_t *vm, const 
         return NULL;
     }
     for (index = 0U; index < count; ++index) {
-        (void)tinypy_object_set_attr(instance, field_names[index], field_name_sizes[index], values[index], NULL);
+        (void)tinypy_object_set_attr_value(instance, field_names[index], values[index], NULL);
     }
     return instance;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_sys_float_info(tinypy_vm_t *vm) {
-    static const char *const field_names[] = {"max", "max_exp", "max_10_exp", "min", "min_exp", "min_10_exp", "dig", "mant_dig", "epsilon", "radix", "rounds"};
-    static const size_t field_name_sizes[] = {3U, 7U, 10U, 3U, 7U, 10U, 3U, 8U, 7U, 5U, 6U};
+    tinypy_value_t *const field_names[] = {vm->internal_max_key, vm->internal_max_exp_key, vm->internal_max_10_exp_key, vm->internal_min_key, vm->internal_min_exp_key, vm->internal_min_10_exp_key, vm->internal_dig_key, vm->internal_mant_dig_key, vm->internal_epsilon_key, vm->internal_radix_key, vm->internal_rounds_key};
     tinypy_value_t *values[11];
     tinypy_value_t *result;
     size_t index;
@@ -955,7 +934,7 @@ static tinypy_value_t *__tinypy_internal_sys_float_info(tinypy_vm_t *vm) {
     values[8] = tinypy_float_from_double(vm, DBL_EPSILON);
     values[9] = tinypy_integer_from_i64(vm, (int64_t)FLT_RADIX);
     values[10] = tinypy_integer_from_i64(vm, (int64_t)FLT_ROUNDS);
-    result = __tinypy_internal_sys_named_tuple(vm, "sys.floatinfo", 13U, field_names, field_name_sizes, values, 11U);
+    result = __tinypy_internal_sys_named_tuple(vm->internal_sys_dot_floatinfo_key, field_names, values, 11U);
     for (index = 0U; index < 11U; ++index) {
         TINYPY_DECREF(values[index]);
     }
@@ -971,7 +950,7 @@ static tinypy_value_t *__tinypy_internal_sys_getsizeof(tinypy_value_t *function,
         return NULL;
     }
     tinypy_error_t *size_error = NULL;
-    tinypy_value_t *method = tinypy_object_get_attr(TINYPY_TUPLE_GET(args, 0U), "__sizeof__", 10U, &size_error);
+    tinypy_value_t *method = tinypy_object_get_attr_value(TINYPY_TUPLE_GET(args, 0U), vm->internal_special_sizeof_key, &size_error);
     tinypy_value_t *empty;
     tinypy_value_t *result;
 
@@ -983,13 +962,12 @@ static tinypy_value_t *__tinypy_internal_sys_getsizeof(tinypy_value_t *function,
         if (TINYPY_TUPLE_SIZE(args) == 2U) {
             tinypy_value_t *fallback = TINYPY_TUPLE_GET(args, 1U);
 
-            TINYPY_INCREF(fallback);
-            return fallback;
+            return TINYPY_RET(fallback);
         }
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not report a size", out_error);
         return NULL;
     }
-    empty = tinypy_tuple_from_items(vm, NULL, 0U);
+    empty = TINYPY_RET_EMPTY_TUPLE(vm);
     result = tinypy_call(method, empty, NULL, out_error);
     TINYPY_DECREF(empty);
     TINYPY_DECREF(method);
@@ -997,51 +975,50 @@ static tinypy_value_t *__tinypy_internal_sys_getsizeof(tinypy_value_t *function,
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_initialize_future_module(tinypy_vm_t *vm) {
-    static const char *const constant_names[] = {"CO_NESTED", "CO_GENERATOR_ALLOWED", "CO_FUTURE_DIVISION", "CO_FUTURE_ABSOLUTE_IMPORT", "CO_FUTURE_WITH_STATEMENT", "CO_FUTURE_PRINT_FUNCTION", "CO_FUTURE_UNICODE_LITERALS"};
-    static const size_t constant_name_sizes[] = {9U, 20U, 18U, 25U, 24U, 24U, 26U};
+    tinypy_value_t *const constant_names[] = {vm->internal_co_nested_key, vm->internal_co_generator_allowed_key, vm->internal_co_future_division_key, vm->internal_co_future_absolute_import_key, vm->internal_co_future_with_statement_key, vm->internal_co_future_print_function_key, vm->internal_co_future_unicode_literals_key};
     static const int64_t constant_values[] = {16, 0, 8192, 16384, 32768, 65536, 131072};
-    tinypy_value_t *module = tinypy_module_new(vm, "__future__", 10U);
-    tinypy_value_t *name = tinypy_string_from_bytes(vm, "__future__", 10U);
-    tinypy_type_t *feature_type = tinypy_type_new(vm, "_Feature", 8U, NULL, 0U, NULL, NULL, NULL);
-    tinypy_value_t *module_name = tinypy_string_from_bytes(vm, "__future__", 10U);
+    tinypy_value_t *module = tinypy_module_new_key(vm->internal_future_module_name);
+    tinypy_value_t *name = TINYPY_RET(vm->internal_future_module_name);
+    tinypy_type_t *feature_type = tinypy_type_new_key(vm->internal_feature_key, NULL, 0U, NULL, NULL, NULL);
+    tinypy_value_t *module_name = TINYPY_RET(vm->internal_future_module_name);
     tinypy_value_t *feature_names = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_value_t *optional;
     tinypy_value_t *mandatory;
     size_t index;
 
-    tinypy_module_add_value(module, "__name__", 8U, name);
-    tinypy_type_set_attr(feature_type, "__module__", 10U, module_name);
-    __tinypy_future_add_method(feature_type, "__init__", 8U, __tinypy_future_feature_init, NULL);
-    __tinypy_future_add_method(feature_type, "getOptionalRelease", 18U, __tinypy_future_feature_release, (void *)(intptr_t)0);
-    __tinypy_future_add_method(feature_type, "getMandatoryRelease", 19U, __tinypy_future_feature_release, (void *)(intptr_t)1);
-    __tinypy_future_add_method(feature_type, "__repr__", 8U, __tinypy_future_feature_repr, NULL);
-    tinypy_module_add_value(module, "_Feature", 8U, &feature_type->base.base);
+    tinypy_module_add_value_key(module, vm->internal_special_name_key, name);
+    tinypy_type_set_attr_key(feature_type, feature_type->vm->internal_special_module_key, module_name);
+    tinypy_internal_type_add_method(feature_type, vm->internal_special_init_key, __tinypy_future_feature_init, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(feature_type, vm->internal_get_optional_release_key, __tinypy_future_feature_release, (void *)(intptr_t)0, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(feature_type, vm->internal_get_mandatory_release_key, __tinypy_future_feature_release, (void *)(intptr_t)1, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(feature_type, vm->internal_special_repr_key, __tinypy_future_feature_repr, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_module_add_value_key(module, vm->internal_feature_key, &feature_type->base.base);
     for (index = 0U; index != sizeof(constant_values) / sizeof(constant_values[0]); ++index) {
         tinypy_value_t *value = tinypy_integer_from_i64(vm, constant_values[index]);
 
-        tinypy_module_add_value(module, constant_names[index], constant_name_sizes[index], value);
+        tinypy_module_add_value_key(module, constant_names[index], value);
         TINYPY_DECREF(value);
     }
 
-#define TINYPY_FUTURE_FEATURE(feature_name, optional_major, optional_minor, optional_level, optional_serial, mandatory_major, mandatory_minor, mandatory_level, flag_value) \
+#define TINYPY_FUTURE_FEATURE(feature_key, optional_major, optional_minor, optional_level, optional_serial, mandatory_major, mandatory_minor, mandatory_level, flag_value) \
     do {                                                                                                                                                                                   \
         optional = __tinypy_future_release_tuple(vm, optional_major, optional_minor, 0, optional_level, sizeof(optional_level) - 1U, optional_serial);                                      \
         mandatory = __tinypy_future_release_tuple(vm, mandatory_major, mandatory_minor, 0, mandatory_level, sizeof(mandatory_level) - 1U, 0);                                               \
-        __tinypy_future_add_feature(vm, module, feature_type, feature_names, #feature_name, sizeof(#feature_name) - 1U, optional, mandatory, flag_value);                                     \
+        __tinypy_future_add_feature(vm, module, feature_type, feature_names, feature_key, optional, mandatory, flag_value);                                     \
         TINYPY_DECREF(mandatory);                                                                                                                                                           \
         TINYPY_DECREF(optional);                                                                                                                                                            \
     } while (0)
 
-    TINYPY_FUTURE_FEATURE(nested_scopes, 2, 1, "beta", 1, 2, 2, "alpha", 16);
-    TINYPY_FUTURE_FEATURE(generators, 2, 2, "alpha", 1, 2, 3, "final", 0);
-    TINYPY_FUTURE_FEATURE(division, 2, 2, "alpha", 2, 3, 0, "alpha", 8192);
-    TINYPY_FUTURE_FEATURE(absolute_import, 2, 5, "alpha", 1, 3, 0, "alpha", 16384);
-    TINYPY_FUTURE_FEATURE(with_statement, 2, 5, "alpha", 1, 2, 6, "alpha", 32768);
-    TINYPY_FUTURE_FEATURE(print_function, 2, 6, "alpha", 2, 3, 0, "alpha", 65536);
-    TINYPY_FUTURE_FEATURE(unicode_literals, 2, 6, "alpha", 2, 3, 0, "alpha", 131072);
+    TINYPY_FUTURE_FEATURE(vm->internal_future_nested_scopes_key, 2, 1, "beta", 1, 2, 2, "alpha", 16);
+    TINYPY_FUTURE_FEATURE(vm->internal_future_generators_key, 2, 2, "alpha", 1, 2, 3, "final", 0);
+    TINYPY_FUTURE_FEATURE(vm->internal_future_division_key, 2, 2, "alpha", 2, 3, 0, "alpha", 8192);
+    TINYPY_FUTURE_FEATURE(vm->internal_future_absolute_import_key, 2, 5, "alpha", 1, 3, 0, "alpha", 16384);
+    TINYPY_FUTURE_FEATURE(vm->internal_future_with_statement_key, 2, 5, "alpha", 1, 2, 6, "alpha", 32768);
+    TINYPY_FUTURE_FEATURE(vm->internal_future_print_function_key, 2, 6, "alpha", 2, 3, 0, "alpha", 65536);
+    TINYPY_FUTURE_FEATURE(vm->internal_future_unicode_literals_key, 2, 6, "alpha", 2, 3, 0, "alpha", 131072);
 #undef TINYPY_FUTURE_FEATURE
 
-    tinypy_module_add_value(module, "all_feature_names", 17U, feature_names);
+    tinypy_module_add_value_key(module, vm->internal_all_feature_names_key, feature_names);
     TINYPY_DECREF(feature_names);
     TINYPY_DECREF(module_name);
     TINYPY_DECREF(&feature_type->base.base);
@@ -1049,12 +1026,6 @@ static tinypy_value_t *__tinypy_internal_initialize_future_module(tinypy_vm_t *v
     return module;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_sys_add_function(tinypy_vm_t *vm, tinypy_value_t *module, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
-
-    tinypy_module_add_value(module, name, name_size, function);
-    TINYPY_DECREF(function);
-}
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     tinypy_value_t *name;
@@ -1064,40 +1035,40 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     uint16_t byteorder_probe = UINT16_C(1);
 
     vm->modules = tinypy_dict_new(vm);
-    tinypy_value_t *builtin_module = tinypy_internal_module_from_dict(vm, "__builtin__", 11U, vm->builtins);
-    name = tinypy_string_from_bytes(vm, "__builtin__", 11U);
-    tinypy_module_add_value(builtin_module, "__name__", 8U, name);
+    tinypy_value_t *builtin_module = tinypy_internal_module_from_dict_key(vm->internal_builtin_module_name, vm->builtins);
+    name = TINYPY_RET(vm->internal_builtin_module_name);
+    tinypy_module_add_value_key(builtin_module, vm->internal_special_name_key, name);
     TINYPY_DECREF(name);
-    tinypy_internal_register_module(vm, "__builtin__", 11U, builtin_module);
+    tinypy_internal_register_module(vm, vm->internal_builtin_module_name, builtin_module);
 
-    tinypy_value_t *sys_module = tinypy_module_new(vm, "sys", 3U);
-    name = tinypy_string_from_bytes(vm, "sys", 3U);
-    tinypy_module_add_value(sys_module, "__name__", 8U, name);
+    tinypy_value_t *sys_module = tinypy_module_new_key(vm->internal_sys_key);
+    name = TINYPY_RET(vm->internal_sys_key);
+    tinypy_module_add_value_key(sys_module, vm->internal_special_name_key, name);
     TINYPY_DECREF(name);
-    tinypy_module_add_value(sys_module, "modules", 7U, vm->modules);
+    tinypy_module_add_value_key(sys_module, vm->internal_modules_key, vm->modules);
     stdout_value = tinypy_internal_output_stream_new(vm, TINYPY_OUTPUT_STDOUT);
     stderr_value = tinypy_internal_output_stream_new(vm, TINYPY_OUTPUT_STDERR);
-    tinypy_module_add_value(sys_module, "stdout", 6U, stdout_value);
-    tinypy_module_add_value(sys_module, "__stdout__", 10U, stdout_value);
-    tinypy_module_add_value(sys_module, "stderr", 6U, stderr_value);
-    tinypy_module_add_value(sys_module, "__stderr__", 10U, stderr_value);
+    tinypy_module_add_value_key(sys_module, vm->internal_stdout_key, stdout_value);
+    tinypy_module_add_value_key(sys_module, vm->internal_special_stdout_key, stdout_value);
+    tinypy_module_add_value_key(sys_module, vm->internal_stderr_key, stderr_value);
+    tinypy_module_add_value_key(sys_module, vm->internal_special_stderr_key, stderr_value);
     name = tinypy_string_from_bytes(vm, *((const uint8_t *)&byteorder_probe) == 1U ? "little" : "big", *((const uint8_t *)&byteorder_probe) == 1U ? 6U : 3U);
-    tinypy_module_add_value(sys_module, "byteorder", 9U, name);
+    tinypy_module_add_value_key(sys_module, vm->internal_byteorder_key, name);
     TINYPY_DECREF(name);
     name = tinypy_integer_from_i64(vm, INT64_C(0x020712f0));
-    tinypy_module_add_value(sys_module, "hexversion", 10U, name);
+    tinypy_module_add_value_key(sys_module, vm->internal_hexversion_key, name);
     TINYPY_DECREF(name);
     name = tinypy_integer_from_i64(vm, INT64_MAX);
-    tinypy_module_add_value(sys_module, "maxint", 6U, name);
-    tinypy_module_add_value(sys_module, "maxsize", 7U, name);
+    tinypy_module_add_value_key(sys_module, vm->internal_maxint_key, name);
+    tinypy_module_add_value_key(sys_module, vm->internal_maxsize_key, name);
     TINYPY_DECREF(name);
     name = tinypy_integer_from_i64(vm, INT64_C(0x10ffff));
-    tinypy_module_add_value(sys_module, "maxunicode", 10U, name);
+    tinypy_module_add_value_key(sys_module, vm->internal_maxunicode_key, name);
     TINYPY_DECREF(name);
-    tinypy_module_add_value(sys_module, "py3kwarning", 11U, &vm->false_object.base);
-    tinypy_module_add_value(sys_module, "dont_write_bytecode", 19U, &vm->false_object.base);
+    tinypy_module_add_value_key(sys_module, vm->internal_py3kwarning_key, &vm->false_object.base);
+    tinypy_module_add_value_key(sys_module, vm->internal_dont_write_bytecode_key, &vm->false_object.base);
     name = tinypy_string_from_bytes(vm, "2.7.18 (tinypy)", 15U);
-    tinypy_module_add_value(sys_module, "version", 7U, name);
+    tinypy_module_add_value_key(sys_module, vm->internal_version_key, name);
     TINYPY_DECREF(name);
     tinypy_value_t *version_items[5];
     version_items[0] = tinypy_integer_from_i64(vm, INT64_C(2));
@@ -1105,23 +1076,22 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     version_items[2] = tinypy_integer_from_i64(vm, INT64_C(18));
     version_items[3] = tinypy_string_from_bytes(vm, "final", 5U);
     version_items[4] = tinypy_integer_from_i64(vm, INT64_C(0));
-    static const char *const version_fields[] = {"major", "minor", "micro", "releaselevel", "serial"};
-    static const size_t version_field_sizes[] = {5U, 5U, 5U, 12U, 6U};
-    tinypy_value_t *version_info = __tinypy_internal_sys_named_tuple(vm, "sys.version_info", 16U, version_fields, version_field_sizes, version_items, 5U);
+    tinypy_value_t *const version_fields[] = {vm->internal_major_key, vm->internal_minor_key, vm->internal_micro_key, vm->internal_releaselevel_key, vm->internal_serial_key};
+    tinypy_value_t *version_info = __tinypy_internal_sys_named_tuple(vm->internal_sys_dot_version_info_key, version_fields, version_items, 5U);
     for (size_t version_index = 0U; version_index != 5U; ++version_index) {
         TINYPY_DECREF(version_items[version_index]);
     }
-    tinypy_module_add_value(sys_module, "version_info", 12U, version_info);
+    tinypy_module_add_value_key(sys_module, vm->internal_version_info_key, version_info);
     TINYPY_DECREF(version_info);
     tinypy_value_t *float_info = __tinypy_internal_sys_float_info(vm);
 
-    tinypy_module_add_value(sys_module, "float_info", 10U, float_info);
+    tinypy_module_add_value_key(sys_module, vm->internal_float_info_key, float_info);
     TINYPY_DECREF(float_info);
-    tinypy_module_add_value(sys_module, "exc_type", 8U, &vm->none_object.base);
-    tinypy_module_add_value(sys_module, "exc_value", 9U, &vm->none_object.base);
-    tinypy_module_add_value(sys_module, "exc_traceback", 13U, &vm->none_object.base);
+    tinypy_module_add_value_key(sys_module, vm->internal_exc_type_key, &vm->none_object.base);
+    tinypy_module_add_value_key(sys_module, vm->internal_exc_value_key, &vm->none_object.base);
+    tinypy_module_add_value_key(sys_module, vm->internal_exc_traceback_key, &vm->none_object.base);
     name = tinypy_integer_from_i64(vm, INT64_C(1013));
-    tinypy_module_add_value(sys_module, "api_version", 11U, name);
+    tinypy_module_add_value_key(sys_module, vm->internal_api_version_key, name);
     TINYPY_DECREF(name);
 #if defined(_WIN32)
     name = tinypy_string_from_bytes(vm, "win32", 5U);
@@ -1132,52 +1102,44 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
 #else
     name = tinypy_string_from_bytes(vm, "unknown", 7U);
 #endif
-    tinypy_module_add_value(sys_module, "platform", 8U, name);
+    tinypy_module_add_value_key(sys_module, vm->internal_platform_key, name);
     TINYPY_DECREF(name);
     name = tinypy_string_from_bytes(vm, "short", 5U);
-    tinypy_module_add_value(sys_module, "float_repr_style", 16U, name);
+    tinypy_module_add_value_key(sys_module, vm->internal_float_repr_style_key, name);
     TINYPY_DECREF(name);
     tinypy_value_t *warn_options = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_value_t *meta_path = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_value_t *path_hooks = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_value_t *path_importer_cache = tinypy_dict_new(vm);
-    tinypy_module_add_value(sys_module, "warnoptions", 11U, warn_options);
-    tinypy_module_add_value(sys_module, "meta_path", 9U, meta_path);
-    tinypy_module_add_value(sys_module, "path_hooks", 10U, path_hooks);
-    tinypy_module_add_value(sys_module, "path_importer_cache", 19U, path_importer_cache);
+    tinypy_module_add_value_key(sys_module, vm->internal_warnoptions_key, warn_options);
+    tinypy_module_add_value_key(sys_module, vm->internal_meta_path_key, meta_path);
+    tinypy_module_add_value_key(sys_module, vm->internal_path_hooks_key, path_hooks);
+    tinypy_module_add_value_key(sys_module, vm->internal_path_importer_cache_key, path_importer_cache);
     TINYPY_DECREF(path_importer_cache);
     TINYPY_DECREF(path_hooks);
     TINYPY_DECREF(meta_path);
     TINYPY_DECREF(warn_options);
-    static const char *const builtin_module_name_bytes[] = {"__builtin__", "__future__", "_codecs", "_functools", "_sre", "_struct", "_weakref", "copy_reg", "exceptions", "sys"};
-    static const size_t builtin_module_name_sizes[] = {11U, 10U, 7U, 10U, 4U, 7U, 8U, 8U, 10U, 3U};
-    tinypy_value_t *builtin_module_name_values[10];
-    for (size_t module_index = 0U; module_index != 10U; ++module_index) {
-        builtin_module_name_values[module_index] = tinypy_string_from_bytes(vm, builtin_module_name_bytes[module_index], builtin_module_name_sizes[module_index]);
-    }
+    tinypy_value_t *const builtin_module_name_values[] = {vm->internal_builtin_module_name, vm->internal_future_module_name, vm->internal_codec_module_name, vm->internal_partial_module_name, vm->internal_sre_module_name, vm->internal_struct_module_name, vm->internal_weakref_module_name, vm->internal_copy_reg_module_name, vm->internal_exception_module_name, vm->internal_sys_key};
     tinypy_value_t *builtin_module_names = tinypy_tuple_from_items(vm, builtin_module_name_values, 10U);
-    for (size_t module_index = 0U; module_index != 10U; ++module_index) {
-        TINYPY_DECREF(builtin_module_name_values[module_index]);
-    }
-    tinypy_module_add_value(sys_module, "builtin_module_names", 20U, builtin_module_names);
+    tinypy_module_add_value_key(sys_module, vm->internal_builtin_module_names_key, builtin_module_names);
     TINYPY_DECREF(builtin_module_names);
     TINYPY_DECREF(stderr_value);
     TINYPY_DECREF(stdout_value);
-    __tinypy_internal_sys_add_function(vm, sys_module, "exc_info", 8U, __tinypy_internal_sys_exc_info);
-    __tinypy_internal_sys_add_function(vm, sys_module, "exc_clear", 9U, __tinypy_internal_sys_exc_clear);
-    __tinypy_internal_sys_add_function(vm, sys_module, "_getframe", 9U, __tinypy_internal_sys_getframe);
-    __tinypy_internal_sys_add_function(vm, sys_module, "getrecursionlimit", 17U, __tinypy_internal_sys_getrecursionlimit);
-    __tinypy_internal_sys_add_function(vm, sys_module, "getsizeof", 9U, __tinypy_internal_sys_getsizeof);
-    __tinypy_internal_sys_add_function(vm, sys_module, "setrecursionlimit", 17U, __tinypy_internal_sys_setrecursionlimit);
-    __tinypy_internal_sys_add_function(vm, sys_module, "getdefaultencoding", 18U, __tinypy_internal_sys_getdefaultencoding);
-    __tinypy_internal_sys_add_function(vm, sys_module, "exit", 4U, __tinypy_internal_sys_exit);
-    tinypy_value_t *displayhook = tinypy_native_function_new(vm, "displayhook", 11U, __tinypy_internal_sys_displayhook, NULL, NULL);
-    tinypy_module_add_value(sys_module, "displayhook", 11U, displayhook);
-    tinypy_module_add_value(sys_module, "__displayhook__", 15U, displayhook);
+    tinypy_internal_module_add_function(sys_module, vm->internal_exc_info_key, __tinypy_internal_sys_exc_info, NULL, NULL);
+    tinypy_internal_module_add_function(sys_module, vm->internal_exc_clear_key, __tinypy_internal_sys_exc_clear, NULL, NULL);
+    tinypy_internal_module_add_function(sys_module, vm->internal_getframe_key, __tinypy_internal_sys_getframe, NULL, NULL);
+    tinypy_internal_module_add_function(sys_module, vm->internal_getrecursionlimit_key, __tinypy_internal_sys_getrecursionlimit, NULL, NULL);
+    tinypy_internal_module_add_function(sys_module, vm->internal_getsizeof_key, __tinypy_internal_sys_getsizeof, NULL, NULL);
+    tinypy_internal_module_add_function(sys_module, vm->internal_setrecursionlimit_key, __tinypy_internal_sys_setrecursionlimit, NULL, NULL);
+    tinypy_internal_module_add_function(sys_module, vm->internal_getdefaultencoding_key, __tinypy_internal_sys_getdefaultencoding, NULL, NULL);
+    tinypy_internal_module_add_function(sys_module, vm->internal_exit_key, __tinypy_internal_sys_exit, NULL, NULL);
+    tinypy_value_t *displayhook = tinypy_native_function_new_key(vm->internal_displayhook_key, __tinypy_internal_sys_displayhook, NULL, NULL);
+    tinypy_module_add_value_key(sys_module, vm->internal_displayhook_key, displayhook);
+    tinypy_module_add_value_key(sys_module, vm->internal_special_displayhook_key, displayhook);
     TINYPY_DECREF(displayhook);
-    tinypy_internal_register_module(vm, "sys", 3U, sys_module);
+    tinypy_internal_register_module(vm, vm->internal_sys_key, sys_module);
     future_module = __tinypy_internal_initialize_future_module(vm);
-    tinypy_internal_register_module(vm, "__future__", 10U, future_module);
+    tinypy_internal_register_module(vm, vm->internal_future_module_name, future_module);
     tinypy_internal_initialize_weakref_module(vm);
     tinypy_internal_initialize_codecs_module(vm);
     tinypy_internal_initialize_functools_module(vm);
@@ -1375,18 +1337,13 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     __tinypy_internal_initialize_empty_tuple(
         &vm->empty_tuple_object,
         &vm->types[TINYPY_VALUE_TUPLE]);
-#define TINYPY_INTERNAL_KEY_CREATE(field, name) \
+#define TINYPY_INTERNAL_KEY_CREATE(field, name, intern_name) \
     vm->field = tinypy_string_from_bytes(vm, name, sizeof(name) - 1U); \
-    (void)tinypy_internal_string_intern(&vm->field, NULL);
+    if (intern_name != 0) { \
+        (void)tinypy_internal_string_intern(&vm->field, NULL); \
+    }
     TINYPY_INTERNAL_KEY_LIST(TINYPY_INTERNAL_KEY_CREATE)
 #undef TINYPY_INTERNAL_KEY_CREATE
-    for (size_t operator_index = 0U; operator_index != TINYPY_SPECIAL_OPERATOR_COUNT; ++operator_index) {
-        size_t operator_size;
-        const char *operator_name = tinypy_internal_object_special_operator_name(operator_index, &operator_size);
-
-        vm->special_operator_keys[operator_index] = tinypy_string_from_bytes(vm, operator_name, operator_size);
-        (void)tinypy_internal_string_intern(&vm->special_operator_keys[operator_index], NULL);
-    }
 
     tinypy_internal_object_initialize_special_keys(vm);
     __tinypy_internal_initialize_type_dicts(vm);
@@ -1420,9 +1377,9 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     __tinypy_internal_initialize_builtins(vm);
     tinypy_internal_initialize_exceptions(vm);
     tinypy_internal_initialize_builtin_functions(vm);
-    __tinypy_internal_builtin_set(vm, "xrange", 6U, &vm->types[TINYPY_VALUE_XRANGE].base.base);
-    __tinypy_internal_builtin_set(vm, "enumerate", 9U, &vm->types[TINYPY_VALUE_ENUMERATE].base.base);
-    __tinypy_internal_builtin_set(vm, "reversed", 8U, &vm->types[TINYPY_VALUE_REVERSED].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_xrange_key, &vm->types[TINYPY_VALUE_XRANGE].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_enumerate_key, &vm->types[TINYPY_VALUE_ENUMERATE].base.base);
+    tinypy_dict_set(vm->builtins, vm->internal_reversed_key, &vm->types[TINYPY_VALUE_REVERSED].base.base);
     __tinypy_internal_initialize_modules(vm);
 
     return vm;
@@ -1568,12 +1525,10 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph, tinypy_boo
     __tinypy_shutdown_add(graph, vm->codec_search_path);
     __tinypy_shutdown_add(graph, vm->codec_cache);
     __tinypy_shutdown_add(graph, vm->codec_errors);
-#define TINYPY_INTERNAL_KEY_ROOT(field, name) __tinypy_shutdown_add(graph, vm->field);
+    __tinypy_shutdown_add(graph, vm->internal_strings);
+#define TINYPY_INTERNAL_KEY_ROOT(field, name, intern_name) __tinypy_shutdown_add(graph, vm->field);
     TINYPY_INTERNAL_KEY_LIST(TINYPY_INTERNAL_KEY_ROOT)
 #undef TINYPY_INTERNAL_KEY_ROOT
-    for (size_t operator_index = 0U; operator_index != TINYPY_SPECIAL_OPERATOR_COUNT; ++operator_index) {
-        __tinypy_shutdown_add(graph, vm->special_operator_keys[operator_index]);
-    }
     __tinypy_shutdown_add(graph, vm->sys_module);
     __tinypy_shutdown_add(graph, vm->module_finder);
     if (vm->memoryview_type != NULL) {

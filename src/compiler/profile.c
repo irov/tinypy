@@ -963,7 +963,7 @@ tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_
         const tinypy_build_value_t *value;
 
         tinypy_build_profile_constant_at(profile, index, &name, &name_size, &value);
-        if (name_size == 10U && memcmp(name, "__NDEBUG__", 10U) == 0) {
+        if (__tinypy_profile_name_is_ndebug(name, name_size) != TINYPY_FALSE) {
             continue;
         }
         (void)memset(&constants[constant_count], 0, sizeof(constants[constant_count]));

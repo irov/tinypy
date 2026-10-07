@@ -34,16 +34,16 @@ static tinypy_ast_sequence_t *__tinypy_preprocessor_sequence_transform(tinypy_co
 static tinypy_ast_sequence_t *__tinypy_preprocessor_optional_sequence_transform(tinypy_compile_ctx_t *ctx, tinypy_ast_sequence_t *sequence);
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_preprocessor_identifier_equal(tinypy_ast_identifier_t identifier, const char *name, size_t name_size) {
-    size_t identifier_size;
-    const char *identifier_data;
-
+static tinypy_bool_t __tinypy_preprocessor_identifier_identity_literal(tinypy_ast_identifier_t identifier) {
     if (identifier == NULL) {
         return TINYPY_FALSE;
     }
-    identifier_data = (const char *)tinypy_string_view(identifier, &identifier_size);
-    tinypy_bool_t return_value_1 = identifier_size == name_size && (name_size == 0U || memcmp(identifier_data, name, name_size) == 0) ? TINYPY_TRUE : TINYPY_FALSE;
-    return return_value_1;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(identifier);
+    tinypy_bool_t result = TINYPY_NAME_EQ(identifier, vm->internal_none_key)
+        || TINYPY_NAME_EQ(identifier, vm->internal_true_key)
+        || TINYPY_NAME_EQ(identifier, vm->internal_false_key);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_preprocessor_identifier_reserved(tinypy_ast_identifier_t identifier) {
@@ -444,7 +444,7 @@ static tinypy_value_t *__tinypy_preprocessor_build_value(tinypy_compile_ctx_t *c
     }
     switch ((tinypy_build_value_type_e)value->type) {
     case TINYPY_BUILD_VALUE_NONE:
-        function_result = tinypy_none_get(ctx->vm);
+        function_result = TINYPY_RET_NONE(ctx->vm);
         return function_result;
     case TINYPY_BUILD_VALUE_BOOL:
         function_result = tinypy_bool_from_i32(ctx->vm, value->integer_value != 0 ? INT32_C(1) : INT32_C(0));
@@ -683,7 +683,7 @@ static tinypy_ast_expression_t __tinypy_preprocessor_expression_transform(tinypy
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_preprocessor_identity_literal(tinypy_ast_expression_t expression) {
     if (expression->kind == TINYPY_AST_KIND_NAME) {
-        tinypy_bool_t return_value_1 = __tinypy_preprocessor_identifier_equal(expression->v.Name.id, "None", 4U) || __tinypy_preprocessor_identifier_equal(expression->v.Name.id, "True", 4U) || __tinypy_preprocessor_identifier_equal(expression->v.Name.id, "False", 5U);
+        tinypy_bool_t return_value_1 = __tinypy_preprocessor_identifier_identity_literal(expression->v.Name.id);
         return return_value_1;
     }
     if (expression->kind == TINYPY_AST_KIND_NUM) {
@@ -703,7 +703,7 @@ static tinypy_bool_t __tinypy_preprocessor_expression_pure(tinypy_ast_expression
     case TINYPY_AST_KIND_STR:
         return TINYPY_TRUE;
     case TINYPY_AST_KIND_NAME:
-        function_result = __tinypy_preprocessor_identifier_equal(expression->v.Name.id, "None", 4U) || __tinypy_preprocessor_identifier_equal(expression->v.Name.id, "True", 4U) || __tinypy_preprocessor_identifier_equal(expression->v.Name.id, "False", 5U);
+        function_result = __tinypy_preprocessor_identifier_identity_literal(expression->v.Name.id);
         return function_result;
     case TINYPY_AST_KIND_BOOL_OP:
         for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.BoolOp.values); ++index) {
@@ -812,21 +812,19 @@ static tinypy_value_t *__tinypy_preprocessor_expression_evaluate(tinypy_compile_
     }
     switch (expression->kind) {
     case TINYPY_AST_KIND_NUM:
-        TINYPY_INCREF(expression->v.Num.n);
-        return expression->v.Num.n;
+        return TINYPY_RET(expression->v.Num.n);
     case TINYPY_AST_KIND_STR:
-        TINYPY_INCREF(expression->v.Str.s);
-        return expression->v.Str.s;
+        return TINYPY_RET(expression->v.Str.s);
     case TINYPY_AST_KIND_NAME:
-        if (__tinypy_preprocessor_identifier_equal(expression->v.Name.id, "None", 4U) != 0) {
-            tinypy_value_t *return_value_1 = tinypy_none_get(ctx->vm);
+        if (TINYPY_NAME_EQ(expression->v.Name.id, ctx->vm->internal_none_key) != 0) {
+            tinypy_value_t *return_value_1 = TINYPY_RET_NONE(ctx->vm);
             return return_value_1;
         }
-        if (__tinypy_preprocessor_identifier_equal(expression->v.Name.id, "True", 4U) != 0) {
-            tinypy_value_t *return_value_2 = tinypy_bool_from_i32(ctx->vm, INT32_C(1));
+        if (TINYPY_NAME_EQ(expression->v.Name.id, ctx->vm->internal_true_key) != 0) {
+            tinypy_value_t *return_value_2 = TINYPY_RET_TRUE(ctx->vm);
             return return_value_2;
         }
-        tinypy_value_t *return_value_3 = tinypy_bool_from_i32(ctx->vm, INT32_C(0));
+        tinypy_value_t *return_value_3 = TINYPY_RET_FALSE(ctx->vm);
         return return_value_3;
     case TINYPY_AST_KIND_UNARY_OP:
         left = __tinypy_preprocessor_expression_evaluate(ctx, expression->v.UnaryOp.operand, future_flags);
@@ -1066,13 +1064,13 @@ static tinypy_value_t *__tinypy_preprocessor_expression_evaluate(tinypy_compile_
             }
             if (compared == 0) {
                 TINYPY_DECREF(right);
-                tinypy_value_t *return_value_11 = tinypy_bool_from_i32(ctx->vm, INT32_C(0));
+                tinypy_value_t *return_value_11 = TINYPY_RET_FALSE(ctx->vm);
                 return return_value_11;
             }
             left = right;
         }
         TINYPY_DECREF(left);
-        tinypy_value_t *return_value_12 = tinypy_bool_from_i32(ctx->vm, INT32_C(1));
+        tinypy_value_t *return_value_12 = TINYPY_RET_TRUE(ctx->vm);
         return return_value_12;
     default:
         break;

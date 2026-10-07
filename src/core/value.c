@@ -120,6 +120,7 @@ tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tin
         (void)memcpy((uint8_t *)result + sizeof(tinypy_value_t), (const uint8_t *)value + sizeof(tinypy_value_t), payload_size - sizeof(tinypy_value_t));
         if (kind == TINYPY_VALUE_STRING) {
             TINYPY_STRING_OBJECT(result)->interned = TINYPY_FALSE;
+            TINYPY_STRING_OBJECT(result)->internal_metadata = NULL;
         }
         else if (kind == TINYPY_VALUE_UNICODE) {
             TINYPY_UNICODE_OBJECT(result)->index_offsets = NULL;
@@ -141,6 +142,7 @@ tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tin
     (void)memcpy((uint8_t *)result + sizeof(tinypy_value_t), (const uint8_t *)value + sizeof(tinypy_value_t), payload_size - sizeof(tinypy_value_t));
     if (kind == TINYPY_VALUE_STRING) {
         TINYPY_STRING_OBJECT(result)->interned = TINYPY_FALSE;
+        TINYPY_STRING_OBJECT(result)->internal_metadata = NULL;
     }
     else if (kind == TINYPY_VALUE_UNICODE) {
         TINYPY_UNICODE_OBJECT(result)->index_offsets = NULL;
@@ -239,7 +241,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     tinypy_value_t *result;
     tinypy_error_t *error = NULL;
 
-    if (vm->type_lookup_cache_epoch != 0U && value->type->finalizer_epoch == vm->type_lookup_cache_epoch && value->type->has_finalizer == 0 && value->type->has_classic_mro == 0 && value->type->has_custom_mro == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_old_instance_has_special(value, "__del__", 7U) == 0)) {
+    if (vm->type_lookup_cache_epoch != 0U && value->type->finalizer_epoch == vm->type_lookup_cache_epoch && value->type->has_finalizer == 0 && value->type->has_classic_mro == 0 && value->type->has_custom_mro == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_old_instance_has_special_key(value, vm->internal_special_del_key) == 0)) {
         return TINYPY_FALSE;
     }
     value->ref = 1;
@@ -247,16 +249,16 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     tinypy_type_t *type = value->type;
     uint64_t epoch = vm->type_lookup_cache_epoch;
     type->finalizer_epoch = epoch;
-    type->has_finalizer = tinypy_internal_type_lookup_key(vm, type, vm->special_del_key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    type->has_finalizer = tinypy_internal_type_lookup_key(vm, type, vm->internal_special_del_key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     if (type->has_finalizer == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE
-        || tinypy_internal_old_instance_has_special(value, "__del__", 7U) == 0)) {
+        || tinypy_internal_old_instance_has_special_key(value, vm->internal_special_del_key) == 0)) {
         tinypy_internal_exception_preserve_end(vm, &exception_state);
         value->ref -= 1U;
         return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
     }
-    tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->special_del_key, &error);
+    tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_del_key, &error);
     if (method != NULL) {
-        args = tinypy_tuple_from_items(vm, NULL, 0U);
+        args = TINYPY_RET_EMPTY_TUPLE(vm);
         result = tinypy_call(method, args, NULL, &error);
         TINYPY_DECREF(args);
         if (result != NULL) {
@@ -354,7 +356,7 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     if (type->weakref_offset != 0U) {
         tinypy_internal_weakref_clear(value);
     }
-    if (vm->special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_epoch != vm->type_lookup_cache_epoch || vm->type_lookup_cache_epoch == 0U || type->has_finalizer != 0 || type->has_classic_mro != 0 || type->has_custom_mro != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE)) {
+    if (vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_epoch != vm->type_lookup_cache_epoch || vm->type_lookup_cache_epoch == 0U || type->has_finalizer != 0 || type->has_classic_mro != 0 || type->has_custom_mro != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE)) {
         if (__tinypy_internal_value_finalize(value) != 0) {
             return;
         }
@@ -482,6 +484,7 @@ tinypy_value_t *tinypy_internal_string_concat_in_place(tinypy_vm_t *vm, tinypy_v
     TINYPY_SIZED_SIZE(grown) = old_size + size;
     TINYPY_STRING_OBJECT(grown)->hash_computed = INT32_C(0);
     TINYPY_STRING_OBJECT(grown)->interned = INT32_C(0);
+    TINYPY_STRING_OBJECT(grown)->internal_metadata = NULL;
     return grown;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -565,31 +568,19 @@ tinypy_bool_t tinypy_internal_value_belongs_to(const tinypy_vm_t *vm, const tiny
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_none_get(tinypy_vm_t *vm) {
-    tinypy_value_t *result = &vm->none_object.base;
-    TINYPY_INCREF(result);
-
-    return result;
+    return TINYPY_RET_NONE(vm);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_not_implemented_get(tinypy_vm_t *vm) {
-    tinypy_value_t *result = &vm->not_implemented_object.base;
-    TINYPY_INCREF(result);
-    return result;
+    return TINYPY_RET_NOT_IMPLEMENTED(vm);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_ellipsis_get(tinypy_vm_t *vm) {
-    tinypy_value_t *result = &vm->ellipsis_object.base;
-    TINYPY_INCREF(result);
-    return result;
+    return TINYPY_RET_ELLIPSIS(vm);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_bool_from_i32(tinypy_vm_t *vm, int32_t value) {
-    tinypy_value_t *result = value != 0
-                 ? &vm->true_object.base
-                 : &vm->false_object.base;
-    TINYPY_INCREF(result);
-
-    return result;
+    return value != 0 ? TINYPY_RET_TRUE(vm) : TINYPY_RET_FALSE(vm);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_integer_from_i64(tinypy_vm_t *vm, int64_t value) {
@@ -597,20 +588,16 @@ tinypy_value_t *tinypy_integer_from_i64(tinypy_vm_t *vm, int64_t value) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_bool_t checked, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_internal_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_bool_t reuse_interned, tinypy_bool_t checked, tinypy_error_t **out_error) {
     if (size == 0U) {
-        tinypy_value_t *result = &vm->empty_string_object.base.base;
-
-        TINYPY_INCREF(result);
-        return result;
+        return TINYPY_RET_EMPTY_STRING(vm);
     }
     if (size == 1U) {
         size_t cache_index = (size_t)*(const uint8_t *)bytes;
         tinypy_value_t *cached = vm->string_char_cache[cache_index];
 
         if (cached != NULL) {
-            TINYPY_INCREF(cached);
-            return cached;
+            return TINYPY_RET(cached);
         }
         tinypy_value_t *result;
 
@@ -631,8 +618,13 @@ static tinypy_value_t *__tinypy_internal_string_from_bytes(tinypy_vm_t *vm, cons
             }
         }
         vm->string_char_cache[cache_index] = result;
-        TINYPY_INCREF(result);
-        return result;
+        return TINYPY_RET(result);
+    }
+    if (reuse_interned != 0 && __tinypy_internal_text_allocation_size(TINYPY_VALUE_STRING, size) != 0U) {
+        tinypy_value_t *cached = tinypy_internal_string_find(vm, bytes, size);
+        if (cached != NULL) {
+            return TINYPY_RET(cached);
+        }
     }
     if (checked != 0) {
         uint8_t *output;
@@ -648,14 +640,19 @@ static tinypy_value_t *__tinypy_internal_string_from_bytes(tinypy_vm_t *vm, cons
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size) {
-    tinypy_value_t *result = __tinypy_internal_string_from_bytes(vm, bytes, size, TINYPY_FALSE, NULL);
+    tinypy_value_t *result = __tinypy_internal_string_from_bytes(vm, bytes, size, TINYPY_TRUE, TINYPY_FALSE, NULL);
 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_string_from_bytes_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error) {
-    tinypy_value_t *result = __tinypy_internal_string_from_bytes(vm, bytes, size, TINYPY_TRUE, out_error);
+    tinypy_value_t *result = __tinypy_internal_string_from_bytes(vm, bytes, size, TINYPY_TRUE, TINYPY_TRUE, out_error);
 
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_string_from_bytes_uninterned(tinypy_vm_t *vm, const void *bytes, size_t size) {
+    tinypy_value_t *result = __tinypy_internal_string_from_bytes(vm, bytes, size, TINYPY_FALSE, TINYPY_FALSE, NULL);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -681,8 +678,7 @@ tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size
     if (cache_index != SIZE_MAX && vm->unicode_char_cache[cache_index] != NULL) {
         tinypy_value_t *cached = vm->unicode_char_cache[cache_index];
 
-        TINYPY_INCREF(cached);
-        return cached;
+        return TINYPY_RET(cached);
     }
 
     code_point_count = __tinypy_internal_utf8_code_point_count(
@@ -726,7 +722,8 @@ tinypy_ref_t tinypy_refcount(const tinypy_value_t *value) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_is_callable(const tinypy_value_t *value) {
-    tinypy_bool_t return_value_1 = value->type->call != NULL || tinypy_internal_object_has_special((tinypy_value_t *)value, "__call__", 8U) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_bool_t return_value_1 = value->type->call != NULL || tinypy_internal_object_has_special_key((tinypy_value_t *)value, vm->internal_special_call_key) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

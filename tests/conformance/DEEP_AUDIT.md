@@ -147,6 +147,178 @@ Dynamic compiler diagnostics use logical filenames with no filesystem source
 lookup. Semantic-error text is None, matching the oracle when that named file
 is unavailable. Core filesystem access remains outside the embedding contract.
 
+## VM name presets
+
+The VM registry now contains 729 persistent names, including class/module
+metadata, fixed protocol names, keyword parameters, codecs and compiler labels,
+module-local methods, builtin type/exception names and `__future__` features.
+Every fixed production name is created at VM startup and uses an `internal_`
+field. The preset lookup table has 2,048 entries with a compile-time load bound.
+Byte-name adapters reuse those objects through an owned-reference factory;
+fixed metadata lookups borrow their VM fields directly. The shared registry
+defines fields, initialization, initial interning policy and shutdown roots.
+Compiler comprehension labels retain their non-interned marshal representation.
+The lookup table keeps spare capacity with a compile-time registry bound.
+
+The 24 indexed operator names now borrow registry fields through an offset
+table and `tinypy_internal_object_special_operator_key(vm, index)`. Their
+duplicate VM array, initialization and owned references were removed. The 81
+native wrapper slots also use registry offsets and pointer/content comparison.
+Core/runtime fixed semantic-name comparisons use VM presets, including codec
+aliases with their existing normalization and Python 2 NUL-prefix quirks.
+AST name checks reuse VM keys; raw parser tokens and standalone C input APIs
+retain bytes without creating Python name objects. Native checks cover borrowed
+operator references and preset/raw/Unicode wrapper classification with full-span
+NUL rejection. Source guards enforce indexed tables and fixed comparisons.
+
+The native `intern_lifetime` case checks all registry entries and operator keys
+for cached identity, owned-reference balance and allocation-free reuse. It also
+checks independent VM ownership, initial interning flags, exact byte spans,
+uncached fallback and zero allocator balance after shutdown. It also verifies
+owned singleton accessors and single evaluation of object and VM expressions.
+The full four-profile
+acceptance matrix below was rerun after this change; the portable inventory
+remains unchanged.
+
+`TINYPY_RET(value)` returns the same non-null object with one added reference,
+using a portable inline helper so the expression is evaluated once. Its VM
+accessors cover None, True, False, NotImplemented, Ellipsis, the empty tuple and
+the empty byte string. Runtime/compiler ownership pairs use this shared
+primitive; the previous object-specific helper was removed. Public C getters
+retain their existing ABI and ownership contract.
+
+Ordinary and checked byte-string constructors now reuse an existing interned
+string from the same VM, adding one owned reference. Empty and one-byte strings
+keep their existing constant caches; misses create a normal string without
+automatically interning it. The lookup shares the existing seeded byte hash and
+skips hashing strings longer than the table's entry-length upper bound. Entries
+remain borrowed and lookup is disabled during VM destruction.
+
+Class metadata and special-slot comparisons use `TINYPY_NAME_EQ`: pointer
+equality returns immediately, while distinct byte strings, Unicode and string
+subclasses retain the existing content comparison without invoking `__eq__`.
+Native method, classmethod, staticmethod, property and module-function
+registration now share common helpers accepting borrowed string keys. Fixed
+names, module-local methods and operator tables use named VM presets.
+`TINYPY_INTERNAL_STRING` remains available to extensions and tests and pins
+interned keys until VM shutdown. It
+computes literal sizes, including embedded NUL, and evaluates VM once. Ordinary
+runtime strings never enter this owned literal dictionary. The SRE keyword
+adapters are selected explicitly at registration without scanning string names;
+bytearray bridges retain static callback specs and borrow keys by VM field
+offset. Shared helpers preserve descriptor kinds, binding, finalizers and
+module metadata. Public type attribute get/set support both byte names and
+borrowed string keys, with identical descriptor behavior.
+Core C sources cannot use lazy literal factories: the host guard checks this
+alongside prefixed, unique registry fields and lookup-table capacity. Native
+coverage checks that the lazy dictionary is absent after startup, every preset
+is reused without allocation, and byte/Unicode function-code aliases agree.
+`func_code` and `__code__` retain distinct keys for the same Python 2 attribute;
+pointer comparison still has a content fallback for incoming noncanonical keys.
+
+Builtin attribute lookup now uses immutable string metadata for preset IDs
+and function tables for the object-kind/name pair. All VM preset strings
+borrow process-lifetime metadata; zero IDs designate names without a getter.
+The 66-entry registry maps to ten sparse kind tables, 65 registered getters and
+71 handler slots including aliases. The tables occupy 5,776 bytes of shared
+pointer storage on macOS arm64, plus 67 bytes for the metadata records.
+Canonical `__class__` lookup checks its VM pointer before reading name bytes;
+raw/Unicode names share the same class getter through the content fallback.
+Common dunder getters, function-code aliases and module dictionary access
+retain direct paths. Raw/Unicode names now borrow presets from the existing
+2,048-slot internal-name cache and read their metadata. The duplicate 256-slot
+builtin-name table and its maximum-length field were removed, saving another
+2,056 bytes per VM. Full-span comparison avoids subtype callbacks and preserves
+the incoming key without retaining or inserting it. The metadata pointer adds
+eight bytes to every allocated byte string; its introduction had previously
+saved 248 bytes per VM by replacing the parallel ID array.
+No per-name allocation, Python reference or new string type is introduced.
+Boolean attribute-lookup flags consistently use `TINYPY_TRUE`/`TINYPY_FALSE`;
+integer statuses and bit masks retain their numeric representation.
+Protocol and compiler operations load their local VM before accessing its
+internal keys. The 73 nested `TINYPY_VALUE_VM(...)->internal_*` expressions
+were replaced; existing VM locals are reused, and nullable results/referents
+are checked before their VM is accessed. Raw compiler/marshal strings and
+immutable string-subtype copies have no preset metadata, while direct Unicode
+keys have no metadata field; they reuse the shared cache instead of a separate
+builtin-name lookup. A public `getattr(code, Name('co_varnames'))` check, where
+`Name` subclasses `str`, matches CPython 2.7, including NUL-suffixed rejection.
+Native regressions check shared metadata across VMs, allocation-free
+raw/Unicode metadata lookup, borrowed key ownership and occupied-bucket
+collisions using embedded-NUL names. Immutable subtype/plain copies clear
+metadata and growable strings cannot retain an obsolete ID. A host guard
+verifies unique dispatch names/IDs, eager interning, table capacity and handler
+coverage for every registered name.
+Descriptor and custom-hook priority remain covered by the complete runtime matrices.
+
+The subsequent full name audit migrated module values, object/instance/type
+attributes, special-method dispatch, constructor/keyword tables, imports and
+type/module creation to value keys. Fixed lookup tables borrow VM fields;
+static SRE callback specs store field offsets instead of byte names and lengths.
+Public byte-name APIs remain adapters to the key implementations. Module and
+type key constructors retain the exact input string without implicitly
+interning ordinary names. Direct instance key access retains its dictionary
+semantics, separate from Python descriptor binding. Native coverage checks
+these ownership rules, embedded-NUL keys, byte interoperability, allocation-free
+replacement, imports and `sys.stdout`. A host source guard rejects internal
+byte-name API calls and fixed literals passed to the owned-name byte factory.
+Bootstrap C type names, parser tokens, diagnostics and dynamic host import
+paths retain their required byte representation.
+Meta/preprocessor AST identifier predicates also use ready interned keys and
+pointer/content comparison; the source guard covers fixed meta name arguments.
+
+Compiler literals, logical filenames and raw marshal strings bypass intern
+lookup. Folded interned results are copied before changing their serialization
+policy, preserving VM presets. Native coverage verifies raw filename flags and
+byte-identical dump/load/dump in a VM with matching presets; the generated
+compiler corpus also compares preset literals and folded results with CPython.
+Dynamic lookup coverage includes embedded NUL, no extra allocation, balanced
+references and removal after the last owner releases the string.
+Ordinary live generated strings never grow the table. AST and meta identifiers
+are inserted at creation rather than merely receiving an interned flag. They
+remain separate from non-interned compiler labels with the same spelling.
+Native tests check script identifier insertion, label flags, key retention,
+byte/key API interoperability and method descriptor ownership. Literal tests
+check pinning an existing weak intern entry, allocation-free repeated lookup,
+independent VMs, embedded NUL and raw compiler labels. Registration tests invoke
+every binding kind, verify module metadata and check seven finalizers run
+exactly once before verifying complete allocator balance at VM shutdown.
+
+A bounded Release comparison for the name-preset change against the fifth-audit
+accepted build used 20,000
+calls to the classic class factory or `type('Generated', (), {})`, with seven
+interleaved runs per build. Median CPU time fell from 0.007086 s to 0.006178 s
+for classic classes (12.8%) and from 0.028990 s to 0.024488 s for new-style
+classes (15.5%). Output matched and allocator balance was zero in every run.
+These are local workload measurements, not a general runtime speed guarantee;
+the recorded results are in `.temp/preset-benchmark.json`.
+
+A separate Release `-O3`, LTO-off comparison uses the standalone
+[attribute benchmark](../../cli/tests/attribute_dispatch_benchmark.c) against
+the preceding accepted preset-name build. Seven interleaved runs measure
+5,000,000 direct dispatches and 500,000 complete C attribute lookups per case,
+excluding VM creation and compilation. Complete-lookup median CPU seconds
+fell from 0.010041 to 0.005445 for `func_dict`, 0.006803 to 0.003672 for
+`co_varnames`, 0.009979 to 0.003900 for `co_lnotab`, and 0.009701 to 0.004805
+for `__module__` (1.84–2.56 times faster). Common `list.append` lookup was
+essentially unchanged (0.012158 versus 0.012190); `__class__` was 2.6% slower
+(0.002665 versus 0.002733). The getter validates hit/miss counts in every run.
+These short local microbenchmarks do not establish application performance;
+samples and medians are in `.temp/builtin-attribute-benchmark.json`.
+
+A subsequent metadata/function-table comparison uses that accepted hash-table
+runtime as its baseline (`f47e5188d22f5e209b098daf5dd8c218567df65c4eca399dbc1f4ebe019373f4`).
+The same benchmark is compiled with `TINYPY_ATTRIBUTE_BENCHMARK_SCALE=10`:
+seven interleaved runs, 50,000,000 direct dispatches and 5,000,000 complete
+lookups per case, Release `-O3` without LTO. Complete-lookup median CPU seconds
+fell from 0.042539 to 0.035800 for `func_dict`, 0.029181 to 0.026394 for
+`co_varnames`, 0.029368 to 0.027044 for `co_lnotab`, and 0.042289 to 0.036232
+for `__module__` (7.9–15.8% lower). `__class__` fell from 0.023601 to 0.020038
+(15.1% lower); direct metadata dispatch fell by 16.3–23.0% for the four named
+fields. The raw unknown-name direct miss was 1.6% slower. Hits/misses matched
+in every run. Results and all samples are in `.temp/builtin-metadata-benchmark.json`;
+they describe these local lookup workloads, not application performance.
+
 ## Final validation
 
 The default [matrix runner](../run_validation.py) completed all 138 stages on
@@ -162,12 +334,12 @@ macOS arm64. C and C99 standalone builds used strict warnings-as-errors.
 All 137 CTest registrations were checked against the exact inventory. Portable
 cases are run separately with the external oracle; their CTest wrappers are
 not counted again as executed native tests. Host/API/runner acceptance checks
-passed 82/82. Standalone marshal/artifact and core symbol audits passed in all
+passed 88/88. Standalone marshal/artifact and core symbol audits passed in all
 profiles. No ASan/UBSan diagnostics occurred. Apple ASan lacks LeakSanitizer;
 macOS records `detect_leaks=0`, while allocator balance is checked independently.
 
 Logs, per-case portable results, JUnit results and the aggregate source/test
-SHA-256 are in `.temp/validation-fifth-accepted/report.json` and its linked artifacts. The
+SHA-256 are in `.temp/validation-builtin-local-vm-accepted/report.json` and its linked artifacts. The
 report rejects incomplete discovery, native/portable skips outside the four
 allowed Release adaptations, inconsistent summaries, empty compiler corpora,
 changed inputs and timeouts. The input fingerprint includes the normative
@@ -179,8 +351,12 @@ semantics have separate runtime fixtures, including `sys_runtime.py`. Timed-out
 stage process trees are stopped.
 
 The final accepted source/test SHA-256 is
-`5a15dd86f8ec358ce48e7c9382b68fab3ab0b436ee59df1d9c53e007dee7bb5f`.
+`c55cf20257c2f07350e6ec2ac072d337c7c731af9a99ca8959168c0e0d352084`.
 The post-run fingerprint matched; all 138 recorded stages have PASS status.
+The object-dispatch, native-wrapper classification, exception-registration and
+VM `_WIN32` branches also passed
+standalone strict C11 syntax checking on macOS; this does not constitute a
+Windows runtime check.
 
 An earlier scoped Debug measurement for 100,000 `pack_into('<d', ...)` calls showed a
 median CPU time of 0.074736 s before the direct-buffer change and 0.049017 s

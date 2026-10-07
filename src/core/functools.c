@@ -29,7 +29,7 @@ tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value
         return NULL;
     }
     tinypy_value_t *callable = TINYPY_TUPLE_GET(args, 0U);
-    if (callable->type->call == NULL && tinypy_internal_object_has_special(callable, "__call__", 8U) == 0) {
+    if (callable->type->call == NULL && tinypy_internal_object_has_special_key(callable, vm->internal_special_call_key) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "the first argument must be callable", out_error);
         return NULL;
     }
@@ -38,7 +38,7 @@ tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value
     TINYPY_INCREF(callable);
     tinypy_value_t *selected_value;
     if (argument_count == 1U) {
-        selected_value = tinypy_tuple_from_items(vm, NULL, 0U);
+        selected_value = TINYPY_RET_EMPTY_TUPLE(vm);
     }
     else {
         tinypy_value_t *const *tuple_items = tinypy_internal_tuple_items(args);
@@ -134,7 +134,7 @@ static tinypy_value_t *__tinypy_partial_reduce_method(tinypy_value_t *function, 
         return NULL;
     }
     partial = TINYPY_PARTIAL_OBJECT(TINYPY_TUPLE_GET(args, 0U));
-    none = tinypy_none_get(vm);
+    none = TINYPY_RET_NONE(vm);
     constructor_items[0] = partial->callable;
     constructor_args = tinypy_tuple_from_items(vm, constructor_items, 1U);
     state_items[0] = partial->callable;
@@ -226,27 +226,21 @@ static tinypy_value_t *__tinypy_partial_setstate_method(tinypy_value_t *function
     if (old_dict != NULL) {
         TINYPY_DECREF(old_dict);
     }
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_partial_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_PARTIAL];
-    tinypy_value_t *call = tinypy_native_function_new(vm, "__call__", 8U, __tinypy_partial_call_method, NULL, NULL);
-    tinypy_value_t *reduce = tinypy_native_function_new(vm, "__reduce__", 10U, __tinypy_partial_reduce_method, NULL, NULL);
-    tinypy_value_t *setstate = tinypy_native_function_new(vm, "__setstate__", 12U, __tinypy_partial_setstate_method, NULL, NULL);
-    tinypy_value_t *module = tinypy_string_from_bytes(vm, "functools", 9U);
+    tinypy_internal_type_add_method(type, vm->internal_special_call_key, __tinypy_partial_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_reduce_key, __tinypy_partial_reduce_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_setstate_key, __tinypy_partial_setstate_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_value_t *module = TINYPY_RET(vm->internal_functools_module_name);
     tinypy_value_t *dict_descriptor = tinypy_internal_instance_dict_descriptor_new(type);
 
     tinypy_internal_constructor_add_builtin_new(type);
-    tinypy_type_set_attr(type, "__module__", 10U, module);
-    tinypy_type_set_attr(type, "__dict__", 8U, dict_descriptor);
-    tinypy_type_set_attr(type, "__call__", 8U, call);
-    tinypy_type_set_attr(type, "__reduce__", 10U, reduce);
-    tinypy_type_set_attr(type, "__setstate__", 12U, setstate);
-    TINYPY_DECREF(setstate);
-    TINYPY_DECREF(reduce);
-    TINYPY_DECREF(call);
+    tinypy_type_set_attr_key(type, type->vm->internal_special_module_key, module);
+    tinypy_type_set_attr_key(type, type->vm->internal_special_dict_key, dict_descriptor);
     TINYPY_DECREF(dict_descriptor);
     TINYPY_DECREF(module);
 }
@@ -276,8 +270,7 @@ tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinyp
         return NULL;
     }
     if (argument_count == 3U) {
-        accumulator = TINYPY_TUPLE_GET(args, 2U);
-        TINYPY_INCREF(accumulator);
+        accumulator = TINYPY_RET(TINYPY_TUPLE_GET(args, 2U));
     }
     tinypy_value_t *call_args = tinypy_internal_tuple_new_checked(vm, 2U, out_error);
     if (call_args == NULL) {
@@ -343,15 +336,15 @@ tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_functools_module(tinypy_vm_t *vm) {
-    tinypy_value_t *module = tinypy_module_new(vm, "_functools", 10U);
-    tinypy_value_t *name = tinypy_string_from_bytes(vm, "_functools", 10U);
-    tinypy_value_t *reduce = tinypy_native_function_new(vm, "reduce", 6U, tinypy_internal_functools_reduce, NULL, NULL);
+    tinypy_value_t *module = tinypy_module_new_key(vm->internal_partial_module_name);
+    tinypy_value_t *name = TINYPY_RET(vm->internal_partial_module_name);
+    tinypy_value_t *reduce = tinypy_native_function_new_key(vm->internal_reduce_key, tinypy_internal_functools_reduce, NULL, NULL);
 
-    tinypy_module_add_value(module, "__name__", 8U, name);
-    tinypy_module_add_value(module, "partial", 7U, &vm->types[TINYPY_VALUE_PARTIAL].base.base);
-    tinypy_module_add_value(module, "reduce", 6U, reduce);
+    tinypy_module_add_value_key(module, vm->internal_special_name_key, name);
+    tinypy_module_add_value_key(module, vm->internal_partial_key, &vm->types[TINYPY_VALUE_PARTIAL].base.base);
+    tinypy_module_add_value_key(module, vm->internal_reduce_key, reduce);
     TINYPY_DECREF(reduce);
     TINYPY_DECREF(name);
-    tinypy_internal_register_module(vm, "_functools", 10U, module);
+    tinypy_internal_register_module(vm, vm->internal_partial_module_name, module);
     TINYPY_DECREF(module);
 }

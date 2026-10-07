@@ -49,7 +49,7 @@ static tinypy_ast_identifier_t __new_identifier(const char *n, tinypy_compile_ct
     unsigned long size = strlen(n);
     tinypy_value_t *id = tinypy_string_from_bytes(arena->vm, n, size);
     if (id != NULL) {
-        tinypy_internal_string_set_interned(id, 1);
+        (void)tinypy_internal_string_intern(&id, NULL);
     }
     if (id != NULL && TINYPY_COMPILER_ARENA_ADD_VALUE(arena, id) != 0) {
         TINYPY_DECREF(id);

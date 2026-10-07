@@ -75,7 +75,7 @@ tinypy_value_t *tinypy_internal_cell_compare(tinypy_value_t *left, tinypy_value_
     tinypy_bool_t result;
 
     if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_CELL) {
-        tinypy_value_t *return_value_1 = tinypy_not_implemented_get(vm);
+        tinypy_value_t *return_value_1 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_1;
     }
     if (__tinypy_cell_order(left, right, &order, out_error) == 0) {
@@ -101,7 +101,7 @@ tinypy_value_t *tinypy_internal_cell_compare(tinypy_value_t *left, tinypy_value_
         result = order >= 0;
         break;
     default:
-        return tinypy_not_implemented_get(vm);
+        return TINYPY_RET_NOT_IMPLEMENTED(vm);
     }
     tinypy_value_t *return_value_3 = tinypy_bool_from_i32(vm, result);
     return return_value_3;
@@ -130,11 +130,9 @@ static tinypy_value_t *__tinypy_cell_cmp_method(tinypy_value_t *function, tinypy
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_cell_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_CELL];
-    tinypy_value_t *cmp = tinypy_native_function_new(vm, "__cmp__", 7U, __tinypy_cell_cmp_method, NULL, NULL);
+    tinypy_internal_type_add_method(type, vm->internal_special_cmp_key, __tinypy_cell_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 
     type->rich_compare = tinypy_internal_cell_compare;
     type->hash = tinypy_internal_cell_hash;
-    tinypy_type_set_attr(type, "__cmp__", 7U, cmp);
-    tinypy_type_set_attr(type, "__hash__", 8U, &vm->none_object.base);
-    TINYPY_DECREF(cmp);
+    tinypy_type_set_attr_key(type, type->vm->internal_special_hash_key, &vm->none_object.base);
 }

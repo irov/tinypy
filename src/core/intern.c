@@ -20,6 +20,7 @@ static tinypy_bool_t __tinypy_intern_resize(tinypy_vm_t *vm, size_t capacity, ti
         return TINYPY_FALSE;
     }
     (void)memset(entries, 0, bytes);
+    size_t max_size = 0U;
     for (index = 0U; index < vm->intern_capacity; ++index) {
         tinypy_intern_entry_t entry = vm->intern_entries[index];
         size_t slot;
@@ -32,6 +33,9 @@ static tinypy_bool_t __tinypy_intern_resize(tinypy_vm_t *vm, size_t capacity, ti
             slot = (slot + 1U) & (capacity - 1U);
         }
         entries[slot] = entry;
+        if (TINYPY_SIZED_SIZE(entry.value) > max_size) {
+            max_size = TINYPY_SIZED_SIZE(entry.value);
+        }
     }
     if (vm->intern_entries != NULL) {
         tinypy_internal_vm_deallocate(vm, vm->intern_entries, vm->intern_capacity * sizeof(*entries));
@@ -39,7 +43,30 @@ static tinypy_bool_t __tinypy_intern_resize(tinypy_vm_t *vm, size_t capacity, ti
     vm->intern_entries = entries;
     vm->intern_capacity = capacity;
     vm->intern_fill = vm->intern_used;
+    vm->intern_max_size = max_size;
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_string_find(const tinypy_vm_t *vm, const void *bytes, size_t size) {
+    if (vm->intern_capacity == 0U || size > vm->intern_max_size || vm->state == TINYPY_VM_STATE_DESTROYING) {
+        return NULL;
+    }
+    tinypy_hash_t hash = tinypy_internal_hash_bytes(vm, (const uint8_t *)bytes, size);
+    size_t slot = (size_t)hash & (vm->intern_capacity - 1U);
+
+    for (;;) {
+        const tinypy_intern_entry_t *entry = &vm->intern_entries[slot];
+        if (entry->value != NULL) {
+            if (entry->hash == hash && TINYPY_SIZED_SIZE(entry->value) == size
+                && (size == 0U || memcmp(TINYPY_TEXT_BYTES(entry->value), bytes, size) == 0)) {
+                return entry->value;
+            }
+        }
+        else if (entry->hash == 0) {
+            return NULL;
+        }
+        slot = (slot + 1U) & (vm->intern_capacity - 1U);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_string_intern(tinypy_value_t **owned_value, tinypy_error_t **out_error) {
@@ -103,6 +130,9 @@ tinypy_bool_t tinypy_internal_string_intern(tinypy_value_t **owned_value, tinypy
     vm->intern_entries[available].value = value;
     vm->intern_entries[available].hash = hash;
     vm->intern_used += 1U;
+    if (TINYPY_SIZED_SIZE(value) > vm->intern_max_size) {
+        vm->intern_max_size = TINYPY_SIZED_SIZE(value);
+    }
     tinypy_internal_string_set_interned(value, TINYPY_TRUE);
     return TINYPY_TRUE;
 }
@@ -139,4 +169,5 @@ void tinypy_internal_intern_finalize(tinypy_vm_t *vm) {
     vm->intern_capacity = 0U;
     vm->intern_used = 0U;
     vm->intern_fill = 0U;
+    vm->intern_max_size = 0U;
 }

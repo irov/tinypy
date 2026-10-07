@@ -25,6 +25,8 @@ const tinypy_type_t *tinypy_value_as_const_type(const tinypy_value_t *value);
 /* Returns one owned type reference. Semantic construction failures return
  * NULL and, when requested, place their diagnostic in out_error. */
 tinypy_type_t *tinypy_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error);
+/* Borrows a byte-string name, derives its VM and retains the exact object. */
+tinypy_type_t *tinypy_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error);
 /* A new-style class created from Python may list classic classes among its
  * bases, as Python 2 permits; such entries appear in __bases__ and __mro__
  * but are not types, so these accessors return NULL for them. */
@@ -36,6 +38,11 @@ const tinypy_type_t *tinypy_type_mro_at(const tinypy_type_t *type, size_t index)
 /* Attribute lookup returns a borrowed value or NULL when the name is absent. */
 tinypy_value_t *tinypy_type_get_attr(const tinypy_type_t *type, const char *name, size_t name_size);
 void tinypy_type_set_attr(tinypy_type_t *type, const char *name, size_t name_size, tinypy_value_t *value);
+/* Key variants borrow an existing str/unicode name from the same VM. They
+ * skip byte-name lookup; setters retain the key/value in the type dictionary
+ * and apply the same native-method descriptor registration as set_attr. */
+tinypy_value_t *tinypy_type_get_attr_key(const tinypy_type_t *type, tinypy_value_t *name);
+void tinypy_type_set_attr_key(tinypy_type_t *type, tinypy_value_t *name, tinypy_value_t *value);
 
 /* Generic instances currently provide Python instance-dict storage and MRO
  * class-attribute lookup. Descriptor invocation and __slots__ lowering are
@@ -44,5 +51,8 @@ tinypy_value_t *tinypy_instance_new(tinypy_type_t *type);
 const tinypy_value_t *tinypy_instance_dict(const tinypy_value_t *instance);
 tinypy_value_t *tinypy_instance_get_attr(tinypy_value_t *instance, const char *name, size_t name_size);
 void tinypy_instance_set_attr(tinypy_value_t *instance, const char *name, size_t name_size, tinypy_value_t *value);
+/* Borrowed same-VM keys; get returns a borrowed value without descriptor binding. */
+tinypy_value_t *tinypy_instance_get_attr_key(tinypy_value_t *instance, tinypy_value_t *name);
+void tinypy_instance_set_attr_key(tinypy_value_t *instance, tinypy_value_t *name, tinypy_value_t *value);
 
 #endif

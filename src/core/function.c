@@ -28,14 +28,13 @@ tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *global
         condition = (condition_2);
     }
     if (condition) {
-        function->doc = TINYPY_TUPLE_GET(consts, 0U);
-        TINYPY_INCREF(function->doc);
+        function->doc = TINYPY_RET(TINYPY_TUPLE_GET(consts, 0U));
     }
     else {
-        doc = tinypy_none_get(vm);
+        doc = TINYPY_RET_NONE(vm);
         function->doc = doc;
     }
-    function->module = tinypy_dict_get_optional(globals, vm->special_name_key);
+    function->module = tinypy_dict_get_optional(globals, vm->internal_special_name_key);
     if (function->module != NULL) {
         TINYPY_INCREF(function->module);
     }
@@ -81,8 +80,8 @@ tinypy_value_t *tinypy_internal_function_call(tinypy_value_t *callable, tinypy_v
 static tinypy_value_t *__tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     TINYPY_CLEAR_ERROR(out_error);
-    if ((callable->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override(callable, "__call__", 8U) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special(callable, "__call__", 8U, out_error);
+    if ((callable->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override_key(callable, vm->internal_special_call_key) != 0) {
+        tinypy_value_t *method = tinypy_internal_object_get_special_key(callable, vm->internal_special_call_key, out_error);
         tinypy_value_t *result;
 
         if (method == NULL) {
@@ -96,8 +95,8 @@ static tinypy_value_t *__tinypy_call(tinypy_value_t *callable, tinypy_value_t *a
         tinypy_value_t *return_value_1 = callable->type->call(callable, args, kwargs, out_error);
         return return_value_1;
     }
-    if (tinypy_internal_object_has_special(callable, "__call__", 8U) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special(callable, "__call__", 8U, out_error);
+    if (tinypy_internal_object_has_special_key(callable, vm->internal_special_call_key) != 0) {
+        tinypy_value_t *method = tinypy_internal_object_get_special_key(callable, vm->internal_special_call_key, out_error);
         tinypy_value_t *result;
 
         if (method == NULL) {
@@ -166,20 +165,16 @@ tinypy_value_t *tinypy_function_doc(const tinypy_value_t *function) {
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_function_keyword_index(const tinypy_value_t *key) {
-    static const char *const names[] = {"code", "globals", "name", "argdefs", "closure"};
-    static const size_t sizes[] = {4U, 7U, 4U, 7U, 7U};
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(key);
+    tinypy_value_t *const names[] = {vm->internal_code_key, vm->internal_globals_key, vm->internal_name_key, vm->internal_argdefs_key, vm->internal_closure_key};
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(key);
-    size_t key_size;
-    const uint8_t *key_bytes;
     size_t index;
 
     if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
         return -INT32_C(1);
     }
-    key_size = TINYPY_TEXT_BYTE_SIZE(key);
-    key_bytes = TINYPY_TEXT_BYTES(key);
     for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
-        if (key_size == sizes[index] && memcmp(key_bytes, names[index], key_size) == 0) {
+        if (TINYPY_NAME_EQ(key, names[index]) != 0) {
             return (int32_t)index;
         }
     }
@@ -306,10 +301,8 @@ static tinypy_value_t *__tinypy_function_call_method(tinypy_value_t *native_func
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_function_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_FUNCTION];
-    tinypy_value_t *call = tinypy_native_function_new(vm, "__call__", 8U, __tinypy_function_call_method, NULL, NULL);
+    tinypy_internal_type_add_method(type, vm->internal_special_call_key, __tinypy_function_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 
     type->create = tinypy_internal_function_create;
     tinypy_internal_constructor_add_builtin_new(type);
-    tinypy_type_set_attr(type, "__call__", 8U, call);
-    TINYPY_DECREF(call);
 }

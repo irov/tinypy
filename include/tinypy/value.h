@@ -18,7 +18,11 @@ tinypy_value_t *tinypy_integer_from_i64(tinypy_vm_t *vm, int64_t value);
 /* Python 2 str stores arbitrary bytes. bytes may be NULL only when size is
  * zero. A trailing NUL is stored for C interoperability but is not part of
  * the value and callers must always use the explicit size. Returns NULL when
- * size cannot be represented by the object allocation. */
+ * size cannot be represented by the object allocation. Empty and one-byte
+ * strings use VM constant caches. Longer strings reuse an existing exact byte
+ * string from this VM's intern table, retaining it for the caller.
+ * Pointer equality implies equality; distinct pointers may still have equal
+ * contents, including non-interned values and string subclasses. */
 tinypy_value_t *tinypy_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size);
 
 /* The returned view is borrowed and remains valid until value is released or

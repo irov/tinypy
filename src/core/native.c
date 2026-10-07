@@ -7,8 +7,16 @@
 #include <string.h>
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
+    tinypy_value_t *function = tinypy_native_function_new_key(key, callback, user_data, finalize);
+    TINYPY_DECREF(key);
+    return function;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_native_function_new_key(tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
     tinypy_native_function_object_t *function = (tinypy_native_function_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_NATIVE_FUNCTION, sizeof(*function));
-    function->name = tinypy_string_from_bytes(vm, name, name_size);
+    function->name = TINYPY_RET(name);
     function->module = NULL;
     function->function = NULL;
     function->self = NULL;
@@ -23,6 +31,43 @@ tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, si
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_native_function_set_descriptor_kind(tinypy_value_t *function, tinypy_native_descriptor_kind_e descriptor_kind) {
     TINYPY_NATIVE_FUNCTION_OBJECT(function)->descriptor_kind = descriptor_kind;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_module_add_function(tinypy_value_t *module, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
+    tinypy_value_t *function = tinypy_native_function_new_key(name, callback, user_data, finalize);
+    tinypy_module_add_value_key(module, name, function);
+    TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_type_add_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize, tinypy_native_descriptor_kind_e descriptor_kind) {
+    tinypy_value_t *function = tinypy_native_function_new_key(name, callback, user_data, finalize);
+    tinypy_internal_native_function_set_descriptor_kind(function, descriptor_kind);
+    tinypy_type_set_attr_key(type, name, function);
+    TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_type_add_property(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t getter, void *user_data, tinypy_native_function_finalize_t finalize) {
+    tinypy_value_t *function = tinypy_native_function_new_key(name, getter, user_data, finalize);
+    tinypy_value_t *property = tinypy_property_new(type->vm, function, NULL, NULL, NULL);
+    tinypy_type_set_attr_key(type, name, property);
+    TINYPY_DECREF(property);
+    TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_type_add_class_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
+    tinypy_value_t *function = tinypy_native_function_new_key(name, callback, user_data, finalize);
+    tinypy_value_t *descriptor = tinypy_class_method_new(function);
+    tinypy_type_set_attr_key(type, name, descriptor);
+    TINYPY_DECREF(descriptor);
+    TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_type_add_static_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
+    tinypy_value_t *function = tinypy_native_function_new_key(name, callback, user_data, finalize);
+    tinypy_value_t *descriptor = tinypy_static_method_new(function);
+    tinypy_type_set_attr_key(type, name, descriptor);
+    TINYPY_DECREF(descriptor);
+    TINYPY_DECREF(function);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_native_function_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
@@ -160,8 +205,7 @@ tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *d
 
     TINYPY_CLEAR_ERROR(out_error);
     if (instance == NULL || function->self != NULL) {
-        TINYPY_INCREF(descriptor);
-        return descriptor;
+        return TINYPY_RET(descriptor);
     }
     if (function->owner != NULL && tinypy_type_is_subtype(instance->type, function->owner) == 0) {
         tinypy_internal_make_vm_error(TINYPY_VALUE_VM(descriptor), TINYPY_ERROR_TYPE, "descriptor requires an instance of its owner", out_error);
@@ -233,7 +277,7 @@ static tinypy_value_t *__tinypy_native_function_attribute_method(tinypy_value_t 
     else if (field == 2) {
         result = native->self == NULL ? native->module : NULL;
         if (result == NULL && native->self == NULL) {
-            result = tinypy_string_from_bytes(vm, "__builtin__", 11U);
+            result = TINYPY_RET(vm->internal_builtin_module_name);
             return result;
         }
     }
@@ -241,15 +285,14 @@ static tinypy_value_t *__tinypy_native_function_attribute_method(tinypy_value_t 
         result = native->owner != NULL ? &native->owner->base.base : NULL;
     }
     else {
-        tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+        tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
         return return_value_1;
     }
     if (result == NULL) {
-        result = tinypy_none_get(vm);
+        result = TINYPY_RET_NONE(vm);
         return result;
     }
-    TINYPY_INCREF(result);
-    return result;
+    return TINYPY_RET(result);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_native_function_call_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -399,11 +442,10 @@ static tinypy_hash_t __tinypy_native_function_hash_slot(tinypy_value_t *value, t
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_native_descriptor_types(tinypy_vm_t *vm) {
     tinypy_type_t **types[] = {&vm->native_method_descriptor_type, &vm->native_wrapper_descriptor_type};
-    static const char *const names[] = {"method_descriptor", "wrapper_descriptor"};
-    static const size_t name_sizes[] = {17U, 18U};
+    tinypy_value_t *const names[] = {vm->internal_method_descriptor_key, vm->internal_wrapper_descriptor_key};
 
     for (size_t index = 0U; index < sizeof(types) / sizeof(types[0]); ++index) {
-        tinypy_type_t *type = tinypy_internal_type_new_configured(vm, names[index], name_sizes[index], NULL, 0U, NULL, NULL, TINYPY_FALSE, TINYPY_FALSE, NULL);
+        tinypy_type_t *type = tinypy_internal_type_new_configured(names[index], NULL, 0U, NULL, NULL, TINYPY_FALSE, TINYPY_FALSE, NULL);
 
         type->layout_kind = TINYPY_VALUE_NATIVE_FUNCTION;
         type->basic_size = sizeof(tinypy_native_function_object_t);
@@ -475,61 +517,46 @@ static tinypy_value_t *__tinypy_native_function_cmp_method(tinypy_value_t *funct
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_native_function_add_type_method(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, user_data, NULL);
-
-    tinypy_type_set_attr(type, name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_native_function_add_type_property(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, intptr_t field) {
-    tinypy_value_t *getter = tinypy_native_function_new(vm, name, name_size, __tinypy_native_function_attribute_method, (void *)field, NULL);
-    tinypy_value_t *property = tinypy_property_new(vm, getter, NULL, NULL, NULL);
-
-    tinypy_type_set_attr(type, name, name_size, property);
-    TINYPY_DECREF(property);
-    TINYPY_DECREF(getter);
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_native_function_type(tinypy_vm_t *vm) {
-    static const struct {
-        const char *name;
-        size_t name_size;
+    const struct {
+        tinypy_value_t *name;
         tinypy_compare_operation_e operation;
     } comparisons[] = {
-        {"__lt__", 6U, TINYPY_COMPARE_LESS},
-        {"__le__", 6U, TINYPY_COMPARE_LESS_EQUAL},
-        {"__eq__", 6U, TINYPY_COMPARE_EQUAL},
-        {"__ne__", 6U, TINYPY_COMPARE_NOT_EQUAL},
-        {"__gt__", 6U, TINYPY_COMPARE_GREATER},
-        {"__ge__", 6U, TINYPY_COMPARE_GREATER_EQUAL}};
+        {vm->internal_special_lt_key, TINYPY_COMPARE_LESS},
+        {vm->internal_special_le_key, TINYPY_COMPARE_LESS_EQUAL},
+        {vm->internal_special_eq_key, TINYPY_COMPARE_EQUAL},
+        {vm->internal_special_ne_key, TINYPY_COMPARE_NOT_EQUAL},
+        {vm->internal_special_gt_key, TINYPY_COMPARE_GREATER},
+        {vm->internal_special_ge_key, TINYPY_COMPARE_GREATER_EQUAL}};
 
     tinypy_type_t *function_type = &vm->types[TINYPY_VALUE_NATIVE_FUNCTION];
     tinypy_type_t *descriptor_types[] = {vm->native_method_descriptor_type, vm->native_wrapper_descriptor_type};
 
-    __tinypy_native_function_add_type_property(vm, function_type, "__name__", 8U, 0);
-    __tinypy_native_function_add_type_property(vm, function_type, "__self__", 8U, 1);
-    __tinypy_native_function_add_type_property(vm, function_type, "__module__", 10U, 2);
-    __tinypy_native_function_add_type_method(vm, function_type, "__call__", 8U, __tinypy_native_function_call_method, NULL);
-    __tinypy_native_function_add_type_method(vm, function_type, "__repr__", 8U, __tinypy_native_function_repr_method, NULL);
-    __tinypy_native_function_add_type_method(vm, function_type, "__hash__", 8U, __tinypy_native_function_hash_method, NULL);
-    __tinypy_native_function_add_type_method(vm, function_type, "__cmp__", 7U, __tinypy_native_function_cmp_method, NULL);
+    tinypy_internal_type_add_property(function_type, vm->internal_special_name_key, __tinypy_native_function_attribute_method, (void *)0, NULL);
+    tinypy_internal_type_add_property(function_type, vm->internal_special_self_key, __tinypy_native_function_attribute_method, (void *)1, NULL);
+    tinypy_internal_type_add_property(function_type, vm->internal_special_module_key, __tinypy_native_function_attribute_method, (void *)2, NULL);
+    tinypy_internal_type_add_method(function_type, vm->internal_special_call_key, __tinypy_native_function_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(function_type, vm->internal_special_repr_key, __tinypy_native_function_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(function_type, vm->internal_special_hash_key, __tinypy_native_function_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(function_type, vm->internal_special_cmp_key, __tinypy_native_function_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     for (size_t index = 0U; index < sizeof(comparisons) / sizeof(comparisons[0]); ++index) {
-        __tinypy_native_function_add_type_method(vm, function_type, comparisons[index].name, comparisons[index].name_size, __tinypy_native_function_compare_method, (void *)(intptr_t)comparisons[index].operation);
+        tinypy_value_t *method_name = comparisons[index].name;
+        tinypy_internal_type_add_method(function_type, method_name, __tinypy_native_function_compare_method, (void *)(intptr_t)comparisons[index].operation, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
     for (size_t type_index = 0U; type_index < sizeof(descriptor_types) / sizeof(descriptor_types[0]); ++type_index) {
         tinypy_type_t *type = descriptor_types[type_index];
 
-        __tinypy_native_function_add_type_property(vm, type, "__name__", 8U, 0);
-        __tinypy_native_function_add_type_property(vm, type, "__objclass__", 12U, 3);
-        __tinypy_native_function_add_type_property(vm, type, "__doc__", 7U, 4);
-        __tinypy_native_function_add_type_method(vm, type, "__call__", 8U, __tinypy_native_function_call_method, NULL);
-        __tinypy_native_function_add_type_method(vm, type, "__get__", 7U, __tinypy_native_descriptor_get_method, NULL);
-        __tinypy_native_function_add_type_method(vm, type, "__repr__", 8U, __tinypy_native_function_repr_method, NULL);
-        __tinypy_native_function_add_type_method(vm, type, "__hash__", 8U, __tinypy_native_function_hash_method, NULL);
-        __tinypy_native_function_add_type_method(vm, type, "__cmp__", 7U, __tinypy_native_function_cmp_method, NULL);
+        tinypy_internal_type_add_property(type, vm->internal_special_name_key, __tinypy_native_function_attribute_method, (void *)0, NULL);
+        tinypy_internal_type_add_property(type, vm->internal_special_objclass_key, __tinypy_native_function_attribute_method, (void *)3, NULL);
+        tinypy_internal_type_add_property(type, vm->internal_special_doc_key, __tinypy_native_function_attribute_method, (void *)4, NULL);
+        tinypy_internal_type_add_method(type, vm->internal_special_call_key, __tinypy_native_function_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method(type, vm->internal_special_get_key, __tinypy_native_descriptor_get_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_native_function_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method(type, vm->internal_special_hash_key, __tinypy_native_function_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method(type, vm->internal_special_cmp_key, __tinypy_native_function_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         for (size_t index = 0U; index < sizeof(comparisons) / sizeof(comparisons[0]); ++index) {
-            __tinypy_native_function_add_type_method(vm, type, comparisons[index].name, comparisons[index].name_size, __tinypy_native_function_compare_method, (void *)(intptr_t)comparisons[index].operation);
+            tinypy_value_t *method_name = comparisons[index].name;
+            tinypy_internal_type_add_method(type, method_name, __tinypy_native_function_compare_method, (void *)(intptr_t)comparisons[index].operation, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
     }
     vm->types[TINYPY_VALUE_NATIVE_FUNCTION].hash = __tinypy_native_function_hash_slot;
@@ -797,6 +824,15 @@ static tinypy_bool_t __tinypy_internal_native_validate_spec(tinypy_vm_t *vm, con
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
+    tinypy_type_t *result = tinypy_native_type_new_key(key, bases, base_count, namespace_dict, spec, out_error);
+
+    TINYPY_DECREF(key);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
     size_t copied_size;
     size_t basic_size;
     tinypy_bool_t has_instance_dict;
@@ -808,7 +844,7 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
     }
     has_instance_dict = __tinypy_internal_native_spec_bool(spec, offsetof(tinypy_native_type_spec_t, has_instance_dict), spec->has_instance_dict);
     has_weakrefs = __tinypy_internal_native_spec_bool(spec, offsetof(tinypy_native_type_spec_t, has_weakrefs), spec->has_weakrefs);
-    tinypy_type_t *type = tinypy_internal_type_new_configured(vm, name, name_size, bases, base_count, NULL, namespace_dict, has_instance_dict, has_weakrefs, out_error);
+    tinypy_type_t *type = tinypy_internal_type_new_configured(name, bases, base_count, NULL, namespace_dict, has_instance_dict, has_weakrefs, out_error);
     if (type == NULL) {
         return NULL;
     }

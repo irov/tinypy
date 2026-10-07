@@ -99,13 +99,13 @@ tinypy_value_t *__tinypy_frontend_integer_from_owner(tinypy_value_t *owner, int6
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *__tinypy_frontend_string_from_owner(tinypy_value_t *owner, const char *bytes, size_t size) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(owner);
-    tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, bytes, size);
+    tinypy_value_t *return_value_1 = tinypy_internal_string_from_bytes_uninterned(vm, bytes, size);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t __tinypy_frontend_dict_set_none(tinypy_value_t *dict, tinypy_value_t *key) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
-    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_value_t *none = TINYPY_RET_NONE(vm);
     tinypy_dict_set(dict, key, none);
     TINYPY_DECREF(none);
     return 0;
@@ -152,8 +152,7 @@ tinypy_value_t *__tinypy_frontend_mangle(tinypy_compile_ctx_t *arena, tinypy_val
     name = (const char *)__tinypy_frontend_string_data(identifier);
     name_size = __tinypy_frontend_string_size(identifier);
     if (private_name == NULL || name_size < 2U || name[0] != '_' || name[1] != '_' || (name[name_size - 1U] == '_' && name[name_size - 2U] == '_') || memchr(name, '.', name_size) != NULL) {
-        TINYPY_INCREF(identifier);
-        return identifier;
+        return TINYPY_RET(identifier);
     }
     class_name = (const char *)__tinypy_frontend_string_data(private_name);
     class_size = __tinypy_frontend_string_size(private_name);
@@ -162,8 +161,7 @@ tinypy_value_t *__tinypy_frontend_mangle(tinypy_compile_ctx_t *arena, tinypy_val
         class_size -= 1U;
     }
     if (class_size == 0U) {
-        TINYPY_INCREF(identifier);
-        return identifier;
+        return TINYPY_RET(identifier);
     }
     buffer = (char *)tinypy_internal_compiler_arena_allocate(arena, class_size + name_size + 1U);
     if (buffer == NULL) {
@@ -183,13 +181,13 @@ tinypy_value_t *__tinypy_frontend_tuple_new(tinypy_value_t *owner, tinypy_compil
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(owner);
     if (size == 0) {
-        tinypy_value_t *return_value_1 = tinypy_tuple_from_items(vm, NULL, 0U);
+        tinypy_value_t *return_value_1 = TINYPY_RET_EMPTY_TUPLE(vm);
         return return_value_1;
     }
     allocation_size = offsetof(tinypy_tuple_object_t, items) + (size_t)size * sizeof(tinypy_value_t *);
     tinypy_tuple_object_t *tuple = (tinypy_tuple_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_TUPLE, allocation_size);
     tuple->base.size = size;
-    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_value_t *none = TINYPY_RET_NONE(vm);
     for (index = 0U; index < (size_t)size; ++index) {
         tuple->items[index] = none;
         TINYPY_INCREF(none);
@@ -304,7 +302,7 @@ static tinypy_value_t *__tinypy_frontend_string_allocate(tinypy_vm_t *vm, size_t
     size_t allocation_size;
 
     if (size == 0U) {
-        tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, NULL, 0U);
+        tinypy_value_t *return_value_1 = TINYPY_RET_EMPTY_STRING(vm);
         return return_value_1;
     }
     allocation_size = offsetof(tinypy_string_object_t, bytes) + size + 1U;

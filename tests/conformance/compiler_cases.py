@@ -27,7 +27,10 @@ def cases():
         result['single/' + name] = expression + '\n'
         result['exec/' + name] = 'result = ' + expression + '\n'
     statements = [
-        '"module doc"\nx=1\nassert x, "assert message"\n',
+        '"module doc"\nx=1\nassert x, "assert message"\n'
+        'raw="<lambda>"\nfolded="<"+"lambda>"\nformatted="<%s>" % "lambda"\n'
+        'joined="<" "module>"\nidentifier="__doc__"\n'
+        'top=genexpr=setcomp=dictcomp=1\n',
         'from __future__ import division\nx=5/2\n',
         'from __future__ import unicode_literals\nx="value"\n',
         'from __future__ import print_function\nprint(1,2,sep=":")\n',

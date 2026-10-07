@@ -48,15 +48,15 @@ void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object) 
         return;
     }
     tinypy_internal_exception_preserve_begin(vm, &state);
-    stream = tinypy_internal_dict_get_optional(vm, TINYPY_MODULE_OBJECT(vm->sys_module)->dict, vm->stderr_key);
+    stream = tinypy_internal_dict_get_optional(vm, TINYPY_MODULE_OBJECT(vm->sys_module)->dict, vm->internal_stderr_key);
     if (stream != NULL) {
         TINYPY_INCREF(stream);
         __tinypy_output_unraisable_text(stream, "Exception ", 10U);
-        module = tinypy_object_get_attr(state.type, "__module__", 10U, &error);
+        module = tinypy_object_get_attr_value(state.type, vm->internal_special_module_key, &error);
         if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING) {
             size_t size = TINYPY_TEXT_BYTE_SIZE(module);
 
-            if (size != 10U || memcmp(TINYPY_TEXT_BYTES(module), "exceptions", 10U) != 0) {
+            if (TINYPY_NAME_EQ(module, vm->internal_exception_module_name) == TINYPY_FALSE) {
                 __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(module), size);
                 __tinypy_output_unraisable_text(stream, ".", 1U);
             }
@@ -110,7 +110,7 @@ tinypy_value_t *tinypy_internal_output_stream_new(tinypy_vm_t *vm, tinypy_output
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_internal_output_call_write(tinypy_value_t *target, tinypy_value_t *text, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-    tinypy_value_t *write_method = tinypy_object_get_attr(target, "write", 5U, out_error);
+    tinypy_value_t *write_method = tinypy_object_get_attr_value(target, vm->internal_write_key, out_error);
     tinypy_value_t *args;
     tinypy_value_t *result;
 
@@ -185,7 +185,7 @@ tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
         tinypy_error_t *error = NULL;
         tinypy_value_t *value;
-        int32_t status = tinypy_internal_object_get_optional_attr_key(target, vm->softspace_key, &value, &error);
+        int32_t status = tinypy_internal_object_get_optional_attr_key(target, vm->internal_softspace_key, &value, &error);
         int32_t soft_space = 0;
 
         if (status > 0) {
@@ -201,7 +201,7 @@ tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target) {
     if (kind == TINYPY_VALUE_INSTANCE) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
         tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(target);
-        tinypy_value_t *value = dict_slot != NULL && *dict_slot != NULL ? tinypy_dict_get_optional(*dict_slot, vm->softspace_key) : NULL;
+        tinypy_value_t *value = dict_slot != NULL && *dict_slot != NULL ? tinypy_dict_get_optional(*dict_slot, vm->internal_softspace_key) : NULL;
         tinypy_bool_t soft_space = TINYPY_FALSE;
 
         if (value != NULL) {
@@ -225,7 +225,7 @@ void tinypy_internal_output_set_soft_space(tinypy_value_t *target, tinypy_bool_t
         tinypy_error_t *error = NULL;
         tinypy_value_t *value = tinypy_integer_from_i64(vm, soft_space != 0 ? INT64_C(1) : INT64_C(0));
 
-        (void)tinypy_object_set_attr_value(target, vm->softspace_key, value, &error);
+        (void)tinypy_object_set_attr_value(target, vm->internal_softspace_key, value, &error);
         TINYPY_DECREF(value);
         if (error != NULL) {
             tinypy_error_release(error);
@@ -239,7 +239,7 @@ void tinypy_internal_output_set_soft_space(tinypy_value_t *target, tinypy_bool_t
         if (dict_slot != NULL) {
             tinypy_value_t *value = tinypy_integer_from_i64(vm, soft_space != 0 ? INT64_C(1) : INT64_C(0));
 
-            tinypy_instance_set_attr(target, "softspace", 9U, value);
+            tinypy_instance_set_attr_key(target, vm->internal_softspace_key, value);
             TINYPY_DECREF(value);
         }
     }
@@ -281,7 +281,7 @@ static tinypy_value_t *__tinypy_output_write_method(tinypy_value_t *function, ti
         return NULL;
     }
     tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(stream)->channel, bytes, size);
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -292,7 +292,7 @@ static tinypy_value_t *__tinypy_output_flush_method(tinypy_value_t *function, ti
     if (__tinypy_output_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -303,7 +303,7 @@ static tinypy_value_t *__tinypy_output_isatty_method(tinypy_value_t *function, t
     if (__tinypy_output_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_bool_from_i32(vm, INT32_C(0));
+    tinypy_value_t *return_value_1 = TINYPY_RET_FALSE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -360,20 +360,13 @@ static tinypy_value_t *__tinypy_output_writelines_method(tinypy_value_t *functio
         }
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_output_type_method(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
-
-    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_output_type(tinypy_vm_t *vm) {
-    __tinypy_output_type_method(vm, "write", 5U, __tinypy_output_write_method);
-    __tinypy_output_type_method(vm, "writelines", 10U, __tinypy_output_writelines_method);
-    __tinypy_output_type_method(vm, "flush", 5U, __tinypy_output_flush_method);
-    __tinypy_output_type_method(vm, "isatty", 6U, __tinypy_output_isatty_method);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], vm->internal_write_key, __tinypy_output_write_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], vm->internal_writelines_key, __tinypy_output_writelines_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], vm->internal_flush_key, __tinypy_output_flush_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], vm->internal_isatty_key, __tinypy_output_isatty_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 }

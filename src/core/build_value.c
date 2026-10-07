@@ -248,7 +248,7 @@ static tinypy_value_t *__tinypy_build_value_read(tinypy_build_value_state_t *sta
         const char *value = va_arg(*state->args, const char *);
         int specified_size = __tinypy_build_value_size(state);
         if (value == NULL) {
-            tinypy_value_t *result = tinypy_none_get(vm);
+            tinypy_value_t *result = TINYPY_RET_NONE(vm);
             return result;
         }
         size_t size = specified_size < 0 ? strlen(value) : (size_t)specified_size;
@@ -259,7 +259,7 @@ static tinypy_value_t *__tinypy_build_value_read(tinypy_build_value_state_t *sta
         const wchar_t *value = va_arg(*state->args, const wchar_t *);
         int specified_size = __tinypy_build_value_size(state);
         if (value == NULL) {
-            tinypy_value_t *result = tinypy_none_get(vm);
+            tinypy_value_t *result = TINYPY_RET_NONE(vm);
             return result;
         }
         size_t size = specified_size < 0 ? wcslen(value) : (size_t)specified_size;
@@ -303,11 +303,10 @@ tinypy_value_t *tinypy_build_value_va(tinypy_vm_t *vm, const char *format, va_li
     if (items != NULL) {
         size_t count = TINYPY_SIZED_SIZE(items);
         if (count == 0U) {
-            result = tinypy_none_get(vm);
+            result = TINYPY_RET_NONE(vm);
         }
         else if (count == 1U) {
-            result = tinypy_list_get(items, 0U);
-            TINYPY_INCREF(result);
+            result = TINYPY_RET(tinypy_list_get(items, 0U));
         }
         else {
             result = __tinypy_build_value_tuple(items);

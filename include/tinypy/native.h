@@ -68,11 +68,16 @@ struct tinypy_native_type_spec_t {
 };
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize);
+/* Borrows an existing byte-string name and retains it in the new
+ * function. No string allocation, lookup or automatic interning is performed. */
+tinypy_value_t *tinypy_native_function_new_key(tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize);
 tinypy_value_t *tinypy_native_function_name(const tinypy_value_t *function);
 void *tinypy_native_function_user_data(const tinypy_value_t *function);
 
 void tinypy_native_type_spec_init(tinypy_native_type_spec_t *spec);
 tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);
+/* Borrows and retains an existing byte-string name from the type VM. */
+tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_native_instance_new(tinypy_type_t *type);
 tinypy_bool_t tinypy_native_instance_construct(tinypy_value_t *instance, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);

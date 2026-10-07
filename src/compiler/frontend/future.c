@@ -9,6 +9,7 @@
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_frontend_future_check_features(tinypy_compile_ctx_t *arena, tinypy_future_features_t *ff, tinypy_ast_statement_t s, const char *filename) {
     int32_t i;
+    tinypy_vm_t *vm = arena->vm;
 
     tinypy_ast_sequence_t *names = s->v.ImportFrom.names;
     for (i = 0; i < TINYPY_AST_SEQUENCE_LENGTH(names); i++) {
@@ -17,28 +18,28 @@ static tinypy_bool_t __tinypy_frontend_future_check_features(tinypy_compile_ctx_
         if (!feature) {
             return TINYPY_FALSE;
         }
-        if (strcmp(feature, TINYPY_FUTURE_FEATURE_NESTED_SCOPES) == 0) {
+        if (TINYPY_NAME_EQ(name->name, vm->internal_future_nested_scopes_key) != TINYPY_FALSE) {
             continue;
         }
-        else if (strcmp(feature, TINYPY_FUTURE_FEATURE_GENERATORS) == 0) {
+        else if (TINYPY_NAME_EQ(name->name, vm->internal_future_generators_key) != TINYPY_FALSE) {
             continue;
         }
-        else if (strcmp(feature, TINYPY_FUTURE_FEATURE_DIVISION) == 0) {
+        else if (TINYPY_NAME_EQ(name->name, vm->internal_future_division_key) != TINYPY_FALSE) {
             ff->features |= TINYPY_CODE_FUTURE_DIVISION;
         }
-        else if (strcmp(feature, TINYPY_FUTURE_FEATURE_ABSOLUTE_IMPORT) == 0) {
+        else if (TINYPY_NAME_EQ(name->name, vm->internal_future_absolute_import_key) != TINYPY_FALSE) {
             ff->features |= TINYPY_CODE_FUTURE_ABSOLUTE_IMPORT;
         }
-        else if (strcmp(feature, TINYPY_FUTURE_FEATURE_WITH_STATEMENT) == 0) {
+        else if (TINYPY_NAME_EQ(name->name, vm->internal_future_with_statement_key) != TINYPY_FALSE) {
             ff->features |= TINYPY_CODE_FUTURE_WITH_STATEMENT;
         }
-        else if (strcmp(feature, TINYPY_FUTURE_FEATURE_PRINT_FUNCTION) == 0) {
+        else if (TINYPY_NAME_EQ(name->name, vm->internal_future_print_function_key) != TINYPY_FALSE) {
             ff->features |= TINYPY_CODE_FUTURE_PRINT_FUNCTION;
         }
-        else if (strcmp(feature, TINYPY_FUTURE_FEATURE_UNICODE_LITERALS) == 0) {
+        else if (TINYPY_NAME_EQ(name->name, vm->internal_future_unicode_literals_key) != TINYPY_FALSE) {
             ff->features |= TINYPY_CODE_FUTURE_UNICODE_LITERALS;
         }
-        else if (strcmp(feature, "braces") == 0) {
+        else if (TINYPY_NAME_EQ(name->name, vm->internal_future_braces_key) != TINYPY_FALSE) {
             tinypy_internal_compiler_semantic_error(arena, "not a chance", s->lineno, TINYPY_FALSE);
             return TINYPY_FALSE;
         }
@@ -91,10 +92,7 @@ static tinypy_bool_t __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena,
 
         if (s->kind == TINYPY_AST_KIND_IMPORT_FROM) {
             tinypy_ast_identifier_t modname = s->v.ImportFrom.module;
-            tinypy_bool_t condition = modname && TINYPY_COMPILER_STRING_GET_SIZE(modname) == 10;
-            if (condition != 0) {
-                condition = !strcmp(TINYPY_COMPILER_STRING_AS_STRING(modname), "__future__");
-            }
+            tinypy_bool_t condition = modname != NULL && TINYPY_NAME_EQ(modname, arena->vm->internal_future_module_name) != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
             if (condition) {
                 if (done) {
                     tinypy_internal_compiler_semantic_error(arena, TINYPY_FUTURE_LATE_IMPORT_MESSAGE, s->lineno, TINYPY_TRUE);

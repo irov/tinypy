@@ -204,6 +204,130 @@ refcount в ноль до отложенного освобождения; та�
 tombstones и сокращает ёмкость. Односимвольные строки и другие постоянные
 значения по-прежнему удерживаются своими owned references самой VM.
 
+Обычный и checked конструкторы byte strings переиспользуют уже interned
+строку по байтам и длине и возвращают владеющую ссылку; новые строки при
+промахе не добавляются в intern table автоматически. Пустая строка и строки
+длины один сохраняют отдельные VM constant caches. Lookup не удерживает
+удалённые строки, учитывает embedded NUL и не переиспользует объекты при
+shutdown. Длинные строки, превышающие верхнюю границу длины записей таблицы,
+не требуют вычисления hash при lookup.
+
+Постоянные имена протоколов, метаданных, keyword-аргументов, кодировок и
+служебных объектов компилятора создаются один раз в общем реестре VM.
+Lookup по байтам и длине переиспользует соответствующий пресет; внутренний
+name factory возвращает владеющую ссылку. Реестр задаёт поля, инициализацию,
+признак interning и shutdown roots, поэтому строки разных VM не смешиваются.
+Имена `<genexpr>`, `<setcomp>` и `<dictcomp>` остаются non-interned, сохраняя
+побайтовое совпадение marshal с CPython 2.7.18.
+
+Реестр фиксированных имён задан непосредственно в исходниках. Идентификаторы
+из AST, в том числе generated names meta frontend, добавляются в общую intern
+table при создании; имена и подходящие строковые константы code objects
+интернируются по правилам Python 2. Данные обычных runtime strings туда
+не добавляются без явного `intern()`. Отдельные non-interned compiler labels
+не используются как объекты AST identifiers даже при совпадении текста.
+
+`tinypy_type_get_attr` и `tinypy_type_set_attr` принимают байты и длину;
+варианты `*_attr_key` принимают готовый borrowed str/unicode key той же VM.
+Setters сохраняют одинаковую регистрацию native method descriptors, включая
+owner и descriptor kind. `tinypy_native_function_new_key` сохраняет готовое
+byte-string имя с владеющей ссылкой и получает VM из него. Эти key API не
+создают строк, не ищут имена по байтам и не добавляют ключи в intern table.
+
+`tinypy_module_new_key`, `tinypy_type_new_key` и `tinypy_native_type_new_key`
+принимают borrowed byte-string имя, получают VM из него и сохраняют именно
+этот объект с владеющей ссылкой. `tinypy_module_add_value_key` и
+`tinypy_module_get_value_key` принимают borrowed str/unicode key той же VM;
+getter возвращает borrowed value или NULL. Запись native function сохраняет
+его module metadata по тем же правилам, что и байтовый API.
+`tinypy_instance_get_attr_key` возвращает borrowed значение непосредственно
+из instance dictionary либо type dictionary, без descriptor binding.
+`tinypy_instance_set_attr_key` пишет прямо в instance dictionary, без вызова
+пользовательского `__setattr__` или descriptor setter. Для Python attribute
+semantics используются `tinypy_object_*_attr_value`. Embedded NUL учитывается
+полной длиной key; существующие byte APIs остаются совместимыми адаптерами.
+`tinypy_import_module_key` принимает borrowed byte-string имя; обработка
+составных имён и host resolver используют его байтовое представление.
+
+Все внутренние операции с именами модулей, атрибутов, специальных методов и
+именованных аргументов используют value keys. Фиксированные таблицы содержат
+borrowed VM keys либо offsets этих полей для static callback data. Сравнения
+имён AST в meta/preprocessor также используют готовые interned keys.
+Проверка исходников запрещает внутренние вызовы byte-name API и создание фиксированных
+ключей через byte factory. Байты остаются на публичных/host границах, в
+обработке динамических путей импорта, parser tokens и текстах диагностики.
+Начальный bootstrap builtin types хранит C names до создания string type
+и VM presets; такие имена не создают Python strings.
+
+Внутренняя регистрация native functions, methods, classmethods, staticmethods
+и properties использует общие `tinypy_internal_*_add_*` helpers с готовым
+borrowed byte-string key той же VM. Они сохраняют descriptor kind, owner,
+module metadata и finalizer; временные ссылки освобождаются внутри helper.
+Имена из общего registry передаются прямо из VM.
+Все фиксированные имена production C-кода, включая module-local методы,
+исключения, codec aliases и `__future__`, заранее создаются из registry при
+инициализации VM. Поля этих строк имеют префикс `internal_`, например
+`internal_special_length_key` и `internal_func_code_key`. Source guard запрещает
+внутреннему production-коду обращаться к ленивой фабрике C-literal keys.
+`TINYPY_INTERNAL_STRING(vm, "literal")` остаётся для extension/test literals:
+длина вычисляется из литерала, включая embedded NUL, VM вычисляется один раз.
+Макрос возвращает borrowed interned строку, удерживаемую VM до shutdown;
+она не требует DECREF. Для владеющей ссылки используется `TINYPY_RET`.
+Вне registry эти литералы удерживаются в ленивом VM dictionary. Обычные
+runtime strings проверяют общий intern table, но при промахе не добавляются
+ни в него, ни в dictionary внутренних C literals. Совпадающий literal не
+меняет non-interned compiler preset: для него используется отдельная строка.
+
+`TINYPY_NAME_EQ(name, preset)` сначала сравнивает указатели, затем байты и
+длину для разных объектов. Fallback сохраняет Unicode и str subclasses,
+не вызывая их пользовательский `__eq__`. Разные указатели сами по себе
+не означают разные строки. `func_code` и `__code__` — разные имена одного
+атрибута Python 2; оба alias проверяются отдельно готовыми полями VM.
+Индексные таблицы операторов и native wrapper slots содержат offsets готовых
+полей VM. `tinypy_internal_object_special_operator_key(vm, index)` возвращает
+borrowed preset без аллокации и изменения refcount; index должен быть меньше
+`TINYPY_SPECIAL_OPERATOR_COUNT`. Отдельный массив строк и дополнительные
+владеющие ссылки для операторов не создаются. AUTO wrapper classification
+сравнивает полный key с preset, включая raw/Unicode fallback и embedded NUL.
+Фиксированные codec aliases сравниваются с presets с сохранением нормализации;
+проверки имён, у которых Python 2 учитывает только префикс до NUL, сохраняют
+это поведение.
+
+Compiler literals, filename и non-interned
+marshal payloads обходят lookup intern table; при свёртке констант
+interned результат копируется перед изменением serialization policy.
+
+`TINYPY_RET(value)` возвращает тот же ненулевой объект с увеличенным refcount,
+вычисляя аргумент ровно один раз. `TINYPY_RET_NONE`, `TINYPY_RET_TRUE`,
+`TINYPY_RET_FALSE`, `TINYPY_RET_NOT_IMPLEMENTED`, `TINYPY_RET_ELLIPSIS`,
+`TINYPY_RET_EMPTY_TUPLE` и `TINYPY_RET_EMPTY_STRING` принимают VM и возвращают
+владеющую ссылку на соответствующий существующий singleton без аллокации.
+
+Логические значения C имеют тип `tinypy_bool_t` и именованные константы
+`TINYPY_TRUE`/`TINYPY_FALSE`. Проверка на `!= TINYPY_FALSE` сохраняет семантику
+любого ненулевого значения; числовые статусы и битовые маски остаются числами.
+Эти константы отличаются от Python singletons, которые возвращают `TINYPY_RET_TRUE`
+и `TINYPY_RET_FALSE`.
+
+Getter встроенных атрибутов выбирает функцию из неизменяемых таблиц по типу
+объекта и `attribute_id`. Каждый byte-string содержит borrowed указатель на
+неизменяемые `tinypy_internal_string_metadata_t`; у VM presets он указывает на
+общие для всех VM static metadata с `builtin_attribute_id`, у обычных строк
+равен NULL. Нулевой id обозначает отсутствие специализированного getter.
+Обычная строка, совпадающая с interned preset, получает сам preset вместе с его
+metadata. Копии immutable subtypes и raw строки не наследуют metadata;
+изменение содержимого при росте строки сбрасывает указатель. Metadata не
+содержат Python values, не удерживают ссылки и не входят в marshal payload.
+Чтение id из preset не требует хеширования или сравнения имён.
+Для raw/Unicode keys preset заимствуется из общего неизменяемого кеша
+внутренних имён VM, после чего id читается из metadata. Отдельная таблица
+builtin-имён не создаётся; входящий key не заменяется, не удерживается и
+не добавляется в кеш. Lookup сравнивает полное содержимое без пользовательских
+`__hash__`/`__eq__`; коллизии и embedded NUL не сокращают сравниваемый span.
+Общие getters `__class__`,
+`__call__`, `__dict__`, function-code aliases и module dictionary сохраняют
+прямой путь. Приоритет custom hooks, дескрипторов и instance dictionary сохраняется.
+
 Python-visible bundled surface намеренно ограничен memory-only runtime:
 
 - встроены `__builtin__`, `sys`, `exceptions`, `__future__`, `_codecs`,

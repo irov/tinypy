@@ -552,7 +552,7 @@ static void __tinypy_representation_quoted(tinypy_representation_builder_t *buil
 static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error);
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_representation_module_attribute(tinypy_value_t *module, const char *name, size_t name_size) {
+static tinypy_value_t *__tinypy_representation_module_attribute(tinypy_value_t *module, tinypy_value_t *name) {
     tinypy_value_t *dict = tinypy_module_dict(module);
     tinypy_dict_entry_t *iterator;
     tinypy_dict_entry_t *end;
@@ -570,7 +570,7 @@ static tinypy_value_t *__tinypy_representation_module_attribute(tinypy_value_t *
             continue;
         }
         key = iterator->key;
-        if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING && TINYPY_STRING_SIZE(key) == name_size && memcmp(TINYPY_STRING_OBJECT(key)->bytes, name, name_size) == 0) {
+        if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(key, name) != 0) {
             return iterator->value;
         }
     }
@@ -753,20 +753,20 @@ static void __tinypy_representation_pointer(tinypy_representation_builder_t *bui
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_value_t *args;
     tinypy_value_t *result;
 
-    tinypy_value_t *attribute = tinypy_internal_object_has_special(value, name, name_size) != 0 ? value : NULL;
+    tinypy_value_t *attribute = tinypy_internal_object_has_special_key(value, name) != 0 ? value : NULL;
     if (attribute == NULL) {
         return NULL;
     }
-    tinypy_value_t *method = tinypy_internal_object_get_special(value, name, name_size, out_error);
+    tinypy_value_t *method = tinypy_internal_object_get_special_key(value, name, out_error);
     if (method == NULL) {
         return NULL;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    args = tinypy_tuple_from_items(vm, NULL, 0U);
+    args = TINYPY_RET_EMPTY_TUPLE(vm);
     result = tinypy_call(method, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(method);
@@ -799,20 +799,10 @@ static tinypy_bool_t __tinypy_representation_append_text(tinypy_representation_b
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_representation_text_equal(const tinypy_value_t *text, const char *name, size_t name_size) {
-    if (TINYPY_TEXT_BYTE_SIZE(text) != name_size) {
-        return TINYPY_FALSE;
-    }
-    int comparison = memcmp(TINYPY_TEXT_BYTES(text), name, name_size);
-
-    return comparison == 0 ? TINYPY_TRUE : TINYPY_FALSE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_dict_module(tinypy_vm_t *vm, tinypy_value_t *dict) {
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, "__module__", 10U);
+    tinypy_value_t *key = vm->internal_special_module_key;
     tinypy_value_t *module = tinypy_internal_dict_get_optional(vm, dict, key);
 
-    TINYPY_DECREF(key);
     if (module == NULL || TINYPY_VALUE_KIND(module) != TINYPY_VALUE_STRING) {
         return NULL;
     }
@@ -838,9 +828,9 @@ static void __tinypy_representation_class_qualified_name(tinypy_representation_b
 /* Instances of types defined in Python show the defining module, the way
    object.__repr__ does in Python 2.7; built-in types stay unqualified. */
 static void __tinypy_representation_type_qualified_name(tinypy_representation_builder_t *builder, const tinypy_type_t *type) {
-    tinypy_value_t *module = tinypy_type_get_attr(type, "__module__", 10U);
+    tinypy_value_t *module = tinypy_type_get_attr_key(type, type->vm->internal_special_module_key);
 
-    if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && __tinypy_representation_text_equal(module, "__builtin__", 11U) == 0) {
+    if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, type->vm->internal_builtin_module_name) == 0) {
         __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
         __tinypy_representation_append_character(builder, (uint8_t)'.');
     }
@@ -896,14 +886,14 @@ static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_bool_t function_result;
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-    const char *special_name = raw != 0 ? "__str__" : "__repr__";
-    size_t special_name_size = raw != 0 ? 7U : 8U;
+    tinypy_value_t *special_name = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
     tinypy_unary_slot_t representation_slot = raw != 0 ? value->type->string : value->type->repr;
 
-    if ((builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override(value, special_name, special_name_size) != 0) {
-        tinypy_value_t *custom = __tinypy_representation_custom(value, special_name, special_name_size, out_error);
+    if ((builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override_key(value, special_name) != 0) {
+        tinypy_value_t *custom = __tinypy_representation_custom(value, special_name, out_error);
 
         if (custom == NULL) {
             return TINYPY_FALSE;
@@ -914,8 +904,8 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     }
     if (raw != 0 && (builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U &&
         (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_DICT || kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) &&
-        tinypy_internal_object_has_special_override(value, "__repr__", 8U) != 0) {
-        tinypy_value_t *custom = __tinypy_representation_custom(value, "__repr__", 8U, out_error);
+        tinypy_internal_object_has_special_override_key(value, vm->internal_special_repr_key) != 0) {
+        tinypy_value_t *custom = __tinypy_representation_custom(value, vm->internal_special_repr_key, out_error);
 
         if (custom == NULL) {
             return TINYPY_FALSE;
@@ -1004,12 +994,12 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     case TINYPY_VALUE_TYPE: {
         tinypy_type_t *type_value = (tinypy_type_t *)value;
         tinypy_bool_t heap_type = (type_value->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
-        tinypy_value_t *module = tinypy_type_get_attr(type_value, "__module__", 10U);
+        tinypy_value_t *module = tinypy_type_get_attr_key(type_value, type_value->vm->internal_special_module_key);
 
         /* Types defined in Python report their module; built-in types live in
            __builtin__ and keep the bare "<type 'name'>" form. */
         __tinypy_representation_append(builder, heap_type != 0 ? "<class '" : "<type '", heap_type != 0 ? 8U : 7U);
-        if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && __tinypy_representation_text_equal(module, "__builtin__", 11U) == 0) {
+        if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, type_value->vm->internal_builtin_module_name) == 0) {
             __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
             __tinypy_representation_append_character(builder, (uint8_t)'.');
         }
@@ -1103,8 +1093,8 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     }
     case TINYPY_VALUE_MODULE: {
         __tinypy_representation_append(builder, "<module '", 9U);
-        tinypy_value_t *module_name = __tinypy_representation_module_attribute(value, "__name__", 8U);
-        tinypy_value_t *module_file = __tinypy_representation_module_attribute(value, "__file__", 8U);
+        tinypy_value_t *module_name = __tinypy_representation_module_attribute(value, vm->internal_special_name_key);
+        tinypy_value_t *module_file = __tinypy_representation_module_attribute(value, vm->internal_special_file_key);
 
         if (module_name == NULL || TINYPY_VALUE_KIND(module_name) != TINYPY_VALUE_STRING) {
             __tinypy_representation_append_character(builder, (uint8_t)'?');
@@ -1168,7 +1158,7 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     default: {
         tinypy_value_t *custom = builder->skip_root_special != 0 && value == builder->root
                                      ? NULL
-                                     : __tinypy_representation_custom(value, special_name, special_name_size, out_error);
+                                     : __tinypy_representation_custom(value, special_name, out_error);
 
         if (custom != NULL) {
             tinypy_bool_t appended = __tinypy_representation_append_text(builder, custom, raw, out_error);
@@ -1181,7 +1171,7 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         /* str() of a classic instance without __str__ falls back to __repr__,
            the way instance_str does in Python 2.7. */
         if (raw != 0 && kind == TINYPY_VALUE_OLD_INSTANCE) {
-            tinypy_value_t *fallback = __tinypy_representation_custom(value, "__repr__", 8U, out_error);
+            tinypy_value_t *fallback = __tinypy_representation_custom(value, vm->internal_special_repr_key, out_error);
 
             if (fallback != NULL) {
                 tinypy_bool_t appended = __tinypy_representation_append_text(builder, fallback, raw, out_error);
@@ -1212,8 +1202,8 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tiny
     tinypy_representation_builder_t builder;
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
-    if (skip_root_special == 0 && tinypy_internal_object_has_special_override(value, raw != 0 ? "__str__" : "__repr__", raw != 0 ? 7U : 8U) != 0) {
-        tinypy_value_t *custom = __tinypy_representation_custom(value, raw != 0 ? "__str__" : "__repr__", raw != 0 ? 7U : 8U, out_error);
+    if (skip_root_special == 0 && tinypy_internal_object_has_special_override_key(value, raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key) != 0) {
+        tinypy_value_t *custom = __tinypy_representation_custom(value, raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key, out_error);
 
         if (custom == NULL) {
             return NULL;
@@ -1363,8 +1353,7 @@ static tinypy_value_t *__tinypy_object_class_property(tinypy_value_t *function, 
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *result = &self->type->base.base;
-    TINYPY_INCREF(result);
+    tinypy_value_t *result = TINYPY_RET(&self->type->base.base);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1398,7 +1387,7 @@ static tinypy_value_t *__tinypy_object_class_assign(tinypy_value_t *function, ti
     TINYPY_INCREF(replacement);
     self->type = target;
     TINYPY_DECREF(&current->base.base);
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1479,63 +1468,45 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
         TINYPY_VALUE_FROZENSET,
         TINYPY_VALUE_BYTEARRAY
     };
-    tinypy_value_t *repr_function = tinypy_native_function_new(vm, "__repr__", 8U, __tinypy_representation_method, NULL, NULL);
-    tinypy_value_t *str_function = tinypy_native_function_new(vm, "__str__", 7U, __tinypy_representation_method, (void *)(intptr_t)1, NULL);
-    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_FLOAT], "__repr__", 8U, repr_function);
-    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_FLOAT], "__str__", 7U, str_function);
-    tinypy_value_t *object_repr_function = tinypy_native_function_new(vm, "__repr__", 8U, __tinypy_object_representation_method, NULL, NULL);
-    tinypy_value_t *object_str_function = tinypy_native_function_new(vm, "__str__", 7U, __tinypy_object_representation_method, (void *)(intptr_t)1, NULL);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_FLOAT], vm->internal_special_repr_key, __tinypy_representation_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_FLOAT], vm->internal_special_str_key, __tinypy_representation_method, (void *)(intptr_t)1, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_repr_key, __tinypy_object_representation_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_str_key, __tinypy_object_representation_method, (void *)(intptr_t)1, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 
-    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_INSTANCE], "__repr__", 8U, object_repr_function);
-    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_INSTANCE], "__str__", 7U, object_str_function);
-    tinypy_value_t *class_getter = tinypy_native_function_new(vm, "__class__", 9U, __tinypy_object_class_property, NULL, NULL);
-    tinypy_value_t *class_setter = tinypy_native_function_new(vm, "__class__", 9U, __tinypy_object_class_assign, NULL, NULL);
+    tinypy_value_t *class_getter = tinypy_native_function_new_key(vm->internal_special_class_key, __tinypy_object_class_property, NULL, NULL);
+    tinypy_value_t *class_setter = tinypy_native_function_new_key(vm->internal_special_class_key, __tinypy_object_class_assign, NULL, NULL);
     tinypy_value_t *class_property = tinypy_property_new(vm, class_getter, class_setter, NULL, NULL);
-    tinypy_value_t *sizeof_function = tinypy_native_function_new(vm, "__sizeof__", 10U, __tinypy_object_sizeof_method, NULL, NULL);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_sizeof_key, __tinypy_object_sizeof_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 
-    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_INSTANCE], "__class__", 9U, class_property);
-    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_INSTANCE], "__sizeof__", 10U, sizeof_function);
+    tinypy_type_set_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_class_key, class_property);
     for (size_t index = 0U; index < sizeof(direct_sizeof_types) / sizeof(direct_sizeof_types[0]); ++index) {
-        tinypy_value_t *direct_sizeof = tinypy_native_function_new(vm, "__sizeof__", 10U, __tinypy_object_sizeof_method, NULL, NULL);
-
-        tinypy_type_set_attr(&vm->types[direct_sizeof_types[index]], "__sizeof__", 10U, direct_sizeof);
-        TINYPY_DECREF(direct_sizeof);
+        tinypy_internal_type_add_method(&vm->types[direct_sizeof_types[index]], vm->internal_special_sizeof_key, __tinypy_object_sizeof_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
-    tinypy_value_t *type_repr_function = tinypy_native_function_new(vm, "__repr__", 8U, __tinypy_type_representation_method, NULL, NULL);
-    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_TYPE], "__repr__", 8U, type_repr_function);
-    TINYPY_DECREF(type_repr_function);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_TYPE], vm->internal_special_repr_key, __tinypy_type_representation_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     for (size_t index = 0U; index < sizeof(semantic_repr_types) / sizeof(semantic_repr_types[0]); ++index) {
         tinypy_value_type_e kind = semantic_repr_types[index];
-        tinypy_value_t *function = tinypy_native_function_new(vm, "__repr__", 8U, __tinypy_builtin_representation_method, (void *)(intptr_t)kind, NULL);
-
-        tinypy_type_set_attr(&vm->types[kind], "__repr__", 8U, function);
-        TINYPY_DECREF(function);
+        tinypy_internal_type_add_method(&vm->types[kind], vm->internal_special_repr_key, __tinypy_builtin_representation_method, (void *)(intptr_t)kind, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
-    TINYPY_DECREF(sizeof_function);
     TINYPY_DECREF(class_property);
     TINYPY_DECREF(class_setter);
     TINYPY_DECREF(class_getter);
-    TINYPY_DECREF(object_str_function);
-    TINYPY_DECREF(object_repr_function);
-    TINYPY_DECREF(str_function);
-    TINYPY_DECREF(repr_function);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_string_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    static const char *const names[1] = {"object"};
     tinypy_vm_t *vm = type->vm;
+    tinypy_value_t *const names[1] = {vm->internal_object_key};
     tinypy_value_t *values[1];
 
     if (tinypy_internal_constructor_optional_arguments(vm, "str", 3U, args, kwargs, names, 1U, 0U, values, out_error) == 0) {
         return NULL;
     }
     if (values[0] == NULL) {
-        tinypy_value_t *value = tinypy_string_from_bytes(vm, NULL, 0U);
+        tinypy_value_t *value = TINYPY_RET_EMPTY_STRING(vm);
         tinypy_value_t *return_value_1 = tinypy_internal_immutable_subclass_copy(type, value, out_error);
         return return_value_1;
     }
     tinypy_value_t *item = values[0];
-    if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_BYTEARRAY && tinypy_internal_object_has_special_override(item, "__str__", 7U) == 0) {
+    if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_BYTEARRAY && tinypy_internal_object_has_special_override_key(item, vm->internal_special_str_key) == 0) {
         tinypy_value_t *value = tinypy_internal_bytearray_string(item, out_error);
         tinypy_value_t *return_value_2 = tinypy_internal_immutable_subclass_copy(type, value, out_error);
         return return_value_2;

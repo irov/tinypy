@@ -31,7 +31,7 @@ static void __tinypy_compiler_byte_escape_error(tinypy_compile_ctx_t *ctx, const
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_compiler_unicode_escape_error(tinypy_compile_ctx_t *ctx, const uint8_t *source, size_t size, size_t start, size_t end, tinypy_bool_t raw, const char *reason, int32_t line_number) {
-    tinypy_value_t *encoding = tinypy_string_from_bytes(ctx->vm, raw != 0 ? "rawunicodeescape" : "unicodeescape", raw != 0 ? 16U : 13U);
+    tinypy_value_t *encoding = TINYPY_RET(raw != 0 ? ctx->vm->internal_codec_raw_unicode_escape_name : ctx->vm->internal_codec_unicode_escape_name);
     tinypy_value_t *input = tinypy_string_from_bytes(ctx->vm, source, size);
     tinypy_value_t *start_value = tinypy_integer_from_i64(ctx->vm, (int64_t)start);
     tinypy_value_t *end_value = tinypy_integer_from_i64(ctx->vm, (int64_t)end);
@@ -104,7 +104,7 @@ static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx
                 run_end += 1U;
             }
             tinypy_value_t *input = tinypy_string_from_bytes(ctx->vm, source + run_start, run_end - run_start);
-            tinypy_value_t *encoding = tinypy_string_from_bytes(ctx->vm, "utf8", 4U);
+            tinypy_value_t *encoding = TINYPY_RET(ctx->vm->internal_codec_utf8_name);
             tinypy_error_t *decode_error = NULL;
             tinypy_value_t *decoded = tinypy_internal_text_codec(ctx->vm, input, encoding, NULL, TINYPY_TRUE, TINYPY_TRUE, NULL, &decode_error);
 
@@ -581,7 +581,7 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
     tinypy_value_t *result;
 
     if (decoded_escape == 0 || output_size == 0U) {
-        result = tinypy_string_from_bytes(ctx->vm, output, output_size);
+        result = tinypy_internal_string_from_bytes_uninterned(ctx->vm, output, output_size);
         return result;
     }
     if (output_size == 1U) {
@@ -593,7 +593,7 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
         bytes[0] = output[0];
     }
     else {
-        result = tinypy_string_from_bytes(ctx->vm, output, output_size);
+        result = tinypy_internal_string_from_bytes_uninterned(ctx->vm, output, output_size);
     }
     tinypy_internal_string_set_interned(result, 0);
     return result;
@@ -656,7 +656,7 @@ tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ct
         tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(ctx->vm, (const char *)joined, left_size + right_size);
         return return_value_1;
     }
-    tinypy_value_t *return_value_2 = tinypy_string_from_bytes(ctx->vm, joined, left_size + right_size);
+    tinypy_value_t *return_value_2 = tinypy_internal_string_from_bytes_uninterned(ctx->vm, joined, left_size + right_size);
     return return_value_2;
 
 non_ascii:

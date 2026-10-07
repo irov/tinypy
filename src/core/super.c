@@ -24,7 +24,7 @@ static tinypy_value_t *__tinypy_super_new(tinypy_type_t *instance_type, tinypy_t
         else {
             tinypy_error_t *lookup_error = NULL;
 
-            reported_type = tinypy_object_get_attr(object, "__class__", 9U, &lookup_error);
+            reported_type = tinypy_object_get_attr_value(object, vm->internal_special_class_key, &lookup_error);
             if (reported_type != NULL && TINYPY_VALUE_KIND(reported_type) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)reported_type, type) != 0) {
                 object_type = (tinypy_type_t *)reported_type;
             }
@@ -78,34 +78,27 @@ void tinypy_internal_super_release_references(tinypy_value_t *value, tinypy_rele
 tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_super_object_t *super_value = TINYPY_SUPER_OBJECT(value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    const char *name_bytes;
-    size_t name_size;
     size_t mro_size;
     size_t index;
     tinypy_bool_t found_type = TINYPY_FALSE;
     tinypy_value_type_e name_kind = TINYPY_VALUE_KIND(name);
 
     if (name_kind == TINYPY_VALUE_STRING || name_kind == TINYPY_VALUE_UNICODE) {
-        name_bytes = (const char *)TINYPY_TEXT_BYTES(name);
-        name_size = TINYPY_TEXT_BYTE_SIZE(name);
-        if (name_size == 13U && memcmp(name_bytes, "__thisclass__", 13U) == 0) {
-            TINYPY_INCREF(&super_value->type->base.base);
-            return &super_value->type->base.base;
+        if (TINYPY_NAME_EQ(name, vm->internal_special_thisclass_key) != TINYPY_FALSE) {
+            return TINYPY_RET(&super_value->type->base.base);
         }
-        if (name_size == 8U && memcmp(name_bytes, "__self__", 8U) == 0) {
+        if (TINYPY_NAME_EQ(name, vm->internal_special_self_key) != TINYPY_FALSE) {
             if (super_value->object != NULL) {
-                TINYPY_INCREF(super_value->object);
-                return super_value->object;
+                return TINYPY_RET(super_value->object);
             }
-            tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+            tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
             return return_value_1;
         }
-        if (name_size == 14U && memcmp(name_bytes, "__self_class__", 14U) == 0) {
+        if (TINYPY_NAME_EQ(name, vm->internal_special_self_class_key) != TINYPY_FALSE) {
             if (super_value->object_type != NULL) {
-                TINYPY_INCREF(&super_value->object_type->base.base);
-                return &super_value->object_type->base.base;
+                return TINYPY_RET(&super_value->object_type->base.base);
             }
-            tinypy_value_t *return_value_2 = tinypy_none_get(vm);
+            tinypy_value_t *return_value_2 = TINYPY_RET_NONE(vm);
             return return_value_2;
         }
     }
@@ -170,8 +163,7 @@ tinypy_value_t *tinypy_internal_super_descriptor_get(tinypy_value_t *descriptor,
     (void)owner;
     TINYPY_CLEAR_ERROR(out_error);
     if (instance == NULL || super_value->object != NULL) {
-        TINYPY_INCREF(descriptor);
-        return descriptor;
+        return TINYPY_RET(descriptor);
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
     if (descriptor->type != &vm->types[TINYPY_VALUE_SUPER]) {
@@ -235,21 +227,17 @@ static tinypy_value_t *__tinypy_super_init_method(tinypy_value_t *function, tiny
     updated->object = previous_object;
     updated->object_type = previous_object_type;
     TINYPY_DECREF(replacement);
-    tinypy_value_t *result = tinypy_none_get(vm);
+    tinypy_value_t *result = TINYPY_RET_NONE(vm);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_super_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_SUPER];
-    tinypy_value_t *get = tinypy_native_function_new(vm, "__get__", 7U, __tinypy_super_get_method, NULL, NULL);
-    tinypy_value_t *init = tinypy_native_function_new(vm, "__init__", 8U, __tinypy_super_init_method, NULL, NULL);
+    tinypy_internal_type_add_method(type, vm->internal_special_get_key, __tinypy_super_get_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_init_key, __tinypy_super_init_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 
     type->descriptor_get = tinypy_internal_super_descriptor_get;
     tinypy_internal_constructor_add_builtin_new(type);
-    tinypy_type_set_attr(type, "__get__", 7U, get);
-    tinypy_type_set_attr(type, "__init__", 8U, init);
-    TINYPY_DECREF(get);
-    TINYPY_DECREF(init);
 }
 //////////////////////////////////////////////////////////////////////////
 const tinypy_type_t *tinypy_super_type(const tinypy_value_t *super_value) {

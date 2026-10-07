@@ -248,8 +248,7 @@ tinypy_bool_t tinypy_internal_dict_equal_checked(const tinypy_value_t *left, con
             *out_equal = TINYPY_FALSE;
             return TINYPY_TRUE;
         }
-        right_value = TINYPY_DICT_OBJECT(right)->table[lookup.index].value;
-        TINYPY_INCREF(right_value);
+        right_value = TINYPY_RET(TINYPY_DICT_OBJECT(right)->table[lookup.index].value);
         equal = left_value == right_value ? 1 : tinypy_compare_bool(left_value, right_value, TINYPY_COMPARE_EQUAL, out_error);
         TINYPY_DECREF(right_value);
         TINYPY_DECREF(left_value);
@@ -788,8 +787,7 @@ tinypy_value_t *tinypy_internal_dict_setdefault_checked(tinypy_value_t *dict, ti
         }
         result = default_value;
     }
-    TINYPY_INCREF(result);
-    return result;
+    return TINYPY_RET(result);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_dict_iteration_error(tinypy_error_t *iteration_error, tinypy_error_t **out_error) {
@@ -876,7 +874,7 @@ done:
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy_value_t *source, tinypy_value_t *keys_method, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-    tinypy_value_t *empty_args = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *empty_args = TINYPY_RET_EMPTY_TUPLE(vm);
     tinypy_value_t *keys = tinypy_call(keys_method, empty_args, NULL, out_error);
 
     TINYPY_DECREF(empty_args);
@@ -964,7 +962,7 @@ tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_va
     }
 
     tinypy_value_t *keys_method = NULL;
-    int32_t mapping_status = tinypy_internal_object_get_optional_attr_key(source, vm->keys_key, &keys_method, out_error);
+    int32_t mapping_status = tinypy_internal_object_get_optional_attr_key(source, vm->internal_keys_key, &keys_method, out_error);
     if (mapping_status < 0) {
         return TINYPY_FALSE;
     }

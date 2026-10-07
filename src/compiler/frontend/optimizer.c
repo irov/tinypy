@@ -84,12 +84,11 @@ static tinypy_bool_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_optimizer_unshared_string(tinypy_value_t *shared) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(shared);
+    size_t size = TINYPY_SIZED_SIZE(shared);
     uint8_t *bytes;
-    tinypy_value_t *copy = tinypy_internal_text_allocate_uninitialized(vm, TINYPY_VALUE_STRING, 1U, 0U, &bytes);
-    size_t size;
-    const uint8_t *source = (const uint8_t *)tinypy_string_view(shared, &size);
+    tinypy_value_t *copy = tinypy_internal_text_allocate_uninitialized(vm, TINYPY_VALUE_STRING, size, 0U, &bytes);
 
-    bytes[0] = source[0];
+    (void)memcpy(bytes, TINYPY_TEXT_BYTES(shared), size);
     tinypy_internal_string_set_interned(copy, TINYPY_FALSE);
     TINYPY_COMPILER_DECREF(shared);
     return copy;
@@ -172,7 +171,9 @@ static tinypy_bool_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t
     }
     if (TINYPY_VALUE_KIND(newconst) == TINYPY_VALUE_STRING) {
         if (TINYPY_SIZED_SIZE(newconst) > 1U) {
-            tinypy_internal_string_set_interned(newconst, TINYPY_FALSE);
+            if (tinypy_internal_string_is_interned(newconst) != 0) {
+                newconst = __tinypy_optimizer_unshared_string(newconst);
+            }
         }
         else if (opcode == TINYPY_OP_BINARY_MODULO && TINYPY_SIZED_SIZE(newconst) == 1U) {
             /* One-byte strings are shared interned singletons, while string
@@ -309,6 +310,7 @@ static uint32_t *__markblocks(tinypy_compile_ctx_t *arena, uint8_t *code, tinypy
 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_value_t *code, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *lineno_obj) {
+    tinypy_vm_t *vm = arena->vm;
     tinypy_compiler_size_t i, j, codelen;
     int32_t nops, h, adj;
     int32_t tgt, tgttgt, opcode;
@@ -319,7 +321,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
     tinypy_compiler_size_t tabsiz;
     int32_t cumlc = 0, lastlc = 0; /* Count runs of consecutive LOAD_CONSTs */
     uint32_t *blocks = NULL;
-    char *name;
+    tinypy_value_t *name;
 
     /* Bypass optimization when the lineno table is too complex */
     lineno = (uint8_t *)TINYPY_COMPILER_STRING_AS_STRING(lineno_obj);
@@ -402,8 +404,8 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
         case TINYPY_OP_LOAD_NAME:
         case TINYPY_OP_LOAD_GLOBAL:
             j = TINYPY_OPTIMIZER_GET_ARGUMENT(codestr, i);
-            name = TINYPY_COMPILER_STRING_AS_STRING(TINYPY_COMPILER_TUPLE_GET_ITEM(names, j));
-            if (name == NULL || strcmp(name, "None") != 0) {
+            name = TINYPY_COMPILER_TUPLE_GET_ITEM(names, j);
+            if (TINYPY_VALUE_KIND(name) != TINYPY_VALUE_STRING || TINYPY_NAME_EQ(name, vm->internal_none_key) == TINYPY_FALSE) {
                 continue;
             }
             for (j = 0; j < TINYPY_COMPILER_LIST_GET_SIZE(consts); j++) {
@@ -412,8 +414,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
                 }
             }
             if (j == TINYPY_COMPILER_LIST_GET_SIZE(consts)) {
-                tinypy_vm_t *vm = TINYPY_VALUE_VM(consts);
-                tinypy_value_t *none = tinypy_none_get(vm);
+                tinypy_value_t *none = TINYPY_RET_NONE(vm);
                 if (TINYPY_COMPILER_LIST_APPEND(consts, none) == -1) {
                     TINYPY_COMPILER_DECREF(none);
                     goto exitError;

@@ -43,6 +43,15 @@ NON_CALL_EXPRESSION_NAMES = {
     "UINTMAX_C",
     "offsetof",
     "sizeof",
+    "TINYPY_RET",
+    "TINYPY_INTERNAL_STRING",
+    "TINYPY_RET_NONE",
+    "TINYPY_RET_TRUE",
+    "TINYPY_RET_FALSE",
+    "TINYPY_RET_NOT_IMPLEMENTED",
+    "TINYPY_RET_ELLIPSIS",
+    "TINYPY_RET_EMPTY_TUPLE",
+    "TINYPY_RET_EMPTY_STRING",
 }
 
 
@@ -97,6 +106,61 @@ def mask_c_comments_and_literals(text: str) -> str:
 def c_expression_contains_call(expression: str) -> bool:
     names = re.findall(r"\b([A-Za-z_]\w*)\s*\(", expression)
     return any(name not in NON_CALL_EXPRESSION_NAMES for name in names)
+
+
+def internal_byte_name_calls(text: str):
+    """Find byte-name/lazy-key calls while allowing their boundary definitions."""
+    byte_apis = {
+        "tinypy_module_new", "tinypy_module_add_value", "tinypy_module_get_value",
+        "tinypy_type_new", "tinypy_type_get_attr", "tinypy_type_set_attr",
+        "tinypy_instance_get_attr", "tinypy_instance_set_attr",
+        "tinypy_object_get_attr", "tinypy_object_set_attr", "tinypy_object_has_attr",
+        "tinypy_object_delete_attr",
+        "tinypy_native_function_new", "tinypy_native_type_new", "tinypy_import_module",
+        "TINYPY_INTERNAL_STRING", "tinypy_internal_string_from_literal",
+        "tinypy_internal_object_special_operator_name",
+    }
+    masked = mask_c_comments_and_literals(text)
+    literal_name_arguments = {
+        "tinypy_internal_name_from_bytes": 1,
+        "__tinypy_meta_identifier_equal": 1,
+        "__tinypy_meta_name_expression": 1,
+        "__tinypy_meta_attribute_expression": 1,
+        "__tinypy_meta_call_expression": 1,
+        "__tinypy_meta_decorator": 1,
+        "__tinypy_meta_decorated_name": 3,
+    }
+    names = byte_apis | set(literal_name_arguments)
+    pattern = re.compile(r"\b(" + "|".join(sorted(names)) + r")\s*\(")
+    violations = []
+    for match in pattern.finditer(masked):
+        opening = match.end() - 1
+        depth = 1
+        commas = []
+        closing = opening + 1
+        while closing < len(masked) and depth:
+            token = masked[closing]
+            if token == "(":
+                depth += 1
+            elif token == ")":
+                depth -= 1
+            elif token == "," and depth == 1:
+                commas.append(closing)
+            closing += 1
+        if depth:
+            raise AssertionError("unterminated call: " + match.group(1))
+        if masked[closing:].lstrip().startswith("{"):
+            continue
+        if match.group(1) not in byte_apis:
+            argument_index = literal_name_arguments[match.group(1)]
+            boundaries = [opening, *commas, closing - 1]
+            if len(boundaries) <= argument_index + 1:
+                continue
+            name_argument = text[boundaries[argument_index] + 1:boundaries[argument_index + 1]].strip()
+            if not name_argument.startswith('"'):
+                continue
+        violations.append((text.count("\n", 0, match.start()) + 1, match.group(1)))
+    return violations
 
 
 def c_function_body_ranges(masked: str, return_type: str):
@@ -919,7 +983,127 @@ class PublicApiNamingTests(unittest.TestCase):
         self.assertIn("value >= TINYPY_INTEGER_CONSTANT_MIN", internal_header)
         self.assertIn("size == 0U", value_source)
         self.assertIn("value == 0.0 && signbit(value) == 0", numeric_source)
-        self.assertIn("result = &vm->empty_tuple_object.base.base", tuple_source)
+        self.assertIn("TINYPY_RET_EMPTY_TUPLE(vm)", tuple_source)
+
+    def test_internal_names_use_value_keys(self) -> None:
+        violations = []
+        for path in sorted((ROOT / "src").rglob("*.c")):
+            for line, name in internal_byte_name_calls(path.read_text(encoding="utf-8")):
+                violations.append("{}:{}: {}".format(path.relative_to(ROOT), line, name))
+        self.assertEqual(violations, [], "Internal name operations must use eager VM value keys")
+
+    def test_internal_name_registry_is_unique_and_prefixed(self) -> None:
+        header = (ROOT / "src/core/internal.h").read_text(encoding="utf-8")
+        registry = header.split("#define TINYPY_INTERNAL_KEY_LIST(X)", 1)[1].split(
+            "#define TINYPY_INTERNAL_KEY_COUNT_ENTRY", 1
+        )[0]
+        entries = re.findall(r'X\((\w+), "([^"\\]*)", ([01])\)', registry)
+        self.assertTrue(entries)
+        fields = [field for field, _, _ in entries]
+        names = [name for _, name, _ in entries]
+        self.assertEqual(len(fields), len(set(fields)))
+        self.assertEqual(len(names), len(set(names)))
+        self.assertTrue(all(field.startswith("internal_") for field in fields))
+        capacity = int(re.search(r"#define TINYPY_INTERNAL_KEY_TABLE_SIZE (\d+)U", header)[1])
+        self.assertEqual(capacity & (capacity - 1), 0)
+        self.assertLessEqual(len(entries), capacity // 2)
+
+    def test_indexed_name_tables_borrow_vm_presets(self) -> None:
+        header = (ROOT / "src/core/internal.h").read_text(encoding="utf-8")
+        registry = dict((field, int(interned)) for field, interned in re.findall(
+            r'X\((\w+), "[^"\\]*", ([01])\)', header
+        ))
+        source = (ROOT / "src/core/object.c").read_text(encoding="utf-8")
+        operators = source.split("__tinypy_object_operator_name_offsets[TINYPY_SPECIAL_OPERATOR_COUNT] = {", 1)[1].split("};", 1)[0]
+        wrappers = (ROOT / "src/core/type.c").read_text(encoding="utf-8").split(
+            "static const size_t slot_name_offsets[] = {", 1
+        )[1].split("};", 1)[0]
+        for table in (operators, wrappers):
+            fields = re.findall(r"offsetof\(tinypy_vm_t, (\w+)\)", table)
+            self.assertTrue(fields)
+            self.assertEqual(len(fields), len(set(fields)))
+            for field in fields:
+                self.assertEqual(registry.get(field), 1, field)
+        count = int(re.search(r"#define TINYPY_SPECIAL_OPERATOR_COUNT (\d+)U", header)[1])
+        self.assertEqual(len(re.findall(r"offsetof\(", operators)), count)
+        self.assertNotIn("internal_special_operator_keys", header)
+
+    def test_fixed_runtime_name_comparisons_use_presets(self) -> None:
+        literal_comparison = re.compile(r'\b(?:memcmp|strcmp|__tinypy_codec_name_equal)\([^;\n]*?,\s*"')
+        violations = []
+        for root in (ROOT / "src/core", ROOT / "src/runtime"):
+            for path in sorted(root.glob("*.c")):
+                source = path.read_text(encoding="utf-8")
+                for match in literal_comparison.finditer(source):
+                    violations.append("{}:{}".format(path.relative_to(ROOT), source.count("\n", 0, match.start()) + 1))
+        self.assertEqual(violations, [])
+
+    def test_internal_name_guard_distinguishes_calls_and_definitions(self) -> None:
+        valid = '''
+            void tinypy_module_add_value(void *module, const char *name, int size, void *value) {
+                tinypy_module_add_value_key(module, vm->internal_stdout_key, value);
+            }
+            // tinypy_module_add_value(module, "stdout", 6U, value);
+            const char *example = "tinypy_type_get_attr(type, name, size)";
+            key = tinypy_internal_name_from_bytes(vm, dynamic_name, dynamic_size);
+            tinypy_type_set_attr_key(type, vm->internal_local_key, value);
+            void *tinypy_internal_string_from_literal(void *vm, const char *bytes, int size) {
+                return vm;
+            }
+        '''
+        invalid = '''
+            tinypy_module_add_value(module, "stdout", 6U, value);
+            tinypy_instance_get_attr(instance, names[index], sizes[index]);
+            key = tinypy_internal_name_from_bytes(vm, "encoding", 8U);
+            result = __tinypy_meta_call_expression(expression, "name", 4U);
+            tinypy_type_set_attr_key(type, TINYPY_INTERNAL_STRING(vm, "local"), value);
+            key = tinypy_internal_string_from_literal(vm, names[index], sizes[index]);
+        '''
+        self.assertEqual(internal_byte_name_calls(valid), [])
+        self.assertEqual([name for _, name in internal_byte_name_calls(invalid)], [
+            "tinypy_module_add_value", "tinypy_instance_get_attr",
+            "tinypy_internal_name_from_bytes",
+            "__tinypy_meta_call_expression",
+            "TINYPY_INTERNAL_STRING", "tinypy_internal_string_from_literal",
+        ])
+
+    def test_builtin_attribute_dispatch_borrows_eager_interned_names(self) -> None:
+        header = (ROOT / "src/core/internal.h").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/object.c").read_text(encoding="utf-8")
+        registry = dict((field, int(interned)) for field, interned in re.findall(
+            r'X\((\w+), "[^"\\]*", ([01])\)', header
+        ))
+        dispatch = source.split("#define TINYPY_BUILTIN_ATTRIBUTE_LIST(X)", 1)[1].split(
+            "#define TINYPY_BUILTIN_ATTRIBUTE_ENUM", 1
+        )[0]
+        entries = re.findall(r"X\((\w+), (TINYPY_BUILTIN_ATTRIBUTE_\w+)\)", dispatch)
+        self.assertTrue(entries)
+        self.assertEqual(len(entries), len(set(field for field, _ in entries)))
+        self.assertEqual(len(entries), len(set(attribute for _, attribute in entries)))
+        for field, _ in entries:
+            self.assertEqual(registry.get(field), 1, field)
+        capacity = int(re.search(r"#define TINYPY_INTERNAL_KEY_TABLE_SIZE (\d+)U", header)[1])
+        self.assertEqual(capacity & (capacity - 1), 0)
+        self.assertLessEqual(len(registry), capacity // 2)
+        self.assertNotIn("internal_builtin_attribute_keys", header)
+        self.assertNotIn("internal_builtin_attribute_max_size", header)
+        self.assertLessEqual(len(entries) + 1, 255)
+        attributes = {attribute for _, attribute in entries}
+        tables = re.findall(
+            r"static const tinypy_builtin_attribute_getter_t (__tinypy_object_\w+_getters)\[TINYPY_BUILTIN_ATTRIBUTE_COUNT\] = \{(.*?)\n\};",
+            source, re.DOTALL,
+        )
+        self.assertTrue(tables)
+        covered = set()
+        for name, body in tables:
+            handlers = re.findall(r"\[(TINYPY_BUILTIN_ATTRIBUTE_\w+)\] = (__tinypy_object_get_\w+)", body)
+            self.assertTrue(handlers, name)
+            self.assertEqual(len(handlers), len({attribute for attribute, _ in handlers}), name)
+            for attribute, handler in handlers:
+                self.assertIn(attribute, attributes, name)
+                self.assertIn("static tinypy_value_t *" + handler + "(tinypy_value_t *value)", source)
+                covered.add(attribute)
+        self.assertEqual(covered, attributes)
 
     def test_static_functions_have_double_underscore_prefix(self) -> None:
         declaration = re.compile(

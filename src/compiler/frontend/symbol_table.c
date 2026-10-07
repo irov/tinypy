@@ -146,7 +146,7 @@ static tinypy_symbol_table_t *__tinypy_symbol_table_new(tinypy_compile_ctx_t *ar
 static tinypy_value_t *__tinypy_symbol_identifier(tinypy_symbol_table_t *st, tinypy_value_t **slot, const char *name) {
     if (*slot == NULL) {
         unsigned long size = strlen(name);
-        *slot = tinypy_string_from_bytes(st->arena->vm, name, size);
+        *slot = tinypy_internal_name_from_bytes(st->arena->vm, name, size);
         if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, *slot) != 0) {
             return NULL;
         }
@@ -1407,7 +1407,7 @@ static tinypy_bool_t __tinypy_symbol_visit_alias(tinypy_symbol_table_t *st, tiny
         store_name = name;
         TINYPY_COMPILER_INCREF(store_name);
     }
-    if (strcmp(TINYPY_COMPILER_STRING_AS_STRING(name), "*")) {
+    if (TINYPY_NAME_EQ(name, st->arena->vm->internal_compiler_star_name) == TINYPY_FALSE) {
         tinypy_bool_t r = __tinypy_symbol_add_def(st, store_name, TINYPY_SYMBOL_DEFINITION_IMPORT);
         TINYPY_COMPILER_DECREF(store_name);
         return r;

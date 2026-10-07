@@ -55,35 +55,36 @@ static tinypy_bool_t __tinypy_meta_runtime_expression_validate(tinypy_meta_conte
 static tinypy_bool_t __tinypy_meta_runtime_statement_validate(tinypy_meta_context_t *meta, tinypy_ast_statement_t statement);
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_meta_identifier_equal(tinypy_ast_identifier_t identifier, const char *name, size_t name_size) {
-    const char *data;
-    size_t size;
+static tinypy_bool_t __tinypy_meta_identifier_equal(tinypy_ast_identifier_t identifier, tinypy_value_t *name) {
+    tinypy_bool_t result = identifier != NULL && TINYPY_NAME_EQ(identifier, name) != 0;
 
-    if (identifier == NULL) {
-        return TINYPY_FALSE;
-    }
-    data = (const char *)tinypy_string_view(identifier, &size);
-    tinypy_bool_t return_value_1 = size == name_size && (size == 0U || memcmp(data, name, size) == 0) ? TINYPY_TRUE : TINYPY_FALSE;
-    return return_value_1;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_meta_name_expression(tinypy_ast_expression_t expression, const char *name, size_t name_size) {
-    tinypy_bool_t return_value_1 = expression != NULL && expression->kind == TINYPY_AST_KIND_NAME && expression->v.Name.ctx == TINYPY_AST_CONTEXT_LOAD && __tinypy_meta_identifier_equal(expression->v.Name.id, name, name_size) != 0;
+static tinypy_bool_t __tinypy_meta_name_expression(tinypy_ast_expression_t expression, tinypy_value_t *name) {
+    tinypy_bool_t return_value_1 = expression != NULL && expression->kind == TINYPY_AST_KIND_NAME && expression->v.Name.ctx == TINYPY_AST_CONTEXT_LOAD && __tinypy_meta_identifier_equal(expression->v.Name.id, name) != 0;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_meta_identifier_is_builtin(tinypy_ast_identifier_t identifier) {
-    tinypy_bool_t return_value_1 = __tinypy_meta_identifier_equal(identifier, "meta", 4U);
+    if (identifier == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(identifier);
+    tinypy_value_t *name = vm->internal_meta_name_key;
+    tinypy_bool_t result = TINYPY_NAME_EQ(identifier, name);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_meta_attribute_expression(tinypy_ast_expression_t expression, tinypy_value_t *attribute) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(attribute);
+    tinypy_bool_t return_value_1 = expression != NULL && expression->kind == TINYPY_AST_KIND_ATTRIBUTE && expression->v.Attribute.ctx == TINYPY_AST_CONTEXT_LOAD && __tinypy_meta_name_expression(expression->v.Attribute.value, vm->internal_meta_name_key) != 0 && __tinypy_meta_identifier_equal(expression->v.Attribute.attr, attribute) != 0;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_meta_attribute_expression(tinypy_ast_expression_t expression, const char *attribute, size_t attribute_size) {
-    tinypy_bool_t return_value_1 = expression != NULL && expression->kind == TINYPY_AST_KIND_ATTRIBUTE && expression->v.Attribute.ctx == TINYPY_AST_CONTEXT_LOAD && __tinypy_meta_name_expression(expression->v.Attribute.value, "meta", 4U) != 0 && __tinypy_meta_identifier_equal(expression->v.Attribute.attr, attribute, attribute_size) != 0;
-    return return_value_1;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_meta_call_expression(tinypy_ast_expression_t expression, const char *attribute, size_t attribute_size) {
-    tinypy_bool_t return_value_1 = expression != NULL && expression->kind == TINYPY_AST_KIND_CALL && __tinypy_meta_attribute_expression(expression->v.Call.func, attribute, attribute_size) != 0;
+static tinypy_bool_t __tinypy_meta_call_expression(tinypy_ast_expression_t expression, tinypy_value_t *attribute) {
+    tinypy_bool_t return_value_1 = expression != NULL && expression->kind == TINYPY_AST_KIND_CALL && __tinypy_meta_attribute_expression(expression->v.Call.func, attribute) != 0;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -287,6 +288,7 @@ static tinypy_ast_identifier_t __tinypy_meta_identifier_from_value(tinypy_meta_c
         return NULL;
     }
     tinypy_value_t *identifier = tinypy_string_from_bytes(meta->compile->vm, bytes, size);
+    (void)tinypy_internal_string_intern(&identifier, NULL);
     tinypy_ast_identifier_t return_value_1 = (tinypy_ast_identifier_t)__tinypy_meta_track(meta, identifier, line, column);
     return return_value_1;
 }
@@ -327,8 +329,8 @@ static tinypy_value_t *__tinypy_meta_eval_call(tinypy_meta_context_t *meta, tiny
         (void)__tinypy_meta_fail(meta, "meta intrinsic does not accept keyword or unpacked arguments", expression->lineno, expression->col_offset);
         return NULL;
     }
-    if (__tinypy_meta_attribute_expression(expression->v.Call.func, "concat", 6U) != 0) {
-        tinypy_value_t *string_from_bytes = tinypy_string_from_bytes(vm, NULL, 0U);
+    if (__tinypy_meta_attribute_expression(expression->v.Call.func, meta->compile->vm->internal_meta_concat_key) != 0) {
+        tinypy_value_t *string_from_bytes = TINYPY_RET_EMPTY_STRING(vm);
         tinypy_value_t *result = __tinypy_meta_track(meta, string_from_bytes, expression->lineno, expression->col_offset);
 
         for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.args); ++index) {
@@ -355,7 +357,7 @@ static tinypy_value_t *__tinypy_meta_eval_call(tinypy_meta_context_t *meta, tiny
         }
         return result;
     }
-    if (__tinypy_meta_attribute_expression(expression->v.Call.func, "range", 5U) != 0) {
+    if (__tinypy_meta_attribute_expression(expression->v.Call.func, meta->compile->vm->internal_range_key) != 0) {
         int64_t start = 0;
         int64_t stop;
         int64_t step = 1;
@@ -430,18 +432,18 @@ static tinypy_value_t *__tinypy_meta_eval(tinypy_meta_context_t *meta, tinypy_as
         if (result != NULL) {
             return result;
         }
-        if (__tinypy_meta_identifier_equal(expression->v.Name.id, "None", 4U) != 0) {
-            tinypy_value_t *none = tinypy_none_get(vm);
+        if (__tinypy_meta_identifier_equal(expression->v.Name.id, meta->compile->vm->internal_none_key) != 0) {
+            tinypy_value_t *none = TINYPY_RET_NONE(vm);
             tinypy_value_t *return_value_1 = __tinypy_meta_track(meta, none, expression->lineno, expression->col_offset);
             return return_value_1;
         }
-        if (__tinypy_meta_identifier_equal(expression->v.Name.id, "True", 4U) != 0) {
-            tinypy_value_t *bool_from_i32_2 = tinypy_bool_from_i32(vm, INT32_C(1));
+        if (__tinypy_meta_identifier_equal(expression->v.Name.id, meta->compile->vm->internal_true_key) != 0) {
+            tinypy_value_t *bool_from_i32_2 = TINYPY_RET_TRUE(vm);
             tinypy_value_t *return_value_2 = __tinypy_meta_track(meta, bool_from_i32_2, expression->lineno, expression->col_offset);
             return return_value_2;
         }
-        if (__tinypy_meta_identifier_equal(expression->v.Name.id, "False", 5U) != 0) {
-            tinypy_value_t *bool_from_i32_2 = tinypy_bool_from_i32(vm, INT32_C(0));
+        if (__tinypy_meta_identifier_equal(expression->v.Name.id, meta->compile->vm->internal_false_key) != 0) {
+            tinypy_value_t *bool_from_i32_2 = TINYPY_RET_FALSE(vm);
             tinypy_value_t *return_value_3 = __tinypy_meta_track(meta, bool_from_i32_2, expression->lineno, expression->col_offset);
             return return_value_3;
         }
@@ -622,13 +624,13 @@ static tinypy_value_t *__tinypy_meta_eval(tinypy_meta_context_t *meta, tinypy_as
                 return return_value_9;
             }
             if (compared == 0) {
-                tinypy_value_t *bool_from_i32_2 = tinypy_bool_from_i32(vm, INT32_C(0));
+                tinypy_value_t *bool_from_i32_2 = TINYPY_RET_FALSE(vm);
                 tinypy_value_t *return_value_10 = __tinypy_meta_track(meta, bool_from_i32_2, expression->lineno, expression->col_offset);
                 return return_value_10;
             }
             left = right;
         }
-        tinypy_value_t *bool_from_i32 = tinypy_bool_from_i32(vm, INT32_C(1));
+        tinypy_value_t *bool_from_i32 = TINYPY_RET_TRUE(vm);
         tinypy_value_t *return_value_11 = __tinypy_meta_track(meta, bool_from_i32, expression->lineno, expression->col_offset);
         return return_value_11;
     default:
@@ -761,7 +763,7 @@ static tinypy_ast_expression_t __tinypy_meta_clone_expression(tinypy_meta_contex
             return return_value_1;
         }
     }
-    if (__tinypy_meta_call_expression(expression, "current_class", 13U) != 0) {
+    if (__tinypy_meta_call_expression(expression, meta->compile->vm->internal_meta_current_class_key) != 0) {
         if (TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.args) != 0 || meta->current_class == NULL) {
             (void)__tinypy_meta_fail(meta, "meta.current_class() is only valid inside an emitted class", expression->lineno, expression->col_offset);
             return NULL;
@@ -771,8 +773,8 @@ static tinypy_ast_expression_t __tinypy_meta_clone_expression(tinypy_meta_contex
         tinypy_ast_expression_t return_value_2 = __tinypy_ast_name(meta->current_class, TINYPY_AST_CONTEXT_LOAD, meta_generated_line, meta_generated_column, meta->compile);
         return return_value_2;
     }
-    if (__tinypy_meta_call_expression(expression, "name", 4U) != 0 || __tinypy_meta_call_expression(expression, "getattr", 7U) != 0) {
-        tinypy_bool_t is_name = __tinypy_meta_call_expression(expression, "name", 4U);
+    if (__tinypy_meta_call_expression(expression, meta->compile->vm->internal_name_key) != 0 || __tinypy_meta_call_expression(expression, meta->compile->vm->internal_getattr_key) != 0) {
+        tinypy_bool_t is_name = __tinypy_meta_call_expression(expression, meta->compile->vm->internal_name_key);
         int32_t expected = is_name != 0 ? 1 : 2;
         tinypy_value_t *name_value;
         tinypy_ast_identifier_t name;
@@ -801,7 +803,7 @@ static tinypy_ast_expression_t __tinypy_meta_clone_expression(tinypy_meta_contex
         tinypy_ast_expression_t return_value_4 = __tinypy_ast_attribute(meta_clone_expression, name, TINYPY_AST_CONTEXT_LOAD, meta_generated_line, meta_generated_column, meta->compile);
         return return_value_4;
     }
-    if (__tinypy_meta_call_expression(expression, "concat", 6U) != 0) {
+    if (__tinypy_meta_call_expression(expression, meta->compile->vm->internal_meta_concat_key) != 0) {
         tinypy_value_t *value = __tinypy_meta_eval(meta, expression);
         if (value == NULL) {
             return NULL;
@@ -910,20 +912,20 @@ static tinypy_ast_expression_t __tinypy_meta_clone_expression(tinypy_meta_contex
     return meta->compile->failed == 0 ? result : NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_meta_decorator(tinypy_ast_expression_t decorator, const char *name, size_t name_size) {
-    if (__tinypy_meta_attribute_expression(decorator, name, name_size) != 0) {
+static tinypy_bool_t __tinypy_meta_decorator(tinypy_ast_expression_t decorator, tinypy_value_t *name) {
+    if (__tinypy_meta_attribute_expression(decorator, name) != 0) {
         return TINYPY_TRUE;
     }
-    tinypy_bool_t return_value_1 = decorator != NULL && decorator->kind == TINYPY_AST_KIND_CALL && __tinypy_meta_attribute_expression(decorator->v.Call.func, name, name_size) != 0;
+    tinypy_bool_t return_value_1 = decorator != NULL && decorator->kind == TINYPY_AST_KIND_CALL && __tinypy_meta_attribute_expression(decorator->v.Call.func, name) != 0;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_ast_identifier_t __tinypy_meta_decorated_name(tinypy_meta_context_t *meta, tinypy_ast_sequence_t *decorators, tinypy_ast_identifier_t fallback, const char *decorator_name, size_t decorator_name_size, int32_t line, int32_t column) {
+static tinypy_ast_identifier_t __tinypy_meta_decorated_name(tinypy_meta_context_t *meta, tinypy_ast_sequence_t *decorators, tinypy_ast_identifier_t fallback, tinypy_value_t *decorator_name, int32_t line, int32_t column) {
     int32_t index;
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(decorators); ++index) {
         tinypy_ast_expression_t decorator = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(decorators, index);
-        if (__tinypy_meta_decorator(decorator, decorator_name, decorator_name_size) != 0) {
+        if (__tinypy_meta_decorator(decorator, decorator_name) != 0) {
             tinypy_ast_expression_t value_expression = NULL;
             tinypy_value_t *value;
 
@@ -935,7 +937,7 @@ static tinypy_ast_identifier_t __tinypy_meta_decorated_name(tinypy_meta_context_
             }
             else if (TINYPY_AST_SEQUENCE_LENGTH(decorator->v.Call.args) == 0 && TINYPY_AST_SEQUENCE_LENGTH(decorator->v.Call.keywords) == 1) {
                 tinypy_ast_keyword_t keyword = (tinypy_ast_keyword_t)TINYPY_AST_SEQUENCE_GET(decorator->v.Call.keywords, 0);
-                if (__tinypy_meta_identifier_equal(keyword->arg, "name", 4U) != 0) {
+                if (__tinypy_meta_identifier_equal(keyword->arg, meta->compile->vm->internal_name_key) != 0) {
                     value_expression = keyword->value;
                 }
             }
@@ -957,7 +959,7 @@ static tinypy_ast_sequence_t *__tinypy_meta_clone_decorators(tinypy_meta_context
 
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(source); ++index) {
         tinypy_ast_expression_t decorator = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(source, index);
-        if (__tinypy_meta_decorator(decorator, "emit", 4U) == 0 && __tinypy_meta_decorator(decorator, "rename", 6U) == 0) {
+        if (__tinypy_meta_decorator(decorator, meta->compile->vm->internal_meta_emit_key) == 0 && __tinypy_meta_decorator(decorator, meta->compile->vm->internal_meta_rename_key) == 0) {
             count += 1;
         }
     }
@@ -968,7 +970,7 @@ static tinypy_ast_sequence_t *__tinypy_meta_clone_decorators(tinypy_meta_context
     count = 0;
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(source); ++index) {
         tinypy_ast_expression_t decorator = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(source, index);
-        if (__tinypy_meta_decorator(decorator, "emit", 4U) == 0 && __tinypy_meta_decorator(decorator, "rename", 6U) == 0) {
+        if (__tinypy_meta_decorator(decorator, meta->compile->vm->internal_meta_emit_key) == 0 && __tinypy_meta_decorator(decorator, meta->compile->vm->internal_meta_rename_key) == 0) {
             TINYPY_AST_SEQUENCE_SET(result, count, __tinypy_meta_clone_expression(meta, decorator));
             count += 1;
         }
@@ -1012,13 +1014,13 @@ static tinypy_ast_statement_t __tinypy_meta_clone_statement(tinypy_meta_context_
     result->col_offset = __tinypy_meta_generated_column(meta, statement->col_offset);
     switch (statement->kind) {
     case TINYPY_AST_KIND_FUNCTION_DEF:
-        result->v.FunctionDef.name = __tinypy_meta_decorated_name(meta, statement->v.FunctionDef.decorator_list, statement->v.FunctionDef.name, "rename", 6U, statement->lineno, statement->col_offset);
+        result->v.FunctionDef.name = __tinypy_meta_decorated_name(meta, statement->v.FunctionDef.decorator_list, statement->v.FunctionDef.name, meta->compile->vm->internal_meta_rename_key, statement->lineno, statement->col_offset);
         result->v.FunctionDef.args = __tinypy_meta_clone_arguments(meta, statement->v.FunctionDef.args);
         result->v.FunctionDef.decorator_list = __tinypy_meta_clone_decorators(meta, statement->v.FunctionDef.decorator_list);
         result->v.FunctionDef.body = __tinypy_meta_clone_statement_sequence(meta, statement->v.FunctionDef.body);
         break;
     case TINYPY_AST_KIND_CLASS_DEF:
-        result->v.ClassDef.name = __tinypy_meta_decorated_name(meta, statement->v.ClassDef.decorator_list, statement->v.ClassDef.name, "rename", 6U, statement->lineno, statement->col_offset);
+        result->v.ClassDef.name = __tinypy_meta_decorated_name(meta, statement->v.ClassDef.decorator_list, statement->v.ClassDef.name, meta->compile->vm->internal_meta_rename_key, statement->lineno, statement->col_offset);
         meta->current_class = result->v.ClassDef.name;
         result->v.ClassDef.bases = __tinypy_meta_clone_expression_sequence(meta, statement->v.ClassDef.bases);
         result->v.ClassDef.decorator_list = __tinypy_meta_clone_decorators(meta, statement->v.ClassDef.decorator_list);
@@ -1040,9 +1042,9 @@ static tinypy_ast_statement_t __tinypy_meta_clone_statement(tinypy_meta_context_
         result->v.AugAssign.value = __tinypy_meta_clone_expression(meta, statement->v.AugAssign.value);
         break;
     case TINYPY_AST_KIND_EXPR:
-        if (__tinypy_meta_call_expression(statement->v.Expr.value, "setattr", 7U) != 0 || __tinypy_meta_call_expression(statement->v.Expr.value, "delattr", 7U) != 0) {
+        if (__tinypy_meta_call_expression(statement->v.Expr.value, meta->compile->vm->internal_setattr_key) != 0 || __tinypy_meta_call_expression(statement->v.Expr.value, meta->compile->vm->internal_delattr_key) != 0) {
             tinypy_ast_expression_t call = statement->v.Expr.value;
-            tinypy_bool_t is_set = __tinypy_meta_call_expression(call, "setattr", 7U);
+            tinypy_bool_t is_set = __tinypy_meta_call_expression(call, meta->compile->vm->internal_setattr_key);
             int32_t expected = is_set != 0 ? 3 : 2;
             tinypy_value_t *name_value;
             tinypy_ast_identifier_t name;
@@ -1204,12 +1206,12 @@ static tinypy_meta_template_t *__tinypy_meta_template_find(tinypy_meta_context_t
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_meta_is_template(tinypy_ast_statement_t statement) {
-    tinypy_bool_t return_value_1 = statement->kind == TINYPY_AST_KIND_FUNCTION_DEF && TINYPY_AST_SEQUENCE_LENGTH(statement->v.FunctionDef.decorator_list) == 1 && __tinypy_meta_attribute_expression((tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(statement->v.FunctionDef.decorator_list, 0), "template", 8U) != 0;
+static tinypy_bool_t __tinypy_meta_is_template(tinypy_ast_statement_t statement, tinypy_value_t *template_name) {
+    tinypy_bool_t return_value_1 = statement->kind == TINYPY_AST_KIND_FUNCTION_DEF && TINYPY_AST_SEQUENCE_LENGTH(statement->v.FunctionDef.decorator_list) == 1 && __tinypy_meta_attribute_expression((tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(statement->v.FunctionDef.decorator_list, 0), template_name) != 0;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_meta_is_emit(tinypy_ast_statement_t statement) {
+static tinypy_bool_t __tinypy_meta_is_emit(tinypy_ast_statement_t statement, tinypy_value_t *emit_name) {
     int32_t index;
 
     if (statement->kind != TINYPY_AST_KIND_FUNCTION_DEF && statement->kind != TINYPY_AST_KIND_CLASS_DEF) {
@@ -1217,7 +1219,7 @@ static tinypy_bool_t __tinypy_meta_is_emit(tinypy_ast_statement_t statement) {
     }
     tinypy_ast_sequence_t *decorators = statement->kind == TINYPY_AST_KIND_FUNCTION_DEF ? statement->v.FunctionDef.decorator_list : statement->v.ClassDef.decorator_list;
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(decorators); ++index) {
-        if (__tinypy_meta_decorator((tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(decorators, index), "emit", 4U) != 0) {
+        if (__tinypy_meta_decorator((tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(decorators, index), emit_name) != 0) {
             return TINYPY_TRUE;
         }
     }
@@ -1302,10 +1304,10 @@ static tinypy_bool_t __tinypy_meta_execute_sequence(tinypy_meta_context_t *meta,
                 return TINYPY_FALSE;
             }
         }
-        else if (__tinypy_meta_is_emit(statement) != 0) {
+        else if (__tinypy_meta_is_emit(statement, meta->compile->vm->internal_meta_emit_key) != 0) {
             tinypy_ast_sequence_t *decorators = statement->kind == TINYPY_AST_KIND_FUNCTION_DEF ? statement->v.FunctionDef.decorator_list : statement->v.ClassDef.decorator_list;
             tinypy_ast_identifier_t fallback = statement->kind == TINYPY_AST_KIND_FUNCTION_DEF ? statement->v.FunctionDef.name : statement->v.ClassDef.name;
-            tinypy_ast_identifier_t name = __tinypy_meta_decorated_name(meta, decorators, fallback, "emit", 4U, statement->lineno, statement->col_offset);
+            tinypy_ast_identifier_t name = __tinypy_meta_decorated_name(meta, decorators, fallback, meta->compile->vm->internal_meta_emit_key, statement->lineno, statement->col_offset);
             tinypy_ast_identifier_t original_name = fallback;
             tinypy_ast_statement_t clone;
 
@@ -1500,10 +1502,10 @@ static tinypy_bool_t __tinypy_meta_expand_statement(tinypy_meta_context_t *meta,
     tinypy_ast_expression_t call = NULL;
     int32_t expression_statement = 0;
 
-    if (statement->kind == TINYPY_AST_KIND_ASSIGN && __tinypy_meta_call_expression(statement->v.Assign.value, "expand", 6U) != 0) {
+    if (statement->kind == TINYPY_AST_KIND_ASSIGN && __tinypy_meta_call_expression(statement->v.Assign.value, meta->compile->vm->internal_expand_key) != 0) {
         call = statement->v.Assign.value;
     }
-    else if (statement->kind == TINYPY_AST_KIND_EXPR && __tinypy_meta_call_expression(statement->v.Expr.value, "expand", 6U) != 0) {
+    else if (statement->kind == TINYPY_AST_KIND_EXPR && __tinypy_meta_call_expression(statement->v.Expr.value, meta->compile->vm->internal_expand_key) != 0) {
         call = statement->v.Expr.value;
         expression_statement = 1;
     }
@@ -1781,7 +1783,7 @@ static tinypy_bool_t __tinypy_meta_runtime_alias_validate(tinypy_meta_context_t 
     }
     data = (const char *)tinypy_string_view(alias->name, &size);
     /* "import meta" and "import meta.x" both bind the name meta. */
-    tinypy_bool_t return_value_2 = (size == 4U || (size > 4U && data[4] == '.')) && memcmp(data, "meta", 4U) == 0 ? __tinypy_meta_fail(meta, "meta cannot be rebound by import", line, column) : 1;
+    tinypy_bool_t return_value_2 = (size == 4U || (size > 4U && data[4] == '.')) && memcmp(data, TINYPY_TEXT_BYTES(meta->compile->vm->internal_meta_name_key), 4U) == 0 ? __tinypy_meta_fail(meta, "meta cannot be rebound by import", line, column) : 1;
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1884,7 +1886,7 @@ static tinypy_bool_t __tinypy_meta_collect_templates(tinypy_meta_context_t *meta
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(source); ++index) {
         tinypy_ast_statement_t statement = (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(source, index);
 
-        if (__tinypy_meta_is_template(statement) != 0) {
+        if (__tinypy_meta_is_template(statement, meta->compile->vm->internal_meta_template_key) != 0) {
             tinypy_meta_template_t *item;
             if (__tinypy_meta_template_find(meta, statement->v.FunctionDef.name) != NULL) {
                 tinypy_bool_t return_value_1 = __tinypy_meta_fail(meta, "duplicate meta template name", statement->lineno, statement->col_offset);

@@ -594,7 +594,7 @@ static int32_t __test_eval_file(tinypy_vm_t *vm, const char *path, int32_t check
     tinypy_error_t *eval_error = NULL;
     tinypy_value_t *code = NULL;
     tinypy_value_t *globals;
-    tinypy_value_t *name_key;
+    tinypy_value_t *internal_name_key;
     tinypy_value_t *name_value;
     tinypy_value_t *eval_result;
     tinypy_marshal_result_e load_result;
@@ -632,11 +632,11 @@ static int32_t __test_eval_file(tinypy_vm_t *vm, const char *path, int32_t check
     }
 
     globals = tinypy_dict_new(vm);
-    name_key = tinypy_string_from_bytes(vm, "__name__", 8U);
+    internal_name_key = tinypy_string_from_bytes(vm, "__name__", 8U);
     name_value = tinypy_string_from_bytes(vm, "fixture", 7U);
-    tinypy_dict_set(globals, name_key, name_value);
+    tinypy_dict_set(globals, internal_name_key, name_value);
     tinypy_release(name_value);
-    tinypy_release(name_key);
+    tinypy_release(internal_name_key);
     eval_result = tinypy_eval_code(code, globals, NULL, &eval_error);
     if (eval_result == NULL) {
         size_t error_size;

@@ -8,22 +8,31 @@ typedef struct tinypy_module_clear_entry_t {
 } tinypy_module_clear_entry_t;
 
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_module_from_dict(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *dict) {
+tinypy_value_t *tinypy_internal_module_from_dict_key(tinypy_value_t *name, tinypy_value_t *dict) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
     tinypy_module_object_t *module = (tinypy_module_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_MODULE, sizeof(*module));
-    module->name = tinypy_string_from_bytes(vm, name, name_size);
+    module->name = TINYPY_RET(name);
     module->dict = dict;
     TINYPY_INCREF(dict);
     return &module->base;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_module_new(tinypy_vm_t *vm, const char *name, size_t name_size) {
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
+    tinypy_value_t *module = tinypy_module_new_key(key);
+    TINYPY_DECREF(key);
+    return module;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_module_new_key(tinypy_value_t *name) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
     tinypy_value_t *dict = tinypy_dict_new(vm);
-    tinypy_value_t *module = tinypy_internal_module_from_dict(vm, name, name_size, dict);
-
-    tinypy_module_add_value(module, "__name__", 8U, TINYPY_MODULE_OBJECT(module)->name);
-    tinypy_module_add_value(module, "__doc__", 7U, &vm->none_object.base);
-    tinypy_module_add_value(module, "__package__", 11U, &vm->none_object.base);
+    tinypy_value_t *module = tinypy_internal_module_from_dict_key(name, dict);
     TINYPY_DECREF(dict);
+
+    tinypy_module_add_value_key(module, vm->internal_special_name_key, TINYPY_MODULE_OBJECT(module)->name);
+    tinypy_module_add_value_key(module, vm->internal_special_doc_key, &vm->none_object.base);
+    tinypy_module_add_value_key(module, vm->internal_special_package_key, &vm->none_object.base);
     return module;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -79,7 +88,7 @@ void tinypy_internal_module_release_references(tinypy_value_t *value, tinypy_rel
                 }
                 bytes = (const char *)TINYPY_STRING_OBJECT(entry->key)->bytes;
                 size = TINYPY_STRING_SIZE(entry->key);
-                if ((pass == 0U && (size == 0U || bytes[0] != '_' || (size > 1U && bytes[1] == '_'))) || (pass == 1U && strcmp(bytes, "__builtins__") == 0)) {
+                if ((pass == 0U && (size == 0U || bytes[0] != '_' || (size > 1U && bytes[1] == '_'))) || (pass == 1U && (entry->key == vm->internal_builtins_key || strcmp(bytes, (const char *)TINYPY_TEXT_BYTES(vm->internal_builtins_key)) == 0))) {
                     continue;
                 }
                 keys[count].key = entry->key;
@@ -141,36 +150,47 @@ void tinypy_module_swap_dict(tinypy_value_t *left_value, tinypy_value_t *right_v
 //////////////////////////////////////////////////////////////////////////
 void tinypy_module_add_value(tinypy_value_t *module_value, const char *name, size_t name_size, tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module_value);
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
+
+    tinypy_module_add_value_key(module_value, key, value);
+    TINYPY_DECREF(key);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_module_add_value_key(tinypy_value_t *module_value, tinypy_value_t *key, tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(module_value);
     tinypy_module_object_t *module = TINYPY_MODULE_OBJECT(module_value);
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
 
     if (module->dict == NULL) {
         module->dict = tinypy_dict_new(vm);
     }
     tinypy_dict_set(module->dict, key, value);
-    TINYPY_DECREF(key);
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_FUNCTION) {
         tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(value);
 
         if (function->module == NULL && module->name != NULL) {
-            function->module = module->name;
-            TINYPY_INCREF(function->module);
+            function->module = TINYPY_RET(module->name);
         }
     }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_module_get_value(tinypy_value_t *module_value, const char *name, size_t name_size) {
-    tinypy_value_t *value;
-
+    if (TINYPY_MODULE_OBJECT(module_value)->dict == NULL) {
+        return NULL;
+    }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module_value);
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
+    tinypy_value_t *value = tinypy_module_get_value_key(module_value, key);
+    TINYPY_DECREF(key);
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_module_get_value_key(tinypy_value_t *module_value, tinypy_value_t *key) {
     tinypy_module_object_t *module = TINYPY_MODULE_OBJECT(module_value);
 
     if (module->dict == NULL) {
         return NULL;
     }
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
-    value = tinypy_dict_get_optional(module->dict, key);
-    TINYPY_DECREF(key);
+    tinypy_value_t *value = tinypy_dict_get_optional(module->dict, key);
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -196,8 +216,8 @@ tinypy_value_t *tinypy_vm_module_finder(const tinypy_vm_t *vm) {
 static tinypy_bool_t __tinypy_module_initialize(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t *doc, tinypy_error_t **out_error) {
     tinypy_module_object_t *module = TINYPY_MODULE_OBJECT(value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *name_key = tinypy_string_from_bytes(vm, "__name__", 8U);
-    tinypy_value_t *doc_key = tinypy_string_from_bytes(vm, "__doc__", 7U);
+    tinypy_value_t *internal_name_key = vm->internal_special_name_key;
+    tinypy_value_t *internal_doc_key = vm->internal_special_doc_key;
 
     if (module->dict == NULL) {
         module->dict = tinypy_dict_new(vm);
@@ -208,19 +228,14 @@ static tinypy_bool_t __tinypy_module_initialize(tinypy_value_t *value, tinypy_va
     if (previous_name != NULL) {
         TINYPY_DECREF(previous_name);
     }
-    if (tinypy_internal_dict_set_checked(vm, module->dict, name_key, name, out_error) == 0 || tinypy_internal_dict_set_checked(vm, module->dict, doc_key, doc, out_error) == 0) {
-        TINYPY_DECREF(doc_key);
-        TINYPY_DECREF(name_key);
+    if (tinypy_internal_dict_set_checked(vm, module->dict, internal_name_key, name, out_error) == 0 || tinypy_internal_dict_set_checked(vm, module->dict, internal_doc_key, doc, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    TINYPY_DECREF(doc_key);
-    TINYPY_DECREF(name_key);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_module_arguments(tinypy_vm_t *vm, tinypy_value_t *args, size_t offset, tinypy_value_t *kwargs, tinypy_value_t **out_name, tinypy_value_t **out_doc, tinypy_error_t **out_error) {
-    static const char *const names[] = {"name", "doc"};
-    static const size_t sizes[] = {4U, 3U};
+    tinypy_value_t *const names[] = {vm->internal_name_key, vm->internal_doc_key};
     size_t count = TINYPY_TUPLE_SIZE(args) - offset;
     size_t keywords = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
     size_t recognized = 0U;
@@ -233,7 +248,7 @@ static tinypy_bool_t __tinypy_module_arguments(tinypy_vm_t *vm, tinypy_value_t *
         return TINYPY_FALSE;
     }
     for (size_t index = 0U; index < 2U; ++index) {
-        tinypy_value_t *keyword = recognized < keywords ? tinypy_internal_constructor_keyword_optional(vm, kwargs, names[index], sizes[index]) : NULL;
+        tinypy_value_t *keyword = recognized < keywords ? tinypy_internal_constructor_keyword_optional(kwargs, names[index]) : NULL;
 
         values[index] = index < count ? TINYPY_TUPLE_GET(args, offset + index) : NULL;
         if (keyword != NULL) {
@@ -241,7 +256,7 @@ static tinypy_bool_t __tinypy_module_arguments(tinypy_vm_t *vm, tinypy_value_t *
             if (values[index] != NULL) {
                 tinypy_message_part_t parts[] = {
                     TINYPY_MESSAGE_PART_LITERAL("Argument given by name ('"),
-                    {names[index], sizes[index]},
+                    TINYPY_MESSAGE_PART_TEXT(names[index]),
                     TINYPY_MESSAGE_PART_LITERAL("') and position ("),
                     {index == 0U ? "1" : "2", 1U},
                     TINYPY_MESSAGE_PART_LITERAL(")")
@@ -283,8 +298,8 @@ static tinypy_bool_t __tinypy_module_arguments(tinypy_vm_t *vm, tinypy_value_t *
 
         for (; entry != end; ++entry) {
             if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) != 0
-                && !((TINYPY_TEXT_BYTE_SIZE(entry->key) == 4U && memcmp(TINYPY_TEXT_BYTES(entry->key), "name", 4U) == 0)
-                     || (TINYPY_TEXT_BYTE_SIZE(entry->key) == 3U && memcmp(TINYPY_TEXT_BYTES(entry->key), "doc", 3U) == 0))) {
+                && !((TINYPY_NAME_EQ(entry->key, vm->internal_name_key) != TINYPY_FALSE)
+                     || (TINYPY_NAME_EQ(entry->key, vm->internal_doc_key) != TINYPY_FALSE))) {
                 tinypy_message_part_t parts[] = {
                     TINYPY_MESSAGE_PART_LITERAL("'"),
                     {(const char *)TINYPY_TEXT_BYTES(entry->key), TINYPY_TEXT_BYTE_SIZE(entry->key)},
@@ -356,16 +371,14 @@ static tinypy_value_t *__tinypy_module_init_method(tinypy_value_t *function, tin
     if (initialized == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_module_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_MODULE];
-    tinypy_value_t *init = tinypy_native_function_new(vm, "__init__", 8U, __tinypy_module_init_method, NULL, NULL);
+    tinypy_internal_type_add_method(type, vm->internal_special_init_key, __tinypy_module_init_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 
     type->create = tinypy_internal_module_create;
     tinypy_internal_constructor_add_builtin_new(type);
-    tinypy_type_set_attr(type, "__init__", 8U, init);
-    TINYPY_DECREF(init);
 }

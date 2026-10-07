@@ -86,10 +86,10 @@ static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, con
     }
     size_t string_length = __tinypy_internal_string_length(message);
     tinypy_value_t *message_value = tinypy_string_from_bytes(vm, message, string_length);
-    tinypy_value_t *filename_value = logical_filename != NULL ? tinypy_string_from_bytes(vm, logical_filename, filename_size) : tinypy_none_get(vm);
-    line_value = line_number >= 0 ? tinypy_integer_from_i64(vm, line_number) : tinypy_none_get(vm);
-    offset_value = column_offset >= 0 ? tinypy_integer_from_i64(vm, column_offset) : tinypy_none_get(vm);
-    text_value = source_line != NULL ? tinypy_string_from_bytes(vm, source_line, source_line_size) : tinypy_none_get(vm);
+    tinypy_value_t *filename_value = logical_filename != NULL ? tinypy_string_from_bytes(vm, logical_filename, filename_size) : TINYPY_RET_NONE(vm);
+    line_value = line_number >= 0 ? tinypy_integer_from_i64(vm, line_number) : TINYPY_RET_NONE(vm);
+    offset_value = column_offset >= 0 ? tinypy_integer_from_i64(vm, column_offset) : TINYPY_RET_NONE(vm);
+    text_value = source_line != NULL ? tinypy_string_from_bytes(vm, source_line, source_line_size) : TINYPY_RET_NONE(vm);
     location_items[0] = filename_value;
     location_items[1] = line_value;
     location_items[2] = offset_value;
@@ -99,15 +99,15 @@ static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, con
     args_items[1] = location;
     args = tinypy_tuple_from_items(vm, args_items, include_location != 0 ? 2U : 1U);
     tinypy_error_t *attribute_error = NULL;
-    (void)tinypy_object_set_attr(exception, "args", 4U, args, &attribute_error);
+    (void)tinypy_object_set_attr_value(exception, vm->internal_args_key, args, &attribute_error);
     if (attribute_error != NULL) {
         tinypy_error_release(attribute_error);
     }
-    tinypy_instance_set_attr(exception, "msg", 3U, message_value);
-    tinypy_instance_set_attr(exception, "filename", 8U, filename_value);
-    tinypy_instance_set_attr(exception, "lineno", 6U, line_value);
-    tinypy_instance_set_attr(exception, "offset", 6U, offset_value);
-    tinypy_instance_set_attr(exception, "text", 4U, text_value);
+    tinypy_instance_set_attr_key(exception, vm->internal_msg_key, message_value);
+    tinypy_instance_set_attr_key(exception, vm->internal_filename_key, filename_value);
+    tinypy_instance_set_attr_key(exception, vm->internal_lineno_key, line_value);
+    tinypy_instance_set_attr_key(exception, vm->internal_offset_key, offset_value);
+    tinypy_instance_set_attr_key(exception, vm->internal_text_key, text_value);
     TINYPY_DECREF(args);
     TINYPY_DECREF(location);
     TINYPY_DECREF(text_value);

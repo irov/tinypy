@@ -27,13 +27,12 @@ static int32_t __tinypy_internal_frame_line_number(const tinypy_frame_object_t *
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, tinypy_value_t *globals, int32_t function_frame) {
     if (vm->current_frame != NULL && vm->current_frame->globals == globals) {
-        tinypy_value_t *builtins = vm->current_frame->builtins;
-        TINYPY_INCREF(builtins);
+        tinypy_value_t *builtins = TINYPY_RET(vm->current_frame->builtins);
         return builtins;
     }
 
     tinypy_bool_t lookup_succeeded;
-    tinypy_value_t *builtins = tinypy_internal_dict_get_optional_suppressed_status(vm, globals, vm->builtins_key, &lookup_succeeded);
+    tinypy_value_t *builtins = tinypy_internal_dict_get_optional_suppressed_status(vm, globals, vm->internal_builtins_key, &lookup_succeeded);
 
     if (builtins != NULL && TINYPY_VALUE_KIND(builtins) == TINYPY_VALUE_MODULE) {
         tinypy_module_object_t *module = TINYPY_MODULE_OBJECT(builtins);
@@ -47,17 +46,15 @@ static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, ti
         builtins = TINYPY_MODULE_OBJECT(builtins)->dict;
     }
     if (builtins != NULL && TINYPY_VALUE_KIND(builtins) == TINYPY_VALUE_DICT) {
-        TINYPY_INCREF(builtins);
-        return builtins;
+        return TINYPY_RET(builtins);
     }
 
     if (builtins == NULL && lookup_succeeded != 0 && (function_frame == 0 || globals == vm->builtins)) {
         builtins = vm->builtins;
-        if (globals != vm->builtins && tinypy_internal_dict_set_checked(vm, globals, vm->builtins_key, builtins, NULL) == 0) {
+        if (globals != vm->builtins && tinypy_internal_dict_set_checked(vm, globals, vm->internal_builtins_key, builtins, NULL) == 0) {
             return NULL;
         }
-        TINYPY_INCREF(builtins);
-        return builtins;
+        return TINYPY_RET(builtins);
     }
     /* Python frames with invalid builtins get only None. The embedding API
        retains its default builtins for an absent key on a top-level frame. */
@@ -65,16 +62,10 @@ static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, ti
     if (builtins == NULL) {
         return NULL;
     }
-    tinypy_value_t *key = tinypy_internal_string_from_bytes_checked(vm, "None", 4U, NULL);
-    if (key == NULL) {
-        TINYPY_DECREF(builtins);
-        return NULL;
-    }
-    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_value_t *none = TINYPY_RET_NONE(vm);
 
-    tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, builtins, key, none, NULL);
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, builtins, vm->internal_none_key, none, NULL);
     TINYPY_DECREF(none);
-    TINYPY_DECREF(key);
     if (stored == 0) {
         TINYPY_DECREF(builtins);
         return NULL;

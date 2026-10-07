@@ -133,8 +133,8 @@ void tinypy_internal_code_release_references(tinypy_value_t *value, tinypy_relea
         visit(code->parameter_indices, user_data);
     }
     for (index = 0U; index < TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE; ++index) {
-        if (code->attribute_cache[index].dict_key != NULL) {
-            visit(code->attribute_cache[index].dict_key, user_data);
+        if (code->attribute_cache[index].internal_dict_key != NULL) {
+            visit(code->attribute_cache[index].internal_dict_key, user_data);
         }
     }
     if (code->compile_environment != NULL) {
@@ -330,7 +330,7 @@ tinypy_value_t *tinypy_internal_code_create(tinypy_type_t *type, tinypy_value_t 
         return NULL;
     }
     if (count < 14U) {
-        empty = tinypy_tuple_from_items(vm, NULL, 0U);
+        empty = TINYPY_RET_EMPTY_TUPLE(vm);
     }
     freevars = count >= 13U ? TINYPY_TUPLE_GET(args, 12U) : empty;
     cellvars = count >= 14U ? TINYPY_TUPLE_GET(args, 13U) : empty;
@@ -544,7 +544,7 @@ tinypy_value_t *tinypy_internal_code_compare(tinypy_value_t *left, tinypy_value_
     tinypy_bool_t result;
 
     if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_CODE) {
-        tinypy_value_t *return_value_1 = tinypy_not_implemented_get(vm);
+        tinypy_value_t *return_value_1 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_1;
     }
     if (operation == TINYPY_COMPARE_EQUAL || operation == TINYPY_COMPARE_NOT_EQUAL) {
@@ -574,7 +574,7 @@ tinypy_value_t *tinypy_internal_code_compare(tinypy_value_t *left, tinypy_value_
         result = order >= 0;
         break;
     default:
-        return tinypy_not_implemented_get(vm);
+        return TINYPY_RET_NOT_IMPLEMENTED(vm);
     }
     tinypy_value_t *return_value_4 = tinypy_bool_from_i32(vm, result);
     return return_value_4;
@@ -655,7 +655,7 @@ static tinypy_value_t *__tinypy_code_hash_method(tinypy_value_t *function, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_code_type(tinypy_vm_t *vm) {
-    static const char *const names[] = {"__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__"};
+    tinypy_value_t *const names[] = {vm->internal_special_lt_key, vm->internal_special_le_key, vm->internal_special_eq_key, vm->internal_special_ne_key, vm->internal_special_gt_key, vm->internal_special_ge_key};
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_CODE];
     size_t index;
 
@@ -664,16 +664,11 @@ void tinypy_internal_initialize_code_type(tinypy_vm_t *vm) {
     type->hash = tinypy_internal_code_hash;
     tinypy_internal_constructor_add_builtin_new(type);
     for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
-        tinypy_value_t *method = tinypy_native_function_new(vm, names[index], 6U, __tinypy_code_compare_method, (void *)(intptr_t)index, NULL);
-
-        tinypy_type_set_attr(type, names[index], 6U, method);
-        TINYPY_DECREF(method);
+        tinypy_internal_type_add_method(type, names[index], __tinypy_code_compare_method, (void *)(intptr_t)index, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
-    tinypy_value_t *cmp = tinypy_native_function_new(vm, "__cmp__", 7U, __tinypy_code_cmp_method, NULL, NULL);
-    tinypy_value_t *hash = tinypy_native_function_new(vm, "__hash__", 8U, __tinypy_code_hash_method, NULL, NULL);
+    tinypy_internal_type_add_method(type, vm->internal_special_cmp_key, __tinypy_code_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_value_t *hash = tinypy_native_function_new_key(vm->internal_special_hash_key, __tinypy_code_hash_method, NULL, NULL);
 
-    tinypy_type_set_attr(type, "__cmp__", 7U, cmp);
-    tinypy_type_set_attr(type, "__hash__", 8U, hash);
+    tinypy_type_set_attr_key(type, type->vm->internal_special_hash_key, hash);
     TINYPY_DECREF(hash);
-    TINYPY_DECREF(cmp);
 }

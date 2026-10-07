@@ -11,7 +11,7 @@ static void __tinypy_method_class_name(tinypy_value_t *class_object, char *buffe
     buffer[0] = '?';
     buffer[1] = '\0';
     tinypy_internal_exception_preserve_begin(vm, &state);
-    name = tinypy_object_get_attr(class_object, "__name__", 8U, NULL);
+    name = tinypy_object_get_attr_value(class_object, vm->internal_special_name_key, NULL);
     if (name != NULL) {
         if (TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING) {
             size_t size = TINYPY_TEXT_BYTE_SIZE(name);
@@ -38,11 +38,10 @@ static void __tinypy_method_receiver_error(tinypy_method_object_t *method, tinyp
         tinypy_value_t *class_object;
 
         tinypy_internal_exception_preserve_begin(vm, &state);
-        class_object = tinypy_object_get_attr(receiver, "__class__", 9U, NULL);
+        class_object = tinypy_object_get_attr_value(receiver, vm->internal_special_class_key, NULL);
         tinypy_internal_exception_preserve_end(vm, &state);
         if (class_object == NULL) {
-            class_object = &receiver->type->base.base;
-            TINYPY_INCREF(class_object);
+            class_object = TINYPY_RET(&receiver->type->base.base);
         }
         __tinypy_method_class_name(class_object, receiver_name, sizeof(receiver_name));
         TINYPY_DECREF(class_object);
@@ -141,8 +140,7 @@ tinypy_value_t *tinypy_internal_method_descriptor_get(tinypy_value_t *descriptor
 
     TINYPY_CLEAR_ERROR(out_error);
     if (method->self != NULL || TINYPY_VALUE_KIND(method->owner) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype(owner, (tinypy_type_t *)method->owner) == 0) {
-        TINYPY_INCREF(descriptor);
-        return descriptor;
+        return TINYPY_RET(descriptor);
     }
     tinypy_value_t *return_value_1 = tinypy_method_new(method->function, instance, &owner->base.base);
     return return_value_1;
@@ -188,11 +186,11 @@ tinypy_value_t *tinypy_internal_method_compare(tinypy_value_t *left, tinypy_valu
     int32_t equal;
 
     if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_METHOD) {
-        tinypy_value_t *return_value_1 = tinypy_not_implemented_get(vm);
+        tinypy_value_t *return_value_1 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_1;
     }
     if (operation != TINYPY_COMPARE_EQUAL && operation != TINYPY_COMPARE_NOT_EQUAL) {
-        tinypy_value_t *return_value_2 = tinypy_not_implemented_get(vm);
+        tinypy_value_t *return_value_2 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_2;
     }
     left_method = TINYPY_METHOD_OBJECT(left);
@@ -242,7 +240,7 @@ tinypy_value_t *tinypy_internal_method_create(tinypy_type_t *type, tinypy_value_
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unbound instancemethod requires an owner", out_error);
             return NULL;
         }
-        owner = tinypy_none_get(vm);
+        owner = TINYPY_RET_NONE(vm);
         owned_owner = TINYPY_TRUE;
     }
     else {

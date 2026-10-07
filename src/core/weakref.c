@@ -53,8 +53,7 @@ static tinypy_value_t *__tinypy_weakref_new_with_type(tinypy_type_t *type, tinyp
             tinypy_weakref_object_t *candidate = TINYPY_WEAKREF_OBJECT(current);
 
             if (current->type == type && candidate->callback == NULL) {
-                TINYPY_INCREF(current);
-                return current;
+                return TINYPY_RET(current);
             }
             current = candidate->next;
         }
@@ -216,11 +215,10 @@ tinypy_value_t *tinypy_internal_weakref_call(tinypy_value_t *callable, tinypy_va
     }
     tinypy_value_t *object = TINYPY_WEAKREF_OBJECT(callable)->object;
     if (object == NULL) {
-        tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+        tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
         return return_value_1;
     }
-    TINYPY_INCREF(object);
-    return object;
+    return TINYPY_RET(object);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_hash_t tinypy_internal_weakref_hash(tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -250,11 +248,11 @@ tinypy_value_t *tinypy_internal_weakref_compare(tinypy_value_t *left, tinypy_val
     tinypy_value_t *right_object;
 
     if (right->type != left->type) {
-        tinypy_value_t *return_value_1 = tinypy_not_implemented_get(vm);
+        tinypy_value_t *return_value_1 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_1;
     }
     if (operation != TINYPY_COMPARE_EQUAL && operation != TINYPY_COMPARE_NOT_EQUAL) {
-        tinypy_value_t *return_value_2 = tinypy_not_implemented_get(vm);
+        tinypy_value_t *return_value_2 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_2;
     }
     left_object = TINYPY_WEAKREF_OBJECT(left)->object;
@@ -396,7 +394,8 @@ static ptrdiff_t __tinypy_weakref_proxy_length(tinypy_value_t *proxy, tinypy_err
         ptrdiff_t return_value_1 = length(object, out_error);
         return return_value_1;
     }
-    tinypy_value_t *method = tinypy_internal_object_get_special(object, "__len__", 7U, out_error);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
+    tinypy_value_t *method = tinypy_internal_object_get_special_key(object, vm->internal_special_length_key, out_error);
     tinypy_value_t *empty;
     tinypy_value_t *result;
     int64_t value;
@@ -404,7 +403,7 @@ static ptrdiff_t __tinypy_weakref_proxy_length(tinypy_value_t *proxy, tinypy_err
     if (method == NULL) {
         return (ptrdiff_t)-1;
     }
-    empty = tinypy_tuple_from_items(TINYPY_VALUE_VM(proxy), NULL, 0U);
+    empty = TINYPY_RET_EMPTY_TUPLE(TINYPY_VALUE_VM(proxy));
     result = tinypy_call(method, empty, NULL, out_error);
     TINYPY_DECREF(empty);
     TINYPY_DECREF(method);
@@ -478,15 +477,16 @@ static tinypy_value_t *__tinypy_weakref_proxy_absolute(tinypy_value_t *proxy, ti
         tinypy_value_t *return_value_1 = object->type->number_slots->absolute(object, out_error);
         return return_value_1;
     }
-    if (tinypy_internal_object_has_special(object, "__abs__", 7U) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special(object, "__abs__", 7U, out_error);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
+    if (tinypy_internal_object_has_special_key(object, vm->internal_special_abs_key) != 0) {
+        tinypy_value_t *method = tinypy_internal_object_get_special_key(object, vm->internal_special_abs_key, out_error);
         tinypy_value_t *empty;
         tinypy_value_t *result;
 
         if (method == NULL) {
             return NULL;
         }
-        empty = tinypy_tuple_from_items(TINYPY_VALUE_VM(proxy), NULL, 0U);
+        empty = TINYPY_RET_EMPTY_TUPLE(TINYPY_VALUE_VM(proxy));
         result = tinypy_call(method, empty, NULL, out_error);
         TINYPY_DECREF(empty);
         TINYPY_DECREF(method);
@@ -731,7 +731,7 @@ static tinypy_value_t *__tinypy_weakref_init_method(tinypy_value_t *function, ti
     if (__tinypy_weakref_arguments(vm, args, kwargs, 2U, 3U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -765,7 +765,7 @@ static tinypy_value_t *__tinypy_weakref_call_method(tinypy_value_t *function, ti
         }
         return NULL;
     }
-    tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
     tinypy_value_t *result = tinypy_internal_weakref_call(TINYPY_TUPLE_GET(args, 0U), empty, NULL, out_error);
 
     TINYPY_DECREF(empty);
@@ -799,63 +799,43 @@ static tinypy_value_t *__tinypy_weakref_proxy_delete_attribute_method(tinypy_val
     if (object == NULL || tinypy_internal_object_delete_attr_protocol_key(object, TINYPY_TUPLE_GET(args, 1U), out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_weakref_add_type_method(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_function_callback_t callback, int32_t static_method) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
-    tinypy_value_t *attribute = static_method != 0 ? tinypy_static_method_new(function) : function;
-
-    tinypy_type_set_attr(&vm->types[TINYPY_VALUE_WEAKREF], name, name_size, attribute);
-    if (attribute != function) {
-        TINYPY_DECREF(attribute);
-    }
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_weakref_proxy_add_type_method(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, user_data, NULL);
-
-    tinypy_internal_native_function_set_descriptor_kind(function, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
-    tinypy_type_set_attr(type, name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_type_t *__tinypy_weakref_proxy_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_bool_t callable) {
-    static const struct {
-        const char *name;
-        size_t size;
+static tinypy_type_t *__tinypy_weakref_proxy_type_new(tinypy_value_t *name, tinypy_bool_t callable) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
+    const struct {
+        tinypy_value_t *name;
         intptr_t operation;
     } binary_methods[] = {
-        {"__add__", 7U, TINYPY_WEAKREF_PROXY_ADD}, {"__radd__", 8U, TINYPY_WEAKREF_PROXY_ADD + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__sub__", 7U, TINYPY_WEAKREF_PROXY_SUBTRACT}, {"__rsub__", 8U, TINYPY_WEAKREF_PROXY_SUBTRACT + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__mul__", 7U, TINYPY_WEAKREF_PROXY_MULTIPLY}, {"__rmul__", 8U, TINYPY_WEAKREF_PROXY_MULTIPLY + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__div__", 7U, TINYPY_WEAKREF_PROXY_DIVIDE}, {"__rdiv__", 8U, TINYPY_WEAKREF_PROXY_DIVIDE + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__floordiv__", 12U, TINYPY_WEAKREF_PROXY_FLOOR_DIVIDE}, {"__rfloordiv__", 13U, TINYPY_WEAKREF_PROXY_FLOOR_DIVIDE + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__truediv__", 11U, TINYPY_WEAKREF_PROXY_TRUE_DIVIDE}, {"__rtruediv__", 12U, TINYPY_WEAKREF_PROXY_TRUE_DIVIDE + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__mod__", 7U, TINYPY_WEAKREF_PROXY_REMAINDER}, {"__rmod__", 8U, TINYPY_WEAKREF_PROXY_REMAINDER + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__divmod__", 10U, TINYPY_WEAKREF_PROXY_DIVMOD}, {"__rdivmod__", 11U, TINYPY_WEAKREF_PROXY_DIVMOD + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__pow__", 7U, TINYPY_WEAKREF_PROXY_POWER}, {"__rpow__", 8U, TINYPY_WEAKREF_PROXY_POWER + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__lshift__", 10U, TINYPY_WEAKREF_PROXY_LEFT_SHIFT}, {"__rlshift__", 11U, TINYPY_WEAKREF_PROXY_LEFT_SHIFT + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__rshift__", 10U, TINYPY_WEAKREF_PROXY_RIGHT_SHIFT}, {"__rrshift__", 11U, TINYPY_WEAKREF_PROXY_RIGHT_SHIFT + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__and__", 7U, TINYPY_WEAKREF_PROXY_BIT_AND}, {"__rand__", 8U, TINYPY_WEAKREF_PROXY_BIT_AND + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__xor__", 7U, TINYPY_WEAKREF_PROXY_BIT_XOR}, {"__rxor__", 8U, TINYPY_WEAKREF_PROXY_BIT_XOR + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__or__", 6U, TINYPY_WEAKREF_PROXY_BIT_OR}, {"__ror__", 7U, TINYPY_WEAKREF_PROXY_BIT_OR + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
-        {"__iadd__", 8U, TINYPY_WEAKREF_PROXY_INPLACE_ADD}, {"__isub__", 8U, TINYPY_WEAKREF_PROXY_INPLACE_SUBTRACT},
-        {"__imul__", 8U, TINYPY_WEAKREF_PROXY_INPLACE_MULTIPLY}, {"__idiv__", 8U, TINYPY_WEAKREF_PROXY_INPLACE_DIVIDE},
-        {"__ifloordiv__", 13U, TINYPY_WEAKREF_PROXY_INPLACE_FLOOR_DIVIDE}, {"__itruediv__", 12U, TINYPY_WEAKREF_PROXY_INPLACE_TRUE_DIVIDE},
-        {"__imod__", 8U, TINYPY_WEAKREF_PROXY_INPLACE_REMAINDER}, {"__ipow__", 8U, TINYPY_WEAKREF_PROXY_INPLACE_POWER},
-        {"__ilshift__", 11U, TINYPY_WEAKREF_PROXY_INPLACE_LEFT_SHIFT}, {"__irshift__", 11U, TINYPY_WEAKREF_PROXY_INPLACE_RIGHT_SHIFT},
-        {"__iand__", 8U, TINYPY_WEAKREF_PROXY_INPLACE_BIT_AND}, {"__ixor__", 8U, TINYPY_WEAKREF_PROXY_INPLACE_BIT_XOR}, {"__ior__", 7U, TINYPY_WEAKREF_PROXY_INPLACE_BIT_OR}};
-    static const struct {
-        const char *name;
-        size_t size;
+        {vm->internal_special_add_key, TINYPY_WEAKREF_PROXY_ADD}, {vm->internal_special_radd_key, TINYPY_WEAKREF_PROXY_ADD + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_sub_key, TINYPY_WEAKREF_PROXY_SUBTRACT}, {vm->internal_special_rsub_key, TINYPY_WEAKREF_PROXY_SUBTRACT + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_mul_key, TINYPY_WEAKREF_PROXY_MULTIPLY}, {vm->internal_special_rmul_key, TINYPY_WEAKREF_PROXY_MULTIPLY + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_div_key, TINYPY_WEAKREF_PROXY_DIVIDE}, {vm->internal_special_rdiv_key, TINYPY_WEAKREF_PROXY_DIVIDE + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_floordiv_key, TINYPY_WEAKREF_PROXY_FLOOR_DIVIDE}, {vm->internal_special_rfloordiv_key, TINYPY_WEAKREF_PROXY_FLOOR_DIVIDE + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_truediv_key, TINYPY_WEAKREF_PROXY_TRUE_DIVIDE}, {vm->internal_special_rtruediv_key, TINYPY_WEAKREF_PROXY_TRUE_DIVIDE + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_mod_key, TINYPY_WEAKREF_PROXY_REMAINDER}, {vm->internal_special_rmod_key, TINYPY_WEAKREF_PROXY_REMAINDER + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_divmod_key, TINYPY_WEAKREF_PROXY_DIVMOD}, {vm->internal_special_rdivmod_key, TINYPY_WEAKREF_PROXY_DIVMOD + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_pow_key, TINYPY_WEAKREF_PROXY_POWER}, {vm->internal_special_rpow_key, TINYPY_WEAKREF_PROXY_POWER + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_lshift_key, TINYPY_WEAKREF_PROXY_LEFT_SHIFT}, {vm->internal_special_rlshift_key, TINYPY_WEAKREF_PROXY_LEFT_SHIFT + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_rshift_key, TINYPY_WEAKREF_PROXY_RIGHT_SHIFT}, {vm->internal_special_rrshift_key, TINYPY_WEAKREF_PROXY_RIGHT_SHIFT + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_and_key, TINYPY_WEAKREF_PROXY_BIT_AND}, {vm->internal_special_rand_key, TINYPY_WEAKREF_PROXY_BIT_AND + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_xor_key, TINYPY_WEAKREF_PROXY_BIT_XOR}, {vm->internal_special_rxor_key, TINYPY_WEAKREF_PROXY_BIT_XOR + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_or_key, TINYPY_WEAKREF_PROXY_BIT_OR}, {vm->internal_special_ror_key, TINYPY_WEAKREF_PROXY_BIT_OR + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET},
+        {vm->internal_special_iadd_key, TINYPY_WEAKREF_PROXY_INPLACE_ADD}, {vm->internal_special_isub_key, TINYPY_WEAKREF_PROXY_INPLACE_SUBTRACT},
+        {vm->internal_special_imul_key, TINYPY_WEAKREF_PROXY_INPLACE_MULTIPLY}, {vm->internal_special_idiv_key, TINYPY_WEAKREF_PROXY_INPLACE_DIVIDE},
+        {vm->internal_special_ifloordiv_key, TINYPY_WEAKREF_PROXY_INPLACE_FLOOR_DIVIDE}, {vm->internal_special_itruediv_key, TINYPY_WEAKREF_PROXY_INPLACE_TRUE_DIVIDE},
+        {vm->internal_special_imod_key, TINYPY_WEAKREF_PROXY_INPLACE_REMAINDER}, {vm->internal_special_ipow_key, TINYPY_WEAKREF_PROXY_INPLACE_POWER},
+        {vm->internal_special_ilshift_key, TINYPY_WEAKREF_PROXY_INPLACE_LEFT_SHIFT}, {vm->internal_special_irshift_key, TINYPY_WEAKREF_PROXY_INPLACE_RIGHT_SHIFT},
+        {vm->internal_special_iand_key, TINYPY_WEAKREF_PROXY_INPLACE_BIT_AND}, {vm->internal_special_ixor_key, TINYPY_WEAKREF_PROXY_INPLACE_BIT_XOR}, {vm->internal_special_ior_key, TINYPY_WEAKREF_PROXY_INPLACE_BIT_OR}};
+    const struct {
+        tinypy_value_t *name;
         intptr_t operation;
     } unary_methods[] = {
-        {"__pos__", 7U, 0}, {"__neg__", 7U, 1}, {"__invert__", 10U, 2}, {"__abs__", 7U, 3},
-        {"__int__", 7U, 4}, {"__long__", 8U, 5}, {"__float__", 9U, 6}, {"__index__", 9U, 7}, {"__nonzero__", 11U, 8}};
-    tinypy_type_t *type = tinypy_internal_type_new_configured(vm, name, name_size, NULL, 0U, NULL, NULL, TINYPY_FALSE, TINYPY_FALSE, NULL);
+        {vm->internal_special_pos_key, 0}, {vm->internal_special_neg_key, 1}, {vm->internal_special_invert_key, 2}, {vm->internal_special_abs_key, 3},
+        {vm->internal_special_int_key, 4}, {vm->internal_special_long_key, 5}, {vm->internal_special_float_key, 6}, {vm->internal_special_index_key, 7}, {vm->internal_special_nonzero_key, 8}};
+    tinypy_type_t *type = tinypy_internal_type_new_configured(name, NULL, 0U, NULL, NULL, TINYPY_FALSE, TINYPY_FALSE, NULL);
 
     type->layout_kind = TINYPY_VALUE_WEAKREF;
     type->basic_size = sizeof(tinypy_weakref_object_t);
@@ -879,19 +859,21 @@ static tinypy_type_t *__tinypy_weakref_proxy_type_new(tinypy_vm_t *vm, const cha
     type->next = __tinypy_weakref_proxy_next;
     type->create = NULL;
     type->flags = (type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
-    tinypy_type_set_attr(type, "__hash__", 8U, &vm->none_object.base);
-    __tinypy_weakref_proxy_add_type_method(vm, type, "__delattr__", 11U, __tinypy_weakref_proxy_delete_attribute_method, NULL);
+    tinypy_type_set_attr_key(type, type->vm->internal_special_hash_key, &vm->none_object.base);
+    tinypy_internal_type_add_method(type, vm->internal_special_delattr_key, __tinypy_weakref_proxy_delete_attribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     for (size_t index = 0U; index < sizeof(binary_methods) / sizeof(binary_methods[0]); ++index) {
-        __tinypy_weakref_proxy_add_type_method(vm, type, binary_methods[index].name, binary_methods[index].size, __tinypy_weakref_proxy_binary_method, (void *)binary_methods[index].operation);
+        tinypy_value_t *method_name = binary_methods[index].name;
+        tinypy_internal_type_add_method(type, method_name, __tinypy_weakref_proxy_binary_method, (void *)binary_methods[index].operation, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     }
     for (size_t index = 0U; index < sizeof(unary_methods) / sizeof(unary_methods[0]); ++index) {
-        __tinypy_weakref_proxy_add_type_method(vm, type, unary_methods[index].name, unary_methods[index].size, __tinypy_weakref_proxy_unary_method, (void *)unary_methods[index].operation);
+        tinypy_value_t *method_name = unary_methods[index].name;
+        tinypy_internal_type_add_method(type, method_name, __tinypy_weakref_proxy_unary_method, (void *)unary_methods[index].operation, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     }
     return type;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_weakref_type(tinypy_vm_t *vm) {
-    static const char *const comparison_names[] = {"__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__"};
+    tinypy_value_t *const comparison_names[] = {vm->internal_special_lt_key, vm->internal_special_le_key, vm->internal_special_eq_key, vm->internal_special_ne_key, vm->internal_special_gt_key, vm->internal_special_ge_key};
 
     (void)memset(&vm->weak_proxy_number_slots, 0, sizeof(vm->weak_proxy_number_slots));
     vm->weak_proxy_number_slots.positive = __tinypy_weakref_proxy_positive;
@@ -930,18 +912,15 @@ void tinypy_internal_initialize_weakref_type(tinypy_vm_t *vm) {
     vm->weak_proxy_mapping_slots.length = __tinypy_weakref_proxy_length;
     vm->weak_proxy_mapping_slots.get_item = __tinypy_weakref_proxy_get_item;
     vm->weak_proxy_mapping_slots.set_item = __tinypy_weakref_proxy_set_item;
-    vm->weak_proxy_type = __tinypy_weakref_proxy_type_new(vm, "weakproxy", 9U, TINYPY_FALSE);
-    vm->callable_weak_proxy_type = __tinypy_weakref_proxy_type_new(vm, "weakcallableproxy", 17U, TINYPY_TRUE);
+    vm->weak_proxy_type = __tinypy_weakref_proxy_type_new(vm->internal_weakproxy_key, TINYPY_FALSE);
+    vm->callable_weak_proxy_type = __tinypy_weakref_proxy_type_new(vm->internal_weakcallableproxy_key, TINYPY_TRUE);
 
-    __tinypy_weakref_add_type_method(vm, "__new__", 7U, __tinypy_weakref_new_method, INT32_C(1));
-    __tinypy_weakref_add_type_method(vm, "__init__", 8U, __tinypy_weakref_init_method, INT32_C(0));
-    __tinypy_weakref_add_type_method(vm, "__call__", 8U, __tinypy_weakref_call_method, INT32_C(0));
-    __tinypy_weakref_add_type_method(vm, "__hash__", 8U, __tinypy_weakref_hash_method, INT32_C(0));
+    tinypy_internal_type_add_static_method(&vm->types[TINYPY_VALUE_WEAKREF], vm->internal_special_new_key, __tinypy_weakref_new_method, NULL, NULL);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_WEAKREF], vm->internal_special_init_key, __tinypy_weakref_init_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_WEAKREF], vm->internal_special_call_key, __tinypy_weakref_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_WEAKREF], vm->internal_special_hash_key, __tinypy_weakref_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     for (size_t index = 0U; index < sizeof(comparison_names) / sizeof(comparison_names[0]); ++index) {
-        tinypy_value_t *function = tinypy_native_function_new(vm, comparison_names[index], 6U, __tinypy_weakref_compare_method, (void *)(intptr_t)index, NULL);
-
-        tinypy_type_set_attr(&vm->types[TINYPY_VALUE_WEAKREF], comparison_names[index], 6U, function);
-        TINYPY_DECREF(function);
+        tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_WEAKREF], comparison_names[index], __tinypy_weakref_compare_method, (void *)(intptr_t)index, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1027,31 +1006,24 @@ static tinypy_value_t *__tinypy_weakref_remove_function(tinypy_value_t *function
             tinypy_dict_delete(dict, key);
         }
     }
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_weakref_add_module_function(tinypy_vm_t *vm, tinypy_value_t *module, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
-
-    tinypy_module_add_value(module, name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_weakref_module(tinypy_vm_t *vm) {
-    tinypy_value_t *module = tinypy_module_new(vm, "_weakref", 8U);
-    tinypy_value_t *name = tinypy_string_from_bytes(vm, "_weakref", 8U);
+    tinypy_value_t *module = tinypy_module_new_key(vm->internal_weakref_module_name);
+    tinypy_value_t *name = TINYPY_RET(vm->internal_weakref_module_name);
 
-    tinypy_module_add_value(module, "__name__", 8U, name);
+    tinypy_module_add_value_key(module, vm->internal_special_name_key, name);
     TINYPY_DECREF(name);
-    tinypy_module_add_value(module, "ReferenceType", 13U, &vm->types[TINYPY_VALUE_WEAKREF].base.base);
-    tinypy_module_add_value(module, "ProxyType", 9U, &vm->weak_proxy_type->base.base);
-    tinypy_module_add_value(module, "CallableProxyType", 17U, &vm->callable_weak_proxy_type->base.base);
-    tinypy_module_add_value(module, "ref", 3U, &vm->types[TINYPY_VALUE_WEAKREF].base.base);
-    __tinypy_weakref_add_module_function(vm, module, "proxy", 5U, __tinypy_weakref_proxy_function);
-    __tinypy_weakref_add_module_function(vm, module, "getweakrefcount", 15U, __tinypy_weakref_count_function);
-    __tinypy_weakref_add_module_function(vm, module, "getweakrefs", 11U, __tinypy_weakref_list_function);
-    __tinypy_weakref_add_module_function(vm, module, "_remove_dead_weakref", 20U, __tinypy_weakref_remove_function);
-    tinypy_internal_register_module(vm, "_weakref", 8U, module);
+    tinypy_module_add_value_key(module, vm->internal_reference_type_key, &vm->types[TINYPY_VALUE_WEAKREF].base.base);
+    tinypy_module_add_value_key(module, vm->internal_proxy_type_key, &vm->weak_proxy_type->base.base);
+    tinypy_module_add_value_key(module, vm->internal_callable_proxy_type_key, &vm->callable_weak_proxy_type->base.base);
+    tinypy_module_add_value_key(module, vm->internal_ref_key, &vm->types[TINYPY_VALUE_WEAKREF].base.base);
+    tinypy_internal_module_add_function(module, vm->internal_proxy_key, __tinypy_weakref_proxy_function, NULL, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_getweakrefcount_key, __tinypy_weakref_count_function, NULL, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_getweakrefs_key, __tinypy_weakref_list_function, NULL, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_remove_dead_weakref_key, __tinypy_weakref_remove_function, NULL, NULL);
+    tinypy_internal_register_module(vm, vm->internal_weakref_module_name, module);
     TINYPY_DECREF(module);
 }

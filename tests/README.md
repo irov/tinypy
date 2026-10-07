@@ -92,6 +92,63 @@ for the failure: returned type/value, exception, callback order, mutation or
 lifetime. Run the affected case during iteration and the full matrix before
 accepting a runtime change. Record material limitations in the coverage model.
 
+The native `intern_lifetime` case also validates every VM name preset: exact
+cached identity, interning policy, owned-reference balance, allocation-free
+reuse, byte-span matching, separate VM ownership and complete shutdown. It also
+checks that core startup and registration never create the lazy literal
+dictionary, and that byte/Unicode `func_code` and `__code__` aliases agree.
+All fixed core names are initialized eagerly in `internal_` VM fields. It also
+checks singleton accessors and single evaluation of `TINYPY_RET` arguments.
+Ordinary and checked string constructors also reuse interned names; dynamic
+intern entries with embedded NUL are removed when their last reference dies.
+Protocol-name comparisons cover cached, raw and Unicode text. Buffer/bytearray
+registration reuses named VM presets; byte/key C APIs retain identical method
+descriptor behavior. Ordinary generated strings do not grow the table, while
+script identifiers are interned without changing compiler label flags.
+Internal C-literal keys remain borrowed and pinned until VM shutdown, including
+embedded NUL and previously weak intern entries. Repeated lookup allocates
+nothing and evaluates the VM argument once. Shared native registration checks
+method/wrapper/classmethod/staticmethod/property binding, module metadata and
+exactly-once finalizers, followed by zero outstanding allocator allocations.
+Module/type constructors retain the exact borrowed name without interning an
+ordinary string. Module and direct-instance key operations cover embedded NUL,
+byte API compatibility, borrowed results, reference balance and allocation-free
+replacement. Direct instance access is checked separately from descriptor
+binding. Key-based import and the `sys.stdout` preset retain their identity.
+The host source guard rejects internal byte-name API calls, including indexed
+name/size tables, and lazy C-literal factories, while permitting their adapter
+definitions. It checks unique, prefixed registry fields and lookup-table capacity.
+Indexed operator and wrapper-slot tables must contain eager registry offsets.
+Operator lookup borrows each VM field without adding references or allocating.
+AUTO wrapper classification covers preset, uncached byte and Unicode keys,
+plus full-span embedded-NUL rejection and descriptor owner/reference balance.
+The source guard also rejects literal name comparisons in core/runtime code.
+Slot declarations using a str subclass keep plain descriptor keys without
+calling the subclass's hash method, as verified against CPython 2.7.
+Compiler filenames matching a preset stay
+non-interned through a byte-identical marshal round trip; the generated compiler
+corpus covers preset literals, concatenation and constant folding.
+
+Builtin attribute dispatch coverage checks shared immutable preset metadata,
+subtype/plain copies and growable strings without stale metadata, raw and Unicode metadata keys,
+allocation-free results, borrowed key reference counts, embedded-NUL names
+colliding with occupied hash buckets, no insertion of incoming names and full
+shutdown balance. The host guard ensures every dispatch key belongs to the
+eager interned registry, with unique identifiers and bounded table capacity.
+The standalone `cli/tests/attribute_dispatch_benchmark.c` measures direct
+dispatch and complete C attribute lookup after VM setup. For a Release build:
+
+```sh
+clang -O3 -std=c99 -Wall -Wextra -Werror -Iinclude cli/tests/attribute_dispatch_benchmark.c .temp/validation-builtin-local-vm-accepted/release/libtinypy.a -lm -o /private/tmp/tinypy_attribute_benchmark
+/private/tmp/tinypy_attribute_benchmark
+```
+
+Compile with `-DTINYPY_ATTRIBUTE_BENCHMARK_SCALE=10` for ten times as many
+iterations when individual timings are too short. Setup remains excluded.
+
+Compare medians from interleaved runs of old/new archives; timings exclude
+startup and compilation and represent only the listed attribute workloads.
+
 The existing compiler differential runner can also check a separately curated
 stdlib/application corpus with `--source-root`, `--logical-root` and
 `--expected-count`. It rejects empty corpora. Host-supplied modules and codecs

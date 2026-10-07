@@ -86,7 +86,7 @@ tinypy_value_t *tinypy_debugger_frame_get(const tinypy_value_t *frame_value, tin
         return NULL;
     }
 
-    key = tinypy_string_from_bytes(TINYPY_VALUE_VM(frame_value), name, name_size);
+    key = tinypy_internal_name_from_bytes(TINYPY_VALUE_VM(frame_value), name, name_size);
     tinypy_value_t *value = tinypy_dict_get_optional(dictionary, key);
     TINYPY_DECREF(key);
     return value;
@@ -122,7 +122,7 @@ tinypy_bool_t tinypy_debugger_frame_set(tinypy_value_t *frame_value, tinypy_debu
         return TINYPY_FALSE;
     }
 
-    key = tinypy_string_from_bytes(TINYPY_VALUE_VM(frame_value), name, name_size);
+    key = tinypy_internal_name_from_bytes(TINYPY_VALUE_VM(frame_value), name, name_size);
     tinypy_dict_set(dictionary, key, value);
     TINYPY_DECREF(key);
     return TINYPY_TRUE;
@@ -161,7 +161,7 @@ tinypy_bool_t tinypy_debugger_frame_delete(tinypy_value_t *frame_value, tinypy_d
         return TINYPY_FALSE;
     }
 
-    key = tinypy_string_from_bytes(TINYPY_VALUE_VM(frame_value), name, name_size);
+    key = tinypy_internal_name_from_bytes(TINYPY_VALUE_VM(frame_value), name, name_size);
     if (tinypy_dict_contains(dictionary, key) == 0) {
         TINYPY_DECREF(key);
         return TINYPY_FALSE;

@@ -267,8 +267,7 @@ static tinypy_value_t *__tinypy_dict_view_compare_method(tinypy_value_t *functio
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
     if (__tinypy_dict_view_is_set_like(left) == 0 || __tinypy_dict_view_is_set_like(right) == 0) {
-        tinypy_value_t *return_value_1 = &vm->not_implemented_object.base;
-        TINYPY_INCREF(return_value_1);
+        tinypy_value_t *return_value_1 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_1;
     }
     tinypy_bool_t comparison;
@@ -468,28 +467,23 @@ static tinypy_hash_t __tinypy_dict_view_unhashable(tinypy_value_t *value, tinypy
     return (tinypy_hash_t)0;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_dict_view_add_method(tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
-    tinypy_value_t *function = tinypy_native_function_new(type->vm, name, name_size, callback, user_data, NULL);
-
-    tinypy_type_set_attr(type, name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
 static void __tinypy_dict_view_initialize_set_like(tinypy_vm_t *vm, tinypy_type_t *type) {
-    static const char *const comparison_names[] = {"__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__"};
+    tinypy_value_t *const comparison_names[] = {vm->internal_special_lt_key, vm->internal_special_le_key, vm->internal_special_eq_key, vm->internal_special_ne_key, vm->internal_special_gt_key, vm->internal_special_ge_key};
     static const tinypy_compare_operation_e comparison_operations[] = {TINYPY_COMPARE_LESS, TINYPY_COMPARE_LESS_EQUAL, TINYPY_COMPARE_EQUAL, TINYPY_COMPARE_NOT_EQUAL, TINYPY_COMPARE_GREATER, TINYPY_COMPARE_GREATER_EQUAL};
-    static const char *const binary_names[] = {"__and__", "__rand__", "__xor__", "__rxor__", "__or__", "__ror__", "__sub__", "__rsub__"};
+    tinypy_value_t *const binary_names[] = {vm->internal_special_and_key, vm->internal_special_rand_key, vm->internal_special_xor_key, vm->internal_special_rxor_key, vm->internal_special_or_key, vm->internal_special_ror_key, vm->internal_special_sub_key, vm->internal_special_rsub_key};
     static const intptr_t binary_operations[] = {0, 100, 1, 101, 2, 102, 3, 103};
     size_t index;
 
     for (index = 0U; index < sizeof(comparison_names) / sizeof(comparison_names[0]); ++index) {
-        __tinypy_dict_view_add_method(type, comparison_names[index], 6U, __tinypy_dict_view_compare_method, (void *)(intptr_t)comparison_operations[index]);
+        tinypy_value_t *method_name = comparison_names[index];
+        tinypy_internal_type_add_method(type, method_name, __tinypy_dict_view_compare_method, (void *)(intptr_t)comparison_operations[index], NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
     for (index = 0U; index < sizeof(binary_names) / sizeof(binary_names[0]); ++index) {
-        __tinypy_dict_view_add_method(type, binary_names[index], strlen(binary_names[index]), __tinypy_dict_view_binary_method, (void *)(intptr_t)binary_operations[index]);
+        tinypy_value_t *method_name = binary_names[index];
+        tinypy_internal_type_add_method(type, method_name, __tinypy_dict_view_binary_method, (void *)(intptr_t)binary_operations[index], NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
-    __tinypy_dict_view_add_method(type, "__contains__", 12U, __tinypy_dict_view_contains_method, NULL);
-    tinypy_type_set_attr(type, "__hash__", 8U, &vm->none_object.base);
+    tinypy_internal_type_add_method(type, vm->internal_special_contains_key, __tinypy_dict_view_contains_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_type_set_attr_key(type, type->vm->internal_special_hash_key, &vm->none_object.base);
     type->hash = __tinypy_dict_view_unhashable;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -501,9 +495,9 @@ void tinypy_internal_initialize_dict_view_types(tinypy_vm_t *vm) {
     size_t index;
 
     for (index = 0U; index < sizeof(types) / sizeof(types[0]); ++index) {
-        __tinypy_dict_view_add_method(types[index], "__len__", 7U, __tinypy_dict_view_len_method, NULL);
-        __tinypy_dict_view_add_method(types[index], "__iter__", 8U, __tinypy_dict_view_iter_method, NULL);
-        __tinypy_dict_view_add_method(types[index], "__repr__", 8U, __tinypy_dict_view_repr_method, NULL);
+        tinypy_internal_type_add_method((types[index]), vm->internal_special_length_key, __tinypy_dict_view_len_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((types[index]), vm->internal_special_iter_key, __tinypy_dict_view_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((types[index]), vm->internal_special_repr_key, __tinypy_dict_view_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
     __tinypy_dict_view_initialize_set_like(vm, &vm->types[TINYPY_VALUE_DICT_KEYS]);
     __tinypy_dict_view_initialize_set_like(vm, &vm->types[TINYPY_VALUE_DICT_ITEMS]);

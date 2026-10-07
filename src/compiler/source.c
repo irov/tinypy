@@ -441,7 +441,7 @@ void tinypy_internal_compiler_decode_error(tinypy_compile_ctx_t *ctx, tinypy_val
 tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number) {
     static const char label[] = ": SyntaxWarning: ";
     tinypy_vm_t *vm = ctx->vm;
-    tinypy_value_t *sys_module = tinypy_dict_get_optional(vm->modules, vm->sys_key);
+    tinypy_value_t *sys_module = tinypy_dict_get_optional(vm->modules, vm->internal_sys_key);
     tinypy_value_t *stderr_value;
     tinypy_error_t *write_error = NULL;
     char line_buffer[16];
@@ -451,7 +451,7 @@ tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx,
     if (sys_module == NULL) {
         return TINYPY_TRUE;
     }
-    stderr_value = tinypy_module_get_value(sys_module, "stderr", 6U);
+    stderr_value = tinypy_module_get_value_key(sys_module, vm->internal_stderr_key);
     if (stderr_value == NULL) {
         return TINYPY_TRUE;
     }
@@ -590,7 +590,7 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     }
     if (ascii != 0 && ascii_offset < output_size) {
         tinypy_value_t *text = tinypy_string_from_bytes(ctx->vm, output, output_size);
-        tinypy_value_t *encoding = tinypy_string_from_bytes(ctx->vm, "ascii", 5U);
+        tinypy_value_t *encoding = TINYPY_RET(ctx->vm->internal_codec_ascii_name);
         tinypy_error_t *decode_error = NULL;
         tinypy_value_t *decoded = tinypy_internal_text_codec(ctx->vm, text, encoding, NULL, TINYPY_TRUE, TINYPY_TRUE, NULL, &decode_error);
 

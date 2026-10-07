@@ -80,8 +80,7 @@ static inline size_t __tinypy_internal_tuple_allocation_size(size_t item_count) 
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_tuple_from_borrowed_items(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size) {
     if (size == 0U) {
-        tinypy_value_t *result = &vm->empty_tuple_object.base.base;
-        TINYPY_INCREF(result);
+        tinypy_value_t *result = TINYPY_RET_EMPTY_TUPLE(vm);
         return result;
     }
     size_t allocation_size = __tinypy_internal_tuple_allocation_size(size);
@@ -102,8 +101,7 @@ tinypy_value_t *tinypy_internal_tuple_from_borrowed_items(tinypy_vm_t *vm, tinyp
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_tuple_new(tinypy_vm_t *vm, size_t size, tinypy_bool_t checked, tinypy_error_t **out_error) {
     if (size == 0U) {
-        tinypy_value_t *result = &vm->empty_tuple_object.base.base;
-        TINYPY_INCREF(result);
+        tinypy_value_t *result = TINYPY_RET_EMPTY_TUPLE(vm);
         return result;
     }
 
@@ -124,7 +122,7 @@ static tinypy_value_t *__tinypy_internal_tuple_new(tinypy_vm_t *vm, size_t size,
     tinypy_value_t **items = TINYPY_TUPLE_OBJECT(result)->items;
 
     for (size_t index = 0U; index < size; ++index) {
-        items[index] = tinypy_none_get(vm);
+        items[index] = TINYPY_RET_NONE(vm);
     }
 
     return result;
@@ -148,8 +146,7 @@ tinypy_value_t *tinypy_internal_tuple_from_items_checked(tinypy_vm_t *vm, tinypy
     size_t index;
 
     if (size == 0U) {
-        result = &vm->empty_tuple_object.base.base;
-        TINYPY_INCREF(result);
+        result = TINYPY_RET_EMPTY_TUPLE(vm);
         return result;
     }
     allocation_size = __tinypy_internal_tuple_allocation_size(size);
@@ -178,8 +175,7 @@ tinypy_value_t *tinypy_internal_tuple_join_items_checked(tinypy_vm_t *vm, tinypy
     }
     size_t size = prefix_size + left_size + right_size;
     if (size == 0U) {
-        tinypy_value_t *result = &vm->empty_tuple_object.base.base;
-        TINYPY_INCREF(result);
+        tinypy_value_t *result = TINYPY_RET_EMPTY_TUPLE(vm);
         return result;
     }
     size_t allocation_size = __tinypy_internal_tuple_allocation_size(size);
@@ -221,14 +217,12 @@ tinypy_value_t *tinypy_internal_tuple_concat_checked(tinypy_vm_t *vm, const tiny
     if (TINYPY_TUPLE_SIZE(left) == 0U) {
         tinypy_value_t *result = (tinypy_value_t *)right;
 
-        TINYPY_INCREF(result);
-        return result;
+        return TINYPY_RET(result);
     }
     if (TINYPY_TUPLE_SIZE(right) == 0U) {
         tinypy_value_t *result = (tinypy_value_t *)left;
 
-        TINYPY_INCREF(result);
-        return result;
+        return TINYPY_RET(result);
     }
     tinypy_value_t *const *left_items = tinypy_internal_tuple_items(left);
     tinypy_value_t *const *right_items = tinypy_internal_tuple_items(right);
@@ -252,8 +246,7 @@ tinypy_value_t *tinypy_internal_tuple_tail_checked(tinypy_vm_t *vm, const tinypy
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_tuple_from_items(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size) {
     if (size == 0U) {
-        tinypy_value_t *result = &vm->empty_tuple_object.base.base;
-        TINYPY_INCREF(result);
+        tinypy_value_t *result = TINYPY_RET_EMPTY_TUPLE(vm);
         return result;
     }
     size_t allocation_size = __tinypy_internal_tuple_allocation_size(size);

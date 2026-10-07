@@ -24,8 +24,7 @@ void tinypy_internal_generator_release_references(tinypy_value_t *value, tinypy_
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_generator_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
     TINYPY_CLEAR_ERROR(out_error);
-    TINYPY_INCREF(value);
-    return value;
+    return TINYPY_RET(value);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_generator_send(tinypy_value_t *generator_value, tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -83,7 +82,7 @@ static tinypy_value_t *__tinypy_generator_throw(tinypy_value_t *generator_value,
         tinypy_internal_exception_make_diagnostic(vm, out_error);
         return NULL;
     }
-    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_value_t *none = TINYPY_RET_NONE(vm);
     generator->running = 1;
     result = tinypy_internal_eval_generator_resume(generator, none, exception_type, exception, traceback, &yielded, out_error);
     generator->running = 0;
@@ -125,7 +124,7 @@ tinypy_bool_t tinypy_generator_close(tinypy_value_t *generator_value, tinypy_err
     if (generator->finished != 0) {
         return TINYPY_TRUE;
     }
-    tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
     exception = tinypy_internal_exception_instantiate(vm->exception_types[TINYPY_EXCEPTION_GENERATOR_EXIT], empty, NULL, out_error);
     TINYPY_DECREF(empty);
     if (exception == NULL) {
@@ -150,7 +149,7 @@ tinypy_bool_t tinypy_generator_close(tinypy_value_t *generator_value, tinypy_err
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_generator_next(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_value_t *none = TINYPY_RET_NONE(vm);
     tinypy_value_t *result = tinypy_generator_send(value, none, out_error);
 
     TINYPY_DECREF(none);
@@ -267,8 +266,7 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
             condition_2 = tinypy_type_is_subtype(item->type, (tinypy_type_t *)exception_argument) != 0;
         }
         if (condition_2) {
-            exception = TINYPY_TUPLE_GET(args, 2U);
-            TINYPY_INCREF(exception);
+            exception = TINYPY_RET(TINYPY_TUPLE_GET(args, 2U));
         }
         else {
             tinypy_value_t *exception_args;
@@ -276,18 +274,17 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
             if (count >= 3U) {
                 tinypy_value_t *argument = TINYPY_TUPLE_GET(args, 2U);
                 if (TINYPY_VALUE_KIND(argument) == TINYPY_VALUE_TUPLE) {
-                    exception_args = argument;
-                    TINYPY_INCREF(exception_args);
+                    exception_args = TINYPY_RET(argument);
                 }
                 else if (TINYPY_VALUE_KIND(argument) == TINYPY_VALUE_NONE) {
-                    exception_args = tinypy_tuple_from_items(vm, NULL, 0U);
+                    exception_args = TINYPY_RET_EMPTY_TUPLE(vm);
                 }
                 else {
                     exception_args = tinypy_tuple_from_items(vm, &argument, 1U);
                 }
             }
             else {
-                exception_args = tinypy_tuple_from_items(vm, NULL, 0U);
+                exception_args = TINYPY_RET_EMPTY_TUPLE(vm);
             }
             exception = tinypy_call(exception_argument, exception_args, NULL, out_error);
             TINYPY_DECREF(exception_args);
@@ -304,20 +301,18 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
         tinypy_value_t *item = count >= 3U ? TINYPY_TUPLE_GET(args, 2U) : NULL;
 
         if (item != NULL && TINYPY_VALUE_KIND(item) == TINYPY_VALUE_OLD_INSTANCE && tinypy_class_is_subclass(tinypy_old_instance_class(item), exception_argument) != 0) {
-            exception = item;
-            TINYPY_INCREF(exception);
+            exception = TINYPY_RET(item);
         }
         else {
             tinypy_value_t *exception_args;
 
             if (item != NULL && TINYPY_VALUE_KIND(item) == TINYPY_VALUE_TUPLE) {
-                exception_args = item;
-                TINYPY_INCREF(exception_args);
+                exception_args = TINYPY_RET(item);
             }
             else {
                 exception_args = item != NULL && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE
                                      ? tinypy_tuple_from_items(vm, &item, 1U)
-                                     : tinypy_tuple_from_items(vm, NULL, 0U);
+                                     : TINYPY_RET_EMPTY_TUPLE(vm);
             }
 
             exception = tinypy_call(exception_argument, exception_args, NULL, out_error);
@@ -334,8 +329,7 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "instance exception may not have a separate value", out_error);
             return NULL;
         }
-        exception = exception_argument;
-        TINYPY_INCREF(exception);
+        exception = TINYPY_RET(exception_argument);
     }
     else {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exceptions must be old-style classes or derived from BaseException", out_error);
@@ -365,7 +359,7 @@ static tinypy_value_t *__tinypy_generator_close_method(tinypy_value_t *function,
     if (tinypy_generator_close(item, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -376,8 +370,7 @@ static tinypy_value_t *__tinypy_generator_iter_method(tinypy_value_t *function, 
     if (__tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    TINYPY_INCREF(self);
+    tinypy_value_t *self = TINYPY_RET(TINYPY_TUPLE_GET(args, 0U));
     return self;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -434,40 +427,33 @@ static tinypy_value_t *__tinypy_iterator_length_hint_method(tinypy_value_t *func
     return return_value;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_generator_type_set(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
-
-    tinypy_type_set_attr(type, name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_generator_types(tinypy_vm_t *vm) {
     size_t index;
 
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_GENERATOR], "next", 4U, __tinypy_generator_next_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_GENERATOR], "send", 4U, __tinypy_generator_send_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_GENERATOR], "throw", 5U, __tinypy_generator_throw_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_GENERATOR], "close", 5U, __tinypy_generator_close_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_GENERATOR], "__iter__", 8U, __tinypy_generator_iter_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_GENERATOR], "__repr__", 8U, __tinypy_generator_repr_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ITERATOR], "next", 4U, __tinypy_generator_next_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ITERATOR], "__iter__", 8U, __tinypy_generator_iter_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ITERATOR], "__length_hint__", 15U, __tinypy_iterator_length_hint_method);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_GENERATOR]), vm->internal_special_next_key, __tinypy_generator_next_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_GENERATOR]), vm->internal_send_key, __tinypy_generator_send_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_GENERATOR]), vm->internal_throw_key, __tinypy_generator_throw_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_GENERATOR]), vm->internal_close_key, __tinypy_generator_close_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_GENERATOR]), vm->internal_special_iter_key, __tinypy_generator_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_GENERATOR]), vm->internal_special_repr_key, __tinypy_generator_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ITERATOR]), vm->internal_special_next_key, __tinypy_generator_next_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ITERATOR]), vm->internal_special_iter_key, __tinypy_generator_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ITERATOR]), vm->internal_special_length_hint_key, __tinypy_iterator_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     for (index = 0U; index < TINYPY_ITERATOR_TYPE_COUNT; ++index) {
-        __tinypy_generator_type_set(vm, vm->iterator_types[index], "next", 4U, __tinypy_generator_next_method);
-        __tinypy_generator_type_set(vm, vm->iterator_types[index], "__iter__", 8U, __tinypy_generator_iter_method);
+        tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_next_key, __tinypy_generator_next_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_iter_key, __tinypy_generator_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         if (index == (size_t)TINYPY_ITERATOR_TYPE_LIST_REVERSE) {
-            __tinypy_generator_type_set(vm, vm->iterator_types[index], "__length_hint__", 15U, __tinypy_reversed_length_hint_method);
+            tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_length_hint_key, __tinypy_reversed_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
         else if (index != (size_t)TINYPY_ITERATOR_TYPE_CALLABLE) {
-            __tinypy_generator_type_set(vm, vm->iterator_types[index], "__length_hint__", 15U, __tinypy_iterator_length_hint_method);
+            tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_length_hint_key, __tinypy_iterator_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
     }
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ENUMERATE], "next", 4U, __tinypy_generator_next_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_ENUMERATE], "__iter__", 8U, __tinypy_generator_iter_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_REVERSED], "next", 4U, __tinypy_generator_next_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_REVERSED], "__iter__", 8U, __tinypy_generator_iter_method);
-    __tinypy_generator_type_set(vm, &vm->types[TINYPY_VALUE_REVERSED], "__length_hint__", 15U, __tinypy_reversed_length_hint_method);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ENUMERATE]), vm->internal_special_next_key, __tinypy_generator_next_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_ENUMERATE]), vm->internal_special_iter_key, __tinypy_generator_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_REVERSED]), vm->internal_special_next_key, __tinypy_generator_next_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_REVERSED]), vm->internal_special_iter_key, __tinypy_generator_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_REVERSED]), vm->internal_special_length_hint_key, __tinypy_reversed_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_generator_frame(const tinypy_value_t *generator) {

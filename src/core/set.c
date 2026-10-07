@@ -73,7 +73,7 @@ static tinypy_bool_t __tinypy_set_insert(tinypy_value_t *set, tinypy_value_t *it
     tinypy_set_object_t *object = TINYPY_SET_OBJECT(set);
 
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_value_t *none = TINYPY_RET_NONE(vm);
     tinypy_bool_t inserted = tinypy_internal_dict_set_checked(vm, object->dict, item, none, out_error);
     TINYPY_DECREF(none);
     if (inserted == 0) {
@@ -93,7 +93,7 @@ tinypy_bool_t tinypy_internal_set_update_iterable(tinypy_value_t *set, tinypy_va
         tinypy_value_t *dict = TINYPY_SET_OBJECT(iterable)->dict;
         tinypy_value_t *target_dict = TINYPY_SET_OBJECT(set)->dict;
         tinypy_dict_entry_t *entries = TINYPY_DICT_ITERATOR_BEGIN(dict);
-        tinypy_value_t *none = tinypy_none_get(TINYPY_VALUE_VM(set));
+        tinypy_value_t *none = TINYPY_RET_NONE(TINYPY_VALUE_VM(set));
         size_t target_size = TINYPY_DICT_SIZE(target_dict);
         size_t source_size = TINYPY_DICT_SIZE(dict);
         size_t capacity = TINYPY_DICT_OBJECT(dict)->mask + 1U;
@@ -192,8 +192,7 @@ static tinypy_value_t *__tinypy_set_normalize(tinypy_value_t *iterable, tinypy_e
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(iterable);
 
     if (kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
-        TINYPY_INCREF(iterable);
-        return iterable;
+        return TINYPY_RET(iterable);
     }
     tinypy_value_t *return_value_1 = tinypy_set_from_iterable(iterable, INT32_C(0), out_error);
     return return_value_1;
@@ -240,8 +239,7 @@ tinypy_bool_t tinypy_internal_set_is_subset_checked(const tinypy_value_t *left, 
         if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
             continue;
         }
-        key = entry->key;
-        TINYPY_INCREF(key);
+        key = TINYPY_RET(entry->key);
         if (tinypy_internal_dict_lookup_hash_checked(vm, right_dict, key, entry->hash, NULL, &found, out_error) == 0) {
             TINYPY_DECREF(key);
             return TINYPY_FALSE;
@@ -368,8 +366,7 @@ tinypy_value_t *tinypy_set_from_iterable(tinypy_value_t *iterable, tinypy_bool_t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(iterable);
     TINYPY_CLEAR_ERROR(out_error);
     if (frozen != 0 && TINYPY_VALUE_KIND(iterable) == TINYPY_VALUE_FROZENSET) {
-        TINYPY_INCREF(iterable);
-        return iterable;
+        return TINYPY_RET(iterable);
     }
     tinypy_value_t *result = __tinypy_set_allocate(vm, frozen);
     if (tinypy_internal_set_update_iterable(result, iterable, out_error) == 0) {
@@ -388,8 +385,7 @@ size_t tinypy_set_size(const tinypy_value_t *set) {
    frozenset the way CPython's set_contains and set_discard_key retry. */
 static tinypy_value_t *__tinypy_set_probe_key(tinypy_value_t *item, tinypy_error_t **out_error) {
     if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SET) {
-        TINYPY_INCREF(item);
-        return item;
+        return TINYPY_RET(item);
     }
     tinypy_value_t *return_value_1 = tinypy_set_from_iterable(item, TINYPY_TRUE, out_error);
     return return_value_1;
@@ -724,7 +720,7 @@ static tinypy_bool_t __tinypy_set_method_arguments(tinypy_vm_t *vm, tinypy_value
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_set_none(tinypy_vm_t *vm) {
-    tinypy_value_t *return_value_1 = tinypy_none_get(vm);
+    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -741,8 +737,7 @@ static tinypy_value_t *__tinypy_set_binary_method(tinypy_value_t *function, tiny
     if (right_kind != TINYPY_VALUE_SET && right_kind != TINYPY_VALUE_FROZENSET) {
         tinypy_value_t *result = &vm->not_implemented_object.base;
 
-        TINYPY_INCREF(result);
-        return result;
+        return TINYPY_RET(result);
     }
     tinypy_value_t *return_value_1 = tinypy_internal_set_binary(left, right, (int32_t)(mode % 100), out_error);
     return return_value_1;
@@ -761,8 +756,7 @@ static tinypy_value_t *__tinypy_set_inplace_method(tinypy_value_t *function, tin
     if (other_kind != TINYPY_VALUE_SET && other_kind != TINYPY_VALUE_FROZENSET) {
         tinypy_value_t *result = &vm->not_implemented_object.base;
 
-        TINYPY_INCREF(result);
-        return result;
+        return TINYPY_RET(result);
     }
     tinypy_bool_t updated;
 
@@ -785,8 +779,7 @@ static tinypy_value_t *__tinypy_set_inplace_method(tinypy_value_t *function, tin
         return NULL;
     }
     TINYPY_SET_OBJECT(self)->hash_computed = 0;
-    TINYPY_INCREF(self);
-    return self;
+    return TINYPY_RET(self);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_set_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -932,8 +925,7 @@ static tinypy_value_t *__tinypy_set_copy_method(tinypy_value_t *function, tinypy
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
     if (self->type == &vm->types[TINYPY_VALUE_FROZENSET]) {
-        TINYPY_INCREF(self);
-        return self;
+        return TINYPY_RET(self);
     }
     tinypy_value_t *return_value_1 = __tinypy_set_copy_kind(self, TINYPY_VALUE_KIND(self) == TINYPY_VALUE_FROZENSET, out_error);
     return return_value_1;
@@ -1231,7 +1223,7 @@ static tinypy_value_t *__tinypy_set_isdisjoint_iterable(tinypy_value_t *self, ti
             if (checked == 0) {
                 return NULL;
             }
-            tinypy_value_t *result = tinypy_bool_from_i32(vm, 0);
+            tinypy_value_t *result = TINYPY_RET_FALSE(vm);
 
             return result;
         }
@@ -1246,7 +1238,7 @@ static tinypy_value_t *__tinypy_set_isdisjoint_iterable(tinypy_value_t *self, ti
         }
         return NULL;
     }
-    tinypy_value_t *result = tinypy_bool_from_i32(vm, 1);
+    tinypy_value_t *result = TINYPY_RET_TRUE(vm);
 
     return result;
 }
@@ -1373,8 +1365,7 @@ static tinypy_value_t *__tinypy_set_create_common(tinypy_type_t *type, tinypy_va
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
     if (type == &vm->types[TINYPY_VALUE_FROZENSET] && TINYPY_VALUE_KIND(item) == TINYPY_VALUE_FROZENSET && item->type == type) {
-        TINYPY_INCREF(item);
-        return item;
+        return TINYPY_RET(item);
     }
     tinypy_value_t *return_value_2 = __tinypy_set_allocate_type_checked(type, out_error);
     if (return_value_2 == NULL) {
@@ -1397,66 +1388,46 @@ tinypy_value_t *tinypy_internal_frozenset_create(tinypy_type_t *type, tinypy_val
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_set_type_method_with_user_data(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback, void *user_data) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, user_data, NULL);
-
-    tinypy_type_set_attr(type, name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_set_type_method(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
-    __tinypy_set_type_method_with_user_data(vm, type, name, name_size, callback, NULL);
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_set_type_method_descriptor(tinypy_vm_t *vm, tinypy_type_t *type, const char *name, size_t name_size, tinypy_native_function_callback_t callback) {
-    tinypy_value_t *function = tinypy_native_function_new(vm, name, name_size, callback, NULL, NULL);
-
-    tinypy_internal_native_function_set_descriptor_kind(function, TINYPY_NATIVE_DESCRIPTOR_METHOD);
-    tinypy_type_set_attr(type, name, name_size, function);
-    TINYPY_DECREF(function);
-}
-//////////////////////////////////////////////////////////////////////////
 static void __tinypy_set_register_common_methods(tinypy_vm_t *vm, tinypy_type_t *type) {
-    __tinypy_set_type_method(vm, type, "copy", 4U, __tinypy_set_copy_method);
-    __tinypy_set_type_method(vm, type, "union", 5U, __tinypy_set_union_method);
-    __tinypy_set_type_method(vm, type, "intersection", 12U, __tinypy_set_intersection_method);
-    __tinypy_set_type_method(vm, type, "difference", 10U, __tinypy_set_difference_method);
-    __tinypy_set_type_method(vm, type, "symmetric_difference", 20U, __tinypy_set_symmetric_difference_method);
-    __tinypy_set_type_method(vm, type, "issubset", 8U, __tinypy_set_issubset_method);
-    __tinypy_set_type_method(vm, type, "issuperset", 10U, __tinypy_set_issuperset_method);
-    __tinypy_set_type_method(vm, type, "isdisjoint", 10U, __tinypy_set_isdisjoint_method);
-    __tinypy_set_type_method(vm, type, "__len__", 7U, __tinypy_set_len_method);
-    __tinypy_set_type_method_descriptor(vm, type, "__contains__", 12U, __tinypy_set_contains_method);
-    __tinypy_set_type_method(vm, type, "__iter__", 8U, __tinypy_set_iter_method);
-    __tinypy_set_type_method(vm, type, "__repr__", 8U, __tinypy_set_repr_method);
-    __tinypy_set_type_method_with_user_data(vm, type, "__and__", 7U, __tinypy_set_binary_method, (void *)(intptr_t)TINYPY_SET_BINARY_AND);
-    __tinypy_set_type_method_with_user_data(vm, type, "__rand__", 8U, __tinypy_set_binary_method, (void *)(intptr_t)(100 + TINYPY_SET_BINARY_AND));
-    __tinypy_set_type_method_with_user_data(vm, type, "__xor__", 7U, __tinypy_set_binary_method, (void *)(intptr_t)TINYPY_SET_BINARY_XOR);
-    __tinypy_set_type_method_with_user_data(vm, type, "__rxor__", 8U, __tinypy_set_binary_method, (void *)(intptr_t)(100 + TINYPY_SET_BINARY_XOR));
-    __tinypy_set_type_method_with_user_data(vm, type, "__or__", 6U, __tinypy_set_binary_method, (void *)(intptr_t)TINYPY_SET_BINARY_OR);
-    __tinypy_set_type_method_with_user_data(vm, type, "__ror__", 7U, __tinypy_set_binary_method, (void *)(intptr_t)(100 + TINYPY_SET_BINARY_OR));
-    __tinypy_set_type_method_with_user_data(vm, type, "__sub__", 7U, __tinypy_set_binary_method, (void *)(intptr_t)TINYPY_SET_BINARY_SUBTRACT);
-    __tinypy_set_type_method_with_user_data(vm, type, "__rsub__", 8U, __tinypy_set_binary_method, (void *)(intptr_t)(100 + TINYPY_SET_BINARY_SUBTRACT));
+    tinypy_internal_type_add_method(type, vm->internal_copy_key, __tinypy_set_copy_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_union_key, __tinypy_set_union_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_intersection_key, __tinypy_set_intersection_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_difference_key, __tinypy_set_difference_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_symmetric_difference_key, __tinypy_set_symmetric_difference_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_issubset_key, __tinypy_set_issubset_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_issuperset_key, __tinypy_set_issuperset_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_isdisjoint_key, __tinypy_set_isdisjoint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_length_key, __tinypy_set_len_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_contains_key, __tinypy_set_contains_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_METHOD);
+    tinypy_internal_type_add_method(type, vm->internal_special_iter_key, __tinypy_set_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_set_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_and_key, __tinypy_set_binary_method, (void *)(intptr_t)TINYPY_SET_BINARY_AND, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_rand_key, __tinypy_set_binary_method, (void *)(intptr_t)(100 + TINYPY_SET_BINARY_AND), NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_xor_key, __tinypy_set_binary_method, (void *)(intptr_t)TINYPY_SET_BINARY_XOR, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_rxor_key, __tinypy_set_binary_method, (void *)(intptr_t)(100 + TINYPY_SET_BINARY_XOR), NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_or_key, __tinypy_set_binary_method, (void *)(intptr_t)TINYPY_SET_BINARY_OR, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_ror_key, __tinypy_set_binary_method, (void *)(intptr_t)(100 + TINYPY_SET_BINARY_OR), NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_sub_key, __tinypy_set_binary_method, (void *)(intptr_t)TINYPY_SET_BINARY_SUBTRACT, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_rsub_key, __tinypy_set_binary_method, (void *)(intptr_t)(100 + TINYPY_SET_BINARY_SUBTRACT), NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_set_types(tinypy_vm_t *vm) {
     __tinypy_set_register_common_methods(vm, &vm->types[TINYPY_VALUE_SET]);
     __tinypy_set_register_common_methods(vm, &vm->types[TINYPY_VALUE_FROZENSET]);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_SET], "add", 3U, __tinypy_set_add_method);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_SET], "discard", 7U, __tinypy_set_discard_method);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_SET], "remove", 6U, __tinypy_set_remove_method);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_SET], "pop", 3U, __tinypy_set_pop_method);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_SET], "clear", 5U, __tinypy_set_clear_method);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_SET], "update", 6U, __tinypy_set_update_method);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_SET], "intersection_update", 19U, __tinypy_set_intersection_update_method);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_SET], "difference_update", 17U, __tinypy_set_difference_update_method);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_SET], "symmetric_difference_update", 27U, __tinypy_set_symmetric_difference_update_method);
-    __tinypy_set_type_method_with_user_data(vm, &vm->types[TINYPY_VALUE_SET], "__iand__", 8U, __tinypy_set_inplace_method, (void *)(intptr_t)TINYPY_SET_BINARY_AND);
-    __tinypy_set_type_method_with_user_data(vm, &vm->types[TINYPY_VALUE_SET], "__ixor__", 8U, __tinypy_set_inplace_method, (void *)(intptr_t)TINYPY_SET_BINARY_XOR);
-    __tinypy_set_type_method_with_user_data(vm, &vm->types[TINYPY_VALUE_SET], "__ior__", 7U, __tinypy_set_inplace_method, (void *)(intptr_t)TINYPY_SET_BINARY_OR);
-    __tinypy_set_type_method_with_user_data(vm, &vm->types[TINYPY_VALUE_SET], "__isub__", 8U, __tinypy_set_inplace_method, (void *)(intptr_t)TINYPY_SET_BINARY_SUBTRACT);
-    __tinypy_set_type_method(vm, &vm->types[TINYPY_VALUE_FROZENSET], "__hash__", 8U, __tinypy_frozenset_hash_method);
-    tinypy_value_t *hash_key = tinypy_string_from_bytes(vm, "__hash__", 8U);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_add_key, __tinypy_set_add_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_discard_key, __tinypy_set_discard_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_remove_key, __tinypy_set_remove_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_pop_key, __tinypy_set_pop_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_clear_key, __tinypy_set_clear_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_update_key, __tinypy_set_update_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_intersection_update_key, __tinypy_set_intersection_update_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_difference_update_key, __tinypy_set_difference_update_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_symmetric_difference_update_key, __tinypy_set_symmetric_difference_update_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_special_iand_key, __tinypy_set_inplace_method, (void *)(intptr_t)TINYPY_SET_BINARY_AND, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_special_ixor_key, __tinypy_set_inplace_method, (void *)(intptr_t)TINYPY_SET_BINARY_XOR, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_special_ior_key, __tinypy_set_inplace_method, (void *)(intptr_t)TINYPY_SET_BINARY_OR, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SET]), vm->internal_special_isub_key, __tinypy_set_inplace_method, (void *)(intptr_t)TINYPY_SET_BINARY_SUBTRACT, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_FROZENSET]), vm->internal_special_hash_key, __tinypy_frozenset_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_value_t *hash_key = vm->internal_special_hash_key;
     tinypy_dict_set(vm->types[TINYPY_VALUE_SET].dict, hash_key, &vm->none_object.base);
-    TINYPY_DECREF(hash_key);
 }
