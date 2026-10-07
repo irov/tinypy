@@ -168,6 +168,9 @@ void tinypy_internal_frame_save_handled(tinypy_vm_t *vm) {
     if (frame->previous_handled_type != NULL) {
         TINYPY_INCREF(frame->previous_handled_type);
     }
+    else {
+        frame->previous_handled_type = TINYPY_RET_NONE(vm);
+    }
     if (frame->previous_handled_value != NULL) {
         TINYPY_INCREF(frame->previous_handled_value);
     }

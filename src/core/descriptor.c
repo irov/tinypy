@@ -1269,13 +1269,13 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
             function_result = __tinypy_internal_c_descriptor_optional(vm, frame->trace);
             return function_result;
         case TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_TYPE:
-            function_result = __tinypy_internal_c_descriptor_optional(vm, frame == vm->current_frame ? vm->handled_type : frame->previous_handled_type);
+            function_result = __tinypy_internal_c_descriptor_optional(vm, frame->previous_handled_type);
             return function_result;
         case TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_VALUE:
-            function_result = __tinypy_internal_c_descriptor_optional(vm, frame == vm->current_frame ? vm->handled_value : frame->previous_handled_value);
+            function_result = __tinypy_internal_c_descriptor_optional(vm, frame->previous_handled_value);
             return function_result;
         case TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_TRACEBACK:
-            function_result = __tinypy_internal_c_descriptor_optional(vm, frame == vm->current_frame ? vm->handled_traceback : frame->previous_handled_traceback);
+            function_result = __tinypy_internal_c_descriptor_optional(vm, frame->previous_handled_traceback);
             return function_result;
         case TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED:
             function_result = tinypy_bool_from_i32(vm, frame->builtins != vm->builtins);
@@ -1362,13 +1362,14 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         return TINYPY_FALSE;
     }
     if (descriptor->writable == 0) {
-        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT) {
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("attribute '"), {(const char *)TINYPY_TEXT_BYTES(descriptor->name), TINYPY_TEXT_BYTE_SIZE(descriptor->name)},
-                TINYPY_MESSAGE_PART_LITERAL("' of 'type' objects is not writable")
+                TINYPY_MESSAGE_PART_LITERAL("' of '"), {descriptor->owner->name, descriptor->owner->name_size},
+                TINYPY_MESSAGE_PART_LITERAL("' objects is not writable")
             };
 
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, 3U, out_error);
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, 5U, out_error);
         }
         else {
             __tinypy_internal_c_descriptor_readonly(vm, out_error);
@@ -1560,6 +1561,26 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT(instance);
 
         __tinypy_internal_c_descriptor_replace(&frame->trace, value);
+        return TINYPY_TRUE;
+    }
+    if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_TYPE && field <= TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_TRACEBACK) {
+        tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT(instance);
+        tinypy_value_t **slot = field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_TYPE ? &frame->previous_handled_type : (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_VALUE ? &frame->previous_handled_value : &frame->previous_handled_traceback);
+        tinypy_value_t *incoming = value != NULL && TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE ? NULL : value;
+        tinypy_value_t *previous = *slot;
+
+        if (incoming != NULL) {
+            TINYPY_INCREF(incoming);
+        }
+        *slot = NULL;
+        if (previous != NULL) {
+            TINYPY_DECREF(previous);
+        }
+        previous = *slot;
+        *slot = incoming;
+        if (previous != NULL) {
+            TINYPY_DECREF(previous);
+        }
         return TINYPY_TRUE;
     }
     if (TINYPY_VALUE_KIND(instance) != TINYPY_VALUE_FUNCTION) {
@@ -1766,9 +1787,9 @@ void tinypy_internal_initialize_descriptor_types(tinypy_vm_t *vm) {
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_lasti_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LAST_INSTRUCTION, INT32_C(0));
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_lineno_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER, INT32_C(0));
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_trace_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_TRACE, INT32_C(1));
-    __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_exc_type_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_TYPE, INT32_C(0));
-    __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_exc_value_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_VALUE, INT32_C(0));
-    __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_exc_traceback_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_TRACEBACK, INT32_C(0));
+    __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_exc_type_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_TYPE, INT32_C(1));
+    __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_exc_value_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_VALUE, INT32_C(1));
+    __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_exc_traceback_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_EXCEPTION_TRACEBACK, INT32_C(1));
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_FRAME], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_f_restricted_key, TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED, INT32_C(0));
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_TRACEBACK], TINYPY_VALUE_MEMBER_DESCRIPTOR, vm->internal_tb_next_key, TINYPY_INTERNAL_C_DESCRIPTOR_TRACEBACK_NEXT, INT32_C(0));
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_TRACEBACK], TINYPY_VALUE_MEMBER_DESCRIPTOR, vm->internal_tb_frame_key, TINYPY_INTERNAL_C_DESCRIPTOR_TRACEBACK_FRAME, INT32_C(0));

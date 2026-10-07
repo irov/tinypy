@@ -300,8 +300,16 @@ interned результат копируется перед изменением
 `TINYPY_RET(value)` возвращает тот же ненулевой объект с увеличенным refcount,
 вычисляя аргумент ровно один раз. `TINYPY_RET_NONE`, `TINYPY_RET_TRUE`,
 `TINYPY_RET_FALSE`, `TINYPY_RET_NOT_IMPLEMENTED`, `TINYPY_RET_ELLIPSIS`,
-`TINYPY_RET_EMPTY_TUPLE` и `TINYPY_RET_EMPTY_STRING` принимают VM и возвращают
+`TINYPY_RET_EMPTY_TUPLE`, `TINYPY_RET_EMPTY_STRING` и
+`TINYPY_RET_EMPTY_UNICODE` принимают VM и возвращают
 владеющую ссылку на соответствующий существующий singleton без аллокации.
+
+Python-класс сохраняет исходный объект `str` своего имени, включая subtype.
+Native type с квалифицированным C-именем возвращает часть после последней
+точки в `__name__` и префикс в `__module__`. Для builtin exceptions с коротким
+C-именем используется явно зарегистрированный модуль. Instance descriptor
+`function.__module__` не является модулем самого типа `function`.
+Модуль Python-класса читается из его собственного namespace.
 
 Логические значения C имеют тип `tinypy_bool_t` и именованные константы
 `TINYPY_TRUE`/`TINYPY_FALSE`. Проверка на `!= TINYPY_FALSE` сохраняет семантику
@@ -370,6 +378,13 @@ len(co_varnames)` и места для аргументов: frame размеч�
 
 Frame execution поддерживает closures, generators, exception blocks,
 comprehensions, `with`, imports и tracing data code object.
+
+`f_exc_type`, `f_exc_value` и `f_exc_traceback` показывают сохранённое
+состояние вызывающего frame; текущий обработчик читается через `sys.exc_info()`.
+Эти getset descriptors допускают запись и удаление. `None` очищает поле;
+при возврате сохранённое состояние передаётся VM с сохранением владения.
+`f_locals`, `f_restricted` и имя generator являются readonly getsets и
+возвращают `AttributeError` при попытке записи или удаления.
 
 При выходе из frame его fast locals освобождаются сразу, даже если frame
 остаётся достижим через traceback: без cyclic GC это разрывает циклы

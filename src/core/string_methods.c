@@ -662,6 +662,22 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, 5U, out_error);
         return NULL;
     }
+    if (conversion == 0 && type != 0U && (value_kind == TINYPY_VALUE_BOOL || value_kind == TINYPY_VALUE_INTEGER || value_kind == TINYPY_VALUE_LONG || value_kind == TINYPY_VALUE_FLOAT || value_kind == TINYPY_VALUE_COMPLEX)) {
+        const char *codes = value_kind == TINYPY_VALUE_FLOAT ? "eEfFgGn%" : (value_kind == TINYPY_VALUE_COMPLEX ? "eEfFgGn" : "bcdoxXneEfFgG%");
+
+        if (strchr(codes, type) == NULL) {
+            const tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("Unknown format code '"),
+                {(const char *)&type, 1U},
+                TINYPY_MESSAGE_PART_LITERAL("' for object of type '"),
+                TINYPY_MESSAGE_PART_TYPE_NAME(value),
+                TINYPY_MESSAGE_PART_LITERAL("'")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, 5U, out_error);
+            return NULL;
+        }
+    }
     if (conversion == 0 && type == 0U) {
         if (value_kind == TINYPY_VALUE_INTEGER || value_kind == TINYPY_VALUE_LONG || (value_kind == TINYPY_VALUE_BOOL && spec_size != 0U)) {
             type = (uint8_t)'d';
@@ -937,8 +953,23 @@ tinypy_value_t *tinypy_internal_string_format_object(tinypy_vm_t *vm, tinypy_val
     size_t size = format_spec != NULL ? TINYPY_TEXT_BYTE_SIZE(format_spec) : 0U;
     tinypy_bool_t unicode = format_spec != NULL && TINYPY_VALUE_KIND(format_spec) == TINYPY_VALUE_UNICODE;
     tinypy_bool_t result_unicode;
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    tinypy_bool_t numeric = kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX;
+    tinypy_value_t *converted = NULL;
+
+    if (unicode != TINYPY_FALSE && numeric != TINYPY_FALSE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) {
+        converted = tinypy_object_str(format_spec, out_error);
+        if (converted == NULL) {
+            return NULL;
+        }
+        spec = TINYPY_TEXT_BYTES(converted);
+        size = TINYPY_TEXT_BYTE_SIZE(converted);
+    }
     tinypy_value_t *result = __tinypy_internal_string_format_value(vm, value, 0, spec, size, unicode, TINYPY_TRUE, format_spec, &result_unicode, out_error);
 
+    if (converted != NULL) {
+        TINYPY_DECREF(converted);
+    }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

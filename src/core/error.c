@@ -178,6 +178,28 @@ void tinypy_internal_make_arity_error(tinypy_vm_t *vm, const char *name, size_t 
     size_t expected_size = tinypy_internal_format_size(expected_buffer, expected);
     size_t count_size = tinypy_internal_format_size(count_buffer, count);
 
+    if (style == TINYPY_ARITY_STYLE_WRAPPER) {
+        char minimum_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+        size_t minimum_size = tinypy_internal_format_size(minimum_buffer, minimum);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("expected "),
+            {minimum_buffer, minimum_size},
+            TINYPY_MESSAGE_PART_LITERAL(" or "),
+            {expected_buffer, expected_size},
+            TINYPY_MESSAGE_PART_LITERAL(" arguments, got "),
+            {count_buffer, count_size},
+        };
+
+        if (minimum == maximum) {
+            parts[2].size = 0U;
+            parts[3].size = 0U;
+        }
+        else {
+            parts[3].size = tinypy_internal_format_size(expected_buffer, maximum);
+        }
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return;
+    }
     if (style == TINYPY_ARITY_STYLE_SINGLE) {
         tinypy_message_part_t parts[] = {
             {name, name_size},
@@ -220,9 +242,10 @@ void tinypy_internal_make_arity_error(tinypy_vm_t *vm, const char *name, size_t 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return;
     }
+    /* A NULL name represents an anonymous PyArg_ParseTuple invocation. */
     tinypy_message_part_t parts[] = {
-        {name, name_size},
-        TINYPY_MESSAGE_PART_LITERAL("() takes "),
+        {name != NULL ? name : "function", name != NULL ? name_size : 8U},
+        {name != NULL ? "() takes " : " takes ", name != NULL ? 9U : 7U},
         TINYPY_MESSAGE_PART_LITERAL("exactly "),
         {expected_buffer, expected_size},
         TINYPY_MESSAGE_PART_LITERAL(" argument"),

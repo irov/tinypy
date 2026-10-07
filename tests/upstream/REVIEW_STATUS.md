@@ -1,11 +1,12 @@
 # Runtime review closure — 2026-10-07
 
-The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 743
-portable regressions across eight passes and a repeatable four-profile matrix.
-Its eighth-pass inventory has 1,413 selected cases, 28 finite runtime matrices
-with 271,524 outcomes per profile, and 11,538 compiler comparisons per profile
-(46,152 across four). These totals passed aggregate acceptance in all four profiles on macOS arm64.
-The preceding seventh-pass report remains a historical baseline. The future
+The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 839
+portable regressions across nine passes and a repeatable four-profile matrix.
+Its ninth-pass inventory has 1,509 selected cases, 32 finite runtime matrices
+with 277,626 outcomes per profile, and 11,562 compiler comparisons per profile
+(46,248 across four). These totals passed aggregate acceptance in all four
+profiles on macOS arm64. The preceding seventh- and eighth-pass reports remain
+historical baselines. The future
 variant and acceptance plan is in [TEST_PLAN.md](../conformance/TEST_PLAN.md).
 The explicit CPython pending-C-exception boundary is recorded in the audit.
 The original
@@ -28,7 +29,48 @@ reproduced. The supplied crashing scripts, custom nopool build and crafted
 bytecode/regex programs were not run. A passing sanitizer suite does not
 establish equivalence to that separate historical investigation.
 
-## Eighth-pass follow-up
+## Ninth-pass follow-up
+
+Four independently authored modules add 96 portable cases: 14
+[metadata arguments](local/test_metadata_arguments_audit.py), 25
+[numeric arguments](local/test_numeric_arguments_audit.py), 31
+[container arguments](local/test_container_arguments_audit.py) and 26
+[introspection arguments](local/test_introspection_arguments_audit.py).
+Their four finite products add 6,102 outcomes (325 + 995 + 3,756 + 1,026).
+Focused strict Debug comparisons match quiet CPython 2.7.18 streams with zero
+outstanding tinypy allocations. Independent source reviews check shared parser
+styles, descriptor routing, argument ownership and saved exception-state transfer.
+
+The complete four-profile run passed all 218 stages in 312.7 recorded stage
+seconds. Debug and ASan/UBSan pass 1,509 portable cases; Release/LTO pass 1,505
+with the four expected detector skips. Every profile passes all 89 native/runtime
+tests, 277,626 runtime outcomes and 11,562 compiler comparisons. Inventory checks
+cover 151 CTest registrations, 161 checked-in compiler sources and 734 VM presets;
+all 90 host checks pass. No DEFER or new skip was added. The accepted source/test
+SHA-256 is `c31bf6d38c1362bf36040274701fd38926be9065f3e5c5b67145fc8fba79f3e1`,
+matching the post-run fingerprint. The report is
+`.temp/validation-ninth-audit-accepted/report.json`. ASan/UBSan emit no diagnostics;
+Apple ASan uses `detect_leaks=0` with independent tinypy allocator-balance checks.
+
+| Family | Concrete correction |
+| --- | --- |
+| Metadata | Native C names split into short __name__ and qualified __module__; Python heap names retain their original object; classic metadata deletion/type/NUL diagnostics and modern empty-base errors follow the reference. Native partial/scanner representations retain qualified names. |
+| Native arguments | One canonical method parser handles native/wrapper arity styles, implicit receivers and keyword rejection. Container operators, set constructors, dictionary/view comparison/hash wrappers and iterator constructors preserve their own operand errors and conversion priority. |
+| Numeric/text | New-argument tuples use fresh base payload snapshots; direct numeric formatting and public format distinguish Unicode specification conversion/result types; numeric class methods retain exact argument diagnostics. |
+| Functions/reduction | FunctionType retains typed argument pins and parser order, suppressed globals metadata lookup and NUL-prefix keyword behavior. Reduction preserves optional lookup/call failures, reported classes and cached slot-name validation. |
+| Frames/descriptors | f_exc_* getsets expose writable saved caller state. Setters clear the displaced field before finalizers; stopped-frame witnesses observe None before publication of the new value. Frame exit transfers/releases saved state once. Read-only frame/generator fields retain descriptor errors. |
+
+Size comparisons verify protocol, type, nonnegative values and relative storage
+relationships; physical CPython object sizes are not asserted. Frame publication
+tests use stopped frames with read-only finalizers. All Python-visible argument
+checks remain active in Release. These changes add no detector adaptation, skip
+or SPEC exclusion. The eighth-pass SRE short-name and classic class NUL-name
+observations are corrected here. Primary references include
+[typeobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/typeobject.c),
+[classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c)
+and [frameobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/frameobject.c).
+
+## Historical eighth-pass follow-up
 
 Four independently authored modules add 91 portable cases: 20
 [buffer state](local/test_buffer_state_audit.py), 28
@@ -62,15 +104,17 @@ The accepted full run checked 147 CTest registrations, 153 checked-in compiler
 sources and 730 VM name presets. Release/LTO retain 1,409 portable passes and
 four detector skips; Debug requires all 1,413 cases.
 
-Two observations are recorded for the next audit rather than counted as fixes:
-native SRE type `__name__` retains `_sre.SRE_Pattern`/`_sre.SRE_Match` in tinypy
-instead of the reference's unqualified names; classic class `__name__` containing
-NUL raises CPython TypeError (`__name__ must not contain null bytes`) versus
-tinypy ValueError (`__name__ must not contain null characters`). The active
-branches are [vm.c](../../src/core/vm.c) and [class.c](../../src/core/class.c),
-with reference definitions in
-[_sre.c](https://github.com/python/cpython/blob/v2.7.18/Modules/_sre.c) and
-[classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c).
+## Continuing metadata audit
+
+Two subsequent observations are recorded for the next audit rather than counted
+as fixes: bound builtin slot wrappers use `builtin_function_or_method` instead
+of CPython's `method-wrapper`, and bytearray iterators use `iterator` instead of
+`bytearray_iterator`. The ninth-pass receiver product checks binding/name/self
+protocols, not wrapper metatype; its native-name product omits bytearray iterators.
+The active registrations are in [vm.c](../../src/core/vm.c), with reference
+definitions in
+[descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c)
+and [bytearrayobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/bytearrayobject.c).
 These observations are not new skips, normalization rules or SPEC exclusions.
 Bounded ordinary programs and stable buffer mutations provide finite evidence;
 arbitrary callbacks/programs, malformed inputs and other host ABIs remain outside

@@ -1465,7 +1465,12 @@ tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t
     }
     base_count = TINYPY_TUPLE_SIZE(bases_value);
     if (base_count == 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type __bases__ must not be empty", out_error);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("can only assign non-empty tuple to "), {type->name, type->name_size},
+            TINYPY_MESSAGE_PART_LITERAL(".__bases__, not ()")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
         return TINYPY_FALSE;
     }
     bases = TINYPY_TUPLE_ITERATOR_BEGIN(bases_value);

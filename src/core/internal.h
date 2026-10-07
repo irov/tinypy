@@ -339,6 +339,7 @@ typedef struct tinypy_intern_entry_t {
     X(internal_copy_reg_module_name, "copy_reg", 1) \
     X(internal_partial_module_name, "_functools", 1) \
     X(internal_functools_module_name, "functools", 1) \
+    X(internal_functools_dot_partial_key, "functools.partial", 1) \
     X(internal_weakref_module_name, "_weakref", 1) \
     X(internal_compiler_module_name, "<module>", 1) \
     X(internal_compiler_lambda_name, "<lambda>", 1) \
@@ -527,6 +528,8 @@ typedef struct tinypy_intern_entry_t {
     X(internal_runtime_error_key, "RuntimeError", 1) \
     X(internal_runtime_warning_key, "RuntimeWarning", 1) \
     X(internal_sre_scanner_key, "SRE_Scanner", 1) \
+    X(internal_sre_pattern_key, "SRE_Pattern", 1) \
+    X(internal_sre_match_key, "SRE_Match", 1) \
     X(internal_standard_error_key, "StandardError", 1) \
     X(internal_stop_iteration_key, "StopIteration", 1) \
     X(internal_struct_key, "Struct", 1) \
@@ -566,6 +569,7 @@ typedef struct tinypy_intern_entry_t {
     X(internal_slotnames_key, "_slotnames", 1) \
     X(internal_sre_dot_sre_match_key, "_sre.SRE_Match", 1) \
     X(internal_sre_dot_sre_pattern_key, "_sre.SRE_Pattern", 1) \
+    X(internal_sre_dot_sre_scanner_key, "_sre.SRE_Scanner", 1) \
     X(internal_subx_key, "_subx", 1) \
     X(internal_abs_key, "abs", 1) \
     X(internal_future_absolute_import_key, "absolute_import", 1) \
@@ -1869,9 +1873,11 @@ size_t tinypy_internal_format_size(char *buffer, size_t value);
 typedef enum tinypy_arity_style_e {
     TINYPY_ARITY_STYLE_PARSED = 0,
     TINYPY_ARITY_STYLE_UNPACK = 1,
-    TINYPY_ARITY_STYLE_SINGLE = 2
+    TINYPY_ARITY_STYLE_SINGLE = 2,
+    TINYPY_ARITY_STYLE_WRAPPER = 3
 } tinypy_arity_style_e;
 void tinypy_internal_make_arity_error(tinypy_vm_t *vm, const char *name, size_t name_size, size_t count, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error);
 void tinypy_internal_make_vm_error_location(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size, tinypy_bool_t include_location, tinypy_error_t **out_error);
 
 tinypy_bool_t tinypy_internal_value_belongs_to(const tinypy_vm_t *vm, const tinypy_value_t *value);

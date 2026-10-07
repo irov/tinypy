@@ -415,26 +415,26 @@ tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, t
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_value_t **field = NULL;
     if (TINYPY_NAME_EQ(name, vm->internal_special_name_key) != 0) {
-        if (TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_STRING) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__name__ must be a string", out_error);
+        if (attribute_value == NULL || TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_STRING) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__name__ must be a string object", out_error);
             return TINYPY_FALSE;
         }
         if (memchr(TINYPY_TEXT_BYTES(attribute_value), '\0', TINYPY_TEXT_BYTE_SIZE(attribute_value)) != NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__name__ must not contain null characters", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__name__ must not contain null bytes", out_error);
             return TINYPY_FALSE;
         }
         field = &class_object->name;
     }
     else if (TINYPY_NAME_EQ(name, vm->internal_special_dict_key) != 0) {
-        if (TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_DICT) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__dict__ must be a dictionary", out_error);
+        if (attribute_value == NULL || TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_DICT) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__dict__ must be a dictionary object", out_error);
             return TINYPY_FALSE;
         }
         field = &class_object->dict;
     }
     else if (TINYPY_NAME_EQ(name, vm->internal_special_bases_key) != 0) {
-        if (TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_TUPLE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__bases__ must be a tuple", out_error);
+        if (attribute_value == NULL || TINYPY_VALUE_KIND(attribute_value) != TINYPY_VALUE_TUPLE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__bases__ must be a tuple object", out_error);
             return TINYPY_FALSE;
         }
         for (size_t index = 0U; index < TINYPY_TUPLE_SIZE(attribute_value); ++index) {
@@ -516,6 +516,13 @@ static tinypy_bool_t __tinypy_class_delete_from_dict(tinypy_value_t *owner, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_class_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    if (TINYPY_NAME_EQ(name, vm->internal_special_name_key) != TINYPY_FALSE ||
+        TINYPY_NAME_EQ(name, vm->internal_special_dict_key) != TINYPY_FALSE ||
+        TINYPY_NAME_EQ(name, vm->internal_special_bases_key) != TINYPY_FALSE) {
+        tinypy_bool_t stored = tinypy_internal_class_set_attribute(value, name, NULL, out_error);
+        return stored;
+    }
     tinypy_bool_t return_value_1 = __tinypy_class_delete_from_dict(value, TINYPY_CLASS_OBJECT(value)->dict, name, out_error);
     return return_value_1;
 }

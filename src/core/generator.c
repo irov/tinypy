@@ -204,7 +204,7 @@ static tinypy_value_t *__tinypy_generator_next_method(tinypy_value_t *function, 
     (void)user_data;
     if (TINYPY_TUPLE_SIZE(args) != 0U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) == TINYPY_VALUE_GENERATOR
         ? __tinypy_generator_bound_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, TINYPY_TRUE, out_error) == TINYPY_FALSE
-        : __tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == TINYPY_FALSE) {
+        : tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
@@ -402,12 +402,11 @@ static tinypy_value_t *__tinypy_generator_close_method(tinypy_value_t *function,
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_generator_iter_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
     if (TINYPY_TUPLE_SIZE(args) != 0U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) == TINYPY_VALUE_GENERATOR
         ? __tinypy_generator_bound_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, TINYPY_TRUE, out_error) == TINYPY_FALSE
-        : __tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == TINYPY_FALSE) {
+        : tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_RET(TINYPY_TUPLE_GET(args, 0U));
@@ -435,7 +434,7 @@ static tinypy_value_t *__tinypy_reversed_length_hint_method(tinypy_value_t *func
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -455,7 +454,7 @@ static tinypy_value_t *__tinypy_iterator_length_hint_method(tinypy_value_t *func
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_generator_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);

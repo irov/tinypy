@@ -830,7 +830,7 @@ static void __tinypy_representation_class_qualified_name(tinypy_representation_b
 static void __tinypy_representation_type_qualified_name(tinypy_representation_builder_t *builder, const tinypy_type_t *type) {
     tinypy_value_t *module = tinypy_type_get_attr_key(type, type->vm->internal_special_module_key);
 
-    if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, type->vm->internal_builtin_module_name) == 0) {
+    if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, type->vm->internal_builtin_module_name) == 0 && ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U || memchr(type->name, '.', type->name_size) == NULL)) {
         __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
         __tinypy_representation_append_character(builder, (uint8_t)'.');
     }
@@ -994,12 +994,12 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     case TINYPY_VALUE_TYPE: {
         tinypy_type_t *type_value = (tinypy_type_t *)value;
         tinypy_bool_t heap_type = (type_value->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
-        tinypy_value_t *module = tinypy_type_get_attr_key(type_value, type_value->vm->internal_special_module_key);
+        tinypy_value_t *module = tinypy_internal_dict_get_optional_suppressed(builder->vm, type_value->dict, builder->vm->internal_special_module_key);
 
-        /* Types defined in Python report their module; built-in types live in
-           __builtin__ and keep the bare "<type 'name'>" form. */
+        /* Python classes use their own module; native types retain their
+           qualified C name, including module prefixes. */
         __tinypy_representation_append(builder, heap_type != 0 ? "<class '" : "<type '", heap_type != 0 ? 8U : 7U);
-        if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, type_value->vm->internal_builtin_module_name) == 0) {
+        if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, type_value->vm->internal_builtin_module_name) == 0 && (heap_type != TINYPY_FALSE || memchr(type_value->name, '.', type_value->name_size) == NULL)) {
             __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
             __tinypy_representation_append_character(builder, (uint8_t)'.');
         }
@@ -1305,10 +1305,7 @@ static tinypy_value_t *__tinypy_representation_method(tinypy_value_t *function, 
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_representation_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object representation method received invalid arguments", out_error);
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -1395,8 +1392,7 @@ static tinypy_value_t *__tinypy_object_sizeof_method(tinypy_value_t *function, t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__sizeof__ received invalid arguments", out_error);
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);

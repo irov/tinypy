@@ -112,6 +112,40 @@ void tinypy_internal_native_function_finalize(tinypy_value_t *value) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_native_function_check_receiver(tinypy_value_t *callable, tinypy_value_t *receiver, tinypy_bool_t binding, tinypy_error_t **out_error) {
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
+    if (function->owner == NULL || (receiver != NULL && tinypy_type_is_subtype(receiver->type, function->owner) != TINYPY_FALSE)) {
+        return TINYPY_TRUE;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+    if (receiver == NULL) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
+            TINYPY_MESSAGE_PART_LITERAL("' of '"), {function->owner->name, function->owner->name_size},
+            TINYPY_MESSAGE_PART_LITERAL("' object needs an argument"),
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    }
+    else {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
+            TINYPY_MESSAGE_PART_LITERAL("' requires a '"), {function->owner->name, function->owner->name_size},
+            TINYPY_MESSAGE_PART_LITERAL("' object but received a '"), TINYPY_MESSAGE_PART_TYPE_NAME(receiver),
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
+        if (binding != TINYPY_FALSE) {
+            parts[2].bytes = "' for '";
+            parts[2].size = sizeof("' for '") - 1U;
+            parts[4].bytes = "' objects doesn't apply to '";
+            parts[4].size = sizeof("' objects doesn't apply to '") - 1U;
+            parts[6].bytes = "' object";
+            parts[6].size = sizeof("' object") - 1U;
+        }
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_native_function_invoke(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
     tinypy_value_t *result = function->callback(callable, args, kwargs, function->user_data, out_error);
@@ -128,6 +162,48 @@ static tinypy_value_t *__tinypy_native_function_invoke(tinypy_value_t *callable,
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *name = tinypy_native_function_name(function);
+    tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(function);
+    tinypy_bool_t wrapper = function->type == vm->native_wrapper_descriptor_type
+        || (native->function != NULL && native->function->type == vm->native_wrapper_descriptor_type);
+    size_t count = TINYPY_TUPLE_SIZE(args);
+    size_t supplied = count != 0U ? count - 1U : 0U;
+
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_message_part_t parts[] = {
+            {wrapper != TINYPY_FALSE ? "wrapper " : "", wrapper != TINYPY_FALSE ? 8U : 0U},
+            TINYPY_MESSAGE_PART_TEXT(name),
+            {wrapper != TINYPY_FALSE ? " doesn't take keyword arguments" : "() takes no keyword arguments", wrapper != TINYPY_FALSE ? sizeof(" doesn't take keyword arguments") - 1U : sizeof("() takes no keyword arguments") - 1U},
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return TINYPY_FALSE;
+    }
+    if (count == 0U || supplied < minimum || supplied > maximum) {
+        const char *name_bytes = (const char *)TINYPY_TEXT_BYTES(name);
+        size_t name_size = TINYPY_TEXT_BYTE_SIZE(name);
+
+        if (wrapper != TINYPY_FALSE) {
+            if (style == TINYPY_ARITY_STYLE_PARSED) {
+                name_bytes = NULL;
+                name_size = 0U;
+            }
+            else if (style == TINYPY_ARITY_STYLE_UNPACK) {
+                name_bytes = "";
+                name_size = 0U;
+            }
+            else if (style == TINYPY_ARITY_STYLE_SINGLE) {
+                style = TINYPY_ARITY_STYLE_WRAPPER;
+            }
+        }
+        tinypy_internal_make_arity_error(vm, name_bytes, name_size, supplied, minimum, maximum, style, out_error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
     tinypy_value_t *call_args = args;
@@ -135,8 +211,7 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
     if (function->self == NULL && function->owner != NULL) {
         tinypy_value_t *receiver = TINYPY_TUPLE_SIZE(args) != 0U ? TINYPY_TUPLE_GET(args, 0U) : NULL;
 
-        if (receiver == NULL || tinypy_type_is_subtype(receiver->type, function->owner) == 0) {
-            tinypy_internal_make_vm_error(TINYPY_VALUE_VM(callable), TINYPY_ERROR_TYPE, "descriptor requires an instance of its owner", out_error);
+        if (__tinypy_native_function_check_receiver(callable, receiver, TINYPY_FALSE, out_error) == TINYPY_FALSE) {
             return NULL;
         }
     }
@@ -166,6 +241,9 @@ tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *calla
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
     TINYPY_CLEAR_ERROR(out_error);
     if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded while calling a Python object", out_error) == 0) {
+        return NULL;
+    }
+    if (function->self == NULL && __tinypy_native_function_check_receiver(callable, count != 0U ? items[0] : NULL, TINYPY_FALSE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *args = tinypy_internal_tuple_join_items_checked(vm, function->self, items, count, NULL, 0U, out_error);
@@ -207,8 +285,7 @@ tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *d
     if (instance == NULL || function->self != NULL) {
         return TINYPY_RET(descriptor);
     }
-    if (function->owner != NULL && tinypy_type_is_subtype(instance->type, function->owner) == 0) {
-        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(descriptor), TINYPY_ERROR_TYPE, "descriptor requires an instance of its owner", out_error);
+    if (__tinypy_native_function_check_receiver(descriptor, instance, TINYPY_TRUE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
 

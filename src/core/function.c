@@ -34,7 +34,7 @@ tinypy_value_t *tinypy_function_new(tinypy_value_t *code, tinypy_value_t *global
         doc = TINYPY_RET_NONE(vm);
         function->doc = doc;
     }
-    function->module = tinypy_dict_get_optional(globals, vm->internal_special_name_key);
+    function->module = tinypy_internal_dict_get_optional_suppressed(vm, globals, vm->internal_special_name_key);
     if (function->module != NULL) {
         TINYPY_INCREF(function->module);
     }
@@ -207,8 +207,15 @@ static int32_t __tinypy_function_keyword_index(const tinypy_value_t *key) {
     if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
         return -INT32_C(1);
     }
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(key);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(key);
+    const uint8_t *terminator = (const uint8_t *)memchr(bytes, '\0', size);
+
+    if (terminator != NULL) {
+        size = (size_t)(terminator - bytes);
+    }
     for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
-        if (TINYPY_NAME_EQ(key, names[index]) != 0) {
+        if (size == TINYPY_TEXT_BYTE_SIZE(names[index]) && memcmp(bytes, TINYPY_TEXT_BYTES(names[index]), size) == 0) {
             return (int32_t)index;
         }
     }
@@ -218,24 +225,69 @@ static int32_t __tinypy_function_keyword_index(const tinypy_value_t *key) {
 tinypy_value_t *tinypy_internal_function_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t count = TINYPY_TUPLE_SIZE(args);
+    size_t keywords = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
+    size_t recognized = 0U;
+    tinypy_value_t *const names[] = {vm->internal_code_key, vm->internal_globals_key, vm->internal_name_key, vm->internal_argdefs_key, vm->internal_closure_key};
+    static const char *positions[] = {"1", "2", "3", "4", "5"};
     tinypy_value_t *arguments[5] = {NULL, NULL, NULL, NULL, NULL};
-    tinypy_bool_t provided[5] = {TINYPY_FALSE, TINYPY_FALSE, TINYPY_FALSE, TINYPY_FALSE, TINYPY_FALSE};
     tinypy_value_t *code;
     tinypy_value_t *globals;
     tinypy_value_t *name;
     tinypy_value_t *defaults = NULL;
     tinypy_value_t *closure = NULL;
+    tinypy_value_t *result = NULL;
     size_t index;
 
-    if (type != &vm->types[TINYPY_VALUE_FUNCTION] || count > 5U) {
+    if (type != &vm->types[TINYPY_VALUE_FUNCTION]) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function() received invalid arguments", out_error);
         return NULL;
     }
-    for (index = 0U; index < count; ++index) {
-        arguments[index] = TINYPY_TUPLE_GET(args, index);
-        provided[index] = TINYPY_TRUE;
+    if (count > 5U || keywords > 5U - count) {
+        tinypy_internal_make_arity_error(vm, "function", 8U, count + keywords, 0U, 5U, TINYPY_ARITY_STYLE_PARSED, out_error);
+        return NULL;
     }
-    if (kwargs != NULL) {
+    for (index = 0U; index < 5U; ++index) {
+        tinypy_value_t *keyword = recognized < keywords ? tinypy_internal_constructor_keyword_optional(kwargs, names[index]) : NULL;
+        tinypy_value_t *argument = index < count ? TINYPY_TUPLE_GET(args, index) : NULL;
+
+        if (keyword != NULL) {
+            recognized += 1U;
+            if (argument != NULL) {
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("Argument given by name ('"), TINYPY_MESSAGE_PART_TEXT(names[index]),
+                    TINYPY_MESSAGE_PART_LITERAL("') and position ("), {positions[index], 1U}, TINYPY_MESSAGE_PART_LITERAL(")")
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
+                goto cleanup;
+            }
+            argument = keyword;
+        }
+        if (argument == NULL && index < 2U) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("Required argument '"), TINYPY_MESSAGE_PART_TEXT(names[index]),
+                TINYPY_MESSAGE_PART_LITERAL("' (pos "), {positions[index], 1U}, TINYPY_MESSAGE_PART_LITERAL(") not found")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
+            goto cleanup;
+        }
+        if (argument != NULL) {
+            arguments[index] = TINYPY_RET(argument);
+            if (index < 2U && TINYPY_VALUE_KIND(argument) != (index == 0U ? TINYPY_VALUE_CODE : TINYPY_VALUE_DICT)) {
+                size_t type_size = argument->type->name_size < 50U ? argument->type->name_size : 50U;
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("function() argument "), {positions[index], 1U},
+                    {index == 0U ? " must be code, not " : " must be dict, not ", 19U},
+                    {TINYPY_VALUE_KIND(argument) == TINYPY_VALUE_NONE ? "None" : argument->type->name, TINYPY_VALUE_KIND(argument) == TINYPY_VALUE_NONE ? 4U : type_size}
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 4U, out_error);
+                goto cleanup;
+            }
+        }
+    }
+    if (recognized != keywords) {
         tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
         tinypy_dict_entry_t *end = TINYPY_DICT_ITERATOR_END(kwargs);
 
@@ -247,52 +299,66 @@ tinypy_value_t *tinypy_internal_function_create(tinypy_type_t *type, tinypy_valu
             }
             keyword_index = __tinypy_function_keyword_index(iterator->key);
             if (keyword_index < 0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function() received an unexpected keyword argument", out_error);
-                return NULL;
+                const uint8_t *bytes = TINYPY_TEXT_BYTES(iterator->key);
+                size_t size = TINYPY_TEXT_BYTE_SIZE(iterator->key);
+                const uint8_t *terminator = (const uint8_t *)memchr(bytes, '\0', size);
+
+                if (terminator != NULL) {
+                    size = (size_t)(terminator - bytes);
+                }
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("'"), {(const char *)bytes, size},
+                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function")
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+                goto cleanup;
             }
-            index = (size_t)keyword_index;
-            if (provided[index] != 0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function() received multiple values for an argument", out_error);
-                return NULL;
-            }
-            arguments[index] = iterator->value;
-            provided[index] = TINYPY_TRUE;
         }
-    }
-    if (provided[0] == 0 || provided[1] == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function() requires code and globals arguments", out_error);
-        return NULL;
     }
     code = arguments[0];
     globals = arguments[1];
-    if (TINYPY_VALUE_KIND(code) != TINYPY_VALUE_CODE || TINYPY_VALUE_KIND(globals) != TINYPY_VALUE_DICT) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function() received an invalid code or globals", out_error);
-        return NULL;
-    }
-    name = provided[2] != 0 && TINYPY_VALUE_KIND(arguments[2]) != TINYPY_VALUE_NONE ? arguments[2] : TINYPY_CODE_NAME(code);
+    name = arguments[2] != NULL && TINYPY_VALUE_KIND(arguments[2]) != TINYPY_VALUE_NONE ? arguments[2] : TINYPY_CODE_NAME(code);
     if (TINYPY_VALUE_KIND(name) != TINYPY_VALUE_STRING) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function name must be a string", out_error);
-        return NULL;
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "arg 3 (name) must be None or string", out_error);
+        goto cleanup;
     }
-    if (provided[3] != 0 && TINYPY_VALUE_KIND(arguments[3]) != TINYPY_VALUE_NONE) {
+    if (arguments[3] != NULL && TINYPY_VALUE_KIND(arguments[3]) != TINYPY_VALUE_NONE) {
         defaults = arguments[3];
         if (TINYPY_VALUE_KIND(defaults) != TINYPY_VALUE_TUPLE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function defaults must be a tuple", out_error);
-            return NULL;
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "arg 4 (defaults) must be None or tuple", out_error);
+            goto cleanup;
         }
     }
-    if (provided[4] != 0 && TINYPY_VALUE_KIND(arguments[4]) != TINYPY_VALUE_NONE) {
+    if (arguments[4] != NULL && TINYPY_VALUE_KIND(arguments[4]) != TINYPY_VALUE_NONE) {
         closure = arguments[4];
         if (TINYPY_VALUE_KIND(closure) != TINYPY_VALUE_TUPLE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function closure must be a tuple", out_error);
-            return NULL;
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "arg 5 (closure) must be None or tuple", out_error);
+            goto cleanup;
         }
     }
     size_t freevar_count = TINYPY_TUPLE_SIZE(TINYPY_CODE_FREEVARS(code));
     size_t closure_count = closure != NULL ? TINYPY_TUPLE_SIZE(closure) : 0U;
+    if (freevar_count != 0U && closure == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "arg 5 (closure) must be tuple", out_error);
+        goto cleanup;
+    }
     if (freevar_count != closure_count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "function closure has the wrong size", out_error);
-        return NULL;
+        char expected_text[TINYPY_MESSAGE_SIZE_BUFFER];
+        char actual_text[TINYPY_MESSAGE_SIZE_BUFFER];
+        size_t expected_size = tinypy_internal_format_size(expected_text, freevar_count);
+        size_t actual_size = tinypy_internal_format_size(actual_text, closure_count);
+        const uint8_t *name_bytes = TINYPY_TEXT_BYTES(TINYPY_CODE_NAME(code));
+        size_t name_size = TINYPY_TEXT_BYTE_SIZE(TINYPY_CODE_NAME(code));
+        const uint8_t *null_byte = (const uint8_t *)memchr(name_bytes, 0, name_size);
+        tinypy_message_part_t parts[] = {
+            {(const char *)name_bytes, null_byte != NULL ? (size_t)(null_byte - name_bytes) : name_size},
+            TINYPY_MESSAGE_PART_LITERAL(" requires closure of length "), {expected_text, expected_size},
+            TINYPY_MESSAGE_PART_LITERAL(", not "), {actual_text, actual_size}
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, 5U, out_error);
+        goto cleanup;
     }
     if (closure != NULL) {
         tinypy_value_t *const *item = TINYPY_TUPLE_ITERATOR_BEGIN(closure);
@@ -300,18 +366,29 @@ tinypy_value_t *tinypy_internal_function_create(tinypy_type_t *type, tinypy_valu
 
         for (; item != end; ++item) {
             if (TINYPY_VALUE_KIND(*item) != TINYPY_VALUE_CELL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function closure contains a non-cell", out_error);
-                return NULL;
+                size_t type_size = (*item)->type->name_size < 100U ? (*item)->type->name_size : 100U;
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("arg 5 (closure) expected cell, found "), {(*item)->type->name, type_size}
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
+                goto cleanup;
             }
         }
     }
-    tinypy_value_t *result = tinypy_function_new(code, globals, defaults, closure);
+    result = tinypy_function_new(code, globals, defaults, closure);
     tinypy_function_object_t *function = TINYPY_FUNCTION_OBJECT(result);
 
     if (name != function->name) {
         TINYPY_INCREF(name);
         TINYPY_DECREF(function->name);
         function->name = name;
+    }
+cleanup:
+    for (index = 0U; index < 5U; ++index) {
+        if (arguments[index] != NULL) {
+            TINYPY_DECREF(arguments[index]);
+        }
     }
     return result;
 }

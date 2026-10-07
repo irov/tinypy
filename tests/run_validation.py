@@ -42,7 +42,8 @@ RUNTIME_MATRICES = [('runtime_matrix.py', RUNTIME_OUTCOMES), ('text_format_matri
                     ('object_state_matrix.py', 1446), ('container_state_matrix.py', 4784),
                     ('operator_dispatch_matrix.py', 11538), ('buffer_state_matrix.py', 2068),
                     ('text_state_matrix.py', 3842), ('execution_state_matrix.py', 622),
-                    ('sys_state_matrix.py', 727)]
+                    ('sys_state_matrix.py', 727), ('metadata_arguments_matrix.py', 325), ('numeric_arguments_matrix.py', 995),
+                    ('container_arguments_matrix.py', 3756), ('introspection_arguments_matrix.py', 1026)]
 STATS = re.compile(r'^tinypy stats: .*outstanding_bytes=0 outstanding_allocations=0\r?\n?$')
 
 

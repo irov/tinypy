@@ -339,7 +339,16 @@ static tinypy_builtin_attribute_e __tinypy_object_builtin_attribute_id(tinypy_vm
 static tinypy_value_t *__tinypy_object_get_type_special_name(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = (tinypy_type_t *)value;
-    tinypy_value_t *result = type->name_object != NULL ? TINYPY_RET(type->name_object) : tinypy_string_from_bytes(vm, type->name, type->name_size);
+    if ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U) {
+        return TINYPY_RET(type->name_object);
+    }
+    size_t offset = 0U;
+    for (size_t index = 0U; index < type->name_size; ++index) {
+        if (type->name[index] == '.') {
+            offset = index + 1U;
+        }
+    }
+    tinypy_value_t *result = tinypy_string_from_bytes(vm, type->name + offset, type->name_size - offset);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -425,16 +434,27 @@ static tinypy_value_t *__tinypy_object_get_type_special_weakrefoffset(tinypy_val
 static tinypy_value_t *__tinypy_object_get_type_special_module(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = (tinypy_type_t *)value;
-    tinypy_value_t *module = tinypy_type_get_attr_key(type, type->vm->internal_special_module_key);
-
-    if (module != NULL) {
-        tinypy_value_t *result = TINYPY_RET(module);
-
-        return result;
+    if ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U) {
+        tinypy_value_t *module = tinypy_internal_dict_get_optional_suppressed(vm, type->dict, vm->internal_special_module_key);
+        if (module == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "__module__", NULL);
+            return NULL;
+        }
+        return TINYPY_RET(module);
     }
-    tinypy_value_t *result = TINYPY_RET(vm->internal_builtin_module_name);
-
-    return result;
+    for (size_t index = type->name_size; index != 0U; --index) {
+        if (type->name[index - 1U] == '.') {
+            tinypy_value_t *result = tinypy_string_from_bytes(vm, type->name, index - 1U);
+            return result;
+        }
+    }
+    /* Builtin exception types keep a short C name and a declared module.
+       Instance descriptors such as function.__module__ are not type metadata. */
+    tinypy_value_t *module = tinypy_internal_dict_get_optional_suppressed(vm, type->dict, vm->internal_special_module_key);
+    if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING) {
+        return TINYPY_RET(module);
+    }
+    return TINYPY_RET(vm->internal_builtin_module_name);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_get_type_special_doc(tinypy_value_t *value) {

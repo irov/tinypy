@@ -453,6 +453,9 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, con
     if (value->type != &vm->types[TINYPY_VALUE_LIST] && value->type != &vm->types[TINYPY_VALUE_TUPLE]) {
         iterator = tinypy_iter(value, out_error);
         if (iterator == NULL) {
+            if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error) != TINYPY_FALSE) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can only assign an iterable", out_error);
+            }
             TINYPY_DECREF(items);
             return NULL;
         }

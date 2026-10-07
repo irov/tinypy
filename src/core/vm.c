@@ -355,7 +355,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
     vm->types[TINYPY_VALUE_OLD_INSTANCE].get_attribute = tinypy_internal_old_instance_get_attribute;
     vm->types[TINYPY_VALUE_OLD_INSTANCE].set_attribute = tinypy_internal_old_instance_set_attribute;
     __tinypy_internal_initialize_type(
-        vm, &vm->types[TINYPY_VALUE_PARTIAL], &vm->types[TINYPY_VALUE_TYPE], "partial", 7U,
+        vm, &vm->types[TINYPY_VALUE_PARTIAL], &vm->types[TINYPY_VALUE_TYPE], "functools.partial", 17U,
         sizeof(tinypy_partial_object_t), 0U,
         TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE, &vm->types[TINYPY_VALUE_INSTANCE],
         tinypy_internal_partial_release_references, NULL);

@@ -44,20 +44,12 @@ void tinypy_complex_as_doubles(const tinypy_value_t *value, double *out_real_val
     *out_imaginary_value = TINYPY_COMPLEX_OBJECT(value)->imaginary;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_numeric_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "numeric method received invalid arguments", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_numeric_bit_length_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t bits = 0U;
 
     (void)user_data;
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
@@ -97,7 +89,7 @@ static tinypy_value_t *__tinypy_numeric_field_method(tinypy_value_t *function, t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     intptr_t field = (intptr_t)user_data;
 
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
@@ -143,7 +135,7 @@ static tinypy_value_t *__tinypy_numeric_conjugate_method(tinypy_value_t *functio
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
@@ -167,7 +159,7 @@ static tinypy_value_t *__tinypy_numeric_getnewargs_method(tinypy_value_t *functi
     tinypy_value_type_e kind;
 
     (void)user_data;
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
@@ -176,16 +168,20 @@ static tinypy_value_t *__tinypy_numeric_getnewargs_method(tinypy_value_t *functi
         items[0] = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(value));
     }
     else if (kind == TINYPY_VALUE_LONG) {
-        TINYPY_INCREF(value);
-        items[0] = tinypy_internal_immutable_subclass_copy(&vm->types[TINYPY_VALUE_LONG], value, out_error);
+        items[0] = tinypy_internal_long_from_base15_digits_checked(vm, TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value), out_error);
     }
-    else if (kind == TINYPY_VALUE_FLOAT) {
-        items[0] = tinypy_float_from_double(vm, TINYPY_FLOAT_OBJECT(value)->value);
-    }
-    else if (kind == TINYPY_VALUE_COMPLEX) {
-        items[0] = tinypy_float_from_double(vm, TINYPY_COMPLEX_OBJECT(value)->real);
-        items[1] = tinypy_float_from_double(vm, TINYPY_COMPLEX_OBJECT(value)->imaginary);
-        item_count = 2U;
+    else if (kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX) {
+        item_count = kind == TINYPY_VALUE_COMPLEX ? 2U : 1U;
+        for (size_t index = 0U; index < item_count; ++index) {
+            items[index] = tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_FLOAT], sizeof(tinypy_float_object_t), out_error);
+            if (items[index] == NULL) {
+                if (index != 0U) {
+                    TINYPY_DECREF(items[0]);
+                }
+                return NULL;
+            }
+            TINYPY_FLOAT_OBJECT(items[index])->value = kind == TINYPY_VALUE_FLOAT ? TINYPY_FLOAT_OBJECT(value)->value : (index == 0U ? TINYPY_COMPLEX_OBJECT(value)->real : TINYPY_COMPLEX_OBJECT(value)->imaginary);
+        }
     }
     else {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__getnewargs__ requires a numeric object", out_error);
@@ -208,7 +204,7 @@ static tinypy_value_t *__tinypy_numeric_cmp_method(tinypy_value_t *function, tin
     int32_t equal;
     int32_t less;
 
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
@@ -221,7 +217,17 @@ static tinypy_value_t *__tinypy_numeric_cmp_method(tinypy_value_t *function, tin
         return NULL;
     }
     if (right_valid == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "numeric comparison descriptor received an incompatible argument", out_error);
+        tinypy_type_t *type = &vm->types[expected];
+        const tinypy_message_part_t parts[] = {
+            {type->name, type->name_size},
+            TINYPY_MESSAGE_PART_LITERAL(".__cmp__(x,y) requires y to be a '"),
+            {type->name, type->name_size},
+            TINYPY_MESSAGE_PART_LITERAL("', not a '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(right),
+            TINYPY_MESSAGE_PART_LITERAL("'")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 6U, out_error);
         return NULL;
     }
     tinypy_value_t *comparison = tinypy_internal_compare_builtin_value(left, right, TINYPY_COMPARE_EQUAL, out_error);
@@ -252,7 +258,7 @@ static tinypy_value_t *__tinypy_numeric_coerce_method(tinypy_value_t *function, 
     tinypy_value_t *converted = NULL;
     tinypy_bool_t compatible = TINYPY_FALSE;
 
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -318,7 +324,7 @@ static tinypy_value_t *__tinypy_float_is_integer_method(tinypy_value_t *function
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     double value = TINYPY_FLOAT_OBJECT(TINYPY_TUPLE_GET(args, 0U))->value;
@@ -343,7 +349,7 @@ static tinypy_value_t *__tinypy_float_as_integer_ratio_method(tinypy_value_t *fu
     double fraction;
 
     (void)user_data;
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     double value = TINYPY_FLOAT_OBJECT(TINYPY_TUPLE_GET(args, 0U))->value;
@@ -402,7 +408,7 @@ static tinypy_value_t *__tinypy_float_hex_method(tinypy_value_t *function, tinyp
     size_t index;
 
     (void)user_data;
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     double value = TINYPY_FLOAT_OBJECT(TINYPY_TUPLE_GET(args, 0U))->value;
@@ -672,15 +678,20 @@ static tinypy_value_t *__tinypy_float_fromhex_method(tinypy_value_t *function, t
     double number;
 
     (void)user_data;
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 2U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "fromhex() requires one string argument", out_error);
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *source = TINYPY_TUPLE_GET(args, 1U);
     tinypy_value_t *encoded = NULL;
     if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE || (TINYPY_VALUE_KIND(source) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(source) != TINYPY_VALUE_UNICODE)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "fromhex() requires one string argument", out_error);
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("expected string or Unicode object, "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(source),
+            TINYPY_MESSAGE_PART_LITERAL(" found")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
         return NULL;
     }
     if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_UNICODE) {
@@ -714,7 +725,7 @@ static tinypy_value_t *__tinypy_numeric_trunc_method(tinypy_value_t *function, t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -741,7 +752,7 @@ static tinypy_value_t *__tinypy_numeric_integer_base_method(tinypy_value_t *func
     intptr_t base = (intptr_t)user_data;
     tinypy_bool_t result_unicode;
 
-    if (__tinypy_numeric_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -791,13 +802,17 @@ static tinypy_value_t *__tinypy_float_getformat_method(tinypy_value_t *function,
     uint16_t byteorder_probe = UINT16_C(1);
 
     (void)user_data;
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 2U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "float.__getformat__ requires a format kind", out_error);
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *kind = TINYPY_TUPLE_GET(args, 1U);
     if (TINYPY_VALUE_KIND(kind) != TINYPY_VALUE_STRING) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "float.__getformat__ requires a string", out_error);
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("__getformat__() argument must be string, not "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(kind)
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
         return NULL;
     }
     const uint8_t *bytes = TINYPY_TEXT_BYTES(kind);
@@ -806,7 +821,7 @@ static tinypy_value_t *__tinypy_float_getformat_method(tinypy_value_t *function,
     tinypy_bool_t double_precision = size >= 6U && memcmp(bytes, TINYPY_TEXT_BYTES(vm->internal_double_key), 6U) == 0 && (size == 6U || bytes[6U] == 0);
 
     if (single_precision == 0 && double_precision == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unknown float format", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__getformat__() argument 1 must be 'double' or 'float'", out_error);
         return NULL;
     }
     if (single_precision != 0 ? vm->float_format_unknown : vm->double_format_unknown) {
@@ -823,24 +838,41 @@ static tinypy_value_t *__tinypy_float_setformat_method(tinypy_value_t *function,
     uint16_t byteorder_probe = UINT16_C(1);
 
     (void)user_data;
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 3U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "float.__setformat__ requires kind and format", out_error);
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *kind = TINYPY_TUPLE_GET(args, 1U);
     tinypy_value_t *format_value = TINYPY_TUPLE_GET(args, 2U);
-    if (tinypy_internal_codecs_validate_name(vm, kind, out_error) == 0 || tinypy_internal_codecs_validate_name(vm, format_value, out_error) == 0) {
+    tinypy_value_t *items[] = {kind, format_value};
+    tinypy_value_t *const names[] = {vm->internal_type_key, vm->internal_format_key};
+    tinypy_value_t *parsed[2];
+    tinypy_value_t *parser_args = tinypy_tuple_from_items(vm, items, 2U);
+    tinypy_bool_t valid = tinypy_internal_constructor_optional_arguments(vm, "__setformat__", sizeof("__setformat__") - 1U, parser_args, NULL, names, 2U, UINT32_C(3), parsed, out_error);
+
+    TINYPY_DECREF(parser_args);
+    if (valid == TINYPY_FALSE) {
         return NULL;
     }
     if (TINYPY_NAME_EQ(kind, vm->internal_float_key) == TINYPY_FALSE && TINYPY_NAME_EQ(kind, vm->internal_double_key) == TINYPY_FALSE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unknown float format", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__setformat__() argument 1 must be 'double' or 'float'", out_error);
         return NULL;
     }
     tinypy_value_t *native_format = *((const uint8_t *)&byteorder_probe) == 1U ? vm->internal_ieee_little_endian_key : vm->internal_ieee_big_endian_key;
     tinypy_bool_t unknown = TINYPY_NAME_EQ(format_value, vm->internal_unknown_key) != TINYPY_FALSE;
     tinypy_bool_t native = TINYPY_NAME_EQ(format_value, native_format) != TINYPY_FALSE;
     if (unknown == 0 && native == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "can only set the native float format", out_error);
+        if (TINYPY_NAME_EQ(format_value, vm->internal_ieee_little_endian_key) != TINYPY_FALSE || TINYPY_NAME_EQ(format_value, vm->internal_ieee_big_endian_key) != TINYPY_FALSE) {
+            const tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("can only set "),
+                TINYPY_MESSAGE_PART_TEXT(kind),
+                TINYPY_MESSAGE_PART_LITERAL(" format to 'unknown' or the detected platform value")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, 3U, out_error);
+        }
+        else {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__setformat__() argument 2 must be 'unknown', 'IEEE, little-endian' or 'IEEE, big-endian'", out_error);
+        }
         return NULL;
     }
     if (TINYPY_TEXT_BYTE_SIZE(kind) == 5U) {

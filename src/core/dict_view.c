@@ -73,14 +73,6 @@ int32_t tinypy_internal_dict_view_contains(tinypy_value_t *value, tinypy_value_t
     return contains;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_dict_view_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "dict view method received invalid arguments", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_dict_view_is_set_like(const tinypy_value_t *value) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
@@ -190,7 +182,7 @@ tinypy_bool_t tinypy_internal_set_like_compare_checked(tinypy_value_t *left, tin
 static tinypy_value_t *__tinypy_dict_view_compare_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    if (__tinypy_dict_view_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
@@ -208,10 +200,9 @@ static tinypy_value_t *__tinypy_dict_view_compare_method(tinypy_value_t *functio
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_view_binary_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     intptr_t mode = (intptr_t)user_data;
 
-    if (__tinypy_dict_view_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, mode >= 100 ? 1U : 0U);
@@ -253,7 +244,7 @@ static tinypy_value_t *__tinypy_dict_view_len_method(tinypy_value_t *function, t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_dict_view_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -270,7 +261,7 @@ static tinypy_value_t *__tinypy_dict_view_iter_method(tinypy_value_t *function, 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_dict_view_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -288,7 +279,7 @@ static tinypy_value_t *__tinypy_dict_view_contains_method(tinypy_value_t *functi
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_dict_view_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -377,7 +368,7 @@ static tinypy_value_t *__tinypy_dict_view_repr_method(tinypy_value_t *function, 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_dict_view_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -412,7 +403,6 @@ static void __tinypy_dict_view_initialize_set_like(tinypy_vm_t *vm, tinypy_type_
         tinypy_internal_type_add_method(type, method_name, __tinypy_dict_view_binary_method, (void *)(intptr_t)binary_operations[index], NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
     tinypy_internal_type_add_method(type, vm->internal_special_contains_key, __tinypy_dict_view_contains_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    tinypy_type_set_attr_key(type, type->vm->internal_special_hash_key, &vm->none_object.base);
     type->hash = __tinypy_dict_view_unhashable;
 }
 //////////////////////////////////////////////////////////////////////////

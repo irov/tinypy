@@ -31,7 +31,9 @@ The run includes:
    previously standalone opcode and bytecode-verifier tests.
 3. Every selected portable case against external CPython 2.7.18, with discovery
    validation, exact source hashes for unchanged vendor modules, and zero
-   allocator balance for each tinypy process.
+   allocator balance for each tinypy process. The inventory contains 41
+   project-authored modules with 1,299 cases and 210 selected vendor cases,
+   for 1,509 selected cases in total.
 4. A fixed matrix of 15,040 numeric and sequence outcomes. It compares values,
    result types and exception classes, including division, reflected builtin
    numeric combinations, infinities, NaN, subnormal/maximum finite doubles,
@@ -57,7 +59,11 @@ The run includes:
    inheritance-policy, source-mode and byte/Unicode combinations.
    Buffer state adds 2,068 observations; text/codec/SRE state adds 3,842;
    import/print/generator state adds 622 and sys/size/displayhook state adds 727.
-   Total: 271,524 unique outcomes per profile across twenty-eight matrices.
+   The ninth audit adds 325 type-metadata and receiver observations,
+   995 numeric-method argument/snapshot observations, 3,756 container-method
+   argument/constructor/error-phase observations and 1,026 function-construction,
+   reduction and saved-frame observations.
+   Total: 277,626 unique outcomes per profile across thirty-two matrices.
    Every identity must be unique, with a positive
    declared cardinality.
 5. 3,693 generated valid source inputs: 2,853 `exec`, 420 `eval`, 420 `single`.
@@ -82,7 +88,10 @@ The run includes:
 The portable report is rejected for missing/duplicate cases, ordinary skips,
 DEFER, reference failures, or inconsistent counts. Only the four declared
 ownership-cycle adaptations may skip in Release; Debug must exercise the
-detector. Python-visible conversion errors, callbacks and error ordering remain
+detector. Acceptance requires 1,509 PASS in Debug and 1,505 PASS with those
+four expected detector SKIP results in Release. These are inventory requirements;
+the generated report records which profiles completed acceptance.
+Python-visible conversion errors, callbacks and error ordering remain
 part of Release acceptance. Diagnostic invariant checks can compile out.
 The CTest inventory is also exact, recorded in `conformance/native_cases.json`;
 JUnit results must contain every selected test and no skips. Timeouts stop the

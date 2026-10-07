@@ -3530,7 +3530,15 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
     }
     vm->evaluation_depth -= 1U;
     vm->current_frame = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
-    if (frame->handled_state_saved != 0 && vm->handled_clear_epoch == frame->handled_clear_epoch) {
+    if (frame->handled_state_saved != 0 && frame->previous_handled_type != NULL && vm->handled_clear_epoch == frame->handled_clear_epoch) {
+        tinypy_value_t **saved[] = {&frame->previous_handled_type, &frame->previous_handled_value, &frame->previous_handled_traceback};
+
+        for (size_t index = 0U; index < sizeof(saved) / sizeof(saved[0]); ++index) {
+            if (*saved[index] != NULL && TINYPY_VALUE_KIND(*saved[index]) == TINYPY_VALUE_NONE) {
+                TINYPY_DECREF(*saved[index]);
+                *saved[index] = NULL;
+            }
+        }
         tinypy_internal_exception_restore_handled(vm, frame->previous_handled_type, frame->previous_handled_value, frame->previous_handled_traceback);
     }
     else {

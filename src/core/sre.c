@@ -2859,7 +2859,7 @@ static void __tinypy_sre_initialize_scanner_type(tinypy_vm_t *vm) {
     spec.payload_size = sizeof(tinypy_internal_sre_scanner_payload_t);
     spec.has_instance_dict = TINYPY_FALSE;
     spec.has_weakrefs = TINYPY_FALSE;
-    vm->sre_scanner_type = tinypy_native_type_new_key(vm->internal_sre_scanner_key, NULL, 0U, NULL, &spec, NULL);
+    vm->sre_scanner_type = tinypy_native_type_new_key(vm->internal_sre_dot_sre_scanner_key, NULL, 0U, NULL, &spec, NULL);
     vm->sre_scanner_type->release_references = __tinypy_sre_scanner_release_references;
     vm->sre_scanner_type->traverse_references = __tinypy_sre_scanner_release_references;
     for (index = 0U; index < sizeof(step_names) / sizeof(step_names[0]); ++index) {

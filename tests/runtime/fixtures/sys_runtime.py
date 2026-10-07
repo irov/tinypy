@@ -125,13 +125,32 @@ try:
     raise ValueError("traceback")
 except ValueError:
     current_traceback = sys.exc_info()[2]
-    assert current_frame.f_exc_type is ValueError
-    assert isinstance(current_frame.f_exc_value, ValueError)
-    assert current_frame.f_exc_traceback is current_traceback
+    assert current_frame.f_exc_type is None
+    assert current_frame.f_exc_value is None
+    assert current_frame.f_exc_traceback is None
     for traceback_attribute in ("tb_next", "tb_frame", "tb_lasti", "tb_lineno"):
         assert traceback_attribute in dir(current_traceback)
     assert current_traceback.tb_frame is current_frame
     assert current_traceback.tb_next is None
+
+sys.exc_clear()
+try:
+    raise KeyError("saved parent")
+except KeyError:
+    parent_exception = sys.exc_info()
+    def inspect_saved_exception():
+        frame = sys._getframe()
+        try:
+            raise ValueError("nested")
+        except ValueError:
+            assert frame.f_exc_type is parent_exception[0]
+            assert frame.f_exc_value is parent_exception[1]
+            assert frame.f_exc_traceback is parent_exception[2]
+            assert sys.exc_info()[0] is ValueError
+    inspect_saved_exception()
+    assert sys.exc_info()[1] is parent_exception[1]
+    del parent_exception
+sys.exc_clear()
 
 original_limit = sys.getrecursionlimit()
 assert original_limit == 1000

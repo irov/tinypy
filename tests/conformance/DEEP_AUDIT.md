@@ -1,7 +1,7 @@
 # Deep conformance audit — 2026-10-07
 
 The supported contract is [SPEC.md](../../SPEC.md), with external CPython
-2.7.18 as the observable-behavior oracle. Eight audit passes added 743 independently
+2.7.18 as the observable-behavior oracle. Nine audit passes added 839 independently
 authored portable cases: the initial 109, 84 boundary/callback cases,
 and 92 comparison/type/generator/regex cases (37 comparisons, 27 types,
 13 control flow and 15 SRE), followed by 87 constructor/iterator/descriptor/
@@ -13,9 +13,10 @@ protocol cases), followed by 83 direct-slot and stateful callback cases
 87 operator/coercion and materialization/state cases (28 operators,
 37 containers and 22 descriptors/functions/set-order/slice cases), followed by
 91 buffer/text/import/print/generator/sys cases (20 buffers, 28 text/codecs/SRE,
-24 execution state and 19 sys state).
-The eighth-pass witnesses and their four finite products pass CPython and
-tinypy comparisons in all four profiles. The aggregate acceptance is recorded below.
+24 execution state and 19 sys state), followed by 96 native-argument and
+introspection cases (14 metadata, 25 numeric, 31 container and 26 introspection).
+The ninth-pass witnesses and their four finite products pass CPython and
+tinypy comparisons in all four profiles. Aggregate acceptance is recorded below.
 These counts are regression witnesses, not a count of distinct defects.
 
 ## Corrected behavior
@@ -81,6 +82,11 @@ These counts are regression witnesses, not a count of distinct defects.
 | Print stream state | Softspace reads only stored int values and exchanges the flag before conversion; generic writer lookup is retained before str callbacks; trailing original text controls the final exchange; descriptor failures are suppressed without losing prior exception state |
 | Generator call errors | Send/throw/close native arity and keyword diagnostics match; failed validation leaves an unstarted frame reusable; resume, throw and close preserve the caller's handled exception state |
 | Sys conversions and display state | Frame depth and recursion limits use Python 2 integer/C-int conversion; getsizeof binds the type special method and consumes only TypeError when a default exists; displayhook orders softspace flushing, repr/writer lookup and builtin underscore publication |
+| Native arguments and receivers | Shared parser preserves each native/wrapper arity style, implicit receiver counting, keyword rejection and conversion priority; direct sequence/set/dictionary/view and iterator methods retain their distinct operand and exhaustion errors |
+| Type metadata | Native qualified names split into module and short name; Python heap types retain original name identity; classic metadata setters/deleters and NUL errors match; empty modern bases retain their own diagnostic |
+| Numeric snapshots and formatting | Long/float/complex new-argument tuples contain fresh base values from stored payloads; Unicode format specifications preserve the tested conversion, result-type and unknown-code rules |
+| Function construction and reduction | FunctionType validates and pins typed arguments in order, suppresses metadata lookup failures and follows NUL-prefix keyword matching; reduce preserves optional lookup/call errors, reported classes and cached slot-name validation |
+| Saved frame fields | Writable f_exc_* getsets expose saved caller state, clear displaced fields before finalizers and restore/release saved state at frame exit; stopped-frame finalizers observe the cleared field; read-only frame/generator fields retain descriptor errors |
 
 Python-visible conversion failures, error ordering and callbacks remain active
 in Release. This work does not add cyclic GC or change the documented ownership
@@ -146,6 +152,25 @@ valid SRE programs use retained supported subjects and replacements. No invalid
 native preconditions, malformed bytecode/regex programs or reference-runtime
 pointer-invalidation probes are acceptance evidence. Compiler comparisons add
 the four modules and four products as eight further checked-in sources.
+
+The ninth pass adds four authored modules:
+[metadata arguments](../upstream/local/test_metadata_arguments_audit.py) (14 cases),
+[numeric arguments](../upstream/local/test_numeric_arguments_audit.py) (25),
+[container arguments](../upstream/local/test_container_arguments_audit.py) (31) and
+[introspection arguments](../upstream/local/test_introspection_arguments_audit.py) (26).
+Their four products add 6,102 unique outcomes: 325 metadata, 995 numeric,
+3,756 container and 1,026 introspection. Each product asserts exact cardinality
+and unique IDs. Focused strict Debug comparisons use quiet CPython 2.7.18
+reference streams and independently checked allocator balance. Source review
+checks owned arguments, suppressed exception state, descriptor routing and
+publication before displaced-value finalizers. Frame publication witnesses use
+stopped frames and read-only finalizers; they do not construct invalid active
+exception states. Size products compare protocol, result type, sign and relative
+relationships rather than CPython's physical allocation sizes. No new skip or
+SPEC exclusion was added. Primary references include
+[typeobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/typeobject.c),
+[classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c)
+and [frameobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/frameobject.c).
 
 Print/displayhook exchange and integer parsing were independently checked
 against [CPython fileobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/fileobject.c),
@@ -214,10 +239,14 @@ as an oracle match. [SPEC.md](../../SPEC.md#14-errors) records this boundary.
 | Text identity/conversion, generic codec parsing and valid SRE callbacks | 3,842 |
 | Indexed imports, parser/metadata callbacks, print state and generator errors | 622 |
 | Sys argument conversion, special size lookup and displayhook state | 727 |
-| **Total unique runtime outcomes** | **271,524** |
+| Type metadata identity, native names and receiver binding | 325 |
+| Numeric direct-slot arguments, snapshots and Unicode format specifications | 995 |
+| Native container/wrapper arguments, keywords and iterator constructors | 3,756 |
+| FunctionType keywords, reduction, cached slot names and saved frame fields | 1,026 |
+| **Total unique runtime outcomes** | **277,626** |
 
 Operands include integer widening, long, bool, float, complex, infinity, NaN,
-subnormal and maximum finite doubles. All twenty-eight matrices compare complete stdout to
+subnormal and maximum finite doubles. All thirty-two matrices compare complete stdout to
 the oracle and verify unique identities, exact cardinality and zero outstanding
 tinypy allocations. They compare exception classes; protocol regressions also
 assert callback order, mutation, identity and selected exception messages.
@@ -235,10 +264,10 @@ failed folds remain valid runtime expressions. Independent host checks assert
 every generated filename, not just the totals. A separate 12,288-row runtime
 matrix verifies all caller/explicit future combinations, code shape and
 execution results.
-Each source is checked at optimize 0/1/2. Another 153 checked-in vendor, local,
+Each source is checked at optimize 0/1/2. Another 161 checked-in vendor, local,
 runtime and matrix sources undergo three-level `exec` comparison. This gives
-11,538 marshal-v2 comparisons per profile, 46,152 across all four. These are
-the eighth-pass inventory totals, accepted in the complete four-profile run.
+11,562 marshal-v2 comparisons per profile, 46,248 across all four. These are
+the ninth-pass inventory totals, accepted in the complete four-profile run.
 
 Three explicitly identified attribute-product rows coalesce consecutive identical
 unsuccessful `module.__dict__` equality probes with a pure False result. Dictionary
@@ -254,7 +283,7 @@ is unavailable. Core filesystem access remains outside the embedding contract.
 
 ## VM name presets
 
-The VM registry now contains 730 persistent names, including class/module
+The VM registry now contains 734 persistent names, including class/module
 metadata, fixed protocol names, keyword parameters, codecs and compiler labels,
 module-local methods, builtin type/exception names and `__future__` features.
 Every fixed production name is created at VM startup and uses an `internal_`
@@ -283,12 +312,13 @@ uncached fallback and zero allocator balance after shutdown. It also verifies
 owned singleton accessors and single evaluation of object and VM expressions.
 The seventh-pass accepted build checked 729 presets. The eighth-pass inventory
 adds the displayhook underscore key to the same registry; all four profiles
-passed the preset checks.
+passed the preset checks. The ninth pass adds the two short SRE type names,
+qualified scanner name and qualified partial name, reusing the same registry.
 
 `TINYPY_RET(value)` returns the same non-null object with one added reference,
 using a portable inline helper so the expression is evaluated once. Its VM
-accessors cover None, True, False, NotImplemented, Ellipsis, the empty tuple and
-the empty byte string. Runtime/compiler ownership pairs use this shared
+accessors cover None, True, False, NotImplemented, Ellipsis, the empty tuple,
+empty byte string and empty Unicode string. Runtime/compiler ownership pairs use this shared
 primitive; the previous object-specific helper was removed. Public C getters
 retain their existing ABI and ownership contract.
 
@@ -424,7 +454,36 @@ fields. The raw unknown-name direct miss was 1.6% slower. Hits/misses matched
 in every run. Results and all samples are in `.temp/builtin-metadata-benchmark.json`;
 they describe these local lookup workloads, not application performance.
 
-## Accepted validation — eighth pass
+## Accepted validation — ninth pass
+
+The default [matrix runner](../run_validation.py) completed all 218 stages on
+macOS arm64 with strict warnings-as-errors. Recorded stage time was 312.7 seconds.
+
+| Profile | Native/runtime CTest | Portable oracle cases | Runtime outcomes | Compiler comparisons |
+| --- | --- | --- | --- | --- |
+| Debug, detector on | 89 PASS | 1,509 PASS | 277,626 identical | 11,562 identical |
+| Release | 89 PASS | 1,505 PASS / 4 diagnostic SKIP | 277,626 identical | 11,562 identical |
+| Unoptimized Debug, ASan/UBSan | 89 PASS | 1,509 PASS | 277,626 identical | 11,562 identical |
+| Release, LTO | 89 PASS | 1,505 PASS / 4 diagnostic SKIP | 277,626 identical | 11,562 identical |
+
+The exact inventory contains 151 CTest registrations, including 89 native/runtime
+tests and 61 portable-module wrappers plus the adapter. Portable cases are run
+with the external oracle and are not counted again as executed native tests.
+All 90 host/API/runner checks pass. The compiler corpus contains 161 checked-in
+sources and 3,693 generated sources, each compared at optimization levels 0, 1
+and 2. All four profiles pass standalone marshal/artifact, core-symbol and
+734-preset checks. There are no ASan/UBSan diagnostics. Apple ASan records
+`detect_leaks=0`; independent allocator checks establish the reported balance.
+
+The accepted report and linked logs are in
+`.temp/validation-ninth-audit-accepted/report.json`. All 218 stages have PASS
+status; the final source/test SHA-256 and post-run fingerprint match:
+`c31bf6d38c1362bf36040274701fd38926be9065f3e5c5b67145fc8fba79f3e1`.
+The report checks exact inventories, unique runtime IDs/cardinalities, quiet
+oracle/compiler streams, profile-specific skips and unchanged source/test inputs,
+including `SPEC.md`. No DEFER cases remain in the selected inventory.
+
+## Historical accepted validation — eighth pass
 
 The default [matrix runner](../run_validation.py) completed all 198 stages on
 macOS arm64. C and C99 standalone builds used strict warnings-as-errors.
@@ -480,23 +539,24 @@ this is a local microbenchmark, not an application performance guarantee.
 fixtures; [TEST_PLAN.md](TEST_PLAN.md) defines applicable variant axes, callback
 states, lifetime checks and future acceptance gates. [tests/README.md](../README.md)
 describes adding regression witnesses and running the full matrix. Confirmed
-supported-scope corrections from all eight passes have their recorded bounded
+supported-scope corrections from all nine passes have their recorded bounded
 evidence and complete four-profile acceptance.
 The one explicit CPython pending-error boundary is described above. The finite
 products enumerate their listed operand combinations; arbitrary Python programs,
 callbacks, host extensions and other ABIs remain unbounded. Declared SPEC
 limitations stay explicit.
 
-Two source-backed observations remain for the next audit. Native SRE type names
-are qualified in tinypy: `type(pattern).__name__` is `_sre.SRE_Pattern`, whereas
-CPython exposes `SRE_Pattern` (and likewise `_sre.SRE_Match` versus `SRE_Match`).
-The native type registrations in [vm.c](../../src/core/vm.c) retain the qualified
-name; [CPython _sre.c](https://github.com/python/cpython/blob/v2.7.18/Modules/_sre.c)
-provides the reference types. Classic class `__name__` assignment containing NUL
-raises TypeError with `__name__ must not contain null bytes` in CPython, but
-ValueError with `__name__ must not contain null characters` in tinypy.
-The active branch is in [class.c](../../src/core/class.c), compared with
-[CPython classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c).
+The two eighth-pass metadata observations (qualified SRE short names and
+classic class NUL-name diagnostics) are corrected by the ninth pass.
+Two further observations remain for the next audit. A bound builtin slot wrapper
+has type name `builtin_function_or_method` in tinypy, whereas CPython exposes
+`method-wrapper`. The receiver product checks binding, name, self and rejection
+protocols; it does not claim wrapper-metatype equivalence. Also,
+`type(iter(bytearray('x'))).__name__` is `iterator` in tinypy versus
+`bytearray_iterator` in CPython. The native-name product does not include this
+iterator. The active registrations are in [vm.c](../../src/core/vm.c), compared
+with [CPython descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c)
+and [bytearrayobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/bytearrayobject.c).
 Neither observation is counted as a corrected witness, hidden by normalization
 or declared a SPEC exclusion.
 

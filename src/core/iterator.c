@@ -722,8 +722,12 @@ tinypy_value_t *tinypy_internal_xrange_create(tinypy_type_t *type, tinypy_value_
     uint64_t step_magnitude;
     uint64_t length;
 
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || argument_count < 1U || argument_count > 3U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "xrange received invalid arguments", out_error);
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "xrange() does not take keyword arguments", out_error);
+        return NULL;
+    }
+    if (argument_count < 1U || argument_count > 3U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "xrange() requires 1-3 int arguments", out_error);
         return NULL;
     }
     if (argument_count == 1U) {
@@ -754,7 +758,7 @@ tinypy_value_t *tinypy_internal_xrange_create(tinypy_type_t *type, tinypy_value_
         }
     }
     if (step == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "xrange step cannot be zero", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "xrange() arg 3 must not be zero", out_error);
         return NULL;
     }
     if ((step > 0 && start >= stop) || (step < 0 && start <= stop)) {
@@ -787,7 +791,7 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
     tinypy_value_t *values[2] = {NULL, NULL};
 
     if (positional_count > 2U || keyword_count > 2U - positional_count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received too many positional arguments", out_error);
+        tinypy_internal_make_arity_error(vm, "enumerate", 9U, positional_count + keyword_count, 1U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error);
         return NULL;
     }
     for (size_t parameter = 0U; parameter < 2U; ++parameter) {
@@ -800,13 +804,21 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
         if (keyword != NULL) {
             recognized_keyword_count += 1U;
             if (values[parameter] != NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received duplicate arguments", out_error);
+                char position = (char)('1' + parameter);
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("Argument given by name ('"),
+                    TINYPY_MESSAGE_PART_TEXT(names[parameter]),
+                    TINYPY_MESSAGE_PART_LITERAL("') and position ("),
+                    {&position, 1U},
+                    TINYPY_MESSAGE_PART_LITERAL(")"),
+                };
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
                 return NULL;
             }
             values[parameter] = keyword;
         }
         if (parameter == 0U && values[parameter] == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate is missing the sequence argument", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Required argument 'sequence' (pos 1) not found", out_error);
             return NULL;
         }
     }
@@ -828,13 +840,34 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
                 }
             }
             if (known == 0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received an unexpected keyword argument", out_error);
+                const char *name = (const char *)TINYPY_TEXT_BYTES(entry->key);
+                size_t size = TINYPY_TEXT_BYTE_SIZE(entry->key);
+                const char *nul = (const char *)memchr(name, 0, size);
+                if (nul != NULL) {
+                    size = (size_t)(nul - name);
+                }
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("'"),
+                    {name, size < 200U ? size : 200U},
+                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function"),
+                };
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
                 return NULL;
             }
         }
     }
     tinypy_value_t *iterable = values[0];
     tinypy_value_t *start = values[1];
+    if (start != NULL && TINYPY_VALUE_KIND(start) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(start) != TINYPY_VALUE_INTEGER && TINYPY_VALUE_KIND(start) != TINYPY_VALUE_LONG
+        && tinypy_internal_object_has_special_key(start, vm->internal_special_index_key) == TINYPY_FALSE) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(start),
+            TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index"),
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
     tinypy_value_t *counter = start != NULL ? tinypy_internal_index_value(start, out_error) : tinypy_integer_from_i64(vm, INT64_C(0));
 
     if (counter == NULL) {
@@ -862,8 +895,12 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
 tinypy_value_t *tinypy_internal_reversed_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
 
-    if ((type == &vm->types[TINYPY_VALUE_REVERSED] && kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reversed received invalid arguments", out_error);
+    if (type == &vm->types[TINYPY_VALUE_REVERSED] && kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reversed() does not take keyword arguments", out_error);
+        return NULL;
+    }
+    if (TINYPY_TUPLE_SIZE(args) != 1U) {
+        tinypy_internal_make_arity_error(vm, "reversed", 8U, TINYPY_TUPLE_SIZE(args), 1U, 1U, TINYPY_ARITY_STYLE_UNPACK, out_error);
         return NULL;
     }
     tinypy_value_t *sequence = TINYPY_TUPLE_GET(args, 0U);
@@ -1150,30 +1187,10 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_iterator_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "iterator method received invalid arguments", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_xrange_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
-    if (__tinypy_iterator_method_arguments(vm, args, kwargs, count, out_error) == 0) {
-        return TINYPY_FALSE;
-    }
-    if (TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_XRANGE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "xrange method requires an xrange object", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_xrange_iter_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value = tinypy_internal_xrange_iter(TINYPY_TUPLE_GET(args, 0U), out_error);
@@ -1181,10 +1198,9 @@ static tinypy_value_t *__tinypy_xrange_iter_method(tinypy_value_t *function, tin
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_xrange_getitem_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value = tinypy_internal_get_item_builtin(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), out_error);
@@ -1195,7 +1211,7 @@ static tinypy_value_t *__tinypy_xrange_len_method(tinypy_value_t *function, tiny
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -1204,10 +1220,9 @@ static tinypy_value_t *__tinypy_xrange_len_method(tinypy_value_t *function, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_xrange_reversed_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
@@ -1220,10 +1235,9 @@ static tinypy_value_t *__tinypy_xrange_reversed_method(tinypy_value_t *function,
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_xrange_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_xrange_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value = tinypy_object_repr(TINYPY_TUPLE_GET(args, 0U), out_error);
