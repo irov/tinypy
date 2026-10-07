@@ -387,7 +387,18 @@ static tinypy_value_t *__tinypy_eval_lookup_name(tinypy_vm_t *vm, tinypy_frame_o
             return cache->value;
         }
     }
-    tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, frame->globals, name);
+    tinypy_value_t *value;
+    tinypy_bool_t cacheable = TINYPY_TRUE;
+
+    if (include_locals != 0) {
+        value = tinypy_internal_dict_get_optional_suppressed(vm, frame->globals, name);
+    }
+    else if (tinypy_internal_dict_get_global(vm, frame->globals, name, &value, &cacheable, out_error) == 0) {
+        return NULL;
+    }
+    if (cacheable == 0) {
+        cache = NULL;
+    }
     if (value != NULL) {
         if (cache != NULL) {
             cache->name_index = name_index;
@@ -417,7 +428,15 @@ static tinypy_value_t *__tinypy_eval_lookup_name(tinypy_vm_t *vm, tinypy_frame_o
             return value;
         }
     }
-    value = tinypy_internal_dict_get_optional(vm, frame->builtins, name);
+    if (include_locals != 0) {
+        value = tinypy_internal_dict_get_optional_suppressed(vm, frame->builtins, name);
+    }
+    else if (tinypy_internal_dict_get_global(vm, frame->builtins, name, &value, &cacheable, out_error) == 0) {
+        return NULL;
+    }
+    if (cacheable == 0) {
+        cache = NULL;
+    }
     if (value != NULL) {
         if (cache != NULL) {
             cache->name_index = name_index;
@@ -669,7 +688,7 @@ static tinypy_bool_t __tinypy_eval_exec_statement(tinypy_vm_t *vm, tinypy_frame_
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exec: arg 3 must be a mapping or None", out_error);
         return TINYPY_FALSE;
     }
-    if (tinypy_dict_contains(execution_globals, vm->builtins_key) == 0) {
+    if (tinypy_internal_dict_get_optional_suppressed(vm, execution_globals, vm->builtins_key) == NULL) {
         tinypy_dict_set(execution_globals, vm->builtins_key, frame->builtins);
     }
     if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_CODE) {
@@ -693,6 +712,10 @@ static tinypy_bool_t __tinypy_eval_exec_statement(tinypy_vm_t *vm, tinypy_frame_
             size_t code_points;
 
             source_bytes = tinypy_unicode_utf8_view(source, &source_size, &code_points);
+        }
+        if (memchr(source_bytes, 0, source_size) != NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected string without null bytes", out_error);
+            return TINYPY_FALSE;
         }
         tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
         if (tinypy_internal_compile_options_inherit_frame(vm, &options) == 0) {
@@ -2801,8 +2824,10 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *mapping = instruction.opcode == TINYPY_OP_STORE_NAME ? tinypy_internal_frame_locals(frame) : frame->globals;
 
-            if (mapping->type == &vm->types[TINYPY_VALUE_DICT]) {
-                tinypy_dict_set(mapping, name, value);
+            if (instruction.opcode == TINYPY_OP_STORE_GLOBAL || mapping->type == &vm->types[TINYPY_VALUE_DICT]) {
+                if (tinypy_internal_dict_set_checked(vm, mapping, name, value, out_error) == 0) {
+                    reason = TINYPY_EVAL_REASON_EXCEPTION;
+                }
             }
             else if (tinypy_set_item(mapping, name, value, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
@@ -2817,10 +2842,15 @@ static tinypy_value_t *__tinypy_eval_code_bound(tinypy_value_t *code, tinypy_val
             tinypy_value_t *mapping = instruction.opcode == TINYPY_OP_DELETE_NAME ? tinypy_internal_frame_locals(frame) : frame->globals;
             tinypy_bool_t deleted;
 
-            if (mapping->type == &vm->types[TINYPY_VALUE_DICT]) {
-                deleted = tinypy_dict_contains(mapping, name) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-                if (deleted != 0) {
-                    tinypy_dict_delete(mapping, name);
+            if (instruction.opcode == TINYPY_OP_DELETE_GLOBAL || mapping->type == &vm->types[TINYPY_VALUE_DICT]) {
+                tinypy_error_t *delete_error = NULL;
+
+                if (tinypy_internal_dict_delete_optional_checked(vm, mapping, name, &deleted, &delete_error) == 0) {
+                    deleted = TINYPY_FALSE;
+                }
+                if (delete_error != NULL) {
+                    tinypy_error_release(delete_error);
+                    tinypy_vm_clear_error(vm);
                 }
             }
             else {

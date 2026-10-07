@@ -232,6 +232,16 @@ static int32_t __test_cycle_diagnostics(void) {
     TEST_CHECK(tinypy_vm_report_cycles(vm, __test_cycle_diagnostic, &diagnostic_state) == 0U);
     TEST_CHECK(diagnostic_state.message_count == 0U);
 
+    tinypy_value_t *retained_module = tinypy_module_new(vm, "retained", 8U);
+    tinypy_value_t *module_marker = tinypy_integer_from_i64(vm, INT64_C(17));
+    tinypy_value_t *module_namespace = tinypy_module_dict(retained_module);
+    tinypy_module_add_value(retained_module, "marker", 6U, module_marker);
+    TEST_CHECK(tinypy_vm_report_cycles(vm, __test_cycle_diagnostic, &diagnostic_state) == 0U);
+    TEST_CHECK(tinypy_module_dict(retained_module) == module_namespace);
+    TEST_CHECK(tinypy_module_get_value(retained_module, "marker", 6U) == module_marker);
+    tinypy_release(module_marker);
+    tinypy_release(retained_module);
+
     list = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_list_append(list, list);
     TEST_CHECK(tinypy_vm_report_cycles(vm, NULL, NULL) == 0U);
@@ -2576,6 +2586,26 @@ static tinypy_value_t *__test_native_return_args(tinypy_value_t *function, tinyp
     return args;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct test_native_reduce_state_t {
+    tinypy_value_t *arguments[2];
+    size_t calls;
+} test_native_reduce_state_t;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_reduce_retain_args(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    test_native_reduce_state_t *state = (test_native_reduce_state_t *)user_data;
+
+    (void)kwargs;
+    if (tinypy_tuple_size(args) != 2U || state->calls >= sizeof(state->arguments) / sizeof(state->arguments[0])) {
+        tinypy_vm_raise_error(tinypy_value_vm(function), TINYPY_ERROR_RUNTIME, "unexpected native reduce arguments");
+        return NULL;
+    }
+    tinypy_retain(args);
+    state->arguments[state->calls++] = args;
+    tinypy_value_t *result = tinypy_add(tinypy_tuple_get(args, 0U), tinypy_tuple_get(args, 1U), out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_stack_budget(void) {
     static const char source[] =
         "depth = 0\n"
@@ -2955,6 +2985,37 @@ static int32_t __test_native_embedding(void) {
     TEST_CHECK(error == NULL);
     native_state.base_type = native_type;
 
+    /* Modules returned by the public Python allocation-only __new__ method
+       are valid embedding values even before their namespace is created. */
+    {
+        tinypy_value_t *known_module = tinypy_module_new(vm, "known", 5U);
+        const tinypy_type_t *module_type = tinypy_object_type(known_module);
+        tinypy_value_t *type_item = (tinypy_value_t *)tinypy_type_as_const_value(module_type);
+        tinypy_value_t *allocate = tinypy_object_get_attr(type_item, "__new__", 7U, &error);
+        tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &type_item, 1U);
+        tinypy_value_t *uninitialized = tinypy_call(allocate, arguments, NULL, &error);
+
+        TEST_CHECK(uninitialized != NULL && error == NULL);
+        TEST_CHECK(tinypy_module_name(uninitialized) == NULL);
+        TEST_CHECK(tinypy_module_dict(uninitialized) == NULL);
+        TEST_CHECK(tinypy_module_get_value(uninitialized, "missing", 7U) == NULL);
+        tinypy_value_t *marker = tinypy_integer_from_i64(vm, 17);
+        tinypy_module_add_value(uninitialized, "marker", 6U, marker);
+        TEST_CHECK(tinypy_module_dict(uninitialized) != NULL);
+        TEST_CHECK(tinypy_module_name(uninitialized) == NULL);
+        TEST_CHECK(tinypy_module_get_value(uninitialized, "marker", 6U) == marker);
+        tinypy_value_t *callback = tinypy_native_function_new(vm, "callback", 8U, __test_native_return_args, NULL, NULL);
+        tinypy_module_add_value(uninitialized, "callback", 8U, callback);
+        TEST_CHECK(tinypy_module_get_value(uninitialized, "callback", 8U) == callback);
+        tinypy_release(callback);
+        tinypy_release(marker);
+        tinypy_release(uninitialized);
+        tinypy_release(allocate);
+        tinypy_release(arguments);
+        tinypy_release(known_module);
+        TEST_CHECK(tinypy_vm_has_error(vm) == 0);
+    }
+
     spec.call = __test_native_call;
     spec.repr = __test_native_repr;
     spec.hash = __test_native_hash;
@@ -3154,6 +3215,46 @@ static int32_t __test_native_embedding(void) {
     tinypy_release(native_method_instance);
     tinypy_release(native_function);
 
+    /* A public native callback may retain its argument tuple. reduce must
+       replace a shared tuple before preparing the next argument pair. */
+    {
+        static const char source[] = "reduce(keep_pairs, [1, 2, 3])";
+        test_native_reduce_state_t reduce_state;
+        tinypy_compile_options_t options;
+
+        (void)memset(&reduce_state, 0, sizeof(reduce_state));
+        tinypy_value_t *callback = tinypy_native_function_new(vm, "keep_pairs", 10U, __test_native_reduce_retain_args, &reduce_state, NULL);
+        tinypy_value_t *globals = tinypy_dict_new(vm);
+        tinypy_value_t *key = tinypy_string_from_bytes(vm, "keep_pairs", 10U);
+
+        tinypy_dict_set(globals, key, callback);
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+        tinypy_value_t *code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "native_reduce.py", sizeof("native_reduce.py") - 1U, &options, &error);
+
+        TEST_CHECK(code != NULL && error == NULL);
+        tinypy_value_t *result = tinypy_eval_code(code, globals, NULL, &error);
+
+        TEST_CHECK(result != NULL && error == NULL);
+        TEST_CHECK(tinypy_integer_as_i64(result) == 6);
+        tinypy_release(result);
+        tinypy_release(code);
+        tinypy_dict_clear(globals);
+        tinypy_release(globals);
+        tinypy_release(key);
+        tinypy_release(callback);
+        TEST_CHECK(reduce_state.calls == 2U);
+        TEST_CHECK(reduce_state.arguments[0] != reduce_state.arguments[1]);
+        TEST_CHECK(tinypy_tuple_size(reduce_state.arguments[0]) == 2U);
+        TEST_CHECK(tinypy_tuple_size(reduce_state.arguments[1]) == 2U);
+        TEST_CHECK(tinypy_integer_as_i64(tinypy_tuple_get(reduce_state.arguments[0], 0U)) == 1);
+        TEST_CHECK(tinypy_integer_as_i64(tinypy_tuple_get(reduce_state.arguments[0], 1U)) == 2);
+        TEST_CHECK(tinypy_integer_as_i64(tinypy_tuple_get(reduce_state.arguments[1], 0U)) == 3);
+        TEST_CHECK(tinypy_integer_as_i64(tinypy_tuple_get(reduce_state.arguments[1], 1U)) == 3);
+        tinypy_release(reduce_state.arguments[0]);
+        tinypy_release(reduce_state.arguments[1]);
+        TEST_CHECK(tinypy_vm_has_error(vm) == 0);
+    }
+
     value = tinypy_integer_from_i64(vm, 3);
     native_result = tinypy_inplace_add(instance, value, &error);
     TEST_CHECK(native_result == instance);
@@ -3240,6 +3341,7 @@ static int32_t __test_native_embedding(void) {
 typedef struct test_module_finder_state_t {
     tinypy_vm_t *vm;
     tinypy_value_t *finder;
+    tinypy_value_t *replacement;
     size_t find_count;
     size_t load_count;
 } test_module_finder_state_t;
@@ -3291,6 +3393,12 @@ static tinypy_value_t *__test_module_finder_load(tinypy_value_t *function, tinyp
         return NULL;
     }
     name = tinypy_tuple_get(args, 0U);
+    if (state->replacement != NULL) {
+        tinypy_dict_set(tinypy_vm_modules(state->vm), name, state->replacement);
+        state->load_count += 1U;
+        tinypy_retain(state->replacement);
+        return state->replacement;
+    }
     name_bytes = (const char *)tinypy_string_view(name, &name_size);
     module = tinypy_module_new(state->vm, name_bytes, name_size);
     tinypy_module_add_value(module, "__name__", 8U, name);
@@ -3369,17 +3477,36 @@ static int32_t __test_module_finder(void) {
     reload_args = tinypy_tuple_from_items(vm, &module, 1U);
     reload_result = tinypy_call(reload_function, reload_args, NULL, &error);
     tinypy_release(reload_args);
-    tinypy_release(reload_function);
-    TEST_CHECK(reload_result == module && error == NULL);
-    tinypy_release(reload_result);
+    TEST_CHECK(reload_result != NULL && reload_result != module && error == NULL);
     answer = tinypy_module_get_value(module, "answer", 6U);
-    TEST_CHECK(answer != NULL && tinypy_integer_as_i64(answer) == 43);
+    TEST_CHECK(answer != NULL && tinypy_integer_as_i64(answer) == 42);
     stale = tinypy_module_get_value(module, "stale", 5U);
     TEST_CHECK(stale != NULL && tinypy_integer_as_i64(stale) == 7);
+    answer = tinypy_module_get_value(reload_result, "answer", 6U);
+    TEST_CHECK(answer != NULL && tinypy_integer_as_i64(answer) == 43);
+    TEST_CHECK(tinypy_module_get_value(reload_result, "stale", 5U) == NULL);
     key = tinypy_string_from_bytes(vm, "finder_sample", 13U);
-    TEST_CHECK(tinypy_dict_get_optional(tinypy_vm_modules(vm), key) == module);
+    TEST_CHECK(tinypy_dict_get_optional(tinypy_vm_modules(vm), key) == reload_result);
     tinypy_release(key);
     TEST_CHECK(finder_state.find_count == 2U && finder_state.load_count == 2U);
+
+    finder_state.replacement = tinypy_integer_from_i64(vm, INT64_C(17));
+    reload_args = tinypy_tuple_from_items(vm, &reload_result, 1U);
+    cached_module = tinypy_call(reload_function, reload_args, NULL, &error);
+    tinypy_release(reload_args);
+    TEST_CHECK(cached_module == finder_state.replacement && error == NULL);
+    TEST_CHECK(tinypy_integer_as_i64(cached_module) == 17);
+    key = tinypy_string_from_bytes(vm, "finder_sample", 13U);
+    TEST_CHECK(tinypy_dict_get_optional(tinypy_vm_modules(vm), key) == cached_module);
+    tinypy_release(key);
+    answer = tinypy_module_get_value(reload_result, "answer", 6U);
+    TEST_CHECK(answer != NULL && tinypy_integer_as_i64(answer) == 43);
+    tinypy_release(cached_module);
+    tinypy_release(finder_state.replacement);
+    finder_state.replacement = NULL;
+    tinypy_release(reload_function);
+    TEST_CHECK(finder_state.find_count == 3U && finder_state.load_count == 3U);
+    tinypy_release(reload_result);
     tinypy_release(module);
 
     module = tinypy_import_module(vm, "finder_broken", 13U, NULL, NULL, 0, &error);
@@ -3391,7 +3518,7 @@ static int32_t __test_module_finder(void) {
     key = tinypy_string_from_bytes(vm, "finder_broken", 13U);
     TEST_CHECK(tinypy_dict_contains(tinypy_vm_modules(vm), key) == 0);
     tinypy_release(key);
-    TEST_CHECK(finder_state.find_count == 3U && finder_state.load_count == 3U);
+    TEST_CHECK(finder_state.find_count == 4U && finder_state.load_count == 4U);
 
     tinypy_vm_set_module_finder(vm, NULL);
     TEST_CHECK(tinypy_vm_module_finder(vm) == NULL);

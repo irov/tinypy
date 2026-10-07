@@ -1181,6 +1181,11 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
     if (field == TINYPY_INTERNAL_C_DESCRIPTOR_MODULE_DICT) {
         tinypy_value_t *dict = TINYPY_MODULE_OBJECT(instance)->dict;
 
+        if (dict == NULL) {
+            tinypy_value_t *result = tinypy_none_get(vm);
+
+            return result;
+        }
         TINYPY_INCREF(dict);
         return dict;
     }

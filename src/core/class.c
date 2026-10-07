@@ -205,6 +205,145 @@ tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_valu
     return &class_object->base;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_class_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    static const char *const names[] = {"name", "bases", "dict"};
+    static const size_t sizes[] = {4U, 5U, 4U};
+    tinypy_vm_t *vm = type->vm;
+    size_t count = TINYPY_TUPLE_SIZE(args);
+    size_t keywords = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
+    size_t recognized = 0U;
+    tinypy_value_t *values[3] = {NULL, NULL, NULL};
+    tinypy_value_t *result = NULL;
+
+    if (count > 3U || keywords > 3U - count) {
+        tinypy_value_t *number = tinypy_integer_from_i64(vm, (int64_t)(count + keywords));
+        tinypy_value_t *text = tinypy_object_str(number, out_error);
+
+        TINYPY_DECREF(number);
+        if (text != NULL) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("function takes at most 3 arguments ("),
+                {(const char *)TINYPY_TEXT_BYTES(text), TINYPY_TEXT_BYTE_SIZE(text)},
+                TINYPY_MESSAGE_PART_LITERAL(" given)")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+            TINYPY_DECREF(text);
+        }
+        return NULL;
+    }
+    for (size_t index = 0U; index < 3U; ++index) {
+        tinypy_value_t *value = index < count ? TINYPY_TUPLE_GET(args, index) : NULL;
+        tinypy_value_t *keyword = recognized < keywords ? tinypy_internal_constructor_keyword_optional(vm, kwargs, names[index], sizes[index]) : NULL;
+
+        if (keyword != NULL) {
+            recognized += 1U;
+            if (value != NULL) {
+                char position = (char)('1' + index);
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("Argument given by name ('"),
+                    {names[index], sizes[index]},
+                    TINYPY_MESSAGE_PART_LITERAL("') and position ("),
+                    {&position, 1U},
+                    TINYPY_MESSAGE_PART_LITERAL(")")
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
+                goto cleanup;
+            }
+            value = keyword;
+        }
+        if (value == NULL) {
+            char position = (char)('1' + index);
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("Required argument '"),
+                {names[index], sizes[index]},
+                TINYPY_MESSAGE_PART_LITERAL("' (pos "),
+                {&position, 1U},
+                TINYPY_MESSAGE_PART_LITERAL(") not found")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
+            goto cleanup;
+        }
+        if (index == 0U && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_STRING) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("argument 1 must be string, not "),
+                {TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE ? "None" : value->type->name,
+                 TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE ? 4U : value->type->name_size}
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
+            goto cleanup;
+        }
+        values[index] = value;
+        TINYPY_INCREF(value);
+    }
+    if (TINYPY_VALUE_KIND(values[2]) != TINYPY_VALUE_DICT) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "PyClass_New: dict must be a dictionary", out_error);
+        goto cleanup;
+    }
+    tinypy_value_t *doc_key = tinypy_string_from_bytes(vm, "__doc__", 7U);
+    tinypy_value_t *module_key = tinypy_string_from_bytes(vm, "__module__", 10U);
+
+    if (tinypy_internal_dict_get_optional_suppressed(vm, values[2], doc_key) == NULL
+        && tinypy_internal_dict_set_checked(vm, values[2], doc_key, &vm->none_object.base, out_error) == 0) {
+        TINYPY_DECREF(doc_key);
+        TINYPY_DECREF(module_key);
+        goto cleanup;
+    }
+    if (tinypy_internal_dict_get_optional_suppressed(vm, values[2], module_key) == NULL && vm->current_frame != NULL) {
+        tinypy_value_t *name_key = tinypy_string_from_bytes(vm, "__name__", 8U);
+        tinypy_value_t *module_name = tinypy_internal_dict_get_optional_suppressed(vm, vm->current_frame->globals, name_key);
+
+        TINYPY_DECREF(name_key);
+        if (module_name != NULL) {
+            TINYPY_INCREF(module_name);
+            tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, values[2], module_key, module_name, out_error);
+
+            TINYPY_DECREF(module_name);
+            if (stored == 0) {
+                TINYPY_DECREF(doc_key);
+                TINYPY_DECREF(module_key);
+                goto cleanup;
+            }
+        }
+    }
+    TINYPY_DECREF(doc_key);
+    TINYPY_DECREF(module_key);
+    if (TINYPY_VALUE_KIND(values[1]) != TINYPY_VALUE_TUPLE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "PyClass_New: bases must be a tuple", out_error);
+        goto cleanup;
+    }
+    for (size_t index = 0U; index < TINYPY_TUPLE_SIZE(values[1]); ++index) {
+        tinypy_value_t *base = TINYPY_TUPLE_GET(values[1], index);
+
+        if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_CLASS) {
+            tinypy_value_t *metaclass = &base->type->base.base;
+            tinypy_value_t *arguments = tinypy_tuple_from_items(vm, values, 3U);
+
+            result = tinypy_call(metaclass, arguments, NULL, out_error);
+            TINYPY_DECREF(arguments);
+            goto cleanup;
+        }
+    }
+    result = tinypy_class_new((const char *)TINYPY_STRING_OBJECT(values[0])->bytes, TINYPY_STRING_SIZE(values[0]), values[1], values[2], out_error);
+    if (result != NULL && TINYPY_VALUE_KIND(result) == TINYPY_VALUE_CLASS) {
+        tinypy_value_t *previous = TINYPY_CLASS_OBJECT(result)->name;
+
+        TINYPY_INCREF(values[0]);
+        TINYPY_CLASS_OBJECT(result)->name = values[0];
+        TINYPY_DECREF(previous);
+    }
+cleanup:
+    for (size_t index = 0U; index < 3U; ++index) {
+        if (values[index] != NULL) {
+            TINYPY_DECREF(values[index]);
+        }
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_class_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(value);
     visit(class_object->name, user_data);

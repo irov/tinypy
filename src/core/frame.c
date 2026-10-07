@@ -32,9 +32,18 @@ static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, ti
         return builtins;
     }
 
-    tinypy_value_t *builtins = tinypy_internal_dict_get_optional(vm, globals, vm->builtins_key);
+    tinypy_bool_t lookup_succeeded;
+    tinypy_value_t *builtins = tinypy_internal_dict_get_optional_suppressed_status(vm, globals, vm->builtins_key, &lookup_succeeded);
 
     if (builtins != NULL && TINYPY_VALUE_KIND(builtins) == TINYPY_VALUE_MODULE) {
+        tinypy_module_object_t *module = TINYPY_MODULE_OBJECT(builtins);
+
+        if (module->dict == NULL) {
+            module->dict = tinypy_internal_dict_new_checked(vm, NULL);
+            if (module->dict == NULL) {
+                return NULL;
+            }
+        }
         builtins = TINYPY_MODULE_OBJECT(builtins)->dict;
     }
     if (builtins != NULL && TINYPY_VALUE_KIND(builtins) == TINYPY_VALUE_DICT) {
@@ -42,7 +51,7 @@ static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, ti
         return builtins;
     }
 
-    if (builtins == NULL && (function_frame == 0 || globals == vm->builtins)) {
+    if (builtins == NULL && lookup_succeeded != 0 && (function_frame == 0 || globals == vm->builtins)) {
         builtins = vm->builtins;
         if (globals != vm->builtins && tinypy_internal_dict_set_checked(vm, globals, vm->builtins_key, builtins, NULL) == 0) {
             return NULL;
@@ -249,7 +258,7 @@ static void __tinypy_internal_frame_sync_local(tinypy_vm_t *vm, tinypy_value_t *
    NULL without an error when the name is absent. */
 tinypy_value_t *tinypy_internal_frame_locals_get(tinypy_vm_t *vm, tinypy_value_t *mapping, tinypy_value_t *name, tinypy_error_t **out_error) {
     if (mapping->type == &vm->types[TINYPY_VALUE_DICT]) {
-        tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, mapping, name);
+        tinypy_value_t *value = tinypy_internal_dict_get_optional_suppressed(vm, mapping, name);
 
         if (value != NULL) {
             TINYPY_INCREF(value);

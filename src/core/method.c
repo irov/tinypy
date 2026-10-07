@@ -3,44 +3,71 @@
 #include "internal.h"
 
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_method_class_name(tinypy_value_t *class_object, char *buffer, size_t capacity) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(class_object);
+    tinypy_internal_exception_state_t state;
+    tinypy_value_t *name;
+
+    buffer[0] = '?';
+    buffer[1] = '\0';
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    name = tinypy_object_get_attr(class_object, "__name__", 8U, NULL);
+    if (name != NULL) {
+        if (TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING) {
+            size_t size = TINYPY_TEXT_BYTE_SIZE(name);
+
+            if (size >= capacity) {
+                size = capacity - 1U;
+            }
+            memcpy(buffer, TINYPY_TEXT_BYTES(name), size);
+            buffer[size] = '\0';
+        }
+        TINYPY_DECREF(name);
+    }
+    tinypy_internal_exception_preserve_end(vm, &state);
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_method_receiver_error(tinypy_method_object_t *method, tinypy_value_t *receiver, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&method->base);
+    char owner_name[256];
+    char receiver_name[256];
+
+    __tinypy_method_class_name(method->owner, owner_name, sizeof(owner_name));
+    if (receiver != NULL) {
+        tinypy_internal_exception_state_t state;
+        tinypy_value_t *class_object;
+
+        tinypy_internal_exception_preserve_begin(vm, &state);
+        class_object = tinypy_object_get_attr(receiver, "__class__", 9U, NULL);
+        tinypy_internal_exception_preserve_end(vm, &state);
+        if (class_object == NULL) {
+            class_object = &receiver->type->base.base;
+            TINYPY_INCREF(class_object);
+        }
+        __tinypy_method_class_name(class_object, receiver_name, sizeof(receiver_name));
+        TINYPY_DECREF(class_object);
+    }
+    else {
+        memcpy(receiver_name, "nothing", sizeof("nothing"));
+    }
     tinypy_value_t *name = TINYPY_VALUE_KIND(method->function) == TINYPY_VALUE_FUNCTION ? TINYPY_FUNCTION_OBJECT(method->function)->name
         : TINYPY_VALUE_KIND(method->function) == TINYPY_VALUE_NATIVE_FUNCTION ? TINYPY_NATIVE_FUNCTION_OBJECT(method->function)->name : NULL;
     const char *function_name = name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING ? (const char *)TINYPY_TEXT_BYTES(name) : "?";
     size_t function_size = name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING ? TINYPY_TEXT_BYTE_SIZE(name) : 1U;
-    size_t owner_size = 1U;
-    const char *owner_name = "?";
-    size_t receiver_size = 7U;
-    const char *receiver_name = "nothing";
 
-    if (TINYPY_VALUE_KIND(method->owner) == TINYPY_VALUE_CLASS) {
-        tinypy_value_t *class_name = TINYPY_CLASS_OBJECT(method->owner)->name;
-
-        owner_name = (const char *)TINYPY_TEXT_BYTES(class_name);
-        owner_size = TINYPY_TEXT_BYTE_SIZE(class_name);
-    }
-    else if (TINYPY_VALUE_KIND(method->owner) == TINYPY_VALUE_TYPE) {
-        owner_name = tinypy_type_name((tinypy_type_t *)method->owner, &owner_size);
-    }
-    if (receiver != NULL) {
-        if (TINYPY_VALUE_KIND(receiver) == TINYPY_VALUE_OLD_INSTANCE) {
-            tinypy_value_t *class_name = TINYPY_CLASS_OBJECT(TINYPY_OLD_INSTANCE_OBJECT(receiver)->class_object)->name;
-
-            receiver_name = (const char *)TINYPY_TEXT_BYTES(class_name);
-            receiver_size = TINYPY_TEXT_BYTE_SIZE(class_name);
-        }
-        else {
-            receiver_name = tinypy_type_name(receiver->type, &receiver_size);
-        }
+    if (name != NULL) {
+        TINYPY_INCREF(name);
     }
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("unbound method "), {function_name, function_size},
-        TINYPY_MESSAGE_PART_LITERAL("() must be called with "), {owner_name, owner_size},
-        TINYPY_MESSAGE_PART_LITERAL(" instance as first argument (got "), {receiver_name, receiver_size},
+        TINYPY_MESSAGE_PART_LITERAL("() must be called with "), {owner_name, strlen(owner_name)},
+        TINYPY_MESSAGE_PART_LITERAL(" instance as first argument (got "), {receiver_name, strlen(receiver_name)},
         {receiver != NULL ? " instance instead)" : " instead)", receiver != NULL ? 18U : 9U}
     };
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    if (name != NULL) {
+        TINYPY_DECREF(name);
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -129,17 +156,12 @@ tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_val
 
     if (bound_self == NULL) {
         tinypy_value_t *first = argument_count != 0U ? TINYPY_TUPLE_GET(args, 0U) : NULL;
-        tinypy_bool_t valid_owner = TINYPY_FALSE;
+        int32_t valid_owner = INT32_C(0);
 
-        if (first != NULL && TINYPY_VALUE_KIND(method->owner) == TINYPY_VALUE_TYPE) {
-            tinypy_type_t *owner_type = (tinypy_type_t *)method->owner;
-
-            valid_owner = tinypy_type_is_subtype(first->type, owner_type);
-        }
-        else if (first != NULL && TINYPY_VALUE_KIND(method->owner) == TINYPY_VALUE_CLASS) {
-            if (TINYPY_VALUE_KIND(first) == TINYPY_VALUE_OLD_INSTANCE) {
-                tinypy_value_t *old_instance_class = tinypy_old_instance_class(first);
-                valid_owner = tinypy_class_is_subclass(old_instance_class, method->owner);
+        if (first != NULL) {
+            valid_owner = tinypy_internal_object_is_instance(first, method->owner, out_error);
+            if (valid_owner < 0) {
+                return NULL;
             }
         }
 

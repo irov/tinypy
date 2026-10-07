@@ -550,15 +550,13 @@ failure:
 //////////////////////////////////////////////////////////////////////////
 /* Follows ensure_fromlist: names listed in a from-import that are not yet
    attributes of a package are imported as its submodules. */
-static tinypy_bool_t __tinypy_import_ensure_fromlist(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_value_t *fromlist, tinypy_bool_t recursive, tinypy_error_t **out_error);
-static tinypy_bool_t __tinypy_import_ensure_fromlist_impl(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_value_t *fromlist, tinypy_bool_t recursive, tinypy_error_t **out_error) {
-    const char *module_name;
-    size_t module_name_size;
+static tinypy_bool_t __tinypy_import_ensure_fromlist(tinypy_vm_t *vm, tinypy_value_t *module, const char *module_name, size_t module_name_size, tinypy_value_t *fromlist, tinypy_bool_t recursive, tinypy_error_t **out_error);
+static tinypy_bool_t __tinypy_import_ensure_fromlist_impl(tinypy_vm_t *vm, tinypy_value_t *module, const char *module_name, size_t module_name_size, tinypy_value_t *fromlist, tinypy_bool_t recursive, tinypy_error_t **out_error) {
     tinypy_error_t *iteration_error = NULL;
     tinypy_value_t *iterator;
     tinypy_bool_t success = TINYPY_TRUE;
 
-    if (__tinypy_import_is_package(module) == 0 || __tinypy_import_text_view(tinypy_module_name(module), &module_name, &module_name_size) == 0) {
+    if (__tinypy_import_is_package(module) == 0) {
         return TINYPY_TRUE;
     }
     iterator = tinypy_iter(fromlist, out_error);
@@ -588,7 +586,7 @@ static tinypy_bool_t __tinypy_import_ensure_fromlist_impl(tinypy_vm_t *vm, tinyp
         if (item_size == 1U && item_bytes[0] == '*') {
             tinypy_value_t *all = recursive == 0 ? tinypy_module_get_value(module, "__all__", 7U) : NULL;
 
-            if (all != NULL && __tinypy_import_ensure_fromlist(vm, module, all, TINYPY_TRUE, out_error) == 0) {
+            if (all != NULL && __tinypy_import_ensure_fromlist(vm, module, module_name, module_name_size, all, TINYPY_TRUE, out_error) == 0) {
                 TINYPY_DECREF(item);
                 success = TINYPY_FALSE;
                 break;
@@ -646,13 +644,10 @@ static tinypy_bool_t __tinypy_import_ensure_fromlist_impl(tinypy_vm_t *vm, tinyp
     return success;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_import_ensure_fromlist(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_value_t *fromlist, tinypy_bool_t recursive, tinypy_error_t **out_error) {
-    tinypy_value_t *name = tinypy_module_name(module);
-    TINYPY_INCREF(name);
+static tinypy_bool_t __tinypy_import_ensure_fromlist(tinypy_vm_t *vm, tinypy_value_t *module, const char *module_name, size_t module_name_size, tinypy_value_t *fromlist, tinypy_bool_t recursive, tinypy_error_t **out_error) {
     TINYPY_INCREF(fromlist);
-    tinypy_bool_t result = __tinypy_import_ensure_fromlist_impl(vm, module, fromlist, recursive, out_error);
+    tinypy_bool_t result = __tinypy_import_ensure_fromlist_impl(vm, module, module_name, module_name_size, fromlist, recursive, out_error);
     TINYPY_DECREF(fromlist);
-    TINYPY_DECREF(name);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -686,8 +681,8 @@ static void __tinypy_import_mark_missing(tinypy_vm_t *vm, const char *name, size
     TINYPY_DECREF(key);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_import_finish(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_value_t *fromlist, tinypy_bool_t has_fromlist, tinypy_error_t **out_error) {
-    if (result != NULL && has_fromlist != 0 && __tinypy_import_ensure_fromlist(vm, result, fromlist, TINYPY_FALSE, out_error) == 0) {
+static tinypy_value_t *__tinypy_import_finish(tinypy_vm_t *vm, tinypy_value_t *result, const char *name, size_t name_size, tinypy_value_t *fromlist, tinypy_bool_t has_fromlist, tinypy_error_t **out_error) {
+    if (result != NULL && has_fromlist != 0 && __tinypy_import_ensure_fromlist(vm, result, name, name_size, fromlist, TINYPY_FALSE, out_error) == 0) {
         TINYPY_DECREF(result);
         return NULL;
     }
@@ -785,8 +780,8 @@ static tinypy_value_t *__tinypy_import_module(tinypy_vm_t *vm, const char *name,
         }
         if (level != 0) {
             result = __tinypy_import_load_path(vm, canonical, canonical_size, importer, importer_size, return_name_size, &not_found, out_error);
+            tinypy_value_t *finished = __tinypy_import_finish(vm, result, canonical, canonical_size, fromlist, has_fromlist, out_error);
             tinypy_internal_vm_deallocate(vm, canonical, canonical_size);
-            tinypy_value_t *finished = __tinypy_import_finish(vm, result, fromlist, has_fromlist, out_error);
             return finished;
         }
     }
@@ -795,7 +790,7 @@ static tinypy_value_t *__tinypy_import_module(tinypy_vm_t *vm, const char *name,
         return NULL;
     }
     result = __tinypy_import_load_path(vm, name, name_size, importer, importer_size, has_fromlist != 0 ? name_size : head_size, &not_found, out_error);
-    tinypy_value_t *finished = __tinypy_import_finish(vm, result, fromlist, has_fromlist, out_error);
+    tinypy_value_t *finished = __tinypy_import_finish(vm, result, name, name_size, fromlist, has_fromlist, out_error);
     return finished;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -881,22 +876,7 @@ tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_err
         TINYPY_DECREF(name_value);
         return NULL;
     }
-    if (loaded != module) {
-        if (TINYPY_VALUE_KIND(loaded) != TINYPY_VALUE_MODULE || tinypy_internal_dict_update_from(tinypy_module_dict(module), tinypy_module_dict(loaded), out_error) == 0) {
-            TINYPY_DECREF(loaded);
-            tinypy_dict_set(vm->modules, key, module);
-            TINYPY_DECREF(key);
-            TINYPY_DECREF(name_value);
-            if (out_error == NULL || *out_error == NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "reload() loader returned an invalid module", out_error);
-            }
-            return NULL;
-        }
-        TINYPY_DECREF(loaded);
-        TINYPY_INCREF(module);
-        loaded = module;
-    }
-    tinypy_dict_set(vm->modules, key, module);
+    tinypy_dict_set(vm->modules, key, loaded);
     TINYPY_DECREF(key);
     TINYPY_DECREF(name_value);
     return loaded;
@@ -942,8 +922,12 @@ tinypy_bool_t tinypy_internal_import_star(tinypy_value_t *module, tinypy_value_t
         TINYPY_INCREF(all);
     }
     else {
-        all = tinypy_list_from_items(vm, NULL, 0U);
         tinypy_value_t *dict = tinypy_module_dict(module);
+        if (dict == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "'NoneType' object has no attribute 'keys'", out_error);
+            return TINYPY_FALSE;
+        }
+        all = tinypy_list_from_items(vm, NULL, 0U);
         size_t position = 0U;
         tinypy_value_t *key;
         tinypy_value_t *value;

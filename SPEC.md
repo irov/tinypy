@@ -128,6 +128,15 @@ Lifetime определяется reference counting. Ациклические �
 немедленно. Host обязан освободить owned references и разорвать owning cycles
 перед `tinypy_vm_destroy`.
 
+При уничтожении module его сохранённый снаружи словарь сохраняет ключи;
+значения byte-string ключей заменяются на `None` в два прохода: сначала имена
+с одним начальным `_`, затем остальные, кроме `__builtins__`. Нестроковые и
+Unicode ключи сохраняются. Traversal для диагностики циклов только читает
+ссылки и не очищает словарь. Python `module.__new__` создаёт объект без имени
+и словаря до инициализации; C accessors возвращают borrowed NULL для этих
+отсутствующих полей. Добавление значения и использование модуля как builtins
+создают словарь лениво.
+
 Это основополагающее правило, а не отсутствующая возможность: runtime не ведёт
 реестр живых значений, а `tinypy_vm_destroy` не выполняет sweep недостижимых
 объектов. Значение, живое к этому моменту, — ошибка host или runtime, и
@@ -451,6 +460,10 @@ Core не строит filesystem paths. Resolver получает canonical mod
 Artifact содержит logical filename, canonical name, package metadata и release
 callback. `sys.modules` поддерживает packages, circular imports и rollback при
 ошибке resolution, compilation или execution.
+Если loader при `reload` заменяет зарегистрированный объект, результатом
+становится этот объект; исходный модуль сохраняет свой namespace. Replacement
+не обязан быть модулем. Обычная повторная загрузка source artifact исполняется
+в прежнем namespace.
 
 Output streams, warnings, diagnostics и formatted tracebacks направляются host
 callbacks. Callback input действителен только на время вызова, если явно не

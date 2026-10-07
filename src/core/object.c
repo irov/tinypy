@@ -256,7 +256,7 @@ tinypy_value_t *tinypy_internal_object_builtin_attribute(tinypy_value_t *value, 
             tinypy_value_t *return_value_3 = __tinypy_object_owned(value);
             return return_value_3;
         }
-        if (value->type->dict_offset != 0U && __tinypy_object_name_equal(name, name_size, "__dict__", 8U) != 0) {
+        if (kind != TINYPY_VALUE_MODULE && value->type->dict_offset != 0U && __tinypy_object_name_equal(name, name_size, "__dict__", 8U) != 0) {
             tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(value);
 
             if (value->type->has_instance_dict == 0) {
@@ -572,7 +572,7 @@ tinypy_value_t *tinypy_internal_object_builtin_attribute(tinypy_value_t *value, 
     }
     if (kind == TINYPY_VALUE_MODULE && __tinypy_object_name_equal(name, name_size, "__dict__", 8U) != 0) {
         tinypy_value_t *module_dict = tinypy_module_dict(value);
-        tinypy_value_t *return_value_57 = __tinypy_object_owned(module_dict);
+        tinypy_value_t *return_value_57 = __tinypy_object_optional(vm, module_dict);
         return return_value_57;
     }
     if (kind == TINYPY_VALUE_GENERATOR) {
@@ -1189,6 +1189,13 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
         result = tinypy_internal_dict_get_optional(vm, TINYPY_FUNCTION_OBJECT(value)->dict, key);
         if (result != NULL) {
             TINYPY_INCREF(result);
+        }
+        else if (tinypy_vm_has_error(vm) == 0) {
+            tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
+
+            if (attribute != NULL) {
+                result = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
+            }
         }
     }
     else {

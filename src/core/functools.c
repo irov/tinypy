@@ -9,19 +9,6 @@ static tinypy_bool_t __tinypy_functools_no_keywords(tinypy_vm_t *vm, tinypy_valu
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_functools_dict_update(tinypy_value_t *target, tinypy_value_t *source) {
-    if (source == NULL) {
-        return;
-    }
-    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(source);
-    tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(source);
-    for (; iterator != iterator_end; ++iterator) {
-        if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-            tinypy_dict_set(target, iterator->key, iterator->value);
-        }
-    }
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_partial_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_partial_object_t *partial = TINYPY_PARTIAL_OBJECT(value);
 
@@ -58,8 +45,11 @@ tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value
         selected_value = tinypy_tuple_from_items(vm, &tuple_items[1], argument_count - 1U);
     }
     partial->args = selected_value;
-    partial->keywords = tinypy_dict_new(vm);
-    __tinypy_functools_dict_update(partial->keywords, kwargs);
+    partial->keywords = kwargs != NULL ? tinypy_internal_dict_copy(kwargs, out_error) : tinypy_dict_new(vm);
+    if (partial->keywords == NULL) {
+        TINYPY_DECREF(&partial->base);
+        return NULL;
+    }
     return &partial->base;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -81,10 +71,15 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
         }
     }
     else {
-        combined_kwargs = tinypy_dict_new(vm);
-        __tinypy_functools_dict_update(combined_kwargs, partial->keywords);
-        if (call_keyword_count != 0U) {
-            __tinypy_functools_dict_update(combined_kwargs, kwargs);
+        combined_kwargs = tinypy_internal_dict_copy(partial->keywords, out_error);
+        if (combined_kwargs == NULL) {
+            TINYPY_DECREF(combined_args);
+            return NULL;
+        }
+        if (call_keyword_count != 0U && tinypy_internal_dict_update_from(combined_kwargs, kwargs, out_error) == 0) {
+            TINYPY_DECREF(combined_kwargs);
+            TINYPY_DECREF(combined_args);
+            return NULL;
         }
     }
     tinypy_value_t *result = tinypy_call(partial->callable, combined_args, combined_kwargs, out_error);
@@ -165,7 +160,6 @@ static tinypy_value_t *__tinypy_partial_setstate_method(tinypy_value_t *function
     tinypy_value_t *stored_args;
     tinypy_value_t *keywords;
     tinypy_value_t *dict;
-    tinypy_value_t *owned_keywords = NULL;
 
     (void)user_data;
     if (__tinypy_partial_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
@@ -185,33 +179,52 @@ static tinypy_value_t *__tinypy_partial_setstate_method(tinypy_value_t *function
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "invalid partial state", out_error);
         return NULL;
     }
+    if (stored_args->type != &vm->types[TINYPY_VALUE_TUPLE]) {
+        tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &stored_args, 1U);
+
+        stored_args = tinypy_internal_tuple_create(&vm->types[TINYPY_VALUE_TUPLE], arguments, NULL, out_error);
+        TINYPY_DECREF(arguments);
+        if (stored_args == NULL) {
+            return NULL;
+        }
+    }
+    else {
+        TINYPY_INCREF(stored_args);
+    }
     if (TINYPY_VALUE_KIND(keywords) == TINYPY_VALUE_NONE) {
-        owned_keywords = tinypy_dict_new(vm);
-        keywords = owned_keywords;
+        keywords = tinypy_dict_new(vm);
+    }
+    else if (keywords->type != &vm->types[TINYPY_VALUE_DICT]) {
+        keywords = tinypy_internal_dict_copy(keywords, out_error);
+        if (keywords == NULL) {
+            TINYPY_DECREF(stored_args);
+            return NULL;
+        }
+    }
+    else {
+        TINYPY_INCREF(keywords);
     }
     TINYPY_INCREF(callable);
-    TINYPY_INCREF(stored_args);
-    TINYPY_INCREF(keywords);
     if (TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_NONE) {
         TINYPY_INCREF(dict);
     }
     tinypy_value_t *old_callable = partial->callable;
-    tinypy_value_t *old_args = partial->args;
-    tinypy_value_t *old_keywords = partial->keywords;
-    tinypy_value_t *old_dict = partial->dict;
 
     partial->callable = callable;
-    partial->args = stored_args;
-    partial->keywords = keywords;
-    partial->dict = TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_NONE ? dict : NULL;
     TINYPY_DECREF(old_callable);
+    tinypy_value_t *old_args = partial->args;
+
+    partial->args = stored_args;
     TINYPY_DECREF(old_args);
+    tinypy_value_t *old_keywords = partial->keywords;
+
+    partial->keywords = keywords;
     TINYPY_DECREF(old_keywords);
+    tinypy_value_t *old_dict = partial->dict;
+
+    partial->dict = TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_NONE ? dict : NULL;
     if (old_dict != NULL) {
         TINYPY_DECREF(old_dict);
-    }
-    if (owned_keywords != NULL) {
-        TINYPY_DECREF(owned_keywords);
     }
     tinypy_value_t *return_value_1 = tinypy_none_get(vm);
     return return_value_1;
@@ -241,7 +254,7 @@ void tinypy_internal_initialize_partial_type(tinypy_vm_t *vm) {
 tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t argument_count = TINYPY_TUPLE_SIZE(args);
-    tinypy_value_t *accumulator;
+    tinypy_value_t *accumulator = NULL;
     tinypy_error_t *iteration_error = NULL;
 
     (void)user_data;
@@ -253,59 +266,67 @@ tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinyp
         return NULL;
     }
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);
-    tinypy_value_t *iterator = tinypy_iter(item_2, out_error);
+    tinypy_error_t *iterator_error = NULL;
+    tinypy_value_t *iterator = tinypy_iter(item_2, &iterator_error);
     if (iterator == NULL) {
+        if (iterator_error != NULL) {
+            tinypy_error_release(iterator_error);
+        }
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reduce() arg 2 must support iteration", out_error);
         return NULL;
     }
     if (argument_count == 3U) {
         accumulator = TINYPY_TUPLE_GET(args, 2U);
         TINYPY_INCREF(accumulator);
     }
-    else {
-        accumulator = tinypy_next(iterator, &iteration_error);
-        if (accumulator == NULL) {
-            TINYPY_DECREF(iterator);
-            if (iteration_error != NULL) {
-                if (out_error != NULL) {
-                    *out_error = iteration_error;
-                }
-                else {
-                    tinypy_error_release(iteration_error);
-                }
-            }
-            else {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reduce() of empty sequence with no initial value", out_error);
-            }
-            return NULL;
+    tinypy_value_t *call_args = tinypy_internal_tuple_new_checked(vm, 2U, out_error);
+    if (call_args == NULL) {
+        if (accumulator != NULL) {
+            TINYPY_DECREF(accumulator);
         }
+        TINYPY_DECREF(iterator);
+        return NULL;
     }
     for (;;) {
+        if (call_args->ref > 1U) {
+            TINYPY_DECREF(call_args);
+            call_args = tinypy_internal_tuple_new_checked(vm, 2U, out_error);
+            if (call_args == NULL) {
+                if (accumulator != NULL) {
+                    TINYPY_DECREF(accumulator);
+                }
+                TINYPY_DECREF(iterator);
+                return NULL;
+            }
+        }
         tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
-        tinypy_value_t *call_items[2];
-        tinypy_value_t *call_args;
-        tinypy_value_t *next;
 
         if (item == NULL) {
             break;
         }
-        call_items[0] = accumulator;
-        call_items[1] = item;
-        call_args = tinypy_tuple_from_items(vm, call_items, 2U);
-        tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 0U);
-        next = tinypy_call(item_3, call_args, NULL, out_error);
-        TINYPY_DECREF(call_args);
+        if (accumulator == NULL) {
+            accumulator = item;
+            continue;
+        }
+        tinypy_tuple_set(call_args, 0U, accumulator);
+        TINYPY_DECREF(accumulator);
+        tinypy_tuple_set(call_args, 1U, item);
         TINYPY_DECREF(item);
-        if (next == NULL) {
-            TINYPY_DECREF(accumulator);
+        tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 0U);
+
+        accumulator = tinypy_call(item_3, call_args, NULL, out_error);
+        if (accumulator == NULL) {
+            TINYPY_DECREF(call_args);
             TINYPY_DECREF(iterator);
             return NULL;
         }
-        TINYPY_DECREF(accumulator);
-        accumulator = next;
     }
-    TINYPY_DECREF(iterator);
+    TINYPY_DECREF(call_args);
     if (iteration_error != NULL) {
-        TINYPY_DECREF(accumulator);
+        if (accumulator != NULL) {
+            TINYPY_DECREF(accumulator);
+        }
+        TINYPY_DECREF(iterator);
         if (out_error != NULL) {
             *out_error = iteration_error;
         }
@@ -314,6 +335,10 @@ tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinyp
         }
         return NULL;
     }
+    if (accumulator == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reduce() of empty sequence with no initial value", out_error);
+    }
+    TINYPY_DECREF(iterator);
     return accumulator;
 }
 //////////////////////////////////////////////////////////////////////////

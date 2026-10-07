@@ -554,8 +554,14 @@ static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_module_attribute(tinypy_value_t *module, const char *name, size_t name_size) {
     tinypy_value_t *dict = tinypy_module_dict(module);
-    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(dict);
-    tinypy_dict_entry_t *end = TINYPY_DICT_ITERATOR_END(dict);
+    tinypy_dict_entry_t *iterator;
+    tinypy_dict_entry_t *end;
+
+    if (dict == NULL) {
+        return NULL;
+    }
+    iterator = TINYPY_DICT_ITERATOR_BEGIN(dict);
+    end = TINYPY_DICT_ITERATOR_END(dict);
 
     for (; iterator != end; ++iterator) {
         tinypy_value_t *key;
@@ -1204,8 +1210,29 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tinypy_bool_t raw, tinypy_bool_t skip_root_special, tinypy_error_t **out_error) {
     tinypy_representation_builder_t builder;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
-    __tinypy_representation_initialize(&builder, TINYPY_VALUE_VM(value));
+    if (skip_root_special == 0 && tinypy_internal_object_has_special_override(value, raw != 0 ? "__str__" : "__repr__", raw != 0 ? 7U : 8U) != 0) {
+        tinypy_value_t *custom = __tinypy_representation_custom(value, raw != 0 ? "__str__" : "__repr__", raw != 0 ? 7U : 8U, out_error);
+
+        if (custom == NULL) {
+            return NULL;
+        }
+        if (TINYPY_VALUE_KIND(custom) == TINYPY_VALUE_UNICODE) {
+            tinypy_value_t *encoded = tinypy_internal_text_codec(vm, custom, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+
+            TINYPY_DECREF(custom);
+            return encoded;
+        }
+        return custom;
+    }
+    if (raw != 0 && TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, value, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+
+        return encoded;
+    }
+
+    __tinypy_representation_initialize(&builder, vm);
     builder.root = value;
     builder.skip_root_special = skip_root_special;
     TINYPY_CLEAR_ERROR(out_error);
@@ -1514,6 +1541,9 @@ tinypy_value_t *tinypy_internal_string_create(tinypy_type_t *type, tinypy_value_
         return return_value_2;
     }
     tinypy_value_t *value = tinypy_object_str(item, out_error);
+    if (type == &vm->types[TINYPY_VALUE_STRING]) {
+        return value;
+    }
     tinypy_value_t *return_value_3 = tinypy_internal_immutable_subclass_copy(type, value, out_error);
     return return_value_3;
 }

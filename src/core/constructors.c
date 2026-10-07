@@ -31,17 +31,9 @@ static tinypy_bool_t __tinypy_constructor_argument_count(tinypy_vm_t *vm, const 
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_constructor_keyword_optional(tinypy_vm_t *vm, tinypy_value_t *kwargs, const char *name, size_t name_size) {
-    tinypy_internal_exception_state_t state;
-    tinypy_error_t *lookup_error = NULL;
-    tinypy_value_t *keyword = NULL;
     tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
+    tinypy_value_t *keyword = tinypy_internal_dict_get_optional_suppressed(vm, kwargs, key);
 
-    tinypy_internal_exception_preserve_begin(vm, &state);
-    (void)tinypy_internal_dict_get_optional_checked(vm, kwargs, key, &keyword, &lookup_error);
-    if (lookup_error != NULL) {
-        tinypy_error_release(lookup_error);
-    }
-    tinypy_internal_exception_preserve_end(vm, &state);
     TINYPY_DECREF(key);
     return keyword;
 }
@@ -2185,11 +2177,7 @@ static tinypy_value_t *__tinypy_constructor_object_format_method(tinypy_value_t 
     if (text == NULL) {
         return NULL;
     }
-    if (TINYPY_TEXT_BYTE_SIZE(spec) == 0U) {
-        return text;
-    }
-    tinypy_bool_t result_unicode = TINYPY_FALSE;
-    tinypy_value_t *return_value_1 = tinypy_internal_string_format_builtin_value(vm, text, INT32_C(0), TINYPY_TEXT_BYTES(spec), TINYPY_TEXT_BYTE_SIZE(spec), spec_unicode, &result_unicode, out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_string_format_object(vm, text, spec, out_error);
 
     TINYPY_DECREF(text);
     return return_value_1;
@@ -2896,7 +2884,7 @@ static tinypy_value_t *__tinypy_constructor_builtin_new_method(tinypy_value_t *f
         }
         return result;
     }
-    if (kind == TINYPY_VALUE_PROPERTY || kind == TINYPY_VALUE_CLASS_METHOD || kind == TINYPY_VALUE_STATIC_METHOD) {
+    if (kind == TINYPY_VALUE_PROPERTY || kind == TINYPY_VALUE_CLASS_METHOD || kind == TINYPY_VALUE_STATIC_METHOD || kind == TINYPY_VALUE_MODULE) {
         tinypy_value_t *result = tinypy_internal_object_allocate_checked(vm, type, type->basic_size, out_error);
 
         return result;

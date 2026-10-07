@@ -177,6 +177,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         sizeof(tinypy_module_object_t), 0U,
         TINYPY_TYPE_FLAG_BASE_TYPE, &vm->types[TINYPY_VALUE_INSTANCE],
         tinypy_internal_module_release_references, NULL);
+    vm->types[TINYPY_VALUE_MODULE].traverse_references = tinypy_internal_module_traverse_references;
     vm->types[TINYPY_VALUE_MODULE].has_instance_dict = INT32_C(1);
     vm->types[TINYPY_VALUE_MODULE].dict_offset = offsetof(tinypy_module_object_t, dict);
     __tinypy_internal_initialize_type(
@@ -343,6 +344,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         TINYPY_TYPE_FLAG_IMMUTABLE, &vm->types[TINYPY_VALUE_INSTANCE],
         tinypy_internal_class_release_references, NULL);
     vm->types[TINYPY_VALUE_CLASS].call = tinypy_internal_class_call;
+    vm->types[TINYPY_VALUE_CLASS].create = tinypy_internal_class_create;
     vm->types[TINYPY_VALUE_CLASS].get_attribute = tinypy_internal_class_get_attribute;
     vm->types[TINYPY_VALUE_CLASS].set_attribute = tinypy_internal_class_set_attribute;
     __tinypy_internal_initialize_type(
@@ -1405,6 +1407,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     tinypy_internal_initialize_code_type(vm);
     tinypy_internal_initialize_function_type(vm);
     tinypy_internal_initialize_module_type(vm);
+    tinypy_internal_constructor_add_builtin_new(&vm->types[TINYPY_VALUE_CLASS]);
     tinypy_internal_initialize_super_type(vm);
     tinypy_internal_initialize_partial_type(vm);
     tinypy_internal_initialize_iterator_types(vm);

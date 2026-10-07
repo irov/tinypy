@@ -32,7 +32,9 @@ RUNTIME_MATRICES = [('runtime_matrix.py', RUNTIME_OUTCOMES), ('text_format_matri
                     ('control_matrix.py', 222), ('sre_matrix.py', 171200),
                     ('type_slots_matrix.py', 415), ('comparison_matrix.py', 2340),
                     ('compiler_diagnostics_matrix.py', 6432), ('descriptor_matrix.py', 1312),
-                    ('iterator_builtin_matrix.py', 1504), ('text_protocol_matrix.py', 726)]
+                    ('iterator_builtin_matrix.py', 1504), ('text_protocol_matrix.py', 726),
+                    ('format_fields_matrix.py', 568), ('functional_matrix.py', 499),
+                    ('namespace_matrix.py', 511), ('attribute_matrix.py', 1091)]
 STATS = re.compile(r'^tinypy stats: .*outstanding_bytes=0 outstanding_allocations=0\r?\n?$')
 
 

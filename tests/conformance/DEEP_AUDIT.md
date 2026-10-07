@@ -1,12 +1,14 @@
 # Deep conformance audit — 2026-10-07
 
 The supported contract is [SPEC.md](../../SPEC.md), with external CPython
-2.7.18 as the observable-behavior oracle. Four audit passes added 372 independently
+2.7.18 as the observable-behavior oracle. Five audit passes added 482 independently
 authored portable cases: the initial 109, 84 boundary/callback cases,
 and 92 comparison/type/generator/regex cases (37 comparisons, 27 types,
 13 control flow and 15 SRE), followed by 87 constructor/iterator/descriptor/
 decoder cases (24 text protocols, 33 builtins, 17 descriptors and 13 compiler
-diagnostics).
+diagnostics), followed by 110 formatting/function/namespace/introspection cases
+(24 brace-formatting, 30 functional consumers, 25 namespace and 31 attribute
+protocol cases).
 Every ordinary selected case passes on both runtimes.
 These counts are regression witnesses, not a count of distinct defects.
 
@@ -45,6 +47,13 @@ These counts are regression witnesses, not a count of distinct defects.
 | Property and callable descriptors | None-copy preserves accessors; getter-doc Exception suppression versus BaseException propagation; published state before doc callbacks; subtype doc storage; callable-descriptor argument diagnostics and precedence |
 | Weak references | Noncallable callback construction; callback release after target death and batch cleanup order; `ref.__new__` keyword policy; cross-subtype equality |
 | Source decoding and literal diagnostics | Late UTF-8 Unicode-literal decoding versus byte literals/comments; early ASCII decoding including Unicode inputs; byte escape messages; named/hex/raw Unicode escape spans; adjacent literal decoding; parser text restored by source encoding and mode |
+| Brace formatting | Conversion before nested specification callbacks; recursion limits and shared automatic numbering; converted text-subclass formatting; original format-spec identity; Unicode numeric fields and mapping keys; field-path validation/error order and formatter iterator recovery |
+| Functional state | Partial tuple-subclass canonicalization and dictionary-subclass copying; cached keyword hashes; sequential publication before each displaced field's finalizer; merge errors prevent target execution |
+| Iterator consumers | Reduce initial-iterator error translation and accumulator lifetime through exhaustion; reusable two-item call tuples with fresh allocation when retained by a native callback; enumerate counter types/promotion and keyword precedence; classic versus new-style reversed lengths; xrange integer parsing; general map iterator-error translation |
+| Execution dictionaries | Exact local/builtin lookup suppression versus checked interned-name global lookup; callback-sensitive global caches including misses and lookup restarts; global writes bypass dictionary-subclass hooks; single-lookup deletion errors; exec NUL validation after namespace/builtins handling |
+| Module lifetime | Allocation-only exact/subclass modules expose None until lazy namespace creation; nullable descriptor/C API fields; checked teardown snapshots and private-first clearing without recreating deleted keys; subtype slots precede namespace release; diagnostics traverse references without clearing them |
+| Introspection and class binding | Vars reads __dict__ once and translates lookup errors; dir follows generic dictionary/members/methods/class/base protocols and classic strict lengths; classic callable lookup and classobj construction; unbound receivers use reported classes/metaclass checks, including the second class lookup when formatting a rejection |
+| Import and reload | Package fromlists use the canonical request name even when module names differ or were assigned after allocation; allocation-only star import reports missing namespace keys; reload returns the loader's replacement without merging or modifying the original namespace, including nonmodule replacements |
 
 Python-visible conversion failures, error ordering and callbacks remain active
 in Release. This work does not add cyclic GC or change the documented ownership
@@ -62,6 +71,18 @@ The native tinypy fixture checks three calls; independent Python-level cases
 check the corresponding six method calls and strict-subtype order. This does
 not claim execution of the CPython extension ABI. Primary reference:
 [CPython object.c](https://github.com/python/cpython/blob/v2.7.18/Objects/object.c).
+
+The fifth pass adds native witnesses for retained reduce call tuples,
+allocation-only module access through the public C API, read-only module traversal
+by the cycle detector, and module-finder reload replacement identity. Their groups
+remain part of the existing 89 native/runtime tests. Python-facing lifecycle,
+introspection and namespace cases use independent CPython expectations. The
+allocation-only integration guards were reviewed in source before exercising
+the corrected valid states. Primary references:
+[moduleobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/moduleobject.c),
+[classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c),
+[ceval.c](https://github.com/python/cpython/blob/v2.7.18/Python/ceval.c) and
+[import.c](https://github.com/python/cpython/blob/v2.7.18/Python/import.c).
 
 SRE products use ordinary valid programs generated from project-authored
 patterns by CPython 2.7.18's regex compiler. Replacement-template parsing and
@@ -104,18 +125,22 @@ as an oracle match. [SPEC.md](../../SPEC.md#14-errors) records this boundary.
 | Property/callable descriptor copying, initialization, binding and weakrefs | 1,312 |
 | Iterator consumers, lengths, aggregate arguments and cached-hash transfer | 1,504 |
 | Text conversion protocols, constructor arguments, decimal and translation errors | 726 |
-| **Total unique runtime outcomes** | **224,675** |
+| Brace fields, conversion/specification protocols and formatter iterators | 568 |
+| Partial state/calls, reduce, counters, lengths and aggregate parsing | 499 |
+| Execution mappings, dictionary callbacks/caches and nullable module/package imports | 511 |
+| Module/class construction, directory protocols, receiver binding and finalizers | 1,091 |
+| **Total unique runtime outcomes** | **227,344** |
 
 Operands include integer widening, long, bool, float, complex, infinity, NaN,
-subnormal and maximum finite doubles. All twelve matrices compare complete stdout to
+subnormal and maximum finite doubles. All sixteen matrices compare complete stdout to
 the oracle and verify unique identities, exact cardinality and zero outstanding
 tinypy allocations. They compare exception classes; protocol regressions also
 assert callback order, mutation, identity and selected exception messages.
 
 The generated compiler corpus contains 444 `exec`, 420 `eval` and 420 `single`
-sources. Each is checked at optimize 0/1/2. Another 123 checked-in vendor, local,
+sources. Each is checked at optimize 0/1/2. Another 131 checked-in vendor, local,
 runtime and matrix sources undergo three-level `exec` comparison. This gives
-4,221 byte-identical marshal-v2 comparisons per profile, 16,884 across all four.
+4,245 byte-identical marshal-v2 comparisons per profile, 16,980 across all four.
 No compiler mismatch was found in these inputs.
 
 Dynamic compiler diagnostics use logical filenames with no filesystem source
@@ -124,17 +149,17 @@ is unavailable. Core filesystem access remains outside the embedding contract.
 
 ## Final validation
 
-The default [matrix runner](../run_validation.py) completed all 118 stages on
+The default [matrix runner](../run_validation.py) completed all 138 stages on
 macOS arm64. C and C99 standalone builds used strict warnings-as-errors.
 
 | Profile | Native/runtime CTest | Portable oracle cases | Runtime outcomes | Compiler comparisons |
 | --- | --- | --- | --- | --- |
-| Debug, detector on | 89 PASS | 1,042 PASS | 224,675 identical | 4,221 identical |
-| Release | 89 PASS | 1,038 PASS / 4 diagnostic SKIP | 224,675 identical | 4,221 identical |
-| Unoptimized Debug, ASan/UBSan | 89 PASS | 1,042 PASS | 224,675 identical | 4,221 identical |
-| Release, LTO | 89 PASS | 1,038 PASS / 4 diagnostic SKIP | 224,675 identical | 4,221 identical |
+| Debug, detector on | 89 PASS | 1,152 PASS | 227,344 identical | 4,245 identical |
+| Release | 89 PASS | 1,148 PASS / 4 diagnostic SKIP | 227,344 identical | 4,245 identical |
+| Unoptimized Debug, ASan/UBSan | 89 PASS | 1,152 PASS | 227,344 identical | 4,245 identical |
+| Release, LTO | 89 PASS | 1,148 PASS / 4 diagnostic SKIP | 227,344 identical | 4,245 identical |
 
-All 133 CTest registrations were checked against the exact inventory. Portable
+All 137 CTest registrations were checked against the exact inventory. Portable
 cases are run separately with the external oracle; their CTest wrappers are
 not counted again as executed native tests. Host/API/runner acceptance checks
 passed 82/82. Standalone marshal/artifact and core symbol audits passed in all
@@ -142,7 +167,7 @@ profiles. No ASan/UBSan diagnostics occurred. Apple ASan lacks LeakSanitizer;
 macOS records `detect_leaks=0`, while allocator balance is checked independently.
 
 Logs, per-case portable results, JUnit results and the aggregate source/test
-SHA-256 are in `.temp/validation-fourth-accepted/report.json` and its linked artifacts. The
+SHA-256 are in `.temp/validation-fifth-accepted/report.json` and its linked artifacts. The
 report rejects incomplete discovery, native/portable skips outside the four
 allowed Release adaptations, inconsistent summaries, empty compiler corpora,
 changed inputs and timeouts. The input fingerprint includes the normative
@@ -154,10 +179,10 @@ semantics have separate runtime fixtures, including `sys_runtime.py`. Timed-out
 stage process trees are stopped.
 
 The final accepted source/test SHA-256 is
-`d47983c9dbe482c18af81cdb2f491e351ab3be9f20b34bc6dc9f5835534892c7`.
-The post-run fingerprint matched; all 118 recorded stages have PASS status.
+`5a15dd86f8ec358ce48e7c9382b68fab3ab0b436ee59df1d9c53e007dee7bb5f`.
+The post-run fingerprint matched; all 138 recorded stages have PASS status.
 
-A scoped Debug measurement for 100,000 `pack_into('<d', ...)` calls showed a
+An earlier scoped Debug measurement for 100,000 `pack_into('<d', ...)` calls showed a
 median CPU time of 0.074736 s before the direct-buffer change and 0.049017 s
 after it, across five interleaved runs (about 34% lower). Bytes and allocator
 balance match. Existing pools keep the external allocation count unchanged;
@@ -169,7 +194,7 @@ this is a local microbenchmark, not an application performance guarantee.
 fixtures; [TEST_PLAN.md](TEST_PLAN.md) defines applicable variant axes, callback
 states, lifetime checks and future acceptance gates. [tests/README.md](../README.md)
 describes adding regression witnesses and running the full matrix. Confirmed
-supported-scope discrepancies from all four audit passes are fixed; the one explicit
+supported-scope discrepancies from all five audit passes are fixed; the one explicit
 CPython pending-error boundary is described above. The finite products are exhaustive
 for their operand lists; arbitrary Python programs, callbacks, host extensions
 and other ABIs remain unbounded. Declared SPEC limitations stay explicit.

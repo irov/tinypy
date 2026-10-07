@@ -207,8 +207,8 @@ static void __tinypy_internal_fixed_builtin_subclass_release_references(tinypy_v
         tinypy_internal_reversed_release_references(value, visit, user_data);
     }
     else if (value->type->layout_kind == TINYPY_VALUE_MODULE) {
-        tinypy_internal_module_release_references(value, visit, user_data);
         __tinypy_internal_fixed_builtin_subclass_slots_release_references(value, visit, user_data);
+        tinypy_internal_module_release_references(value, visit, user_data);
         return;
     }
     else if (value->type->layout_kind == TINYPY_VALUE_SUPER) {
@@ -226,6 +226,11 @@ static void __tinypy_internal_fixed_builtin_subclass_release_references(tinypy_v
         tinypy_internal_property_release_references(value, visit, user_data);
     }
     tinypy_internal_instance_release_references(value, visit, user_data);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_module_subclass_traverse_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_internal_module_traverse_references(value, visit, user_data);
+    __tinypy_internal_fixed_builtin_subclass_slots_release_references(value, visit, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_builtin_subclass_destroy(tinypy_value_t *value) {
@@ -1858,6 +1863,9 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_vm_t *vm, const char *na
                                    ? tinypy_internal_type_release_references
                                    : (instance_kind == TINYPY_VALUE_WEAKREF ? tinypy_internal_weakref_release_references : (instance_kind == TINYPY_VALUE_TUPLE ? tinypy_internal_tuple_subclass_release_references : (instance_kind == TINYPY_VALUE_NATIVE_INSTANCE ? tinypy_internal_native_instance_release_references : (__tinypy_internal_type_has_container_builtin_layout(instance_kind) != 0 ? __tinypy_internal_builtin_subclass_release_references : (__tinypy_internal_type_has_fixed_builtin_layout(vm, instance_kind) != 0 ? __tinypy_internal_fixed_builtin_subclass_release_references : tinypy_internal_instance_release_references)))));
     type->traverse_references = type->release_references;
+    if (instance_kind == TINYPY_VALUE_MODULE) {
+        type->traverse_references = __tinypy_internal_module_subclass_traverse_references;
+    }
     type->destroy = instance_kind == TINYPY_VALUE_TYPE
                         ? tinypy_internal_type_destroy
                         : (instance_kind == TINYPY_VALUE_WEAKREF ? tinypy_internal_weakref_destroy : (instance_kind == TINYPY_VALUE_TUPLE ? tinypy_internal_tuple_subclass_destroy : (instance_kind == TINYPY_VALUE_NATIVE_INSTANCE ? tinypy_internal_native_instance_destroy : (__tinypy_internal_type_has_container_builtin_layout(instance_kind) != 0 ? __tinypy_internal_builtin_subclass_destroy : (instance_kind == TINYPY_VALUE_UNICODE ? tinypy_internal_unicode_destroy : NULL)))));

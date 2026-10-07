@@ -712,7 +712,7 @@ length_unavailable:
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_iterator_integer(tinypy_vm_t *vm, tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
     (void)vm;
-    tinypy_bool_t return_value_1 = tinypy_internal_index_as_i64(value, out_value, TINYPY_FALSE, out_error);
+    tinypy_bool_t return_value_1 = tinypy_internal_integer_as_ssize(value, out_value, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -783,54 +783,81 @@ tinypy_value_t *tinypy_internal_xrange_create(tinypy_type_t *type, tinypy_value_
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    static const char *const names[2] = {"sequence", "start"};
+    static const size_t name_sizes[2] = {8U, 5U};
     tinypy_vm_t *vm = type->vm;
     size_t positional_count = TINYPY_TUPLE_SIZE(args);
     size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
     size_t recognized_keyword_count = 0U;
-    tinypy_value_t *iterable = positional_count >= 1U ? TINYPY_TUPLE_GET(args, 0U) : NULL;
-    tinypy_value_t *start = positional_count >= 2U ? TINYPY_TUPLE_GET(args, 1U) : NULL;
+    tinypy_value_t *values[2] = {NULL, NULL};
 
-    if (positional_count > 2U) {
+    if (positional_count > 2U || keyword_count > 2U - positional_count) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received too many positional arguments", out_error);
         return NULL;
     }
-    if (keyword_count != 0U) {
-        tinypy_value_t *sequence_key = tinypy_string_from_bytes(vm, "sequence", 8U);
-        tinypy_value_t *start_key = tinypy_string_from_bytes(vm, "start", 5U);
-        tinypy_value_t *sequence_keyword = tinypy_dict_get_optional(kwargs, sequence_key);
-        tinypy_value_t *start_keyword = tinypy_dict_get_optional(kwargs, start_key);
+    for (size_t parameter = 0U; parameter < 2U; ++parameter) {
+        tinypy_value_t *keyword = NULL;
 
-        TINYPY_DECREF(start_key);
-        TINYPY_DECREF(sequence_key);
-        if (sequence_keyword != NULL) {
+        values[parameter] = parameter < positional_count ? TINYPY_TUPLE_GET(args, parameter) : NULL;
+        if (recognized_keyword_count < keyword_count) {
+            keyword = tinypy_internal_constructor_keyword_optional(vm, kwargs, names[parameter], name_sizes[parameter]);
+        }
+        if (keyword != NULL) {
             recognized_keyword_count += 1U;
-            if (iterable != NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received multiple values for sequence", out_error);
+            if (values[parameter] != NULL) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received duplicate arguments", out_error);
                 return NULL;
             }
-            iterable = sequence_keyword;
+            values[parameter] = keyword;
         }
-        if (start_keyword != NULL) {
-            recognized_keyword_count += 1U;
-            if (start != NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received multiple values for start", out_error);
-                return NULL;
-            }
-            start = start_keyword;
-        }
-        if (recognized_keyword_count != keyword_count) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received an unexpected keyword argument", out_error);
+        if (parameter == 0U && values[parameter] == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate is missing the sequence argument", out_error);
             return NULL;
         }
     }
-    if (iterable == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate is missing the sequence argument", out_error);
-        return NULL;
+    if (recognized_keyword_count != keyword_count) {
+        for (size_t slot = 0U; slot <= TINYPY_DICT_OBJECT(kwargs)->mask; ++slot) {
+            tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(kwargs)->table[slot];
+            tinypy_bool_t known = TINYPY_FALSE;
+
+            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
+                continue;
+            }
+            tinypy_value_type_e kind = TINYPY_VALUE_KIND(entry->key);
+            if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
+                for (size_t parameter = 0U; parameter < 2U; ++parameter) {
+                    if (TINYPY_TEXT_BYTE_SIZE(entry->key) == name_sizes[parameter] && memcmp(TINYPY_TEXT_BYTES(entry->key), names[parameter], name_sizes[parameter]) == 0) {
+                        known = TINYPY_TRUE;
+                        break;
+                    }
+                }
+            }
+            if (known == 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "enumerate received an unexpected keyword argument", out_error);
+                return NULL;
+            }
+        }
     }
+    tinypy_value_t *iterable = values[0];
+    tinypy_value_t *start = values[1];
     tinypy_value_t *counter = start != NULL ? tinypy_internal_index_value(start, out_error) : tinypy_integer_from_i64(vm, INT64_C(0));
 
     if (counter == NULL) {
         return NULL;
+    }
+    tinypy_internal_exception_state_t exception_state;
+    tinypy_error_t *conversion_error = NULL;
+    int64_t index;
+
+    tinypy_internal_exception_preserve_begin(vm, &exception_state);
+    tinypy_bool_t fits = tinypy_internal_index_as_i64(counter, &index, TINYPY_FALSE, &conversion_error);
+    if (conversion_error != NULL) {
+        tinypy_error_release(conversion_error);
+    }
+    tinypy_internal_exception_preserve_end(vm, &exception_state);
+    if (fits != 0) {
+        TINYPY_DECREF(counter);
+        counter = tinypy_integer_from_i64(vm, index);
     }
     tinypy_value_t *result = __tinypy_enumerate_new(type, iterable, counter, out_error);
     TINYPY_DECREF(counter);
@@ -977,7 +1004,7 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, s
         if (length_value == NULL) {
             return TINYPY_FALSE;
         }
-        if (tinypy_internal_index_as_i64(length_value, &length, TINYPY_FALSE, out_error) == 0) {
+        if (__tinypy_length_hint_length_result(sequence, length_value, &length, out_error) == 0) {
             TINYPY_DECREF(length_value);
             return TINYPY_FALSE;
         }

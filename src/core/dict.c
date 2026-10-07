@@ -10,6 +10,7 @@
 typedef struct tinypy_dict_lookup_t {
     size_t index;
     tinypy_bool_t found;
+    tinypy_bool_t cacheable;
 } tinypy_dict_lookup_t;
 /* Code caches borrow values; VM-wide generations prevent dictionary address reuse
    or content swaps from making an old borrowed value look current. */
@@ -96,6 +97,7 @@ static tinypy_bool_t __tinypy_internal_dict_lookup(const tinypy_vm_t *vm, const 
     size_t index;
     uint64_t perturb;
 
+    out_lookup->cacheable = TINYPY_TRUE;
 restart:
     out_lookup->index = 0U;
     out_lookup->found = 0;
@@ -143,6 +145,7 @@ restart:
                 perturb >>= TINYPY_DICT_PERTURB_SHIFT;
                 continue;
             }
+            out_lookup->cacheable = TINYPY_FALSE;
             TINYPY_INCREF(stored_key);
             tinypy_bool_t compared = __tinypy_internal_dict_keys_equal(vm, stored_key, key, &equal, out_error);
             TINYPY_DECREF(stored_key);
@@ -554,9 +557,50 @@ tinypy_value_t *tinypy_internal_dict_get_optional(const tinypy_vm_t *vm, const t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyDict_GetItem consumes lookup failures and preserves an existing error.
+   The returned value is borrowed, like the ordinary optional lookup. */
+tinypy_value_t *tinypy_internal_dict_get_optional_suppressed(tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key) {
+    tinypy_value_t *result = tinypy_internal_dict_get_optional_suppressed_status(vm, dict, key, NULL);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_dict_get_optional_suppressed_status(tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_bool_t *out_succeeded) {
+    tinypy_internal_exception_state_t state;
+    tinypy_error_t *lookup_error = NULL;
+    tinypy_value_t *value = NULL;
+
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    tinypy_bool_t succeeded = tinypy_internal_dict_get_optional_checked(vm, dict, key, &value, &lookup_error);
+    if (lookup_error != NULL) {
+        tinypy_error_release(lookup_error);
+    }
+    tinypy_internal_exception_preserve_end(vm, &state);
+    if (out_succeeded != NULL) {
+        *out_succeeded = succeeded;
+    }
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_dict_get_optional_checked(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_value_t **out_value, tinypy_error_t **out_error) {
     tinypy_bool_t return_value_1 = tinypy_internal_dict_get_optional_index_checked(vm, dict, key, NULL, out_value, out_error);
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Evaluator names are exact strings. Report whether a lookup invoked the
+   generic comparison path so LOAD_GLOBAL never caches away user callbacks. */
+tinypy_bool_t tinypy_internal_dict_get_global(tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_value_t **out_value, tinypy_bool_t *out_cacheable, tinypy_error_t **out_error) {
+    tinypy_dict_lookup_t lookup;
+    tinypy_hash_t hash;
+
+    if (__tinypy_internal_dict_find_public(vm, dict, key, &lookup, &hash, out_error) == 0) {
+        *out_value = NULL;
+        *out_cacheable = TINYPY_FALSE;
+        return TINYPY_FALSE;
+    }
+    *out_value = lookup.found != 0 ? TINYPY_DICT_OBJECT(dict)->table[lookup.index].value : NULL;
+    *out_cacheable = lookup.cacheable;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_dict_get_optional_index_checked(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, size_t *out_index, tinypy_value_t **out_value, tinypy_error_t **out_error) {

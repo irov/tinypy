@@ -32,6 +32,10 @@ tests cover callbacks that affect later observations.
 | Source decoders | Default byte encoding, ASCII/Latin-1/UTF-8 cookie and BOM, bytes/Unicode input, LF/CR/CRLF, byte versus Unicode/raw literal, escape spans before/after non-ASCII text, decoder-versus-parser error precedence |
 | Native keyword parser | String/Unicode/subtype names, equality True/False/raising Exception/BaseException, prior handled exception, duplicate/missing/unknown names, per-parameter conversion and raw-name validation order |
 | Descriptor construction | Accessor None/omitted/replacement, exact/subtype property, doc callback sees published state, Exception/BaseException doc lookup, callable-descriptor binding and argument-error priority |
+| Brace formatting | Byte/Unicode receiver, automatic/manual numbering, attribute/item paths, decimal indices, conversion before nested specs, converted text subclass format hook, original builtin format-spec identity, parser error and iterator recovery |
+| Execution namespaces | eval/exec source/code/tuple forms, globals dict subtype versus custom locals, builtin insertion/error precedence, LOAD_NAME suppression versus LOAD_GLOBAL propagation, cold/warm name cache and collision callbacks, global versus local assignment/deletion |
+| Functional consumers | Partial construction/call/state conversion and replacement order, stored keyword hashes, enumerate/xrange numeric conversion, reversed length and terminal states, reduce accumulator lifetime and retained call-argument tuples |
+| Modules and introspection | Allocation-only module state, initialization/reinitialization keywords, lazy builtins dictionary, vars/dir protocol reads, spoofed class and metaclass instance checks, retained module dictionary and teardown callbacks |
 | State | Fresh/reinitialized object, partial progress, failed operation followed by recovery, per-VM state and separate VM isolation |
 | Lifetime | Retained input across callback, removed input, finalizer/weakref notification, borrowed versus owned reference, zero allocator balance |
 
@@ -103,6 +107,29 @@ argument parsers may suppress keyword lookup errors as CPython does; checked
 function-binding dictionary insertion retains its separately documented policy.
 For `dict.fromkeys`, distinguish exact dict/set cached hashes from subclass
 iteration and alternative writable objects returned by the constructor.
+
+Warm a name cache before repeating callback-sensitive lookups. Colliding custom
+keys must still compare on every lookup, including misses that fall back to
+builtins. Check native global dictionary writes separately from local mapping
+hooks. Frame/builtin lookup suppresses errors where Python 2 uses PyDict_GetItem;
+LOAD_GLOBAL's ordinary interned-name path propagates them. Follow both paths
+with an independent successful operation and inspect the prior handled exception.
+
+Formatting tests record conversion, nested-spec and final format callbacks in
+order. Inspect returned text subclasses independently with str/repr/format, then
+through brace formatting. Formatter iterator tests continue after a parsing
+failure to observe terminal state. Module teardown tests retain the namespace
+dictionary and record value finalizers; read-only traversal must not clear it.
+Include deletion of a later namespace key by an earlier finalizer. Test
+allocation-only modules and heap subtypes before and after lazy dictionary
+creation, then packages with an assigned name/path and recursive __all__.
+Import requests use the canonical request name independently of the module's
+stored name. A native loader replacing a module during reload must preserve
+replacement identity and leave the original namespace intact; test both a
+new module and an ordinary nonmodule result.
+For reduce, retain previous intermediate values with weak references while the
+next item is requested; a user callback retaining its call tuple requires a fresh
+tuple for the next call.
 
 Compiler diagnostics compare the complete args/location payload and codec error
 spans in the decoder's byte domain. Use a terminating non-hex tail for raw escape

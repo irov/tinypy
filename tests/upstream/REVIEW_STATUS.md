@@ -1,9 +1,9 @@
 # Runtime review closure — 2026-10-07
 
-The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 372
+The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 482
 portable regressions and a repeatable four-profile matrix. Its final corpus
-has 1,042 selected cases; finite runtime matrices cover 224,675 outcomes, and
-compiler comparison covers 16,884 outputs across the profiles. The future
+has 1,152 selected cases; finite runtime matrices cover 227,344 outcomes, and
+compiler comparison covers 16,980 outputs across the profiles. The future
 variant and acceptance plan is in [TEST_PLAN.md](../conformance/TEST_PLAN.md).
 The explicit CPython pending-C-exception boundary is recorded in the audit.
 The original
@@ -60,7 +60,7 @@ establish equivalence to that separate historical investigation.
 | Deleted `sys.stdout`; builtin print target | Fixed/hardened: missing output raises RuntimeError; output targets are retained across writes. |
 | Star import, mutable `__all__`, fromlist names and host importer names | Hardened: snapshot keys or iterate an owned `__all__`; retain text used by subsequent calls. |
 | Empty package import name | Fixed: avoid indexing an empty name and return the package for an allowed relative empty import. |
-| Partial state replacement | Hardened: publish all new owned fields before releasing old ones. |
+| Partial state replacement | Superseded by the deep audit: validate and canonicalize first, then replace each field before releasing its old value, in CPython's func/args/keywords/attributes order. Finalizers observe the new current field and the still-old later fields. |
 | Native finalizers and debugger callbacks | Hardened: preserve the pending exception around callback entry. Live-VM native finalizers report ignored errors while the object and its children are retained; destruction proceeds only after the callback and any resurrection check. |
 | Bytearray item/slice/find/in-place addition and memoryview indexing | Hardened: materialize conversions and replacements before rereading current storage; retain exported storage and snapshot overlapping additions. |
 | `_struct` offsets | Superseded by the deep audit: acquire and retain the buffer export before offset/numeric callbacks, matching CPython's resize blocking and observation of in-place changes; release it on every exit. Supported offset protocols and error ordering have oracle regressions. |

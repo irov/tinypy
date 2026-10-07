@@ -46,8 +46,10 @@ The run includes:
    across 32 valid patterns, 50 subjects, independent bounds, groups, scanner
    metadata and replacement/split counts. Additional products cover 6,432 compiler
    diagnostics, 1,312 descriptor/weakref observations, 1,504 iterator/aggregate
-   observations and 726 text/constructor protocols. Total: 224,675 unique outcomes per
-   profile across twelve matrices. Every identity must be unique, with a positive
+   observations and 726 text/constructor protocols. New products cover 568 brace-format
+   observations, 499 functional consumers, 511 execution/import namespaces and
+   1,091 module/class/introspection observations. Total: 227,344 unique outcomes per
+   profile across sixteen matrices. Every identity must be unique, with a positive
    declared cardinality.
 5. 1,284 generated valid source inputs: 444 `exec`, 420 `eval`, 420 `single`.
    Every input is compiled at optimization levels 0, 1 and 2 and must produce
