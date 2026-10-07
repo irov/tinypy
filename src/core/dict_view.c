@@ -56,9 +56,7 @@ int32_t tinypy_internal_dict_view_contains(tinypy_value_t *value, tinypy_value_t
         }
         key = TINYPY_TUPLE_GET(item, 0U);
         tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-        if (tinypy_internal_dict_get_optional_checked(vm, view->dict, key, &dict_value, out_error) == 0) {
-            return INT32_C(-1);
-        }
+        dict_value = tinypy_internal_dict_get_optional_suppressed(vm, view->dict, key);
         if (dict_value == NULL) {
             return INT32_C(0);
         }
@@ -111,76 +109,7 @@ static int32_t __tinypy_dict_view_set_like_contains(tinypy_value_t *value, tinyp
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_dict_view_key_dict(tinypy_value_t *value) {
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-
-    if (kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
-        tinypy_value_t *dict = TINYPY_SET_OBJECT(value)->dict;
-
-        return dict;
-    }
-    if (kind == TINYPY_VALUE_DICT_KEYS) {
-        tinypy_value_t *dict = TINYPY_DICT_VIEW_OBJECT(value)->dict;
-
-        return dict;
-    }
-    return NULL;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_dict_view_subset_keys(tinypy_value_t *left, tinypy_value_t *right, tinypy_value_t *left_dict, tinypy_value_t *right_dict, tinypy_bool_t *out_subset, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_dict_entry_t *entries = TINYPY_DICT_OBJECT(left_dict)->table;
-    size_t capacity = TINYPY_DICT_OBJECT(left_dict)->mask + 1U;
-    uint64_t version = TINYPY_DICT_OBJECT(left_dict)->mutation_version;
-
-    for (size_t index = 0U; index < capacity; ++index) {
-        if (TINYPY_DICT_ENTRY_IS_ACTIVE(&entries[index])) {
-            tinypy_value_t *key = entries[index].key;
-            tinypy_value_type_e kind = TINYPY_VALUE_KIND(key);
-            tinypy_bool_t found;
-            tinypy_bool_t valid;
-            tinypy_bool_t builtin_hash = key->type == &vm->types[kind]
-                && (kind == TINYPY_VALUE_NONE || kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER
-                    || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX
-                    || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE);
-
-            TINYPY_INCREF(key);
-            if (builtin_hash != 0) {
-                valid = tinypy_internal_dict_lookup_hash_checked(vm, right_dict, key, entries[index].hash, NULL, &found, out_error);
-            }
-            else {
-                int32_t contains = __tinypy_dict_view_set_like_contains(right, key, out_error);
-
-                valid = contains >= 0;
-                found = contains > 0;
-            }
-            TINYPY_DECREF(key);
-            if (valid == 0) {
-                return TINYPY_FALSE;
-            }
-            if (TINYPY_DICT_OBJECT(left_dict)->table != entries || TINYPY_DICT_OBJECT(left_dict)->mutation_version != version) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "dictionary changed during view comparison", out_error);
-                return TINYPY_FALSE;
-            }
-            if (found == 0) {
-                *out_subset = TINYPY_FALSE;
-                return TINYPY_TRUE;
-            }
-        }
-    }
-    *out_subset = TINYPY_TRUE;
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_dict_view_subset_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_subset, tinypy_error_t **out_error) {
-    tinypy_value_t *left_dict = __tinypy_dict_view_key_dict(left);
-    tinypy_value_t *right_dict = __tinypy_dict_view_key_dict(right);
-
-    if (left_dict != NULL && right_dict != NULL) {
-        tinypy_bool_t result = __tinypy_dict_view_subset_keys(left, right, left_dict, right_dict, out_subset, out_error);
-
-        return result;
-    }
     tinypy_value_t *iterator = tinypy_iter(left, out_error);
     tinypy_error_t *iteration_error = NULL;
 

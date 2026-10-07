@@ -504,7 +504,6 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     intptr_t mode = (intptr_t)user_data;
     tinypy_value_t *object = NULL;
-    tinypy_value_t *start = NULL;
     tinypy_value_t *end = NULL;
     tinypy_value_t *replacement = NULL;
     tinypy_value_t *result = NULL;
@@ -516,6 +515,10 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
     if (mode == 0) {
+        if (tinypy_type_is_subtype(item->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "codec must pass exception instance", out_error);
+            return NULL;
+        }
         (void)tinypy_exception_raise(item, NULL, out_error);
         return NULL;
     }
@@ -523,25 +526,24 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
     tinypy_bool_t decode = tinypy_type_is_subtype(item->type, vm->exception_types[TINYPY_EXCEPTION_UNICODE_DECODE_ERROR]);
     tinypy_bool_t translate = tinypy_type_is_subtype(item->type, vm->exception_types[TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR]);
     if ((encode == 0 && decode == 0 && translate == 0) || ((mode == 3 || mode == 4) && encode == 0)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "error handler does not support this UnicodeError", out_error);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("don't know how to handle "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(item),
+            TINYPY_MESSAGE_PART_LITERAL(" in error callback"),
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
     }
-    object = tinypy_object_get_attr_value(item, vm->internal_object_key, out_error);
-    if (object == NULL) {
+    tinypy_internal_unicode_error_payload_t *payload = (tinypy_internal_unicode_error_payload_t *)tinypy_native_instance_payload(item);
+    if (payload->object != NULL) {
+        object = TINYPY_RET(payload->object);
+    }
+    if (object == NULL || TINYPY_VALUE_KIND(object) != (decode != 0 ? TINYPY_VALUE_STRING : TINYPY_VALUE_UNICODE)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, decode != 0 ? "object attribute must be str" : "object attribute must be unicode", out_error);
         goto cleanup;
     }
-    if (TINYPY_VALUE_KIND(object) != (decode != 0 ? TINYPY_VALUE_STRING : TINYPY_VALUE_UNICODE)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "UnicodeError object has an invalid type", out_error);
-        goto cleanup;
-    }
-    start = tinypy_object_get_attr_value(item, vm->internal_start_key, out_error);
-    if (start == NULL || tinypy_internal_index_as_i64(start, &first, TINYPY_FALSE, out_error) == 0) {
-        goto cleanup;
-    }
-    end = tinypy_object_get_attr_value(item, vm->internal_end_key, out_error);
-    if (end == NULL || tinypy_internal_index_as_i64(end, &last, TINYPY_FALSE, out_error) == 0) {
-        goto cleanup;
-    }
+    first = payload->start;
+    last = payload->end;
     /* Match the clamped UnicodeError accessors, before sizing any output. */
     int64_t length = (int64_t)TINYPY_SIZED_SIZE(object);
     if (first < INT64_C(0)) {
@@ -560,7 +562,6 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "invalid UnicodeError range", out_error);
         goto cleanup;
     }
-    TINYPY_DECREF(end);
     end = tinypy_integer_from_i64(vm, last);
     size_t count = (size_t)(last - first);
     if (mode == 1) {
@@ -642,9 +643,6 @@ cleanup:
     }
     if (end != NULL) {
         TINYPY_DECREF(end);
-    }
-    if (start != NULL) {
-        TINYPY_DECREF(start);
     }
     if (object != NULL) {
         TINYPY_DECREF(object);

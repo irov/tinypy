@@ -22,15 +22,33 @@ static tinypy_bool_t __tinypy_container_argument_count(tinypy_vm_t *vm, tinypy_v
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_container_integer_result(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
+    tinypy_bool_t result = tinypy_internal_index_as_i64(value, out_value, TINYPY_FALSE, out_error);
+
+    if (result == 0 && TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG) {
+        if (out_error != NULL && *out_error != NULL) {
+            tinypy_error_release(*out_error);
+            *out_error = NULL;
+        }
+        tinypy_vm_clear_error(TINYPY_VALUE_VM(value));
+        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_OVERFLOW, "Python int too large to convert to C long", out_error);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_integer_as_ssize(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
+    if (kind == TINYPY_VALUE_FLOAT) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument expected, got float", out_error);
+        return TINYPY_FALSE;
+    }
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || value->type == &vm->types[TINYPY_VALUE_LONG]) {
-        tinypy_bool_t result = tinypy_internal_index_as_i64(value, out_value, TINYPY_FALSE, out_error);
+        tinypy_bool_t result = __tinypy_container_integer_result(value, out_value, out_error);
         return result;
     }
-    if (kind != TINYPY_VALUE_FLOAT && tinypy_internal_object_has_special_key(value, vm->internal_special_int_key) != 0) {
+    if (tinypy_internal_object_has_special_key(value, vm->internal_special_int_key) != 0) {
         tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_int_key, out_error);
 
         if (method == NULL) {
@@ -47,10 +65,10 @@ tinypy_bool_t tinypy_internal_integer_as_ssize(tinypy_value_t *value, int64_t *o
         kind = TINYPY_VALUE_KIND(converted);
         if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
             TINYPY_DECREF(converted);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ returned a non-integer", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ method should return an integer", out_error);
             return TINYPY_FALSE;
         }
-        tinypy_bool_t result = tinypy_internal_index_as_i64(converted, out_value, TINYPY_FALSE, out_error);
+        tinypy_bool_t result = __tinypy_container_integer_result(converted, out_value, out_error);
 
         TINYPY_DECREF(converted);
         return result;
@@ -81,7 +99,7 @@ static tinypy_bool_t __tinypy_container_list_index(tinypy_vm_t *vm, int64_t inde
                 *out_index = 0U;
                 return TINYPY_TRUE;
             }
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "list index out of range", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "pop index out of range", out_error);
             return TINYPY_FALSE;
         }
         *out_index = size - (size_t)distance;
@@ -92,7 +110,7 @@ static tinypy_bool_t __tinypy_container_list_index(tinypy_vm_t *vm, int64_t inde
             *out_index = size;
             return TINYPY_TRUE;
         }
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "list index out of range", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "pop index out of range", out_error);
         return TINYPY_FALSE;
     }
     *out_index = (size_t)index;
@@ -1772,7 +1790,9 @@ static tinypy_value_t *__tinypy_container_conversion_method(tinypy_value_t *func
         return result;
     }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_COMPLEX) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot convert complex to a real number", out_error);
+        const char *message = mode == 0 ? "can't convert complex to int" : (mode == 1 ? "can't convert complex to long" : "can't convert complex to float");
+
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, message, out_error);
         return NULL;
     }
     tinypy_value_type_e source_kind = TINYPY_VALUE_KIND(value);
@@ -1880,6 +1900,34 @@ static tinypy_value_t *__tinypy_container_format_method(tinypy_value_t *function
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Legacy slice slots receive C integer bounds and clamp negatives to zero. */
+static tinypy_value_t *__tinypy_container_legacy_slice(tinypy_value_t *args, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(args);
+    int64_t bounds[2];
+
+    for (size_t index = 0U; index < 2U; ++index) {
+        tinypy_value_t *bound = TINYPY_TUPLE_GET(args, index + 1U);
+
+        if (TINYPY_VALUE_KIND(bound) == TINYPY_VALUE_FLOAT) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument expected, got float", out_error);
+            return NULL;
+        }
+        if (tinypy_internal_number_as_i64(bound, &bounds[index], out_error) == 0) {
+            return NULL;
+        }
+        if (bounds[index] < 0) {
+            bounds[index] = 0;
+        }
+    }
+    tinypy_value_t *start = tinypy_integer_from_i64(vm, bounds[0]);
+    tinypy_value_t *stop = tinypy_integer_from_i64(vm, bounds[1]);
+    tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
+
+    TINYPY_DECREF(stop);
+    TINYPY_DECREF(start);
+    return slice;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_container_getslice_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -1887,7 +1935,10 @@ static tinypy_value_t *__tinypy_container_getslice_method(tinypy_value_t *functi
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 3U, 3U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *slice = tinypy_slice_new(vm, TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), NULL);
+    tinypy_value_t *slice = __tinypy_container_legacy_slice(args, out_error);
+    if (slice == NULL) {
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_internal_get_item_builtin(TINYPY_TUPLE_GET(args, 0U), slice, out_error);
     TINYPY_DECREF(slice);
     return result;
@@ -1900,7 +1951,10 @@ static tinypy_value_t *__tinypy_container_setslice_method(tinypy_value_t *functi
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 4U, 4U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *slice = tinypy_slice_new(vm, TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), NULL);
+    tinypy_value_t *slice = __tinypy_container_legacy_slice(args, out_error);
+    if (slice == NULL) {
+        return NULL;
+    }
     tinypy_bool_t assigned = tinypy_internal_set_item_builtin(TINYPY_TUPLE_GET(args, 0U), slice, TINYPY_TUPLE_GET(args, 3U), out_error);
     TINYPY_DECREF(slice);
     if (assigned == 0) {
@@ -1917,7 +1971,10 @@ static tinypy_value_t *__tinypy_container_delslice_method(tinypy_value_t *functi
     if (__tinypy_container_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_container_argument_count(vm, args, 3U, 3U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *slice = tinypy_slice_new(vm, TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), NULL);
+    tinypy_value_t *slice = __tinypy_container_legacy_slice(args, out_error);
+    if (slice == NULL) {
+        return NULL;
+    }
     tinypy_bool_t deleted = tinypy_internal_delete_item_builtin(TINYPY_TUPLE_GET(args, 0U), slice, out_error);
     TINYPY_DECREF(slice);
     if (deleted == 0) {

@@ -223,25 +223,6 @@ static tinypy_value_t *__tinypy_dictproxy_snapshot(tinypy_value_t *dict, int32_t
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_dictproxy_copy(tinypy_value_t *dict, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
-    tinypy_value_t *result = tinypy_dict_new(vm);
-    tinypy_dict_entry_t *entry = TINYPY_DICT_ITERATOR_BEGIN(dict);
-    tinypy_dict_entry_t *end = TINYPY_DICT_ITERATOR_END(dict);
-
-    if (tinypy_internal_dict_reserve_checked(vm, result, TINYPY_DICT_SIZE(dict), out_error) == 0) {
-        TINYPY_DECREF(result);
-        return NULL;
-    }
-    for (; entry != end; ++entry) {
-        if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) && tinypy_internal_dict_set_checked(vm, result, entry->key, entry->value, out_error) == 0) {
-            TINYPY_DECREF(result);
-            return NULL;
-        }
-    }
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dictproxy_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_internal_dictproxy_method_e method = (tinypy_internal_dictproxy_method_e)(intptr_t)user_data;
@@ -287,7 +268,7 @@ static tinypy_value_t *__tinypy_dictproxy_method(tinypy_value_t *function, tinyp
         tinypy_value_t *return_value_4 = tinypy_internal_dict_iterator_new(dict, (int32_t)method - (int32_t)TINYPY_INTERNAL_DICTPROXY_ITERKEYS);
         return return_value_4;
     }
-    tinypy_value_t *return_value_5 = __tinypy_dictproxy_copy(dict, out_error);
+    tinypy_value_t *return_value_5 = tinypy_internal_dict_copy(dict, out_error);
     return return_value_5;
 }
 //////////////////////////////////////////////////////////////////////////

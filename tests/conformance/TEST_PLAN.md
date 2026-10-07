@@ -40,6 +40,8 @@ tests cover callbacks that affect later observations.
 | Lifetime | Retained input across callback, removed input, finalizer/weakref notification, borrowed versus owned reference, zero allocator balance |
 | VM name presets | Every registry entry, dispatch operator and singleton accessor reuses its VM object without allocation; eager initialization of all fixed core names, no lazy dictionary after startup, unique registry fields with `internal_` prefix and bounded lookup capacity; ordinary/checked constructors, no insertion of ordinary generated strings, script identifier insertion, byte/key attribute registration and descriptor ownership, owned-reference balance, single argument evaluation, full byte-span matching, embedded-NUL intern entry lifetime, pointer/content protocol comparison, byte/Unicode function-code aliases, independent VMs, compiler/marshal interning flags and shutdown allocator balance; extension/test C-literal pinning and repeated allocation-free lookup; shared method/wrapper/classmethod/staticmethod/property registration, module metadata and exactly-once finalizers; exact borrowed module/type names, module/direct-instance value keys, descriptor versus direct-dictionary semantics, embedded-NUL byte interoperability and allocation-free replacement, key imports and source guard against internal byte-name and lazy literal calls; indexed operator/wrapper-slot tables reuse registry offsets, operator access has no extra roots or references; AUTO wrapper classification covers preset/raw/Unicode keys and embedded-NUL rejection; guard against fixed literal comparisons in core/runtime |
 | Builtin attribute dispatch | Shared immutable string metadata supplies preset IDs without hashing; function tables retain descriptor/custom-hook priority and alias semantics; zero IDs and absent handlers, subtype/plain copies and growing strings clear metadata; raw/Unicode metadata keys, allocation-free reference reuse, full-span embedded-NUL collision probes, no dynamic key insertion, independent VM ownership and eager dispatch registry/capacity/handler coverage checks; standalone Release benchmark compares direct dispatch and complete C attribute lookup |
+| Nested control | Ordered pairs of plain/if/while/for/except/finally/with/multiple-with wrappers, record/return/break/continue/raise/yield actions, true/false branch inputs, suppressing/propagating context managers, generator drain/throw/close and final frame state |
+| Codec callback state | Exact/subtype tuple and Unicode replacement, independent int/index/float position protocols, handler registry replacement, cached exception identity, mutation of error metadata/object, replacement encoding failure, return-tuple/position finalizers and failure recovery |
 
 Test Python 2 conversion protocols separately: `__int__`, `__index__`,
 `__float__`, truth and length conversion are not interchangeable. Stored builtin
@@ -71,6 +73,13 @@ Canonicalize values when order is unspecified; preserve order when the Python
 contract makes it observable. Keep signed zero, result type and long suffixes
 visible in numeric observations. Compare syntax-error args and location fields,
 not merely the fact that compilation failed.
+
+Unsuccessful dictionary probes can revisit a bucket; exact probe repetition
+depends on physical table capacity and layout. A pure False equality callback
+may coalesce consecutive identical probe events only in an explicitly identified
+product row. Hash calls, callback occurrence, results and errors stay visible.
+Keep successful, mutating and raising callback traces exact; do not use general
+trace normalization to conceal distinct semantic lookups.
 
 ## Acceptance layers
 
@@ -163,6 +172,25 @@ Finite matrices exhaust their declared operand lists. Arbitrary callbacks and
 Python programs remain unbounded; deterministic bounded fuzz tests and new
 regression witnesses extend that boundary over time. A new feature must update
 the applicable axes and coverage map rather than relying on an old PASS count.
+
+The compiler corpus also enumerates 8 outer wrappers × 8 inner wrappers ×
+5 control actions, 5 argument layouts × 5 nested closure/comprehension forms,
+and 6 line gaps × 4 instruction-run lengths. The host inventory check verifies
+every tuple's filename, not only the aggregate count. These 369 sources compare
+marshal-v2 bytes at optimize 0/1/2; the separate runtime composition product
+uses bounded loops and compares 2,048 executions, callback traces and suspended
+generator unwind states. Neither compiler byte equality nor execution equality
+substitutes for the other layer.
+
+Callback-sensitive products must identify which entry points read a builtin
+subtype's stored payload and which invoke its conversion hooks. Record cached
+versus recomputed hashes separately for dictionary equality, copies, views and
+set operations. Name lookup must distinguish canonical preset strings from
+raw strings and string subclasses; type mutation has its own canonicalization
+rule. Run the same observations with cold and warm caches, including data
+descriptor priority, instance-dictionary shadows and a successful operation
+after a callback raises. A fast path may remove Python-visible work only when
+the oracle demonstrates that the corresponding callbacks do not run.
 
 Run the same acceptance matrix on each supported target ABI/toolchain. The
 report records the reference's integer width, Unicode width and platform;

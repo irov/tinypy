@@ -1362,8 +1362,13 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         return TINYPY_FALSE;
     }
     if (descriptor->writable == 0) {
-        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "attribute '__doc__' of 'type' objects is not writable", out_error);
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("attribute '"), {(const char *)TINYPY_TEXT_BYTES(descriptor->name), TINYPY_TEXT_BYTE_SIZE(descriptor->name)},
+                TINYPY_MESSAGE_PART_LITERAL("' of 'type' objects is not writable")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, 3U, out_error);
         }
         else {
             __tinypy_internal_c_descriptor_readonly(vm, out_error);
@@ -1384,7 +1389,11 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         }
         if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_BASES) {
             if (value == NULL) {
-                __tinypy_internal_c_descriptor_readonly(vm, out_error);
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("can't delete "), {type->name, type->name_size}, TINYPY_MESSAGE_PART_LITERAL(".__bases__")
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
                 return TINYPY_FALSE;
             }
             tinypy_bool_t result = tinypy_internal_type_set_bases(type, value, out_error);
@@ -1761,9 +1770,7 @@ void tinypy_internal_initialize_exception_descriptors(tinypy_type_t *type) {
     if (type->native_payload_size == sizeof(tinypy_internal_unicode_error_payload_t)) {
         tinypy_vm_t *vm = type->vm;
         tinypy_value_t *const names[5] = {vm->internal_encoding_key, vm->internal_object_key, vm->internal_reason_key, vm->internal_start_key, vm->internal_end_key};
-        size_t first = type == vm->exception_types[TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR] ? 1U : 0U;
-
-        for (size_t index = first; index < 5U; ++index) {
+        for (size_t index = 0U; index < 5U; ++index) {
             tinypy_value_t *descriptor = __tinypy_internal_c_descriptor_new_with_owner(vm, TINYPY_VALUE_MEMBER_DESCRIPTOR, type, names[index], (tinypy_internal_c_descriptor_field_e)((size_t)TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_ENCODING + index), TINYPY_TRUE, TINYPY_FALSE);
 
             tinypy_type_set_attr_key(type, names[index], descriptor);

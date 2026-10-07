@@ -115,8 +115,21 @@ tinypy_bool_t tinypy_internal_type_set_name(tinypy_type_t *type, tinypy_value_t 
     const uint8_t *name;
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (value == NULL || TINYPY_VALUE_KIND(value) != TINYPY_VALUE_STRING) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type __name__ must be a string", out_error);
+    if (value == NULL) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("can't delete "), {type->name, type->name_size}, TINYPY_MESSAGE_PART_LITERAL(".__name__")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        return TINYPY_FALSE;
+    }
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_STRING) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("can only assign string to "), {type->name, type->name_size},
+            TINYPY_MESSAGE_PART_LITERAL(".__name__, not '"), TINYPY_MESSAGE_PART_TYPE_NAME(value), TINYPY_MESSAGE_PART_LITERAL("'")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
         return TINYPY_FALSE;
     }
     name = TINYPY_TEXT_BYTES(value);
@@ -126,13 +139,14 @@ tinypy_bool_t tinypy_internal_type_set_name(tinypy_type_t *type, tinypy_value_t 
         return TINYPY_FALSE;
     }
     TINYPY_INCREF(value);
-    if (type->name_object != NULL) {
-        TINYPY_DECREF(type->name_object);
-    }
+    tinypy_value_t *previous = type->name_object;
     type->name_object = value;
     type->name = (const char *)name;
     type->name_size = name_size;
     tinypy_internal_type_modified(type);
+    if (previous != NULL) {
+        TINYPY_DECREF(previous);
+    }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1437,7 +1451,12 @@ tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t
         return TINYPY_FALSE;
     }
     if (TINYPY_VALUE_KIND(bases_value) != TINYPY_VALUE_TUPLE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type __bases__ must be a tuple", out_error);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("can only assign tuple to "), {type->name, type->name_size},
+            TINYPY_MESSAGE_PART_LITERAL(".__bases__, not "), TINYPY_MESSAGE_PART_TYPE_NAME(bases_value)
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 4U, out_error);
         return TINYPY_FALSE;
     }
     if (type->bases_updating != 0) {
@@ -2105,7 +2124,7 @@ restart_lookup:
     mro_size = snapshot != NULL ? TINYPY_TUPLE_SIZE(snapshot) : __tinypy_internal_type_mro_size_raw(type);
     for (index = 0U; index < mro_size; ++index) {
         tinypy_value_t *mro_entry = snapshot != NULL ? TINYPY_TUPLE_GET(snapshot, index) : __tinypy_internal_type_mro_value_at(type, index);
-        tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, tinypy_internal_type_mro_entry_dict(mro_entry), key);
+        tinypy_value_t *value = tinypy_internal_dict_get_optional_suppressed(vm, tinypy_internal_type_mro_entry_dict(mro_entry), key);
 
         if (type->mro != mro) {
             if (snapshot != NULL) {

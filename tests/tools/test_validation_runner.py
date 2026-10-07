@@ -114,12 +114,28 @@ class CompilerCorpusAcceptance(unittest.TestCase):
             path = Path(directory)
             counts = RUNNER.write_corpus(path)
             expected = {source.relative_to(path): source.read_bytes() for source in path.rglob('*.py')}
-            self.assertEqual(counts, {'exec': 444, 'eval': 420, 'single': 420})
+            self.assertEqual(counts, {'exec': 813, 'eval': 420, 'single': 420})
             self.assertEqual(RUNNER.write_corpus(path), counts)
             self.assertEqual({source.relative_to(path): source.read_bytes() for source in path.rglob('*.py')}, expected)
             (path / 'stale.py').write_text('pass\n')
             with self.assertRaisesRegex(RuntimeError, 'unexpected generated compiler inputs'):
                 RUNNER.write_corpus(path)
+
+    def test_composition_corpus_covers_every_declared_axis(self):
+        wrappers = ('plain', 'if', 'while', 'for', 'except', 'finally', 'with', 'multiwith')
+        actions = ('return', 'break', 'continue', 'raise', 'yield')
+        expected = {'control_%s_%s_%s.py' % (outer, inner, action)
+                    for outer in wrappers for inner in wrappers for action in actions}
+        expected.update('closure_%d_%d.py' % (signature, expression)
+                        for signature in range(5) for expression in range(5))
+        expected.update('line_%d_%d.py' % (gap, length)
+                        for gap in (0, 127, 128, 255, 256, 511) for length in (1, 21, 86, 260))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            RUNNER.write_corpus(path)
+            actual = {source.name for source in (path / 'exec').glob('*.py')
+                      if source.name.startswith(('control_', 'closure_', 'line_'))}
+            self.assertEqual(actual, expected)
 
     def test_compiler_subprocess_timeout_is_enforced(self):
         with patch.object(COMPILER.subprocess, 'run', side_effect=subprocess.TimeoutExpired('compiler', 0.5)) as run:

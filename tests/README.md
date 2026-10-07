@@ -48,14 +48,20 @@ The run includes:
    diagnostics, 1,312 descriptor/weakref observations, 1,504 iterator/aggregate
    observations and 726 text/constructor protocols. New products cover 568 brace-format
    observations, 499 functional consumers, 511 execution/import namespaces and
-   1,091 module/class/introspection observations. Total: 227,344 unique outcomes per
-   profile across sixteen matrices. Every identity must be unique, with a positive
+   1,091 module/class/introspection observations. Callback products add 2,990
+   container, 1,019 numeric/codec and 808 attribute/descriptor observations.
+   Nested control-flow products add 2,048 bounded executions.
+   Total: 234,209 unique outcomes per profile across twenty matrices.
+   Every identity must be unique, with a positive
    declared cardinality.
-5. 1,284 generated valid source inputs: 444 `exec`, 420 `eval`, 420 `single`.
+5. 1,653 generated valid source inputs: 813 `exec`, 420 `eval`, 420 `single`.
    Every input is compiled at optimization levels 0, 1 and 2 and must produce
    byte-identical marshal-v2 to CPython. The inputs cover literal/operator
    products, scopes/closures, comprehensions, decorators, futures, classes,
-   exception/loop/context-manager blocks and Python 2 syntax. All vendor,
+   exception/loop/context-manager blocks and Python 2 syntax. This includes
+   all 320 declared ordered wrapper/action tuples, 25 closure/argument tuples
+   and 24 line-gap/instruction-run tuples; a separate host guard verifies the
+   complete tuple inventory. All vendor,
    local, runtime and product-matrix fixture sources also undergo the three-level compiler
    comparison in `exec` mode.
    These compiler product sources must compile with quiet stdout and stderr on

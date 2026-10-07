@@ -30,7 +30,7 @@ tinypy_bool_t tinypy_internal_number_as_i64(tinypy_value_t *value, int64_t *out_
     kind = TINYPY_VALUE_KIND(converted);
     if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
         TINYPY_DECREF(converted);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ returned a non-integer", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ method should return an integer", out_error);
         return TINYPY_FALSE;
     }
     tinypy_bool_t result = tinypy_internal_index_as_i64(converted, out_value, TINYPY_FALSE, out_error);

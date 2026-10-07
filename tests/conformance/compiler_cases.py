@@ -1,6 +1,64 @@
 """Project-authored, deterministic valid-source compiler product domains."""
 
 from pathlib import Path
+from itertools import product
+
+
+CONTROL_WRAPPERS = ('plain', 'if', 'while', 'for', 'except', 'finally', 'with', 'multiwith')
+CONTROL_ACTIONS = ('return result\n', 'break\n', 'continue\n',
+                   'raise ValueError, result\n', 'yield result\n')
+
+
+def indent(source):
+    return ''.join(' ' + line if line.strip() else line
+                   for line in source.splitlines(True))
+
+
+def wrap_control(body, kind):
+    if kind == 'plain':
+        return body
+    if kind == 'if':
+        return 'if flag:\n' + indent(body) + 'else:\n pass\n'
+    if kind == 'while':
+        return 'while flag:\n' + indent(body) + 'else:\n flag=0\n'
+    if kind == 'for':
+        return 'for item in items:\n' + indent(body) + 'else:\n flag=0\n'
+    if kind == 'except':
+        return ('try:\n' + indent(body) +
+                'except ValueError, error:\n flag=error\nelse:\n flag=1\n')
+    if kind == 'finally':
+        return 'try:\n' + indent(body) + 'finally:\n cleanup()\n'
+    if kind == 'with':
+        return 'with manager as entry:\n' + indent(body)
+    if kind == 'multiwith':
+        return 'with manager as entry, other as second:\n' + indent(body)
+    raise AssertionError(kind)
+
+
+def composition_cases():
+    result = {}
+    for outer, inner, action in product(CONTROL_WRAPPERS, CONTROL_WRAPPERS,
+                                        CONTROL_ACTIONS):
+        body = wrap_control(wrap_control(action, inner), outer)
+        source = ('def f(flag,items,manager,other,result):\n for value in items:\n' +
+                  indent(indent(body)) + ' return\n')
+        name = 'exec/control_%s_%s_%s.py' % (outer, inner, action.split()[0])
+        result[name] = source
+    signatures = ('a,z,b', 'z,a,b', '(z,a),b', 'a,(b,z)', 'a,b=2,*z,**kw')
+    expressions = ('lambda: (a,b,z)', '[lambda: (a,b,z) for b in items]',
+                   '(lambda: (a,b,z) for b in items)',
+                   '{b:lambda: (a,b,z) for b in items}', '{b for b in (a,z)}')
+    for signature_index, signature in enumerate(signatures):
+        for expression_index, expression in enumerate(expressions):
+            source = ('def outer(%s):\n items=[1,2]\n def middle():\n'
+                      '  class C(object):\n   a=2\n   def inner(self):\n'
+                      '    return %s\n  return C\n return middle\n') % (signature, expression)
+            result['exec/closure_%d_%d.py' % (signature_index, expression_index)] = source
+    for gap, length in product((0, 127, 128, 255, 256, 511), (1, 21, 86, 260)):
+        source = ('def f(flag):\n if flag:\n' + '  x=1\n' * length +
+                  '\n' * gap + '  return x\n return -1\n')
+        result['exec/line_%d_%d.py' % (gap, length)] = source
+    return result
 
 
 def cases():
@@ -57,6 +115,7 @@ def cases():
     ]
     for index, source in enumerate(statements):
         result['exec/statement_%04d.py' % index] = source
+    result.update(composition_cases())
     return result
 
 

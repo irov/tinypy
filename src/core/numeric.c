@@ -176,10 +176,8 @@ static tinypy_value_t *__tinypy_numeric_getnewargs_method(tinypy_value_t *functi
         items[0] = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(value));
     }
     else if (kind == TINYPY_VALUE_LONG) {
-        tinypy_value_t *conversion_args = tinypy_tuple_from_items(vm, &value, 1U);
-
-        items[0] = tinypy_internal_long_create(&vm->types[TINYPY_VALUE_LONG], conversion_args, NULL, out_error);
-        TINYPY_DECREF(conversion_args);
+        TINYPY_INCREF(value);
+        items[0] = tinypy_internal_immutable_subclass_copy(&vm->types[TINYPY_VALUE_LONG], value, out_error);
     }
     else if (kind == TINYPY_VALUE_FLOAT) {
         items[0] = tinypy_float_from_double(vm, TINYPY_FLOAT_OBJECT(value)->value);
@@ -287,11 +285,25 @@ static tinypy_value_t *__tinypy_numeric_coerce_method(tinypy_value_t *function, 
         converted = TINYPY_RET(other);
     }
     else {
-        tinypy_value_t *conversion_args = tinypy_tuple_from_items(vm, &other, 1U);
-        tinypy_type_t *target_type = &vm->types[target];
+        if (target == TINYPY_VALUE_LONG) {
+            converted = tinypy_long_from_i64(vm, TINYPY_INTEGER_VALUE(other));
+        }
+        else {
+            double number;
 
-        converted = target_type->create(target_type, conversion_args, NULL, out_error);
-        TINYPY_DECREF(conversion_args);
+            if (other_kind == TINYPY_VALUE_LONG) {
+                if (tinypy_long_as_double(other, &number, out_error) == 0) {
+                    return NULL;
+                }
+            }
+            else if (other_kind == TINYPY_VALUE_FLOAT) {
+                number = TINYPY_FLOAT_OBJECT(other)->value;
+            }
+            else {
+                number = (double)TINYPY_INTEGER_VALUE(other);
+            }
+            converted = target == TINYPY_VALUE_FLOAT ? tinypy_float_from_double(vm, number) : tinypy_complex_from_doubles(vm, number, 0.0);
+        }
         if (converted == NULL) {
             return NULL;
         }
@@ -712,9 +724,15 @@ static tinypy_value_t *__tinypy_numeric_trunc_method(tinypy_value_t *function, t
         tinypy_value_t *return_value_1 = tinypy_internal_immutable_subclass_copy(&vm->types[kind], self, out_error);
         return return_value_1;
     }
-    tinypy_value_t *constructor_args = tinypy_tuple_from_items(vm, &self, 1U);
+    if (kind == TINYPY_VALUE_BOOL) {
+        tinypy_value_t *result = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(self));
+        return result;
+    }
+    tinypy_value_t *number = tinypy_float_from_double(vm, TINYPY_FLOAT_OBJECT(self)->value);
+    tinypy_value_t *constructor_args = tinypy_tuple_from_items(vm, &number, 1U);
     tinypy_value_t *result = tinypy_internal_integer_create(&vm->types[TINYPY_VALUE_INTEGER], constructor_args, NULL, out_error);
     TINYPY_DECREF(constructor_args);
+    TINYPY_DECREF(number);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

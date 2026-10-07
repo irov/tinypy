@@ -204,11 +204,7 @@ tinypy_bool_t tinypy_internal_dict_equal(const tinypy_value_t *left, const tinyp
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_dict_equal_checked(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    const tinypy_dict_entry_t *entries;
-    size_t capacity;
     size_t index;
-    uint64_t left_version;
-    uint64_t right_version;
 
     if (left == right) {
         *out_equal = TINYPY_TRUE;
@@ -218,13 +214,8 @@ tinypy_bool_t tinypy_internal_dict_equal_checked(const tinypy_value_t *left, con
         *out_equal = TINYPY_FALSE;
         return TINYPY_TRUE;
     }
-    entries = TINYPY_DICT_OBJECT(left)->table;
-    capacity = TINYPY_DICT_CAPACITY(left);
-    left_version = TINYPY_DICT_OBJECT(left)->mutation_version;
-    right_version = TINYPY_DICT_OBJECT(right)->mutation_version;
-    for (index = 0U; index < capacity; ++index) {
-        const tinypy_dict_entry_t *entry = &entries[index];
-        tinypy_dict_lookup_t lookup;
+    for (index = 0U; index < TINYPY_DICT_CAPACITY(left); ++index) {
+        const tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(left)->table[index];
         tinypy_value_t *left_key;
         tinypy_value_t *left_value;
         tinypy_value_t *right_value;
@@ -237,26 +228,22 @@ tinypy_bool_t tinypy_internal_dict_equal_checked(const tinypy_value_t *left, con
         left_value = entry->value;
         TINYPY_INCREF(left_key);
         TINYPY_INCREF(left_value);
-        if (__tinypy_internal_dict_lookup(vm, right, left_key, entry->hash, &lookup, out_error) == 0) {
-            TINYPY_DECREF(left_key);
-            TINYPY_DECREF(left_value);
-            return TINYPY_FALSE;
-        }
-        if (lookup.found == 0) {
+        right_value = tinypy_internal_dict_get_optional_suppressed(vm, right, left_key);
+        if (right_value == NULL) {
             TINYPY_DECREF(left_key);
             TINYPY_DECREF(left_value);
             *out_equal = TINYPY_FALSE;
             return TINYPY_TRUE;
         }
-        right_value = TINYPY_RET(TINYPY_DICT_OBJECT(right)->table[lookup.index].value);
+        TINYPY_INCREF(right_value);
         equal = left_value == right_value ? 1 : tinypy_compare_bool(left_value, right_value, TINYPY_COMPARE_EQUAL, out_error);
         TINYPY_DECREF(right_value);
-        TINYPY_DECREF(left_value);
         TINYPY_DECREF(left_key);
+        TINYPY_DECREF(left_value);
         if (equal < 0) {
             return TINYPY_FALSE;
         }
-        if (equal == 0 || TINYPY_DICT_OBJECT(left)->mutation_version != left_version || TINYPY_DICT_OBJECT(right)->mutation_version != right_version) {
+        if (equal == 0) {
             *out_equal = TINYPY_FALSE;
             return TINYPY_TRUE;
         }

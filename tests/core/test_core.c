@@ -3525,6 +3525,14 @@ static int32_t __test_native_embedding(void) {
     TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == 78);
     TEST_CHECK(error == NULL);
     tinypy_release(value);
+    attribute_result = tinypy_object_get_attr(instance, "__call__", 8U, &error);
+    TEST_CHECK(attribute_result == instance);
+    TEST_CHECK(error == NULL);
+    value = tinypy_call(attribute_result, call_args, NULL, &error);
+    TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == 78);
+    TEST_CHECK(error == NULL);
+    tinypy_release(value);
+    tinypy_release(attribute_result);
     tinypy_release(call_args);
 
     value = tinypy_integer_from_i64(vm, 73);
