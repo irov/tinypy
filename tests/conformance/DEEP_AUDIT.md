@@ -1,10 +1,12 @@
 # Deep conformance audit — 2026-10-07
 
 The supported contract is [SPEC.md](../../SPEC.md), with external CPython
-2.7.18 as the observable-behavior oracle. Three audit passes added 285 independently
+2.7.18 as the observable-behavior oracle. Four audit passes added 372 independently
 authored portable cases: the initial 109, 84 boundary/callback cases,
 and 92 comparison/type/generator/regex cases (37 comparisons, 27 types,
-13 control flow and 15 SRE).
+13 control flow and 15 SRE), followed by 87 constructor/iterator/descriptor/
+decoder cases (24 text protocols, 33 builtins, 17 descriptors and 13 compiler
+diagnostics).
 Every ordinary selected case passes on both runtimes.
 These counts are regression witnesses, not a count of distinct defects.
 
@@ -36,6 +38,13 @@ These counts are regression witnesses, not a count of distinct defects.
 | Type construction and slots | Query/creation APIs and original metaclass kwargs; original base-tuple identity and subtype protocols; generic slot iteration, validation and error order; namespace snapshot after callbacks; exact descriptor names; canonical immutable physical slot names and class reassignment; nonempty variable-size builtin/metaclass slot rejection and weakref policy |
 | Generator control and namespaces | Explicit StopIteration type/payload survives Python-visible next/send; native next still consumes exhaustion; throw constructor failure enters the suspended generator; close tests requested exception type; classic locals require getitem and bytearray/memoryview mappings are accepted |
 | Regular expressions | Negative update counts; numeric conversion/order and signed C-int getlower; keyword/alias/default handling; supported buffer subject/result types and subtype slicing; reversed independent bounds, including zero-minimum repeats; original scanner/finditer/sub callback position metadata |
+| Numeric constructors | String/Unicode subtype conversion overrides; numeric legacy buffers; explicit-base conversion and error order; decimal Unicode error fields and ranges; keyword arguments and complex second-operand float conversion |
+| Native keyword parsing | Dictionary equality callbacks distinguish supplied values from defaults; ignored lookup exceptions preserve the prior exception state; positional/keyword conflicts and per-parameter conversion order |
+| Aggregate parsing and allocation | `sorted` checks and converts arguments before materializing its input, then repeats reverse conversion through `list.sort`; length hints use the correct stored integer-subtype values and numeric conversions; `dict.fromkeys` accepts alternative writable constructor results and transfers cached hashes for exact builtin sources |
+| Translation and text construction | Unicode-table promotion for byte strings; legacy character-buffer acceptance and delete-character error order; no-op exact-string identity; Unicode/str constructor keywords and builtin decode versus subtype hooks |
+| Property and callable descriptors | None-copy preserves accessors; getter-doc Exception suppression versus BaseException propagation; published state before doc callbacks; subtype doc storage; callable-descriptor argument diagnostics and precedence |
+| Weak references | Noncallable callback construction; callback release after target death and batch cleanup order; `ref.__new__` keyword policy; cross-subtype equality |
+| Source decoding and literal diagnostics | Late UTF-8 Unicode-literal decoding versus byte literals/comments; early ASCII decoding including Unicode inputs; byte escape messages; named/hex/raw Unicode escape spans; adjacent literal decoding; parser text restored by source encoding and mode |
 
 Python-visible conversion failures, error ordering and callbacks remain active
 in Release. This work does not add cyclic GC or change the documented ownership
@@ -91,18 +100,22 @@ as an oracle match. [SPEC.md](../../SPEC.md#14-errors) records this boundary.
 | Classic/new-style comparison/hash/truth/length return conversions | 170 |
 | Regex: 32 patterns × 50 subjects × 13 bound pairs × 5 methods | 104,000 |
 | Regex updates: 32 patterns × 50 subjects × 7 counts × 6 operations | 67,200 |
-| **Total unique runtime outcomes** | **214,701** |
+| Compiler diagnostic contexts, source forms, encodings, modes and flags | 6,432 |
+| Property/callable descriptor copying, initialization, binding and weakrefs | 1,312 |
+| Iterator consumers, lengths, aggregate arguments and cached-hash transfer | 1,504 |
+| Text conversion protocols, constructor arguments, decimal and translation errors | 726 |
+| **Total unique runtime outcomes** | **224,675** |
 
 Operands include integer widening, long, bool, float, complex, infinity, NaN,
-subnormal and maximum finite doubles. All eight matrices compare complete stdout to
+subnormal and maximum finite doubles. All twelve matrices compare complete stdout to
 the oracle and verify unique identities, exact cardinality and zero outstanding
 tinypy allocations. They compare exception classes; protocol regressions also
 assert callback order, mutation, identity and selected exception messages.
 
 The generated compiler corpus contains 444 `exec`, 420 `eval` and 420 `single`
-sources. Each is checked at optimize 0/1/2. Another 115 checked-in vendor, local,
+sources. Each is checked at optimize 0/1/2. Another 123 checked-in vendor, local,
 runtime and matrix sources undergo three-level `exec` comparison. This gives
-4,197 byte-identical marshal-v2 comparisons per profile, 16,788 across all four.
+4,221 byte-identical marshal-v2 comparisons per profile, 16,884 across all four.
 No compiler mismatch was found in these inputs.
 
 Dynamic compiler diagnostics use logical filenames with no filesystem source
@@ -111,28 +124,29 @@ is unavailable. Core filesystem access remains outside the embedding contract.
 
 ## Final validation
 
-The default [matrix runner](../run_validation.py) completed all 98 stages on
+The default [matrix runner](../run_validation.py) completed all 118 stages on
 macOS arm64. C and C99 standalone builds used strict warnings-as-errors.
 
 | Profile | Native/runtime CTest | Portable oracle cases | Runtime outcomes | Compiler comparisons |
 | --- | --- | --- | --- | --- |
-| Debug, detector on | 89 PASS | 955 PASS | 214,701 identical | 4,197 identical |
-| Release | 89 PASS | 951 PASS / 4 diagnostic SKIP | 214,701 identical | 4,197 identical |
-| Unoptimized Debug, ASan/UBSan | 89 PASS | 955 PASS | 214,701 identical | 4,197 identical |
-| Release, LTO | 89 PASS | 951 PASS / 4 diagnostic SKIP | 214,701 identical | 4,197 identical |
+| Debug, detector on | 89 PASS | 1,042 PASS | 224,675 identical | 4,221 identical |
+| Release | 89 PASS | 1,038 PASS / 4 diagnostic SKIP | 224,675 identical | 4,221 identical |
+| Unoptimized Debug, ASan/UBSan | 89 PASS | 1,042 PASS | 224,675 identical | 4,221 identical |
+| Release, LTO | 89 PASS | 1,038 PASS / 4 diagnostic SKIP | 224,675 identical | 4,221 identical |
 
-All 129 CTest registrations were checked against the exact inventory. Portable
+All 133 CTest registrations were checked against the exact inventory. Portable
 cases are run separately with the external oracle; their CTest wrappers are
 not counted again as executed native tests. Host/API/runner acceptance checks
-passed 78/78. Standalone marshal/artifact and core symbol audits passed in all
+passed 82/82. Standalone marshal/artifact and core symbol audits passed in all
 profiles. No ASan/UBSan diagnostics occurred. Apple ASan lacks LeakSanitizer;
 macOS records `detect_leaks=0`, while allocator balance is checked independently.
 
 Logs, per-case portable results, JUnit results and the aggregate source/test
-SHA-256 are in `.temp/validation-third-accepted/report.json` and its linked artifacts. The
+SHA-256 are in `.temp/validation-fourth-accepted/report.json` and its linked artifacts. The
 report rejects incomplete discovery, native/portable skips outside the four
 allowed Release adaptations, inconsistent summaries, empty compiler corpora,
-changed inputs and timeouts. Reverse inventories also reject unregistered local
+changed inputs and timeouts. The input fingerprint includes the normative
+`SPEC.md`; matrix cardinalities must be positive integers. Reverse inventories also reject unregistered local
 test files, uncovered local modules or unregistered runtime matrices. Compiler
 product children must have quiet stdout/stderr, including the oracle; matching
 marshal payloads cannot hide diagnostics. Intentional Python SyntaxWarning
@@ -140,8 +154,8 @@ semantics have separate runtime fixtures, including `sys_runtime.py`. Timed-out
 stage process trees are stopped.
 
 The final accepted source/test SHA-256 is
-`4e7432b5c5a1ada4dd1ffd65e854170cc6bd262bc95ca3b174c563c9e43d8544`.
-The post-run fingerprint matched; all 98 recorded stages have PASS status.
+`d47983c9dbe482c18af81cdb2f491e351ab3be9f20b34bc6dc9f5835534892c7`.
+The post-run fingerprint matched; all 118 recorded stages have PASS status.
 
 A scoped Debug measurement for 100,000 `pack_into('<d', ...)` calls showed a
 median CPU time of 0.074736 s before the direct-buffer change and 0.049017 s
@@ -155,7 +169,20 @@ this is a local microbenchmark, not an application performance guarantee.
 fixtures; [TEST_PLAN.md](TEST_PLAN.md) defines applicable variant axes, callback
 states, lifetime checks and future acceptance gates. [tests/README.md](../README.md)
 describes adding regression witnesses and running the full matrix. Confirmed
-supported-scope discrepancies from all three audit passes are fixed; the one explicit
+supported-scope discrepancies from all four audit passes are fixed; the one explicit
 CPython pending-error boundary is described above. The finite products are exhaustive
 for their operand lists; arbitrary Python programs, callbacks, host extensions
 and other ABIs remain unbounded. Declared SPEC limitations stay explicit.
+
+Builtin documentation strings remain abbreviated; these products verify
+descriptor/documentation behavior with authored values and do not assert full
+CPython documentation-text parity. The aggregate matrix enumerates stable
+ordinary callbacks. Earlier local regressions retain Python 2 general `map`'s
+ignored length-hint-error behavior; arbitrary pending-C-exception paths are
+not established by that bounded coverage.
+
+The decoder diagnostic phase and keyword-parser behavior were checked against
+ordinary source/callback witnesses and independently reviewed against
+[CPython ast.c](https://github.com/python/cpython/blob/v2.7.18/Python/ast.c),
+[tokenizer.c](https://github.com/python/cpython/blob/v2.7.18/Parser/tokenizer.c)
+and [getargs.c](https://github.com/python/cpython/blob/v2.7.18/Python/getargs.c).

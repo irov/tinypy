@@ -46,10 +46,6 @@ static tinypy_value_t *__tinypy_weakref_new_with_type(tinypy_type_t *type, tinyp
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot create weak reference to this object", out_error);
         return NULL;
     }
-    if (callback != NULL && tinypy_is_callable(callback) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak reference callback must be callable", out_error);
-        return NULL;
-    }
     if (callback == NULL && (type == &vm->types[TINYPY_VALUE_WEAKREF] || type == vm->weak_proxy_type || type == vm->callable_weak_proxy_type)) {
         tinypy_value_t *current = *head_slot;
 
@@ -114,7 +110,6 @@ void tinypy_internal_weakref_clear(tinypy_value_t *value) {
         tinypy_weakref_object_t *weakref = TINYPY_WEAKREF_OBJECT(current);
         tinypy_value_t *next = weakref->next;
 
-        weakref->next = NULL;
         if (weakref->callback != NULL) {
             tinypy_vm_t *vm = TINYPY_VALUE_VM(current);
             tinypy_internal_exception_state_t exception_state;
@@ -133,6 +128,29 @@ void tinypy_internal_weakref_clear(tinypy_value_t *value) {
                 tinypy_error_release(error);
             }
             tinypy_internal_exception_preserve_end(vm, &exception_state);
+        }
+        current = next;
+    }
+    current = weakref_value;
+    weakref_value = NULL;
+    while (current != NULL) {
+        tinypy_weakref_object_t *weakref = TINYPY_WEAKREF_OBJECT(current);
+        tinypy_value_t *next = weakref->next;
+
+        weakref->next = weakref_value;
+        weakref_value = current;
+        current = next;
+    }
+    current = weakref_value;
+    while (current != NULL) {
+        tinypy_weakref_object_t *weakref = TINYPY_WEAKREF_OBJECT(current);
+        tinypy_value_t *next = weakref->next;
+        tinypy_value_t *callback = weakref->callback;
+
+        weakref->next = NULL;
+        weakref->callback = NULL;
+        if (callback != NULL) {
+            TINYPY_DECREF(callback);
         }
         TINYPY_DECREF(current);
         current = next;
@@ -684,7 +702,8 @@ static tinypy_value_t *__tinypy_weakref_new_method(tinypy_value_t *function, tin
     tinypy_value_t *callback = NULL;
 
     (void)user_data;
-    if (__tinypy_weakref_arguments(vm, args, kwargs, 2U, 3U, out_error) == 0) {
+    (void)kwargs;
+    if (__tinypy_weakref_arguments(vm, args, NULL, 2U, 3U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);

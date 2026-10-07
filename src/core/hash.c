@@ -880,7 +880,7 @@ tinypy_bool_t tinypy_internal_equal_value(const tinypy_value_t *left, const tiny
         tinypy_value_t *left_object = TINYPY_WEAKREF_OBJECT((tinypy_value_t *)left)->object;
         tinypy_value_t *right_object = TINYPY_WEAKREF_OBJECT((tinypy_value_t *)right)->object;
 
-        if (left_object == NULL || right_object == NULL) {
+        if (left->type != right->type || left_object == NULL || right_object == NULL) {
             return left == right ? TINYPY_TRUE : TINYPY_FALSE;
         }
         tinypy_bool_t return_value_7 = tinypy_internal_equal_value(left_object, right_object, 1);

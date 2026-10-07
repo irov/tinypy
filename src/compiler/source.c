@@ -154,18 +154,6 @@ static tinypy_bool_t __tinypy_compiler_encoding_cookie(const uint8_t *source, si
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_compiler_ascii_valid(const uint8_t *bytes, size_t size, size_t *out_invalid_offset) {
-    size_t index;
-
-    for (index = 0U; index < size; ++index) {
-        if (bytes[index] >= 0x80U) {
-            *out_invalid_offset = index;
-            return TINYPY_FALSE;
-        }
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_compiler_utf8_valid(const uint8_t *bytes, size_t size, size_t *out_invalid_offset) {
     size_t index = 0U;
 
@@ -267,6 +255,92 @@ void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind
     }
     ctx->failed = 1;
     __tinypy_compiler_source_line(ctx, line_number, &line_bytes, &line_size);
+    if (line_bytes != NULL && (ctx->source_is_latin1 != 0 || ctx->source_diagnostic_latin1 != 0)) {
+        uint8_t *original = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, line_size + 1U);
+        uint8_t *restored = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, line_size + 1U);
+        size_t offset = 0U;
+        size_t original_size = 0U;
+        size_t original_column = 0U;
+        size_t restored_size = 0U;
+
+        if (original == NULL || restored == NULL) {
+            tinypy_internal_make_vm_error(ctx->vm, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", out_error);
+            return;
+        }
+        while (offset < line_size) {
+            uint32_t code_point;
+            size_t width = tinypy_internal_utf8_decode((const uint8_t *)line_bytes + offset, line_size - offset, &code_point);
+            if (width == 0U) {
+                width = 1U;
+                code_point = (uint8_t)line_bytes[offset];
+            }
+            if (column_offset > 0 && offset < (size_t)column_offset - 1U) {
+                original_column += 1U;
+            }
+            original[original_size++] = code_point <= 0xffU ? (uint8_t)code_point : '?';
+            offset += width;
+        }
+        offset = 0U;
+        size_t restored_column = 0U;
+        while (offset < original_size) {
+            uint32_t code_point = original[offset];
+            size_t width = 1U;
+            if (ctx->source_is_latin1 != 0 && ctx->source_diagnostic_latin1 != 0) {
+                width = tinypy_internal_utf8_decode(original + offset, original_size - offset, &code_point);
+                if (width == 0U) {
+                    width = tinypy_internal_utf8_invalid_span(original + offset, original_size - offset);
+                    code_point = '?';
+                }
+            }
+            if (offset < original_column) {
+                restored_column += 1U;
+            }
+            restored[restored_size++] = code_point <= 0xffU ? (uint8_t)code_point : '?';
+            offset += width;
+        }
+        line_bytes = (const char *)restored;
+        line_size = restored_size;
+        if (column_offset > 0) {
+            column_offset = (int32_t)restored_column + 1;
+        }
+    }
+    else if (line_bytes != NULL && ctx->source_diagnostic_utf8 != 0) {
+        if (line_size > (SIZE_MAX - 1U) / 3U) {
+            tinypy_internal_make_vm_error(ctx->vm, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", out_error);
+            return;
+        }
+        uint8_t *restored = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, line_size * 3U + 1U);
+        size_t offset = 0U;
+        size_t restored_size = 0U;
+        size_t restored_column = 0U;
+        if (restored == NULL) {
+            tinypy_internal_make_vm_error(ctx->vm, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", out_error);
+            return;
+        }
+        while (offset < line_size) {
+            uint32_t code_point;
+            size_t width = tinypy_internal_utf8_decode((const uint8_t *)line_bytes + offset, line_size - offset, &code_point);
+            size_t output_width = width;
+            if (width == 0U) {
+                width = tinypy_internal_utf8_invalid_span((const uint8_t *)line_bytes + offset, line_size - offset);
+                (void)memcpy(restored + restored_size, "\xef\xbf\xbd", 3U);
+                output_width = 3U;
+            }
+            else {
+                (void)memcpy(restored + restored_size, line_bytes + offset, width);
+            }
+            if (column_offset > 0 && offset < (size_t)column_offset - 1U) {
+                restored_column += output_width;
+            }
+            restored_size += output_width;
+            offset += width;
+        }
+        line_bytes = (const char *)restored;
+        line_size = restored_size;
+        if (column_offset > 0) {
+            column_offset = (int32_t)restored_column + 1;
+        }
+    }
     if (line_number == 0 && ctx->source.size == 0U) {
         line_bytes = "";
     }
@@ -335,6 +409,33 @@ void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, co
     }
     message[offset] = '\0';
     tinypy_internal_compiler_semantic_error(ctx, message, line_number, include_location);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_compiler_decode_error(tinypy_compile_ctx_t *ctx, tinypy_value_t *exception, int32_t line_number, tinypy_bool_t literal) {
+    TINYPY_INCREF(exception);
+    tinypy_vm_clear_error(ctx->vm);
+    tinypy_value_t *rendered = tinypy_object_str(exception, ctx->out_error);
+    TINYPY_DECREF(exception);
+    if (rendered == NULL) {
+        ctx->failed = TINYPY_TRUE;
+        return;
+    }
+    size_t message_size;
+    const char *message = tinypy_string_view(rendered, &message_size);
+    const char *parts[] = {literal != 0 ? "(unicode error) " : "", message};
+    size_t sizes[] = {literal != 0 ? 16U : 0U, message_size};
+
+    if (literal != 0) {
+        /* Python 2 bounds its AST decoder diagnostic to a 128-byte buffer. */
+        if (sizes[1] > 127U - sizes[0]) {
+            sizes[1] = 127U - sizes[0];
+        }
+        tinypy_internal_compiler_semantic_error_parts(ctx, parts, sizes, 2U, line_number, TINYPY_TRUE);
+    }
+    else {
+        tinypy_internal_compiler_error_parts(ctx, TINYPY_ERROR_SOURCE_DECODING, parts, sizes, 2U, 0, 0);
+    }
+    TINYPY_DECREF(rendered);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number) {
@@ -408,19 +509,19 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         input_offset = 3U;
         bom = 1;
         latin1 = 0;
+        ctx->source_diagnostic_utf8 = TINYPY_TRUE;
     }
     if (__tinypy_compiler_encoding_cookie(input + input_offset, source_size - input_offset, &cookie, &cookie_size, &cookie_line) != 0) {
         ctx->source_encoding_declared = TINYPY_TRUE;
         if (__tinypy_compiler_is_latin1_cookie(cookie, cookie_size) != 0) {
+            ctx->source_diagnostic_latin1 = TINYPY_TRUE;
             if (ctx->source_is_unicode == 0) {
                 latin1 = 1;
             }
         }
         else if (__tinypy_compiler_is_ascii_cookie(cookie, cookie_size) != 0) {
-            if (ctx->source_is_unicode == 0) {
-                ascii = 1;
-                latin1 = 0;
-            }
+            ascii = 1;
+            latin1 = 0;
         }
         else {
             if (__tinypy_compiler_is_utf8_cookie(cookie, cookie_size) == 0) {
@@ -435,18 +536,14 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
                 return TINYPY_FALSE;
             }
             latin1 = 0;
+            ctx->source_diagnostic_utf8 = TINYPY_TRUE;
         }
     }
     if (bom != 0 && (latin1 != 0 || ascii != 0 || (cookie != NULL && __tinypy_compiler_cookie_prefix(cookie, cookie_size, "utf-8", 5U) == 0))) {
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source encoding conflicts with UTF-8 BOM", cookie_line, 1, out_error);
         return TINYPY_FALSE;
     }
-    if (ascii != 0 && __tinypy_compiler_ascii_valid(input + input_offset, source_size - input_offset, &invalid_offset) == 0) {
-        __tinypy_compiler_byte_position(input + input_offset, invalid_offset, &invalid_line, &invalid_column);
-        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source is not valid ASCII", invalid_line, invalid_column, out_error);
-        return TINYPY_FALSE;
-    }
-    if (latin1 == 0 && ascii == 0 && __tinypy_compiler_utf8_valid(input + input_offset, source_size - input_offset, &invalid_offset) == 0) {
+    if (ctx->source_default_latin1 == 0 && latin1 == 0 && ascii == 0 && __tinypy_compiler_utf8_valid(input + input_offset, source_size - input_offset, &invalid_offset) == 0) {
         __tinypy_compiler_byte_position(input + input_offset, invalid_offset, &invalid_line, &invalid_column);
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SOURCE_DECODING, "source is not valid UTF-8", invalid_line, invalid_column, out_error);
         return TINYPY_FALSE;
@@ -485,5 +582,35 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     output[output_size] = '\0';
     ctx->source.bytes = output;
     ctx->source.size = output_size;
+    size_t ascii_offset = 0U;
+    if (ascii != 0) {
+        while (ascii_offset < output_size && output[ascii_offset] < 0x80U) {
+            ascii_offset += 1U;
+        }
+    }
+    if (ascii != 0 && ascii_offset < output_size) {
+        tinypy_value_t *text = tinypy_string_from_bytes(ctx->vm, output, output_size);
+        tinypy_value_t *encoding = tinypy_string_from_bytes(ctx->vm, "ascii", 5U);
+        tinypy_error_t *decode_error = NULL;
+        tinypy_value_t *decoded = tinypy_internal_text_codec(ctx->vm, text, encoding, NULL, TINYPY_TRUE, TINYPY_TRUE, NULL, &decode_error);
+
+        if (decoded == NULL && ctx->vm->raised_value != NULL) {
+            tinypy_internal_compiler_decode_error(ctx, ctx->vm->raised_value, 0, TINYPY_FALSE);
+            if (out_error != NULL && *out_error != NULL) {
+                __tinypy_compiler_byte_position(output, ascii_offset, &(*out_error)->line_number, &(*out_error)->column_offset);
+            }
+        }
+        if (decode_error != NULL) {
+            tinypy_error_release(decode_error);
+        }
+        if (decoded != NULL) {
+            TINYPY_DECREF(decoded);
+        }
+        TINYPY_DECREF(encoding);
+        TINYPY_DECREF(text);
+        if (decoded == NULL) {
+            return TINYPY_FALSE;
+        }
+    }
     return TINYPY_TRUE;
 }

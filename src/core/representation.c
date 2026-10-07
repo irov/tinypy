@@ -1495,26 +1495,25 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_string_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    static const char *const names[1] = {"object"};
     tinypy_vm_t *vm = type->vm;
+    tinypy_value_t *values[1];
 
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) > 1U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "str constructor received invalid arguments", out_error);
+    if (tinypy_internal_constructor_optional_arguments(vm, "str", 3U, args, kwargs, names, 1U, 0U, values, out_error) == 0) {
         return NULL;
     }
-    if (TINYPY_TUPLE_SIZE(args) == 0U) {
+    if (values[0] == NULL) {
         tinypy_value_t *value = tinypy_string_from_bytes(vm, NULL, 0U);
         tinypy_value_t *return_value_1 = tinypy_internal_immutable_subclass_copy(type, value, out_error);
         return return_value_1;
     }
-    tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_BYTEARRAY) {
-        tinypy_value_t *item_3 = TINYPY_TUPLE_GET(args, 0U);
-        tinypy_value_t *value = tinypy_internal_bytearray_string(item_3, out_error);
+    tinypy_value_t *item = values[0];
+    if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_BYTEARRAY && tinypy_internal_object_has_special_override(item, "__str__", 7U) == 0) {
+        tinypy_value_t *value = tinypy_internal_bytearray_string(item, out_error);
         tinypy_value_t *return_value_2 = tinypy_internal_immutable_subclass_copy(type, value, out_error);
         return return_value_2;
     }
-    tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *value = tinypy_object_str(item_2, out_error);
+    tinypy_value_t *value = tinypy_object_str(item, out_error);
     tinypy_value_t *return_value_3 = tinypy_internal_immutable_subclass_copy(type, value, out_error);
     return return_value_3;
 }

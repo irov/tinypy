@@ -59,6 +59,18 @@ tinypy_bool_t tinypy_internal_integer_as_ssize(tinypy_value_t *value, int64_t *o
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyInt_AsSsize_t reads integer subtypes directly, then uses __int__. */
+tinypy_bool_t tinypy_internal_number_as_ssize(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG) {
+        tinypy_bool_t result = tinypy_internal_index_as_i64(value, out_value, TINYPY_FALSE, out_error);
+        return result;
+    }
+    tinypy_bool_t result = tinypy_internal_number_as_i64(value, out_value, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_container_list_index(tinypy_vm_t *vm, int64_t index, size_t size, tinypy_bool_t allow_end, size_t *out_index, tinypy_error_t **out_error) {
     uint64_t distance;
 
@@ -924,6 +936,8 @@ error:
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    static const char *const names[3] = {"cmp", "key", "reverse"};
+    static const size_t name_sizes[3] = {3U, 3U, 7U};
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *compare = NULL;
     tinypy_value_t *key_function = NULL;
@@ -949,68 +963,65 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     }
     argument_count = TINYPY_TUPLE_SIZE(args);
     tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_TUPLE_SIZE(args) >= 2U) {
-        compare = TINYPY_TUPLE_GET(args, 1U);
-    }
-    if (TINYPY_TUPLE_SIZE(args) >= 3U) {
-        key_function = TINYPY_TUPLE_GET(args, 2U);
-    }
-    if (TINYPY_TUPLE_SIZE(args) >= 4U) {
-        tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 3U);
-        int64_t integer;
+    size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
+    size_t matched_keywords = 0U;
 
-        if (tinypy_internal_integer_as_ssize(item_2, &integer, out_error) == 0) {
-            return NULL;
+    if (keyword_count > 4U - argument_count) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort expected at most three arguments", out_error);
+        return NULL;
+    }
+    for (size_t parameter = 0U; parameter < 3U; ++parameter) {
+        tinypy_value_t *value = parameter + 1U < argument_count ? TINYPY_TUPLE_GET(args, parameter + 1U) : NULL;
+        tinypy_value_t *keyword_value = NULL;
+
+        if (matched_keywords < keyword_count) {
+            keyword_value = tinypy_internal_constructor_keyword_optional(vm, kwargs, names[parameter], name_sizes[parameter]);
         }
-        if (integer < INT32_MIN || integer > INT32_MAX) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "sort reverse does not fit in a C int", out_error);
-            return NULL;
+        if (keyword_value != NULL) {
+            matched_keywords += 1U;
+            if (value != NULL) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort received duplicate arguments", out_error);
+                return NULL;
+            }
+            value = keyword_value;
         }
-        reverse = integer != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        if (parameter == 0U) {
+            compare = value;
+        }
+        else if (parameter == 1U) {
+            key_function = value;
+        }
+        else if (value != NULL) {
+            int64_t integer;
+
+            if (tinypy_internal_integer_as_ssize(value, &integer, out_error) == 0) {
+                return NULL;
+            }
+            if (integer < INT32_MIN || integer > INT32_MAX) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "sort reverse does not fit in a C int", out_error);
+                return NULL;
+            }
+            reverse = integer != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        }
     }
-    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
-        tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
-        tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(kwargs);
+    if (matched_keywords != keyword_count) {
+        for (size_t slot = 0U; slot <= TINYPY_DICT_OBJECT(kwargs)->mask; ++slot) {
+            tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(kwargs)->table[slot];
+            tinypy_bool_t known = TINYPY_FALSE;
 
-        for (; iterator != iterator_end; ++iterator) {
-            const uint8_t *name;
-            size_t name_size;
-
-            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator) || TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING) {
+            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
                 continue;
             }
-            name = tinypy_string_view(iterator->key, &name_size);
-            if (name_size == 3U && memcmp(name, "cmp", 3U) == 0) {
-                if (argument_count >= 2U) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort received multiple values for cmp", out_error);
-                    return NULL;
+            tinypy_value_type_e kind = TINYPY_VALUE_KIND(entry->key);
+            if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
+                for (size_t parameter = 0U; parameter < 3U; ++parameter) {
+                    if (TINYPY_TEXT_BYTE_SIZE(entry->key) == name_sizes[parameter] && memcmp(TINYPY_TEXT_BYTES(entry->key), names[parameter], name_sizes[parameter]) == 0) {
+                        known = TINYPY_TRUE;
+                        break;
+                    }
                 }
-                compare = iterator->value;
             }
-            else if (name_size == 3U && memcmp(name, "key", 3U) == 0) {
-                if (argument_count >= 3U) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort received multiple values for key", out_error);
-                    return NULL;
-                }
-                key_function = iterator->value;
-            }
-            else if (name_size == 7U && memcmp(name, "reverse", 7U) == 0) {
-                if (argument_count >= 4U) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort received multiple values for reverse", out_error);
-                    return NULL;
-                }
-                int64_t integer;
-
-                if (tinypy_internal_integer_as_ssize(iterator->value, &integer, out_error) == 0) {
-                    return NULL;
-                }
-                if (integer < INT32_MIN || integer > INT32_MAX) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "sort reverse does not fit in a C int", out_error);
-                    return NULL;
-                }
-                reverse = integer != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-            }
-            else {
+            if (known == 0) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort received an unexpected keyword", out_error);
                 return NULL;
             }
@@ -1162,18 +1173,44 @@ static tinypy_value_t *__tinypy_dict_fromkeys_method(tinypy_value_t *function, t
     if (result == NULL) {
         return NULL;
     }
-    if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_DICT) {
-        TINYPY_DECREF(result);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "dict.fromkeys() constructor returned a non-dict", out_error);
-        return NULL;
-    }
     tinypy_bool_t exact_dict = result->type == &vm->types[TINYPY_VALUE_DICT] ? TINYPY_TRUE : TINYPY_FALSE;
     if (exact_dict != 0 && tinypy_internal_dict_reserve_checked(vm, result, tinypy_internal_iterable_size_hint(TINYPY_TUPLE_GET(args, 1U)), out_error) == 0) {
         TINYPY_DECREF(result);
         return NULL;
     }
     value = TINYPY_TUPLE_SIZE(args) == 3U ? TINYPY_TUPLE_GET(args, 2U) : &vm->none_object.base;
-    iterator = tinypy_iter(TINYPY_TUPLE_GET(args, 1U), out_error);
+    tinypy_value_t *source = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_type_e source_kind = TINYPY_VALUE_KIND(source);
+    tinypy_value_t *source_dict = NULL;
+
+    if (source->type == &vm->types[TINYPY_VALUE_DICT]) {
+        source_dict = source;
+    }
+    else if ((source_kind == TINYPY_VALUE_SET || source_kind == TINYPY_VALUE_FROZENSET) && source->type == &vm->types[source_kind]) {
+        source_dict = TINYPY_SET_OBJECT(source)->dict;
+    }
+    if (exact_dict != 0 && TINYPY_DICT_SIZE(result) == 0U && source_dict != NULL) {
+        for (size_t index = 0U; index <= TINYPY_DICT_OBJECT(source_dict)->mask; ++index) {
+            tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(source_dict)->table[index];
+
+            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
+                continue;
+            }
+            tinypy_value_t *key = entry->key;
+            tinypy_hash_t hash = entry->hash;
+
+            TINYPY_INCREF(key);
+            tinypy_bool_t assigned = tinypy_internal_dict_set_hash_checked(vm, result, key, value, hash, out_error);
+
+            TINYPY_DECREF(key);
+            if (assigned == 0) {
+                TINYPY_DECREF(result);
+                return NULL;
+            }
+        }
+        return result;
+    }
+    iterator = tinypy_iter(source, out_error);
     if (iterator == NULL) {
         TINYPY_DECREF(result);
         return NULL;

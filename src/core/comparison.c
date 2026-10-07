@@ -142,7 +142,7 @@ static int32_t __tinypy_truth(tinypy_value_t *value, tinypy_bool_t dispatch_spec
             return INT32_C(-1);
         }
         int64_t length;
-        if (tinypy_internal_number_as_i64(result, &length, out_error) == 0) {
+        if (tinypy_internal_number_as_ssize(result, &length, out_error) == 0) {
             TINYPY_DECREF(result);
             return INT32_C(-1);
         }

@@ -30,12 +30,14 @@ RUNTIME_OUTCOMES = 15040
 RUNTIME_MATRICES = [('runtime_matrix.py', RUNTIME_OUTCOMES), ('text_format_matrix.py', 18186),
                     ('compile_matrix.py', 3216), ('text_numeric_edges_matrix.py', 4082),
                     ('control_matrix.py', 222), ('sre_matrix.py', 171200),
-                    ('type_slots_matrix.py', 415), ('comparison_matrix.py', 2340)]
+                    ('type_slots_matrix.py', 415), ('comparison_matrix.py', 2340),
+                    ('compiler_diagnostics_matrix.py', 6432), ('descriptor_matrix.py', 1312),
+                    ('iterator_builtin_matrix.py', 1504), ('text_protocol_matrix.py', 726)]
 STATS = re.compile(r'^tinypy stats: .*outstanding_bytes=0 outstanding_allocations=0\r?\n?$')
 
 
 def source_fingerprint():
-    paths = [ROOT / 'CMakeLists.txt']
+    paths = [ROOT / 'CMakeLists.txt', ROOT / 'SPEC.md']
     for directory in ('src', 'include', 'tests', 'cli', 'tools'):
         paths.extend(path for path in (ROOT / directory).rglob('*')
                      if path.is_file() and (path.suffix in ('.c', '.h', '.inc', '.py', '.json', '.cmake')
@@ -85,6 +87,8 @@ def check_coverage_inventory(manifest, inventory):
     if unmapped:
         raise RuntimeError('local modules missing from coverage: ' + ', '.join(sorted(unmapped)))
     matrix_names = [name for name, _ in RUNTIME_MATRICES]
+    if any(type(count) is not int or count <= 0 for _, count in RUNTIME_MATRICES):
+        raise RuntimeError('runtime matrix cardinality must be a positive integer')
     registered_matrices = set(matrix_names)
     discovered_matrices = {path.name for path in (ROOT / 'tests/conformance').glob('*_matrix.py') if path.is_file()}
     if len(matrix_names) != len(registered_matrices) or registered_matrices != discovered_matrices:
@@ -169,6 +173,8 @@ def check_portable(report, manifest, profile):
 
 def check_runtime(expected, actual, stderr, expected_count=None):
     expected_count = RUNTIME_OUTCOMES if expected_count is None else expected_count
+    if type(expected_count) is not int or expected_count <= 0:
+        raise RuntimeError('runtime matrix cardinality must be a positive integer')
     lines = expected.splitlines()
     identities = [line.split(b'\t', 1)[0] for line in lines]
     if len(lines) != expected_count or len(set(identities)) != len(lines):

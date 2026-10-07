@@ -580,9 +580,8 @@ static tinypy_bool_t __tinypy_length_hint_builtin_length(tinypy_value_t *value, 
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_length_hint_result(tinypy_vm_t *vm, tinypy_value_t *result, int64_t default_hint, int64_t *out_hint, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_length_hint_result(tinypy_value_t *result, int64_t default_hint, int64_t *out_hint, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(result);
-    tinypy_value_t *integer = NULL;
     int64_t hint;
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG) {
@@ -590,19 +589,10 @@ static tinypy_bool_t __tinypy_length_hint_result(tinypy_vm_t *vm, tinypy_value_t
             return TINYPY_FALSE;
         }
     }
-    else if (result->type->number_slots != NULL || kind == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special(result, "__int__", 7U) != 0) {
-        tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &result, 1U);
-
-        integer = tinypy_internal_integer_create(&vm->types[TINYPY_VALUE_INTEGER], arguments, NULL, out_error);
-        TINYPY_DECREF(arguments);
-        if (integer == NULL) {
+    else if (result->type->number_slots != NULL || kind == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special(result, "__int__", 7U) != 0 || tinypy_internal_object_has_special(result, "__float__", 9U) != 0) {
+        if (tinypy_internal_number_as_ssize(result, &hint, out_error) == 0) {
             return TINYPY_FALSE;
         }
-        if (tinypy_internal_index_as_i64(integer, &hint, TINYPY_FALSE, out_error) == 0) {
-            TINYPY_DECREF(integer);
-            return TINYPY_FALSE;
-        }
-        TINYPY_DECREF(integer);
     }
     else {
         *out_hint = default_hint;
@@ -610,6 +600,17 @@ static tinypy_bool_t __tinypy_length_hint_result(tinypy_vm_t *vm, tinypy_value_t
     }
     *out_hint = hint;
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_length_hint_length_result(tinypy_value_t *value, tinypy_value_t *result, int64_t *out_length, tinypy_error_t **out_error) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(result);
+
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER) {
+        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "__len__ should return an int", out_error);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t converted = tinypy_internal_number_as_ssize(result, out_length, out_error);
+    return converted;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Python 2's _PyObject_LengthHint is observable: it invokes __len__ first,
@@ -629,7 +630,7 @@ tinypy_bool_t tinypy_internal_length_hint(tinypy_value_t *value, int64_t default
             }
             goto length_unavailable;
         }
-        if (tinypy_internal_index_as_i64(result, &length, TINYPY_FALSE, out_error) == 0) {
+        if (__tinypy_length_hint_length_result(value, result, &length, out_error) == 0) {
             TINYPY_DECREF(result);
             if (__tinypy_length_hint_consume_fallback_error(vm, out_error) == 0) {
                 return TINYPY_FALSE;
@@ -673,7 +674,7 @@ tinypy_bool_t tinypy_internal_length_hint(tinypy_value_t *value, int64_t default
             }
             goto length_unavailable;
         }
-        if (tinypy_internal_index_as_i64(result, &length, TINYPY_FALSE, out_error) == 0) {
+        if (__tinypy_length_hint_length_result(value, result, &length, out_error) == 0) {
             TINYPY_DECREF(result);
             if (__tinypy_length_hint_consume_fallback_error(vm, out_error) == 0) {
                 return TINYPY_FALSE;
@@ -703,7 +704,7 @@ length_unavailable:
         }
         return TINYPY_FALSE;
     }
-    tinypy_bool_t converted = __tinypy_length_hint_result(vm, result, default_hint, out_hint, out_error);
+    tinypy_bool_t converted = __tinypy_length_hint_result(result, default_hint, out_hint, out_error);
 
     TINYPY_DECREF(result);
     return converted;

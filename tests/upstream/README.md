@@ -1,8 +1,8 @@
 # Portable Python 2 tests
 
 This corpus vendors 20 complete CPython 2.7.18 modules with 221 discovered
-cases, of which 210 are selected, and adds nineteen project-authored
-modules with 745 cases. Upstream files are byte-for-byte unchanged.
+cases, of which 210 are selected, and adds twenty-three project-authored
+modules with 832 cases. Upstream files are byte-for-byte unchanged.
 `manifest.json` records source commits, paths, SHA-256 hashes, case names and
 explicit reasons for excluding originals outside the tinypy corpus. Locally authored modules
 have an explicit origin marker and a complete case list; their source is
@@ -127,9 +127,9 @@ Whole modules needing additional libraries or source cleanup were not copied:
 | IronPython tests | iptest and CLR-specific infrastructure |
 | MicroPython tests | Select and validate Python 2-compatible cases from a Python 3 corpus |
 
-All 951 ordinary active cases currently pass on tinypy and the CPython 2.7.18
-reference. Debug additionally passes four diagnostic adaptations (955 PASS);
-Release reports 951 PASS and 4 SKIP. The full build/oracle/compiler matrix has
+All 1,038 ordinary active cases currently pass on tinypy and the CPython 2.7.18
+reference. Debug additionally passes four diagnostic adaptations (1,042 PASS);
+Release reports 1,038 PASS and 4 SKIP. The full build/oracle/compiler matrix has
 one entry point documented in [tests/README.md](../README.md); its finite
 coverage model and latest audit are under [conformance](../conformance/DEEP_AUDIT.md).
 Failures remain failures, without expected-failure annotations. Runtime fixes

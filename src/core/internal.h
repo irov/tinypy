@@ -1365,6 +1365,7 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base, tinyp
 tinypy_bool_t tinypy_internal_index_as_i64(tinypy_value_t *value, int64_t *out_value, tinypy_bool_t clamp_overflow, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_integer_as_ssize(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_number_as_ssize(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_number_as_i64(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t *out_consumed, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_encode_attribute_name(tinypy_value_t *key, tinypy_error_t **out_error);
@@ -1449,6 +1450,8 @@ tinypy_value_t *tinypy_internal_long_create(tinypy_type_t *type, tinypy_value_t 
 tinypy_value_t *tinypy_internal_float_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_complex_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_unicode_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_constructor_optional_arguments(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *args, tinypy_value_t *kwargs, const char *const *names, size_t maximum, uint32_t text_arguments, tinypy_value_t **outputs, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_constructor_keyword_optional(tinypy_vm_t *vm, tinypy_value_t *kwargs, const char *name, size_t name_size);
 int32_t tinypy_internal_d2s_buffered_n(double value, char *result);
 tinypy_value_t *tinypy_internal_tuple_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_list_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);

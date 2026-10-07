@@ -29,6 +29,9 @@ tests cover callbacks that affect later observations.
 | Regular expressions | Valid byte/Unicode patterns, empty matches, captures/names, branches/repeats/lookarounds, exact/subclass/legacy-buffer subjects, independent bounds, scanner progress/metadata, negative/zero/positive counts and replacement callbacks |
 | Buffer | Read-only/writable, bytearray/legacy buffer/memoryview where accepted, outstanding export, child view, overlap, offset and size boundaries |
 | Compiler | exec/eval/single, optimize 0/1/2, explicit/inherited futures, bytes/Unicode, newline/CRLF, valid syntax and parser/AST/symbol/codegen errors |
+| Source decoders | Default byte encoding, ASCII/Latin-1/UTF-8 cookie and BOM, bytes/Unicode input, LF/CR/CRLF, byte versus Unicode/raw literal, escape spans before/after non-ASCII text, decoder-versus-parser error precedence |
+| Native keyword parser | String/Unicode/subtype names, equality True/False/raising Exception/BaseException, prior handled exception, duplicate/missing/unknown names, per-parameter conversion and raw-name validation order |
+| Descriptor construction | Accessor None/omitted/replacement, exact/subtype property, doc callback sees published state, Exception/BaseException doc lookup, callable-descriptor binding and argument-error priority |
 | State | Fresh/reinitialized object, partial progress, failed operation followed by recovery, per-VM state and separate VM isolation |
 | Lifetime | Retained input across callback, removed input, finalizer/weakref notification, borrowed versus owned reference, zero allocator balance |
 
@@ -93,6 +96,21 @@ match group types, callback slicing, pos/endpos metadata and independent
 bounds. Host re helper stubs test template/expand forwarding and error order;
 they do not establish the external template parser's behavior.
 
+Length-hint tests distinguish classic strict-int length results, stored new-style
+integer/long subtype payloads, float/custom numeric conversion, unavailable length,
+fallback hint, ignored versus propagated errors and exhausted iterators. Native
+argument parsers may suppress keyword lookup errors as CPython does; checked
+function-binding dictionary insertion retains its separately documented policy.
+For `dict.fromkeys`, distinguish exact dict/set cached hashes from subclass
+iteration and alternative writable objects returned by the constructor.
+
+Compiler diagnostics compare the complete args/location payload and codec error
+spans in the decoder's byte domain. Use a terminating non-hex tail for raw escape
+failure products so the oracle's reported positions remain deterministic.
+Builtin documentation text is abbreviated; use authored doc values when testing
+property/doc dispatch rather than treating external documentation prose as a
+semantic oracle.
+
 ## Adding and maintaining coverage
 
 1. Confirm a compact witness on CPython 2.7.18 and record the differing
@@ -109,7 +127,7 @@ they do not establish the external template parser's behavior.
 5. Run focused oracle cases during iteration, then the default four-profile
    coordinator for final acceptance. Freeze source inputs for that run.
 6. Preserve failure logs, compiler payloads, portable results, JUnit results
-   and the source/test hash in the report. Record material platform/contract
+   and the source/test/SPEC hash in the report. Record material platform/contract
    boundaries in the audit report.
 
 Finite matrices exhaust their declared operand lists. Arbitrary callbacks and

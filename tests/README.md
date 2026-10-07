@@ -17,7 +17,7 @@ Release with LTO. Use `--profile debug` for a focused iteration, repeat
 `.temp/validation`. Every validation stage has a timeout. Logs and an incremental
 JSON report remain there on success or failure. Only requested profiles appear
 as tested. Compiler mismatches retain both marshal payloads. The report includes
-an aggregate source/test SHA-256 and refuses acceptance if inputs change during
+an aggregate source/test/SPEC SHA-256 and refuses acceptance if inputs change during
 the run. This coordinator needs CMake/CTest 3.26 or newer, a C compiler, `nm`
 and a toolchain that supports the chosen sanitizer/LTO profiles.
 Apple ASan does not support LeakSanitizer, so `detect_leaks=0` is selected on
@@ -44,8 +44,11 @@ The run includes:
    415 type/slot observations and 2,340 comparison/hash/truth observations
    including method-call traces. The regex matrix covers 171,200 observations
    across 32 valid patterns, 50 subjects, independent bounds, groups, scanner
-   metadata and replacement/split counts. Total: 214,701 unique outcomes per
-   profile across eight matrices. Every identity must be unique.
+   metadata and replacement/split counts. Additional products cover 6,432 compiler
+   diagnostics, 1,312 descriptor/weakref observations, 1,504 iterator/aggregate
+   observations and 726 text/constructor protocols. Total: 224,675 unique outcomes per
+   profile across twelve matrices. Every identity must be unique, with a positive
+   declared cardinality.
 5. 1,284 generated valid source inputs: 444 `exec`, 420 `eval`, 420 `single`.
    Every input is compiled at optimization levels 0, 1 and 2 and must produce
    byte-identical marshal-v2 to CPython. The inputs cover literal/operator

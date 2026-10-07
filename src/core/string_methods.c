@@ -2495,6 +2495,18 @@ static tinypy_value_t *__tinypy_string_split_method(tinypy_value_t *function, ti
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_unicode_translate_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error);
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_string_character_buffer(tinypy_vm_t *vm, tinypy_value_t *value, const uint8_t **out_bytes, size_t *out_size, tinypy_error_t **out_error) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if ((kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_BYTEARRAY) && tinypy_internal_bytes_view(value, out_bytes, out_size) != 0) {
+        return TINYPY_TRUE;
+    }
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected a string or other character buffer object", out_error);
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *delete_characters = NULL;
@@ -2507,6 +2519,7 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
     uint8_t *output;
     size_t input_index;
     size_t output_size = 0U;
+    tinypy_bool_t changed = TINYPY_FALSE;
     uint8_t deleted_flags[32] = {0U};
 
     (void)user_data;
@@ -2520,9 +2533,25 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
         return NULL;
     }
     translation = NULL;
+    if (TINYPY_VALUE_KIND(table) == TINYPY_VALUE_UNICODE) {
+        if (TINYPY_TUPLE_SIZE(args) == 3U) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "deletions are implemented differently for unicode", out_error);
+            return NULL;
+        }
+        tinypy_value_t *unicode_text = tinypy_internal_text_codec(vm, text, NULL, NULL, TINYPY_TRUE, TINYPY_TRUE, NULL, out_error);
+        if (unicode_text == NULL) {
+            return NULL;
+        }
+        tinypy_value_t *items[] = {unicode_text, table};
+        tinypy_value_t *translated_args = tinypy_tuple_from_items(vm, items, 2U);
+        tinypy_value_t *result = __tinypy_unicode_translate_method(function, translated_args, NULL, NULL, out_error);
+
+        TINYPY_DECREF(translated_args);
+        TINYPY_DECREF(unicode_text);
+        return result;
+    }
     if (TINYPY_VALUE_KIND(table) != TINYPY_VALUE_NONE) {
-        if (tinypy_internal_bytes_view(table, &translation, &translation_size) == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "translation table must be a buffer", out_error);
+        if (__tinypy_string_character_buffer(vm, table, &translation, &translation_size, out_error) == 0) {
             return NULL;
         }
         if (translation_size != 256U) {
@@ -2532,8 +2561,11 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
     }
     if (TINYPY_TUPLE_SIZE(args) == 3U) {
         delete_characters = TINYPY_TUPLE_GET(args, 2U);
-        if (tinypy_internal_bytes_view(delete_characters, &deleted, &deleted_size) == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "delete characters must be a string", out_error);
+        if (TINYPY_VALUE_KIND(delete_characters) == TINYPY_VALUE_UNICODE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "deletions are implemented differently for unicode", out_error);
+            return NULL;
+        }
+        if (__tinypy_string_character_buffer(vm, delete_characters, &deleted, &deleted_size, out_error) == 0) {
             return NULL;
         }
         for (input_index = 0U; input_index < deleted_size; ++input_index) {
@@ -2550,7 +2582,17 @@ static tinypy_value_t *__tinypy_string_translate_method(tinypy_value_t *function
         uint8_t character = source[input_index];
         if ((deleted_flags[character >> 3U] & (uint8_t)(1U << (character & 7U))) == 0U) {
             output_size += 1U;
+            if (translation != NULL && translation[character] != character) {
+                changed = TINYPY_TRUE;
+            }
         }
+        else {
+            changed = TINYPY_TRUE;
+        }
+    }
+    if (changed == 0 && text->type == &vm->types[TINYPY_VALUE_STRING]) {
+        TINYPY_INCREF(text);
+        return text;
     }
     if (output_size == 0U) {
         tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, NULL, 0U);
@@ -2584,6 +2626,16 @@ static tinypy_value_t *__tinypy_unicode_translate_method(tinypy_value_t *functio
     }
     text = TINYPY_TUPLE_GET(args, 0U);
     table = TINYPY_TUPLE_GET(args, 1U);
+    if (TINYPY_TEXT_BYTE_SIZE(text) != 0U && TINYPY_VALUE_KIND(table) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special(table, "__getitem__", 11U) == 0 && (table->type->mapping_slots == NULL || table->type->mapping_slots->get_item == NULL) && (table->type->sequence_slots == NULL || table->type->sequence_slots->get_item == NULL)) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(table),
+            TINYPY_MESSAGE_PART_LITERAL("' object has no attribute '__getitem__'"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
     while (offset < TINYPY_TEXT_BYTE_SIZE(text)) {
@@ -2633,7 +2685,7 @@ static tinypy_value_t *__tinypy_unicode_translate_method(tinypy_value_t *functio
             if (mapped < 0 || mapped > INT64_C(0x10ffff)) {
                 TINYPY_DECREF(replacement);
                 __tinypy_string_builder_discard(&builder);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "character mapping must be in range(0x110000)", out_error);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "character mapping must be in range(0x%lx)", out_error);
                 return NULL;
             }
             __tinypy_string_builder_code_point(&builder, (uint32_t)mapped);

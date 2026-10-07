@@ -1,9 +1,9 @@
 # Runtime review closure — 2026-10-07
 
-The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 285
+The subsequent [deep conformance audit](../conformance/DEEP_AUDIT.md) adds 372
 portable regressions and a repeatable four-profile matrix. Its final corpus
-has 955 selected cases; finite runtime matrices cover 214,701 outcomes, and
-compiler comparison covers 16,788 outputs across the profiles. The future
+has 1,042 selected cases; finite runtime matrices cover 224,675 outcomes, and
+compiler comparison covers 16,884 outputs across the profiles. The future
 variant and acceptance plan is in [TEST_PLAN.md](../conformance/TEST_PLAN.md).
 The explicit CPython pending-C-exception boundary is recorded in the audit.
 The original

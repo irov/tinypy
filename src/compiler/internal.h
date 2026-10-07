@@ -68,6 +68,8 @@ typedef struct tinypy_compile_ctx_t {
     tinypy_bool_t source_encoding_declared;
     tinypy_bool_t source_default_latin1;
     tinypy_bool_t source_is_latin1;
+    tinypy_bool_t source_diagnostic_latin1;
+    tinypy_bool_t source_diagnostic_utf8;
     tinypy_bool_t failed;
     tinypy_error_t **out_error;
 } tinypy_compile_ctx_t;
@@ -82,6 +84,7 @@ void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind
 void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, int32_t column_offset);
 void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number, tinypy_bool_t include_location);
 void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, tinypy_bool_t include_location);
+void tinypy_internal_compiler_decode_error(tinypy_compile_ctx_t *ctx, tinypy_value_t *exception, int32_t line_number, tinypy_bool_t literal);
 tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number);
 tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx, const char *text, int32_t line_number, int32_t column_offset);

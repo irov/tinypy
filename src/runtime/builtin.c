@@ -294,7 +294,7 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__len__() should return an int", out_error);
             return NULL;
         }
-        if (tinypy_internal_number_as_i64(result, &length, out_error) == 0) {
+        if (tinypy_internal_number_as_ssize(result, &length, out_error) == 0) {
             TINYPY_DECREF(result);
             return NULL;
         }
@@ -372,7 +372,7 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
             return NULL;
         }
         int64_t length;
-        if (tinypy_internal_number_as_i64(result, &length, out_error) == 0) {
+        if (tinypy_internal_number_as_ssize(result, &length, out_error) == 0) {
             TINYPY_DECREF(result);
             return NULL;
         }
@@ -1082,6 +1082,81 @@ static tinypy_value_t *__tinypy_builtin_range(tinypy_value_t *function, tinypy_v
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_builtin_sorted_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t **out_source, tinypy_error_t **out_error) {
+    static const char *const names[4] = {"iterable", "cmp", "key", "reverse"};
+    static const size_t name_sizes[4] = {8U, 3U, 3U, 7U};
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    size_t positional_count = TINYPY_TUPLE_SIZE(args);
+    size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
+    size_t matched_keywords = 0U;
+
+    if (__tinypy_builtin_argument_count(function, args, 0U, 4U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (keyword_count > 4U - positional_count) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sorted expected at most four arguments", out_error);
+        return TINYPY_FALSE;
+    }
+    for (size_t parameter = 0U; parameter < 4U; ++parameter) {
+        tinypy_value_t *value = parameter < positional_count ? TINYPY_TUPLE_GET(args, parameter) : NULL;
+        tinypy_value_t *keyword_value = NULL;
+
+        if (matched_keywords < keyword_count) {
+            keyword_value = tinypy_internal_constructor_keyword_optional(vm, kwargs, names[parameter], name_sizes[parameter]);
+        }
+        if (keyword_value != NULL) {
+            matched_keywords += 1U;
+            if (value != NULL) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sorted received duplicate arguments", out_error);
+                return TINYPY_FALSE;
+            }
+            value = keyword_value;
+        }
+        if (parameter == 0U) {
+            if (value == NULL) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sorted requires an iterable argument", out_error);
+                return TINYPY_FALSE;
+            }
+            *out_source = value;
+        }
+        if (parameter == 3U && value != NULL) {
+            int64_t reverse;
+
+            if (tinypy_internal_integer_as_ssize(value, &reverse, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+            if (reverse < INT32_MIN || reverse > INT32_MAX) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "sort reverse does not fit in a C int", out_error);
+                return TINYPY_FALSE;
+            }
+        }
+    }
+    if (matched_keywords != keyword_count) {
+        for (size_t index = 0U; index <= TINYPY_DICT_OBJECT(kwargs)->mask; ++index) {
+            tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(kwargs)->table[index];
+            tinypy_bool_t known = TINYPY_FALSE;
+
+            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
+                continue;
+            }
+            tinypy_value_type_e kind = TINYPY_VALUE_KIND(entry->key);
+            if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
+                for (size_t parameter = 0U; parameter < 4U; ++parameter) {
+                    if (TINYPY_TEXT_BYTE_SIZE(entry->key) == name_sizes[parameter] && memcmp(TINYPY_TEXT_BYTES(entry->key), names[parameter], name_sizes[parameter]) == 0) {
+                        known = TINYPY_TRUE;
+                        break;
+                    }
+                }
+            }
+            if (known == 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sorted received an unexpected keyword", out_error);
+                return TINYPY_FALSE;
+            }
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_sorted(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_error_t *iteration_error = NULL;
@@ -1089,19 +1164,19 @@ static tinypy_value_t *__tinypy_builtin_sorted(tinypy_value_t *function, tinypy_
     tinypy_value_t *sort_args;
     tinypy_value_t *sort_result;
     size_t argument_count;
+    tinypy_value_t *source;
 
     (void)user_data;
-    if (__tinypy_builtin_argument_count(function, args, 1U, 4U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
+    if (__tinypy_builtin_sorted_arguments(function, args, kwargs, &source, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *iterator = tinypy_iter(item_2, out_error);
+    tinypy_value_t *iterator = tinypy_iter(source, out_error);
     if (iterator == NULL) {
         return NULL;
     }
     tinypy_value_t *list = tinypy_list_from_items(vm, NULL, 0U);
     int64_t hint;
-    if (tinypy_internal_length_hint(item_2, INT64_C(8), &hint, out_error) == 0) {
+    if (tinypy_internal_length_hint(source, INT64_C(8), &hint, out_error) == 0) {
         TINYPY_DECREF(list);
         TINYPY_DECREF(iterator);
         return NULL;
@@ -1148,7 +1223,7 @@ static tinypy_value_t *__tinypy_builtin_sorted(tinypy_value_t *function, tinypy_
         TINYPY_DECREF(list);
         return NULL;
     }
-    argument_count = TINYPY_TUPLE_SIZE(args) - 1U;
+    argument_count = TINYPY_TUPLE_SIZE(args) != 0U ? TINYPY_TUPLE_SIZE(args) - 1U : 0U;
     tinypy_value_t *const *items = argument_count != 0U ? &tinypy_internal_tuple_items(args)[1] : NULL;
     sort_args = tinypy_tuple_from_items(vm, items, argument_count);
     sort_result = tinypy_call(sort_method, sort_args, kwargs, out_error);

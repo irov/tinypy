@@ -447,51 +447,17 @@ void tinypy_internal_bytearray_swap_contents(tinypy_value_t *left, tinypy_value_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_bytearray_constructor_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t **out_source, tinypy_value_t **out_encoding, tinypy_value_t **out_errors, tinypy_error_t **out_error) {
     static const char *const names[3] = {"source", "encoding", "errors"};
-    static const size_t sizes[3] = {6U, 8U, 6U};
-    tinypy_value_t **outputs[3] = {out_source, out_encoding, out_errors};
-    size_t count = TINYPY_TUPLE_SIZE(args);
+    tinypy_value_t *values[3];
 
-    if (count > 3U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bytearray constructor received too many arguments", out_error);
+    if (tinypy_internal_constructor_optional_arguments(vm, "bytearray", 9U, args, kwargs, names, 3U, UINT32_C(6), values, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    for (size_t index = 0U; index < 3U; ++index) {
-        *outputs[index] = index < count ? TINYPY_TUPLE_GET(args, index) : NULL;
-    }
-    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
-        size_t recognized = 0U;
-
-        for (size_t index = 0U; index < 3U; ++index) {
-            tinypy_value_t *key = tinypy_string_from_bytes(vm, names[index], sizes[index]);
-            tinypy_value_t *keyword = tinypy_dict_get_optional(kwargs, key);
-
-            TINYPY_DECREF(key);
-            if (keyword == NULL) {
-                continue;
-            }
-            recognized += 1U;
-            if (*outputs[index] != NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bytearray constructor received multiple values for an argument", out_error);
-                return TINYPY_FALSE;
-            }
-            *outputs[index] = keyword;
-        }
-        if (recognized != TINYPY_DICT_SIZE(kwargs)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bytearray constructor received an invalid keyword argument", out_error);
-            return TINYPY_FALSE;
-        }
-    }
+    *out_source = values[0];
+    *out_encoding = values[1];
+    *out_errors = values[2];
     if (*out_source == NULL && (*out_encoding != NULL || *out_errors != NULL)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "encoding or errors without sequence argument", out_error);
         return TINYPY_FALSE;
-    }
-    for (size_t index = 1U; index < 3U; ++index) {
-        tinypy_value_t *value = *outputs[index];
-
-        if (value != NULL && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_UNICODE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bytearray encoding and errors must be strings", out_error);
-            return TINYPY_FALSE;
-        }
     }
     return TINYPY_TRUE;
 }

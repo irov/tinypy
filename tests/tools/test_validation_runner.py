@@ -102,6 +102,11 @@ class RuntimeAcceptance(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'inventory changed'):
             self.check()
 
+    def test_empty_product_or_invalid_cardinality_cannot_pass(self):
+        for count in [0, -1, True, 2.0]:
+            with self.subTest(count=count), self.assertRaisesRegex(RuntimeError, 'positive integer'):
+                RUNNER.check_runtime(b'', b'', self.stats, count)
+
 
 class CompilerCorpusAcceptance(unittest.TestCase):
     def test_generated_sources_are_reproducible_and_inventory_is_fixed(self):
@@ -242,6 +247,39 @@ class CoverageInventoryAcceptance(unittest.TestCase):
         self.inventory['domains'][0]['tests'] = ['tests/upstream/local/test_example.py']
         with self.assertRaisesRegex(RuntimeError, 'runtime matrices missing from coverage'):
             self.check()
+
+    def test_zero_negative_or_noninteger_declared_cardinality_fails(self):
+        for count in [0, -1, True, 1.0]:
+            with patch.object(RUNNER, 'RUNTIME_MATRICES', [('example_matrix.py', count)]):
+                with self.subTest(count=count), self.assertRaisesRegex(RuntimeError, 'positive integer'):
+                    self.check()
+
+
+class SourceFingerprintAcceptance(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / 'CMakeLists.txt').write_text('project(example)\n')
+        (self.root / 'SPEC.md').write_text('Supported contract\n')
+        source = self.root / 'src'
+        source.mkdir()
+        (source / 'example.c').write_text('int example;\n')
+        patcher = patch.object(RUNNER, 'ROOT', self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_contract_content_is_part_of_accepted_inputs(self):
+        original = RUNNER.source_fingerprint()
+        (self.root / 'SPEC.md').write_text('Changed supported contract\n')
+        self.assertNotEqual(original, RUNNER.source_fingerprint())
+
+    def test_source_identity_is_hashed_but_audit_reports_are_independent(self):
+        original = RUNNER.source_fingerprint()
+        (self.root / 'audit.md').write_text('Validation results\n')
+        self.assertEqual(original, RUNNER.source_fingerprint())
+        (self.root / 'src/example.c').rename(self.root / 'src/renamed.c')
+        self.assertNotEqual(original, RUNNER.source_fingerprint())
 
 
 class NativeAcceptance(unittest.TestCase):
