@@ -15,6 +15,8 @@ tinypy_value_t *tinypy_frame_globals(const tinypy_value_t *frame);
 tinypy_value_t *tinypy_frame_locals(const tinypy_value_t *frame);
 int32_t tinypy_frame_last_instruction(const tinypy_value_t *frame);
 int32_t tinypy_frame_line_number(const tinypy_value_t *frame);
+/* Counts the value stack slots in use, including the one each method call in
+ * progress keeps below its callable. */
 size_t tinypy_frame_stack_depth(const tinypy_value_t *frame);
 tinypy_value_t *tinypy_vm_current_frame(const tinypy_vm_t *vm);
 

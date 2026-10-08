@@ -1,6 +1,7 @@
 #include "tinypy/code.h"
 #include "tinypy/compiler.h"
 
+#include "bytecode_verify.h"
 #include "internal.h"
 
 #include <limits.h>
@@ -109,6 +110,39 @@ static size_t __tinypy_internal_code_caches_size(size_t slot_count) {
     return size;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Verified bytecode with method calls is evaluated from a copy marking them. */
+static tinypy_bool_t __tinypy_internal_code_find_method_calls(tinypy_code_object_t *code, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(&code->base);
+    const uint8_t *bytecode = TINYPY_STRING_OBJECT(code->bytecode)->bytes;
+    size_t bytecode_size = TINYPY_SIZED_SIZE(code->bytecode);
+    size_t load_limit = bytecode_size / 3U;
+    size_t pending_capacity = (size_t)code->stack_size < load_limit ? (size_t)code->stack_size : load_limit;
+    size_t scratch_size = pending_capacity * sizeof(tinypy_bytecode_method_load_t) + (bytecode_size + 7U) / 8U;
+    uint8_t *scratch = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
+
+    if (scratch == NULL) {
+        return TINYPY_FALSE;
+    }
+    uint8_t *method_bytecode = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, bytecode_size, out_error);
+    if (method_bytecode == NULL) {
+        tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
+        return TINYPY_FALSE;
+    }
+    tinypy_bytecode_method_load_t *pending = (tinypy_bytecode_method_load_t *)scratch;
+    uint8_t *targets = scratch + pending_capacity * sizeof(tinypy_bytecode_method_load_t);
+    size_t slots = tinypy_bytecode_find_method_calls(bytecode, bytecode_size, method_bytecode, targets, pending, pending_capacity);
+
+    tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
+    if (slots == 0U) {
+        tinypy_internal_vm_deallocate(vm, method_bytecode, bytecode_size);
+        return TINYPY_TRUE;
+    }
+    code->method_bytecode = method_bytecode;
+    code->method_bytecode_size = bytecode_size;
+    code->method_call_slots = slots;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* The caches share one zeroed allocation. */
 tinypy_bool_t tinypy_internal_code_allocate_caches(tinypy_code_object_t *code, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&code->base);
@@ -128,7 +162,8 @@ tinypy_bool_t tinypy_internal_code_allocate_caches(tinypy_code_object_t *code, t
     code->global_cache = (tinypy_global_cache_entry_t *)caches;
     code->attribute_cache = (tinypy_attribute_lookup_cache_entry_t *)(code->global_cache + slot_count);
     code->attribute_store_cache = (tinypy_attribute_store_cache_entry_t *)(code->attribute_cache + slot_count * TINYPY_ATTRIBUTE_LOOKUP_CACHE_WAYS);
-    return TINYPY_TRUE;
+    tinypy_bool_t found = __tinypy_internal_code_find_method_calls(code, out_error);
+    return found;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_code_destroy(tinypy_value_t *value) {
@@ -147,6 +182,10 @@ void tinypy_internal_code_destroy(tinypy_value_t *value) {
         code->global_cache = NULL;
         code->attribute_cache = NULL;
         code->attribute_store_cache = NULL;
+    }
+    if (code->method_bytecode != NULL) {
+        tinypy_internal_vm_deallocate(vm, code->method_bytecode, code->method_bytecode_size);
+        code->method_bytecode = NULL;
     }
 }
 //////////////////////////////////////////////////////////////////////////

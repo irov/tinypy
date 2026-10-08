@@ -8,6 +8,21 @@ def compare_until_recursion_limit(left, right):
     return compare_until_recursion_limit(left, right)
 
 
+def call_again_until_recursion_limit(target):
+    return target.again()
+
+
+class AgainUntilRecursionLimit(object):
+    def again(self):
+        return call_again_until_recursion_limit(self)
+
+
+def record_nested(recorder, depth):
+    if depth == 0:
+        return recorder.record(depth)
+    return recorder.record(record_nested(recorder, depth - 1), recorder.record(depth))
+
+
 class EvaluationSemantics(unittest.TestCase):
     def test_call_evaluates_receiver_before_arguments(self):
         events = []
@@ -636,3 +651,173 @@ class EvaluationSemantics(unittest.TestCase):
         self.assertEqual(make(Detail, 6), ('Other', (), [('seen', (6,))]))
         del Failure.__new__
         self.assertEqual(make(Detail, 7), ('Detail', (7,), []))
+
+    def test_builtin_calls_keep_arguments_through_every_path(self):
+        def error(callable, *args, **kwargs):
+            try:
+                callable(*args, **kwargs)
+            except Exception as caught:
+                return (type(caught).__name__, str(caught))
+            return None
+        values = [3, 1]
+        append = values.append
+        append(4)
+        list.append(values, 5)
+        apply(values.append, (6,))
+        values.append(*(7,))
+        self.assertEqual(values, [3, 1, 4, 5, 6, 7])
+        self.assertEqual(error(values.append), ('TypeError', 'append() takes exactly one argument (0 given)'))
+        self.assertEqual(error(values.append, 1, 2), ('TypeError', 'append() takes exactly one argument (2 given)'))
+        self.assertEqual(error(values.append, item=1), ('TypeError', 'append() takes no keyword arguments'))
+        self.assertEqual(error(list.append), ('TypeError', "descriptor 'append' of 'list' object needs an argument"))
+        self.assertEqual(error(list.append, (), 1), ('TypeError', "descriptor 'append' requires a 'list' object but received a 'tuple'"))
+        self.assertEqual(error(values.pop, 1, 2), ('TypeError', 'pop() takes at most 1 argument (2 given)'))
+        self.assertEqual(error(len), ('TypeError', 'len() takes exactly one argument (0 given)'))
+        self.assertEqual(error(len, [], x=1), ('TypeError', 'len() takes no keyword arguments'))
+        self.assertEqual(error(getattr, 1), ('TypeError', 'getattr expected at least 2 arguments, got 1'))
+        self.assertEqual(error({}.get), ('TypeError', 'get expected at least 1 arguments, got 0'))
+        self.assertEqual(error('abc'.find), ('TypeError', 'find/rfind/index/rindex() takes at least 1 argument (0 given)'))
+        self.assertEqual(error(u'abc'.find), ('TypeError', 'find() takes at least 1 argument (0 given)'))
+        self.assertEqual(error(set().union, x=1), ('TypeError', 'union() takes no keyword arguments'))
+        self.assertEqual(error({}.update, 1, 2), ('TypeError', 'update expected at most 1 arguments, got 2'))
+        self.assertEqual(error(max), ('TypeError', 'max expected 1 arguments, got 0'))
+        self.assertEqual(error(min, [1], other=1), ('TypeError', 'min() got an unexpected keyword argument'))
+        self.assertEqual(error(min, []), ('ValueError', 'min() arg is an empty sequence'))
+        self.assertEqual(error(sorted, [], [], [], [], []), ('TypeError', 'sorted() takes at most 4 arguments (5 given)'))
+        self.assertEqual(error(values.sort, reversed=True), ('TypeError', "'reversed' is an invalid keyword argument for this function"))
+        self.assertEqual((min(3, 1, 2), max(3, 1, 2), min([3, 1, 2]), max('bca'), min(3, 1, key=lambda x: -x)), (1, 3, 1, 'c', 3))
+        self.assertEqual(max((x for x in [2, 5, 1]), key=lambda x: x % 5), 2)
+        self.assertEqual((sorted([3, 1, 2], reverse=True), sorted([3, 1, 2], None, lambda x: -x)), ([3, 2, 1], [3, 2, 1]))
+        self.assertEqual(('{0}-{1}-{x}'.format(1, 2, x=3), u'{}{}'.format('a', 'b'), 'abc'.encode(encoding='ascii')), ('1-2-3', u'ab', 'abc'))
+        data = {'a': 1}
+        data.update({'b': 2}, c=3)
+        dict.update(data, d=4)
+        self.assertEqual((sorted(data.items()), data.get('z', 0), data.setdefault('e'), data.pop('a')), ([('a', 1), ('b', 2), ('c', 3), ('d', 4)], 0, None, 1))
+        self.assertEqual((set([1]).union([2], (3,)), frozenset([1, 2]).intersection([2], [2, 3]), set([1, 2, 3]).difference([1], [2])), (set([1, 2, 3]), frozenset([2]), set([3])))
+        self.assertEqual(('a,b'.split(','), ' x '.strip(), 'abcabc'.rfind('b', 0, 4), 'abc'.startswith(('x', 'a')), str.upper('a')), (['a', 'b'], 'x', 1, True, 'A'))
+        self.assertEqual((range(3), range(1, 3), range(10 ** 20, 10 ** 20 + 2), abs(-2), chr(65), ord('A'), sum([1, 2], 3)), ([0, 1, 2], [1, 2], [10 ** 20, 10 ** 20 + 1], 2, 'A', 65, 6))
+
+    def test_builtin_methods_compare_by_function_and_receiver(self):
+        values = []
+        self.assertTrue(values.append == values.append)
+        self.assertFalse(values.append == values.pop)
+        self.assertFalse(values.append == [].append)
+        receiver = (1, 2)
+        self.assertEqual(hash(receiver.count), hash(receiver.count))
+        self.assertFalse(receiver.count == receiver.index)
+        self.assertFalse(len == abs)
+        self.assertTrue(list.append == list.append)
+        self.assertFalse(list.append == list.pop)
+        self.assertEqual(repr(list.append), "<method 'append' of 'list' objects>")
+        self.assertTrue(repr(values.append).startswith('<built-in method append of list object at '))
+        self.assertEqual(repr(len), '<built-in function len>')
+
+    def test_method_call_follows_instance_and_class_changes(self):
+        class Base(object):
+            def greet(self, suffix=''):
+                return 'base' + suffix
+        class Child(Base):
+            pass
+        def call(target):
+            return target.greet('!')
+        item = Child()
+        self.assertEqual([call(item) for index in range(3)], ['base!'] * 3)
+        item.greet = lambda suffix: 'instance' + suffix
+        self.assertEqual(call(item), 'instance!')
+        del item.greet
+        self.assertEqual(call(item), 'base!')
+        Child.greet = lambda self, suffix: 'child' + suffix
+        self.assertEqual(call(item), 'child!')
+        del Child.greet
+        Base.greet = staticmethod(lambda suffix: 'static' + suffix)
+        self.assertEqual(call(item), 'static!')
+        Base.greet = classmethod(lambda cls, suffix: cls.__name__ + suffix)
+        self.assertEqual(call(item), 'Child!')
+        Base.greet = property(lambda self: lambda suffix: 'property' + suffix)
+        self.assertEqual(call(item), 'property!')
+        del Base.greet
+        self.assertRaises(AttributeError, call, item)
+        class Other(object):
+            def greet(self, suffix):
+                return 'other' + suffix
+        item.__class__ = Other
+        self.assertEqual(call(item), 'other!')
+        Other.__getattribute__ = lambda self, name: lambda suffix: 'hook' + suffix
+        self.assertEqual(call(item), 'hook!')
+        del Other.__getattribute__
+        Other.__getattr__ = lambda self, name: lambda suffix: 'fallback' + suffix
+        del Other.greet
+        self.assertEqual(call(item), 'fallback!')
+        class Classic:
+            def greet(self, suffix):
+                return 'classic' + suffix
+        class Holder(object):
+            greet = staticmethod(lambda suffix: 'holder' + suffix)
+        module = type(unittest)('methods')
+        module.greet = lambda suffix: 'module' + suffix
+        self.assertEqual([call(Classic()), call(module), call(Holder)], ['classic!', 'module!', 'holder!'])
+
+    def test_method_call_keeps_bound_method_semantics(self):
+        class Counter(object):
+            def __init__(self):
+                self.values = []
+            def add(self, value, scale=1):
+                self.values.append(value * scale)
+                return self
+        counter = Counter()
+        method = counter.add
+        self.assertFalse(method is counter.add)
+        self.assertTrue(method == counter.add)
+        counter.add(1).add(2, scale=3).add(value=4).add(*(5,)).add(**{'value': 6})
+        self.assertEqual(counter.values, [1, 6, 4, 5, 6])
+        self.assertRaises(TypeError, counter.add)
+        try:
+            counter.add(1, 2, 3)
+        except TypeError as error:
+            self.assertEqual(str(error), 'add() takes at most 3 arguments (4 given)')
+        class Values(list):
+            pass
+        values = Values()
+        values.append(1)
+        values.extend([2])
+        self.assertEqual(values, [1, 2])
+        class Borrowed(object):
+            push = list.append
+        try:
+            Borrowed().push(1)
+        except TypeError as error:
+            self.assertEqual(str(error), "descriptor 'append' for 'list' objects doesn't apply to 'Borrowed' object")
+        try:
+            [].append(item=1)
+        except TypeError as error:
+            self.assertEqual(str(error), 'append() takes no keyword arguments')
+        self.assertEqual([3, 1, 2].sort(key=lambda value: -value), None)
+        self.assertEqual('{0}{x}'.format(1, x=2), '12')
+        self.assertEqual({}.get(1, 2), 2)
+
+    def test_method_call_operands_survive_suspension_and_errors(self):
+        log = []
+        class Recorder(object):
+            def record(self, *values):
+                log.append(values)
+                return len(values)
+        recorder = Recorder()
+        def generator():
+            total = recorder.record((yield 'first'), recorder.record((yield 'second')), [].pop())
+            yield total
+        running = generator()
+        self.assertEqual(next(running), 'first')
+        self.assertEqual(running.send(1), 'second')
+        self.assertRaises(IndexError, running.send, 2)
+        self.assertEqual(log, [(2,)])
+        def failing():
+            return recorder.record(1, missing_name)
+        self.assertRaises(NameError, failing)
+        suspended = generator()
+        next(suspended)
+        del suspended
+        self.assertEqual(record_nested(recorder, 3), 2)
+        try:
+            call_again_until_recursion_limit(AgainUntilRecursionLimit())
+        except RuntimeError as error:
+            self.assertEqual(str(error), 'maximum recursion depth exceeded')

@@ -2089,6 +2089,105 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify(const uint8_t *bytecode, 
     return TINYPY_BYTECODE_VERIFY_OK;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Instructions that leave the straight-line run or change the block stack. */
+static tinypy_bool_t __tinypy_verify_ends_run(uint8_t opcode) {
+    if ((tinypy_opcode_categories(opcode) & (TINYPY_OPCODE_CATEGORY_JREL | TINYPY_OPCODE_CATEGORY_JABS)) != 0U) {
+        return TINYPY_TRUE;
+    }
+    switch (opcode) {
+    case TINYPY_OP_RETURN_VALUE:
+    case TINYPY_OP_RAISE_VARARGS:
+    case TINYPY_OP_BREAK_LOOP:
+    case TINYPY_OP_POP_BLOCK:
+    case TINYPY_OP_END_FINALLY:
+    case TINYPY_OP_WITH_CLEANUP:
+        return TINYPY_TRUE;
+    default:
+        return TINYPY_FALSE;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_bytecode_find_method_calls(const uint8_t *bytecode, size_t bytecode_size, uint8_t *out_bytecode, uint8_t *targets, tinypy_bytecode_method_load_t *pending, size_t pending_capacity) {
+    size_t offset = 0U;
+
+    (void)memcpy(out_bytecode, bytecode, bytecode_size);
+    (void)memset(targets, 0, (bytecode_size + 7U) / 8U);
+    while (offset < bytecode_size) {
+        tinypy_decoded_instruction_t instruction;
+        size_t target;
+
+        (void)tinypy_opcode_decode(bytecode, bytecode_size, offset, &instruction);
+        if ((tinypy_opcode_categories(instruction.opcode) & (TINYPY_OPCODE_CATEGORY_JREL | TINYPY_OPCODE_CATEGORY_JABS)) != 0U && __tinypy_verify_jump_target(&instruction, &target) != 0 && target < bytecode_size) {
+            targets[target >> 3U] |= (uint8_t)(1U << (target & 7U));
+        }
+        offset = instruction.next_offset;
+    }
+    ptrdiff_t depth = 0;
+    size_t pending_count = 0U;
+    uint8_t previous_opcode = (uint8_t)TINYPY_OP_NOP;
+    size_t active = 0U;
+    size_t deepest = 0U;
+
+    offset = 0U;
+    while (offset < bytecode_size) {
+        tinypy_decoded_instruction_t instruction;
+        tinypy_verify_effect_t effect;
+        uint8_t receiver_opcode = previous_opcode;
+
+        (void)tinypy_opcode_decode(bytecode, bytecode_size, offset, &instruction);
+        offset = instruction.next_offset;
+        previous_opcode = instruction.opcode;
+        if ((targets[instruction.offset >> 3U] & (uint8_t)(1U << (instruction.offset & 7U))) != 0U) {
+            pending_count = 0U;
+        }
+        if (__tinypy_verify_get_effect(instruction.opcode, instruction.argument, &effect) == 0) {
+            pending_count = 0U;
+            continue;
+        }
+        if (__tinypy_verify_ends_run(instruction.opcode) != 0) {
+            pending_count = 0U;
+        }
+        ptrdiff_t lowest = depth - (ptrdiff_t)effect.required;
+        if (instruction.opcode == TINYPY_OP_CALL_FUNCTION) {
+            while (pending_count != 0U && pending[pending_count - 1U].position > lowest) {
+                pending_count -= 1U;
+            }
+            if (pending_count != 0U && pending[pending_count - 1U].position == lowest) {
+                pending_count -= 1U;
+                out_bytecode[pending[pending_count].offset] = (uint8_t)TINYPY_OPCODE_LOAD_METHOD;
+                out_bytecode[instruction.next_offset - 3U] = (uint8_t)TINYPY_OPCODE_CALL_METHOD;
+            }
+        }
+        while (pending_count != 0U && pending[pending_count - 1U].position >= lowest) {
+            pending_count -= 1U;
+        }
+        depth = depth - (ptrdiff_t)effect.pop_count + (ptrdiff_t)effect.push_count;
+        /* An attribute of a global is usually one of a module or a class,
+           which binds no receiver, so its call stays plain. */
+        if (instruction.opcode == TINYPY_OP_LOAD_ATTR && receiver_opcode != TINYPY_OP_LOAD_GLOBAL && receiver_opcode != TINYPY_OP_LOAD_NAME && pending_count < pending_capacity) {
+            pending[pending_count].offset = instruction.next_offset - 3U;
+            pending[pending_count].position = depth - 1;
+            pending_count += 1U;
+        }
+    }
+    /* Method calls nest without crossing, as their operands do. */
+    offset = 0U;
+    while (offset < bytecode_size) {
+        tinypy_decoded_instruction_t instruction;
+
+        (void)tinypy_opcode_decode(out_bytecode, bytecode_size, offset, &instruction);
+        offset = instruction.next_offset;
+        if (instruction.opcode == TINYPY_OPCODE_LOAD_METHOD) {
+            active += 1U;
+            deepest = active > deepest ? active : deepest;
+        }
+        else if (instruction.opcode == TINYPY_OPCODE_CALL_METHOD) {
+            active -= 1U;
+        }
+    }
+    return deepest;
+}
+//////////////////////////////////////////////////////////////////////////
 const char *tinypy_bytecode_verify_status_name(tinypy_bytecode_verify_status_e status) {
     switch (status) {
     case TINYPY_BYTECODE_VERIFY_OK:

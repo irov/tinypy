@@ -1537,6 +1537,12 @@ typedef struct tinypy_code_object_t {
     tinypy_global_cache_entry_t *global_cache;
     tinypy_attribute_lookup_cache_entry_t *attribute_cache;
     tinypy_attribute_store_cache_entry_t *attribute_store_cache;
+    /* The bytecode evaluated when it has method calls, a copy with their
+       LOAD_ATTR and CALL_FUNCTION rewritten; its frames take
+       method_call_slots more stack slots. */
+    uint8_t *method_bytecode;
+    size_t method_bytecode_size;
+    size_t method_call_slots;
 } tinypy_code_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_frame_block_t {
@@ -1652,6 +1658,24 @@ typedef enum tinypy_native_descriptor_kind_e {
     TINYPY_NATIVE_DESCRIPTOR_CLASS_METHOD = 3
 } tinypy_native_descriptor_kind_e;
 //////////////////////////////////////////////////////////////////////////
+/* The three ways CPython 2.7 reports a C-level argument count mismatch:
+   PyArg_ParseTuple, PyArg_UnpackTuple and METH_O. An unchecked builtin
+   parses its arguments and keywords itself. */
+typedef enum tinypy_arity_style_e {
+    TINYPY_ARITY_STYLE_PARSED = 0,
+    TINYPY_ARITY_STYLE_UNPACK = 1,
+    TINYPY_ARITY_STYLE_SINGLE = 2,
+    TINYPY_ARITY_STYLE_WRAPPER = 3,
+    TINYPY_ARITY_STYLE_UNCHECKED = 4
+} tinypy_arity_style_e;
+//////////////////////////////////////////////////////////////////////////
+/* The internal calling convention of builtins, like METH_O and METH_VARARGS
+   without an argument tuple: self is the receiver of a method and NULL for a
+   function, and items holds the count positional arguments after it. Unless
+   the function's arity style is TINYPY_ARITY_STYLE_UNCHECKED, its caller has
+   checked count against its bounds and rejected keyword arguments. */
+typedef tinypy_value_t *(*tinypy_native_items_callback_t)(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_native_function_object_t {
     tinypy_value_t base;
     tinypy_value_t *name;
@@ -1660,6 +1684,10 @@ typedef struct tinypy_native_function_object_t {
     tinypy_value_t *self;
     tinypy_type_t *owner;
     tinypy_native_function_callback_t callback;
+    tinypy_native_items_callback_t items_callback;
+    size_t minimum;
+    size_t maximum;
+    tinypy_arity_style_e arity_style;
     void *user_data;
     tinypy_native_function_finalize_t finalize;
     tinypy_bool_t owner_retained;
@@ -2039,16 +2067,9 @@ typedef struct tinypy_message_part_t {
 #define TINYPY_MESSAGE_SIZE_BUFFER 21U
 void tinypy_internal_make_vm_error_parts(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const tinypy_message_part_t *parts, size_t part_count, tinypy_error_t **out_error);
 size_t tinypy_internal_format_size(char *buffer, size_t value);
-/* The three ways CPython 2.7 reports a C-level argument count mismatch:
-   PyArg_ParseTuple, PyArg_UnpackTuple and METH_O. */
-typedef enum tinypy_arity_style_e {
-    TINYPY_ARITY_STYLE_PARSED = 0,
-    TINYPY_ARITY_STYLE_UNPACK = 1,
-    TINYPY_ARITY_STYLE_SINGLE = 2,
-    TINYPY_ARITY_STYLE_WRAPPER = 3
-} tinypy_arity_style_e;
 void tinypy_internal_make_arity_error(tinypy_vm_t *vm, const char *name, size_t name_size, size_t count, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_native_arguments_check(tinypy_value_t *function, size_t count, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_legacy_slice_new(tinypy_value_t *args, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_iterator_length_hint_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error);
 void tinypy_internal_initialize_native_function_descriptors(tinypy_vm_t *vm);
@@ -2498,6 +2519,8 @@ void tinypy_internal_type_add_method(tinypy_type_t *type, tinypy_value_t *name, 
 void tinypy_internal_type_add_property(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t getter, void *user_data, tinypy_native_function_finalize_t finalize);
 void tinypy_internal_type_add_class_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize);
 void tinypy_internal_type_add_static_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize);
+tinypy_value_t *tinypy_internal_native_items_function_new(tinypy_value_t *name, tinypy_native_items_callback_t callback, void *user_data, size_t minimum, size_t maximum, tinypy_arity_style_e style);
+void tinypy_internal_type_add_items_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_items_callback_t callback, void *user_data, size_t minimum, size_t maximum, tinypy_arity_style_e style);
 /* Borrows an eager VM preset; index must be less than TINYPY_SPECIAL_OPERATOR_COUNT. */
 tinypy_value_t *tinypy_internal_object_special_operator_key(tinypy_vm_t *vm, size_t index);
 tinypy_value_t *tinypy_internal_type_mro_tuple(tinypy_type_t *type);
@@ -2575,6 +2598,8 @@ void tinypy_internal_native_function_destroy(tinypy_value_t *value);
 void tinypy_internal_native_function_finalize(tinypy_value_t *value);
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_native_method_calls_unbound(tinypy_value_t *descriptor, tinypy_value_t *instance);
+tinypy_value_t *tinypy_internal_native_function_call_method(tinypy_value_t *descriptor, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 void tinypy_internal_native_method_free_list_push(tinypy_vm_t *vm, tinypy_value_t *value);
 void tinypy_internal_native_method_free_list_finalize(tinypy_vm_t *vm);
 void tinypy_internal_native_argument_cache_finalize(tinypy_vm_t *vm);

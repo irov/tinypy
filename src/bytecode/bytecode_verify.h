@@ -91,4 +91,29 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify(const uint8_t *bytecode, 
 
 const char *tinypy_bytecode_verify_status_name(tinypy_bytecode_verify_status_e status);
 
+/* Opcodes of the evaluator's own copy of bytecode, which emitted bytecode
+   never contains: the LOAD_ATTR and the CALL_FUNCTION of a method call. */
+#define TINYPY_OPCODE_LOAD_METHOD 148U
+#define TINYPY_OPCODE_CALL_METHOD 149U
+
+/* A LOAD_ATTR waiting for the instruction that consumes its value. */
+typedef struct tinypy_bytecode_method_load_t {
+    size_t offset;
+    ptrdiff_t position;
+} tinypy_bytecode_method_load_t;
+
+/*
+ * Finds the method calls of verified bytecode: a LOAD_ATTR, not of a global
+ * or a name, whose value is only the callable of a later CALL_FUNCTION in the
+ * same straight-line run, which no jump enters after the LOAD_ATTR and no
+ * instruction between them reads below the callable. out_bytecode receives a
+ * copy of the bytecode with both opcodes of each method call rewritten to
+ * TINYPY_OPCODE_LOAD_METHOD and TINYPY_OPCODE_CALL_METHOD. targets is scratch
+ * of (bytecode_size + 7) / 8 bytes; pending holds the LOAD_ATTRs waiting at
+ * once, and one beyond pending_capacity is not considered. Returns the largest
+ * number of method calls whose operands are on the value stack at the same
+ * time, zero when there are none.
+ */
+size_t tinypy_bytecode_find_method_calls(const uint8_t *bytecode, size_t bytecode_size, uint8_t *out_bytecode, uint8_t *targets, tinypy_bytecode_method_load_t *pending, size_t pending_capacity);
+
 #endif

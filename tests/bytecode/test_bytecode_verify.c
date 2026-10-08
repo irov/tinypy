@@ -879,6 +879,64 @@ static int32_t __test_status_names(void) {
     return 0;
 }
 
+static size_t __test_find_method_calls(const uint8_t *code, size_t code_size, uint8_t *out_code) {
+    tinypy_bytecode_method_load_t pending[4];
+    uint8_t targets[8];
+    size_t slots = tinypy_bytecode_find_method_calls(code, code_size, out_code, targets, pending, 4U);
+
+    return slots;
+}
+
+static int32_t __test_method_calls(void) {
+    static const uint8_t simple[] = {
+        TINYPY_OP_LOAD_FAST, 0U, 0U,     /* 0 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,     /* 3 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,     /* 6 */
+        TINYPY_OP_LOAD_CONST, 0U, 0U,    /* 9 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,     /* 12 */
+        TINYPY_OP_CALL_FUNCTION, 1U, 1U, /* 15 */
+        TINYPY_OP_RETURN_VALUE           /* 18 */
+    };
+    static const uint8_t nested[] = {
+        TINYPY_OP_LOAD_FAST, 0U, 0U,     /* 0 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,     /* 3 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,     /* 6 */
+        TINYPY_OP_LOAD_ATTR, 1U, 0U,     /* 9 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,     /* 12 */
+        TINYPY_OP_LOAD_ATTR, 1U, 0U,     /* 15 */
+        TINYPY_OP_CALL_FUNCTION, 1U, 0U, /* 18 */
+        TINYPY_OP_CALL_FUNCTION, 1U, 0U, /* 21 */
+        TINYPY_OP_RETURN_VALUE           /* 24 */
+    };
+    static const uint8_t plain[] = {
+        TINYPY_OP_LOAD_GLOBAL, 0U, 0U,   /* 0 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,     /* 3 */
+        TINYPY_OP_CALL_FUNCTION, 0U, 0U, /* 6 */
+        TINYPY_OP_LOAD_FAST, 0U, 0U,     /* 9 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,     /* 12 */
+        TINYPY_OP_ROT_TWO,               /* 15 */
+        TINYPY_OP_CALL_FUNCTION, 0U, 0U, /* 16 */
+        TINYPY_OP_LOAD_FAST, 0U, 0U,     /* 19 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,     /* 22 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,     /* 25 */
+        TINYPY_OP_JUMP_FORWARD, 0U, 0U,  /* 28 -> 31 */
+        TINYPY_OP_CALL_FUNCTION, 1U, 0U, /* 31 */
+        TINYPY_OP_RETURN_VALUE           /* 34 */
+    };
+    uint8_t out_code[sizeof(plain)];
+
+    TEST_CHECK(__test_find_method_calls(simple, sizeof(simple), out_code) == 1U);
+    TEST_CHECK(out_code[3] == TINYPY_OPCODE_LOAD_METHOD && out_code[15] == TINYPY_OPCODE_CALL_METHOD);
+    TEST_CHECK(memcmp(out_code + 4, simple + 4, 11U) == 0 && memcmp(out_code + 16, simple + 16, 3U) == 0);
+    TEST_CHECK(__test_find_method_calls(nested, sizeof(nested), out_code) == 2U);
+    TEST_CHECK(out_code[3] == TINYPY_OPCODE_LOAD_METHOD && out_code[21] == TINYPY_OPCODE_CALL_METHOD);
+    TEST_CHECK(out_code[9] == TINYPY_OPCODE_LOAD_METHOD && out_code[18] == TINYPY_OPCODE_CALL_METHOD);
+    TEST_CHECK(out_code[15] == TINYPY_OP_LOAD_ATTR);
+    TEST_CHECK(__test_find_method_calls(plain, sizeof(plain), out_code) == 0U);
+    TEST_CHECK(memcmp(out_code, plain, sizeof(plain)) == 0);
+    return 0;
+}
+
 int main(void) {
     if (__test_simple_and_terminators() != 0) {
         return 1;
@@ -926,6 +984,9 @@ int main(void) {
         return 1;
     }
     if (__test_status_names() != 0) {
+        return 1;
+    }
+    if (__test_method_calls() != 0) {
         return 1;
     }
     return 0;

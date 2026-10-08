@@ -22,11 +22,28 @@ tinypy_value_t *tinypy_native_function_new_key(tinypy_value_t *name, tinypy_nati
     function->self = NULL;
     function->owner = NULL;
     function->callback = callback;
+    function->items_callback = NULL;
+    function->minimum = 0U;
+    function->maximum = SIZE_MAX;
+    function->arity_style = TINYPY_ARITY_STYLE_UNCHECKED;
     function->user_data = user_data;
     function->finalize = finalize;
     function->owner_retained = TINYPY_FALSE;
     function->descriptor_kind = TINYPY_NATIVE_DESCRIPTOR_AUTO;
     return &function->base;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A builtin of the items convention; minimum and maximum bound the positional
+   arguments after self unless the style is TINYPY_ARITY_STYLE_UNCHECKED. */
+tinypy_value_t *tinypy_internal_native_items_function_new(tinypy_value_t *name, tinypy_native_items_callback_t callback, void *user_data, size_t minimum, size_t maximum, tinypy_arity_style_e style) {
+    tinypy_value_t *function = tinypy_native_function_new_key(name, NULL, user_data, NULL);
+    tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(function);
+
+    native->items_callback = callback;
+    native->minimum = minimum;
+    native->maximum = maximum;
+    native->arity_style = style;
+    return function;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_native_function_set_descriptor_kind(tinypy_value_t *function, tinypy_native_descriptor_kind_e descriptor_kind) {
@@ -42,6 +59,12 @@ void tinypy_internal_module_add_function(tinypy_value_t *module, tinypy_value_t 
 void tinypy_internal_type_add_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize, tinypy_native_descriptor_kind_e descriptor_kind) {
     tinypy_value_t *function = tinypy_native_function_new_key(name, callback, user_data, finalize);
     tinypy_internal_native_function_set_descriptor_kind(function, descriptor_kind);
+    tinypy_type_set_attr_key(type, name, function);
+    TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_type_add_items_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_items_callback_t callback, void *user_data, size_t minimum, size_t maximum, tinypy_arity_style_e style) {
+    tinypy_value_t *function = tinypy_internal_native_items_function_new(name, callback, user_data, minimum, maximum, style);
     tinypy_type_set_attr_key(type, name, function);
     TINYPY_DECREF(function);
 }
@@ -150,10 +173,7 @@ static tinypy_bool_t __tinypy_native_function_check_receiver(tinypy_value_t *cal
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_native_function_invoke(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
-    tinypy_value_t *result = function->callback(callable, args, kwargs, function->user_data, out_error);
-
+static void __tinypy_native_function_result_error(tinypy_value_t *callable, tinypy_value_t *result, tinypy_error_t **out_error) {
     if (result == NULL && (out_error == NULL || *out_error == NULL)) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
         if (tinypy_vm_has_error(vm) != 0) {
@@ -163,16 +183,30 @@ static tinypy_value_t *__tinypy_native_function_invoke(tinypy_value_t *callable,
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "native function failed without an error", out_error);
         }
     }
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_native_function_invoke(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
+    tinypy_value_t *result = function->callback(callable, args, kwargs, function->user_data, out_error);
+
+    __tinypy_native_function_result_error(callable, result, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
-    size_t count = TINYPY_TUPLE_SIZE(args);
-    size_t supplied = count != 0U ? count - 1U : 0U;
+/* Runs an items callback after the argument check its function declares. */
+static tinypy_value_t *__tinypy_native_function_invoke_items(tinypy_value_t *callable, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
 
-    if ((kwargs == NULL || TINYPY_DICT_SIZE(kwargs) == 0U) && count != 0U && supplied >= minimum && supplied <= maximum) {
-        return TINYPY_TRUE;
+    if (function->arity_style != TINYPY_ARITY_STYLE_UNCHECKED && tinypy_internal_native_arguments_check(callable, count, kwargs, function->minimum, function->maximum, function->arity_style, out_error) == TINYPY_FALSE) {
+        return NULL;
     }
+    tinypy_value_t *result = function->items_callback(callable, self, items, count, kwargs, out_error);
+
+    __tinypy_native_function_result_error(callable, result, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_native_arguments_error(tinypy_value_t *function, size_t supplied, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *name = TINYPY_NATIVE_FUNCTION_OBJECT(function)->name;
     tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(function);
@@ -187,7 +221,7 @@ tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, 
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        return TINYPY_FALSE;
+        return;
     }
     const char *name_bytes = (const char *)TINYPY_TEXT_BYTES(name);
     size_t name_size = TINYPY_TEXT_BYTE_SIZE(name);
@@ -206,7 +240,26 @@ tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, 
         }
     }
     tinypy_internal_make_arity_error(vm, name_bytes, name_size, supplied, minimum, maximum, style, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The PyArg_ParseTuple-style check of the positional arguments after self. */
+tinypy_bool_t tinypy_internal_native_arguments_check(tinypy_value_t *function, size_t count, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
+    if ((kwargs == NULL || TINYPY_DICT_SIZE(kwargs) == 0U) && count >= minimum && count <= maximum) {
+        return TINYPY_TRUE;
+    }
+    __tinypy_native_arguments_error(function, count, kwargs, minimum, maximum, style, out_error);
     return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
+    size_t count = TINYPY_TUPLE_SIZE(args);
+
+    if (count == 0U) {
+        __tinypy_native_arguments_error(function, 0U, kwargs, minimum, maximum, style, out_error);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t result = tinypy_internal_native_arguments_check(function, count - 1U, kwargs, minimum, maximum, style, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -221,6 +274,19 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
         }
     }
 
+    if (function->items_callback != NULL) {
+        tinypy_value_t *const *items = tinypy_internal_tuple_items(args);
+        size_t count = TINYPY_TUPLE_SIZE(args);
+        tinypy_value_t *self = function->self;
+
+        if (self == NULL && function->owner != NULL) {
+            self = items[0];
+            items += 1;
+            count -= 1U;
+        }
+        tinypy_value_t *result = __tinypy_native_function_invoke_items(callable, self, items, count, kwargs, out_error);
+        return result;
+    }
     if (function->self != NULL) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
 
@@ -311,19 +377,19 @@ void tinypy_internal_native_argument_cache_finalize(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-/* Native calls pass one owned argument tuple, including self. The callback
-   may retain it; its public ABI and recursion guard stay unchanged. */
-tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+/* An items callback takes self and the items as they are; a tuple callback
+   takes one owned argument tuple of both, which it may retain. Its public ABI
+   and recursion guard stay unchanged. */
+static tinypy_value_t *__tinypy_native_function_call_self(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
-    TINYPY_CLEAR_ERROR(out_error);
-    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded while calling a Python object", out_error) == 0) {
-        return NULL;
+
+    if (function->items_callback != NULL) {
+        vm->evaluation_depth += 1U;
+        tinypy_value_t *result = __tinypy_native_function_invoke_items(callable, self, items, count, kwargs, out_error);
+        vm->evaluation_depth -= 1U;
+        return result;
     }
-    if (function->self == NULL && __tinypy_native_function_check_receiver(callable, count != 0U ? items[0] : NULL, TINYPY_FALSE, out_error) == TINYPY_FALSE) {
-        return NULL;
-    }
-    tinypy_value_t *args = __tinypy_native_arguments_acquire(vm, function->self, items, count, out_error);
+    tinypy_value_t *args = __tinypy_native_arguments_acquire(vm, self, items, count, out_error);
     if (args == NULL) {
         return NULL;
     }
@@ -331,6 +397,48 @@ tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *calla
     tinypy_value_t *result = __tinypy_native_function_invoke(callable, args, kwargs, out_error);
     __tinypy_native_arguments_release(vm, args);
     vm->evaluation_depth -= 1U;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
+    TINYPY_CLEAR_ERROR(out_error);
+    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded while calling a Python object", out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = function->self;
+    if (self == NULL && function->owner != NULL) {
+        if (__tinypy_native_function_check_receiver(callable, count != 0U ? items[0] : NULL, TINYPY_FALSE, out_error) == TINYPY_FALSE) {
+            return NULL;
+        }
+        self = items[0];
+        items += 1;
+        count -= 1U;
+    }
+    tinypy_value_t *result = __tinypy_native_function_call_self(vm, callable, self, items, count, kwargs, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Whether a method call may run a method descriptor with the instance as self
+   instead of the built-in method binding would create. */
+tinypy_bool_t tinypy_internal_native_method_calls_unbound(tinypy_value_t *descriptor, tinypy_value_t *instance) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(descriptor);
+    tinypy_bool_t result = descriptor->type == vm->native_method_descriptor_type && function->items_callback != NULL && function->self == NULL
+        && (function->owner == NULL || tinypy_type_is_subtype(instance->type, function->owner) != TINYPY_FALSE);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Calls a method descriptor as the built-in method binding self would. */
+tinypy_value_t *tinypy_internal_native_function_call_method(tinypy_value_t *descriptor, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+    TINYPY_CLEAR_ERROR(out_error);
+    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded while calling a Python object", out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *result = __tinypy_native_function_call_self(vm, descriptor, self, items, count, kwargs, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -388,6 +496,10 @@ static tinypy_value_t *__tinypy_native_function_bind(tinypy_value_t *descriptor,
     method->self = instance;
     method->owner = NULL;
     method->callback = function->callback;
+    method->items_callback = function->items_callback;
+    method->minimum = function->minimum;
+    method->maximum = function->maximum;
+    method->arity_style = function->arity_style;
     method->user_data = function->user_data;
     method->finalize = NULL;
     method->owner_retained = TINYPY_FALSE;
@@ -497,6 +609,10 @@ static tinypy_value_t *__tinypy_native_class_method_descriptor_call(tinypy_value
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
+    }
+    if (function->items_callback != NULL) {
+        tinypy_value_t *items_result = __tinypy_native_function_invoke_items(callable, class_value, tinypy_internal_tuple_items(args) + 1, TINYPY_TUPLE_SIZE(args) - 1U, kwargs, out_error);
+        return items_result;
     }
     tinypy_value_t *result = __tinypy_native_function_invoke(callable, args, kwargs, out_error);
     return result;
@@ -655,7 +771,7 @@ static tinypy_hash_t __tinypy_native_function_hash_slot(tinypy_value_t *value, t
             hash = (tinypy_hash_t)(int32_t)combined;
         }
         else {
-            hash = receiver_hash ^ (tinypy_hash_t)(((uintptr_t)native->callback >> 4U) ^ ((uintptr_t)native->user_data >> 4U));
+            hash = receiver_hash ^ (tinypy_hash_t)(((uintptr_t)native->callback >> 4U) ^ ((uintptr_t)native->items_callback >> 4U) ^ ((uintptr_t)native->user_data >> 4U));
         }
     }
     return hash == (tinypy_hash_t)-1 ? (tinypy_hash_t)-2 : hash;
@@ -764,7 +880,7 @@ tinypy_bool_t tinypy_internal_native_function_compare_three_way(tinypy_value_t *
     else if (a->self != b->self) {
         *out_order = (uintptr_t)a->self < (uintptr_t)b->self ? -1 : 1;
     }
-    else if (a->callback == b->callback && a->user_data == b->user_data) {
+    else if (a->callback == b->callback && a->items_callback == b->items_callback && a->user_data == b->user_data) {
         *out_order = 0;
     }
     else {
@@ -794,7 +910,7 @@ static tinypy_value_t *__tinypy_native_function_compare_slot(tinypy_value_t *lef
         }
         tinypy_native_function_object_t *a = TINYPY_NATIVE_FUNCTION_OBJECT(left);
         tinypy_native_function_object_t *b = TINYPY_NATIVE_FUNCTION_OBJECT(right);
-        result = a->self == b->self && a->callback == b->callback && a->user_data == b->user_data;
+        result = a->self == b->self && a->callback == b->callback && a->items_callback == b->items_callback && a->user_data == b->user_data;
         if (operation == TINYPY_COMPARE_NOT_EQUAL) {
             result = result == 0;
         }

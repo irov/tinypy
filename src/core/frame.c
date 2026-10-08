@@ -364,6 +364,10 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
         tinypy_value_t *freevars = TINYPY_CODE_FREEVARS(code);
         size_t free_count = TINYPY_TUPLE_SIZE(freevars);
         size_t stack_size = (size_t)TINYPY_CODE_STACK_SIZE(code);
+        /* Each method call nested at a point of the bytecode keeps one value
+           more than its stack depth there, so the declared size bounds the
+           slots of code not yet analyzed, as for a new generator. */
+        stack_size += TINYPY_CODE_OBJECT(code)->bytecode_verified != 0 ? TINYPY_CODE_OBJECT(code)->method_call_slots : stack_size;
         if (cell_count > SIZE_MAX - local_count || free_count > SIZE_MAX - local_count - cell_count
             || stack_size > SIZE_MAX - local_count - cell_count - free_count) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "frame is too large", NULL);
@@ -472,7 +476,9 @@ void tinypy_internal_frame_release_references(tinypy_value_t *value, tinypy_rele
         }
     }
     for (index = 0U; index < (size_t)(frame->stack_top - frame->value_stack); ++index) {
-        visit(frame->value_stack[index], user_data);
+        if (frame->value_stack[index] != NULL) {
+            visit(frame->value_stack[index], user_data);
+        }
     }
 }
 //////////////////////////////////////////////////////////////////////////

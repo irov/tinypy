@@ -303,6 +303,13 @@ borrowed VM keys либо offsets этих полей для static callback dat
 borrowed byte-string key той же VM. Они сохраняют descriptor kind, owner,
 module metadata и finalizer; временные ссылки освобождаются внутри helper.
 Имена из общего registry передаются прямо из VM.
+Горячие builtins регистрируются через `tinypy_internal_type_add_items_method`
+и `tinypy_internal_native_items_function_new` во внутренней items-конвенции:
+callback получает self (NULL у функции), массив позиционных аргументов и
+kwargs без argument tuple. Вызывающий код проверяет объявленную арность и
+отклоняет keywords с теми же диагностиками, что и PyArg-парсеры, кроме стиля
+`TINYPY_ARITY_STYLE_UNCHECKED`, при котором аргументы разбирает сам callback.
+Callbacks публичного `tinypy_native_function_new` по-прежнему получают tuple.
 Все фиксированные имена production C-кода, включая module-local методы,
 исключения, codec aliases и `__future__`, заранее создаются из registry при
 инициализации VM. Поля этих строк имеют префикс `internal_`, например
@@ -437,6 +444,17 @@ len(co_varnames)` и места для аргументов: frame размеч�
 
 Frame execution поддерживает closures, generators, exception blocks,
 comprehensions, `with`, imports и tracing data code object.
+
+После верификации evaluator находит method calls: `LOAD_ATTR` не от global или
+name, значение которого в той же линейной цепочке без входящих переходов
+используется только как callable следующего `CALL_FUNCTION`. Если они есть,
+code object хранит копию bytecode, где эти пары заменены внутренними opcodes
+evaluator, и frames этого кода получают по слоту стека на каждый вложенный
+method call; `co_code`, `co_stacksize`, `f_lasti`, marshal и compiler output
+не меняются. Когда атрибут разрешается в функцию или method descriptor типа
+получателя, вызов получает получателя первым аргументом без bound method;
+иначе под callable лежит пустой слот, а поиск атрибута и вызов идут обычным
+путём. `tinypy_frame_stack_depth` учитывает эти слоты.
 
 `f_exc_type`, `f_exc_value` и `f_exc_traceback` показывают сохранённое
 состояние вызывающего frame; текущий обработчик читается через `sys.exc_info()`.
