@@ -523,17 +523,25 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
         }
     }
     vm->host.release_module_artifact(vm->host.user_data, artifact);
+    /* A failed module leaves sys.modules; releasing it sets its globals to
+       None the way _PyModule_Clear does, for the functions that outlive it. */
     if (loaded == 0) {
         if (reload_module == NULL) {
             tinypy_dict_delete(vm->modules, key);
-            tinypy_value_t *module_dict = tinypy_module_dict(module);
-            tinypy_dict_clear(module_dict);
         }
         TINYPY_DECREF(module);
         TINYPY_DECREF(key);
         return NULL;
     }
+    /* A module that leaves None for itself in sys.modules was not found. */
     tinypy_value_t *registered = tinypy_internal_dict_get_optional(vm, vm->modules, key);
+    if (registered != NULL && TINYPY_VALUE_KIND(registered) == TINYPY_VALUE_NONE && reload_module == NULL) {
+        *out_not_found = 1;
+        __tinypy_import_make_not_found_error(vm, name, name_size, out_error);
+        TINYPY_DECREF(module);
+        TINYPY_DECREF(key);
+        return NULL;
+    }
     if (registered == NULL) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("Loaded module "),
@@ -756,15 +764,13 @@ static void __tinypy_import_discard_error(tinypy_vm_t *vm, tinypy_error_t **out_
 //////////////////////////////////////////////////////////////////////////
 /* Marks a name that an implicit relative import found missing, so later
    imports skip straight to the absolute name, as mark_miss does. */
-static void __tinypy_import_mark_missing(tinypy_vm_t *vm, const char *name, size_t name_size) {
-    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
+static void __tinypy_import_mark_missing(tinypy_vm_t *vm, tinypy_value_t *key) {
     tinypy_value_t *none = TINYPY_RET_NONE(vm);
 
     if (tinypy_dict_get_optional(vm->modules, key) == NULL) {
         tinypy_dict_set(vm->modules, key, none);
     }
     TINYPY_DECREF(none);
-    TINYPY_DECREF(key);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_import_finish(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_value_t *tail, const char *name, size_t name_size, tinypy_value_t *fromlist, tinypy_error_t **out_error) {
@@ -795,6 +801,7 @@ static tinypy_value_t *__tinypy_import_module(tinypy_vm_t *vm, const char *name,
     tinypy_bool_t not_found = TINYPY_FALSE;
     tinypy_value_t *result;
     tinypy_value_t *tail = NULL;
+    tinypy_value_t *relative_miss = NULL;
 
     TINYPY_CLEAR_ERROR(out_error);
     if (level != 0 && package_size != 0U) {
@@ -802,8 +809,9 @@ static tinypy_value_t *__tinypy_import_module(tinypy_vm_t *vm, const char *name,
         tinypy_value_t *parent = tinypy_dict_get_optional(vm->modules, parent_key);
 
         TINYPY_DECREF(parent_key);
+        /* A None parent makes the import absolute, as get_parent's Py_None. */
         if (parent == NULL || TINYPY_VALUE_KIND(parent) == TINYPY_VALUE_NONE) {
-            if (level > 0) {
+            if (level > 0 && parent == NULL) {
                 static const char prefix[] = "Parent module '";
                 static const char suffix[] = "' not loaded, cannot perform relative import";
                 char message[sizeof(prefix) + 200U + sizeof(suffix) - 1U];
@@ -848,7 +856,7 @@ static tinypy_value_t *__tinypy_import_module(tinypy_vm_t *vm, const char *name,
                     return NULL;
                 }
                 __tinypy_import_discard_error(vm, out_error);
-                __tinypy_import_mark_missing(vm, canonical, package_size + 1U + head_size);
+                relative_miss = tinypy_internal_name_from_bytes(vm, canonical, package_size + 1U + head_size);
                 tinypy_internal_vm_deallocate(vm, canonical, canonical_size);
                 level = 0;
             }
@@ -868,6 +876,18 @@ static tinypy_value_t *__tinypy_import_module(tinypy_vm_t *vm, const char *name,
         return NULL;
     }
     result = __tinypy_import_load_path(vm, name, name_size, globals, head_size, &tail, &not_found, out_error);
+    /* mark_miss: the relative name is known missing once the absolute head
+       imported. */
+    if (relative_miss != NULL) {
+        tinypy_value_t *head_key = tinypy_internal_name_from_bytes(vm, name, head_size);
+        tinypy_value_t *head = tinypy_dict_get_optional(vm->modules, head_key);
+
+        if (head != NULL && TINYPY_VALUE_KIND(head) != TINYPY_VALUE_NONE) {
+            __tinypy_import_mark_missing(vm, relative_miss);
+        }
+        TINYPY_DECREF(head_key);
+        TINYPY_DECREF(relative_miss);
+    }
     tinypy_value_t *finished = __tinypy_import_finish(vm, result, tail, name, name_size, fromlist, out_error);
     return finished;
 }
@@ -915,21 +935,28 @@ tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_err
 
     TINYPY_CLEAR_ERROR(out_error);
     if (TINYPY_VALUE_KIND(module) != TINYPY_VALUE_MODULE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reload() argument must be a module", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reload() argument must be module", out_error);
         return NULL;
     }
     name_value = tinypy_module_get_value_key(module, vm->internal_special_name_key);
-    if (__tinypy_import_text_view(name_value, &name, &name_size) == 0 || name_size == 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reload() module has no valid __name__", out_error);
+    if (name_value == NULL || TINYPY_VALUE_KIND(name_value) != TINYPY_VALUE_STRING) {
+        tinypy_internal_exception_raise_system_error(vm, "nameless module", out_error);
         return NULL;
     }
+    (void)__tinypy_import_text_view(name_value, &name, &name_size);
     TINYPY_INCREF(name_value);
     key = tinypy_internal_name_from_bytes(vm, name, name_size);
     registered = tinypy_dict_get_optional(vm->modules, key);
     if (registered != module) {
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("reload(): module "),
+            {name, name_size},
+            TINYPY_MESSAGE_PART_LITERAL(" not in sys.modules")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_IMPORT, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         TINYPY_DECREF(key);
         TINYPY_DECREF(name_value);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "reload() module is not registered in sys.modules", out_error);
         return NULL;
     }
     size_t parent_size = name_size;
@@ -1052,6 +1079,19 @@ tinypy_bool_t tinypy_internal_import_star(tinypy_value_t *module, tinypy_value_t
         if (skip_private != 0 && TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING && TINYPY_TEXT_BYTE_SIZE(key) != 0U && TINYPY_TEXT_BYTES(key)[0] == '_') {
             TINYPY_DECREF(key);
             continue;
+        }
+        /* PyObject_GetAttr reads each listed name, which must be a string. */
+        if (TINYPY_VALUE_KIND(key) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(key) != TINYPY_VALUE_UNICODE) {
+            const tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("attribute name must be string, not '"),
+                TINYPY_MESSAGE_PART_TYPE_NAME(key),
+                TINYPY_MESSAGE_PART_LITERAL("'")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            TINYPY_DECREF(key);
+            success = TINYPY_FALSE;
+            break;
         }
         tinypy_value_t *value = tinypy_internal_object_get_attr_key(module, key, out_error);
         tinypy_bool_t stored = value != NULL ? __tinypy_import_store_name(vm, locals, key, value, out_error) : TINYPY_FALSE;

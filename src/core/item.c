@@ -15,9 +15,24 @@ static void __tinypy_item_invalid_index_result(tinypy_vm_t *vm, tinypy_value_t *
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyIndex_Check: classic instances always qualify and fail on conversion
+   when they lack __index__. */
+static tinypy_bool_t __tinypy_item_is_index(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_OLD_INSTANCE) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t has_index = tinypy_internal_object_has_special_key(value, vm->internal_special_index_key) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return has_index;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyNumber_Index; a classic instance looks __index__ up like any attribute. */
 tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *method = NULL;
 
     if (kind == TINYPY_VALUE_BOOL) {
         tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(value));
@@ -26,154 +41,158 @@ tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_
     if (kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG) {
         return TINYPY_RET(value);
     }
-    if (tinypy_internal_object_has_special_key(value, vm->internal_special_index_key) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_index_key, out_error);
-        tinypy_value_t *args;
-        tinypy_value_t *converted;
+    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+        int32_t status = tinypy_internal_object_get_optional_attr_key(value, vm->internal_special_index_key, &method, out_error);
 
+        if (status < 0) {
+            return NULL;
+        }
+        if (status == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object cannot be interpreted as an index", out_error);
+            return NULL;
+        }
+    }
+    else if (tinypy_internal_object_has_special_key(value, vm->internal_special_index_key) != 0) {
+        method = tinypy_internal_object_get_special_key(value, vm->internal_special_index_key, out_error);
         if (method == NULL) {
             return NULL;
         }
-        args = TINYPY_RET_EMPTY_TUPLE(vm);
-        converted = tinypy_call(method, args, NULL, out_error);
-        TINYPY_DECREF(args);
-        TINYPY_DECREF(method);
-        if (converted == NULL) {
-            return NULL;
-        }
-        kind = TINYPY_VALUE_KIND(converted);
-        if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
-            __tinypy_item_invalid_index_result(vm, converted, out_error);
-            TINYPY_DECREF(converted);
-            return NULL;
-        }
-        if (kind == TINYPY_VALUE_BOOL) {
-            tinypy_value_t *result = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(converted));
-
-            TINYPY_DECREF(converted);
-            return result;
-        }
-        return converted;
     }
-    tinypy_message_part_t parts[] = {
-        TINYPY_MESSAGE_PART_LITERAL("'"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(value),
-        TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index")
-    };
+    else {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(value),
+            TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index")
+        };
 
-    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-    return NULL;
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        return NULL;
+    }
+    tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
+    tinypy_value_t *converted = tinypy_call(method, args, NULL, out_error);
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(method);
+    if (converted == NULL) {
+        return NULL;
+    }
+    kind = TINYPY_VALUE_KIND(converted);
+    if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
+        __tinypy_item_invalid_index_result(vm, converted, out_error);
+        TINYPY_DECREF(converted);
+        return NULL;
+    }
+    if (kind == TINYPY_VALUE_BOOL) {
+        tinypy_value_t *result = tinypy_integer_from_i64(vm, TINYPY_INTEGER_VALUE(converted));
+
+        TINYPY_DECREF(converted);
+        return result;
+    }
+    return converted;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_index_as_i64(tinypy_value_t *value, int64_t *out_index, tinypy_bool_t clamp_overflow, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_item_long_as_i64(const tinypy_value_t *value, int64_t *out_index) {
+    const tinypy_long_object_t *long_value = TINYPY_LONG_OBJECT(value);
+    size_t count = TINYPY_LONG_DIGIT_COUNT(value);
+    uint64_t magnitude = 0U;
+    size_t index;
+
+    if (count > 5U) {
+        return TINYPY_FALSE;
+    }
+    for (index = count; index != 0U; index -= 1U) {
+        if (magnitude > (UINT64_MAX >> 15U)) {
+            return TINYPY_FALSE;
+        }
+        magnitude = (magnitude << 15U) | long_value->digits[index - 1U];
+    }
+    if (TINYPY_LONG_SIGN(value) >= 0) {
+        if (magnitude > (uint64_t)INT64_MAX) {
+            return TINYPY_FALSE;
+        }
+        *out_index = (int64_t)magnitude;
+        return TINYPY_TRUE;
+    }
+    if (magnitude > (uint64_t)INT64_MAX + UINT64_C(1)) {
+        return TINYPY_FALSE;
+    }
+    *out_index = magnitude == (uint64_t)INT64_MAX + UINT64_C(1) ? INT64_MIN : -(int64_t)magnitude;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyNumber_AsSsize_t: an index beyond the int64 range is clamped, or raises
+   the error kind the caller names about the original object. */
+static tinypy_bool_t __tinypy_item_number_as_ssize(tinypy_value_t *value, tinypy_bool_t clamp, tinypy_error_kind_e overflow_error, int64_t *out_index, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *converted = NULL;
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER) {
         *out_index = TINYPY_INTEGER_VALUE(value);
         return TINYPY_TRUE;
     }
-    if (kind == TINYPY_VALUE_LONG) {
-        const tinypy_long_object_t *long_value = TINYPY_LONG_OBJECT(value);
-        size_t count = TINYPY_LONG_DIGIT_COUNT(value);
-        uint64_t magnitude = 0U;
-        size_t index;
-
-        if (count > 5U) {
-            goto overflow;
-        }
-        for (index = count; index != 0U; index -= 1U) {
-            if (magnitude > (UINT64_MAX >> 15U)) {
-                goto overflow;
-            }
-            magnitude = (magnitude << 15U) | long_value->digits[index - 1U];
-        }
-        if (TINYPY_LONG_SIGN(value) >= 0) {
-            if (magnitude > (uint64_t)INT64_MAX) {
-                goto overflow;
-            }
-            *out_index = (int64_t)magnitude;
-        }
-        else {
-            if (magnitude > (uint64_t)INT64_MAX + UINT64_C(1)) {
-                goto overflow;
-            }
-            *out_index = magnitude == (uint64_t)INT64_MAX + UINT64_C(1) ? INT64_MIN : -(int64_t)magnitude;
-        }
-        return TINYPY_TRUE;
+    if (clamp == 0) {
+        tinypy_bool_t converted = tinypy_internal_number_as_index(value, overflow_error, out_index, out_error);
+        return converted;
     }
-    if (tinypy_internal_object_has_special_key(value, vm->internal_special_index_key) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_index_key, out_error);
-        tinypy_value_t *args;
-
-        if (method == NULL) {
-            return TINYPY_FALSE;
-        }
-        args = TINYPY_RET_EMPTY_TUPLE(vm);
-        converted = tinypy_call(method, args, NULL, out_error);
-        TINYPY_DECREF(args);
-        TINYPY_DECREF(method);
-        if (converted == NULL) {
-            return TINYPY_FALSE;
-        }
-        kind = TINYPY_VALUE_KIND(converted);
-        if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
-            __tinypy_item_invalid_index_result(vm, converted, out_error);
-            TINYPY_DECREF(converted);
-            return TINYPY_FALSE;
-        }
-        tinypy_bool_t result = tinypy_internal_index_as_i64(converted, out_index, clamp_overflow, out_error);
-        TINYPY_DECREF(converted);
-        return result;
+    tinypy_value_t *integer = tinypy_internal_index_value(value, out_error);
+    if (integer == NULL) {
+        return TINYPY_FALSE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument required", out_error);
-    return TINYPY_FALSE;
-overflow:
-    if (clamp_overflow != 0) {
-        *out_index = TINYPY_LONG_SIGN(value) < 0 ? -INT64_MAX : INT64_MAX;
-        return TINYPY_TRUE;
+    if (TINYPY_VALUE_KIND(integer) != TINYPY_VALUE_LONG) {
+        *out_index = TINYPY_INTEGER_VALUE(integer);
     }
-    tinypy_message_part_t parts[] = {
-        TINYPY_MESSAGE_PART_LITERAL("cannot fit '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(value),
-        TINYPY_MESSAGE_PART_LITERAL("' into an index-sized integer"),
-    };
-    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_OVERFLOW, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-    return TINYPY_FALSE;
+    else if (__tinypy_item_long_as_i64(integer, out_index) == 0) {
+        *out_index = TINYPY_LONG_SIGN(integer) < 0 ? INT64_MIN : INT64_MAX;
+    }
+    TINYPY_DECREF(integer);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_item_slice_index_value(tinypy_vm_t *vm, const tinypy_value_t *value, int64_t *out_index, tinypy_error_t **out_error) {
-    (void)vm;
-    tinypy_bool_t return_value_1 = tinypy_internal_index_as_i64((tinypy_value_t *)value, out_index, TINYPY_TRUE, out_error);
-    return return_value_1;
+/* Callers negate clamped indices, so the clamp stops at -INT64_MAX. */
+tinypy_bool_t tinypy_internal_index_as_i64(tinypy_value_t *value, int64_t *out_index, tinypy_bool_t clamp_overflow, tinypy_error_t **out_error) {
+    if (__tinypy_item_number_as_ssize(value, clamp_overflow, TINYPY_ERROR_OVERFLOW, out_index, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (clamp_overflow != 0 && *out_index == INT64_MIN) {
+        *out_index = -INT64_MAX;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Resolve callbacks before reading the length of a mutable sequence. */
+/* _PyEval_SliceIndex */
+static tinypy_bool_t __tinypy_item_slice_index(tinypy_value_t *value, int64_t *out_index, tinypy_error_t **out_error) {
+    if (__tinypy_item_is_index(value) == 0) {
+        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "slice indices must be integers or None or have an __index__ method", out_error);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t converted = __tinypy_item_number_as_ssize(value, TINYPY_TRUE, TINYPY_ERROR_OVERFLOW, out_index, out_error);
+    return converted;
+}
+//////////////////////////////////////////////////////////////////////////
+/* _PySlice_Unpack resolves callbacks before the caller reads the length of a
+   mutable sequence. */
 tinypy_bool_t tinypy_internal_slice_unpack(tinypy_value_t *slice_value, tinypy_internal_slice_indices_t *indices, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(slice_value);
     tinypy_slice_object_t *slice = TINYPY_SLICE_OBJECT(slice_value);
 
     indices->step = 1;
     if (TINYPY_VALUE_KIND(slice->step) != TINYPY_VALUE_NONE
-        && __tinypy_item_slice_index_value(vm, slice->step, &indices->step, out_error) == 0) {
+        && __tinypy_item_slice_index(slice->step, &indices->step, out_error) == 0) {
         return TINYPY_FALSE;
-    }
-    if (indices->step == INT64_MIN) {
-        indices->step = -INT64_MAX;
     }
     if (indices->step == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "slice step cannot be zero", out_error);
         return TINYPY_FALSE;
     }
+    if (indices->step == INT64_MIN) {
+        indices->step = -INT64_MAX;
+    }
     indices->start = indices->step < 0 ? INT64_MAX : 0;
     if (TINYPY_VALUE_KIND(slice->start) != TINYPY_VALUE_NONE
-        && __tinypy_item_slice_index_value(vm, slice->start, &indices->start, out_error) == 0) {
+        && __tinypy_item_slice_index(slice->start, &indices->start, out_error) == 0) {
         return TINYPY_FALSE;
     }
     indices->stop = indices->step < 0 ? INT64_MIN : INT64_MAX;
     if (TINYPY_VALUE_KIND(slice->stop) != TINYPY_VALUE_NONE
-        && __tinypy_item_slice_index_value(vm, slice->stop, &indices->stop, out_error) == 0) {
+        && __tinypy_item_slice_index(slice->stop, &indices->stop, out_error) == 0) {
         return TINYPY_FALSE;
     }
     indices->length = 0U;
@@ -229,40 +248,124 @@ tinypy_bool_t tinypy_internal_slice_indices(tinypy_value_t *slice_value, size_t 
     return adjusted;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_item_adjust_index(tinypy_vm_t *vm, int64_t index, size_t size, size_t *out_index, tinypy_error_t **out_error) {
-    if (index < 0) {
-        uint64_t distance = (uint64_t)(-(index + 1)) + UINT64_C(1);
-        if (distance > size) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "container index is out of range", out_error);
-            return TINYPY_FALSE;
-        }
-        *out_index = size - (size_t)distance;
-        return TINYPY_TRUE;
+static size_t __tinypy_item_sequence_size(tinypy_value_t *container) {
+    size_t size;
+
+    switch (TINYPY_VALUE_KIND(container)) {
+    case TINYPY_VALUE_TUPLE:
+        size = TINYPY_TUPLE_SIZE(container);
+        break;
+    case TINYPY_VALUE_LIST:
+        size = TINYPY_LIST_SIZE(container);
+        break;
+    case TINYPY_VALUE_STRING:
+        (void)tinypy_string_view(container, &size);
+        break;
+    case TINYPY_VALUE_UNICODE: {
+        size_t byte_size;
+
+        (void)tinypy_unicode_utf8_view(container, &byte_size, &size);
+        break;
     }
-    if ((uint64_t)index >= (uint64_t)size) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "container index is out of range", out_error);
+    default:
+        size = TINYPY_XRANGE_OBJECT(container)->length;
+        break;
+    }
+    return size;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_item_indices_error(tinypy_vm_t *vm, tinypy_message_part_t sequence, tinypy_value_t *key, tinypy_error_t **out_error) {
+    tinypy_message_part_t parts[] = {
+        sequence,
+        TINYPY_MESSAGE_PART_LITERAL(" indices must be integers, not "),
+        TINYPY_MESSAGE_PART_TYPE_NAME(key)
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+/* list_subscript and its siblings word a key without __index__ after the
+   sequence type and report a key too large for an index as IndexError. The
+   size is read after the conversion, since __index__ may resize the list. */
+static tinypy_bool_t __tinypy_item_position(tinypy_value_t *container, tinypy_value_t *key, const char *range_message, size_t *out_index, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(container);
+    int64_t index;
+
+    if (__tinypy_item_is_index(key) == 0) {
+        if (kind == TINYPY_VALUE_TUPLE) {
+            __tinypy_item_indices_error(vm, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("tuple"), key, out_error);
+        }
+        else if (kind == TINYPY_VALUE_STRING) {
+            __tinypy_item_indices_error(vm, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("string"), key, out_error);
+        }
+        else if (kind == TINYPY_VALUE_UNICODE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "string indices must be integers", out_error);
+        }
+        else if (kind == TINYPY_VALUE_XRANGE) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("sequence index must be integer, not '"),
+                TINYPY_MESSAGE_PART_TYPE_NAME(key),
+                TINYPY_MESSAGE_PART_LITERAL("'")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        }
+        else {
+            __tinypy_item_indices_error(vm, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("list"), key, out_error);
+        }
         return TINYPY_FALSE;
     }
-    *out_index = (size_t)index;
+    if (__tinypy_item_number_as_ssize(key, TINYPY_FALSE, TINYPY_ERROR_INDEX, &index, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    size_t size = __tinypy_item_sequence_size(container);
+    uint64_t distance = index < 0 ? (uint64_t)(-(index + 1)) + UINT64_C(1) : UINT64_C(0);
+    if ((index < 0 && distance > size) || (index >= 0 && (uint64_t)index >= (uint64_t)size)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, range_message, out_error);
+        return TINYPY_FALSE;
+    }
+    *out_index = index < 0 ? size - (size_t)distance : (size_t)index;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_item_normalize_index(tinypy_vm_t *vm, tinypy_value_t *key, size_t size, size_t *out_index, tinypy_error_t **out_error) {
-    int64_t index;
-    if (tinypy_internal_index_as_i64(key, &index, TINYPY_TRUE, out_error) == 0) {
-        return TINYPY_FALSE;
+/* Python 2.7 types with a sequence protocol word a missing subscript as
+   unsupported indexing; others have no __getitem__ at all. */
+static tinypy_bool_t __tinypy_item_has_sequence_protocol(const tinypy_value_t *container) {
+    switch (TINYPY_VALUE_KIND(container)) {
+    case TINYPY_VALUE_TUPLE:
+    case TINYPY_VALUE_STRING:
+    case TINYPY_VALUE_UNICODE:
+    case TINYPY_VALUE_XRANGE:
+    case TINYPY_VALUE_SET:
+    case TINYPY_VALUE_FROZENSET:
+    case TINYPY_VALUE_DICT_KEYS:
+    case TINYPY_VALUE_DICT_VALUES:
+    case TINYPY_VALUE_DICT_ITEMS:
+        return TINYPY_TRUE;
+    default:
+        break;
     }
-    tinypy_bool_t adjusted = __tinypy_item_adjust_index(vm, index, size, out_index, out_error);
-    return adjusted;
+    return (container->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_item_list_index(tinypy_value_t *list, tinypy_value_t *key, size_t *out_index, tinypy_error_t **out_error) {
+/* The fallbacks of PyObject_GetItem, PyObject_SetItem and PyObject_DelItem:
+   a sequence first converts an index key, then refuses the operation. */
+static void __tinypy_item_unsupported(tinypy_value_t *container, tinypy_value_t *key, tinypy_message_part_t sequence_message, tinypy_message_part_t message, tinypy_error_t **out_error) {
     int64_t index;
-    if (tinypy_internal_index_as_i64(key, &index, TINYPY_TRUE, out_error) == 0) {
-        return TINYPY_FALSE;
+
+    if (__tinypy_item_has_sequence_protocol(container) != 0 && __tinypy_item_is_index(key) != 0) {
+        if (__tinypy_item_number_as_ssize(key, TINYPY_FALSE, TINYPY_ERROR_INDEX, &index, out_error) == 0) {
+            return;
+        }
+        message = sequence_message;
     }
-    tinypy_bool_t adjusted = __tinypy_item_adjust_index(TINYPY_VALUE_VM(list), index, TINYPY_LIST_SIZE(list), out_index, out_error);
-    return adjusted;
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(container),
+        message
+    };
+    tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(container), TINYPY_ERROR_TYPE, parts, 3U, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_item_call_method(tinypy_value_t *container, tinypy_value_t *name, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
@@ -449,7 +552,8 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, const char *negative_hint_message, tinypy_bool_t *out_aborted, tinypy_error_t **out_error) {
+/* PySequence_Fast replaces the TypeError of a non-iterable with its own. */
+static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, const char *type_message, const char *negative_hint_message, tinypy_bool_t *out_aborted, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *items = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_value_t *iterator = NULL;
@@ -460,7 +564,7 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, con
         iterator = tinypy_iter(value, out_error);
         if (iterator == NULL) {
             if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error) != TINYPY_FALSE) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can only assign an iterable", out_error);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, type_message, out_error);
             }
             TINYPY_DECREF(items);
             return NULL;
@@ -491,6 +595,24 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, con
     return items;
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_item_extended_size_error(tinypy_vm_t *vm, size_t replacement_size, size_t length, tinypy_error_t **out_error) {
+    char replacement_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+    char length_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+    size_t replacement_digits = tinypy_internal_format_size(replacement_buffer, replacement_size);
+    size_t length_digits = tinypy_internal_format_size(length_buffer, length);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("attempt to assign sequence of size "),
+        {replacement_buffer, replacement_digits},
+        TINYPY_MESSAGE_PART_LITERAL(" to extended slice of size "),
+        {length_buffer, length_digits}
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+/* list_ass_subscript compares the replacement with the slice length taken
+   before collecting it; positions a shrunken list no longer holds are then
+   recomputed rather than written. */
 static tinypy_bool_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_value_t *slice, tinypy_value_t *value, tinypy_bool_t ignore_negative_hint, tinypy_bool_t legacy_slice, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
     tinypy_internal_slice_indices_t indices;
@@ -508,11 +630,18 @@ static tinypy_bool_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_v
     }
     tinypy_bool_t aborted = TINYPY_FALSE;
     const char *negative_hint_message = ignore_negative_hint != 0 ? NULL : "error return without exception set";
+    const char *type_message = indices.step == 1 ? "can only assign an iterable" : "must assign iterable to extended slice";
     tinypy_value_t *replacement = value == list
                                       ? tinypy_list_from_items(vm, TINYPY_LIST_OBJECT(list)->items, TINYPY_LIST_SIZE(list))
-                                      : __tinypy_item_collect_iterable(value, negative_hint_message, &aborted, out_error);
+                                      : __tinypy_item_collect_iterable(value, type_message, negative_hint_message, &aborted, out_error);
     if (replacement == NULL) {
         return aborted;
+    }
+    replacement_size = TINYPY_LIST_SIZE(replacement);
+    if (indices.step != 1 && replacement_size != indices.length) {
+        __tinypy_item_extended_size_error(vm, replacement_size, indices.length, out_error);
+        TINYPY_DECREF(replacement);
+        return TINYPY_FALSE;
     }
     size_t size = TINYPY_LIST_SIZE(list);
     tinypy_bool_t adjust = indices.step == 1;
@@ -529,13 +658,12 @@ static tinypy_bool_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_v
         TINYPY_DECREF(replacement);
         return TINYPY_FALSE;
     }
-    replacement_size = TINYPY_LIST_SIZE(replacement);
     replacement_items = TINYPY_LIST_OBJECT(replacement)->items;
     if (indices.step == 1) {
         replaced = tinypy_internal_list_replace_range_checked(list, (size_t)indices.start, indices.length, replacement_items, replacement_size, out_error);
     }
     else if (replacement_size != indices.length) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "extended slice assignment has the wrong size", out_error);
+        __tinypy_item_extended_size_error(vm, replacement_size, indices.length, out_error);
         replaced = TINYPY_FALSE;
     }
     else {
@@ -562,6 +690,43 @@ static tinypy_bool_t __tinypy_item_list_delete_slice(tinypy_value_t *list, tinyp
     return deleted;
 }
 //////////////////////////////////////////////////////////////////////////
+/* instance_subscript and its siblings look the method up as an attribute, so
+   a classic instance without it raises its own AttributeError. */
+static tinypy_value_t *__tinypy_item_call_attribute(tinypy_value_t *container, tinypy_value_t *name, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    tinypy_value_t *method = tinypy_internal_object_get_attr_key(container, name, out_error);
+
+    if (method == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, items, item_count);
+    tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(method);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_item_get_missing(tinypy_value_t *container, tinypy_value_t *key, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+
+    if (dispatch_special != 0 && TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_value_t *result = __tinypy_item_call_attribute(container, vm->internal_special_getitem_key, &key, 1U, out_error);
+        return result;
+    }
+    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_XRANGE) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("sequence index must be integer, not '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(key),
+            TINYPY_MESSAGE_PART_LITERAL("'")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        return NULL;
+    }
+    __tinypy_item_unsupported(container, key, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object does not support indexing"), (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object has no attribute '__getitem__'"), out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value_t *key, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {
     tinypy_value_type_e kind;
     size_t index;
@@ -569,7 +734,8 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     TINYPY_CLEAR_ERROR(out_error);
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_override_key(container, vm->internal_special_getitem_key) != 0) {
+    /* instance_subscript fetches a classic __getitem__ like any attribute. */
+    if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(container, vm->internal_special_getitem_key) != 0)) {
         tinypy_value_t *return_value_1 = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &key, 1U, out_error);
         return return_value_1;
     }
@@ -619,8 +785,8 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
                 tinypy_value_t *return_value_3 = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &key, 1U, out_error);
                 return return_value_3;
             }
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not support slicing", out_error);
-            return NULL;
+            tinypy_value_t *missing = __tinypy_item_get_missing(container, key, dispatch_special, out_error);
+            return missing;
         }
         if (tinypy_internal_slice_unpack(key, &indices, out_error) == 0
             || tinypy_internal_slice_adjust_indices(vm, kind == TINYPY_VALUE_LIST ? TINYPY_LIST_SIZE(container) : size, &indices, out_error) == 0) {
@@ -638,89 +804,85 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
         return return_value_6;
     }
     if (kind == TINYPY_VALUE_TUPLE) {
-        size_t tuple_size = TINYPY_TUPLE_SIZE(container);
-        if (__tinypy_item_normalize_index(vm, key, tuple_size, &index, out_error) == 0) {
+        if (__tinypy_item_position(container, key, "tuple index out of range", &index, out_error) == 0) {
             return NULL;
         }
         item = TINYPY_RET(TINYPY_TUPLE_GET(container, index));
         return item;
     }
     if (kind == TINYPY_VALUE_LIST) {
-        if (__tinypy_item_list_index(container, key, &index, out_error) == 0) {
+        if (__tinypy_item_position(container, key, "list index out of range", &index, out_error) == 0) {
             return NULL;
         }
         item = TINYPY_RET(TINYPY_LIST_GET(container, index));
         return item;
     }
     if (kind == TINYPY_VALUE_STRING) {
-        const uint8_t *bytes;
-        size_t size;
-
-        bytes = (const uint8_t *)tinypy_string_view(container, &size);
-        if (__tinypy_item_normalize_index(vm, key, size, &index, out_error) == 0) {
+        if (__tinypy_item_position(container, key, "string index out of range", &index, out_error) == 0) {
             return NULL;
         }
+        size_t size;
+        const uint8_t *bytes = (const uint8_t *)tinypy_string_view(container, &size);
         tinypy_value_t *return_value_7 = tinypy_string_from_bytes(vm, bytes + index, 1U);
         return return_value_7;
     }
     if (kind == TINYPY_VALUE_UNICODE) {
-        size_t byte_size;
-        size_t code_point_count;
-
-        (void)tinypy_unicode_utf8_view(container, &byte_size, &code_point_count);
-        if (__tinypy_item_normalize_index(vm, key, code_point_count, &index, out_error) == 0) {
+        if (__tinypy_item_position(container, key, "string index out of range", &index, out_error) == 0) {
             return NULL;
         }
         tinypy_value_t *return_value_8 = __tinypy_item_unicode_get(container, index);
         return return_value_8;
     }
     if (kind == TINYPY_VALUE_XRANGE) {
-        tinypy_xrange_object_t *range = TINYPY_XRANGE_OBJECT(container);
-
-        if (__tinypy_item_normalize_index(vm, key, range->length, &index, out_error) == 0) {
+        if (__tinypy_item_position(container, key, "xrange object index out of range", &index, out_error) == 0) {
             return NULL;
         }
-        tinypy_value_t *return_value_9 = tinypy_integer_from_i64(vm, tinypy_internal_xrange_item_value(range, index));
+        tinypy_value_t *return_value_9 = tinypy_integer_from_i64(vm, tinypy_internal_xrange_item_value(TINYPY_XRANGE_OBJECT(container), index));
         return return_value_9;
     }
     if (dispatch_special != 0 && tinypy_internal_object_has_special_key(container, vm->internal_special_getitem_key) != 0) {
         tinypy_value_t *return_value_10 = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &key, 1U, out_error);
         return return_value_10;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not support item access", out_error);
-    return NULL;
+    tinypy_value_t *missing = __tinypy_item_get_missing(container, key, dispatch_special, out_error);
+    return missing;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_item_slice_bound(tinypy_value_t *bound, int64_t fallback, int64_t *out_bound, tinypy_error_t **out_error) {
-    if (bound == NULL || TINYPY_VALUE_KIND(bound) == TINYPY_VALUE_NONE) {
-        *out_bound = fallback;
-        return TINYPY_TRUE;
-    }
-    tinypy_bool_t return_value_1 = tinypy_internal_index_as_i64(bound, out_bound, TINYPY_TRUE, out_error);
-    return return_value_1;
+/* ISINDEX of ceval: an omitted bound or one with an index. */
+static tinypy_bool_t __tinypy_item_is_slice_offset(tinypy_value_t *bound) {
+    tinypy_bool_t offset = bound == NULL || __tinypy_item_is_index(bound) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return offset;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The legacy two-argument slice protocol receives plain offsets: a missing
-   upper bound becomes the largest index and negative bounds are resolved
-   against __len__ when the container provides one. */
-static tinypy_bool_t __tinypy_item_legacy_slice_bounds(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, int64_t *out_start, int64_t *out_stop, tinypy_error_t **out_error) {
+/* apply_slice reads offsets like _PyEval_SliceIndex, and PySequence_GetSlice
+   adds the length to a negative one; a classic instance has a length slot
+   even without __len__, which then raises its AttributeError. */
+static tinypy_bool_t __tinypy_item_slice_offsets(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, int64_t *out_start, int64_t *out_stop, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_value_t *length_value;
     int64_t length;
 
-    if (__tinypy_item_slice_bound(start, 0, out_start, out_error) == 0) {
+    *out_start = 0;
+    *out_stop = INT64_MAX;
+    if (start != NULL && __tinypy_item_number_as_ssize(start, TINYPY_TRUE, TINYPY_ERROR_OVERFLOW, out_start, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    if (__tinypy_item_slice_bound(stop, INT64_MAX, out_stop, out_error) == 0) {
+    if (stop != NULL && __tinypy_item_number_as_ssize(stop, TINYPY_TRUE, TINYPY_ERROR_OVERFLOW, out_stop, out_error) == 0) {
         return TINYPY_FALSE;
     }
     if (*out_start >= 0 && *out_stop >= 0) {
         return TINYPY_TRUE;
     }
-    if (tinypy_internal_object_has_special_key(container, vm->internal_special_length_key) == 0) {
+    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE) {
+        length_value = __tinypy_item_call_attribute(container, vm->internal_special_length_key, NULL, 0U, out_error);
+    }
+    else if (tinypy_internal_object_has_special_key(container, vm->internal_special_length_key) != 0) {
+        length_value = __tinypy_item_call_method(container, vm->internal_special_length_key, NULL, 0U, out_error);
+    }
+    else {
         return TINYPY_TRUE;
     }
-    length_value = __tinypy_item_call_method(container, vm->internal_special_length_key, NULL, 0U, out_error);
     if (length_value == NULL) {
         return TINYPY_FALSE;
     }
@@ -738,73 +900,76 @@ static tinypy_bool_t __tinypy_item_legacy_slice_bounds(tinypy_value_t *container
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_item_call_legacy_slice(tinypy_value_t *container, tinypy_value_t *name, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_item_offsets_slice(tinypy_vm_t *vm, int64_t start, int64_t stop) {
+    tinypy_value_t *start_value = tinypy_integer_from_i64(vm, start);
+    tinypy_value_t *stop_value = tinypy_integer_from_i64(vm, stop);
+    tinypy_value_t *slice = tinypy_slice_new(vm, start_value, stop_value, NULL);
+
+    TINYPY_DECREF(stop_value);
+    TINYPY_DECREF(start_value);
+    return slice;
+}
+//////////////////////////////////////////////////////////////////////////
+/* sq_slice and sq_ass_slice: __getslice__ and its siblings receive the
+   offsets; a classic instance without them passes a slice of the offsets to
+   __getitem__ and its siblings, as instance_slice does. */
+static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *item_name, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_value_t *items[3];
-    tinypy_value_t *result;
-    size_t item_count = value != NULL ? 3U : 2U;
     int64_t low;
     int64_t high;
 
-    if (__tinypy_item_legacy_slice_bounds(container, start, stop, &low, &high, out_error) == 0) {
+    if (__tinypy_item_slice_offsets(container, start, stop, &low, &high, out_error) == 0) {
         return NULL;
     }
-    items[0] = tinypy_integer_from_i64(vm, low);
-    items[1] = tinypy_integer_from_i64(vm, high);
-    items[2] = value;
-    result = __tinypy_item_call_method(container, name, items, item_count, out_error);
-    TINYPY_DECREF(items[1]);
+    if (tinypy_internal_object_has_special_override_key(container, slice_name) != 0) {
+        items[0] = tinypy_integer_from_i64(vm, low);
+        items[1] = tinypy_integer_from_i64(vm, high);
+        items[2] = value;
+        tinypy_value_t *result = __tinypy_item_call_method(container, slice_name, items, value != NULL ? 3U : 2U, out_error);
+        TINYPY_DECREF(items[1]);
+        TINYPY_DECREF(items[0]);
+        return result;
+    }
+    items[0] = __tinypy_item_offsets_slice(vm, low, high);
+    items[1] = value;
+    tinypy_value_t *result = __tinypy_item_call_attribute(container, item_name, items, value != NULL ? 2U : 1U, out_error);
     TINYPY_DECREF(items[0]);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_item_fallback_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+/* Whether apply_slice and assign_slice use sq_slice and sq_ass_slice: both
+   bounds must be offsets, and only classic instances, lists and types that
+   define the legacy method have the slot. */
+static tinypy_bool_t __tinypy_item_uses_offsets(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *start, tinypy_value_t *stop) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(container);
 
-    if (TINYPY_VALUE_KIND(container) != TINYPY_VALUE_OLD_INSTANCE) {
-        tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
-        return slice;
+    if (__tinypy_item_is_slice_offset(start) == 0 || __tinypy_item_is_slice_offset(stop) == 0) {
+        return TINYPY_FALSE;
     }
-    int64_t low;
-    int64_t high;
-
-    if (__tinypy_item_legacy_slice_bounds(container, start, stop, &low, &high, out_error) == 0) {
-        return NULL;
-    }
-    tinypy_value_t *low_value = tinypy_integer_from_i64(vm, low);
-    tinypy_value_t *high_value = tinypy_integer_from_i64(vm, high);
-    tinypy_value_t *slice = tinypy_slice_new(vm, low_value, high_value, NULL);
-
-    TINYPY_DECREF(high_value);
-    TINYPY_DECREF(low_value);
-    return slice;
+    tinypy_bool_t slot = kind == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(container, slice_name) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return slot;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_get_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    tinypy_value_t *slice;
-    tinypy_value_t *result;
 
-    if (tinypy_internal_object_has_special_override_key(container, vm->internal_special_getslice_key) != 0) {
-        tinypy_value_t *return_value_1 = __tinypy_item_call_legacy_slice(container, vm->internal_special_getslice_key, start, stop, NULL, out_error);
+    if (__tinypy_item_uses_offsets(container, vm->internal_special_getslice_key, start, stop) != 0) {
+        tinypy_value_t *return_value_1 = __tinypy_item_call_offsets(container, vm->internal_special_getslice_key, vm->internal_special_getitem_key, start, stop, NULL, out_error);
         return return_value_1;
     }
-    slice = __tinypy_item_fallback_slice(container, start, stop, out_error);
-    if (slice == NULL) {
-        return NULL;
-    }
-    result = tinypy_get_item(container, slice, out_error);
+    tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
+    tinypy_value_t *result = tinypy_get_item(container, slice, out_error);
     TINYPY_DECREF(slice);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    tinypy_value_t *slice;
     tinypy_bool_t stored;
 
-    if (tinypy_internal_object_has_special_override_key(container, vm->internal_special_setslice_key) != 0) {
-        tinypy_value_t *result = __tinypy_item_call_legacy_slice(container, vm->internal_special_setslice_key, start, stop, value, out_error);
+    if (__tinypy_item_uses_offsets(container, vm->internal_special_setslice_key, start, stop) != 0) {
+        tinypy_value_t *result = __tinypy_item_call_offsets(container, vm->internal_special_setslice_key, vm->internal_special_setitem_key, start, stop, value, out_error);
 
         if (result == NULL) {
             return TINYPY_FALSE;
@@ -812,27 +977,21 @@ tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
     }
-    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_LIST) {
+    /* list_ass_slice clamps the offsets only after collecting the
+       replacement, which may resize the list. */
+    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_LIST && __tinypy_item_is_slice_offset(start) != 0 && __tinypy_item_is_slice_offset(stop) != 0) {
         int64_t low;
         int64_t high;
 
-        if (__tinypy_item_legacy_slice_bounds(container, start, stop, &low, &high, out_error) == 0) {
+        if (__tinypy_item_slice_offsets(container, start, stop, &low, &high, out_error) == 0) {
             return TINYPY_FALSE;
         }
-        tinypy_value_t *low_value = tinypy_integer_from_i64(vm, low < 0 ? 0 : low);
-        tinypy_value_t *high_value = tinypy_integer_from_i64(vm, high < 0 ? 0 : high);
-
-        slice = tinypy_slice_new(vm, low_value, high_value, NULL);
-        TINYPY_DECREF(high_value);
-        TINYPY_DECREF(low_value);
+        tinypy_value_t *slice = __tinypy_item_offsets_slice(vm, low < 0 ? 0 : low, high < 0 ? 0 : high);
         stored = __tinypy_item_list_set_slice(container, slice, value, TINYPY_FALSE, TINYPY_TRUE, out_error);
         TINYPY_DECREF(slice);
         return stored;
     }
-    slice = __tinypy_item_fallback_slice(container, start, stop, out_error);
-    if (slice == NULL) {
-        return TINYPY_FALSE;
-    }
+    tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
     stored = tinypy_set_item(container, slice, value, out_error);
     TINYPY_DECREF(slice);
     return stored;
@@ -840,11 +999,9 @@ tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_delete_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    tinypy_value_t *slice;
-    tinypy_bool_t deleted;
 
-    if (tinypy_internal_object_has_special_override_key(container, vm->internal_special_delslice_key) != 0) {
-        tinypy_value_t *result = __tinypy_item_call_legacy_slice(container, vm->internal_special_delslice_key, start, stop, NULL, out_error);
+    if (__tinypy_item_uses_offsets(container, vm->internal_special_delslice_key, start, stop) != 0) {
+        tinypy_value_t *result = __tinypy_item_call_offsets(container, vm->internal_special_delslice_key, vm->internal_special_delitem_key, start, stop, NULL, out_error);
 
         if (result == NULL) {
             return TINYPY_FALSE;
@@ -852,11 +1009,8 @@ tinypy_bool_t tinypy_internal_delete_slice(tinypy_value_t *container, tinypy_val
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
     }
-    slice = __tinypy_item_fallback_slice(container, start, stop, out_error);
-    if (slice == NULL) {
-        return TINYPY_FALSE;
-    }
-    deleted = tinypy_delete_item(container, slice, out_error);
+    tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
+    tinypy_bool_t deleted = tinypy_delete_item(container, slice, out_error);
     TINYPY_DECREF(slice);
     return deleted;
 }
@@ -879,7 +1033,7 @@ static tinypy_bool_t __tinypy_set_item(tinypy_value_t *container, tinypy_value_t
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     TINYPY_CLEAR_ERROR(out_error);
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_override_key(container, vm->internal_special_setitem_key) != 0) {
+    if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(container, vm->internal_special_setitem_key) != 0)) {
         tinypy_value_t *items[2] = {key, value};
         tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_setitem_key, items, 2U, out_error);
 
@@ -907,15 +1061,17 @@ static tinypy_bool_t __tinypy_set_item(tinypy_value_t *container, tinypy_value_t
             tinypy_bool_t return_value_3 = __tinypy_item_list_set_slice(container, key, value, dispatch_special == 0, legacy_slice, out_error);
             return return_value_3;
         }
-        if (__tinypy_item_list_index(container, key, &index, out_error) == 0) {
+        if (__tinypy_item_position(container, key, "list assignment index out of range", &index, out_error) == 0) {
             return TINYPY_FALSE;
         }
         tinypy_list_set(container, index, value);
         return TINYPY_TRUE;
     }
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_key(container, vm->internal_special_setitem_key) != 0) {
-        tinypy_value_t *items[2] = {key, value};
-        tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_setitem_key, items, 2U, out_error);
+    tinypy_value_t *items[2] = {key, value};
+    if (dispatch_special != 0 && (kind == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_key(container, vm->internal_special_setitem_key) != 0)) {
+        tinypy_value_t *result = kind == TINYPY_VALUE_OLD_INSTANCE
+                                     ? __tinypy_item_call_attribute(container, vm->internal_special_setitem_key, items, 2U, out_error)
+                                     : __tinypy_item_call_method(container, vm->internal_special_setitem_key, items, 2U, out_error);
 
         if (result == NULL) {
             return TINYPY_FALSE;
@@ -923,7 +1079,7 @@ static tinypy_bool_t __tinypy_set_item(tinypy_value_t *container, tinypy_value_t
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not support item assignment", out_error);
+    __tinypy_item_unsupported(container, key, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object does not support item assignment"), (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object does not support item assignment"), out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -945,7 +1101,7 @@ static tinypy_bool_t __tinypy_delete_item(tinypy_value_t *container, tinypy_valu
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     TINYPY_CLEAR_ERROR(out_error);
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_override_key(container, vm->internal_special_delitem_key) != 0) {
+    if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(container, vm->internal_special_delitem_key) != 0)) {
         tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_delitem_key, &key, 1U, out_error);
 
         if (result == NULL) {
@@ -976,14 +1132,16 @@ static tinypy_bool_t __tinypy_delete_item(tinypy_value_t *container, tinypy_valu
             tinypy_bool_t return_value_2 = __tinypy_item_list_delete_slice(container, key, out_error);
             return return_value_2;
         }
-        if (__tinypy_item_list_index(container, key, &index, out_error) == 0) {
+        if (__tinypy_item_position(container, key, "list assignment index out of range", &index, out_error) == 0) {
             return TINYPY_FALSE;
         }
         tinypy_list_delete(container, index);
         return TINYPY_TRUE;
     }
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_key(container, vm->internal_special_delitem_key) != 0) {
-        tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_delitem_key, &key, 1U, out_error);
+    if (dispatch_special != 0 && (kind == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_key(container, vm->internal_special_delitem_key) != 0)) {
+        tinypy_value_t *result = kind == TINYPY_VALUE_OLD_INSTANCE
+                                     ? __tinypy_item_call_attribute(container, vm->internal_special_delitem_key, &key, 1U, out_error)
+                                     : __tinypy_item_call_method(container, vm->internal_special_delitem_key, &key, 1U, out_error);
 
         if (result == NULL) {
             return TINYPY_FALSE;
@@ -991,7 +1149,7 @@ static tinypy_bool_t __tinypy_delete_item(tinypy_value_t *container, tinypy_valu
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object does not support item deletion", out_error);
+    __tinypy_item_unsupported(container, key, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object doesn't support item deletion"), (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object does not support item deletion"), out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////

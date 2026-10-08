@@ -1,11 +1,16 @@
 #include "internal.h"
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_functools_no_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_functools_no_keywords(tinypy_value_t *function, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     if (kwargs == NULL || TINYPY_DICT_SIZE(kwargs) == 0U) {
         return TINYPY_TRUE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "function does not accept keyword arguments", out_error);
+    const tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_TEXT(tinypy_native_function_name(function)),
+        TINYPY_MESSAGE_PART_LITERAL("() takes no keyword arguments")
+    };
+
+    tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(function), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -51,6 +56,10 @@ tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "the first argument must be callable", out_error);
         return NULL;
     }
+    tinypy_value_t *keywords = kwargs != NULL ? __tinypy_functools_copy_keywords(kwargs, out_error) : tinypy_dict_new(vm);
+    if (keywords == NULL) {
+        return NULL;
+    }
     tinypy_partial_object_t *partial = (tinypy_partial_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
     partial->callable = callable;
     TINYPY_INCREF(callable);
@@ -63,11 +72,7 @@ tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value
         selected_value = tinypy_tuple_from_items(vm, &tuple_items[1], argument_count - 1U);
     }
     partial->args = selected_value;
-    partial->keywords = kwargs != NULL ? __tinypy_functools_copy_keywords(kwargs, out_error) : tinypy_dict_new(vm);
-    if (partial->keywords == NULL) {
-        TINYPY_DECREF(&partial->base);
-        return NULL;
-    }
+    partial->keywords = keywords;
     return &partial->base;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -270,11 +275,13 @@ tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinyp
     tinypy_error_t *iteration_error = NULL;
 
     (void)user_data;
-    if (__tinypy_functools_no_keywords(vm, kwargs, out_error) == 0) {
+    if (__tinypy_functools_no_keywords(function, kwargs, out_error) == 0) {
         return NULL;
     }
     if (argument_count < 2U || argument_count > 3U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reduce expected two or three arguments", out_error);
+        tinypy_value_t *name = tinypy_native_function_name(function);
+
+        tinypy_internal_make_arity_error(vm, (const char *)TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name), argument_count, 2U, 3U, TINYPY_ARITY_STYLE_UNPACK, out_error);
         return NULL;
     }
     tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 1U);

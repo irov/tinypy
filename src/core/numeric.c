@@ -348,11 +348,11 @@ static tinypy_value_t *__tinypy_float_as_integer_ratio_method(tinypy_value_t *fu
     }
     double value = TINYPY_FLOAT_OBJECT(TINYPY_TUPLE_GET(args, 0U))->value;
     if (isnan(value)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "cannot convert NaN to integer ratio", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "Cannot pass NaN to float.as_integer_ratio.", out_error);
         return NULL;
     }
     if (isinf(value)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "cannot convert Infinity to integer ratio", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "Cannot pass infinity to float.as_integer_ratio.", out_error);
         return NULL;
     }
     if (value == 0.0) {
@@ -488,6 +488,7 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
     size_t coefficient_end;
     size_t fraction_digits = 0U;
     size_t significant_digits = 0U;
+    size_t leading_zeros = 0U;
     size_t digit_count = 0U;
     int32_t first_digit = 0;
     int32_t leading_bits = 0;
@@ -554,6 +555,9 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
                     first_digit = digit;
                 }
                 significant_digits += 1U;
+            }
+            else {
+                leading_zeros += 1U;
             }
         }
         else if (bytes[cursor] == '.' && dot == 0) {
@@ -649,7 +653,11 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
     if (kept < precision) {
         significand <<= precision - kept;
     }
-    if (guard != 0 && (sticky != 0 || (significand & UINT64_C(1)) != 0U)) {
+    /* float_fromhex takes the bit above a rounding bit at the top of the
+       leading digit from the character before that digit: a stripped zero
+       keeps the tie even, anything else rounds it up. */
+    tinypy_bool_t odd = (significand & UINT64_C(1)) != 0U || (precision == 0U && leading_bits == 4 && leading_zeros == 0U) ? TINYPY_TRUE : TINYPY_FALSE;
+    if (guard != 0 && (sticky != 0 || odd != 0)) {
         significand += 1U;
     }
     *out_number = ldexp((double)significand, (int)least);

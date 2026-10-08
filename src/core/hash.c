@@ -7,6 +7,7 @@
 
 #define TINYPY_LONG_DIGIT_MASK UINT16_C(0x7fff)
 #define TINYPY_DOUBLE_LONG_DIGITS ((size_t)70U)
+#define TINYPY_INTERNAL_HASH_TUPLE_INLINE_FRAMES 16U
 
 //////////////////////////////////////////////////////////////////////////
 static inline tinypy_hash_t __tinypy_internal_hash_fix(uint64_t value) {
@@ -262,41 +263,99 @@ static tinypy_hash_t __tinypy_internal_hash_unicode(const tinypy_vm_t *vm, const
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct tinypy_internal_hash_tuple_frame_t {
+    const tinypy_value_t *tuple;
+    size_t index;
+    uint64_t hash;
+    uint64_t multiplier;
+} tinypy_internal_hash_tuple_frame_t;
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_hash_tuple_begin(tinypy_internal_hash_tuple_frame_t *frame, const tinypy_value_t *tuple) {
+    frame->tuple = tuple;
+    frame->index = 0U;
+    frame->hash = UINT64_C(0x345678);
+    frame->multiplier = UINT64_C(1000003);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_hash_tuple_fold(tinypy_internal_hash_tuple_frame_t *frame, tinypy_hash_t item_hash) {
+    size_t remaining = TINYPY_SIZED_SIZE(frame->tuple) - frame->index - 1U;
+
+    frame->hash = (frame->hash ^ (uint64_t)item_hash) * frame->multiplier;
+    frame->multiplier += UINT64_C(82520) + (uint64_t)remaining + (uint64_t)remaining;
+    frame->index += 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+/* tuplehash; exact tuples nested in a tuple are hashed with an explicit stack
+   rather than C recursion, so deep nesting cannot exhaust the native stack. */
 static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *const *items = tinypy_internal_tuple_items(value);
-    size_t remaining = TINYPY_SIZED_SIZE(value);
-    size_t index = 0U;
-    uint64_t hash = UINT64_C(0x345678);
-    uint64_t multiplier = UINT64_C(1000003);
-    while (remaining != 0U) {
-        tinypy_value_t *previous_raised = TINYPY_VALUE_VM(value)->raised_value;
-        tinypy_hash_t item_hash = tinypy_internal_hash_value(items[index], out_error);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_internal_hash_tuple_frame_t inline_frames[TINYPY_INTERNAL_HASH_TUPLE_INLINE_FRAMES];
+    tinypy_internal_hash_tuple_frame_t *frames = inline_frames;
+    size_t capacity = TINYPY_INTERNAL_HASH_TUPLE_INLINE_FRAMES;
+    size_t depth = 1U;
+    tinypy_hash_t hash = (tinypy_hash_t)0;
 
-        if ((out_error != NULL && *out_error != NULL) || TINYPY_VALUE_VM(value)->raised_value != previous_raised) {
-            return (tinypy_hash_t)0;
+    __tinypy_internal_hash_tuple_begin(&frames[0], value);
+    while (depth != 0U) {
+        tinypy_internal_hash_tuple_frame_t *frame = &frames[depth - 1U];
+
+        if (frame->index == TINYPY_SIZED_SIZE(frame->tuple)) {
+            hash = __tinypy_internal_hash_fix(frame->hash + UINT64_C(97531));
+            depth -= 1U;
+            if (depth != 0U) {
+                __tinypy_internal_hash_tuple_fold(&frames[depth - 1U], hash);
+            }
+            continue;
         }
+        const tinypy_value_t *item = tinypy_internal_tuple_items(frame->tuple)[frame->index];
+        if (item->type != &vm->types[TINYPY_VALUE_TUPLE]) {
+            tinypy_value_t *previous_raised = vm->raised_value;
+            tinypy_hash_t item_hash = tinypy_internal_hash_value(item, out_error);
 
-        remaining -= 1U;
-        hash = (hash ^ (uint64_t)item_hash) * multiplier;
-        multiplier += UINT64_C(82520) + (uint64_t)remaining + (uint64_t)remaining;
-        index += 1U;
+            if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
+                hash = (tinypy_hash_t)0;
+                break;
+            }
+            __tinypy_internal_hash_tuple_fold(frame, item_hash);
+            continue;
+        }
+        if (depth == capacity) {
+            size_t size = capacity * sizeof(*frames);
+            tinypy_internal_hash_tuple_frame_t *grown = frames == inline_frames
+                                                            ? (tinypy_internal_hash_tuple_frame_t *)tinypy_internal_vm_allocate_checked(vm, size * 2U, out_error)
+                                                            : (tinypy_internal_hash_tuple_frame_t *)tinypy_internal_vm_reallocate_checked(vm, frames, size, size * 2U, out_error);
+
+            if (grown == NULL) {
+                hash = (tinypy_hash_t)0;
+                break;
+            }
+            if (frames == inline_frames) {
+                (void)memcpy(grown, inline_frames, size);
+            }
+            frames = grown;
+            capacity *= 2U;
+        }
+        __tinypy_internal_hash_tuple_begin(&frames[depth], item);
+        depth += 1U;
     }
-    hash += UINT64_C(97531);
-    tinypy_hash_t return_value_1 = __tinypy_internal_hash_fix(hash);
-    return return_value_1;
+    if (frames != inline_frames) {
+        tinypy_internal_vm_deallocate(vm, frames, capacity * sizeof(*frames));
+    }
+    return hash;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinypy_bool_t overrides_only, tinypy_hash_t *out_hash, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *mutable_value = (tinypy_value_t *)value;
 
-    if ((overrides_only != 0 ? tinypy_internal_object_has_special_override_key(mutable_value, vm->internal_special_hash_key) : tinypy_internal_object_has_special_key(mutable_value, vm->internal_special_hash_key)) == 0) {
+    if (overrides_only != 0 && tinypy_internal_object_has_special_override_key(mutable_value, vm->internal_special_hash_key) == 0) {
         return INT32_C(0);
     }
-    tinypy_value_t *method = tinypy_internal_object_get_special_key(mutable_value, vm->internal_special_hash_key, out_error);
+    tinypy_value_t *method;
+    int32_t found = tinypy_internal_object_lookup_special_key(mutable_value, vm->internal_special_hash_key, &method, out_error);
 
-    if (method == NULL) {
-        return INT32_C(-1);
+    if (found <= 0) {
+        return found;
     }
     if (TINYPY_VALUE_KIND(method) == TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE) {
         tinypy_message_part_t parts[] = {
@@ -341,6 +400,26 @@ static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinyp
     tinypy_bool_t failed = out_error != NULL && *out_error != NULL;
 
     return failed != 0 ? INT32_C(-1) : INT32_C(1);
+}
+//////////////////////////////////////////////////////////////////////////
+/* instance_hash: a classic instance with __eq__ or __cmp__, looked up in that
+   order, needs its own __hash__. */
+static int32_t __tinypy_internal_hash_classic_comparable(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *const names[] = {vm->internal_special_eq_key, vm->internal_special_cmp_key};
+
+    for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        tinypy_value_t *method;
+        int32_t found = tinypy_internal_object_lookup_special_key(value, names[index], &method, out_error);
+
+        if (found > 0) {
+            TINYPY_DECREF(method);
+        }
+        if (found != 0) {
+            return found;
+        }
+    }
+    return INT32_C(0);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_hash_t tinypy_internal_hash_value(const tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -475,6 +554,9 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
     default: {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
         tinypy_hash_t hash;
+
+        /* PyObject_Hash readies a type without tp_hash. */
+        value->type->flags &= ~TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
         int32_t special = __tinypy_internal_hash_special(value, TINYPY_FALSE, &hash, out_error);
 
         if (special > 0) {
@@ -483,11 +565,16 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
         if (special < 0) {
             return (tinypy_hash_t)0;
         }
-        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE &&
-            (tinypy_internal_object_has_special_key((tinypy_value_t *)value, vm->internal_special_cmp_key) != 0 ||
-             tinypy_internal_object_has_special_key((tinypy_value_t *)value, vm->internal_special_eq_key) != 0)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable instance", out_error);
-            return (tinypy_hash_t)0;
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+            int32_t comparable = __tinypy_internal_hash_classic_comparable((tinypy_value_t *)value, out_error);
+
+            if (comparable < 0) {
+                return (tinypy_hash_t)0;
+            }
+            if (comparable > 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable instance", out_error);
+                return (tinypy_hash_t)0;
+            }
         }
         function_result = __tinypy_internal_hash_fix(
                     (uint64_t)((uintptr_t)value >> 4U));

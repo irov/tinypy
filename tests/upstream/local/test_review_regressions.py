@@ -1041,8 +1041,10 @@ class ReviewRegressions(unittest.TestCase):
             self.assertEqual(cmp(first, other), -cmp(other, first))
             if type(first) is type(other):
                 expected = cmp(id(first), id(other))
-            elif isinstance(other, (int, long, float)):
-                expected = cmp(id(type(first)), id(type(other)))
+            elif isinstance(other, (int, long)):
+                # Numbers of different types order like CPython's static
+                # type objects, where float precedes int and long.
+                expected = -1
             else:
                 continue
             self.assertEqual(cmp(first, other), expected)

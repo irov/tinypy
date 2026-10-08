@@ -340,27 +340,18 @@ static void __tinypy_internal_value_release_contents(tinypy_value_t *value) {
     vm->release_depth -= 1U;
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_value_release_zero(tinypy_value_t *value) {
+/* Runs the generator close, __del__ and native finalizers of a dying object;
+   returns TRUE when one of them resurrected it. */
+static tinypy_bool_t __tinypy_internal_value_run_finalizers(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = value->type;
 
-    if (type == &vm->types[TINYPY_VALUE_INTEGER] && vm->state == TINYPY_VM_STATE_LIVE && vm->integer_free_count < TINYPY_INTEGER_FREE_LIST_MAX) {
-        tinypy_integer_object_t *integer = TINYPY_INTEGER_OBJECT(value);
-
-        __tinypy_internal_integer_set_free_next(integer, vm->integer_free_list);
-        vm->integer_free_list = integer;
-        vm->integer_free_count += 1U;
-        return;
-    }
-    if (type->weakref_offset != 0U) {
-        tinypy_internal_weakref_clear(value);
-    }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GENERATOR && __tinypy_internal_value_finalize_generator(value) != 0) {
-        return;
+        return TINYPY_TRUE;
     }
     if (vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_epoch != vm->type_lookup_cache_epoch || vm->type_lookup_cache_epoch == 0U || type->has_finalizer != 0 || type->has_classic_mro != 0 || type->has_custom_mro != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE)) {
         if (__tinypy_internal_value_finalize(value) != 0) {
-            return;
+            return TINYPY_TRUE;
         }
     }
     if ((TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && value->type->native_spec.finalize != NULL)
@@ -374,20 +365,50 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
         }
         value->ref -= 1U;
         if (value->ref != 0U) {
-            return;
+            return TINYPY_TRUE;
         }
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_value_release_zero(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_type_t *type = value->type;
+
+    if (type == &vm->types[TINYPY_VALUE_INTEGER] && vm->state == TINYPY_VM_STATE_LIVE && vm->integer_free_count < TINYPY_INTEGER_FREE_LIST_MAX) {
+        tinypy_integer_object_t *integer = TINYPY_INTEGER_OBJECT(value);
+
+        __tinypy_internal_integer_set_free_next(integer, vm->integer_free_list);
+        vm->integer_free_list = integer;
+        vm->integer_free_count += 1U;
+        return;
+    }
+    if (type->weakref_offset != 0U) {
+        tinypy_internal_weakref_clear(value, TINYPY_TRUE);
+    }
+    /* The garbage a finalizer releases directly is not deferred: a deferred
+       frame or bound method would still refer to the object and make it look
+       resurrected. subtype_dealloc lowers the trashcan nesting the same way. */
+    size_t release_depth = vm->release_depth;
+    if (release_depth >= TINYPY_RELEASE_DEFER_DEPTH) {
+        vm->release_depth = TINYPY_RELEASE_DEFER_DEPTH - 1U;
+    }
+    tinypy_bool_t resurrected = __tinypy_internal_value_run_finalizers(value);
+    vm->release_depth = release_depth;
+    if (resurrected != 0) {
+        return;
     }
     /* Finalizers may replace __class__ and create new weak references. */
     type = value->type;
     if (type->weakref_offset != 0U) {
-        tinypy_internal_weakref_clear(value);
+        tinypy_internal_weakref_clear(value, TINYPY_FALSE);
     }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
         tinypy_internal_string_unintern(value);
     }
     /* Only already-finalized zero-ref objects are deferred. Their ref word
        temporarily links the queue; no registry or extra allocation is needed. */
-    if (vm->release_depth >= 32U) {
+    if (vm->release_depth >= TINYPY_RELEASE_DEFER_DEPTH) {
         value->ref = (tinypy_ref_t)(uintptr_t)vm->pending_releases;
         vm->pending_releases = value;
         return;

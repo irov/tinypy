@@ -108,6 +108,7 @@ typedef struct tinypy_intern_entry_t {
 #define TINYPY_FRAME_FREE_LIST_MAX 64U
 #define TINYPY_METHOD_FREE_LIST_MAX 256U
 #define TINYPY_NATIVE_METHOD_FREE_LIST_MAX 64U
+#define TINYPY_RELEASE_DEFER_DEPTH 32U
 #define TINYPY_INTERNAL_KEY_TABLE_SIZE 2048U
 #define TINYPY_TYPE_LOOKUP_CACHE_SIZE 1024U
 //////////////////////////////////////////////////////////////////////////
@@ -321,9 +322,6 @@ typedef struct tinypy_intern_entry_t {
     X(internal_pattern_key, "pattern", 1) \
     X(internal_maxsplit_key, "maxsplit", 1) \
     X(internal_repl_key, "repl", 1) \
-    X(internal_codec_cache_key, "_cache", 1) \
-    X(internal_codec_search_path_key, "_search_path", 1) \
-    X(internal_codec_errors_key, "_errors", 1) \
     X(internal_codec_ascii_name, "ascii", 1) \
     X(internal_codec_utf8_name, "utf8", 1) \
     X(internal_codec_latin1_name, "latin-1", 1) \
@@ -482,6 +480,7 @@ typedef struct tinypy_intern_entry_t {
     X(internal_viewvalues_key, "viewvalues", 1) \
     X(internal_zfill_key, "zfill", 1) \
     X(internal_codec_646_key, "646", 1) \
+    X(internal_codec_8859_key, "8859", 1) \
     X(internal_arithmetic_error_key, "ArithmeticError", 1) \
     X(internal_attribute_error_key, "AttributeError", 1) \
     X(internal_base_exception_key, "BaseException", 1) \
@@ -578,8 +577,9 @@ typedef struct tinypy_intern_entry_t {
     X(internal_add_extension_key, "add_extension", 1) \
     X(internal_all_key, "all", 1) \
     X(internal_all_feature_names_key, "all_feature_names", 1) \
-    X(internal_ansi_hyphen_x3_dot_4_hyphen_1968_key, "ansi-x3.4-1968", 1) \
     X(internal_ansi_x3_dot_4_1968_key, "ansi_x3.4_1968", 1) \
+    X(internal_ansi_x3_dot_4_1986_key, "ansi_x3.4_1986", 1) \
+    X(internal_ansi_x3_4_1968_key, "ansi_x3_4_1968", 1) \
     X(internal_any_key, "any", 1) \
     X(internal_api_version_key, "api_version", 1) \
     X(internal_apply_key, "apply", 1) \
@@ -601,6 +601,7 @@ typedef struct tinypy_intern_entry_t {
     X(internal_cell_contents_key, "cell_contents", 1) \
     X(internal_chr_key, "chr", 1) \
     X(internal_classmethod_key, "classmethod", 1) \
+    X(internal_classmethod_descriptor_key, "classmethod_descriptor", 1) \
     X(internal_classobj_key, "classobj", 1) \
     X(internal_clear_extension_cache_key, "clear_extension_cache", 1) \
     X(internal_close_key, "close", 1) \
@@ -624,7 +625,10 @@ typedef struct tinypy_intern_entry_t {
     X(internal_complex_key, "complex", 1) \
     X(internal_constructor_key, "constructor", 1) \
     X(internal_copyright_key, "copyright", 1) \
+    X(internal_cp367_key, "cp367", 1) \
     X(internal_cp819_key, "cp819", 1) \
+    X(internal_csascii_key, "csascii", 1) \
+    X(internal_csisolatin1_key, "csisolatin1", 1) \
     X(internal_deleter_key, "deleter", 1) \
     X(internal_dict_items_key, "dict_items", 1) \
     X(internal_dict_keys_key, "dict_keys", 1) \
@@ -695,9 +699,10 @@ typedef struct tinypy_intern_entry_t {
     X(internal_groupindex_key, "groupindex", 1) \
     X(internal_hasattr_key, "hasattr", 1) \
     X(internal_hash_key, "hash", 1) \
-    X(internal_hex_hyphen_codec_key, "hex-codec", 1) \
     X(internal_hex_codec_key, "hex_codec", 1) \
     X(internal_hexversion_key, "hexversion", 1) \
+    X(internal_ibm367_key, "ibm367", 1) \
+    X(internal_ibm819_key, "ibm819", 1) \
     X(internal_id_key, "id", 1) \
     X(internal_ignore_key, "ignore", 1) \
     X(internal_strict_errors_key, "strict_errors", 1) \
@@ -717,10 +722,14 @@ typedef struct tinypy_intern_entry_t {
     X(internal_isatty_key, "isatty", 1) \
     X(internal_isdisjoint_key, "isdisjoint", 1) \
     X(internal_isinstance_key, "isinstance", 1) \
-    X(internal_iso_hyphen_8859_hyphen_1_key, "iso-8859-1", 1) \
-    X(internal_iso646_hyphen_us_key, "iso646-us", 1) \
-    X(internal_iso8859_hyphen_1_key, "iso8859-1", 1) \
-    X(internal_iso_8859_hyphen_1_key, "iso_8859-1", 1) \
+    X(internal_iso646_us_key, "iso646_us", 1) \
+    X(internal_iso8859_key, "iso8859", 1) \
+    X(internal_iso8859_1_key, "iso8859_1", 1) \
+    X(internal_iso_646_dot_irv_1991_key, "iso_646.irv_1991", 1) \
+    X(internal_iso_8859_1_key, "iso_8859_1", 1) \
+    X(internal_iso_8859_1_1987_key, "iso_8859_1_1987", 1) \
+    X(internal_iso_ir_100_key, "iso_ir_100", 1) \
+    X(internal_iso_ir_6_key, "iso_ir_6", 1) \
     X(internal_issubclass_key, "issubclass", 1) \
     X(internal_issubset_key, "issubset", 1) \
     X(internal_issuperset_key, "issuperset", 1) \
@@ -730,6 +739,7 @@ typedef struct tinypy_intern_entry_t {
     X(internal_l1_key, "l1", 1) \
     X(internal_lastgroup_key, "lastgroup", 1) \
     X(internal_lastindex_key, "lastindex", 1) \
+    X(internal_latin_key, "latin", 1) \
     X(internal_latin1_key, "latin1", 1) \
     X(internal_latin_1_key, "latin_1", 1) \
     X(internal_latin_1_decode_key, "latin_1_decode", 1) \
@@ -829,9 +839,11 @@ typedef struct tinypy_intern_entry_t {
     X(internal_union_key, "union", 1) \
     X(internal_unpack_key, "unpack", 1) \
     X(internal_unpack_from_key, "unpack_from", 1) \
-    X(internal_us_hyphen_ascii_key, "us-ascii", 1) \
+    X(internal_us_key, "us", 1) \
+    X(internal_us_ascii_key, "us_ascii", 1) \
     X(internal_utf_key, "utf", 1) \
-    X(internal_utf_hyphen_8_key, "utf-8", 1) \
+    X(internal_utf8_ucs2_key, "utf8_ucs2", 1) \
+    X(internal_utf8_ucs4_key, "utf8_ucs4", 1) \
     X(internal_utf_8_key, "utf_8", 1) \
     X(internal_utf_8_encode_key, "utf_8_encode", 1) \
     X(internal_vars_key, "vars", 1) \
@@ -1280,7 +1292,6 @@ typedef struct tinypy_dict_object_t {
     uint64_t cache_version;
     tinypy_bool_t type_dictionary;
     tinypy_type_t *type_owner;
-    size_t popitem_finger;
     tinypy_dict_entry_t small_table[TINYPY_DICT_MIN_SIZE];
 } tinypy_dict_object_t;
 //////////////////////////////////////////////////////////////////////////
@@ -1289,7 +1300,6 @@ typedef struct tinypy_set_object_t {
     tinypy_value_t *dict;
     tinypy_hash_t hash;
     tinypy_bool_t hash_computed;
-    size_t finger;
     tinypy_value_t *weakrefs;
 } tinypy_set_object_t;
 //////////////////////////////////////////////////////////////////////////
@@ -1441,7 +1451,6 @@ typedef struct tinypy_frame_object_t {
     tinypy_value_t *globals;
     tinypy_value_t *locals;
     tinypy_value_t *trace;
-    uint64_t handled_clear_epoch;
     tinypy_bool_t handled_state_saved;
     tinypy_value_t *previous_handled_type;
     tinypy_value_t *previous_handled_value;
@@ -1531,7 +1540,8 @@ typedef struct tinypy_module_object_t {
 typedef enum tinypy_native_descriptor_kind_e {
     TINYPY_NATIVE_DESCRIPTOR_AUTO = 0,
     TINYPY_NATIVE_DESCRIPTOR_METHOD = 1,
-    TINYPY_NATIVE_DESCRIPTOR_WRAPPER = 2
+    TINYPY_NATIVE_DESCRIPTOR_WRAPPER = 2,
+    TINYPY_NATIVE_DESCRIPTOR_CLASS_METHOD = 3
 } tinypy_native_descriptor_kind_e;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_native_function_object_t {
@@ -1732,6 +1742,13 @@ typedef char tinypy_float_body_must_follow_header_t[offsetof(tinypy_float_object
 typedef char tinypy_complex_body_must_follow_header_t[offsetof(tinypy_complex_object_t, real) == sizeof(tinypy_value_t) ? 1 : -1];
 typedef char tinypy_dict_body_must_follow_header_t[offsetof(tinypy_dict_object_t, fill) == sizeof(tinypy_value_t) ? 1 : -1];
 //////////////////////////////////////////////////////////////////////////
+/* A container whose representation is being built, as Py_ReprEnter records
+   it; the frames live on the native stack of the representing calls. */
+typedef struct tinypy_representation_frame_t {
+    const tinypy_value_t *value;
+    struct tinypy_representation_frame_t *previous;
+} tinypy_representation_frame_t;
+//////////////////////////////////////////////////////////////////////////
 struct tinypy_vm_t {
     uint32_t state;
     tinypy_allocator_t allocator;
@@ -1768,6 +1785,7 @@ struct tinypy_vm_t {
     tinypy_type_t *native_method_descriptor_type;
     tinypy_type_t *native_wrapper_descriptor_type;
     tinypy_type_t *native_method_wrapper_type;
+    tinypy_type_t *native_class_method_descriptor_type;
 
     tinypy_sequence_slots_t buffer_sequence_slots;
     tinypy_mapping_slots_t buffer_mapping_slots;
@@ -1783,7 +1801,6 @@ struct tinypy_vm_t {
     tinypy_value_t *raised_value;
     tinypy_value_t *emergency_memory_error;
     tinypy_value_t *raised_traceback;
-    uint64_t handled_clear_epoch;
     tinypy_value_t *handled_type;
     tinypy_value_t *handled_value;
     tinypy_value_t *handled_traceback;
@@ -1796,6 +1813,7 @@ struct tinypy_vm_t {
     uintptr_t native_stack_origin;
     size_t max_stack_bytes;
     tinypy_bool_t recursion_error;
+    tinypy_representation_frame_t *representation_frames;
 #if defined(TINYPY_DEBUGGER)
     tinypy_debugger_t debugger;
     tinypy_bool_t has_debugger;
@@ -2075,9 +2093,13 @@ void tinypy_internal_dict_release_references(tinypy_value_t *value, tinypy_relea
 void tinypy_internal_dict_destroy(tinypy_value_t *value);
 void tinypy_internal_dict_initialize_empty(tinypy_value_t *dict);
 tinypy_value_t *tinypy_internal_dict_copy(tinypy_value_t *source, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_dict_snapshot(tinypy_value_t *source, tinypy_error_t **out_error);
 void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *right);
-void tinypy_internal_dict_reserve(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_used);
-tinypy_bool_t tinypy_internal_dict_reserve_checked(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_used, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_dict_hash_checked(const tinypy_vm_t *vm, const tinypy_value_t *key, tinypy_hash_t *out_hash, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_dict_resize_checked(tinypy_vm_t *vm, tinypy_value_t *dict, size_t minimum_used, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_dict_merge_reserve_checked(tinypy_vm_t *vm, tinypy_value_t *dict, size_t incoming, tinypy_error_t **out_error);
+const tinypy_dict_entry_t *tinypy_internal_dict_next_entry(const tinypy_value_t *dict, size_t *position);
+tinypy_bool_t tinypy_internal_dict_pop_entry(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t **out_key, tinypy_value_t **out_value);
 tinypy_value_t *tinypy_internal_dict_get_optional(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key);
 tinypy_value_t *tinypy_internal_dict_get_optional_suppressed(tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key);
 tinypy_value_t *tinypy_internal_dict_get_optional_suppressed_status(tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_bool_t *out_succeeded);
@@ -2088,6 +2110,7 @@ tinypy_bool_t tinypy_internal_dict_lookup_hash_checked(const tinypy_vm_t *vm, co
 tinypy_bool_t tinypy_internal_dict_contains_checked(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_bool_t *out_contains, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_set_checked(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_dict_insert_checked(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_value_t *source, const char *negative_hint_message, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy_value_t *source, tinypy_value_t *keys_method, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_dict_delete_optional_checked(tinypy_vm_t *vm, tinypy_value_t *dict, const tinypy_value_t *key, tinypy_bool_t *out_deleted, tinypy_error_t **out_error);
@@ -2102,6 +2125,10 @@ tinypy_value_t *tinypy_internal_object_repr_builtin(tinypy_value_t *value, tinyp
 tinypy_value_t *tinypy_internal_object_str_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_operator_builtin(tinypy_value_t *left, tinypy_value_t *right, int32_t mode, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_unary_builtin(tinypy_value_t *value, int32_t mode, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_number_absolute(tinypy_value_t *value, tinypy_error_t **out_error);
+int32_t tinypy_internal_number_coerce(tinypy_value_t **left, tinypy_value_t **right, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_sequence_concat(tinypy_value_t *sequence, tinypy_value_t *other, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_number_as_index(tinypy_value_t *value, tinypy_error_kind_e overflow_kind, int64_t *out_index, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_get_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_delete_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error);
@@ -2123,6 +2150,7 @@ tinypy_value_t *tinypy_internal_frozenset_create(tinypy_type_t *type, tinypy_val
 tinypy_bool_t tinypy_internal_set_update_iterable(tinypy_value_t *set, tinypy_value_t *iterable, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_power_modulo(tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_builtin_power_slot(tinypy_value_type_e owner_kind, tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_index_as_i64(tinypy_value_t *value, int64_t *out_value, tinypy_bool_t clamp_overflow, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_integer_as_ssize(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error);
@@ -2131,6 +2159,15 @@ tinypy_bool_t tinypy_internal_number_as_i64(tinypy_value_t *value, int64_t *out_
 tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t *out_consumed, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_encode_attribute_name(tinypy_value_t *key, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_codecs_validate_name(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error);
+/* The codecs the runtime implements, by encodings module. */
+typedef enum tinypy_internal_builtin_codec_e {
+    TINYPY_INTERNAL_BUILTIN_CODEC_ASCII = 0,
+    TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 = 1,
+    TINYPY_INTERNAL_BUILTIN_CODEC_LATIN1 = 2,
+    TINYPY_INTERNAL_BUILTIN_CODEC_HEX = 3,
+    TINYPY_INTERNAL_BUILTIN_CODEC_NONE = 4
+} tinypy_internal_builtin_codec_e;
+tinypy_internal_builtin_codec_e tinypy_internal_codecs_builtin(tinypy_vm_t *vm, const tinypy_value_t *encoding);
 tinypy_value_t *tinypy_internal_dict_setdefault_checked(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *default_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_slice_unpack(tinypy_value_t *slice_value, tinypy_internal_slice_indices_t *indices, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_slice_adjust_indices(tinypy_vm_t *vm, size_t size, tinypy_internal_slice_indices_t *indices, tinypy_error_t **out_error);
@@ -2149,12 +2186,13 @@ tinypy_value_t *tinypy_internal_bytearray_repr(tinypy_value_t *value, tinypy_err
 tinypy_value_t *tinypy_internal_bytearray_string(tinypy_value_t *value, tinypy_error_t **out_error);
 void tinypy_internal_initialize_bytearray_methods(tinypy_vm_t *vm);
 tinypy_bool_t tinypy_internal_bytes_view(const tinypy_value_t *value, const uint8_t **out_bytes, size_t *out_size);
+tinypy_bool_t tinypy_internal_sequence_index(tinypy_value_t *key, int64_t *out_index, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_bytearray_concat_bytes(tinypy_vm_t *vm, const uint8_t *left_bytes, size_t left_size, const uint8_t *right_bytes, size_t right_size, tinypy_error_t **out_error);
 tinypy_type_t *tinypy_internal_type_new_configured(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_bool_t has_instance_dict, tinypy_bool_t has_weakrefs, tinypy_error_t **out_error);
 tinypy_value_t **tinypy_internal_object_dict_slot(tinypy_value_t *value);
 tinypy_value_t **tinypy_internal_object_member_slot(tinypy_value_t *value, size_t index);
 tinypy_value_t **tinypy_internal_weakref_head_slot(tinypy_value_t *value);
-void tinypy_internal_weakref_clear(tinypy_value_t *value);
+void tinypy_internal_weakref_clear(tinypy_value_t *value, tinypy_bool_t call_callbacks);
 void tinypy_internal_weakref_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_weakref_destroy(tinypy_value_t *value);
 tinypy_value_t *tinypy_internal_weakref_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
@@ -2229,6 +2267,7 @@ tinypy_bool_t tinypy_internal_output_write(tinypy_value_t *target, const void *b
 void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object);
 tinypy_bool_t tinypy_internal_output_write_value(tinypy_value_t *target, tinypy_value_t *text, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target, tinypy_bool_t new_flag);
+tinypy_bool_t tinypy_internal_output_flush_line(tinypy_vm_t *vm, tinypy_error_t **out_error);
 void tinypy_internal_type_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_type_destroy(tinypy_value_t *value);
 void tinypy_internal_type_lookup_cache_invalidate(tinypy_vm_t *vm);
@@ -2236,6 +2275,7 @@ void tinypy_internal_type_detach(tinypy_type_t *type);
 void tinypy_internal_type_modified(tinypy_type_t *type);
 void tinypy_internal_type_lookup_cache_finalize(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_type_lookup_key(tinypy_vm_t *vm, const tinypy_type_t *type, tinypy_value_t *key);
+void tinypy_internal_type_message_name(const tinypy_type_t *type, tinypy_message_part_t out_parts[3]);
 void tinypy_internal_type_set_attr_key(tinypy_type_t *type, tinypy_value_t *key, tinypy_value_t *value);
 tinypy_bool_t tinypy_internal_type_set_name(tinypy_type_t *type, tinypy_value_t *value, tinypy_error_t **out_error);
 void tinypy_internal_instance_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
@@ -2244,8 +2284,10 @@ void tinypy_internal_class_release_references(tinypy_value_t *value, tinypy_rele
 void tinypy_internal_old_instance_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_class_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_class_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+void tinypy_internal_initialize_class_type(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_class_get_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_old_instance_call_hook(tinypy_value_t *instance_value, tinypy_value_t *hook, tinypy_value_t *name, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_old_instance_set_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_class_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
@@ -2273,7 +2315,9 @@ void tinypy_internal_type_add_static_method(tinypy_type_t *type, tinypy_value_t 
 tinypy_value_t *tinypy_internal_object_special_operator_key(tinypy_vm_t *vm, size_t index);
 tinypy_value_t *tinypy_internal_type_mro_tuple(tinypy_type_t *type);
 tinypy_value_t *tinypy_internal_call_conversion(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t *out_handled, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_call_int_conversion(tinypy_value_t *value, tinypy_bool_t *out_handled, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_get_special_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
+int32_t tinypy_internal_object_lookup_special_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t **out_method, tinypy_error_t **out_error);
 void tinypy_internal_code_destroy(tinypy_value_t *value);
 void tinypy_internal_code_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_code_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
@@ -2308,8 +2352,10 @@ tinypy_value_t *tinypy_internal_string_formatter_parser_next(tinypy_iterator_obj
 tinypy_value_t *tinypy_internal_string_formatter_field_next(tinypy_iterator_object_t *iterator, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_native_function_bind_class(tinypy_value_t *descriptor, tinypy_value_t *class_value, tinypy_error_t **out_error);
 void tinypy_internal_native_function_set_descriptor_kind(tinypy_value_t *function, tinypy_native_descriptor_kind_e descriptor_kind);
 tinypy_value_t *tinypy_internal_method_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_method_bind(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error);
 void tinypy_internal_method_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_method_free_list_push(tinypy_vm_t *vm, tinypy_value_t *value);
 void tinypy_internal_method_free_list_finalize(tinypy_vm_t *vm);
@@ -2344,6 +2390,7 @@ void tinypy_internal_native_instance_finalize(tinypy_value_t *value);
 void tinypy_internal_callable_descriptor_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_static_method_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_class_method_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_class_method_bind(tinypy_value_t *descriptor, tinypy_value_t *owner, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_static_method_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_class_method_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 void tinypy_internal_property_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
@@ -2370,6 +2417,7 @@ tinypy_value_t *tinypy_internal_object_get_base_attr_key(tinypy_value_t *value, 
 int32_t tinypy_internal_object_get_optional_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t **out_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *attribute_value, tinypy_error_t **out_error);
 void tinypy_internal_object_make_attribute_error_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
+void tinypy_internal_make_attribute_name_error(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_set_attr_protocol_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *attribute_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_delete_attr_protocol_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
@@ -2378,6 +2426,7 @@ tinypy_bool_t tinypy_internal_descriptor_set_value(tinypy_vm_t *vm, tinypy_value
 tinypy_bool_t tinypy_internal_descriptor_delete_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_error_t **out_error);
 void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_exception_check_normalized(tinypy_value_t *exception_class, tinypy_value_t *value, tinypy_error_t **out_error);
 void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e kind, const char *message);
 void tinypy_internal_exception_clear_raised(tinypy_vm_t *vm);
 void tinypy_internal_exception_clear_handled(tinypy_vm_t *vm);
@@ -2394,7 +2443,7 @@ void tinypy_internal_exception_preserve_begin(tinypy_vm_t *vm, tinypy_internal_e
 void tinypy_internal_exception_preserve_end(tinypy_vm_t *vm, tinypy_internal_exception_state_t *state);
 void tinypy_internal_exception_set_raised(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *traceback);
 void tinypy_internal_exception_set_raised_type(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback);
-void tinypy_internal_sys_publish_handled_exception(tinypy_vm_t *vm);
+void tinypy_internal_sys_publish_handled_exception(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback);
 void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm);
 void tinypy_internal_exception_restore_handled(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback);
 void tinypy_internal_exception_restore_raised_from_handled(tinypy_vm_t *vm);

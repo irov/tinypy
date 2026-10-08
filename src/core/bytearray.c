@@ -311,10 +311,38 @@ static tinypy_bool_t __tinypy_bytearray_extend_iterable(tinypy_value_t *value, t
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_bytearray_index(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_value_t *value, size_t *out_index, tinypy_error_t **out_error) {
+/* PyNumber_AsSsize_t(key, PyExc_IndexError): an index too large for a
+   Py_ssize_t is an IndexError. */
+tinypy_bool_t tinypy_internal_sequence_index(tinypy_value_t *key, int64_t *out_index, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(key);
+    tinypy_error_t *error = NULL;
+
+    if (tinypy_internal_index_as_i64(key, out_index, TINYPY_FALSE, &error) != 0) {
+        return TINYPY_TRUE;
+    }
+    if (error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_OVERFLOW) {
+        tinypy_vm_clear_error(vm);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, tinypy_error_message(error, NULL), out_error);
+        tinypy_error_release(error);
+        return TINYPY_FALSE;
+    }
+    if (out_error != NULL) {
+        *out_error = error;
+    }
+    else if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_bytearray_index(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_value_t *value, const char *type_message, size_t *out_index, tinypy_error_t **out_error) {
     int64_t index;
 
-    if (tinypy_internal_index_as_i64(key, &index, TINYPY_TRUE, out_error) == 0) {
+    if (tinypy_internal_object_has_special_key(key, vm->internal_special_index_key) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, type_message, out_error);
+        return TINYPY_FALSE;
+    }
+    if (tinypy_internal_sequence_index(key, &index, out_error) == 0) {
         return TINYPY_FALSE;
     }
     size_t size = TINYPY_SIZED_SIZE(value);
@@ -499,6 +527,32 @@ static tinypy_bool_t __tinypy_bytearray_constructor_arguments(tinypy_vm_t *vm, t
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* bytearray(text, encoding[, errors]) runs the codec as _PyCodec_EncodeText
+   does: a byte string still contributes its own bytes, while unicode
+   contributes what the encoder returned, which must be a byte buffer. The
+   caller releases the encoder result after copying. */
+static tinypy_value_t *__tinypy_bytearray_encode(tinypy_vm_t *vm, tinypy_value_t *source, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_error_t **out_error) {
+    const uint8_t *bytes;
+    size_t size;
+    tinypy_value_t *encoded = tinypy_internal_codecs_transform_registered(vm, source, encoding, errors, TINYPY_FALSE, out_error);
+
+    if (encoded == NULL || TINYPY_VALUE_KIND(source) == TINYPY_VALUE_STRING) {
+        return encoded;
+    }
+    if (tinypy_internal_bytes_view(encoded, &bytes, &size) == 0) {
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("can't concat "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(encoded),
+            TINYPY_MESSAGE_PART_LITERAL(" to bytearray")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        TINYPY_DECREF(encoded);
+        return NULL;
+    }
+    return encoded;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     uint8_t *bytes;
@@ -516,35 +570,24 @@ tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_val
         return return_value_1;
     }
     tinypy_value_type_e source_kind = TINYPY_VALUE_KIND(source);
-    if (source_kind == TINYPY_VALUE_UNICODE) {
-        if (encoding == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unicode argument without an encoding", out_error);
-            return NULL;
-        }
-        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, source, encoding, errors, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
-        if (encoded == NULL) {
-            return NULL;
-        }
-        if (TINYPY_VALUE_KIND(encoded) != TINYPY_VALUE_STRING) {
-            TINYPY_DECREF(encoded);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "encoder did not return a string", out_error);
-            return NULL;
-        }
-        tinypy_value_t *result = __tinypy_bytearray_from_bytes_checked(vm, TINYPY_TEXT_BYTES(encoded), TINYPY_TEXT_BYTE_SIZE(encoded), out_error);
-        TINYPY_DECREF(encoded);
-        return result;
+    if (source_kind == TINYPY_VALUE_UNICODE && encoding == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unicode argument without an encoding", out_error);
+        return NULL;
     }
-    if (source_kind != TINYPY_VALUE_STRING && (encoding != NULL || errors != NULL)) {
+    if (source_kind != TINYPY_VALUE_STRING && source_kind != TINYPY_VALUE_UNICODE && (encoding != NULL || errors != NULL)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "encoding or errors without a string argument", out_error);
         return NULL;
     }
-    if (source_kind == TINYPY_VALUE_STRING && encoding != NULL) {
-        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, source, encoding, errors, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+    if (encoding != NULL) {
+        const uint8_t *encoded_bytes;
+        size_t encoded_size;
+        tinypy_value_t *encoded = __tinypy_bytearray_encode(vm, source, encoding, errors, out_error);
 
         if (encoded == NULL) {
             return NULL;
         }
-        tinypy_value_t *result = __tinypy_bytearray_from_bytes_checked(vm, TINYPY_TEXT_BYTES(source), TINYPY_TEXT_BYTE_SIZE(source), out_error);
+        (void)tinypy_internal_bytes_view(source_kind == TINYPY_VALUE_STRING ? source : encoded, &encoded_bytes, &encoded_size);
+        tinypy_value_t *result = __tinypy_bytearray_from_bytes_checked(vm, encoded_bytes, encoded_size, out_error);
 
         TINYPY_DECREF(encoded);
         return result;
@@ -602,35 +645,21 @@ tinypy_bool_t tinypy_internal_bytearray_initialize(tinypy_value_t *value, tinypy
         return TINYPY_TRUE;
     }
     tinypy_value_type_e source_kind = TINYPY_VALUE_KIND(source);
-    if (source_kind == TINYPY_VALUE_UNICODE) {
-        if (encoding == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unicode argument without an encoding", out_error);
-            return TINYPY_FALSE;
-        }
-        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, source, encoding, errors, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
-        if (encoded == NULL) {
-            return TINYPY_FALSE;
-        }
-        if (TINYPY_VALUE_KIND(encoded) != TINYPY_VALUE_STRING) {
-            TINYPY_DECREF(encoded);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "encoder did not return a string", out_error);
-            return TINYPY_FALSE;
-        }
-        tinypy_bool_t extended = __tinypy_bytearray_extend_iterable(value, encoded, out_error);
-        TINYPY_DECREF(encoded);
-        return extended;
+    if (source_kind == TINYPY_VALUE_UNICODE && encoding == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unicode argument without an encoding", out_error);
+        return TINYPY_FALSE;
     }
-    if (source_kind != TINYPY_VALUE_STRING && (encoding != NULL || errors != NULL)) {
+    if (source_kind != TINYPY_VALUE_STRING && source_kind != TINYPY_VALUE_UNICODE && (encoding != NULL || errors != NULL)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "encoding or errors without a string argument", out_error);
         return TINYPY_FALSE;
     }
-    if (source_kind == TINYPY_VALUE_STRING && encoding != NULL) {
-        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, source, encoding, errors, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+    if (encoding != NULL) {
+        tinypy_value_t *encoded = __tinypy_bytearray_encode(vm, source, encoding, errors, out_error);
 
         if (encoded == NULL) {
             return TINYPY_FALSE;
         }
-        tinypy_bool_t extended = __tinypy_bytearray_extend_iterable(value, source, out_error);
+        tinypy_bool_t extended = __tinypy_bytearray_extend_iterable(value, source_kind == TINYPY_VALUE_STRING ? source : encoded, out_error);
 
         TINYPY_DECREF(encoded);
         return extended;
@@ -698,7 +727,7 @@ tinypy_value_t *tinypy_internal_bytearray_get_item(tinypy_value_t *value, tinypy
         }
         return result;
     }
-    if (__tinypy_bytearray_index(vm, key, value, &index, out_error) == 0) {
+    if (__tinypy_bytearray_index(vm, key, value, "bytearray indices must be integers", &index, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_3 = tinypy_integer_from_i64(vm, (int64_t)TINYPY_BYTEARRAY_OBJECT(value)->bytes[index]);
@@ -749,7 +778,18 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
             replacement = TINYPY_BYTEARRAY_OBJECT(item)->bytes;
             if (slice.step == 1 || replacement_size != 0U) {
                 if (slice.step != 1 && replacement_size != slice.length) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "extended slice assignment has the wrong size", out_error);
+                    char replacement_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+                    char slice_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+                    size_t replacement_digits = tinypy_internal_format_size(replacement_buffer, replacement_size);
+                    size_t slice_digits = tinypy_internal_format_size(slice_buffer, slice.length);
+                    const tinypy_message_part_t parts[] = {
+                        TINYPY_MESSAGE_PART_LITERAL("attempt to assign bytes of size "),
+                        {replacement_buffer, replacement_digits},
+                        TINYPY_MESSAGE_PART_LITERAL(" to extended slice of size "),
+                        {slice_buffer, slice_digits}
+                    };
+
+                    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
                     return TINYPY_FALSE;
                 }
                 if (slice.step == 1 && replacement_size > SIZE_MAX - (size - slice.length)) {
@@ -769,6 +809,12 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
             if (tinypy_internal_slice_adjust_indices(vm, size, &slice, out_error) == 0) {
                 return TINYPY_FALSE;
             }
+        }
+        /* An extended slice deletion needs a resizable array even when it
+           selects nothing. */
+        if (slice.step != 1 && TINYPY_BYTEARRAY_OBJECT(value)->exports != 0U) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_BUFFER, "Existing exports of data: object cannot be re-sized", out_error);
+            return TINYPY_FALSE;
         }
         if (slice.length != 0U && tinypy_internal_bytearray_resize_allowed(value, size - slice.length, out_error) == 0) {
             return TINYPY_FALSE;
@@ -790,7 +836,7 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
         return TINYPY_TRUE;
     }
     uint8_t byte = 0U;
-    if (__tinypy_bytearray_index(vm, key, value, &index, out_error) == 0) {
+    if (__tinypy_bytearray_index(vm, key, value, "bytearray indices must be integer", &index, out_error) == 0) {
         return TINYPY_FALSE;
     }
     if (item != NULL && __tinypy_bytearray_item(vm, item, &byte, out_error) == 0) {
@@ -803,7 +849,11 @@ tinypy_bool_t tinypy_internal_bytearray_set_item(tinypy_value_t *value, tinypy_v
         __tinypy_bytearray_delete_index(value, index);
         return TINYPY_TRUE;
     }
-    TINYPY_BYTEARRAY_OBJECT(value)->bytes[index] = byte;
+    /* Converting the item may have run Python code that shrank the array;
+       the store past its end is then lost, as in CPython. */
+    if (index < TINYPY_SIZED_SIZE(value)) {
+        TINYPY_BYTEARRAY_OBJECT(value)->bytes[index] = byte;
+    }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////

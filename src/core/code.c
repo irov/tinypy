@@ -275,26 +275,45 @@ static tinypy_bool_t __tinypy_code_integer(tinypy_vm_t *vm, tinypy_value_t *valu
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_code_identifier_tuple(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *const *item = TINYPY_TUPLE_ITERATOR_BEGIN(value);
-    tinypy_value_t *const *end = TINYPY_TUPLE_ITERATOR_END(value);
+/* validate_and_copy_tuple: identifiers are copied into exact str objects so
+   later name lookups never run str subclass methods, and interning them
+   leaves the caller's tuple untouched. */
+static tinypy_value_t *__tinypy_code_copy_identifiers(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_TUPLE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code free variables must be tuples of strings", out_error);
+        return NULL;
+    }
+    tinypy_value_t *const *items = tinypy_internal_tuple_items(value);
+    size_t size = TINYPY_TUPLE_SIZE(value);
+    for (size_t index = 0U; index < size; ++index) {
+        if (TINYPY_VALUE_KIND(items[index]) != TINYPY_VALUE_STRING) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("name tuples must contain only strings, not '"),
+                TINYPY_MESSAGE_PART_TYPE_NAME(items[index]),
+                TINYPY_MESSAGE_PART_LITERAL("'"),
+            };
 
-    for (; item != end; ++item) {
-        if (TINYPY_VALUE_KIND(*item) != TINYPY_VALUE_STRING) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code name tuple contains a non-string", out_error);
-            return TINYPY_FALSE;
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            return NULL;
         }
     }
-    return TINYPY_TRUE;
+    tinypy_value_t *copy = tinypy_tuple_from_items(vm, items, size);
+    tinypy_value_t **copy_items = TINYPY_TUPLE_ITEMS(copy);
+    for (size_t index = 0U; index < size; ++index) {
+        tinypy_value_t *item = copy_items[index];
+
+        if (item->type != &vm->types[TINYPY_VALUE_STRING]) {
+            copy_items[index] = tinypy_string_from_bytes(vm, TINYPY_TEXT_BYTES(item), TINYPY_TEXT_BYTE_SIZE(item));
+            TINYPY_DECREF(item);
+        }
+    }
+    return copy;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_code_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t count = TINYPY_TUPLE_SIZE(args);
     int32_t integers[5];
-    tinypy_value_t *empty = NULL;
-    tinypy_value_t *freevars;
-    tinypy_value_t *cellvars;
     size_t index;
 
     if (type != &vm->types[TINYPY_VALUE_CODE] || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || count < 12U || count > 14U) {
@@ -317,35 +336,32 @@ tinypy_value_t *tinypy_internal_code_create(tinypy_type_t *type, tinypy_value_t 
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code() received an invalid string or tuple field", out_error);
         return NULL;
     }
-    if (__tinypy_code_identifier_tuple(vm, TINYPY_TUPLE_GET(args, 6U), out_error) == 0 || __tinypy_code_identifier_tuple(vm, TINYPY_TUPLE_GET(args, 7U), out_error) == 0) {
-        return NULL;
+    tinypy_value_t *empty = &vm->empty_tuple_object.base.base;
+    tinypy_value_t *const sources[] = {TINYPY_TUPLE_GET(args, 6U), TINYPY_TUPLE_GET(args, 7U), count >= 13U ? TINYPY_TUPLE_GET(args, 12U) : empty, count >= 14U ? TINYPY_TUPLE_GET(args, 13U) : empty};
+    tinypy_value_t *identifiers[] = {NULL, NULL, NULL, NULL};
+    tinypy_value_t *result = NULL;
+
+    for (index = 0U; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+        identifiers[index] = __tinypy_code_copy_identifiers(vm, sources[index], out_error);
+        if (identifiers[index] == NULL) {
+            goto cleanup;
+        }
     }
-    if ((size_t)integers[1] != TINYPY_TUPLE_SIZE(TINYPY_TUPLE_GET(args, 7U))) {
+    if ((size_t)integers[1] != TINYPY_TUPLE_SIZE(identifiers[1])) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code() nlocals must match the number of variable names", out_error);
-        return NULL;
+        goto cleanup;
     }
     size_t required_locals = (size_t)integers[0] + ((integers[3] & TINYPY_CODE_VARARGS) != 0 ? 1U : 0U) + ((integers[3] & TINYPY_CODE_VAR_KEYWORDS) != 0 ? 1U : 0U);
     if (required_locals > (size_t)integers[1]) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code() argcount exceeds nlocals", out_error);
-        return NULL;
+        goto cleanup;
     }
-    if (count < 14U) {
-        empty = TINYPY_RET_EMPTY_TUPLE(vm);
-    }
-    freevars = count >= 13U ? TINYPY_TUPLE_GET(args, 12U) : empty;
-    cellvars = count >= 14U ? TINYPY_TUPLE_GET(args, 13U) : empty;
-    if (TINYPY_VALUE_KIND(freevars) != TINYPY_VALUE_TUPLE || TINYPY_VALUE_KIND(cellvars) != TINYPY_VALUE_TUPLE || __tinypy_code_identifier_tuple(vm, freevars, out_error) == 0 || __tinypy_code_identifier_tuple(vm, cellvars, out_error) == 0) {
-        if (empty != NULL) {
-            TINYPY_DECREF(empty);
+    result = tinypy_code_new(integers[0], integers[1], integers[2], integers[3], TINYPY_TUPLE_GET(args, 4U), TINYPY_TUPLE_GET(args, 5U), identifiers[0], identifiers[1], identifiers[2], identifiers[3], TINYPY_TUPLE_GET(args, 8U), TINYPY_TUPLE_GET(args, 9U), integers[4], TINYPY_TUPLE_GET(args, 11U));
+cleanup:
+    for (index = 0U; index < sizeof(identifiers) / sizeof(identifiers[0]); ++index) {
+        if (identifiers[index] != NULL) {
+            TINYPY_DECREF(identifiers[index]);
         }
-        if (out_error == NULL || *out_error == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code free variables must be tuples of strings", out_error);
-        }
-        return NULL;
-    }
-    tinypy_value_t *result = tinypy_code_new(integers[0], integers[1], integers[2], integers[3], TINYPY_TUPLE_GET(args, 4U), TINYPY_TUPLE_GET(args, 5U), TINYPY_TUPLE_GET(args, 6U), TINYPY_TUPLE_GET(args, 7U), freevars, cellvars, TINYPY_TUPLE_GET(args, 8U), TINYPY_TUPLE_GET(args, 9U), integers[4], TINYPY_TUPLE_GET(args, 11U));
-    if (empty != NULL) {
-        TINYPY_DECREF(empty);
     }
     return result;
 }

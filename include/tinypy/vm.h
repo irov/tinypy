@@ -50,7 +50,9 @@ typedef struct tinypy_vm_config_t {
 
     /* Zero disables allocation-budget preflight. Fallible variable-size
      * language operations report MemoryError before exceeding the budget.
-     * The VM object, reserved pool arenas and direct allocations count. */
+     * The VM object, reserved pool arenas and direct allocations count. The
+     * VM bootstrap must fit the budget as a whole. C API calls without an
+     * error result are not fallible and complete regardless of the budget. */
     size_t max_heap_bytes;
     uint64_t feature_flags;
     int32_t optimize_level;
@@ -63,6 +65,8 @@ typedef struct tinypy_vm_config_t {
     size_t max_stack_bytes;
 } tinypy_vm_config_t;
 
+/* Returns NULL, with everything it allocated released, when max_heap_bytes is
+ * smaller than the memory the VM bootstrap holds. */
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config);
 tinypy_value_t *tinypy_vm_builtins(const tinypy_vm_t *vm);
 

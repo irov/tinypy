@@ -366,14 +366,16 @@ static tinypy_value_t **__tinypy_list_detach_begin(tinypy_vm_t *vm, size_t count
     return displaced;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_list_detach_end(tinypy_vm_t *vm, tinypy_value_t **displaced, size_t count) {
+/* list_ass_slice releases the displaced items from the last one, the
+   extended slice operations from the first. */
+static void __tinypy_list_detach_end(tinypy_vm_t *vm, tinypy_value_t **displaced, size_t count, tinypy_bool_t backwards) {
     size_t index;
 
     if (displaced == NULL) {
         return;
     }
     for (index = 0U; index < count; ++index) {
-        TINYPY_DECREF(displaced[index]);
+        TINYPY_DECREF(displaced[backwards != 0 ? count - 1U - index : index]);
     }
     tinypy_internal_vm_deallocate(vm, displaced, count * sizeof(*displaced));
 }
@@ -430,7 +432,7 @@ tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, s
         __tinypy_internal_cycle_diagnostics_list_insert(vm, list, start + index, items[index]);
     }
 #endif
-    __tinypy_list_detach_end(vm, displaced, count);
+    __tinypy_list_detach_end(vm, displaced, count, TINYPY_TRUE);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -458,7 +460,7 @@ tinypy_bool_t tinypy_internal_list_replace_strided_checked(tinypy_value_t *list,
 #endif
     }
     object->mutation_version += UINT64_C(1);
-    __tinypy_list_detach_end(vm, displaced, count);
+    __tinypy_list_detach_end(vm, displaced, count, TINYPY_FALSE);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -504,7 +506,7 @@ tinypy_bool_t tinypy_internal_list_delete_strided_checked(tinypy_value_t *list, 
     (void)memset(object->items + size - count, 0, count * sizeof(tinypy_value_t *));
     object->base.size = size - count;
     object->mutation_version += UINT64_C(1);
-    __tinypy_list_detach_end(vm, displaced, count);
+    __tinypy_list_detach_end(vm, displaced, count, TINYPY_FALSE);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -541,8 +543,9 @@ void tinypy_list_clear(tinypy_value_t *list) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_clear(vm, list);
 #endif
-    for (size_t index = 0U; index < item_count; ++index) {
-        TINYPY_DECREF(items[index]);
+    /* list_clear releases the items from the last one. */
+    for (size_t index = item_count; index != 0U; --index) {
+        TINYPY_DECREF(items[index - 1U]);
     }
     if (items != NULL) {
         tinypy_internal_vm_deallocate(vm, items, allocated * sizeof(*items));

@@ -157,7 +157,7 @@ static tinypy_bool_t __tinypy_buffer_normalize_index(tinypy_value_t *value, tiny
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sequence index must be integer", out_error);
         return TINYPY_FALSE;
     }
-    if (tinypy_internal_index_as_i64(key, &index, TINYPY_TRUE, out_error) == 0) {
+    if (tinypy_internal_sequence_index(key, &index, out_error) == 0) {
         return TINYPY_FALSE;
     }
     (void)tinypy_buffer_view(value, &size);
@@ -869,7 +869,12 @@ static tinypy_value_t *__tinypy_memoryview_get(tinypy_value_t *instance, void *p
     if (__tinypy_memoryview_index(instance, key, size, &index, out_error) == 0) {
         return NULL;
     }
+    /* __index__ may have shrunk an owner that a buffer object exposes. */
     bytes = tinypy_internal_memoryview_view(instance, &size);
+    if (index >= size) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "index out of bounds", out_error);
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_string_from_bytes(vm, bytes + index, 1U);
 
     return result;
@@ -1114,6 +1119,18 @@ static tinypy_value_t *__tinypy_memoryview_property(tinypy_value_t *function, ti
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    if (tinypy_internal_memoryview_check(self) == 0) {
+        tinypy_value_t *name = tinypy_native_function_name(function);
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("descriptor '"),
+            TINYPY_MESSAGE_PART_TEXT(name),
+            TINYPY_MESSAGE_PART_LITERAL("' for 'memoryview' objects doesn't apply to '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(self),
+            TINYPY_MESSAGE_PART_LITERAL("' object")
+        };
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
     if (field == 0) {
         tinypy_value_t *result = tinypy_string_from_bytes(vm, "B", 1U);
 

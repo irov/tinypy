@@ -1051,7 +1051,7 @@ static const tinypy_type_t *__tinypy_internal_select_layout_base(tinypy_vm_t *vm
             continue;
         }
         if (candidate_kind != builtin_layout_kind) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have incompatible instance layouts", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have instance lay-out conflict", out_error);
             return NULL;
         }
     }
@@ -1062,7 +1062,7 @@ static const tinypy_type_t *__tinypy_internal_select_layout_base(tinypy_vm_t *vm
             continue;
         }
         if (builtin_layout_kind != TINYPY_VALUE_INVALID && candidate->layout_kind == TINYPY_VALUE_INSTANCE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have incompatible instance layouts", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have instance lay-out conflict", out_error);
             return NULL;
         }
         if (layout_base->slot_count == 0U) {
@@ -1074,7 +1074,7 @@ static const tinypy_type_t *__tinypy_internal_select_layout_base(tinypy_vm_t *vm
             continue;
         }
         if (tinypy_type_is_subtype(layout_base, candidate) == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have incompatible instance layouts", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have instance lay-out conflict", out_error);
             return NULL;
         }
     }
@@ -1757,6 +1757,9 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_value_t *internal_name_k
     type->has_instance_dict = layout_base->has_instance_dict != 0 || add_instance_dict != 0 ? INT32_C(1) : INT32_C(0);
     type->layout_kind = instance_kind;
     if (instance_kind == TINYPY_VALUE_TYPE) {
+        /* Classes keep their attributes in the type dictionary, so a
+           metaclass adds no __dict__ slot. */
+        type->has_instance_dict = INT32_C(0);
         type->basic_size = sizeof(tinypy_type_t);
         type->dict_offset = 0U;
         type->slots_offset = 0U;
@@ -2108,6 +2111,31 @@ static inline size_t __tinypy_internal_type_lookup_cache_index(const tinypy_type
     return (size_t)mixed & (TINYPY_TYPE_LOOKUP_CACHE_SIZE - 1U);
 }
 //////////////////////////////////////////////////////////////////////////
+/* Fills the module, separator and name parts of the tp_name CPython reports:
+   classes created by Python keep the bare name, other types defined outside
+   __builtin__ are qualified by their module. The parts borrow the type's
+   strings and are used before any Python code runs. */
+void tinypy_internal_type_message_name(const tinypy_type_t *type, tinypy_message_part_t out_parts[3]) {
+    tinypy_vm_t *vm = type->vm;
+
+    out_parts[0].bytes = "";
+    out_parts[0].size = 0U;
+    out_parts[1].bytes = ".";
+    out_parts[1].size = 0U;
+    out_parts[2].bytes = type->name;
+    out_parts[2].size = type->name_size;
+    if ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U || type->dict == NULL || memchr(type->name, '.', type->name_size) != NULL) {
+        return;
+    }
+    tinypy_value_t *module = tinypy_internal_dict_get_optional_suppressed(vm, type->dict, vm->internal_special_module_key);
+    if (module == NULL || TINYPY_VALUE_KIND(module) != TINYPY_VALUE_STRING || TINYPY_NAME_EQ(module, vm->internal_builtin_module_name) != 0) {
+        return;
+    }
+    out_parts[0].bytes = (const char *)TINYPY_TEXT_BYTES(module);
+    out_parts[0].size = TINYPY_TEXT_BYTE_SIZE(module);
+    out_parts[1].size = 1U;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_type_lookup_key(tinypy_vm_t *vm, const tinypy_type_t *type, tinypy_value_t *key) {
     tinypy_type_lookup_cache_entry_t *entry = NULL;
     tinypy_hash_t hash = 0;
@@ -2212,10 +2240,12 @@ void tinypy_type_set_attr_key(tinypy_type_t *type, tinypy_value_t *key, tinypy_v
         if (function->self == NULL && function->function == NULL && function->owner == NULL && (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(key) == TINYPY_VALUE_UNICODE)) {
             tinypy_bool_t wrapper = function->descriptor_kind == TINYPY_NATIVE_DESCRIPTOR_WRAPPER
                                         ? TINYPY_TRUE
-                                        : function->descriptor_kind == TINYPY_NATIVE_DESCRIPTOR_METHOD
+                                        : function->descriptor_kind != TINYPY_NATIVE_DESCRIPTOR_AUTO
                                               ? TINYPY_FALSE
                                               : __tinypy_internal_native_descriptor_is_wrapper(vm, key);
-            tinypy_type_t *descriptor_type = wrapper != 0 ? vm->native_wrapper_descriptor_type : vm->native_method_descriptor_type;
+            tinypy_type_t *descriptor_type = function->descriptor_kind == TINYPY_NATIVE_DESCRIPTOR_CLASS_METHOD
+                                                 ? vm->native_class_method_descriptor_type
+                                                 : (wrapper != 0 ? vm->native_wrapper_descriptor_type : vm->native_method_descriptor_type);
             tinypy_type_t *previous_type = value->type;
 
             TINYPY_INCREF(&descriptor_type->base.base);
@@ -2355,7 +2385,7 @@ tinypy_value_t *tinypy_internal_type_call(tinypy_value_t *callable, tinypy_value
     tinypy_value_t *initializer;
     tinypy_value_t *initialize_result;
 
-    if (type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] || type == vm->native_method_descriptor_type || type == vm->native_wrapper_descriptor_type || type == vm->native_method_wrapper_type) {
+    if (type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] || type == vm->native_method_descriptor_type || type == vm->native_wrapper_descriptor_type || type == vm->native_method_wrapper_type || type == vm->native_class_method_descriptor_type) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("cannot create '"), {type->name, type->name_size}, TINYPY_MESSAGE_PART_LITERAL("' instances")
         };

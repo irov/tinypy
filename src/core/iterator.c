@@ -690,6 +690,8 @@ tinypy_bool_t tinypy_internal_length_hint(tinypy_value_t *value, int64_t default
     }
 
 length_unavailable:
+    /* The __length_hint__ lookup readies the type. */
+    value->type->flags &= ~TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_key(value, vm->internal_special_length_hint_key) == 0) {
         *out_hint = default_hint;
         return TINYPY_TRUE;
@@ -838,7 +840,7 @@ tinypy_value_t *tinypy_internal_xrange_create(tinypy_type_t *type, tinypy_value_
     }
     length = (distance - UINT64_C(1)) / step_magnitude + UINT64_C(1);
     if (length > (uint64_t)PTRDIFF_MAX) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "xrange has too many items", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "xrange() result has too many items", out_error);
         return NULL;
     }
     tinypy_value_t *return_value_2 = tinypy_internal_xrange_new(vm, start, step, (size_t)length);
@@ -1349,6 +1351,11 @@ void tinypy_internal_initialize_iterator_types(tinypy_vm_t *vm) {
         type->iter = reversed_list != 0 ? tinypy_internal_reversed_iter : tinypy_internal_iterator_iter;
         type->next = next_slots[index];
         type->flags = (type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
+        /* Only callable-iterator is readied at startup; the others stay
+           without attribute assignment until their first attribute lookup. */
+        if (index != (size_t)TINYPY_ITERATOR_TYPE_CALLABLE) {
+            type->flags |= TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
+        }
         vm->iterator_types[index] = type;
     }
 
@@ -1359,9 +1366,10 @@ void tinypy_internal_initialize_iterator_types(tinypy_vm_t *vm) {
     tinypy_internal_type_add_method(xrange_type, vm->internal_special_repr_key, __tinypy_xrange_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_iter_non_iterator_error(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_error_t **out_error) {
+/* PyObject_GetIter, or instance_getiter for a classic instance. */
+static void __tinypy_iter_non_iterator_error(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *result, tinypy_error_t **out_error) {
     tinypy_message_part_t parts[] = {
-        TINYPY_MESSAGE_PART_LITERAL("iter() returned non-iterator of type '"),
+        TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE ? (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("__iter__ returned non-iterator of type '") : (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("iter() returned non-iterator of type '"),
         TINYPY_MESSAGE_PART_TYPE_NAME(result),
         TINYPY_MESSAGE_PART_LITERAL("'"),
     };
@@ -1387,7 +1395,7 @@ static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispat
         TINYPY_DECREF(args);
         TINYPY_DECREF(method);
         if (result != NULL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_OLD_INSTANCE && result->type->next == NULL && tinypy_internal_object_has_special_key(result, vm->internal_special_next_key) == 0) {
-            __tinypy_iter_non_iterator_error(vm, result, out_error);
+            __tinypy_iter_non_iterator_error(vm, value, result, out_error);
             TINYPY_DECREF(result);
             return NULL;
         }
@@ -1406,30 +1414,53 @@ static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispat
         }
         return return_value_2;
     }
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_key(value, vm->internal_special_iter_key) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_iter_key, out_error);
-        tinypy_value_t *args;
-        tinypy_value_t *result;
+    if (dispatch_special != 0) {
+        tinypy_value_t *method;
+        int32_t found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_iter_key, &method, out_error);
 
-        if (method == NULL) {
+        if (found < 0) {
             return NULL;
         }
-        args = TINYPY_RET_EMPTY_TUPLE(vm);
-        result = tinypy_call(method, args, NULL, out_error);
-        TINYPY_DECREF(args);
-        TINYPY_DECREF(method);
-        if (result != NULL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_OLD_INSTANCE && result->type->next == NULL && tinypy_internal_object_has_special_key(result, vm->internal_special_next_key) == 0) {
-            __tinypy_iter_non_iterator_error(vm, result, out_error);
-            TINYPY_DECREF(result);
+        if (found > 0) {
+            tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
+            tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
+
+            TINYPY_DECREF(args);
+            TINYPY_DECREF(method);
+            if (result != NULL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_OLD_INSTANCE && result->type->next == NULL && tinypy_internal_object_has_special_key(result, vm->internal_special_next_key) == 0) {
+                __tinypy_iter_non_iterator_error(vm, value, result, out_error);
+                TINYPY_DECREF(result);
+                return NULL;
+            }
+            return result;
+        }
+        /* instance_getiter fetches __getitem__ through __getattr__ too. */
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+            found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_getitem_key, &method, out_error);
+            if (found > 0) {
+                TINYPY_DECREF(method);
+            }
+        }
+        else {
+            found = tinypy_internal_object_has_special_key(value, vm->internal_special_getitem_key) != 0 ? INT32_C(1) : INT32_C(0);
+        }
+        if (found < 0) {
             return NULL;
         }
-        return result;
+        if (found > 0) {
+            tinypy_value_t *iterator = __tinypy_internal_iterator_new(value);
+
+            TINYPY_ITERATOR_OBJECT(iterator)->mode = INT32_C(4);
+            return iterator;
+        }
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "iteration over non-sequence", out_error);
+            return NULL;
+        }
     }
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_key(value, vm->internal_special_getitem_key) != 0) {
-        tinypy_value_t *iterator = __tinypy_internal_iterator_new(value);
-
-        TINYPY_ITERATOR_OBJECT(iterator)->mode = INT32_C(4);
-        return iterator;
+    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "iteration over non-sequence", out_error);
+        return NULL;
     }
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("'"),
@@ -1452,18 +1483,34 @@ tinypy_value_t *tinypy_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* instance_iternext finds next like any attribute of a classic instance. */
 tinypy_value_t *tinypy_internal_next_raw(tinypy_value_t *iterator, tinypy_error_t **out_error) {
     TINYPY_CLEAR_ERROR(out_error);
     if (iterator->type->next == NULL) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator);
-        if (tinypy_internal_object_has_special_key(iterator, vm->internal_special_next_key) != 0) {
-            tinypy_value_t *method = tinypy_internal_object_get_special_key(iterator, vm->internal_special_next_key, out_error);
-            tinypy_value_t *args;
-            tinypy_value_t *result;
+        tinypy_value_t *method = NULL;
 
+        if (TINYPY_VALUE_KIND(iterator) == TINYPY_VALUE_OLD_INSTANCE) {
+            int32_t status = tinypy_internal_object_get_optional_attr_key(iterator, vm->internal_special_next_key, &method, out_error);
+
+            if (status < 0) {
+                return NULL;
+            }
+            if (status == 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "instance has no next() method", out_error);
+                return NULL;
+            }
+        }
+        else if (tinypy_internal_object_has_special_key(iterator, vm->internal_special_next_key) != 0) {
+            method = tinypy_internal_object_get_special_key(iterator, vm->internal_special_next_key, out_error);
             if (method == NULL) {
                 return NULL;
             }
+        }
+        if (method != NULL) {
+            tinypy_value_t *args;
+            tinypy_value_t *result;
+
             args = TINYPY_RET_EMPTY_TUPLE(vm);
             result = tinypy_call(method, args, NULL, out_error);
             TINYPY_DECREF(args);

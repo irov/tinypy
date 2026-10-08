@@ -124,6 +124,13 @@ object, arena table, полный зарезервированный разме�
 allocations. Вычисляемые результаты `long`, text, buffer, list и tuple
 отклоняются с `MemoryError`, если они не помещаются в остаток budget.
 
+Bootstrap VM выполняется целиком и только затем сверяется с budget: если
+занятая им память больше `max_heap_bytes`, `tinypy_vm_create` освобождает всё
+и возвращает NULL. Функции C API без error result, например `tinypy_dict_set`
+и `tinypy_list_append`, не являются fallible: их рост игнорирует budget и
+всегда завершается. Compiler и runtime при исчерпании budget сообщают
+`MemoryError`, не теряя данных.
+
 Lifetime определяется reference counting. Ациклические объекты уничтожаются
 немедленно. Host обязан освободить owned references и разорвать owning cycles
 перед `tinypy_vm_destroy`.
@@ -186,12 +193,23 @@ Runtime реализует:
 - descriptors, properties, class/static methods и `__slots__`;
 - weak references и explicit finalization behavior.
 
+Dict и set воспроизводят таблицы CPython 2.7: рост после вставки,
+предварительный размер при merge, copy и dict displays, finger в слоте 0 для
+`popitem` и `set.pop`, поэтому порядок итерации совпадает с CPython 2.7.
+Вставка, после которой таблице не хватает памяти для роста, завершается
+`MemoryError` и оставляет контейнер прежним. `list.sort` повторяет listsort
+CPython 2.7, включая число сравнений и частично отсортированный порядок после
+исключения в сравнении.
+
 Functions, bound Python methods, generators, set и frozenset поддерживают
 weak references. У генератора weakref callbacks выполняются перед `finally`
 при закрытии во время уничтожения. Basic ref/proxy caches сохраняют порядок
 references и callbacks; изменение callable protocol referent не создаёт второй
 basic proxy. Lookup из `_remove_dead_weakref` выполняется один раз и подавляет
-только `KeyError`, включая subclasses.
+только `KeyError`, включая subclasses. Weak references, созданные `__del__`
+объекта, который не был воскрешён, очищаются без вызова их callbacks. Объекты,
+которые финализатор освобождает напрямую, не откладываются очередью
+освобождения, поэтому глубокая цепочка вызывает каждый `__del__` один раз.
 
 Legacy `buffer` хранит запрошенные offset и size, а доступ ограничивает их
 текущей длиной owner. Уменьшение и последующее увеличение bytearray owner не
@@ -262,7 +280,10 @@ getter возвращает borrowed value или NULL. Запись native func
 из instance dictionary либо type dictionary, без descriptor binding.
 `tinypy_instance_set_attr_key` пишет прямо в instance dictionary, без вызова
 пользовательского `__setattr__` или descriptor setter. Для Python attribute
-semantics используются `tinypy_object_*_attr_value`. Embedded NUL учитывается
+semantics используются `tinypy_object_*_attr_value`. Типы, созданные VM,
+включая исключения, как и built-in типы CPython, отклоняют присваивание и
+удаление атрибутов через этот путь; внутренняя установка атрибутов и native
+host types не затронуты. Embedded NUL учитывается
 полной длиной key; существующие byte APIs остаются совместимыми адаптерами.
 `tinypy_import_module_key` принимает borrowed byte-string имя; обработка
 составных имён и host resolver используют его байтовое представление.
@@ -319,9 +340,13 @@ errors: первое безопасное attribute read отмечает общ
 регистрация namespace не меняются. Numeric real/imag/numerator/denominator
 поля имеют соответствующие C member/getset descriptor kinds, включая readonly
 и wrong-receiver diagnostics.
-Фиксированные codec aliases сравниваются с presets с сохранением нормализации;
-проверки имён, у которых Python 2 учитывает только префикс до NUL, сохраняют
-это поведение.
+Имена встроенных codecs сравниваются с presets после нормализации
+`encodings.search_function`: ASCII-буквы приводятся к нижнему регистру, каждая
+серия прочих символов, кроме `.`, между буквами и цифрами становится одним `_`;
+aliases из `encodings.aliases` проверяются и с `.`, заменённой на `_`. Реестр
+search functions, cache и error handlers `_codecs` не виден как атрибуты
+модуля. Проверки имён, у которых Python 2 учитывает только префикс до NUL,
+сохраняют это поведение.
 
 Compiler literals, filename и non-interned
 marshal payloads обходят lookup intern table; при свёртке констант
@@ -417,6 +442,12 @@ comprehensions, `with`, imports и tracing data code object.
 состояние вызывающего frame; текущий обработчик читается через `sys.exc_info()`.
 Эти getset descriptors допускают запись и удаление. `None` очищает поле;
 при возврате сохранённое состояние передаётся VM с сохранением владения.
+Frame сохраняет состояние вызывающего при первом обработанном исключении и
+восстанавливает его при выходе и при `yield`, как `set_exc_info` и
+`reset_exc_info` в CPython 2.7, в том числе после `sys.exc_clear()` в
+вызванной функции. `sys.exc_type`, `sys.exc_value` и `sys.exc_traceback`
+повторяют это состояние; как `PySys_SetObject`, отсутствующие value и
+traceback удаляют имена, а `sys.exc_clear()` записывает во все три `None`.
 `f_locals`, `f_restricted` и имя generator являются readonly getsets и
 возвращают `AttributeError` при попытке записи или удаления.
 
@@ -640,7 +671,10 @@ callback. `sys.modules` поддерживает packages, circular imports и r
 
 Output streams, warnings, diagnostics и formatted tracebacks направляются host
 callbacks. Callback input действителен только на время вызова, если явно не
-указано иное.
+указано иное. Host, который завершает top-level run или сообщает uncaught
+exception, сначала вызывает `tinypy_output_flush_line`: как `Py_FlushLine`,
+она дописывает в `sys.stdout` перевод строки, отложенный print statement с
+завершающей запятой, игнорирует ошибку записи и сохраняет raised exception.
 
 ## 14. Errors
 

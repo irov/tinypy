@@ -118,6 +118,11 @@ allowing room for runtime call frames, callbacks and exception unwinding.
 Exceeding the byte budget raises `RuntimeError` even when the logical Python
 recursion limit has not been reached.
 
+`tinypy_vm_config_t.max_heap_bytes` bounds the memory a VM holds; zero disables
+it. `tinypy_vm_create` returns NULL when the VM bootstrap alone exceeds the
+budget. Compilation and execution report `MemoryError` when a fallible
+allocation does not fit; C API calls without an error result are not limited.
+
 The optional [CLI library](cli/README.md) is a separate target inside this
 project. It is disabled by default and is never linked into the embedding
 `tinypy` target.

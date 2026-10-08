@@ -137,14 +137,32 @@ tinypy_value_t *tinypy_internal_function_descriptor_get(tinypy_value_t *descript
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_method_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+    tinypy_value_t *result = tinypy_internal_method_bind(descriptor, instance, &owner->base.base, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* instancemethod_descr_get: a bound method, or an unbound method whose class
+   is not a base of the owner (classic or new-style), stays unchanged. */
+tinypy_value_t *tinypy_internal_method_bind(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error) {
     tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(descriptor);
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (method->self != NULL || TINYPY_VALUE_KIND(method->owner) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype(owner, (tinypy_type_t *)method->owner) == 0) {
+    if (method->self != NULL) {
         return TINYPY_RET(descriptor);
     }
-    tinypy_value_t *return_value_1 = tinypy_method_new(method->function, instance, &owner->base.base);
-    return return_value_1;
+    if (TINYPY_VALUE_KIND(method->owner) != TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(owner) != TINYPY_VALUE_NONE) {
+        int32_t subclass = tinypy_internal_object_instance_check(owner, method->owner, TINYPY_TRUE, out_error);
+
+        if (subclass < 0) {
+            return NULL;
+        }
+        if (subclass == 0) {
+            return TINYPY_RET(descriptor);
+        }
+    }
+    tinypy_value_t *result = tinypy_method_new(method->function, instance, owner);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {

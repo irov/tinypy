@@ -221,3 +221,87 @@ class Regressions(unittest.TestCase):
                 return 93L
 
         self.assertRaises(TypeError, lambda: "%d" % Measurement())
+
+    def test_classic_integer_argument_truncates(self):
+        class Parcel:
+            pass
+
+        class Truncating:
+            def __trunc__(self):
+                return 1.5
+
+        for convert in (int, range, xrange, chr, [1, 2, 3].pop):
+            self.assertRaises(AttributeError, convert, Parcel())
+        self.assertEqual([4, 5, 6].pop(Truncating()), 5)
+        self.assertEqual(range(Truncating()), [0])
+        self.assertEqual(chr(Truncating()), "\x01")
+
+    def test_classic_repeat_count_from_getattr(self):
+        class Parcel:
+            def __getattr__(self, name):
+                if name == "__index__":
+                    return lambda: 2
+                raise AttributeError(name)
+
+        self.assertEqual("abc" * Parcel(), "abcabc")
+        self.assertEqual(Parcel() * [7], [7, 7])
+
+    def test_builtin_class_method_descriptor(self):
+        class Mapping(dict):
+            pass
+
+        descriptor = dict.__dict__["fromkeys"]
+        self.assertEqual(type(descriptor).__name__, "classmethod_descriptor")
+        self.assertEqual(repr(descriptor), "<method 'fromkeys' of 'dict' objects>")
+        self.assertEqual((descriptor.__name__, descriptor.__objclass__), ("fromkeys", dict))
+        self.assertEqual(descriptor(dict, "a"), {"a": None})
+        self.assertIs(type(descriptor(Mapping, "a")), Mapping)
+        self.assertIs(type(descriptor.__get__(None, Mapping)("a")), Mapping)
+        self.assertEqual(descriptor.__get__({})("b", 1), {"b": 1})
+        self.assertRaises(TypeError, descriptor)
+        self.assertRaises(TypeError, descriptor, 1)
+        self.assertRaises(TypeError, descriptor, int, "a")
+        self.assertRaises(TypeError, descriptor.__get__, None, int)
+        self.assertRaises(TypeError, type(descriptor))
+        self.assertIs(type(float.__dict__["fromhex"]), type(descriptor))
+        self.assertIs(object.__subclasshook__(), NotImplemented)
+
+    def test_property_members_are_readonly(self):
+        def getter(owner):
+            "getter documentation"
+            return 1
+
+        class Subproperty(property):
+            pass
+
+        value = property(getter)
+        self.assertEqual(value.__doc__, "getter documentation")
+        self.assertIs(value.fget, getter)
+        for name in ("fget", "fset", "fdel", "__doc__"):
+            self.assertRaises(TypeError, setattr, value, name, None)
+            self.assertRaises(TypeError, delattr, value, name)
+        derived = Subproperty(getter)
+        derived.__doc__ = "replaced"
+        self.assertEqual(derived.__doc__, "replaced")
+
+    def test_instance_method_doc(self):
+        class Modern(object):
+            def method(self):
+                "method documentation"
+
+        class Classic:
+            def method(self):
+                "classic documentation"
+
+        self.assertEqual(Modern.method.__doc__, "method documentation")
+        self.assertEqual(Modern().method.__doc__, "method documentation")
+        self.assertEqual(Classic().method.__doc__, "classic documentation")
+        self.assertRaises(AttributeError, setattr, Modern.method, "__doc__", "x")
+        self.assertRaises(AttributeError, delattr, Modern().method, "__doc__")
+
+    def test_unready_iterator_attribute_assignment(self):
+        iterator = iter(bytearray("ab"))
+        self.assertRaises(TypeError, setattr, iterator, "label", 1)
+        self.assertRaises(TypeError, delattr, iterator, "label")
+        self.assertEqual(iterator.__length_hint__(), 2)
+        self.assertRaises(AttributeError, setattr, iterator, "label", 1)

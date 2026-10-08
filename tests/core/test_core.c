@@ -393,6 +393,14 @@ static int32_t __test_pool_allocator(void) {
     TEST_CHECK(vm != NULL);
     values = (tinypy_value_t **)malloc(value_count * sizeof(*values));
     TEST_CHECK(values != NULL);
+    /* The integer free list keeps the first values released; fill it first so
+       the values below return to the pool wherever the bootstrap left room. */
+    for (index = 0U; index < TINYPY_INTEGER_FREE_LIST_MAX; index += 1U) {
+        values[index] = tinypy_integer_from_i64(vm, INT64_C(1000000) + (int64_t)index);
+    }
+    for (index = 0U; index < TINYPY_INTEGER_FREE_LIST_MAX; index += 1U) {
+        tinypy_release(values[index]);
+    }
     base_allocations = state.outstanding_allocations;
     allocation_calls = state.allocation_calls;
 
@@ -3249,6 +3257,72 @@ static int32_t __test_subtype_factory_limits(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A table that cannot grow after an insertion keeps the dictionary or set as
+   it was: repeated failures must not use up the free slots that terminate
+   lookups. Only the table allocations are large enough to fail. */
+static int32_t __test_container_failed_growth(void) {
+    static const char setup_source[] =
+        "keys = range(20000)\n"
+        "def fill(container, add):\n"
+        "    position = 0\n"
+        "    try:\n"
+        "        while position < len(keys):\n"
+        "            add(container, keys[position])\n"
+        "            position += 1\n"
+        "    except MemoryError:\n"
+        "        pass\n"
+        "    size = len(container)\n"
+        "    failures = 0\n"
+        "    while position < len(keys):\n"
+        "        try:\n"
+        "            add(container, keys[position])\n"
+        "        except MemoryError:\n"
+        "            failures += 1\n"
+        "        position += 1\n"
+        "    assert 0 < size < len(keys) and len(container) == size\n"
+        "    assert failures == len(keys) - size and -1 not in container\n"
+        "def store(values, key):\n"
+        "    values[key] = None\n"
+        "def add(members, key):\n"
+        "    members.add(key)\n";
+    static const char fill_source[] =
+        "fill({}, store)\n"
+        "fill(set(), add)\n";
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *setup_code = tinypy_compile_source(vm, setup_source, sizeof(setup_source) - 1U, "failed_growth.py", sizeof("failed_growth.py") - 1U, &options, &error);
+    TEST_CHECK(setup_code != NULL && error == NULL);
+    tinypy_value_t *fill_code = tinypy_compile_source(vm, fill_source, sizeof(fill_source) - 1U, "failed_growth.py", sizeof("failed_growth.py") - 1U, &options, &error);
+    TEST_CHECK(fill_code != NULL && error == NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *result = tinypy_eval_code(setup_code, globals, NULL, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+
+    state.fail_allocation_above = 300U * 1024U;
+    result = tinypy_eval_code(fill_code, globals, NULL, &error);
+    state.fail_allocation_above = 0U;
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_release(fill_code);
+    tinypy_release(setup_code);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_container_heap_limits(void) {
     static const char source[] =
         "list_failed = False\n"
@@ -3340,6 +3414,167 @@ static int32_t __test_container_heap_limits(void) {
     tinypy_vm_destroy(vm);
     TEST_CHECK(state.outstanding_allocations == 0U);
     TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __test_heap_budget_native_initialize(tinypy_value_t *module, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = tinypy_value_vm(module);
+    tinypy_value_t *value = tinypy_integer_from_i64(vm, INT64_C(2));
+
+    (void)user_data;
+    (void)out_error;
+    tinypy_module_add_value(module, "VALUE", 5U, value);
+    tinypy_release(value);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static const tinypy_module_artifact_t *__test_heap_budget_resolve(void *user_data, const tinypy_module_request_t *request) {
+    const tinypy_module_artifact_t *artifacts = (const tinypy_module_artifact_t *)user_data;
+    size_t index;
+
+    for (index = 0U; index < 2U; ++index) {
+        if (request->canonical_name_size == artifacts[index].canonical_name_size && memcmp(request->canonical_name, artifacts[index].canonical_name, request->canonical_name_size) == 0) {
+            return &artifacts[index];
+        }
+    }
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __test_heap_budget_release(void *user_data, const tinypy_module_artifact_t *artifact) {
+    (void)user_data;
+    (void)artifact;
+}
+//////////////////////////////////////////////////////////////////////////
+typedef enum test_heap_budget_outcome_e {
+    TEST_HEAP_BUDGET_REJECTED = 0,
+    TEST_HEAP_BUDGET_MEMORY_ERROR = 1,
+    TEST_HEAP_BUDGET_SUCCEEDED = 2
+} test_heap_budget_outcome_e;
+//////////////////////////////////////////////////////////////////////////
+/* A run under a heap budget ends with success or MemoryError: the VM is
+   either created whole or not at all, and nothing leaks or is miscompiled. */
+static int32_t __test_heap_budget_run(tinypy_module_artifact_t *artifacts, const char *source, size_t budget, test_heap_budget_outcome_e *out_outcome) {
+    test_allocator_state_t state;
+    tinypy_host_t host;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = artifacts;
+    host.resolve_module = __test_heap_budget_resolve;
+    host.release_module_artifact = __test_heap_budget_release;
+    config.host = &host;
+    config.max_heap_bytes = budget;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    if (vm == NULL) {
+        TEST_CHECK(state.outstanding_allocations == 0U);
+        TEST_CHECK(state.outstanding_bytes == 0U);
+        *out_outcome = TEST_HEAP_BUDGET_REJECTED;
+        return 0;
+    }
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    size_t source_size = strlen(source);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, source_size, "budget.py", 9U, globals, NULL, &options, &error);
+    *out_outcome = result != NULL ? TEST_HEAP_BUDGET_SUCCEEDED : TEST_HEAP_BUDGET_MEMORY_ERROR;
+    if (result != NULL) {
+        tinypy_release(result);
+    }
+    else {
+        TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+    }
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Budgets grow geometrically from below the VM bootstrap to well above the
+   whole run; failures late in a run sit just under the smallest budget that
+   succeeds, so that range is swept finely as well. */
+static int32_t __test_heap_budget_sweep(void) {
+    static const char module_source[] =
+        "VALUE = 1\n"
+        "def twice(item):\n"
+        "    return [item] * 2\n";
+    static const char *const sources[] = {
+        "",
+        "def outer(x):\n"
+        "    def inner(y):\n"
+        "        return x + y\n"
+        "    return inner\n"
+        "class Sample(object):\n"
+        "    def items(self):\n"
+        "        return [index * 2 for index in range(5)]\n"
+        "assert outer(1)(2) == 3\n"
+        "assert Sample().items() == [0, 2, 4, 6, 8]\n",
+        "def numbers():\n"
+        "    try:\n"
+        "        yield 1\n"
+        "        yield 2\n"
+        "    finally:\n"
+        "        log.append('closed')\n"
+        "log = []\n"
+        "assert sum(numbers()) == 3\n"
+        "assert log == ['closed']\n",
+        "import budget_source\n"
+        "import budget_native\n"
+        "assert budget_source.VALUE + budget_native.VALUE == 3\n"
+        "assert budget_source.twice('x') == ['x', 'x']\n"};
+    tinypy_module_artifact_t artifacts[2];
+    size_t outcome_counts[3] = {0U, 0U, 0U};
+    size_t index;
+
+    (void)memset(artifacts, 0, sizeof(artifacts));
+    for (index = 0U; index < 2U; ++index) {
+        artifacts[index].abi_version = TINYPY_ABI_VERSION;
+        artifacts[index].struct_size = (uint32_t)sizeof(artifacts[index]);
+        artifacts[index].canonical_name_size = 13U;
+    }
+    artifacts[0].content_kind = TINYPY_MODULE_CONTENT_SOURCE;
+    artifacts[0].data = module_source;
+    artifacts[0].data_size = sizeof(module_source) - 1U;
+    artifacts[0].canonical_name = "budget_source";
+    artifacts[0].logical_filename = "budget_source.py";
+    artifacts[0].logical_filename_size = 16U;
+    artifacts[1].content_kind = TINYPY_MODULE_CONTENT_NATIVE;
+    artifacts[1].canonical_name = "budget_native";
+    artifacts[1].native_initialize = __test_heap_budget_native_initialize;
+    for (index = 0U; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+        size_t threshold = 0U;
+        size_t budget;
+        size_t step;
+
+        for (budget = 16U * 1024U; budget <= 4U * 1024U * 1024U; budget += budget / 7U) {
+            test_heap_budget_outcome_e outcome;
+            if (__test_heap_budget_run(artifacts, sources[index], budget, &outcome) != 0) {
+                return 1;
+            }
+            outcome_counts[outcome] += 1U;
+            if (outcome == TEST_HEAP_BUDGET_SUCCEEDED && threshold == 0U) {
+                threshold = budget;
+            }
+        }
+        TEST_CHECK(threshold != 0U);
+        for (step = 1U; step <= 32U; ++step) {
+            test_heap_budget_outcome_e outcome;
+            if (__test_heap_budget_run(artifacts, sources[index], threshold - threshold / 256U * step, &outcome) != 0) {
+                return 1;
+            }
+            outcome_counts[outcome] += 1U;
+        }
+    }
+    TEST_CHECK(outcome_counts[TEST_HEAP_BUDGET_REJECTED] != 0U);
+    TEST_CHECK(outcome_counts[TEST_HEAP_BUDGET_MEMORY_ERROR] != 0U);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -4377,7 +4612,15 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "container_heap_limits") == 0) {
         int return_value_20 = __test_container_heap_limits();
-        return return_value_20;
+        if (return_value_20 != 0) {
+            return return_value_20;
+        }
+        int failed_growth = __test_container_failed_growth();
+        return failed_growth;
+    }
+    if (strcmp(argv[1], "heap_budget_sweep") == 0) {
+        int heap_budget = __test_heap_budget_sweep();
+        return heap_budget;
     }
     if (strcmp(argv[1], "native_embedding") == 0) {
         int return_value_21 = __test_native_embedding();

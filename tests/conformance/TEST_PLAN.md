@@ -220,9 +220,11 @@ when a called frame returns.
 
 Do not compare process addresses or unspecified mapping/set iteration order.
 Canonicalize values when order is unspecified; preserve order when the Python
-contract makes it observable. Keep signed zero, result type and long suffixes
-visible in numeric observations. Compare syntax-error args and location fields,
-not merely the fact that compilation failed.
+contract makes it observable. Dict and set iteration order follows the CPython
+2.7 table layout and is compared only by the regression tests dedicated to it.
+Keep signed zero, result type and long suffixes visible in numeric
+observations. Compare syntax-error args and location fields, not merely the
+fact that compilation failed.
 
 Unsuccessful dictionary probes can revisit a bucket; exact probe repetition
 depends on physical table capacity and layout. A pure False equality callback

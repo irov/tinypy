@@ -755,6 +755,7 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute(tinypy_vm_t *vm, tinypy_
     options.optimize_level = optimize_level;
     filename_size = strlen(filename);
     result = tinypy_exec_source(vm, source, source_size, filename, filename_size, globals, NULL, &options, &error);
+    tinypy_output_flush_line(vm);
     if (result != NULL) {
         tinypy_release(result);
         return TINYPY_CLI_EXECUTE_OK;
@@ -791,6 +792,7 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *
     options.optimize_level = optimize_level;
     filename_size = strlen(filename);
     result = tinypy_eval_source(vm, source, source_size, filename, filename_size, globals, NULL, &options, &error);
+    tinypy_output_flush_line(vm);
     if (result != NULL) {
         if (tinypy_typeof(result) != TINYPY_VALUE_NONE) {
             tinypy_value_t *representation = tinypy_object_repr(result, &error);

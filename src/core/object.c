@@ -45,75 +45,85 @@ static tinypy_bool_t __tinypy_object_type_metadata_read_only(tinypy_value_t *key
 }
 //////////////////////////////////////////////////////////////////////////
 /* Classic classes and their instances name the class itself, the way Python
-   2.7 reports a missing attribute on them. */
+   2.7 reports a missing attribute on them; other objects use the tp_name. */
 static void __tinypy_object_make_attribute_error(tinypy_value_t *value, const char *name, size_t name_size, tinypy_error_t **out_error) {
     static const char object_prefix[] = "'";
     static const char type_prefix[] = "type object '";
-    static const char type_separator[] = "' has no attribute '";
-    static const char object_separator[] = "' object has no attribute '";
     static const char class_prefix[] = "class ";
+    static const char object_separator[] = "' object has no attribute '";
+    static const char type_separator[] = "' has no attribute '";
     static const char class_separator[] = " has no attribute '";
-    static const char instance_prefix[] = "";
     static const char instance_separator[] = " instance has no attribute '";
-    static const char suffix[] = "'";
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-    const char *prefix = object_prefix;
-    size_t prefix_size = sizeof(object_prefix) - 1U;
-    const char *separator = object_separator;
-    size_t separator_size = sizeof(object_separator) - 1U;
-    const char *owner_name = value->type->name;
-    size_t owner_name_size = value->type->name_size;
-    size_t message_size;
-    size_t offset = 0U;
-    char *message;
+    tinypy_message_part_t owner[3];
 
     const char *name_nul = (const char *)memchr(name, 0, name_size);
     if (name_nul != NULL) {
         name_size = (size_t)(name_nul - name);
     }
-    if (kind == TINYPY_VALUE_PARTIAL && value->type == &vm->types[TINYPY_VALUE_PARTIAL]) {
-        owner_name = "functools.partial";
-        owner_name_size = sizeof("functools.partial") - 1U;
-    }
-    if (kind == TINYPY_VALUE_TYPE) {
-        prefix = type_prefix;
-        prefix_size = sizeof(type_prefix) - 1U;
-        separator = type_separator;
-        separator_size = sizeof(type_separator) - 1U;
-        owner_name = ((tinypy_type_t *)value)->name;
-        owner_name_size = ((tinypy_type_t *)value)->name_size;
-    }
+    tinypy_message_part_t parts[] = {
+        {object_prefix, sizeof(object_prefix) - 1U},
+        {NULL, 0U},
+        {NULL, 0U},
+        {NULL, 0U},
+        {object_separator, sizeof(object_separator) - 1U},
+        {name, name_size},
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+    };
+
     if (kind == TINYPY_VALUE_CLASS || kind == TINYPY_VALUE_OLD_INSTANCE) {
         tinypy_value_t *class_value = kind == TINYPY_VALUE_CLASS ? value : tinypy_old_instance_class(value);
         tinypy_value_t *class_name = tinypy_class_name(class_value);
 
-        owner_name = (const char *)TINYPY_TEXT_BYTES(class_name);
-        owner_name_size = TINYPY_TEXT_BYTE_SIZE(class_name);
-        prefix = kind == TINYPY_VALUE_CLASS ? class_prefix : instance_prefix;
-        prefix_size = kind == TINYPY_VALUE_CLASS ? sizeof(class_prefix) - 1U : sizeof(instance_prefix) - 1U;
-        separator = kind == TINYPY_VALUE_CLASS ? class_separator : instance_separator;
-        separator_size = kind == TINYPY_VALUE_CLASS ? sizeof(class_separator) - 1U : sizeof(instance_separator) - 1U;
+        parts[0].bytes = class_prefix;
+        parts[0].size = kind == TINYPY_VALUE_CLASS ? sizeof(class_prefix) - 1U : 0U;
+        parts[3].bytes = (const char *)TINYPY_TEXT_BYTES(class_name);
+        parts[3].size = TINYPY_TEXT_BYTE_SIZE(class_name);
+        parts[4].bytes = kind == TINYPY_VALUE_CLASS ? class_separator : instance_separator;
+        parts[4].size = kind == TINYPY_VALUE_CLASS ? sizeof(class_separator) - 1U : sizeof(instance_separator) - 1U;
     }
-    message_size = prefix_size + owner_name_size + separator_size + name_size + (sizeof(suffix) - 1U);
-    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U);
-    if (prefix_size != 0U) {
-        (void)memcpy(message + offset, prefix, prefix_size);
-        offset += prefix_size;
+    else {
+        tinypy_internal_type_message_name(kind == TINYPY_VALUE_TYPE ? (tinypy_type_t *)value : value->type, owner);
+        parts[1] = owner[0];
+        parts[2] = owner[1];
+        parts[3] = owner[2];
+        if (kind == TINYPY_VALUE_TYPE) {
+            parts[0].bytes = type_prefix;
+            parts[0].size = sizeof(type_prefix) - 1U;
+            parts[4].bytes = type_separator;
+            parts[4].size = sizeof(type_separator) - 1U;
+        }
     }
-    if (owner_name_size != 0U) {
-        (void)memcpy(message + offset, owner_name, owner_name_size);
-        offset += owner_name_size;
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyObject_GenericSetAttr without a dictionary to store into: a class
+   attribute that is not a data descriptor makes the name read-only. */
+static void __tinypy_object_generic_setattr_error(tinypy_value_t *value, tinypy_value_t *key, tinypy_bool_t has_attribute, tinypy_error_t **out_error) {
+    if (has_attribute == TINYPY_FALSE) {
+        tinypy_internal_object_make_attribute_error_key(value, key, out_error);
+        return;
     }
-    (void)memcpy(message + offset, separator, separator_size);
-    offset += separator_size;
-    if (name_size != 0U) {
-        (void)memcpy(message + offset, name, name_size);
-        offset += name_size;
-    }
-    (void)memcpy(message + offset, suffix, sizeof(suffix));
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, message, out_error);
-    tinypy_internal_vm_deallocate(vm, message, message_size + 1U);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        TINYPY_MESSAGE_PART_LITERAL("' object attribute '"),
+        TINYPY_MESSAGE_PART_TEXT(key),
+        TINYPY_MESSAGE_PART_LITERAL("' is read-only"),
+    };
+
+    tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(value), TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+/* A missing dictionary entry or empty slot reports the bare attribute name,
+   like the KeyError PyObject_GenericSetAttr turns into AttributeError. */
+void tinypy_internal_make_attribute_name_error(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_TEXT(name),
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_object_make_attribute_error_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
@@ -366,15 +376,18 @@ static tinypy_value_t *__tinypy_object_get_type_special_dict(tinypy_value_t *val
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_object_immutable_type_error(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *name = __tinypy_object_get_type_special_name(value);
+    tinypy_message_part_t name[3];
+
+    tinypy_internal_type_message_name((tinypy_type_t *)value, name);
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("can't set attributes of built-in/extension type '"),
-        TINYPY_MESSAGE_PART_TEXT(name), TINYPY_MESSAGE_PART_LITERAL("'")
+        name[0],
+        name[1],
+        name[2],
+        TINYPY_MESSAGE_PART_LITERAL("'")
     };
 
-    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-    TINYPY_DECREF(name);
+    tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_get_type_special_bases(tinypy_value_t *value) {
@@ -1171,7 +1184,7 @@ tinypy_bool_t tinypy_internal_object_has_special_override_key(tinypy_value_t *va
     }
     /* Immutable VM-native descriptor types share the native-function payload,
        but their own slots are built-ins rather than Python overrides. */
-    if (value->type == vm->native_method_descriptor_type || value->type == vm->native_wrapper_descriptor_type || value->type == vm->native_method_wrapper_type) {
+    if (value->type == vm->native_method_descriptor_type || value->type == vm->native_wrapper_descriptor_type || value->type == vm->native_method_wrapper_type || value->type == vm->native_class_method_descriptor_type) {
         return TINYPY_FALSE;
     }
     attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
@@ -1248,6 +1261,27 @@ tinypy_value_t *tinypy_internal_descriptor_get_value(tinypy_vm_t *vm, tinypy_val
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+/* Fetches an optional special method once. A classic instance looks it up
+   like any attribute, __getattr__ included, and only an AttributeError means
+   it is missing; other objects look it up on their type. Returns 1 with an
+   owned method, 0 when there is none and -1 on error. */
+int32_t tinypy_internal_object_lookup_special_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t **out_method, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+    *out_method = NULL;
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        int32_t status = tinypy_internal_object_get_optional_attr_key(value, key, out_method, out_error);
+        return status;
+    }
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
+    if (attribute == NULL) {
+        return INT32_C(0);
+    }
+    *out_method = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
+    return *out_method != NULL ? INT32_C(1) : -INT32_C(1);
+}
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_get_special_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
@@ -1674,6 +1708,7 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
         return stored;
     }
     tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
+    tinypy_bool_t has_attribute = descriptor != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     if (descriptor != NULL) {
         TINYPY_INCREF(descriptor);
         tinypy_bool_t data = tinypy_internal_descriptor_is_data(vm, descriptor);
@@ -1692,7 +1727,7 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
         tinypy_value_t **dict_slot;
 
         if (value->type->has_instance_dict == TINYPY_FALSE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "instance has no dictionary for this attribute", out_error);
+            __tinypy_object_generic_setattr_error(value, key, has_attribute, out_error);
             return TINYPY_FALSE;
         }
         dict_slot = tinypy_internal_object_dict_slot(value);
@@ -1748,7 +1783,7 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
             return TINYPY_FALSE;
         }
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object attributes are read-only", out_error);
+    __tinypy_object_generic_setattr_error(value, key, has_attribute, out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1756,7 +1791,6 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
    __class__ and __dict__ directly without consulting either hook. */
 static tinypy_bool_t __tinypy_object_old_instance_set_attr(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *method;
 
     if (TINYPY_NAME_EQ(key, vm->internal_special_class_key) != 0) {
         tinypy_bool_t return_value_1 = tinypy_internal_old_instance_set_class(value, attribute_value, out_error);
@@ -1766,19 +1800,10 @@ static tinypy_bool_t __tinypy_object_old_instance_set_attr(tinypy_value_t *value
         tinypy_bool_t return_value_2 = tinypy_internal_old_instance_set_dict(value, attribute_value, out_error);
         return return_value_2;
     }
-    if (tinypy_internal_old_instance_has_special_key(value, vm->internal_special_setattr_key) != 0) {
-        tinypy_value_t *items[2] = {key, attribute_value};
-        tinypy_value_t *args;
-        tinypy_value_t *result;
+    tinypy_value_t *hook = tinypy_internal_class_lookup_key(vm, tinypy_old_instance_class(value), vm->internal_special_setattr_key);
+    if (hook != NULL) {
+        tinypy_value_t *result = tinypy_internal_old_instance_call_hook(value, hook, key, attribute_value, out_error);
 
-        method = tinypy_internal_object_get_special_key(value, vm->internal_special_setattr_key, out_error);
-        if (method == NULL) {
-            return TINYPY_FALSE;
-        }
-        args = tinypy_tuple_from_items(vm, items, 2U);
-        result = tinypy_call(method, args, NULL, out_error);
-        TINYPY_DECREF(args);
-        TINYPY_DECREF(method);
         if (result == NULL) {
             return TINYPY_FALSE;
         }
@@ -1791,7 +1816,6 @@ static tinypy_bool_t __tinypy_object_old_instance_set_attr(tinypy_value_t *value
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_object_old_instance_delete_attr(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *method;
 
     if (TINYPY_NAME_EQ(key, vm->internal_special_class_key) != 0) {
         tinypy_bool_t return_value_1 = tinypy_internal_old_instance_set_class(value, NULL, out_error);
@@ -1801,18 +1825,10 @@ static tinypy_bool_t __tinypy_object_old_instance_delete_attr(tinypy_value_t *va
         tinypy_bool_t return_value_2 = tinypy_internal_old_instance_set_dict(value, NULL, out_error);
         return return_value_2;
     }
-    if (tinypy_internal_old_instance_has_special_key(value, vm->internal_special_delattr_key) != 0) {
-        tinypy_value_t *args;
-        tinypy_value_t *result;
+    tinypy_value_t *hook = tinypy_internal_class_lookup_key(vm, tinypy_old_instance_class(value), vm->internal_special_delattr_key);
+    if (hook != NULL) {
+        tinypy_value_t *result = tinypy_internal_old_instance_call_hook(value, hook, key, NULL, out_error);
 
-        method = tinypy_internal_object_get_special_key(value, vm->internal_special_delattr_key, out_error);
-        if (method == NULL) {
-            return TINYPY_FALSE;
-        }
-        args = tinypy_tuple_from_items(vm, &key, 1U);
-        result = tinypy_call(method, args, NULL, out_error);
-        TINYPY_DECREF(args);
-        TINYPY_DECREF(method);
         if (result == NULL) {
             return TINYPY_FALSE;
         }
@@ -1929,6 +1945,7 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
         return deleted;
     }
     tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
+    tinypy_bool_t has_attribute = descriptor != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     if (descriptor != NULL) {
         TINYPY_INCREF(descriptor);
         tinypy_bool_t data = tinypy_internal_descriptor_is_data(vm, descriptor);
@@ -1974,11 +1991,11 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
         dict = TINYPY_FUNCTION_OBJECT(value)->dict;
     }
     if (dict == NULL) {
-        tinypy_internal_object_make_attribute_error_key(value, key, out_error);
+        __tinypy_object_generic_setattr_error(value, key, has_attribute, out_error);
         return TINYPY_FALSE;
     }
     if (tinypy_internal_dict_delete_optional(vm, dict, key) == 0) {
-        tinypy_internal_object_make_attribute_error_key(value, key, out_error);
+        tinypy_internal_make_attribute_name_error(vm, key, out_error);
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;

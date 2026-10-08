@@ -53,7 +53,9 @@ void tinypy_internal_module_release_references(tinypy_value_t *value, tinypy_rel
     tinypy_value_t *dict = module->dict;
     tinypy_value_t *name = module->name;
 
-    if (dict != NULL) {
+    /* The VM keeps the builtins namespace for every frame, as the globals
+       of __main__ keep the __builtin__ module alive in CPython. */
+    if (dict != NULL && dict != vm->builtins) {
         tinypy_internal_exception_state_t state;
         tinypy_error_t *error = NULL;
 

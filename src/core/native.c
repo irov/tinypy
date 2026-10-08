@@ -54,12 +54,10 @@ void tinypy_internal_type_add_property(tinypy_type_t *type, tinypy_value_t *name
     TINYPY_DECREF(function);
 }
 //////////////////////////////////////////////////////////////////////////
+/* Built-in class methods become classmethod_descriptor objects of their type
+   and bind as built-in methods of the class. */
 void tinypy_internal_type_add_class_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
-    tinypy_value_t *function = tinypy_native_function_new_key(name, callback, user_data, finalize);
-    tinypy_value_t *descriptor = tinypy_class_method_new(function);
-    tinypy_type_set_attr_key(type, name, descriptor);
-    TINYPY_DECREF(descriptor);
-    TINYPY_DECREF(function);
+    tinypy_internal_type_add_method(type, name, callback, user_data, finalize, TINYPY_NATIVE_DESCRIPTOR_CLASS_METHOD);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_type_add_static_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
@@ -118,28 +116,34 @@ static tinypy_bool_t __tinypy_native_function_check_receiver(tinypy_value_t *cal
         return TINYPY_TRUE;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+    tinypy_message_part_t owner[3];
+
+    tinypy_internal_type_message_name(function->owner, owner);
     if (receiver == NULL) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
-            TINYPY_MESSAGE_PART_LITERAL("' of '"), {function->owner->name, function->owner->name_size},
+            TINYPY_MESSAGE_PART_LITERAL("' of '"), owner[0], owner[1], owner[2],
             TINYPY_MESSAGE_PART_LITERAL("' object needs an argument"),
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
     }
     else {
+        tinypy_message_part_t receiver_name[3];
+
+        tinypy_internal_type_message_name(receiver->type, receiver_name);
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
-            TINYPY_MESSAGE_PART_LITERAL("' requires a '"), {function->owner->name, function->owner->name_size},
-            TINYPY_MESSAGE_PART_LITERAL("' object but received a '"), TINYPY_MESSAGE_PART_TYPE_NAME(receiver),
+            TINYPY_MESSAGE_PART_LITERAL("' requires a '"), owner[0], owner[1], owner[2],
+            TINYPY_MESSAGE_PART_LITERAL("' object but received a '"), receiver_name[0], receiver_name[1], receiver_name[2],
             TINYPY_MESSAGE_PART_LITERAL("'"),
         };
         if (binding != TINYPY_FALSE) {
             parts[2].bytes = "' for '";
             parts[2].size = sizeof("' for '") - 1U;
-            parts[4].bytes = "' objects doesn't apply to '";
-            parts[4].size = sizeof("' objects doesn't apply to '") - 1U;
-            parts[6].bytes = "' object";
-            parts[6].size = sizeof("' object") - 1U;
+            parts[6].bytes = "' objects doesn't apply to '";
+            parts[6].size = sizeof("' objects doesn't apply to '") - 1U;
+            parts[10].bytes = "' object";
+            parts[10].size = sizeof("' object") - 1U;
         }
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
     }
@@ -278,19 +282,9 @@ void tinypy_internal_native_method_free_list_finalize(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+/* Creates a built-in method with self bound, reusing the method free list. */
+static tinypy_value_t *__tinypy_native_function_bind(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(descriptor);
-
-    TINYPY_CLEAR_ERROR(out_error);
-    if (instance == NULL || function->self != NULL) {
-        return TINYPY_RET(descriptor);
-    }
-    if (__tinypy_native_function_check_receiver(descriptor, instance, TINYPY_TRUE, out_error) == TINYPY_FALSE) {
-        return NULL;
-    }
-
-    (void)owner;
-
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
     tinypy_type_t *method_type = descriptor->type == vm->native_wrapper_descriptor_type && vm->native_method_wrapper_type != NULL ? vm->native_method_wrapper_type : &vm->types[TINYPY_VALUE_NATIVE_FUNCTION];
     tinypy_native_function_object_t *method;
@@ -334,6 +328,107 @@ tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *d
     return &method->base;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(descriptor);
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (instance == NULL || function->self != NULL) {
+        return TINYPY_RET(descriptor);
+    }
+    if (__tinypy_native_function_check_receiver(descriptor, instance, TINYPY_TRUE, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+
+    (void)owner;
+
+    tinypy_value_t *method = __tinypy_native_function_bind(descriptor, instance, out_error);
+    return method;
+}
+//////////////////////////////////////////////////////////////////////////
+/* classmethod_get: the class must be a type deriving from the method's
+   owner, and becomes the self of a built-in method. */
+tinypy_value_t *tinypy_internal_native_function_bind_class(tinypy_value_t *descriptor, tinypy_value_t *class_value, tinypy_error_t **out_error) {
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(descriptor);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype((tinypy_type_t *)class_value, function->owner) == 0) {
+        tinypy_bool_t is_type = TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_TYPE ? TINYPY_TRUE : TINYPY_FALSE;
+        tinypy_message_part_t owner_name[3];
+        tinypy_message_part_t class_name[3];
+
+        tinypy_internal_type_message_name(function->owner, owner_name);
+        tinypy_internal_type_message_name(is_type != 0 ? (tinypy_type_t *)class_value : class_value->type, class_name);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
+            TINYPY_MESSAGE_PART_LITERAL("' for type '"), owner_name[0], owner_name[1], owner_name[2],
+            TINYPY_MESSAGE_PART_LITERAL("' doesn't apply to type '"), class_name[0], class_name[1], class_name[2],
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
+
+        if (is_type == 0) {
+            parts[6].bytes = "' needs a type, not a '";
+            parts[6].size = sizeof("' needs a type, not a '") - 1U;
+            parts[10].bytes = "' as arg 2";
+            parts[10].size = sizeof("' as arg 2") - 1U;
+        }
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    tinypy_value_t *method = __tinypy_native_function_bind(descriptor, class_value, out_error);
+    return method;
+}
+//////////////////////////////////////////////////////////////////////////
+/* classmethod_get: the class the descriptor is found through, or the type of
+   the instance. */
+static tinypy_value_t *__tinypy_native_class_method_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+    tinypy_type_t *class_type = owner != NULL ? owner : instance->type;
+    tinypy_value_t *method = tinypy_internal_native_function_bind_class(descriptor, &class_type->base.base, out_error);
+
+    return method;
+}
+//////////////////////////////////////////////////////////////////////////
+/* classmethoddescr_call: the first argument is the class, which receives the
+   call like the self of a bound built-in method. */
+static tinypy_value_t *__tinypy_native_class_method_descriptor_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+
+    if (TINYPY_TUPLE_SIZE(args) == 0U) {
+        (void)__tinypy_native_function_check_receiver(callable, NULL, TINYPY_FALSE, out_error);
+        return NULL;
+    }
+    tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_message_part_t received_name[3];
+
+    tinypy_internal_type_message_name(class_value->type, received_name);
+    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
+            TINYPY_MESSAGE_PART_LITERAL("' requires a type but received a '"), received_name[0], received_name[1], received_name[2],
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    if (tinypy_type_is_subtype((tinypy_type_t *)class_value, function->owner) == 0) {
+        tinypy_message_part_t owner_name[3];
+
+        tinypy_internal_type_message_name(function->owner, owner_name);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
+            TINYPY_MESSAGE_PART_LITERAL("' requires a subtype of '"), owner_name[0], owner_name[1], owner_name[2],
+            TINYPY_MESSAGE_PART_LITERAL("' but received '"), received_name[0], received_name[1], received_name[2],
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    tinypy_value_t *result = __tinypy_native_function_invoke(callable, args, kwargs, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_native_function_call_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -347,7 +442,7 @@ static tinypy_value_t *__tinypy_native_function_call_method(tinypy_value_t *func
     if (call_args == NULL) {
         return NULL;
     }
-    tinypy_value_t *result = tinypy_internal_native_function_call(self, call_args, kwargs, out_error);
+    tinypy_value_t *result = self->type->call(self, call_args, kwargs, out_error);
     TINYPY_DECREF(call_args);
     return result;
 }
@@ -471,7 +566,7 @@ static tinypy_hash_t __tinypy_native_function_hash_slot(tinypy_value_t *value, t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_hash_t hash;
 
-    if (value->type == vm->native_method_descriptor_type || value->type == vm->native_wrapper_descriptor_type) {
+    if (value->type == vm->native_method_descriptor_type || value->type == vm->native_wrapper_descriptor_type || value->type == vm->native_class_method_descriptor_type) {
         value->type->flags &= ~TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
         hash = (tinypy_hash_t)((uintptr_t)value >> 4U);
     }
@@ -512,8 +607,10 @@ static tinypy_value_t *__tinypy_native_function_hash_method(tinypy_value_t *func
 static tinypy_value_t *__tinypy_native_function_compare_slot(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_native_descriptor_types(tinypy_vm_t *vm) {
-    tinypy_type_t **types[] = {&vm->native_method_descriptor_type, &vm->native_wrapper_descriptor_type, &vm->native_method_wrapper_type};
-    tinypy_value_t *const names[] = {vm->internal_method_descriptor_key, vm->internal_wrapper_descriptor_key, vm->internal_method_wrapper_key};
+    tinypy_type_t **types[] = {&vm->native_method_descriptor_type, &vm->native_wrapper_descriptor_type, &vm->native_method_wrapper_type, &vm->native_class_method_descriptor_type};
+    tinypy_value_t *const names[] = {vm->internal_method_descriptor_key, vm->internal_wrapper_descriptor_key, vm->internal_method_wrapper_key, vm->internal_classmethod_descriptor_key};
+    static const tinypy_call_slot_t calls[] = {tinypy_internal_native_function_call, tinypy_internal_native_function_call, tinypy_internal_native_function_call, __tinypy_native_class_method_descriptor_call};
+    static const tinypy_descriptor_get_slot_t getters[] = {tinypy_internal_native_function_descriptor_get, tinypy_internal_native_function_descriptor_get, NULL, __tinypy_native_class_method_descriptor_get};
 
     for (size_t index = 0U; index < sizeof(types) / sizeof(types[0]); ++index) {
         tinypy_type_t *type = tinypy_internal_type_new_configured(names[index], NULL, 0U, NULL, NULL, TINYPY_FALSE, TINYPY_FALSE, NULL);
@@ -527,13 +624,13 @@ void tinypy_internal_initialize_native_descriptor_types(tinypy_vm_t *vm) {
         type->release_references = tinypy_internal_native_function_release_references;
         type->traverse_references = tinypy_internal_native_function_release_references;
         type->destroy = tinypy_internal_native_function_destroy;
-        type->call = tinypy_internal_native_function_call;
-        type->descriptor_get = index == 2U ? NULL : tinypy_internal_native_function_descriptor_get;
+        type->call = calls[index];
+        type->descriptor_get = getters[index];
         type->rich_compare = index == 2U ? __tinypy_native_function_compare_slot : NULL;
         type->hash = __tinypy_native_function_hash_slot;
         type->create = NULL;
         type->flags = (type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
-        if (index == 0U || index == 2U) {
+        if (index != 1U) {
             type->flags |= TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
         }
         *types[index] = type;
@@ -560,6 +657,12 @@ static tinypy_value_t *__tinypy_native_descriptor_get_method(tinypy_value_t *fun
     if (instance == NULL && (count == 2U || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 2U)) == TINYPY_VALUE_NONE)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__get__(None, None) is invalid", out_error);
         return NULL;
+    }
+    if (descriptor->type == vm->native_class_method_descriptor_type) {
+        tinypy_value_t *class_value = count == 3U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 2U)) != TINYPY_VALUE_NONE ? TINYPY_TUPLE_GET(args, 2U) : &instance->type->base.base;
+        tinypy_value_t *method = tinypy_internal_native_function_bind_class(descriptor, class_value, out_error);
+
+        return method;
     }
     tinypy_value_t *return_value_1 = tinypy_internal_native_function_descriptor_get(descriptor, instance, owner, out_error);
     return return_value_1;
@@ -680,7 +783,7 @@ void tinypy_internal_initialize_native_function_type(tinypy_vm_t *vm) {
         {vm->internal_special_ge_key, TINYPY_COMPARE_GREATER_EQUAL}};
 
     tinypy_type_t *function_type = &vm->types[TINYPY_VALUE_NATIVE_FUNCTION];
-    tinypy_type_t *descriptor_types[] = {vm->native_method_descriptor_type, vm->native_wrapper_descriptor_type, vm->native_method_wrapper_type};
+    tinypy_type_t *descriptor_types[] = {vm->native_method_descriptor_type, vm->native_wrapper_descriptor_type, vm->native_method_wrapper_type, vm->native_class_method_descriptor_type};
     tinypy_internal_type_add_method(function_type, vm->internal_special_call_key, __tinypy_native_function_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(function_type, vm->internal_special_repr_key, __tinypy_native_function_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(function_type, vm->internal_special_hash_key, __tinypy_native_function_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

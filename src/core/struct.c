@@ -377,7 +377,12 @@ static tinypy_bool_t __tinypy_struct_buffer_acquire(tinypy_vm_t *vm, tinypy_valu
 
     (void)memset(buffer, 0, sizeof(*buffer));
     if (writable != 0 && kind != TINYPY_VALUE_BYTEARRAY && (tinypy_internal_memoryview_check(value) == 0 || tinypy_internal_memoryview_is_readonly(value) != 0)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument must be read-write buffer", out_error);
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("argument must be read-write buffer, not "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(value)
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return TINYPY_FALSE;
     }
     if (writable == 0 && kind == TINYPY_VALUE_NONE) {
@@ -603,36 +608,6 @@ too_small: {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_struct_pack_offset(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-    tinypy_bool_t result;
-
-    if (kind == TINYPY_VALUE_LONG) {
-        result = tinypy_internal_index_as_i64(value, out_value, TINYPY_FALSE, out_error);
-        return result;
-    }
-    if (kind == TINYPY_VALUE_FLOAT) {
-        tinypy_bool_t handled = TINYPY_FALSE;
-        tinypy_value_t *converted = tinypy_internal_call_conversion(value, vm->internal_special_int_key, &handled, out_error);
-
-        if (handled == 0 || converted == NULL) {
-            return TINYPY_FALSE;
-        }
-        kind = TINYPY_VALUE_KIND(converted);
-        if (kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG && kind != TINYPY_VALUE_BOOL) {
-            TINYPY_DECREF(converted);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ method should return an integer", out_error);
-            return TINYPY_FALSE;
-        }
-        result = tinypy_internal_index_as_i64(converted, out_value, TINYPY_FALSE, out_error);
-        TINYPY_DECREF(converted);
-        return result;
-    }
-    result = tinypy_internal_integer_as_ssize(value, out_value, out_error);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_pack_into(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
@@ -669,7 +644,8 @@ static tinypy_value_t *__tinypy_struct_pack_into(tinypy_value_t *function, tinyp
         TINYPY_DECREF(format_value);
         return NULL;
     }
-    if (__tinypy_struct_pack_offset(TINYPY_TUPLE_GET(args, 2U), &signed_offset, out_error) == 0) {
+    /* pack_into reads the offset with PyInt_AsSsize_t. */
+    if (tinypy_internal_number_as_ssize(TINYPY_TUPLE_GET(args, 2U), &signed_offset, out_error) == 0) {
         goto cleanup;
     }
     if (__tinypy_struct_offset(vm, signed_offset, buffer_view.size, format.byte_size, "pack_into", 9U, &offset, out_error) == 0) {

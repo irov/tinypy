@@ -3,6 +3,10 @@
 #include <math.h>
 #include <string.h>
 
+#define TINYPY_LIST_SORT_MIN_GALLOP 7U
+#define TINYPY_LIST_SORT_MAX_PENDING 85U
+#define TINYPY_LIST_SORT_TEMPORARY_SIZE 256U
+
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_container_integer_result(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
     tinypy_bool_t result = tinypy_internal_index_as_i64(value, out_value, TINYPY_FALSE, out_error);
@@ -30,33 +34,25 @@ tinypy_bool_t tinypy_internal_integer_as_ssize(tinypy_value_t *value, int64_t *o
         tinypy_bool_t result = __tinypy_container_integer_result(value, out_value, out_error);
         return result;
     }
-    if (tinypy_internal_object_has_special_key(value, vm->internal_special_int_key) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_int_key, out_error);
+    tinypy_bool_t handled;
+    tinypy_value_t *converted = tinypy_internal_call_int_conversion(value, &handled, out_error);
 
-        if (method == NULL) {
-            return TINYPY_FALSE;
+    if (converted == NULL) {
+        if (handled == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "an integer is required", out_error);
         }
-        tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
-        tinypy_value_t *converted = tinypy_call(method, args, NULL, out_error);
-
-        TINYPY_DECREF(args);
-        TINYPY_DECREF(method);
-        if (converted == NULL) {
-            return TINYPY_FALSE;
-        }
-        kind = TINYPY_VALUE_KIND(converted);
-        if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
-            TINYPY_DECREF(converted);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ method should return an integer", out_error);
-            return TINYPY_FALSE;
-        }
-        tinypy_bool_t result = __tinypy_container_integer_result(converted, out_value, out_error);
-
-        TINYPY_DECREF(converted);
-        return result;
+        return TINYPY_FALSE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "an integer is required", out_error);
-    return TINYPY_FALSE;
+    kind = TINYPY_VALUE_KIND(converted);
+    if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
+        TINYPY_DECREF(converted);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ method should return an integer", out_error);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t result = __tinypy_container_integer_result(converted, out_value, out_error);
+
+    TINYPY_DECREF(converted);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyInt_AsSsize_t reads integer subtypes directly, then uses __int__. */
@@ -257,13 +253,14 @@ static tinypy_value_t *__tinypy_list_inplace_multiply_method(tinypy_value_t *fun
         tinypy_list_clear(list);
     }
     else if (count > 1 && unit_size != 0U) {
+        /* list_inplace_repeat runs out of memory for any size it cannot hold. */
         if ((uint64_t)count > (uint64_t)(SIZE_MAX / unit_size)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "repeated list is too large", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "repeated list is too large", out_error);
             return NULL;
         }
         size_t total_size = unit_size * (size_t)count;
         if (total_size >= (size_t)PTRDIFF_MAX || total_size > SIZE_MAX / sizeof(tinypy_value_t *)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "repeated list is too large", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "repeated list is too large", out_error);
             return NULL;
         }
         if (tinypy_internal_list_reserve_checked(vm, list, total_size, out_error) == 0) {
@@ -509,42 +506,22 @@ typedef struct tinypy_list_sort_item_t {
 } tinypy_list_sort_item_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_list_sort_run_t {
-    size_t base;
+    tinypy_list_sort_item_t *base;
     size_t length;
 } tinypy_list_sort_run_t;
 //////////////////////////////////////////////////////////////////////////
-typedef struct tinypy_list_sort_scratch_t {
+/* MergeState of listsort: the pending runs, the galloping threshold and the
+   temporary storage, which spills to the heap only for long merges. */
+typedef struct tinypy_list_sort_state_t {
     tinypy_vm_t *vm;
-    tinypy_list_sort_item_t *items;
-    size_t capacity;
-} tinypy_list_sort_scratch_t;
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_list_sort_scratch_reserve(tinypy_list_sort_scratch_t *scratch, size_t required, tinypy_error_t **out_error) {
-    size_t capacity;
-    size_t old_size;
-    size_t new_size;
-    tinypy_list_sort_item_t *resized;
-
-    if (required <= scratch->capacity) {
-        return TINYPY_TRUE;
-    }
-    capacity = required;
-    if (capacity > SIZE_MAX / sizeof(*scratch->items)) {
-        tinypy_internal_make_vm_error(scratch->vm, TINYPY_ERROR_MEMORY, "sort temporary storage is too large", out_error);
-        return TINYPY_FALSE;
-    }
-    old_size = scratch->capacity * sizeof(*scratch->items);
-    new_size = capacity * sizeof(*scratch->items);
-    resized = scratch->items == NULL
-                  ? (tinypy_list_sort_item_t *)tinypy_internal_vm_allocate_checked(scratch->vm, new_size, out_error)
-                  : (tinypy_list_sort_item_t *)tinypy_internal_vm_reallocate_checked(scratch->vm, scratch->items, old_size, new_size, out_error);
-    if (resized == NULL) {
-        return TINYPY_FALSE;
-    }
-    scratch->items = resized;
-    scratch->capacity = capacity;
-    return TINYPY_TRUE;
-}
+    tinypy_value_t *compare;
+    size_t min_gallop;
+    tinypy_list_sort_item_t *temporary;
+    size_t temporary_capacity;
+    size_t run_count;
+    tinypy_list_sort_run_t runs[TINYPY_LIST_SORT_MAX_PENDING];
+    tinypy_list_sort_item_t inline_temporary[TINYPY_LIST_SORT_TEMPORARY_SIZE];
+} tinypy_list_sort_state_t;
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_container_call_items(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
     if (callable->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
@@ -599,7 +576,12 @@ static tinypy_bool_t __tinypy_list_sort_compare(tinypy_vm_t *vm, tinypy_value_t 
             return TINYPY_FALSE;
         }
         if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_INTEGER) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "comparison function must return int", out_error);
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("comparison function must return int, not "),
+                TINYPY_MESSAGE_PART_TYPE_NAME(result)
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
             TINYPY_DECREF(result);
             return TINYPY_FALSE;
         }
@@ -627,318 +609,622 @@ static void __tinypy_list_sort_reverse_items(tinypy_list_sort_item_t *items, siz
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_list_sort_bound(tinypy_vm_t *vm, const tinypy_list_sort_item_t *items, size_t count, tinypy_value_t *key, tinypy_bool_t upper, tinypy_value_t *compare, size_t *out_bound, tinypy_error_t **out_error) {
-    size_t low = 0U;
-    size_t high = count;
-    size_t probe = 0U;
+static tinypy_bool_t __tinypy_list_sort_less(tinypy_list_sort_state_t *state, const tinypy_list_sort_item_t *left, const tinypy_list_sort_item_t *right, tinypy_bool_t *out_less, tinypy_error_t **out_error) {
+    tinypy_bool_t compared = __tinypy_list_sort_compare(state->vm, left->key, right->key, state->compare, out_less, out_error);
 
-    /* Find a small interval before the binary search on long winning runs. */
-    while (probe < count) {
-        tinypy_bool_t less;
-        tinypy_bool_t before;
-
-        if (__tinypy_list_sort_compare(vm, upper != 0 ? key : items[probe].key, upper != 0 ? items[probe].key : key, compare, &less, out_error) == 0) {
-            return TINYPY_FALSE;
-        }
-        before = upper != 0 ? less == 0 : less;
-        if (before == 0) {
-            high = probe;
-            break;
-        }
-        low = probe + 1U;
-        if (probe > (count - 1U) / 2U) {
-            break;
-        }
-        probe = probe * 2U + 1U;
-    }
-    while (low < high) {
-        size_t middle = low + (high - low) / 2U;
-        tinypy_bool_t less;
-        tinypy_bool_t before;
-
-        if (__tinypy_list_sort_compare(vm, upper != 0 ? key : items[middle].key, upper != 0 ? items[middle].key : key, compare, &less, out_error) == 0) {
-            return TINYPY_FALSE;
-        }
-        before = upper != 0 ? less == 0 : less;
-        if (before != 0) {
-            low = middle + 1U;
-        }
-        else {
-            high = middle;
-        }
-    }
-    *out_bound = low;
-    return TINYPY_TRUE;
+    return compared;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_list_sort_binary_insert(tinypy_vm_t *vm, tinypy_list_sort_item_t *items, size_t begin, size_t sorted_end, size_t end, tinypy_value_t *compare, tinypy_error_t **out_error) {
-    for (size_t index = sorted_end; index < end; ++index) {
-        tinypy_list_sort_item_t pivot = items[index];
-        size_t low = begin;
-        size_t high = index;
+/* binarysort: [low, high) is sorted by binary insertion, [low, start) being
+   sorted already; a failed comparison leaves a permutation of the slice. */
+static tinypy_bool_t __tinypy_list_sort_binary(tinypy_list_sort_state_t *state, tinypy_list_sort_item_t *low, tinypy_list_sort_item_t *high, tinypy_list_sort_item_t *start, tinypy_error_t **out_error) {
+    if (low == start) {
+        ++start;
+    }
+    for (; start < high; ++start) {
+        tinypy_list_sort_item_t *left = low;
+        tinypy_list_sort_item_t *right = start;
+        tinypy_list_sort_item_t pivot = *right;
 
-        while (low < high) {
-            size_t middle = low + (high - low) / 2U;
+        do {
+            tinypy_list_sort_item_t *middle = left + ((right - left) >> 1);
             tinypy_bool_t less;
 
-            if (__tinypy_list_sort_compare(vm, pivot.key, items[middle].key, compare, &less, out_error) == 0) {
+            if (__tinypy_list_sort_less(state, &pivot, middle, &less, out_error) == 0) {
                 return TINYPY_FALSE;
             }
             if (less != 0) {
-                high = middle;
+                right = middle;
             }
             else {
-                low = middle + 1U;
+                left = middle + 1;
             }
-        }
-        (void)memmove(items + low + 1U, items + low, (index - low) * sizeof(*items));
-        items[low] = pivot;
+        } while (left < right);
+        (void)memmove(left + 1, left, (size_t)(start - left) * sizeof(*left));
+        *left = pivot;
     }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_list_sort_merge(tinypy_vm_t *vm, tinypy_list_sort_item_t *items, tinypy_list_sort_scratch_t *scratch, size_t left, size_t middle, size_t right, tinypy_value_t *compare, tinypy_error_t **out_error) {
-    size_t left_size = middle - left;
-    size_t right_size = right - middle;
-    size_t temporary_size = left_size < right_size ? left_size : right_size;
-    tinypy_list_sort_item_t *temporary;
+/* count_run: the longest ascending run, or the longest strictly descending
+   one, which the caller may reverse without breaking stability. */
+static tinypy_bool_t __tinypy_list_sort_count_run(tinypy_list_sort_state_t *state, tinypy_list_sort_item_t *low, tinypy_list_sort_item_t *high, size_t *out_length, tinypy_bool_t *out_descending, tinypy_error_t **out_error) {
+    tinypy_bool_t less;
+    size_t length = 2U;
 
-    if (__tinypy_list_sort_scratch_reserve(scratch, temporary_size, out_error) == 0) {
+    *out_descending = TINYPY_FALSE;
+    ++low;
+    if (low == high) {
+        *out_length = 1U;
+        return TINYPY_TRUE;
+    }
+    if (__tinypy_list_sort_less(state, low, low - 1, &less, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    temporary = scratch->items;
+    *out_descending = less;
+    for (low = low + 1; low < high; ++low, ++length) {
+        tinypy_bool_t next_less;
 
-    if (left_size <= right_size) {
-        size_t left_index = 0U;
-        size_t right_index = middle;
-        size_t output = left;
-        size_t left_wins = 0U;
-        size_t right_wins = 0U;
-
-        (void)memcpy(temporary, items + left, left_size * sizeof(*items));
-        while (left_index < left_size && right_index < right) {
-            tinypy_bool_t right_is_less;
-
-            if (__tinypy_list_sort_compare(vm, items[right_index].key, temporary[left_index].key, compare, &right_is_less, out_error) == 0) {
-                (void)memcpy(items + output, temporary + left_index, (left_size - left_index) * sizeof(*items));
-                return TINYPY_FALSE;
-            }
-            if (right_is_less != 0) {
-                items[output++] = items[right_index++];
-                right_wins += 1U;
-                left_wins = 0U;
-            }
-            else {
-                items[output++] = temporary[left_index++];
-                left_wins += 1U;
-                right_wins = 0U;
-            }
-            if (left_index < left_size && right_index < right && (left_wins >= 7U || right_wins >= 7U)) {
-                size_t count;
-                tinypy_bool_t left_run = left_wins >= 7U;
-                const tinypy_list_sort_item_t *run = left_run != 0 ? temporary + left_index : items + right_index;
-                size_t remaining = left_run != 0 ? left_size - left_index : right - right_index;
-                tinypy_value_t *key = left_run != 0 ? items[right_index].key : temporary[left_index].key;
-
-                if (__tinypy_list_sort_bound(vm, run, remaining, key, left_run, compare, &count, out_error) == 0) {
-                    (void)memcpy(items + output, temporary + left_index, (left_size - left_index) * sizeof(*items));
-                    return TINYPY_FALSE;
-                }
-                (void)memmove(items + output, run, count * sizeof(*items));
-                output += count;
-                if (left_run != 0) {
-                    left_index += count;
-                }
-                else {
-                    right_index += count;
-                }
-                left_wins = 0U;
-                right_wins = 0U;
-            }
+        if (__tinypy_list_sort_less(state, low, low - 1, &next_less, out_error) == 0) {
+            return TINYPY_FALSE;
         }
-        if (left_index < left_size) {
-            (void)memcpy(items + output, temporary + left_index, (left_size - left_index) * sizeof(*items));
-        }
-    }
-    else {
-        size_t left_index = middle;
-        size_t right_index = right_size;
-        size_t output = right;
-        size_t left_wins = 0U;
-        size_t right_wins = 0U;
-
-        (void)memcpy(temporary, items + middle, right_size * sizeof(*items));
-        while (left_index > left && right_index > 0U) {
-            tinypy_bool_t right_is_less;
-
-            if (__tinypy_list_sort_compare(vm, temporary[right_index - 1U].key, items[left_index - 1U].key, compare, &right_is_less, out_error) == 0) {
-                (void)memcpy(items + output - right_index, temporary, right_index * sizeof(*items));
-                return TINYPY_FALSE;
-            }
-            if (right_is_less != 0) {
-                items[--output] = items[--left_index];
-                left_wins += 1U;
-                right_wins = 0U;
-            }
-            else {
-                items[--output] = temporary[--right_index];
-                right_wins += 1U;
-                left_wins = 0U;
-            }
-            if (left_index > left && right_index > 0U && (left_wins >= 7U || right_wins >= 7U)) {
-                size_t bound;
-                tinypy_bool_t left_run = left_wins >= 7U;
-                const tinypy_list_sort_item_t *run = left_run != 0 ? items + left : temporary;
-                size_t remaining = left_run != 0 ? left_index - left : right_index;
-                tinypy_value_t *key = left_run != 0 ? temporary[right_index - 1U].key : items[left_index - 1U].key;
-
-                if (__tinypy_list_sort_bound(vm, run, remaining, key, left_run, compare, &bound, out_error) == 0) {
-                    (void)memcpy(items + output - right_index, temporary, right_index * sizeof(*items));
-                    return TINYPY_FALSE;
-                }
-                size_t count = remaining - bound;
-
-                output -= count;
-                (void)memmove(items + output, run + bound, count * sizeof(*items));
-                if (left_run != 0) {
-                    left_index -= count;
-                }
-                else {
-                    right_index -= count;
-                }
-                left_wins = 0U;
-                right_wins = 0U;
-            }
-        }
-        if (right_index > 0U) {
-            (void)memcpy(items + left, temporary, right_index * sizeof(*items));
-        }
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_list_sort_merge_at(tinypy_vm_t *vm, tinypy_list_sort_item_t *items, tinypy_list_sort_scratch_t *scratch, tinypy_list_sort_run_t *runs, size_t *run_count, size_t run_index, tinypy_value_t *compare, tinypy_error_t **out_error) {
-    size_t middle = runs[run_index + 1U].base;
-    size_t right = middle + runs[run_index + 1U].length;
-    size_t index;
-
-    if (__tinypy_list_sort_merge(vm, items, scratch, runs[run_index].base, middle, right, compare, out_error) == 0) {
-        return TINYPY_FALSE;
-    }
-    runs[run_index].length += runs[run_index + 1U].length;
-    for (index = run_index + 1U; index + 1U < *run_count; ++index) {
-        runs[index] = runs[index + 1U];
-    }
-    *run_count -= 1U;
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_list_sort_merge_collapse(tinypy_vm_t *vm, tinypy_list_sort_item_t *items, tinypy_list_sort_scratch_t *scratch, tinypy_list_sort_run_t *runs, size_t *run_count, tinypy_value_t *compare, tinypy_error_t **out_error) {
-    while (*run_count > 1U) {
-        size_t run_index = *run_count - 2U;
-
-        if ((run_index > 0U && runs[run_index - 1U].length <= runs[run_index].length + runs[run_index + 1U].length)
-            || (run_index > 1U && runs[run_index - 2U].length <= runs[run_index - 1U].length + runs[run_index].length)) {
-            if (runs[run_index - 1U].length < runs[run_index + 1U].length) {
-                run_index -= 1U;
-            }
-        }
-        else if (runs[run_index].length > runs[run_index + 1U].length) {
+        if (next_less != less) {
             break;
         }
-        if (__tinypy_list_sort_merge_at(vm, items, scratch, runs, run_count, run_index, compare, out_error) == 0) {
+    }
+    *out_length = length;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static ptrdiff_t __tinypy_list_sort_next_offset(ptrdiff_t offset, ptrdiff_t max_offset) {
+    if (offset > (PTRDIFF_MAX - 1) / 2) {
+        return max_offset;
+    }
+    return (offset << 1) + 1;
+}
+//////////////////////////////////////////////////////////////////////////
+/* gallop_left: the position k with items[k - 1] < key <= items[k], found by
+   galloping from hint and then searching binary. */
+static tinypy_bool_t __tinypy_list_sort_gallop_left(tinypy_list_sort_state_t *state, const tinypy_list_sort_item_t *key, const tinypy_list_sort_item_t *items, ptrdiff_t count, ptrdiff_t hint, ptrdiff_t *out_position, tinypy_error_t **out_error) {
+    const tinypy_list_sort_item_t *base = items + hint;
+    ptrdiff_t last_offset = 0;
+    ptrdiff_t offset = 1;
+    tinypy_bool_t less;
+
+    if (__tinypy_list_sort_less(state, base, key, &less, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (less != 0) {
+        ptrdiff_t max_offset = count - hint;
+
+        while (offset < max_offset) {
+            if (__tinypy_list_sort_less(state, base + offset, key, &less, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+            if (less == 0) {
+                break;
+            }
+            last_offset = offset;
+            offset = __tinypy_list_sort_next_offset(offset, max_offset);
+        }
+        if (offset > max_offset) {
+            offset = max_offset;
+        }
+        last_offset += hint;
+        offset += hint;
+    }
+    else {
+        ptrdiff_t max_offset = hint + 1;
+
+        while (offset < max_offset) {
+            if (__tinypy_list_sort_less(state, base - offset, key, &less, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+            if (less != 0) {
+                break;
+            }
+            last_offset = offset;
+            offset = __tinypy_list_sort_next_offset(offset, max_offset);
+        }
+        if (offset > max_offset) {
+            offset = max_offset;
+        }
+        ptrdiff_t previous = last_offset;
+        last_offset = hint - offset;
+        offset = hint - previous;
+    }
+    ++last_offset;
+    while (last_offset < offset) {
+        ptrdiff_t middle = last_offset + ((offset - last_offset) >> 1);
+
+        if (__tinypy_list_sort_less(state, items + middle, key, &less, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        if (less != 0) {
+            last_offset = middle + 1;
+        }
+        else {
+            offset = middle;
+        }
+    }
+    *out_position = offset;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* gallop_right: like gallop_left, but after the rightmost item equal to key,
+   so items[k - 1] <= key < items[k]. */
+static tinypy_bool_t __tinypy_list_sort_gallop_right(tinypy_list_sort_state_t *state, const tinypy_list_sort_item_t *key, const tinypy_list_sort_item_t *items, ptrdiff_t count, ptrdiff_t hint, ptrdiff_t *out_position, tinypy_error_t **out_error) {
+    const tinypy_list_sort_item_t *base = items + hint;
+    ptrdiff_t last_offset = 0;
+    ptrdiff_t offset = 1;
+    tinypy_bool_t less;
+
+    if (__tinypy_list_sort_less(state, key, base, &less, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (less != 0) {
+        ptrdiff_t max_offset = hint + 1;
+
+        while (offset < max_offset) {
+            if (__tinypy_list_sort_less(state, key, base - offset, &less, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+            if (less == 0) {
+                break;
+            }
+            last_offset = offset;
+            offset = __tinypy_list_sort_next_offset(offset, max_offset);
+        }
+        if (offset > max_offset) {
+            offset = max_offset;
+        }
+        ptrdiff_t previous = last_offset;
+        last_offset = hint - offset;
+        offset = hint - previous;
+    }
+    else {
+        ptrdiff_t max_offset = count - hint;
+
+        while (offset < max_offset) {
+            if (__tinypy_list_sort_less(state, key, base + offset, &less, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+            if (less != 0) {
+                break;
+            }
+            last_offset = offset;
+            offset = __tinypy_list_sort_next_offset(offset, max_offset);
+        }
+        if (offset > max_offset) {
+            offset = max_offset;
+        }
+        last_offset += hint;
+        offset += hint;
+    }
+    ++last_offset;
+    while (last_offset < offset) {
+        ptrdiff_t middle = last_offset + ((offset - last_offset) >> 1);
+
+        if (__tinypy_list_sort_less(state, key, items + middle, &less, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        if (less != 0) {
+            offset = middle;
+        }
+        else {
+            last_offset = middle + 1;
+        }
+    }
+    *out_position = offset;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_list_sort_release(tinypy_list_sort_state_t *state) {
+    if (state->temporary != state->inline_temporary) {
+        tinypy_internal_vm_deallocate(state->vm, state->temporary, state->temporary_capacity * sizeof(*state->temporary));
+    }
+    state->temporary = state->inline_temporary;
+    state->temporary_capacity = TINYPY_LIST_SORT_TEMPORARY_SIZE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* merge_getmem replaces the temporary storage without copying it. */
+static tinypy_bool_t __tinypy_list_sort_reserve(tinypy_list_sort_state_t *state, ptrdiff_t need, tinypy_error_t **out_error) {
+    if ((size_t)need <= state->temporary_capacity) {
+        return TINYPY_TRUE;
+    }
+    __tinypy_list_sort_release(state);
+    if ((size_t)need > SIZE_MAX / sizeof(*state->temporary)) {
+        tinypy_internal_make_vm_error(state->vm, TINYPY_ERROR_MEMORY, "sort temporary storage is too large", out_error);
+        return TINYPY_FALSE;
+    }
+    tinypy_list_sort_item_t *temporary = (tinypy_list_sort_item_t *)tinypy_internal_vm_allocate_checked(state->vm, (size_t)need * sizeof(*temporary), out_error);
+    if (temporary == NULL) {
+        return TINYPY_FALSE;
+    }
+    state->temporary = temporary;
+    state->temporary_capacity = (size_t)need;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* merge_lo merges the shorter run a, copied aside, with the run b after it;
+   items[a] > items[b] and the last of a ends the merge. */
+static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *state, tinypy_list_sort_item_t *a, ptrdiff_t a_count, tinypy_list_sort_item_t *b, ptrdiff_t b_count, tinypy_error_t **out_error) {
+    size_t min_gallop = state->min_gallop;
+    tinypy_bool_t merged = TINYPY_FALSE;
+    tinypy_bool_t less;
+    ptrdiff_t position;
+
+    if (__tinypy_list_sort_reserve(state, a_count, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    (void)memcpy(state->temporary, a, (size_t)a_count * sizeof(*a));
+    tinypy_list_sort_item_t *destination = a;
+    a = state->temporary;
+
+    *destination++ = *b++;
+    --b_count;
+    if (b_count == 0) {
+        goto succeed;
+    }
+    if (a_count == 1) {
+        goto copy_b;
+    }
+    for (;;) {
+        size_t a_wins = 0U;
+        size_t b_wins = 0U;
+
+        for (;;) {
+            if (__tinypy_list_sort_less(state, b, a, &less, out_error) == 0) {
+                goto fail;
+            }
+            if (less != 0) {
+                *destination++ = *b++;
+                ++b_wins;
+                a_wins = 0U;
+                --b_count;
+                if (b_count == 0) {
+                    goto succeed;
+                }
+                if (b_wins >= min_gallop) {
+                    break;
+                }
+            }
+            else {
+                *destination++ = *a++;
+                ++a_wins;
+                b_wins = 0U;
+                --a_count;
+                if (a_count == 1) {
+                    goto copy_b;
+                }
+                if (a_wins >= min_gallop) {
+                    break;
+                }
+            }
+        }
+        ++min_gallop;
+        do {
+            min_gallop -= min_gallop > 1U ? 1U : 0U;
+            state->min_gallop = min_gallop;
+            if (__tinypy_list_sort_gallop_right(state, b, a, a_count, 0, &position, out_error) == 0) {
+                goto fail;
+            }
+            a_wins = (size_t)position;
+            if (position != 0) {
+                (void)memcpy(destination, a, (size_t)position * sizeof(*a));
+                destination += position;
+                a += position;
+                a_count -= position;
+                if (a_count == 1) {
+                    goto copy_b;
+                }
+                if (a_count == 0) {
+                    goto succeed;
+                }
+            }
+            *destination++ = *b++;
+            --b_count;
+            if (b_count == 0) {
+                goto succeed;
+            }
+            if (__tinypy_list_sort_gallop_left(state, a, b, b_count, 0, &position, out_error) == 0) {
+                goto fail;
+            }
+            b_wins = (size_t)position;
+            if (position != 0) {
+                (void)memmove(destination, b, (size_t)position * sizeof(*b));
+                destination += position;
+                b += position;
+                b_count -= position;
+                if (b_count == 0) {
+                    goto succeed;
+                }
+            }
+            *destination++ = *a++;
+            --a_count;
+            if (a_count == 1) {
+                goto copy_b;
+            }
+        } while (a_wins >= TINYPY_LIST_SORT_MIN_GALLOP || b_wins >= TINYPY_LIST_SORT_MIN_GALLOP);
+        ++min_gallop;
+        state->min_gallop = min_gallop;
+    }
+succeed:
+    merged = TINYPY_TRUE;
+fail:
+    if (a_count != 0) {
+        (void)memcpy(destination, a, (size_t)a_count * sizeof(*a));
+    }
+    return merged;
+copy_b:
+    (void)memmove(destination, b, (size_t)b_count * sizeof(*b));
+    destination[b_count] = *a;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* merge_hi merges the run a with the shorter run b after it, copied aside,
+   from the right end. */
+static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *state, tinypy_list_sort_item_t *a, ptrdiff_t a_count, tinypy_list_sort_item_t *b, ptrdiff_t b_count, tinypy_error_t **out_error) {
+    size_t min_gallop = state->min_gallop;
+    tinypy_bool_t merged = TINYPY_FALSE;
+    tinypy_bool_t less;
+    ptrdiff_t position;
+
+    if (__tinypy_list_sort_reserve(state, b_count, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_list_sort_item_t *destination = b + b_count - 1;
+    (void)memcpy(state->temporary, b, (size_t)b_count * sizeof(*b));
+    tinypy_list_sort_item_t *a_base = a;
+    tinypy_list_sort_item_t *b_base = state->temporary;
+    b = state->temporary + b_count - 1;
+    a += a_count - 1;
+
+    *destination-- = *a--;
+    --a_count;
+    if (a_count == 0) {
+        goto succeed;
+    }
+    if (b_count == 1) {
+        goto copy_a;
+    }
+    for (;;) {
+        size_t a_wins = 0U;
+        size_t b_wins = 0U;
+
+        for (;;) {
+            if (__tinypy_list_sort_less(state, b, a, &less, out_error) == 0) {
+                goto fail;
+            }
+            if (less != 0) {
+                *destination-- = *a--;
+                ++a_wins;
+                b_wins = 0U;
+                --a_count;
+                if (a_count == 0) {
+                    goto succeed;
+                }
+                if (a_wins >= min_gallop) {
+                    break;
+                }
+            }
+            else {
+                *destination-- = *b--;
+                ++b_wins;
+                a_wins = 0U;
+                --b_count;
+                if (b_count == 1) {
+                    goto copy_a;
+                }
+                if (b_wins >= min_gallop) {
+                    break;
+                }
+            }
+        }
+        ++min_gallop;
+        do {
+            min_gallop -= min_gallop > 1U ? 1U : 0U;
+            state->min_gallop = min_gallop;
+            if (__tinypy_list_sort_gallop_right(state, b, a_base, a_count, a_count - 1, &position, out_error) == 0) {
+                goto fail;
+            }
+            position = a_count - position;
+            a_wins = (size_t)position;
+            if (position != 0) {
+                destination -= position;
+                a -= position;
+                (void)memmove(destination + 1, a + 1, (size_t)position * sizeof(*a));
+                a_count -= position;
+                if (a_count == 0) {
+                    goto succeed;
+                }
+            }
+            *destination-- = *b--;
+            --b_count;
+            if (b_count == 1) {
+                goto copy_a;
+            }
+            if (__tinypy_list_sort_gallop_left(state, a, b_base, b_count, b_count - 1, &position, out_error) == 0) {
+                goto fail;
+            }
+            position = b_count - position;
+            b_wins = (size_t)position;
+            if (position != 0) {
+                destination -= position;
+                b -= position;
+                (void)memcpy(destination + 1, b + 1, (size_t)position * sizeof(*b));
+                b_count -= position;
+                if (b_count == 1) {
+                    goto copy_a;
+                }
+                if (b_count == 0) {
+                    goto succeed;
+                }
+            }
+            *destination-- = *a--;
+            --a_count;
+            if (a_count == 0) {
+                goto succeed;
+            }
+        } while (a_wins >= TINYPY_LIST_SORT_MIN_GALLOP || b_wins >= TINYPY_LIST_SORT_MIN_GALLOP);
+        ++min_gallop;
+        state->min_gallop = min_gallop;
+    }
+succeed:
+    merged = TINYPY_TRUE;
+fail:
+    if (b_count != 0) {
+        (void)memcpy(destination - (b_count - 1), b_base, (size_t)b_count * sizeof(*b_base));
+    }
+    return merged;
+copy_a:
+    destination -= a_count;
+    a -= a_count;
+    (void)memmove(destination + 1, a + 1, (size_t)a_count * sizeof(*a));
+    *destination = *b;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* merge_at merges the pending runs at index and index + 1, skipping the
+   items of either that are already in place. */
+static tinypy_bool_t __tinypy_list_sort_merge_at(tinypy_list_sort_state_t *state, size_t index, tinypy_error_t **out_error) {
+    tinypy_list_sort_run_t *runs = state->runs;
+    tinypy_list_sort_item_t *a = runs[index].base;
+    ptrdiff_t a_count = (ptrdiff_t)runs[index].length;
+    tinypy_list_sort_item_t *b = runs[index + 1U].base;
+    ptrdiff_t b_count = (ptrdiff_t)runs[index + 1U].length;
+    ptrdiff_t position;
+
+    runs[index].length = (size_t)(a_count + b_count);
+    if (index + 3U == state->run_count) {
+        runs[index + 1U] = runs[index + 2U];
+    }
+    state->run_count -= 1U;
+    if (__tinypy_list_sort_gallop_right(state, b, a, a_count, 0, &position, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    a += position;
+    a_count -= position;
+    if (a_count == 0) {
+        return TINYPY_TRUE;
+    }
+    if (__tinypy_list_sort_gallop_left(state, a + a_count - 1, b, b_count, b_count - 1, &b_count, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (b_count == 0) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t merged = a_count <= b_count
+                               ? __tinypy_list_sort_merge_low(state, a, a_count, b, b_count, out_error)
+                               : __tinypy_list_sort_merge_high(state, a, a_count, b, b_count, out_error);
+    return merged;
+}
+//////////////////////////////////////////////////////////////////////////
+/* merge_collapse restores the invariants of the pending runs:
+   length[-3] > length[-2] + length[-1] and length[-2] > length[-1]. */
+static tinypy_bool_t __tinypy_list_sort_merge_collapse(tinypy_list_sort_state_t *state, tinypy_error_t **out_error) {
+    tinypy_list_sort_run_t *runs = state->runs;
+
+    while (state->run_count > 1U) {
+        size_t index = state->run_count - 2U;
+
+        if ((index > 0U && runs[index - 1U].length <= runs[index].length + runs[index + 1U].length)
+            || (index > 1U && runs[index - 2U].length <= runs[index - 1U].length + runs[index].length)) {
+            if (runs[index - 1U].length < runs[index + 1U].length) {
+                --index;
+            }
+        }
+        else if (runs[index].length > runs[index + 1U].length) {
+            break;
+        }
+        if (__tinypy_list_sort_merge_at(state, index, out_error) == 0) {
             return TINYPY_FALSE;
         }
     }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_list_sort_adaptive(tinypy_vm_t *vm, tinypy_list_sort_item_t *items, size_t size, tinypy_value_t *compare, tinypy_error_t **out_error) {
-    tinypy_list_sort_scratch_t scratch;
-    tinypy_list_sort_run_t runs[128];
-    size_t run_count = 0U;
-    size_t begin = 0U;
-    size_t minrun = size;
+static tinypy_bool_t __tinypy_list_sort_merge_force_collapse(tinypy_list_sort_state_t *state, tinypy_error_t **out_error) {
+    tinypy_list_sort_run_t *runs = state->runs;
+
+    while (state->run_count > 1U) {
+        size_t index = state->run_count - 2U;
+
+        if (index > 0U && runs[index - 1U].length < runs[index + 1U].length) {
+            --index;
+        }
+        if (__tinypy_list_sort_merge_at(state, index, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* merge_compute_minrun */
+static size_t __tinypy_list_sort_minimum_run(size_t count) {
     size_t remainder = 0U;
 
-    while (minrun >= 64U) {
-        remainder |= minrun & 1U;
-        minrun >>= 1U;
+    while (count >= 64U) {
+        remainder |= count & 1U;
+        count >>= 1U;
     }
-    minrun += remainder;
+    return count + remainder;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The mergesort of listsort in Python 2.7, step for step, so comparison
+   counts and the order left by a failing comparison match. */
+static tinypy_bool_t __tinypy_list_sort_items(tinypy_vm_t *vm, tinypy_list_sort_item_t *items, size_t size, tinypy_value_t *compare, tinypy_error_t **out_error) {
+    tinypy_list_sort_state_t state;
+    tinypy_bool_t sorted = TINYPY_TRUE;
+
     if (size < 2U) {
         return TINYPY_TRUE;
     }
-    scratch.vm = vm;
-    scratch.items = NULL;
-    scratch.capacity = 0U;
-    while (begin < size) {
-        size_t end = begin + 1U;
+    state.vm = vm;
+    state.compare = compare;
+    state.min_gallop = TINYPY_LIST_SORT_MIN_GALLOP;
+    state.temporary = state.inline_temporary;
+    state.temporary_capacity = TINYPY_LIST_SORT_TEMPORARY_SIZE;
+    state.run_count = 0U;
+    tinypy_list_sort_item_t *low = items;
+    tinypy_list_sort_item_t *high = items + size;
+    size_t remaining = size;
+    size_t minimum_run = __tinypy_list_sort_minimum_run(size);
+    while (remaining != 0U) {
+        size_t length;
+        tinypy_bool_t descending;
 
-        if (end < size) {
-            tinypy_bool_t descending;
-
-            if (__tinypy_list_sort_compare(vm, items[end].key, items[end - 1U].key, compare, &descending, out_error) == 0) {
-                goto error;
-            }
-            end += 1U;
-            if (descending != 0) {
-                while (end < size) {
-                    if (__tinypy_list_sort_compare(vm, items[end].key, items[end - 1U].key, compare, &descending, out_error) == 0) {
-                        goto error;
-                    }
-                    if (descending == 0) {
-                        break;
-                    }
-                    end += 1U;
-                }
-                __tinypy_list_sort_reverse_items(items, begin, end);
-            }
-            else {
-                while (end < size) {
-                    tinypy_bool_t less;
-
-                    if (__tinypy_list_sort_compare(vm, items[end].key, items[end - 1U].key, compare, &less, out_error) == 0) {
-                        goto error;
-                    }
-                    if (less != 0) {
-                        break;
-                    }
-                    end += 1U;
-                }
-            }
+        if (__tinypy_list_sort_count_run(&state, low, high, &length, &descending, out_error) == 0) {
+            sorted = TINYPY_FALSE;
+            break;
         }
-        size_t extended_end = begin + (size - begin < minrun ? size - begin : minrun);
+        if (descending != 0) {
+            __tinypy_list_sort_reverse_items(low, 0U, length);
+        }
+        if (length < minimum_run) {
+            size_t forced = remaining <= minimum_run ? remaining : minimum_run;
 
-        if (end < extended_end) {
-            if (__tinypy_list_sort_binary_insert(vm, items, begin, end, extended_end, compare, out_error) == 0) {
-                goto error;
+            if (__tinypy_list_sort_binary(&state, low, low + forced, low + length, out_error) == 0) {
+                sorted = TINYPY_FALSE;
+                break;
             }
-            end = extended_end;
+            length = forced;
         }
-        runs[run_count].base = begin;
-        runs[run_count].length = end - begin;
-        run_count += 1U;
-        begin = end;
-        if (__tinypy_list_sort_merge_collapse(vm, items, &scratch, runs, &run_count, compare, out_error) == 0) {
-            goto error;
+        state.runs[state.run_count].base = low;
+        state.runs[state.run_count].length = length;
+        state.run_count += 1U;
+        if (__tinypy_list_sort_merge_collapse(&state, out_error) == 0) {
+            sorted = TINYPY_FALSE;
+            break;
         }
+        low += length;
+        remaining -= length;
     }
-    while (run_count > 1U) {
-        if (__tinypy_list_sort_merge_at(vm, items, &scratch, runs, &run_count, run_count - 2U, compare, out_error) == 0) {
-            goto error;
-        }
+    if (sorted != 0) {
+        sorted = __tinypy_list_sort_merge_force_collapse(&state, out_error);
     }
-    if (scratch.items != NULL) {
-        tinypy_internal_vm_deallocate(vm, scratch.items, scratch.capacity * sizeof(*scratch.items));
-    }
-    return TINYPY_TRUE;
-
-error:
-    if (scratch.items != NULL) {
-        tinypy_internal_vm_deallocate(vm, scratch.items, scratch.capacity * sizeof(*scratch.items));
-    }
-    return TINYPY_FALSE;
+    __tinypy_list_sort_release(&state);
+    return sorted;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -963,16 +1249,14 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     size_t index;
 
     (void)user_data;
-    if (tinypy_internal_native_method_arguments(function, args, NULL, 0U, 3U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
-        return NULL;
-    }
     argument_count = TINYPY_TUPLE_SIZE(args);
     tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
     size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
     size_t matched_keywords = 0U;
 
-    if (keyword_count > 4U - argument_count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort expected at most three arguments", out_error);
+    /* PyArg_ParseTupleAndKeywords with "|OOi:sort". */
+    if (argument_count - 1U + keyword_count > 3U) {
+        tinypy_internal_make_arity_error(vm, "sort", 4U, argument_count - 1U + keyword_count, 0U, 3U, TINYPY_ARITY_STYLE_PARSED, out_error);
         return NULL;
     }
     for (size_t parameter = 0U; parameter < 3U; ++parameter) {
@@ -985,7 +1269,16 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
         if (keyword_value != NULL) {
             matched_keywords += 1U;
             if (value != NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort received duplicate arguments", out_error);
+                char position = (char)('1' + parameter);
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("Argument given by name ('"),
+                    TINYPY_MESSAGE_PART_TEXT(names[parameter]),
+                    TINYPY_MESSAGE_PART_LITERAL("') and position ("),
+                    {&position, 1U},
+                    TINYPY_MESSAGE_PART_LITERAL(")"),
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
                 return NULL;
             }
             value = keyword_value;
@@ -1003,7 +1296,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
                 return NULL;
             }
             if (integer < INT32_MIN || integer > INT32_MAX) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "sort reverse does not fit in a C int", out_error);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, integer < INT32_MIN ? "signed integer is less than minimum" : "signed integer is greater than maximum", out_error);
                 return NULL;
             }
             reverse = integer != 0 ? TINYPY_TRUE : TINYPY_FALSE;
@@ -1018,16 +1311,32 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
                 continue;
             }
             tinypy_value_type_e kind = TINYPY_VALUE_KIND(entry->key);
-            if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
-                for (size_t parameter = 0U; parameter < 3U; ++parameter) {
-                    if (TINYPY_NAME_EQ(entry->key, names[parameter]) != 0) {
-                        known = TINYPY_TRUE;
-                        break;
-                    }
+            if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
+                return NULL;
+            }
+            /* The keyword is read as a C string, up to an embedded NUL. */
+            const char *name = (const char *)TINYPY_TEXT_BYTES(entry->key);
+            size_t name_size = TINYPY_TEXT_BYTE_SIZE(entry->key);
+            const char *terminator = (const char *)memchr(name, 0, name_size);
+
+            if (terminator != NULL) {
+                name_size = (size_t)(terminator - name);
+            }
+            for (size_t parameter = 0U; parameter < 3U; ++parameter) {
+                if (name_size == TINYPY_TEXT_BYTE_SIZE(names[parameter]) && memcmp(name, TINYPY_TEXT_BYTES(names[parameter]), name_size) == 0) {
+                    known = TINYPY_TRUE;
+                    break;
                 }
             }
             if (known == 0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sort received an unexpected keyword", out_error);
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("'"),
+                    {name, name_size < 200U ? name_size : 200U},
+                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function"),
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
                 return NULL;
             }
         }
@@ -1081,7 +1390,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
         __tinypy_list_sort_reverse_items(items, 0U, size);
     }
     if (keys_ready != 0) {
-        sorted = __tinypy_list_sort_adaptive(vm, items, size, compare, out_error);
+        sorted = __tinypy_list_sort_items(vm, items, size, compare, out_error);
     }
     if (keys_ready != 0 && reverse != 0) {
         __tinypy_list_sort_reverse_items(items, 0U, size);
@@ -1155,6 +1464,31 @@ static tinypy_value_t *__tinypy_dict_get_method(tinypy_value_t *function, tinypy
     return TINYPY_RET(result);
 }
 //////////////////////////////////////////////////////////////////////////
+/* dict.fromkeys sizes an empty dictionary once for the keys of a dictionary
+   or set and stores them with their hashes without growing the table. */
+static tinypy_bool_t __tinypy_dict_fromkeys_table(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_value_t *source_dict, tinypy_value_t *value, tinypy_error_t **out_error) {
+    size_t position = 0U;
+
+    if (tinypy_internal_dict_resize_checked(vm, result, TINYPY_DICT_SIZE(source_dict) / 2U * 3U, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    for (;;) {
+        const tinypy_dict_entry_t *entry = tinypy_internal_dict_next_entry(source_dict, &position);
+
+        if (entry == NULL) {
+            return TINYPY_TRUE;
+        }
+        tinypy_value_t *key = entry->key;
+        tinypy_hash_t hash = entry->hash;
+        TINYPY_INCREF(key);
+        tinypy_bool_t inserted = tinypy_internal_dict_insert_checked(vm, result, key, value, hash, out_error);
+        TINYPY_DECREF(key);
+        if (inserted == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_fromkeys_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *result;
@@ -1178,39 +1512,20 @@ static tinypy_value_t *__tinypy_dict_fromkeys_method(tinypy_value_t *function, t
         return NULL;
     }
     tinypy_bool_t exact_dict = result->type == &vm->types[TINYPY_VALUE_DICT] ? TINYPY_TRUE : TINYPY_FALSE;
-    if (exact_dict != 0 && tinypy_internal_dict_reserve_checked(vm, result, tinypy_internal_iterable_size_hint(TINYPY_TUPLE_GET(args, 1U)), out_error) == 0) {
-        TINYPY_DECREF(result);
-        return NULL;
-    }
     value = TINYPY_TUPLE_SIZE(args) == 3U ? TINYPY_TUPLE_GET(args, 2U) : &vm->none_object.base;
     tinypy_value_t *source = TINYPY_TUPLE_GET(args, 1U);
-    tinypy_value_type_e source_kind = TINYPY_VALUE_KIND(source);
     tinypy_value_t *source_dict = NULL;
 
     if (source->type == &vm->types[TINYPY_VALUE_DICT]) {
         source_dict = source;
     }
-    else if ((source_kind == TINYPY_VALUE_SET || source_kind == TINYPY_VALUE_FROZENSET) && source->type == &vm->types[source_kind]) {
+    else if (source->type == &vm->types[TINYPY_VALUE_SET] || source->type == &vm->types[TINYPY_VALUE_FROZENSET]) {
         source_dict = TINYPY_SET_OBJECT(source)->dict;
     }
     if (exact_dict != 0 && TINYPY_DICT_SIZE(result) == 0U && source_dict != NULL) {
-        for (size_t index = 0U; index <= TINYPY_DICT_OBJECT(source_dict)->mask; ++index) {
-            tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(source_dict)->table[index];
-
-            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
-                continue;
-            }
-            tinypy_value_t *key = entry->key;
-            tinypy_hash_t hash = entry->hash;
-
-            TINYPY_INCREF(key);
-            tinypy_bool_t assigned = tinypy_internal_dict_set_hash_checked(vm, result, key, value, hash, out_error);
-
-            TINYPY_DECREF(key);
-            if (assigned == 0) {
-                TINYPY_DECREF(result);
-                return NULL;
-            }
+        if (__tinypy_dict_fromkeys_table(vm, result, source_dict, value, out_error) == 0) {
+            TINYPY_DECREF(result);
+            return NULL;
         }
         return result;
     }
@@ -1355,39 +1670,27 @@ static tinypy_value_t *__tinypy_dict_clear_method(tinypy_value_t *function, tiny
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_dict_update_from(tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error) {
+    tinypy_bool_t return_value_1 = tinypy_internal_dict_update_from(target, source, "error return without exception set", out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_copy_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
     (void)user_data;
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *source = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *snapshot = tinypy_internal_dict_copy(source, out_error);
-    if (snapshot == NULL) {
+    tinypy_value_t *result = tinypy_internal_dict_new_checked(vm, out_error);
+    if (result == NULL) {
         return NULL;
     }
-    tinypy_value_t *result = tinypy_dict_new(vm);
-    if (tinypy_internal_dict_reserve_checked(vm, result, TINYPY_DICT_SIZE(snapshot), out_error) == 0) {
-        TINYPY_DECREF(snapshot);
+    if (__tinypy_dict_update_from(result, TINYPY_TUPLE_GET(args, 0U), out_error) == 0) {
         TINYPY_DECREF(result);
         return NULL;
     }
-    for (size_t index = 0U; index <= TINYPY_DICT_OBJECT(snapshot)->mask; ++index) {
-        tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(snapshot)->table[index];
-        if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry)
-            && tinypy_internal_dict_set_hash_checked(vm, result, entry->key, entry->value, entry->hash, out_error) == 0) {
-            TINYPY_DECREF(snapshot);
-            TINYPY_DECREF(result);
-            return NULL;
-        }
-    }
-    TINYPY_DECREF(snapshot);
     return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_dict_update_from(tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error) {
-    tinypy_bool_t return_value_1 = tinypy_internal_dict_update_from(target, source, "error return without exception set", out_error);
-    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_update_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1468,36 +1771,21 @@ static tinypy_value_t *__tinypy_dict_pop_method(tinypy_value_t *function, tinypy
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_popitem_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_dict_entry_t *iterator_begin;
 
     (void)user_data;
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *dict_value = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_dict_object_t *dict = TINYPY_DICT_OBJECT(dict_value);
-    size_t capacity = dict->mask + 1U;
-    size_t finger = dict->popitem_finger < capacity ? dict->popitem_finger : 0U;
-    size_t scanned;
-
-    /* The finger remembers where the last scan stopped, as dict_popitem
-       does, so draining a dictionary stays linear. */
-    iterator_begin = TINYPY_DICT_ITERATOR_BEGIN(dict_value);
-    for (scanned = 0U; scanned < capacity; ++scanned) {
-        size_t index = (finger + scanned) % capacity;
-        tinypy_dict_entry_t *iterator = &iterator_begin[index];
-
-        if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-            tinypy_value_t *items[2] = {iterator->key, iterator->value};
-            tinypy_value_t *result = tinypy_tuple_from_items(vm, items, 2U);
-
-            (void)tinypy_internal_dict_delete_index(vm, dict_value, index, NULL, NULL);
-            dict->popitem_finger = index + 1U;
-            return result;
-        }
+    tinypy_value_t *dict = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *items[2];
+    if (tinypy_internal_dict_pop_entry(vm, dict, &items[0], &items[1]) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_KEY, "popitem(): dictionary is empty", out_error);
+        return NULL;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_KEY, "popitem(): dictionary is empty", out_error);
-    return NULL;
+    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, 2U);
+    TINYPY_DECREF(items[1]);
+    TINYPY_DECREF(items[0]);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_container_getitem_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1601,18 +1889,8 @@ static tinypy_value_t *__tinypy_container_binary_method(tinypy_value_t *function
         mode -= 100;
     }
     if (mode == 8 && TINYPY_TUPLE_SIZE(args) == 3U) {
-        tinypy_value_t *modulus = TINYPY_TUPLE_GET(args, 2U);
-        tinypy_value_type_e self_kind = TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U));
-
-        if (self_kind != TINYPY_VALUE_FLOAT && self_kind != TINYPY_VALUE_COMPLEX &&
-            (__tinypy_container_numeric_operand_accepted(function, TINYPY_VALUE_KIND(left)) == 0 ||
-             __tinypy_container_numeric_operand_accepted(function, TINYPY_VALUE_KIND(right)) == 0 ||
-             (TINYPY_VALUE_KIND(modulus) != TINYPY_VALUE_NONE && __tinypy_container_numeric_operand_accepted(function, TINYPY_VALUE_KIND(modulus)) == 0))) {
-            tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
-            return result;
-        }
-        tinypy_value_t *return_value_1 = tinypy_internal_power_modulo_builtin(left, right, modulus, out_error);
-        return return_value_1;
+        tinypy_value_t *power = tinypy_internal_builtin_power_slot(TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)), left, right, TINYPY_TUPLE_GET(args, 2U), out_error);
+        return power;
     }
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
@@ -1631,28 +1909,16 @@ static tinypy_value_t *__tinypy_container_binary_method(tinypy_value_t *function
         tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return result;
     }
-    if (mode == 0 && (left_sequence != 0 || right_sequence != 0)) {
-        tinypy_bool_t compatible_text = (left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE) && (right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE);
-        tinypy_bool_t compatible_sequence = (left_kind == TINYPY_VALUE_LIST || left_kind == TINYPY_VALUE_TUPLE) && left_kind == right_kind;
-
-        if (compatible_text == 0 && compatible_sequence == 0) {
-            if (self_kind == TINYPY_VALUE_LIST || self_kind == TINYPY_VALUE_TUPLE) {
-                const tinypy_type_t *sequence_type = &vm->types[self_kind];
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("can only concatenate "),
-                    {sequence_type->name, sequence_type->name_size},
-                    TINYPY_MESSAGE_PART_LITERAL(" (not \""),
-                    TINYPY_MESSAGE_PART_TYPE_NAME(right),
-                    TINYPY_MESSAGE_PART_LITERAL("\") to "),
-                    {sequence_type->name, sequence_type->name_size},
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                return NULL;
-            }
-            tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
-            return result;
-        }
+    /* The __add__ of str, unicode, list and tuple wraps sq_concat, which
+       never declines an operand. */
+    if (mode == 0 && self_numeric == 0) {
+        tinypy_value_t *concatenated = tinypy_internal_sequence_concat(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), out_error);
+        return concatenated;
+    }
+    /* string_mod and unicode_mod only format a left operand of their type. */
+    if (mode == 6 && self_numeric == 0 && left_kind != self_kind) {
+        tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
+        return result;
     }
     if (mode == 2 && self_numeric == 0 && (left_sequence != 0 || right_sequence != 0)) {
         tinypy_value_t *sequence = TINYPY_TUPLE_GET(args, 0U);
@@ -1662,17 +1928,7 @@ static tinypy_value_t *__tinypy_container_binary_method(tinypy_value_t *function
         if (multiplier != TINYPY_VALUE_BOOL && multiplier != TINYPY_VALUE_INTEGER && multiplier != TINYPY_VALUE_LONG) {
             int64_t count;
 
-            if (tinypy_internal_object_has_special_key(multiplier_value, vm->internal_special_index_key) == 0) {
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    TINYPY_MESSAGE_PART_TYPE_NAME(multiplier_value),
-                    TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index"),
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                return NULL;
-            }
-            if (tinypy_internal_index_as_i64(multiplier_value, &count, TINYPY_FALSE, out_error) == 0) {
+            if (tinypy_internal_number_as_index(multiplier_value, TINYPY_ERROR_OVERFLOW, &count, out_error) == 0) {
                 return NULL;
             }
             tinypy_value_t *count_value = tinypy_integer_from_i64(vm, count);

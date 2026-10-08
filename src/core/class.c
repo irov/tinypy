@@ -88,14 +88,17 @@ static tinypy_value_t *__tinypy_class_bind_impl(tinypy_value_t *class_value, tin
         tinypy_value_t *return_value_1 = tinypy_method_new(attribute, instance, class_value);
         return return_value_1;
     }
+    if (kind == TINYPY_VALUE_METHOD) {
+        tinypy_value_t *method = tinypy_internal_method_bind(attribute, instance, class_value, out_error);
+        return method;
+    }
     if (kind == TINYPY_VALUE_STATIC_METHOD) {
         tinypy_value_t *callable = tinypy_static_method_callable(attribute);
 
         return TINYPY_RET(callable);
     }
     if (kind == TINYPY_VALUE_CLASS_METHOD) {
-        tinypy_value_t *class_method_callable = tinypy_class_method_callable(attribute);
-        tinypy_value_t *return_value_2 = tinypy_method_new(class_method_callable, class_value, class_value);
+        tinypy_value_t *return_value_2 = tinypy_internal_class_method_bind(attribute, class_value, out_error);
         return return_value_2;
     }
     if ((attribute->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_type_lookup_key(vm, attribute->type, vm->internal_special_get_key) != NULL) {
@@ -138,12 +141,39 @@ static tinypy_value_t *__tinypy_class_bind(tinypy_value_t *class_value, tinypy_v
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyClass_New fills in __doc__ and the __module__ of the calling frame's
+   globals before it looks at the bases. */
+static tinypy_bool_t __tinypy_class_namespace_defaults(tinypy_vm_t *vm, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
+    tinypy_value_t *doc_key = vm->internal_special_doc_key;
+    tinypy_value_t *module_key = vm->internal_special_module_key;
+
+    if (tinypy_internal_dict_get_optional_suppressed(vm, namespace_dict, doc_key) == NULL) {
+        if (tinypy_internal_dict_set_checked(vm, namespace_dict, doc_key, &vm->none_object.base, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    if (vm->current_frame == NULL || tinypy_internal_dict_get_optional_suppressed(vm, namespace_dict, module_key) != NULL) {
+        return TINYPY_TRUE;
+    }
+    tinypy_value_t *module_name = tinypy_internal_dict_get_optional_suppressed(vm, vm->current_frame->globals, vm->internal_special_name_key);
+    if (module_name == NULL) {
+        return TINYPY_TRUE;
+    }
+    TINYPY_INCREF(module_name);
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, namespace_dict, module_key, module_name, out_error);
+    TINYPY_DECREF(module_name);
+    return stored;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_value_t *bases, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(bases);
     TINYPY_CLEAR_ERROR(out_error);
+    if (__tinypy_class_namespace_defaults(vm, namespace_dict, out_error) == 0) {
+        return NULL;
+    }
     iterator = TINYPY_TUPLE_ITERATOR_BEGIN(bases);
     iterator_end = TINYPY_TUPLE_ITERATOR_END(bases);
     for (; iterator != iterator_end; ++iterator) {
@@ -254,26 +284,8 @@ tinypy_value_t *tinypy_internal_class_create(tinypy_type_t *type, tinypy_value_t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "PyClass_New: dict must be a dictionary", out_error);
         goto cleanup;
     }
-    tinypy_value_t *internal_doc_key = vm->internal_special_doc_key;
-    tinypy_value_t *module_key = vm->internal_special_module_key;
-
-    if (tinypy_internal_dict_get_optional_suppressed(vm, values[2], internal_doc_key) == NULL
-        && tinypy_internal_dict_set_checked(vm, values[2], internal_doc_key, &vm->none_object.base, out_error) == 0) {
+    if (__tinypy_class_namespace_defaults(vm, values[2], out_error) == 0) {
         goto cleanup;
-    }
-    if (tinypy_internal_dict_get_optional_suppressed(vm, values[2], module_key) == NULL && vm->current_frame != NULL) {
-        tinypy_value_t *internal_name_key = vm->internal_special_name_key;
-        tinypy_value_t *module_name = tinypy_internal_dict_get_optional_suppressed(vm, vm->current_frame->globals, internal_name_key);
-
-        if (module_name != NULL) {
-            TINYPY_INCREF(module_name);
-            tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, values[2], module_key, module_name, out_error);
-
-            TINYPY_DECREF(module_name);
-            if (stored == 0) {
-                goto cleanup;
-            }
-        }
     }
     if (TINYPY_VALUE_KIND(values[1]) != TINYPY_VALUE_TUPLE) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "PyClass_New: bases must be a tuple", out_error);
@@ -388,22 +400,27 @@ tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *insta
     if (result != NULL || TINYPY_NAME_EQ(name, vm->internal_special_getattr_key) != 0) {
         return result;
     }
-    tinypy_value_t *hook_attribute = tinypy_internal_class_lookup_key(vm, instance->class_object, vm->internal_special_getattr_key);
-    tinypy_value_t *hook;
-    tinypy_value_t *args;
+    tinypy_value_t *hook = tinypy_internal_class_lookup_key(vm, instance->class_object, vm->internal_special_getattr_key);
 
-    if (hook_attribute == NULL) {
+    if (hook == NULL) {
         return NULL;
     }
     if (vm->raised_value != NULL && tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_ATTRIBUTE_ERROR, out_error) == 0) {
         return NULL;
     }
-    hook = __tinypy_class_bind(instance->class_object, hook_attribute, instance_value, out_error);
-    if (hook == NULL) {
-        return NULL;
-    }
-    args = tinypy_tuple_from_items(vm, &name, 1U);
-    result = tinypy_call(hook, args, NULL, out_error);
+    result = tinypy_internal_old_instance_call_hook(instance_value, hook, name, NULL, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* cl_getattr, cl_setattr and cl_delattr: the hook found in the class is
+   called unbound, with the instance first and without __get__. */
+tinypy_value_t *tinypy_internal_old_instance_call_hook(tinypy_value_t *instance_value, tinypy_value_t *hook, tinypy_value_t *name, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(instance_value);
+    tinypy_value_t *items[] = {instance_value, name, value};
+
+    TINYPY_INCREF(hook);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, items, value != NULL ? 3U : 2U);
+    tinypy_value_t *result = tinypy_call(hook, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(hook);
     return result;
@@ -540,7 +557,7 @@ tinypy_value_t *tinypy_internal_class_call(tinypy_value_t *callable, tinypy_valu
     if (initializer_attribute == NULL) {
         if (TINYPY_TUPLE_SIZE(args) != 0U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U)) {
             TINYPY_DECREF(instance);
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "class constructor takes no arguments", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "this constructor takes no arguments", out_error);
             return NULL;
         }
         return instance;
@@ -559,7 +576,7 @@ tinypy_value_t *tinypy_internal_class_call(tinypy_value_t *callable, tinypy_valu
     if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_NONE) {
         TINYPY_DECREF(result);
         TINYPY_DECREF(instance);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__init__ must return None", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__init__() should return None", out_error);
         return NULL;
     }
     TINYPY_DECREF(result);
@@ -575,6 +592,28 @@ tinypy_bool_t tinypy_internal_old_instance_has_special_key(tinypy_value_t *value
     tinypy_bool_t result = tinypy_internal_dict_get_optional(vm, instance->dict, key) != NULL
         || tinypy_internal_class_lookup_key(vm, instance->class_object, key) != NULL;
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_class_representation_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    if (user_data != NULL) {
+        tinypy_value_t *text = tinypy_internal_object_str_builtin(self, out_error);
+        return text;
+    }
+    tinypy_value_t *representation = tinypy_internal_object_repr_builtin(self, out_error);
+    return representation;
+}
+//////////////////////////////////////////////////////////////////////////
+/* classobj exposes class_repr and class_str as __repr__ and __str__. */
+void tinypy_internal_initialize_class_type(tinypy_vm_t *vm) {
+    tinypy_type_t *type = &vm->types[TINYPY_VALUE_CLASS];
+
+    tinypy_internal_constructor_add_builtin_new(type);
+    tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_class_representation_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_str_key, __tinypy_class_representation_method, (void *)(intptr_t)1, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_name(const tinypy_value_t *class_value) {

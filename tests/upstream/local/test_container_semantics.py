@@ -385,3 +385,385 @@ class ContainerSemantics(unittest.TestCase):
         self.assertIs(removable.fdel, remove)
         self.assertEqual(removable.__doc__, 'value accessor')
         self.assertIs(removable.__get__(None, object), removable)
+
+    def test_dict_order_follows_table_growth_and_presizing(self):
+        def built(keys):
+            result = {}
+            for key in keys:
+                result[key] = 1
+            return result
+        self.assertEqual(built((9, 1, 2, 3, 4, 5)).keys(), [1, 2, 3, 4, 5, 9])
+        self.assertEqual(built((9, 1, 2, 3, 4)).keys(), [9, 2, 3, 4, 1])
+        grown = built(range(16, 24))
+        for key in range(16, 21):
+            del grown[key]
+        for key in (32, 64, 96, 128, 160):
+            grown[key] = 1
+        self.assertEqual(grown.keys(), [32, 64, 96, 128, 160, 21, 22, 23])
+        source = built([33, 1] + range(100, 117))
+        updated = {}
+        updated.update(source)
+        for copy in (source.copy(), dict(source), updated, dict(**dict((str(key), key) for key in source))):
+            self.assertEqual(len(copy), 19)
+        self.assertEqual(source.copy().keys()[:3], [1, 33, 100])
+        self.assertEqual(dict(source).keys()[:3], [1, 33, 100])
+        self.assertEqual(updated.keys()[:3], [1, 33, 100])
+        self.assertEqual(dict.fromkeys(source).keys()[:3], [33, 100, 101])
+        self.assertEqual(dict.fromkeys([33, 1] + range(100, 117)).keys()[:3], [33, 100, 101])
+        self.assertEqual(dict([(33, 1), (1, 1)] + [(key, 1) for key in range(100, 117)]).keys()[:3], [33, 100, 101])
+        names = ['k%d' % index for index in range(22)]
+        self.assertEqual(dict.fromkeys(names[:11]).keys(), ['k10', 'k3', 'k2', 'k1', 'k0', 'k7', 'k6', 'k5', 'k4', 'k9', 'k8'])
+        self.assertEqual(dict.fromkeys(dict.fromkeys(names[:11])).keys(), ['k3', 'k2', 'k1', 'k10', 'k7', 'k6', 'k5', 'k4', 'k9', 'k8', 'k0'])
+        self.assertEqual(dict.fromkeys(set(names[:11])).keys(), ['k3', 'k2', 'k1', 'k10', 'k7', 'k6', 'k5', 'k4', 'k9', 'k8', 'k0'])
+        keyword_source = built(names)
+        self.assertEqual(dict(**keyword_source).keys(), dict(keyword_source).keys())
+        display = {33: 0, 1: 0, 65: 0, 2: 0, 97: 0, 3: 0, 129: 0, 4: 0, 161: 0, 5: 0, 193: 0, 6: 0}
+        self.assertEqual(display.keys(), [65, 2, 3, 4, 5, 6, 97, 33, 1, 129, 161, 193])
+
+    def test_set_order_follows_setobject(self):
+        names = ['k%d' % index for index in range(30)]
+        self.assertEqual(list({9, 1}), [9, 1])
+        self.assertEqual(list({1, 9}), [1, 9])
+        self.assertEqual(list(set([9, 1, 2, 3, 4, 5])), [1, 2, 3, 4, 5, 9])
+        self.assertEqual(list(set(names[:6]).symmetric_difference(['k1', 'zz'])), ['zz', 'k3', 'k2', 'k0', 'k5', 'k4'])
+        toggled = set(names[:6])
+        toggled.symmetric_difference_update(['k1', 'zz'])
+        self.assertEqual(list(toggled), ['zz', 'k3', 'k2', 'k0', 'k5', 'k4'])
+        self.assertEqual(list(set(names[:19]) | set(['zz'])), ['zz', 'k13', 'k12', 'k11', 'k10', 'k17', 'k16', 'k15', 'k14', 'k18', 'k3', 'k2', 'k1', 'k0', 'k7', 'k6', 'k5', 'k4', 'k9', 'k8'])
+        self.assertEqual(list(set(names[:19]) - set(['k1'])), ['k13', 'k12', 'k11', 'k10', 'k17', 'k16', 'k15', 'k14', 'k18', 'k3', 'k2', 'k0', 'k7', 'k6', 'k5', 'k4', 'k9', 'k8'])
+        self.assertEqual(list(set(names[:19]) & set(names[5:30])), ['k13', 'k12', 'k11', 'k10', 'k17', 'k16', 'k15', 'k14', 'k18', 'k7', 'k6', 'k5', 'k9', 'k8'])
+        comparisons = []
+        class Equal(object):
+            def __init__(self, name):
+                self.name = name
+            def __hash__(self):
+                return 0
+            def __eq__(self, other):
+                comparisons.append((self.name, other.name))
+                return True
+        display = {Equal('a'), Equal('b')}
+        self.assertEqual([member.name for member in display], ['a'])
+        self.assertEqual(comparisons, [('a', 'b')])
+
+    def test_popitem_and_pop_resume_from_slot_zero(self):
+        popping = dict.fromkeys([0, 8, 16, 3, 11, 19, 40, 41])
+        popped = []
+        while popping:
+            popped.append(popping.popitem()[0])
+            if len(popped) == 3:
+                popping[24] = 1
+        self.assertEqual(popped, [0, 3, 8, 41, 11, 16, 40, 19, 24])
+        popping = set([0, 8, 16, 3, 11, 19, 40, 41])
+        popped = []
+        while popping:
+            popped.append(popping.pop())
+            if len(popped) == 3:
+                popping.add(24)
+        self.assertEqual(popped, [0, 3, 8, 41, 11, 16, 40, 19, 24])
+        self.assertRaises(KeyError, {}.popitem)
+        self.assertRaises(KeyError, set().pop)
+
+    def test_insertion_uses_slot_filled_by_key_comparison(self):
+        class Key(object):
+            def __init__(self, name, action=None):
+                self.name = name
+                self.action = action
+            def __hash__(self):
+                return 0
+            def __eq__(self, other):
+                action = self.action
+                self.action = None
+                if action is not None:
+                    action()
+                return self is other
+        first, second, late = Key('A'), Key('B'), Key('X')
+        collided = {}
+        collided[first] = 'a'
+        collided[second] = 'b'
+        del collided[first]
+        second.action = lambda: collided.__setitem__(late, 'x')
+        collided[Key('C')] = 'c'
+        self.assertEqual(len(collided), 2)
+        self.assertEqual(sorted((key.name, value) for key, value in collided.items()), [('B', 'b'), ('X', 'c')])
+
+    def test_copies_and_set_operations_reuse_stored_hashes(self):
+        calls = [0]
+        class Counted(object):
+            def __init__(self, value):
+                self.value = value
+            def __hash__(self):
+                calls[0] += 1
+                return self.value
+            def __eq__(self, other):
+                return isinstance(other, Counted) and other.value == self.value
+        keys = [Counted(value) for value in range(10)]
+        mapping = dict.fromkeys(keys)
+        members = set(keys)
+        others = set(keys[5:] + [Counted(20)])
+        calls[0] = 0
+        results = [mapping.copy(), dict(mapping), set(mapping), dict.fromkeys(mapping), dict.fromkeys(members), set(members),
+                   members.copy(), members | others, members & others, members - others, members ^ others, frozenset(members),
+                   mapping.viewkeys() & members]
+        merged = set(members)
+        merged.symmetric_difference_update(others)
+        self.assertEqual([len(result) for result in results], [10, 10, 10, 10, 10, 10, 10, 11, 5, 5, 6, 10, 10])
+        self.assertEqual(len(merged), 6)
+        self.assertEqual(calls[0], 10)
+
+    def test_subscript_errors_name_the_sequence(self):
+        def message(error, function, *args):
+            try:
+                function(*args)
+            except error as exception:
+                return str(exception)
+            raise AssertionError('no %s' % error.__name__)
+        def store(target, key):
+            target[key] = 0
+        def remove(target, key):
+            del target[key]
+        self.assertEqual(message(IndexError, lambda: [1][5]), 'list index out of range')
+        self.assertEqual(message(IndexError, lambda: (1,)[5]), 'tuple index out of range')
+        self.assertEqual(message(IndexError, lambda: 'x'[5]), 'string index out of range')
+        self.assertEqual(message(IndexError, lambda: u'x'[-5]), 'string index out of range')
+        self.assertEqual(message(IndexError, lambda: xrange(3)[5]), 'xrange object index out of range')
+        self.assertEqual(message(IndexError, store, [1], 5), 'list assignment index out of range')
+        self.assertEqual(message(IndexError, remove, [1], -5), 'list assignment index out of range')
+        self.assertEqual(message(IndexError, lambda: [1][2 ** 70]), "cannot fit 'long' into an index-sized integer")
+        self.assertEqual(message(TypeError, lambda: [1]['a']), 'list indices must be integers, not str')
+        self.assertEqual(message(TypeError, lambda: (1,)[1.5]), 'tuple indices must be integers, not float')
+        self.assertEqual(message(TypeError, lambda: 'x'[None]), 'string indices must be integers, not NoneType')
+        self.assertEqual(message(TypeError, lambda: u'x'['a']), 'string indices must be integers')
+        self.assertEqual(message(TypeError, lambda: xrange(3)['a']), "sequence index must be integer, not 'str'")
+        self.assertEqual(message(TypeError, lambda: None[0]), "'NoneType' object has no attribute '__getitem__'")
+        self.assertEqual(message(TypeError, lambda: set()[0]), "'set' object does not support indexing")
+        self.assertEqual(message(TypeError, store, (1,), 0), "'tuple' object does not support item assignment")
+        self.assertEqual(message(TypeError, remove, (1,), 0), "'tuple' object doesn't support item deletion")
+        self.assertEqual(message(TypeError, remove, (1,), slice(None)), "'tuple' object does not support item deletion")
+        self.assertEqual(message(TypeError, lambda: [1, 2]['a':]), 'slice indices must be integers or None or have an __index__ method')
+        self.assertEqual(message(TypeError, slice(None).indices, 'a'), "'str' object cannot be interpreted as an index")
+        values = range(5)
+        self.assertEqual(message(TypeError, values.__setitem__, slice(None, None, 2), 5), 'must assign iterable to extended slice')
+        self.assertEqual(message(TypeError, values.__setitem__, slice(1, 2), 5), 'can only assign an iterable')
+        self.assertEqual(message(ValueError, values.__setitem__, slice(None, None, 2), [1]), 'attempt to assign sequence of size 1 to extended slice of size 3')
+        self.assertRaises(MemoryError, [1, 2].__imul__, 2 ** 62)
+
+    def test_index_callbacks_may_shrink_the_list(self):
+        class Shrinking(object):
+            def __init__(self, target, contents, index):
+                self.target = target
+                self.contents = contents
+                self.index = index
+            def __index__(self):
+                self.target.__init__(self.contents)
+                return self.index
+        items = range(50)
+        with self.assertRaises(IndexError) as failure:
+            items[Shrinking(items, [1], 40)]
+        self.assertEqual(str(failure.exception), 'list index out of range')
+        items = range(50)
+        self.assertRaises(IndexError, items.__setitem__, Shrinking(items, [1], 40), 5)
+        self.assertEqual(items, [1])
+        items = range(50)
+        self.assertRaises(IndexError, items.__delitem__, Shrinking(items, [1], 40))
+        self.assertEqual(items, [1])
+        items = range(50)
+        self.assertEqual(items[10:Shrinking(items, [1], 40)], [])
+        items = range(50)
+        items[10:Shrinking(items, range(30), 40)] = []
+        self.assertEqual(items, range(10))
+        items = range(50)
+        del items[10:Shrinking(items, [1], 40):2]
+        self.assertEqual(items, [1])
+
+    def test_classic_instance_slices_use_offsets_only_for_indices(self):
+        class Recorder:
+            def __getitem__(self, key):
+                return key
+            def __setitem__(self, key, value):
+                self.stored = (key, value)
+            def __delitem__(self, key):
+                self.deleted = key
+        class Sized(Recorder):
+            def __len__(self):
+                return 10
+        class Index(object):
+            def __index__(self):
+                return 3
+        recorder = Recorder()
+        self.assertEqual(recorder['a':'b'], slice('a', 'b', None))
+        self.assertEqual(recorder[1.5:2], slice(1.5, 2, None))
+        self.assertEqual(recorder[1:None], slice(1, None, None))
+        self.assertEqual(recorder[1:2], slice(1, 2, None))
+        self.assertEqual(recorder[Index():], slice(3, 9223372036854775807, None))
+        self.assertRaises(AttributeError, lambda: recorder[-1:])
+        recorder['x':'y'] = 1
+        self.assertEqual(recorder.stored, (slice('x', 'y', None), 1))
+        del recorder[1.5:]
+        self.assertEqual(recorder.deleted, slice(1.5, None, None))
+        sized = Sized()
+        self.assertEqual(sized[-1:], slice(9, 9223372036854775807, None))
+        self.assertEqual(sized[:-2], slice(0, 8, None))
+        self.assertEqual(sized[-10 ** 30:], slice(-9223372036854775798, 9223372036854775807, None))
+
+    def test_sort_matches_listsort(self):
+        compared = [0]
+        limit = [0]
+        def counting(left, right):
+            compared[0] += 1
+            if compared[0] == limit[0]:
+                raise ValueError('stop')
+            return cmp(left, right)
+        seed = [1]
+        def random(bound):
+            seed[0] = (seed[0] * 1103515245 + 12345) & 0x7fffffff
+            return seed[0] % bound
+        shapes = [[random(100000) for index in range(2000)], range(2000) + [random(2000) for index in range(10)],
+                  range(0, 4000, 2) + range(1, 4000, 2), range(1000, 2000) + range(1000), [random(3) for index in range(2000)]]
+        counts = []
+        for shape in shapes:
+            compared[0] = 0
+            values = list(shape)
+            values.sort(cmp=counting)
+            self.assertEqual(values, sorted(shape))
+            counts.append(compared[0])
+        self.assertEqual(counts, [19270, 2189, 7998, 2027, 10696])
+        values = [5, 3, 9, 1, 7, 2, 8, 6, 4, 0]
+        compared[0] = 0
+        limit[0] = 12
+        self.assertRaises(ValueError, values.sort, cmp=counting)
+        self.assertEqual(values, [1, 2, 3, 5, 7, 9, 8, 6, 4, 0])
+        def reinitialize(value):
+            values.__init__([9, 8])
+            return value
+        values = [3, 1, 2]
+        with self.assertRaises(ValueError) as failure:
+            values.sort(key=reinitialize)
+        self.assertEqual(str(failure.exception), 'list modified during sort')
+        self.assertEqual(values, [1, 2, 3])
+        self.assertRaises(TypeError, [1, 2].sort, cmp=lambda left, right: 1L)
+
+    def test_deep_nesting_in_repr_and_hash(self):
+        nested_list = []
+        nested_dict = {}
+        for index in range(5000):
+            nested_list = [nested_list]
+            nested_dict = {1: nested_dict}
+        message = 'maximum recursion depth exceeded while getting the repr of an object'
+        for function, value in ((repr, nested_list), (str, nested_list), (repr, nested_dict)):
+            with self.assertRaises(RuntimeError) as failure:
+                function(value)
+            self.assertEqual(str(failure.exception), message)
+        nested_tuple = ()
+        for index in range(100000):
+            nested_tuple = (nested_tuple,)
+        self.assertIsInstance(hash(nested_tuple), int)
+        self.assertEqual(hash(((((1, 'a'),),),)), hash(((((1, 'a'),),),)))
+
+    def test_repr_reentry_through_user_repr(self):
+        members = set()
+        items = []
+        class SetHolder(object):
+            def __repr__(self):
+                return 'H' + repr(members)
+        class ListHolder(object):
+            def __repr__(self):
+                return 'H' + repr(items)
+        class Invalid(object):
+            def __repr__(self):
+                return 42
+        members.add(SetHolder())
+        items.append(ListHolder())
+        self.assertEqual(repr(members), 'set([Hset(...)])')
+        self.assertEqual(repr(items), '[H[...]]')
+        with self.assertRaises(TypeError) as failure:
+            repr([Invalid()])
+        self.assertEqual(str(failure.exception), '__repr__ returned non-string (type int)')
+
+    def test_sequence_comparisons_and_containment(self):
+        left = []
+        right = []
+        class Emptying(object):
+            def __eq__(self, other):
+                del left[:]
+                del right[:]
+                return False
+        left[:] = [Emptying(), Emptying()]
+        right[:] = [Emptying(), Emptying()]
+        self.assertTrue(left == right)
+        compared = []
+        class Probe(object):
+            def __eq__(self, other):
+                compared.append('probe')
+                return True
+        class Stored(object):
+            def __eq__(self, other):
+                compared.append('stored')
+                return False
+        self.assertTrue(Probe() in [Stored()])
+        self.assertTrue(Probe() in (Stored(),))
+        self.assertTrue(Probe() in iter([Stored()]))
+        self.assertTrue(Probe() in {1: Stored()}.viewvalues())
+        self.assertEqual(compared, ['probe'] * 4)
+        self.assertRaises(TypeError, lambda: [1] & set([1]))
+        self.assertEqual(sorted({1: 2, 3: 4}.viewkeys() & [1]), [1])
+
+    def test_list_clearing_releases_items_from_the_end(self):
+        released = []
+        class Tracked(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                released.append(self.name)
+        for clear in (lambda values: values.__imul__(0), lambda values: values.__delslice__(0, 3), lambda values: values.__setslice__(0, 3, [9])):
+            values = [Tracked('a'), Tracked('b'), Tracked('c')]
+            del released[:]
+            clear(values)
+            self.assertEqual(released, ['c', 'b', 'a'])
+
+    def test_classic_iteration_errors(self):
+        class Plain:
+            pass
+        class ReturnsPlain:
+            def __iter__(self):
+                return Plain()
+        class ReturnsInteger:
+            def __iter__(self):
+                return 1
+        def message(function):
+            try:
+                function()
+            except TypeError as exception:
+                return str(exception)
+            raise AssertionError('no TypeError')
+        self.assertEqual(message(lambda: iter(Plain())), 'iteration over non-sequence')
+        self.assertEqual(message(lambda: iter(ReturnsInteger())), "__iter__ returned non-iterator of type 'int'")
+        self.assertEqual(message(lambda: list(ReturnsPlain())), 'instance has no next() method')
+
+    def test_sort_parses_arguments_like_pyarg(self):
+        def message(function, *args, **kwargs):
+            try:
+                function(*args, **kwargs)
+            except TypeError as exception:
+                return str(exception)
+            raise AssertionError('no TypeError')
+        values = [2, 1]
+        self.assertEqual(message(values.sort, foo=1), "'foo' is an invalid keyword argument for this function")
+        self.assertEqual(message(values.sort, None, cmp=None), "Argument given by name ('cmp') and position (1)")
+        self.assertEqual(message(values.sort, 1, 2, 3, 4), 'sort() takes at most 3 arguments (4 given)')
+        self.assertEqual(message(values.sort, reverse=1.5), 'integer argument expected, got float')
+        self.assertEqual(message(values.sort, iterable=[2]), "'iterable' is an invalid keyword argument for this function")
+        values.sort(None, None, 1)
+        self.assertEqual(values, [2, 1])
+
+    def test_container_repr_encodes_unicode_results(self):
+        class Accented(object):
+            def __repr__(self):
+                return u'\xe9'
+        class Plain(object):
+            def __repr__(self):
+                return u'abc'
+        self.assertEqual(repr([Plain()]), '[abc]')
+        for container in ([Accented()], (Accented(),), {1: Accented()}):
+            with self.assertRaises(UnicodeEncodeError) as failure:
+                repr(container)
+            self.assertEqual(failure.exception.args, ('ascii', u'\xe9', 0, 1, 'ordinal not in range(128)'))

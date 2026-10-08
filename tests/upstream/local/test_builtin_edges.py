@@ -1,8 +1,18 @@
 """Project-authored Python 2 iterator builtin and container callback witnesses."""
 
 import unittest
+import _codecs
+import _struct
 import _weakref as weakref
 import sys
+
+
+def error_text(function, *args, **kwargs):
+    try:
+        function(*args, **kwargs)
+    except Exception as error:
+        return type(error).__name__ + ': ' + str(error)
+    raise AssertionError('no exception raised')
 
 
 class BuiltinEdges(unittest.TestCase):
@@ -432,3 +442,237 @@ class BuiltinEdges(unittest.TestCase):
             return result
         self.assertEqual(min([2, 1], key=key), 1)
         self.assertEqual([reference() for reference in references], [None, None])
+
+    def test_native_getters_reject_foreign_receivers(self):
+        for receiver, kind in ((5, 'int'), ('abc', 'str'), (bytearray('abc'), 'bytearray')):
+            for name in ('format', 'itemsize', 'ndim', 'readonly', 'shape', 'strides', 'suboffsets'):
+                self.assertEqual(error_text(memoryview.__dict__[name].__get__, receiver),
+                                 "TypeError: descriptor '%s' for 'memoryview' objects doesn't apply to '%s' object" % (name, kind))
+            for name in ('start', 'stop', 'step'):
+                self.assertEqual(error_text(slice.__dict__[name].__get__, receiver),
+                                 "TypeError: descriptor '%s' for 'slice' objects doesn't apply to '%s' object" % (name, kind))
+        self.assertEqual(memoryview.__dict__['shape'].__get__(memoryview('abc')), (3L,))
+
+    def test_format_spec_errors_follow_the_spec_parser(self):
+        cases = [
+            ((1.5, 'd'), "ValueError: Unknown format code 'd' for object of type 'float'"),
+            ((1, '.2'), 'ValueError: Precision not allowed in integer format specifier'),
+            ((1, '9' * 20), 'ValueError: Too many decimal digits in format string'),
+            ((1.0, '.' + '9' * 20 + 'f'), 'ValueError: Too many decimal digits in format string'),
+            ((1.0, '.%df' % (2 ** 31)), 'ValueError: precision too big'),
+            ((1, '.'), 'ValueError: Format specifier missing precision'),
+            ((1, 'xx'), 'ValueError: Invalid conversion specification'),
+            ((1, ',x'), "ValueError: Cannot specify ',' with 'x'."),
+            (('abc', ','), "ValueError: Cannot specify ',' with 's'."),
+            ((1, '+c'), "ValueError: Sign not allowed with integer format specifier 'c'"),
+            ((-1, 'c'), 'OverflowError: %c arg not in range(0x100)'),
+            ((1.5, '#'), 'ValueError: Alternate form (#) not allowed in float format specifier'),
+            ((1 + 2j, '010'), 'ValueError: Zero padding is not allowed in complex format specifier'),
+            ((1 + 2j, '%'), "ValueError: Unknown format code '%' for object of type 'complex'"),
+            (('abc', '+'), 'ValueError: Sign not allowed in string format specifier'),
+            (('abc', '#'), 'ValueError: Alternate form (#) not allowed in string format specifier'),
+            ((u'abc', '010'), "ValueError: '=' alignment not allowed in string format specifier"),
+            ((u'abc', u'\x01'), "ValueError: Unknown format code '\\x1' for object of type 'unicode'"),
+            (([1], 'x'), "ValueError: Unknown format code 'x' for object of type 'str'"),
+        ]
+        for arguments, expected in cases:
+            self.assertEqual(error_text(format, *arguments), expected)
+        self.assertEqual(error_text('{:<{}}'.format, 'a', 2 ** 63), 'ValueError: Too many decimal digits in format string')
+        self.assertEqual(len(format(1.0, '.100001f')), 100003)
+
+    def test_percent_operands_and_messages(self):
+        class IntegerWithFloat(int):
+            def __float__(self):
+                return 2.5
+        class Classic:
+            pass
+        class Mapping(object):
+            def __getitem__(self, key):
+                return key.upper()
+        self.assertEqual('%f' % IntegerWithFloat(1), '2.500000')
+        self.assertEqual(u'%f' % IntegerWithFloat(1), u'2.500000')
+        self.assertEqual('' % Classic(), '')
+        self.assertEqual('%(a)s %%' % Mapping(), 'A %')
+        self.assertEqual('%5%|%-3%|' % (), '    %|%  |')
+        self.assertEqual(len('%.100001f' % 1.0), 100003)
+        cases = [
+            (lambda: '%d' % float('nan'), 'TypeError: %d format: a number is required, not float'),
+            (lambda: '%i' % 'x', 'TypeError: %d format: a number is required, not str'),
+            (lambda: '%x' % [], 'TypeError: %x format: a number is required, not list'),
+            (lambda: '%f' % 'x', 'TypeError: float argument required, not str'),
+            (lambda: u'%f' % 'x', 'TypeError: a float is required'),
+            (lambda: '%c' % 256, 'OverflowError: unsigned byte integer is greater than maximum'),
+            (lambda: '%c' % -1, 'OverflowError: unsigned byte integer is less than minimum'),
+            (lambda: '%c' % 'ab', 'TypeError: %c requires int or char'),
+            (lambda: u'%c' % '\xe9\xe9', 'TypeError: %c requires int or char'),
+            (lambda: u'%c' % 0x110000, 'OverflowError: %c arg not in range(0x110000) (wide Python build)'),
+            (lambda: '%y' % 1, "ValueError: unsupported format character 'y' (0x79) at index 1"),
+            (lambda: u'ab%\u1234' % 1, "ValueError: unsupported format character '?' (0x1234) at index 3"),
+            (lambda: '%lld' % 1, "ValueError: unsupported format character 'l' (0x6c) at index 2"),
+            (lambda: '%.117d' % 1, 'OverflowError: formatted integer is too long (precision too large?)'),
+            (lambda: '%.*f' % (2 ** 31, 1.0), 'OverflowError: Python int too large to convert to C int'),
+            (lambda: '%(a)s' % 5, 'TypeError: format requires a mapping'),
+            (lambda: '%(a)*d' % {'a': 1}, 'TypeError: not enough arguments for format string'),
+        ]
+        for function, expected in cases:
+            self.assertEqual(error_text(function), expected)
+
+    def test_text_search_bounds_require_index(self):
+        self.assertEqual(error_text('abc'.find, 'b', 1.5), 'TypeError: slice indices must be integers or None or have an __index__ method')
+        self.assertEqual(error_text(u'abc'.count, u'b', None, 'x'), 'TypeError: slice indices must be integers or None or have an __index__ method')
+        self.assertEqual('abc'.find('b', True), 1)
+
+    def test_codec_names_resolve_like_the_encodings_search_function(self):
+        for name in (' utf 8 ', 'Latin_1', 'ISO-8859-1', 'US-ASCII', 'iso_646.irv:1991', 'ansi.x3_4.1968', '-UTF-8-'):
+            self.assertEqual(u'a'.encode(name), 'a')
+        for name in ('u-t-f-8', 'latin.1', 'utf.8', 'iso.646.irv.1991'):
+            self.assertRaises(LookupError, u'a'.encode, name)
+            self.assertRaises(LookupError, _codecs.lookup, name)
+        self.assertEqual(len(_codecs.lookup('  hEx  ')), 4)
+        self.assertFalse(hasattr(_codecs, '_search_path'))
+        def search(name):
+            if name == 'builtin_edges_returns_int':
+                return (lambda text, errors='strict': (5, 1), None, None, None)
+        _codecs.register(search)
+        self.assertEqual(error_text(u'a'.encode, 'builtin_edges_returns_int'), 'TypeError: encoder did not return a string/unicode object (type=int)')
+        self.assertEqual(error_text(bytearray, u'a', 'builtin_edges_returns_int'), "TypeError: can't concat int to bytearray")
+        self.assertEqual(bytearray('ab', 'builtin_edges_returns_int'), bytearray('ab'))
+        self.assertEqual(error_text(_codecs.register_error, 'builtin_edges', 5), 'TypeError: handler must be callable')
+
+    def test_codec_error_handlers_clamp_their_ranges(self):
+        replace = _codecs.lookup_error('replace')
+        self.assertEqual(replace(UnicodeTranslateError(u'abc', 0, 2 ** 40, 'x')), (u'\ufffd' * 3, 3))
+        self.assertEqual(replace(UnicodeEncodeError('ascii', u'abc', 1, 10, 'x')), (u'??', 3))
+        self.assertEqual(replace(UnicodeEncodeError('ascii', u'', 0, 0, 'x')), (u'?', 0))
+        self.assertRaises(MemoryError, replace, UnicodeEncodeError('ascii', u'abc', 5, 1, 'x'))
+        self.assertEqual(_codecs.lookup_error('xmlcharrefreplace')(UnicodeEncodeError('ascii', u'abc', 5, 1, 'x')), (u'', 1))
+
+    def test_bytearray_index_and_resize_errors(self):
+        data = bytearray('abc')
+        self.assertEqual(error_text(data.__getitem__, 2 ** 70), "IndexError: cannot fit 'long' into an index-sized integer")
+        self.assertEqual(error_text(data.__getitem__, 'a'), 'TypeError: bytearray indices must be integers')
+        self.assertEqual(error_text(data.__setitem__, 'a', 1), 'TypeError: bytearray indices must be integer')
+        self.assertEqual(error_text(buffer('abc').__getitem__, 2 ** 70), "IndexError: cannot fit 'long' into an index-sized integer")
+        self.assertEqual(error_text(data.__setitem__, slice(None, None, 2), 'xyz'), 'ValueError: attempt to assign bytes of size 3 to extended slice of size 2')
+        view = memoryview(data)
+        self.assertEqual(error_text(data.__delitem__, slice(10, None, 2)), 'BufferError: Existing exports of data: object cannot be re-sized')
+        del view
+        del data[10::2]
+        self.assertEqual(data, bytearray('abc'))
+
+    def test_struct_pack_into_argument_messages(self):
+        target = bytearray(16)
+        self.assertEqual(error_text(_struct.pack_into, '<d', target, 2 ** 70, 1.5), 'OverflowError: long int too large to convert to int')
+        self.assertEqual(error_text(_struct.pack_into, '<d', 'abc', 0, 1.5), 'TypeError: argument must be read-write buffer, not str')
+        _struct.pack_into('<d', target, 8.7, 1.5)
+        self.assertEqual(_struct.unpack_from('<d', target, 8), (1.5,))
+
+    def test_builtin_argument_messages(self):
+        class Text(str):
+            pass
+        class NegativeLength(object):
+            def __len__(self):
+                return -1
+        cases = [
+            (lambda: chr(256), 'ValueError: chr() arg not in range(256)'),
+            (lambda: chr(65.0), 'TypeError: integer argument expected, got float'),
+            (lambda: unichr(0x110000), 'ValueError: unichr() arg not in range(0x110000) (wide Python build)'),
+            (lambda: ord('ab'), 'TypeError: ord() expected a character, but string of length 2 found'),
+            (lambda: ord(u''), 'TypeError: ord() expected a character, but string of length 0 found'),
+            (lambda: ord(5), 'TypeError: ord() expected string of length 1, but int found'),
+            (lambda: min(), 'TypeError: min expected 1 arguments, got 0'),
+            (lambda: max([]), 'ValueError: max() arg is an empty sequence'),
+            (lambda: min([1], foo=1), 'TypeError: min() got an unexpected keyword argument'),
+            (lambda: sum(['a'], ''), "TypeError: sum() can't sum strings [use ''.join(seq) instead]"),
+            (lambda: sorted([1], foo=1), "TypeError: 'foo' is an invalid keyword argument for this function"),
+            (lambda: sorted([1], None, None, False, x=1), 'TypeError: sorted() takes at most 4 arguments (5 given)'),
+            (lambda: getattr(1, 5), 'TypeError: getattr(): attribute name must be string'),
+            (lambda: hasattr(1, None), 'TypeError: hasattr(): attribute name must be string'),
+            (lambda: setattr(Text(), 5, 1), "TypeError: attribute name must be string, not 'int'"),
+            (lambda: getattr(1, u'\xe9'), "UnicodeEncodeError: 'ascii' codec can't encode character u'\\xe9' in position 0: ordinal not in range(128)"),
+            (lambda: next([1]), 'TypeError: list object is not an iterator'),
+            (lambda: zip([1], 5), 'TypeError: zip argument #2 must support iteration'),
+            (lambda: apply(len, 5), 'TypeError: apply() arg 2 expected sequence, found int'),
+            (lambda: len(5), "TypeError: object of type 'int' has no len()"),
+            (lambda: len(NegativeLength()), 'ValueError: __len__() should return >= 0'),
+            (lambda: reduce(len), 'TypeError: reduce expected at least 2 arguments, got 1'),
+            (lambda: reduce(len, [], x=1), 'TypeError: reduce() takes no keyword arguments'),
+            (lambda: len([], x=1), 'TypeError: len() takes no keyword arguments'),
+            (lambda: intern(u'x'), 'TypeError: intern() argument 1 must be string, not unicode'),
+            (lambda: intern(Text('x')), "TypeError: can't intern subclass of string"),
+        ]
+        for function, expected in cases:
+            self.assertEqual(error_text(function), expected)
+
+    def test_range_falls_back_to_long_bounds(self):
+        result = range(0, 2 ** 64, 2 ** 63)
+        self.assertEqual(result, [0, 2 ** 63])
+        self.assertEqual([type(item) for item in result], [long, long])
+        self.assertEqual([type(item) for item in range(5L)], [int] * 5)
+        self.assertEqual(error_text(range, 1.5), 'TypeError: range() integer end argument expected, got float.')
+        self.assertEqual(error_text(range, 1.5, 2), 'TypeError: range() integer start argument expected, got float.')
+        self.assertEqual(error_text(range, 0, 2 ** 63), 'OverflowError: range() result has too many items')
+        self.assertEqual(error_text(range, 0, 1, 0), 'ValueError: range() step argument must not be zero')
+        self.assertEqual(error_text(xrange, -2 ** 63, 2 ** 63 - 1), 'OverflowError: xrange() result has too many items')
+
+    def test_instance_checks_bound_classinfo_recursion(self):
+        nested = str
+        for depth in xrange(5000):
+            nested = (nested,)
+        self.assertEqual(error_text(isinstance, 1, nested), 'RuntimeError: maximum recursion depth exceeded in __instancecheck__')
+        self.assertEqual(error_text(issubclass, int, nested), 'RuntimeError: maximum recursion depth exceeded in __subclasscheck__')
+        class Bases(object):
+            def __init__(self, base):
+                self.__bases__ = (base,) if base is not None else ()
+        chain = Bases(None)
+        for depth in xrange(5000):
+            chain = Bases(chain)
+        self.assertIs(issubclass(chain, Bases(None)), False)
+        class RaisingBases(object):
+            @property
+            def __bases__(self):
+                raise KeyError('bases')
+        self.assertRaises(KeyError, issubclass, RaisingBases(), Bases(None))
+
+    def test_setattr_interns_attribute_names(self):
+        class Holder(object):
+            pass
+        holder = Holder()
+        setattr(holder, ''.join(['fo', 'o']), 1)
+        self.assertIs([key for key in holder.__dict__][0], 'foo')
+
+    def test_dir_merge_survives_dict_replacement(self):
+        events = []
+        class Key(object):
+            def __hash__(self):
+                return hash('a')
+            def __eq__(self, other):
+                if not events:
+                    events.append(other)
+                    holder.__dict__ = {}
+                return False
+        class Holder(object):
+            pass
+        holder = Holder()
+        namespace = {Key(): 2, 'a': 1}
+        for index in range(20):
+            namespace['x%d' % index] = index
+        holder.__dict__ = namespace
+        del namespace
+        self.assertIn('x19', dir(holder))
+        self.assertEqual(events, ['a'])
+
+    def test_import_with_none_parent_is_absolute(self):
+        sys.modules['builtin_edges_none_parent'] = None
+        try:
+            self.assertEqual(error_text(__import__, 'builtin_edges_missing', {'__name__': 'builtin_edges_none_parent.child'}, {}, [], 1),
+                             'ImportError: No module named builtin_edges_missing')
+        finally:
+            del sys.modules['builtin_edges_none_parent']
+
+    def test_output_softspace_is_an_attribute(self):
+        stream = sys.stdout
+        previous = stream.softspace
+        stream.softspace = 1
+        self.assertEqual(stream.softspace, 1)
+        stream.softspace = previous

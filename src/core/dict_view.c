@@ -207,36 +207,7 @@ static tinypy_value_t *__tinypy_dict_view_binary_method(tinypy_value_t *function
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, mode >= 100 ? 1U : 0U);
     tinypy_value_t *right = TINYPY_TUPLE_GET(args, mode >= 100 ? 0U : 1U);
-    tinypy_value_t *left_set = NULL;
-    tinypy_value_t *right_set = NULL;
-    tinypy_value_t *result;
-
-    /* dictviews_or and friends build a set from the view and accept any
-       iterable as the other operand. */
-    if (__tinypy_dict_view_is_set_like(left) == 0) {
-        left_set = tinypy_set_from_iterable(left, TINYPY_FALSE, out_error);
-        if (left_set == NULL) {
-            return NULL;
-        }
-        left = left_set;
-    }
-    if (__tinypy_dict_view_is_set_like(right) == 0) {
-        right_set = tinypy_set_from_iterable(right, TINYPY_FALSE, out_error);
-        if (right_set == NULL) {
-            if (left_set != NULL) {
-                TINYPY_DECREF(left_set);
-            }
-            return NULL;
-        }
-        right = right_set;
-    }
-    result = tinypy_internal_set_binary(left, right, (int32_t)(mode % 100), out_error);
-    if (left_set != NULL) {
-        TINYPY_DECREF(left_set);
-    }
-    if (right_set != NULL) {
-        TINYPY_DECREF(right_set);
-    }
+    tinypy_value_t *result = tinypy_internal_set_binary(left, right, (int32_t)(mode % 100), out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

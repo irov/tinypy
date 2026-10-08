@@ -534,6 +534,7 @@ class PublicApiNamingTests(unittest.TestCase):
                 "tinypy_native_function_new",
                 "tinypy_native_type_new",
                 "tinypy_output_emit",
+                "tinypy_output_flush_line",
                 "tinypy_compile_source",
                 "tinypy_preprocess_source",
                 "tinypy_eval_source",

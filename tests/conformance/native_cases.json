@@ -82,6 +82,7 @@
   "runtime_exception_state_lost",
   "runtime_float_hex_locale",
   "runtime_function_call",
+  "runtime_heap_budget_sweep",
   "runtime_intern_lifetime",
   "runtime_marshal_code_materialization",
   "runtime_module_finder",

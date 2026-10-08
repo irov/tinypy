@@ -62,6 +62,126 @@ tinypy_bool_t tinypy_internal_codecs_validate_name(tinypy_vm_t *vm, tinypy_value
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Compares an encoding name, normalised the way encodings.search_function
+   does (ASCII letters lowered, each run of other characters except '.'
+   one '_' between alphanumerics), with a normalised name; dots may compare
+   as underscores. */
+static tinypy_bool_t __tinypy_codecs_normalized_equal(const uint8_t *name, size_t size, const tinypy_value_t *normalized, tinypy_bool_t dots_as_underscores) {
+    const uint8_t *expected = TINYPY_TEXT_BYTES(normalized);
+    size_t expected_size = TINYPY_TEXT_BYTE_SIZE(normalized);
+    size_t position = 0U;
+    tinypy_bool_t separator = TINYPY_FALSE;
+    size_t index;
+
+    for (index = 0U; index < size; ++index) {
+        uint8_t character = name[index];
+
+        if (character >= (uint8_t)'A' && character <= (uint8_t)'Z') {
+            character = (uint8_t)(character + ('a' - 'A'));
+        }
+        if ((character < (uint8_t)'0' || character > (uint8_t)'9') && (character < (uint8_t)'a' || character > (uint8_t)'z') && character != (uint8_t)'.') {
+            separator = TINYPY_TRUE;
+            continue;
+        }
+        if (separator != 0 && position != 0U) {
+            if (position == expected_size || expected[position] != (uint8_t)'_') {
+                return TINYPY_FALSE;
+            }
+            position += 1U;
+        }
+        separator = TINYPY_FALSE;
+        if (character == (uint8_t)'.' && dots_as_underscores != 0) {
+            character = (uint8_t)'_';
+        }
+        if (position == expected_size || expected[position] != character) {
+            return TINYPY_FALSE;
+        }
+        position += 1U;
+    }
+    tinypy_bool_t result = position == expected_size ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The codec modules, in the order of the builtin codecs, then their
+   encodings aliases. */
+typedef struct tinypy_codecs_name_t {
+    size_t offset;
+    tinypy_internal_builtin_codec_e codec;
+} tinypy_codecs_name_t;
+//////////////////////////////////////////////////////////////////////////
+#define TINYPY_CODECS_NAME(FIELD, CODEC) {offsetof(tinypy_vm_t, FIELD), TINYPY_INTERNAL_BUILTIN_CODEC_##CODEC}
+static const tinypy_codecs_name_t __tinypy_codecs_builtin_names[] = {
+    TINYPY_CODECS_NAME(internal_codec_ascii_name, ASCII),
+    TINYPY_CODECS_NAME(internal_utf_8_key, UTF8),
+    TINYPY_CODECS_NAME(internal_latin_1_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_hex_codec_key, HEX),
+    TINYPY_CODECS_NAME(internal_codec_646_key, ASCII),
+    TINYPY_CODECS_NAME(internal_ansi_x3_dot_4_1968_key, ASCII),
+    TINYPY_CODECS_NAME(internal_ansi_x3_4_1968_key, ASCII),
+    TINYPY_CODECS_NAME(internal_ansi_x3_dot_4_1986_key, ASCII),
+    TINYPY_CODECS_NAME(internal_cp367_key, ASCII),
+    TINYPY_CODECS_NAME(internal_csascii_key, ASCII),
+    TINYPY_CODECS_NAME(internal_ibm367_key, ASCII),
+    TINYPY_CODECS_NAME(internal_iso646_us_key, ASCII),
+    TINYPY_CODECS_NAME(internal_iso_646_dot_irv_1991_key, ASCII),
+    TINYPY_CODECS_NAME(internal_iso_ir_6_key, ASCII),
+    TINYPY_CODECS_NAME(internal_us_key, ASCII),
+    TINYPY_CODECS_NAME(internal_us_ascii_key, ASCII),
+    TINYPY_CODECS_NAME(internal_u8_key, UTF8),
+    TINYPY_CODECS_NAME(internal_utf_key, UTF8),
+    TINYPY_CODECS_NAME(internal_codec_utf8_name, UTF8),
+    TINYPY_CODECS_NAME(internal_utf8_ucs2_key, UTF8),
+    TINYPY_CODECS_NAME(internal_utf8_ucs4_key, UTF8),
+    TINYPY_CODECS_NAME(internal_codec_8859_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_cp819_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_csisolatin1_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_ibm819_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_iso8859_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_iso8859_1_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_iso_8859_1_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_iso_8859_1_1987_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_iso_ir_100_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_l1_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_latin_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_latin1_key, LATIN1),
+    TINYPY_CODECS_NAME(internal_hex_key, HEX)
+};
+#undef TINYPY_CODECS_NAME
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_codecs_builtin_name(tinypy_vm_t *vm, size_t index) {
+    tinypy_value_t *name = *(tinypy_value_t **)((uint8_t *)vm + __tinypy_codecs_builtin_names[index].offset);
+
+    return name;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_codecs_module_name(tinypy_vm_t *vm, tinypy_internal_builtin_codec_e codec) {
+    tinypy_value_t *name = __tinypy_codecs_builtin_name(vm, (size_t)codec);
+
+    return name;
+}
+//////////////////////////////////////////////////////////////////////////
+/* encodings.search_function over the builtin codecs: the normalised name is
+   a codec module or an alias, or an alias once its dots read as
+   underscores. */
+tinypy_internal_builtin_codec_e tinypy_internal_codecs_builtin(tinypy_vm_t *vm, const tinypy_value_t *encoding) {
+    const size_t count = sizeof(__tinypy_codecs_builtin_names) / sizeof(__tinypy_codecs_builtin_names[0]);
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(encoding);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(encoding);
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        if (__tinypy_codecs_normalized_equal(bytes, size, __tinypy_codecs_builtin_name(vm, index), TINYPY_FALSE) != 0) {
+            return __tinypy_codecs_builtin_names[index].codec;
+        }
+    }
+    for (index = TINYPY_INTERNAL_BUILTIN_CODEC_NONE; index < count; ++index) {
+        if (__tinypy_codecs_normalized_equal(bytes, size, __tinypy_codecs_builtin_name(vm, index), TINYPY_TRUE) != 0) {
+            return __tinypy_codecs_builtin_names[index].codec;
+        }
+    }
+    return TINYPY_INTERNAL_BUILTIN_CODEC_NONE;
+}
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_codecs_normalize(tinypy_vm_t *vm, tinypy_value_t *name) {
     const uint8_t *source = TINYPY_TEXT_BYTES(name);
@@ -126,13 +246,25 @@ static tinypy_value_t *__tinypy_codecs_lookup(tinypy_value_t *function, tinypy_v
     cache = vm->codec_cache;
     tinypy_value_t *cached = tinypy_dict_get_optional(cache, normalized);
 
+    /* The encodings search function comes first and finds the builtin
+       codecs, cached under their module names. */
+    if (cached == NULL) {
+        tinypy_internal_builtin_codec_e builtin = tinypy_internal_codecs_builtin(vm, normalized);
+
+        if (builtin != TINYPY_INTERNAL_BUILTIN_CODEC_NONE) {
+            cached = tinypy_dict_get_optional(cache, __tinypy_codecs_module_name(vm, builtin));
+            tinypy_dict_set(cache, normalized, cached);
+        }
+    }
     if (cached != NULL) {
         TINYPY_INCREF(cached);
         TINYPY_DECREF(normalized);
         return cached;
     }
+    /* Search functions registered meanwhile wait for the next lookup. */
     search_path = vm->codec_search_path;
-    for (size_t index = 0U; index < TINYPY_LIST_SIZE(search_path); ++index) {
+    size_t search_count = TINYPY_LIST_SIZE(search_path);
+    for (size_t index = 0U; index < search_count; ++index) {
         tinypy_value_t *search = TINYPY_RET(TINYPY_LIST_GET(search_path, index));
         tinypy_value_t *search_args = tinypy_tuple_from_items(vm, &normalized, 1U);
         tinypy_value_t *result = tinypy_call(search, search_args, NULL, out_error);
@@ -207,7 +339,7 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     intptr_t operation = (intptr_t)user_data;
     tinypy_bool_t decode = (int32_t)(operation & (intptr_t)1);
-    tinypy_value_t *encoding = operation < (intptr_t)2 || operation == (intptr_t)7 ? vm->internal_utf_hyphen_8_key : (operation < (intptr_t)4 ? vm->internal_codec_ascii_name : vm->internal_codec_latin1_name);
+    tinypy_value_t *encoding = operation < (intptr_t)2 || operation == (intptr_t)7 ? vm->internal_utf_8_key : (operation < (intptr_t)4 ? vm->internal_codec_ascii_name : vm->internal_codec_latin1_name);
     size_t maximum = operation == (intptr_t)1 ? 3U : 2U;
     tinypy_value_t *errors = NULL;
     tinypy_value_t *converted;
@@ -534,7 +666,7 @@ static tinypy_value_t *__tinypy_codecs_register_error(tinypy_value_t *function, 
     tinypy_value_t *name = values[0];
     tinypy_value_t *handler = values[1];
     if (handler->type->call == NULL && tinypy_internal_object_has_special_key(handler, vm->internal_special_call_key) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "error handler must be callable", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "handler must be callable", out_error);
         return NULL;
     }
     tinypy_value_t *codecs_module_value = vm->codec_errors;
@@ -680,13 +812,14 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
     }
     first = mode == 1 || (mode == 2 && decode != 0) ? INT64_C(0) : payload->start;
     last = payload->end;
-    /* Match the clamped UnicodeError accessors, before sizing any output. */
+    /* Match the clamped UnicodeError accessors, before sizing any output:
+       the start of an empty object clamps to -1. */
     int64_t length = (int64_t)TINYPY_SIZED_SIZE(object);
     if (first < INT64_C(0)) {
         first = INT64_C(0);
     }
     if (first >= length) {
-        first = length > INT64_C(0) ? length - INT64_C(1) : INT64_C(0);
+        first = length - INT64_C(1);
     }
     if (last < INT64_C(1)) {
         last = INT64_C(1);
@@ -694,12 +827,14 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
     if (last > length) {
         last = length;
     }
-    if (last < first) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "invalid UnicodeError range", out_error);
+    /* An inverted range sizes the replace handler's output negative and
+       leaves the escaping handlers nothing to escape. */
+    if (last < first && mode == 2) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "codec replacement is too large", out_error);
         goto cleanup;
     }
     end = tinypy_integer_from_i64(vm, last);
-    size_t count = (size_t)(last - first);
+    size_t count = last > first ? (size_t)(last - first) : 0U;
     if (mode == 1) {
         replacement = tinypy_unicode_from_utf8(vm, NULL, 0U);
     }
@@ -793,17 +928,12 @@ static tinypy_value_t *__tinypy_codecs_add_function(tinypy_value_t *module, tiny
     return function;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_codecs_cache_builtin(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_value_t *encode, tinypy_value_t *decode, tinypy_value_t *const *aliases, size_t alias_count) {
-    (void)module;
+static void __tinypy_codecs_cache_builtin(tinypy_vm_t *vm, tinypy_internal_builtin_codec_e builtin, tinypy_value_t *encode, tinypy_value_t *decode) {
     tinypy_value_t *none = TINYPY_RET_NONE(vm);
     tinypy_value_t *items[4] = {encode, decode, none, none};
     tinypy_value_t *codec = tinypy_tuple_from_items(vm, items, 4U);
-    tinypy_value_t *cache = vm->codec_cache;
-    size_t index;
 
-    for (index = 0U; index != alias_count; ++index) {
-        tinypy_dict_set(cache, aliases[index], codec);
-    }
+    tinypy_dict_set(vm->codec_cache, __tinypy_codecs_module_name(vm, builtin), codec);
     TINYPY_DECREF(codec);
     TINYPY_DECREF(none);
 }
@@ -811,10 +941,6 @@ static void __tinypy_codecs_cache_builtin(tinypy_vm_t *vm, tinypy_value_t *modul
 void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm) {
     tinypy_value_t *const error_names[5] = {vm->internal_codec_strict_name, vm->internal_ignore_key, vm->internal_replace_key, vm->internal_xmlcharrefreplace_key, vm->internal_backslashreplace_key};
     tinypy_value_t *const function_names[5] = {vm->internal_strict_errors_key, vm->internal_ignore_errors_key, vm->internal_replace_errors_key, vm->internal_xmlcharrefreplace_errors_key, vm->internal_backslashreplace_errors_key};
-    tinypy_value_t *const utf8_aliases[] = {vm->internal_utf_hyphen_8_key, vm->internal_codec_utf8_name, vm->internal_utf_8_key, vm->internal_u8_key, vm->internal_utf_key};
-    tinypy_value_t *const ascii_aliases[] = {vm->internal_codec_ascii_name, vm->internal_codec_646_key, vm->internal_us_hyphen_ascii_key, vm->internal_iso646_hyphen_us_key, vm->internal_ansi_x3_dot_4_1968_key, vm->internal_ansi_hyphen_x3_dot_4_hyphen_1968_key};
-    tinypy_value_t *const latin1_aliases[] = {vm->internal_codec_latin1_name, vm->internal_latin1_key, vm->internal_latin_1_key, vm->internal_iso_hyphen_8859_hyphen_1_key, vm->internal_iso8859_hyphen_1_key, vm->internal_iso_8859_hyphen_1_key, vm->internal_cp819_key, vm->internal_l1_key};
-    tinypy_value_t *const hex_aliases[] = {vm->internal_hex_key, vm->internal_hex_hyphen_codec_key, vm->internal_hex_codec_key};
     tinypy_value_t *module = tinypy_module_new_key(vm->internal_codec_module_name);
     tinypy_value_t *name = TINYPY_RET(vm->internal_codec_module_name);
     tinypy_value_t *search_path = tinypy_list_from_items(vm, NULL, 0U);
@@ -835,16 +961,7 @@ void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm) {
     vm->codec_cache = cache;
     vm->codec_errors = errors;
     TINYPY_INCREF(module);
-    TINYPY_INCREF(search_path);
-    TINYPY_INCREF(cache);
-    TINYPY_INCREF(errors);
     tinypy_module_add_value_key(module, vm->internal_special_name_key, name);
-    tinypy_module_add_value_key(module, vm->internal_codec_search_path_key, search_path);
-    tinypy_module_add_value_key(module, vm->internal_codec_cache_key, cache);
-    tinypy_module_add_value_key(module, vm->internal_codec_errors_key, errors);
-    TINYPY_DECREF(errors);
-    TINYPY_DECREF(cache);
-    TINYPY_DECREF(search_path);
     TINYPY_DECREF(name);
 
     tinypy_value_t *function = __tinypy_codecs_add_function(module, vm->internal_register_key, __tinypy_codecs_register, module);
@@ -880,10 +997,10 @@ void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm) {
     hex_encode = tinypy_native_function_new_key(vm->internal_hex_encode_key, __tinypy_codecs_hex, (void *)(intptr_t)0, NULL);
     hex_decode = tinypy_native_function_new_key(vm->internal_hex_decode_key, __tinypy_codecs_hex, (void *)(intptr_t)1, NULL);
 
-    __tinypy_codecs_cache_builtin(vm, module, utf8_encode, utf8_decode, utf8_aliases, sizeof(utf8_aliases) / sizeof(utf8_aliases[0]));
-    __tinypy_codecs_cache_builtin(vm, module, ascii_encode, ascii_decode, ascii_aliases, sizeof(ascii_aliases) / sizeof(ascii_aliases[0]));
-    __tinypy_codecs_cache_builtin(vm, module, latin1_encode, latin1_decode, latin1_aliases, sizeof(latin1_aliases) / sizeof(latin1_aliases[0]));
-    __tinypy_codecs_cache_builtin(vm, module, hex_encode, hex_decode, hex_aliases, sizeof(hex_aliases) / sizeof(hex_aliases[0]));
+    __tinypy_codecs_cache_builtin(vm, TINYPY_INTERNAL_BUILTIN_CODEC_UTF8, utf8_encode, utf8_decode);
+    __tinypy_codecs_cache_builtin(vm, TINYPY_INTERNAL_BUILTIN_CODEC_ASCII, ascii_encode, ascii_decode);
+    __tinypy_codecs_cache_builtin(vm, TINYPY_INTERNAL_BUILTIN_CODEC_LATIN1, latin1_encode, latin1_decode);
+    __tinypy_codecs_cache_builtin(vm, TINYPY_INTERNAL_BUILTIN_CODEC_HEX, hex_encode, hex_decode);
     TINYPY_DECREF(utf8_decode);
     TINYPY_DECREF(hex_decode);
     TINYPY_DECREF(hex_encode);

@@ -82,7 +82,21 @@ static tinypy_value_t *__tinypy_slice_field_method(tinypy_value_t *function, tin
     if (__tinypy_slice_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
         return NULL;
     }
-    tinypy_slice_object_t *slice = TINYPY_SLICE_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    /* The getter is reachable unbound through the property's fget. */
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(self) != TINYPY_VALUE_SLICE) {
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("descriptor '"),
+            TINYPY_MESSAGE_PART_TEXT(tinypy_native_function_name(function)),
+            TINYPY_MESSAGE_PART_LITERAL("' for 'slice' objects doesn't apply to '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(self),
+            TINYPY_MESSAGE_PART_LITERAL("' object")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    tinypy_slice_object_t *slice = TINYPY_SLICE_OBJECT(self);
     tinypy_value_t *result;
     switch ((intptr_t)user_data) {
     case 0:

@@ -161,7 +161,6 @@ void tinypy_internal_frame_save_handled(tinypy_vm_t *vm) {
         return;
     }
     frame->handled_state_saved = TINYPY_TRUE;
-    frame->handled_clear_epoch = vm->handled_clear_epoch;
     frame->previous_handled_type = vm->handled_type;
     frame->previous_handled_value = vm->handled_value;
     frame->previous_handled_traceback = vm->handled_traceback;
@@ -415,7 +414,6 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
         frame->locals = globals;
     }
     frame->trace = NULL;
-    frame->handled_clear_epoch = vm->handled_clear_epoch;
     frame->handled_state_saved = TINYPY_FALSE;
     frame->previous_handled_type = NULL;
     frame->previous_handled_value = NULL;

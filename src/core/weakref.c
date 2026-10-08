@@ -118,7 +118,10 @@ tinypy_value_t *tinypy_weakref_get(const tinypy_value_t *value) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_weakref_clear(tinypy_value_t *value) {
+/* PyObject_ClearWeakRefs calls the callbacks; references created by a
+   finalizer that did not resurrect the object are cleared without them, as
+   _PyWeakref_ClearRef does in subtype_dealloc and instance_dealloc. */
+void tinypy_internal_weakref_clear(tinypy_value_t *value, tinypy_bool_t call_callbacks) {
     tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(value);
 
     if (head_slot == NULL || *head_slot == NULL) {
@@ -140,7 +143,7 @@ void tinypy_internal_weakref_clear(tinypy_value_t *value) {
         tinypy_weakref_object_t *weakref = TINYPY_WEAKREF_OBJECT(current);
         tinypy_value_t *next = weakref->next;
 
-        if (weakref->callback != NULL) {
+        if (call_callbacks != 0 && weakref->callback != NULL) {
             tinypy_vm_t *vm = TINYPY_VALUE_VM(current);
             tinypy_internal_exception_state_t exception_state;
             tinypy_value_t *args = tinypy_tuple_from_items(vm, &current, 1U);
@@ -572,8 +575,11 @@ static tinypy_value_t *__tinypy_weakref_proxy_index(tinypy_value_t *proxy, tinyp
     static tinypy_value_t *__tinypy_weakref_proxy_##name(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) { \
         tinypy_vm_t *vm = TINYPY_VALUE_VM(left);                                                                                     \
         tinypy_value_t *left_object = __tinypy_weakref_proxy_referent(left, out_error);                                              \
+        if (left_object == NULL) {                                                                                                    \
+            return NULL;                                                                                                              \
+        }                                                                                                                             \
         tinypy_value_t *right_object = __tinypy_weakref_proxy_operand(vm, right, out_error);                                         \
-        tinypy_value_t *return_value_1 = left_object != NULL && right_object != NULL ? operation(left_object, right_object, out_error) : NULL; \
+        tinypy_value_t *return_value_1 = right_object != NULL ? operation(left_object, right_object, out_error) : NULL;              \
         return return_value_1;                                                                                                        \
     }
 
@@ -581,8 +587,11 @@ static tinypy_value_t *__tinypy_weakref_proxy_index(tinypy_value_t *proxy, tinyp
     static tinypy_value_t *__tinypy_weakref_proxy_reflected_##name(tinypy_value_t *right, tinypy_value_t *left, tinypy_error_t **out_error) { \
         tinypy_vm_t *vm = TINYPY_VALUE_VM(right);                                                                                     \
         tinypy_value_t *right_object = __tinypy_weakref_proxy_referent(right, out_error);                                            \
+        if (right_object == NULL) {                                                                                                   \
+            return NULL;                                                                                                              \
+        }                                                                                                                             \
         tinypy_value_t *left_object = __tinypy_weakref_proxy_operand(vm, left, out_error);                                           \
-        tinypy_value_t *return_value_1 = left_object != NULL && right_object != NULL ? operation(left_object, right_object, out_error) : NULL; \
+        tinypy_value_t *return_value_1 = left_object != NULL ? operation(left_object, right_object, out_error) : NULL;               \
         return return_value_1;                                                                                                        \
     }
 
@@ -613,9 +622,11 @@ TINYPY_WEAKREF_PROXY_REFLECTED(divide, tinypy_divide)
 static tinypy_value_t *__tinypy_weakref_proxy_power(tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(base);
     tinypy_value_t *object = __tinypy_weakref_proxy_referent(base, out_error);
+    if (object == NULL) {
+        return NULL;
+    }
     tinypy_value_t *exponent_object = __tinypy_weakref_proxy_operand(vm, exponent, out_error);
-
-    if (object == NULL || exponent_object == NULL) {
+    if (exponent_object == NULL) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = modulus == NULL || TINYPY_VALUE_KIND(modulus) == TINYPY_VALUE_NONE
@@ -668,14 +679,17 @@ static tinypy_value_t *__tinypy_weakref_proxy_binary_method(tinypy_value_t *func
         return NULL;
     }
     tinypy_value_t *self_object = __tinypy_weakref_proxy_referent(TINYPY_TUPLE_GET(args, 0U), out_error);
+    if (self_object == NULL) {
+        return NULL;
+    }
     tinypy_value_t *argument_object = __tinypy_weakref_proxy_operand(vm, TINYPY_TUPLE_GET(args, 1U), out_error);
+    if (argument_object == NULL) {
+        return NULL;
+    }
     tinypy_bool_t reflected = operation >= TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *left = reflected != 0 ? argument_object : self_object;
     tinypy_value_t *right = reflected != 0 ? self_object : argument_object;
 
-    if (self_object == NULL || argument_object == NULL) {
-        return NULL;
-    }
     if (reflected != 0) {
         operation -= TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET;
     }
