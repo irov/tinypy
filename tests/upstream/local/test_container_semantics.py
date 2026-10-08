@@ -767,3 +767,243 @@ class ContainerSemantics(unittest.TestCase):
             with self.assertRaises(UnicodeEncodeError) as failure:
                 repr(container)
             self.assertEqual(failure.exception.args, ('ascii', u'\xe9', 0, 1, 'ordinal not in range(128)'))
+
+    def test_dispatch_overrides_follow_class_changes(self):
+        class Base(object):
+            pass
+        class Value(Base):
+            pass
+        class Other(object):
+            def __add__(self, other):
+                return 'other-add'
+            def __eq__(self, other):
+                return 'other-eq'
+        left = Value()
+        right = Value()
+        def outcomes():
+            operations = (
+                lambda: left + right,
+                lambda: 1 + left,
+                lambda: left == right,
+                lambda: type(left < right).__name__,
+                lambda: bool(left),
+                lambda: 1 in left,
+                lambda: left[3],
+                lambda: hash(left) == 7,
+            )
+            results = []
+            for operation in operations:
+                try:
+                    results.append(operation())
+                except TypeError as exception:
+                    results.append(type(exception).__name__)
+            return results
+        plain = outcomes()
+        self.assertEqual(plain, ['TypeError', 'TypeError', False, 'bool', True, 'TypeError', 'TypeError', False])
+        Base.__add__ = lambda self, other: 'add'
+        Base.__radd__ = lambda self, other: 'radd'
+        Base.__eq__ = lambda self, other: 'eq'
+        Base.__lt__ = lambda self, other: 'lt'
+        Base.__nonzero__ = lambda self: False
+        Base.__contains__ = lambda self, item: True
+        Base.__getitem__ = lambda self, index: index * 2
+        Base.__hash__ = lambda self: 7
+        self.assertEqual(outcomes(), ['add', 'radd', 'eq', 'str', False, True, 6, True])
+        Value.__add__ = lambda self, other: 'value-add'
+        self.assertEqual(left + right, 'value-add')
+        del Value.__add__
+        self.assertEqual(left + right, 'add')
+        for name in ('__add__', '__radd__', '__eq__', '__lt__', '__nonzero__', '__contains__', '__getitem__', '__hash__'):
+            delattr(Base, name)
+        self.assertEqual(outcomes(), plain)
+        Value.__bases__ = (Other,)
+        self.assertEqual(left + right, 'other-add')
+        self.assertEqual(left == right, 'other-eq')
+        Value.__bases__ = (Base,)
+        self.assertEqual(outcomes(), plain)
+        left.__class__ = Other
+        self.assertEqual(left + right, 'other-add')
+        left.__class__ = Value
+        Base.__hash__ = None
+        self.assertRaises(TypeError, hash, left)
+
+    def test_inplace_and_reflected_dispatch_after_warming(self):
+        class Number(object):
+            def __init__(self, value):
+                self.value = value
+        number = Number(1)
+        for attempt in range(3):
+            self.assertRaises(TypeError, lambda: 2 * number)
+        def inplace():
+            target = number
+            target += 5
+            return target
+        self.assertRaises(TypeError, inplace)
+        Number.__rmul__ = lambda self, other: Number(self.value * other)
+        Number.__add__ = lambda self, other: Number(self.value + other)
+        self.assertEqual((2 * number).value, 2)
+        self.assertEqual(inplace().value, 6)
+        self.assertIsNot(inplace(), number)
+        Number.__iadd__ = lambda self, other: self
+        self.assertIs(inplace(), number)
+        del Number.__iadd__
+        self.assertIsNot(inplace(), number)
+
+    def test_special_methods_survive_removing_themselves(self):
+        class Fragile(object):
+            def __add__(self, other):
+                del Fragile.__add__
+                return 'add'
+            def __eq__(self, other):
+                del Fragile.__eq__
+                return 'eq'
+            def __getitem__(self, index):
+                del Fragile.__getitem__
+                return index
+            def __len__(self):
+                del Fragile.__len__
+                return 0
+            def __hash__(self):
+                del Fragile.__hash__
+                return 11
+            def next(self):
+                del Fragile.next
+                return 'next'
+        value = Fragile()
+        self.assertEqual(value + 1, 'add')
+        self.assertRaises(TypeError, lambda: value + 1)
+        self.assertEqual(value == 1, 'eq')
+        self.assertEqual(value == 1, False)
+        self.assertEqual(value[4], 4)
+        self.assertRaises(TypeError, lambda: value[4])
+        self.assertEqual(bool(value), False)
+        self.assertEqual(bool(value), True)
+        self.assertEqual(hash(value), 11)
+        self.assertEqual(hash(value) == 11, False)
+        self.assertEqual(next(value), 'next')
+        self.assertRaises(TypeError, next, value)
+
+    def test_dict_item_pairs_stay_independent(self):
+        values = dict((index, str(index)) for index in range(40))
+        pairs = list(values.iteritems())
+        self.assertEqual(sorted(pairs), sorted(values.items()))
+        self.assertEqual(len(set(pairs)), 40)
+        iterator = values.iteritems()
+        held = next(iterator)
+        snapshot = tuple(held)
+        later = [pair for pair in iterator]
+        self.assertEqual(held, snapshot)
+        self.assertEqual(sorted(later + [held]), sorted(values.items()))
+        total = 0
+        for key, value in values.iteritems():
+            total += key + len(value)
+            values[key] = value + '!'
+        self.assertEqual(total, sum(range(40)) + sum(len(str(index)) for index in range(40)))
+        self.assertEqual(sorted(values.values())[:2], ['0!', '1!'])
+        seen = []
+        for pair in values.viewitems():
+            seen.append(pair)
+        self.assertEqual(sorted(seen), sorted(values.items()))
+        iterator = values.iteritems()
+        next(iterator)
+        values[100] = 'x'
+        self.assertRaises(RuntimeError, next, iterator)
+
+    def test_exact_operand_arithmetic_matches_slots(self):
+        import sys
+        smallest = -sys.maxint - 1
+        cases = []
+        for left in (7, -7, 0, smallest):
+            for right in (3, -3, 1, -1):
+                cases.append((left % right, left // right, left / right, divmod(left, right)))
+        self.assertEqual(repr(smallest // -1), repr(sys.maxint + 1))
+        self.assertEqual(repr(smallest % -1), '0L')
+        self.assertEqual(repr(smallest / -1), repr(sys.maxint + 1))
+        self.assertEqual(cases[:12], [(1, 2, 2, (2, 1)), (-2, -3, -3, (-3, -2)), (0, 7, 7, (7, 0)), (0, -7, -7, (-7, 0)), (2, -3, -3, (-3, 2)), (-1, 2, 2, (2, -1)), (0, -7, -7, (-7, 0)), (0, 7, 7, (7, 0))] + [(0, 0, 0, (0, 0))] * 4)
+        self.assertEqual(repr(cases[15]), repr((smallest % -1, smallest // -1, smallest / -1, divmod(smallest, -1))))
+        for operation, message in ((lambda: 5 % 0, 'integer division or modulo by zero'), (lambda: 5 // 0, 'integer division or modulo by zero'), (lambda: 5.0 % 0.0, 'float modulo'), (lambda: 5.0 // 0.0, 'float divmod()')):
+            try:
+                operation()
+            except ZeroDivisionError as exception:
+                self.assertEqual(str(exception), message)
+            else:
+                self.fail('no ZeroDivisionError')
+        floats = []
+        for left in (5.5, -5.5, 0.0, -0.0, 1e300):
+            for right in (2.0, -2.0, 1e-300, float('inf'), float('-inf')):
+                floats.append(repr((left % right, left // right)))
+        self.assertEqual(floats, [
+            '(1.5, 2.0)', '(-0.5, -3.0)', '(9.297525904218413e-301, 5.5e+300)', '(5.5, 0.0)', '(-inf, -1.0)',
+            '(0.5, -3.0)', '(-1.5, 2.0)', '(7.02474095781587e-302, -5.5e+300)', '(inf, -1.0)', '(-5.5, 0.0)',
+            '(0.0, 0.0)', '(-0.0, -0.0)', '(0.0, 0.0)', '(0.0, 0.0)', '(-0.0, -0.0)',
+            '(0.0, -0.0)', '(-0.0, 0.0)', '(0.0, -0.0)', '(0.0, -0.0)', '(-0.0, 0.0)',
+            '(0.0, 5e+299)', '(-0.0, -5e+299)', '(4.891554850853602e-301, inf)', '(1e+300, 0.0)', '(-inf, -1.0)'])
+        self.assertEqual(repr(float('nan') % 2.0), 'nan')
+        self.assertEqual(repr([True + True, 2L % 3, (1 + 2j) * 2, True << 3, 5L // 2, 3 + 2L, 7 % True, 2 ** 10, 2.0 ** 0.5]), repr([2, 2L, (2 + 4j), 8, 2L, 5L, 0, 1024, 1.4142135623730951]))
+        self.assertRaises(TypeError, lambda: 1.5 << 2)
+        self.assertRaises(TypeError, lambda: 1j << 2)
+        class Modulo(int):
+            def __mod__(self, other):
+                return 'mod'
+            def __rfloordiv__(self, other):
+                return 'rfloordiv'
+        self.assertEqual(Modulo(5) % 3, 'mod')
+        self.assertEqual(5 // Modulo(3), 'rfloordiv')
+        self.assertEqual(5 % Modulo(3), 2)
+
+    def test_exact_operand_concatenation_and_formatting(self):
+        left = [1, 2]
+        right = [3]
+        joined = left + right
+        self.assertEqual((joined, left, right), ([1, 2, 3], [1, 2], [3]))
+        self.assertEqual(left + left, [1, 2, 1, 2])
+        self.assertEqual([] + [], [])
+        alias = left
+        alias += right
+        self.assertIs(alias, left)
+        self.assertEqual(left, [1, 2, 3])
+        pair = (1, 2)
+        grown = pair
+        grown += (3,)
+        self.assertEqual((pair, grown), ((1, 2), (1, 2, 3)))
+        self.assertEqual('ab' + u'cd', u'abcd')
+        self.assertEqual(type('ab' + 'cd'), str)
+        self.assertEqual(u'\xe9' + 'x', u'\xe9x')
+        self.assertRaises(UnicodeDecodeError, lambda: u'x' + '\xe9')
+        text = 'a'
+        text += 'b'
+        self.assertEqual(text, 'ab')
+        self.assertEqual('%s-%d' % ('x', 3), 'x-3')
+        self.assertEqual('%s' % u'\xe9', u'\xe9')
+        self.assertEqual(u'%s' % 'x', u'x')
+        self.assertEqual('%(a)s' % {'a': 1}, '1')
+        self.assertEqual('%s' % [1], '[1]')
+        self.assertRaises(TypeError, lambda: '%d' % 'x')
+        values = range(10)
+        self.assertEqual((values[2:5], values[5:2], values[:0], values[::3], [][0:0], values[-3:]), ([2, 3, 4], [], [], [0, 3, 6, 9], [], [7, 8, 9]))
+        class Text(str):
+            def __add__(self, other):
+                return 'text-add'
+            def __mod__(self, other):
+                return 'text-mod'
+        self.assertEqual(Text('a') + 'b', 'text-add')
+        self.assertEqual(Text('a') % 'b', 'text-mod')
+
+    def test_exact_scalar_comparisons_match_rich_compare(self):
+        import sys
+        nan = float('nan')
+        self.assertEqual([nan < 1.0, nan > 1.0, nan <= nan, nan >= nan, nan == nan, nan != nan], [False, False, False, False, False, True])
+        self.assertEqual([nan == nan, [nan] == [nan], nan in [nan], (nan,) < (nan, 1)], [False, True, True, True])
+        self.assertEqual(sorted([0.0, -0.0, -1.5, 2.5]), [-1.5, 0.0, -0.0, 2.5])
+        self.assertEqual(sorted([-0.0, 0.0]), [-0.0, 0.0])
+        self.assertEqual(sorted(['b', 'a\x00', 'a', '\xff', 'ab', '']), ['', 'a', 'a\x00', 'ab', 'b', '\xff'])
+        self.assertEqual(['abc' < 'abd', 'abc' < 'ab', 'ab' <= 'ab', 'b' > 'abc', 'x' != 'x', 'x' == 'x'], [True, False, True, True, False, True])
+        smallest = -sys.maxint - 1
+        self.assertEqual([smallest < sys.maxint, smallest == smallest, sys.maxint >= sys.maxint, cmp(smallest, sys.maxint), cmp(3, 3), cmp(4, 3)], [True, True, True, -1, 0, 1])
+        self.assertEqual(sorted([3, -2, sys.maxint, smallest, 0]), [smallest, -2, 0, 3, sys.maxint])
+        self.assertEqual(sorted([(2, 'b'), (1, 'z'), (2, 'a')]), [(1, 'z'), (2, 'a'), (2, 'b')])
+        self.assertEqual(sorted(range(10), key=lambda value: value % 3), [0, 3, 6, 9, 1, 4, 7, 2, 5, 8])
+        self.assertEqual(sorted(['b', 'A', 'a'], key=str.lower), ['A', 'a', 'b'])
+        mixed = [1 < 1.5, 2 == 2.0, 2 != 2.0, -0.0 == 0, 3 > nan, 3 != nan, 2 ** 53 + 1 == float(2 ** 53 + 1), sys.maxint < float(sys.maxint), float('inf') > sys.maxint, -float('inf') < smallest, 0.5 <= 0, 7 >= 6.999]
+        self.assertEqual(mixed, [True, True, False, True, False, True, False, True, True, True, False, True])
+        self.assertEqual(repr(sorted([3, 1.5, -2, 2.0, 0, -0.0, 2])), '[-2, 0, -0.0, 1.5, 2.0, 2, 3]')

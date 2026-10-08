@@ -110,6 +110,9 @@ void tinypy_internal_iterator_release_references(tinypy_value_t *value, tinypy_r
     if (iterator->sentinel != NULL) {
         visit(iterator->sentinel, user_data);
     }
+    if (iterator->result != NULL) {
+        visit(iterator->result, user_data);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_iterator_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -195,6 +198,35 @@ static tinypy_value_t *__tinypy_internal_iterator_next_bytearray(tinypy_iterator
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The (key, value) pair of a dict item iterator. The pair it returned first
+   is refilled while only the iterator holds it; the displaced items are
+   released once the pair is consistent again. */
+static tinypy_value_t *__tinypy_internal_iterator_dict_item(tinypy_iterator_object_t *iterator, tinypy_value_t *key, tinypy_value_t *value) {
+    tinypy_value_t *pair = iterator->result;
+
+    if (pair == NULL || TINYPY_REFCNT(pair) != 1) {
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator->iterable);
+        tinypy_value_t *items[2] = {key, value};
+        tinypy_value_t *fresh = tinypy_tuple_from_items(vm, items, 2U);
+
+        if (pair == NULL) {
+            iterator->result = TINYPY_RET(fresh);
+        }
+        return fresh;
+    }
+    tinypy_value_t *previous_key = TINYPY_TUPLE_GET(pair, 0U);
+    tinypy_value_t *previous_value = TINYPY_TUPLE_GET(pair, 1U);
+
+    TINYPY_INCREF(key);
+    TINYPY_INCREF(value);
+    TINYPY_TUPLE_GET(pair, 0U) = key;
+    TINYPY_TUPLE_GET(pair, 1U) = value;
+    TINYPY_INCREF(pair);
+    TINYPY_DECREF(previous_key);
+    TINYPY_DECREF(previous_value);
+    return pair;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_iterator_next_dict(tinypy_iterator_object_t *iterator, tinypy_error_t **out_error) {
     tinypy_dict_object_t *dict = TINYPY_DICT_OBJECT(iterator->iterable);
 
@@ -209,18 +241,13 @@ static tinypy_value_t *__tinypy_internal_iterator_next_dict(tinypy_iterator_obje
 
         iterator->table_position += 1U;
         if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
-            tinypy_value_t *items[2];
-
             iterator->index += 1U;
             if (iterator->mode == INT32_C(1)) {
                 return TINYPY_RET(entry->value);
             }
             if (iterator->mode == INT32_C(2)) {
-                items[0] = entry->key;
-                items[1] = entry->value;
-                tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator->iterable);
-                tinypy_value_t *return_value_1 = tinypy_tuple_from_items(vm, items, 2U);
-                return return_value_1;
+                tinypy_value_t *pair = __tinypy_internal_iterator_dict_item(iterator, entry->key, entry->value);
+                return pair;
             }
             return TINYPY_RET(entry->key);
         }
@@ -621,7 +648,7 @@ tinypy_bool_t tinypy_internal_length_hint(tinypy_value_t *value, int64_t default
     tinypy_length_slot_t length_slot;
     int64_t length;
 
-    if (tinypy_internal_object_has_special_override_key(value, vm->internal_special_length_key) != 0) {
+    if (__tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) != 0) {
         result = __tinypy_length_hint_call(value, vm->internal_special_length_key, NULL, out_error);
         if (result == NULL) {
             if (__tinypy_length_hint_consume_fallback_error(vm, out_error) == 0) {
@@ -731,7 +758,7 @@ tinypy_value_t *tinypy_internal_iterator_length_hint_method(tinypy_value_t *func
         int64_t length = 0;
         tinypy_bool_t valid = TINYPY_FALSE;
 
-        if (tinypy_internal_object_has_special_override_key(source, vm->internal_special_length_key) != TINYPY_FALSE || length_slot == NULL) {
+        if (__tinypy_internal_object_overrides_dispatch(source, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) != TINYPY_FALSE || length_slot == NULL) {
             if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_key(source, vm->internal_special_length_key) != TINYPY_FALSE) {
                 tinypy_value_t *result = __tinypy_length_hint_call(source, vm->internal_special_length_key, NULL, out_error);
 
@@ -1382,7 +1409,7 @@ static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispat
     tinypy_value_type_e kind;
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_override_key(value, vm->internal_special_iter_key) != 0) {
+    if (dispatch_special != 0 && __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(ITER)) != 0) {
         tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_iter_key, out_error);
         tinypy_value_t *args;
         tinypy_value_t *result;
@@ -1488,8 +1515,13 @@ tinypy_value_t *tinypy_internal_next_raw(tinypy_value_t *iterator, tinypy_error_
     TINYPY_CLEAR_ERROR(out_error);
     if (iterator->type->next == NULL) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator);
+        tinypy_value_t *function = tinypy_internal_type_function_key(iterator, vm->internal_special_next_key);
         tinypy_value_t *method = NULL;
 
+        if (function != NULL) {
+            tinypy_value_t *direct = tinypy_internal_call_type_function(function, iterator, NULL, 0U, out_error);
+            return direct;
+        }
         if (TINYPY_VALUE_KIND(iterator) == TINYPY_VALUE_OLD_INSTANCE) {
             int32_t status = tinypy_internal_object_get_optional_attr_key(iterator, vm->internal_special_next_key, &method, out_error);
 

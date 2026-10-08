@@ -51,3 +51,26 @@ foreach(fragment IN LISTS syntax_fragments)
         message(FATAL_ERROR "syntax error output is missing '${fragment}':\n${syntax_stderr}")
     endif()
 endforeach()
+
+set(rendering_source [=[class Failure(Exception):
+    def __str__(self):
+        calls.append(1)
+        return 'calls=%d' % len(calls)
+calls = []
+def fail():
+    raise Failure()
+try:
+    fail()
+finally:
+    pass]=])
+
+execute_process(COMMAND "${TINYPY_EXECUTABLE}" -c "${rendering_source}" RESULT_VARIABLE rendering_result OUTPUT_VARIABLE rendering_stdout ERROR_VARIABLE rendering_stderr)
+
+if(rendering_result EQUAL 0)
+    message(FATAL_ERROR "rendering error command unexpectedly succeeded")
+endif()
+
+string(FIND "${rendering_stderr}" "Failure: calls=1" rendering_position)
+if(rendering_position EQUAL -1)
+    message(FATAL_ERROR "an uncaught exception message is not rendered once, when it is reported:\n${rendering_stderr}")
+endif()

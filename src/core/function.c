@@ -107,7 +107,7 @@ static tinypy_value_t *__tinypy_call(tinypy_value_t *callable, tinypy_value_t *a
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, 2U, out_error);
         return NULL;
     }
-    if ((callable->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override_key(callable, vm->internal_special_call_key) != 0) {
+    if ((callable->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && __tinypy_internal_object_overrides_dispatch(callable, TINYPY_INTERNAL_DISPATCH_BIT(CALL)) != 0) {
         tinypy_value_t *method = tinypy_internal_object_get_special_key(callable, vm->internal_special_call_key, out_error);
         tinypy_value_t *result;
 
@@ -154,12 +154,11 @@ static tinypy_value_t *__tinypy_call(tinypy_value_t *callable, tinypy_value_t *a
 tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
 
-    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded while calling a Python object", out_error) == 0) {
+    if (__tinypy_internal_call_enter(vm, out_error) == 0) {
         return NULL;
     }
-    vm->evaluation_depth += 1U;
     tinypy_value_t *result = __tinypy_call(callable, args, kwargs, out_error);
-    vm->evaluation_depth -= 1U;
+    __tinypy_internal_call_leave(vm);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

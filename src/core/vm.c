@@ -1785,7 +1785,11 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     tinypy_shutdown_graph_t graph;
     size_t type_index;
 
+    /* Diagnostics the host still holds render while native payloads are
+       intact; ones raised by native finalizers render before teardown. */
+    tinypy_internal_error_render_pending(vm);
     __tinypy_shutdown_finalize_natives(vm);
+    tinypy_internal_error_render_pending(vm);
     vm->state = TINYPY_VM_STATE_DESTROYING;
     tinypy_internal_intern_finalize(vm);
     tinypy_internal_type_lookup_cache_finalize(vm);
@@ -1793,6 +1797,7 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     tinypy_internal_frame_free_list_finalize(vm);
     tinypy_internal_method_free_list_finalize(vm);
     tinypy_internal_native_method_free_list_finalize(vm);
+    tinypy_internal_native_argument_cache_finalize(vm);
     (void)memset(&graph, 0, sizeof(graph));
     graph.vm = vm;
     __tinypy_shutdown_collect(&graph, TINYPY_TRUE);

@@ -370,6 +370,12 @@ static void __tinypy_item_unsupported(tinypy_value_t *container, tinypy_value_t 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_item_call_method(tinypy_value_t *container, tinypy_value_t *name, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    tinypy_value_t *function = item_count <= 2U ? tinypy_internal_type_function_key(container, name) : NULL;
+
+    if (function != NULL) {
+        tinypy_value_t *direct = tinypy_internal_call_type_function(function, container, items, item_count, out_error);
+        return direct;
+    }
     tinypy_value_t *method = tinypy_internal_object_get_special_key(container, name, out_error);
 
     if (method == NULL) {
@@ -421,6 +427,11 @@ static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, c
     if (tuple == 0 && tinypy_internal_list_reserve_checked(vm, result, indices->length, out_error) == 0) {
         TINYPY_DECREF(result);
         return NULL;
+    }
+    /* A contiguous list slice fits the reserved storage in one piece. */
+    if (tuple == 0 && indices->step == 1 && indices->length != 0U) {
+        tinypy_list_extend(result, TINYPY_LIST_OBJECT(container)->items + indices->start, indices->length);
+        return result;
     }
     for (index = 0U; index < indices->length; ++index) {
         size_t source_index = (size_t)(indices->start + (int64_t)index * indices->step);
@@ -735,7 +746,7 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     TINYPY_CLEAR_ERROR(out_error);
     /* instance_subscript fetches a classic __getitem__ like any attribute. */
-    if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(container, vm->internal_special_getitem_key) != 0)) {
+    if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || __tinypy_internal_object_overrides_dispatch(container, TINYPY_INTERNAL_DISPATCH_BIT(GETITEM)) != 0)) {
         tinypy_value_t *return_value_1 = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &key, 1U, out_error);
         return return_value_1;
     }
@@ -1033,7 +1044,7 @@ static tinypy_bool_t __tinypy_set_item(tinypy_value_t *container, tinypy_value_t
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     TINYPY_CLEAR_ERROR(out_error);
-    if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(container, vm->internal_special_setitem_key) != 0)) {
+    if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || __tinypy_internal_object_overrides_dispatch(container, TINYPY_INTERNAL_DISPATCH_BIT(SETITEM)) != 0)) {
         tinypy_value_t *items[2] = {key, value};
         tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_setitem_key, items, 2U, out_error);
 
@@ -1101,7 +1112,7 @@ static tinypy_bool_t __tinypy_delete_item(tinypy_value_t *container, tinypy_valu
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     TINYPY_CLEAR_ERROR(out_error);
-    if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(container, vm->internal_special_delitem_key) != 0)) {
+    if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || __tinypy_internal_object_overrides_dispatch(container, TINYPY_INTERNAL_DISPATCH_BIT(DELITEM)) != 0)) {
         tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_delitem_key, &key, 1U, out_error);
 
         if (result == NULL) {

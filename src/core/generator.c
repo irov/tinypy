@@ -148,12 +148,11 @@ tinypy_bool_t tinypy_generator_close(tinypy_value_t *generator_value, tinypy_err
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* send(None) without a reference of its own: sending only borrows the value. */
 tinypy_value_t *tinypy_internal_generator_next(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *none = TINYPY_RET_NONE(vm);
-    tinypy_value_t *result = tinypy_generator_send(value, none, out_error);
+    tinypy_value_t *result = tinypy_generator_send(value, &vm->none_object.base, out_error);
 
-    TINYPY_DECREF(none);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

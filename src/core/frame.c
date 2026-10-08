@@ -73,47 +73,44 @@ static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, ti
     return builtins;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_value_t *code, size_t allocation_size, size_t local_slot_count) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
-    tinypy_frame_object_t *previous = NULL;
-    tinypy_frame_object_t *frame;
+static size_t __tinypy_internal_frame_allocation_size(const tinypy_frame_object_t *frame) {
+    size_t allocation_size = offsetof(tinypy_frame_object_t, locals_plus) + TINYPY_SIZED_SIZE(&frame->base) * sizeof(tinypy_value_t *);
+    return allocation_size;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_frame_free_list_drop(tinypy_vm_t *vm) {
+    tinypy_frame_object_t *frame = vm->frame_free_list;
+    size_t allocation_size = __tinypy_internal_frame_allocation_size(frame);
 
-    if (TINYPY_CODE_OBJECT(code)->cached_frame != NULL) {
-        frame = TINYPY_FRAME_OBJECT(TINYPY_CODE_OBJECT(code)->cached_frame);
-        TINYPY_CODE_OBJECT(code)->cached_frame = NULL;
+    vm->frame_free_list = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
+    vm->frame_free_count -= 1U;
+    vm->types[TINYPY_VALUE_FRAME].base.base.ref -= 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    __tinypy_internal_cycle_diagnostics_value_unregister(vm, &frame->base.base);
+#endif
+    tinypy_internal_vm_deallocate(vm, frame, allocation_size);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The free list is a stack: its top is reused when it has the size, and is
+   released otherwise, so the list follows the sizes in use without a scan. */
+static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_vm_t *vm, size_t allocation_size, size_t local_slot_count) {
+    tinypy_frame_object_t *frame = vm->frame_free_list;
+
+    if (frame != NULL && __tinypy_internal_frame_allocation_size(frame) == allocation_size) {
+        vm->frame_free_list = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
+        vm->frame_free_count -= 1U;
         frame->base.base.ref = 1;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_value_reuse(vm, &frame->base.base);
 #endif
+        if (local_slot_count != 0U) {
+            (void)memset(frame->locals_plus, 0, local_slot_count * sizeof(*frame->locals_plus));
+        }
         return frame;
     }
-    frame = vm->frame_free_list;
-
-    while (frame != NULL) {
-        tinypy_frame_object_t *next = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
-        size_t cached_size = offsetof(tinypy_frame_object_t, locals_plus) + TINYPY_SIZED_SIZE(&frame->base) * sizeof(tinypy_value_t *);
-
-        if (cached_size == allocation_size) {
-            if (previous != NULL) {
-                previous->back = frame->back;
-            }
-            else {
-                vm->frame_free_list = next;
-            }
-            vm->frame_free_count -= 1U;
-            frame->base.base.ref = 1;
-#if defined(TINYPY_CYCLE_DIAGNOSTICS)
-            __tinypy_internal_cycle_diagnostics_value_reuse(vm, &frame->base.base);
-#endif
-            if (local_slot_count != 0U) {
-                (void)memset(frame->locals_plus, 0, local_slot_count * sizeof(*frame->locals_plus));
-            }
-            return frame;
-        }
-        previous = frame;
-        frame = next;
+    if (frame != NULL) {
+        __tinypy_internal_frame_free_list_drop(vm);
     }
-
     frame = (tinypy_frame_object_t *)tinypy_internal_vm_allocate_checked(vm, allocation_size, NULL);
     if (frame == NULL) {
         return NULL;
@@ -141,16 +138,7 @@ void tinypy_internal_frame_free_list_push(tinypy_vm_t *vm, tinypy_value_t *value
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_frame_free_list_finalize(tinypy_vm_t *vm) {
     while (vm->frame_free_list != NULL) {
-        tinypy_frame_object_t *frame = vm->frame_free_list;
-        size_t allocation_size = offsetof(tinypy_frame_object_t, locals_plus) + TINYPY_SIZED_SIZE(&frame->base) * sizeof(tinypy_value_t *);
-
-        vm->frame_free_list = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
-        vm->frame_free_count -= 1U;
-        vm->types[TINYPY_VALUE_FRAME].base.base.ref -= 1;
-#if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        __tinypy_internal_cycle_diagnostics_value_unregister(vm, &frame->base.base);
-#endif
-        tinypy_internal_vm_deallocate(vm, frame, allocation_size);
+        __tinypy_internal_frame_free_list_drop(vm);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -178,23 +166,16 @@ void tinypy_internal_frame_save_handled(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* The frame keeps its code alive until the other references are gone, so a
+   code object still held elsewhere can take the frame for its next call. */
 void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&frame->base.base);
 
-    tinypy_value_t *code = frame->code;
-    tinypy_bool_t cache_code = code->ref > 1U && TINYPY_CODE_OBJECT(code)->cached_frame == NULL
-        && TINYPY_SIZED_SIZE(&frame->base) <= 1024U ? TINYPY_TRUE : TINYPY_FALSE;
-
-    if (cache_code != 0) {
-        TINYPY_INCREF(code);
-    }
     frame->base.base.ref = 0;
     if (frame->back != NULL) {
         TINYPY_DECREF(frame->back);
         frame->back = NULL;
     }
-    TINYPY_DECREF(frame->code);
-    frame->code = NULL;
     TINYPY_DECREF(frame->builtins);
     frame->builtins = NULL;
     TINYPY_DECREF(frame->globals);
@@ -207,14 +188,14 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
         TINYPY_DECREF(frame->trace);
         frame->trace = NULL;
     }
-    if (cache_code != 0 && TINYPY_CODE_OBJECT(code)->cached_frame == NULL) {
+    tinypy_value_t *code = frame->code;
+    frame->code = NULL;
+    if (code->ref > 1U && TINYPY_CODE_OBJECT(code)->cached_frame == NULL && TINYPY_SIZED_SIZE(&frame->base) <= 1024U) {
         TINYPY_CODE_OBJECT(code)->cached_frame = &frame->base.base;
-        TINYPY_DECREF(code);
+        code->ref -= 1U;
         return;
     }
-    if (cache_code != 0) {
-        TINYPY_DECREF(code);
-    }
+    TINYPY_DECREF(code);
     if (vm->frame_free_count < TINYPY_FRAME_FREE_LIST_MAX) {
         tinypy_internal_frame_free_list_push(vm, &frame->base.base);
     }
@@ -355,45 +336,57 @@ tinypy_value_t *tinypy_internal_frame_locals(tinypy_frame_object_t *frame) {
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, int32_t function_frame) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
-    size_t local_count;
-    size_t cell_count;
-    size_t free_count;
-    size_t stack_size;
-    size_t extras;
-    size_t allocation_size;
     int32_t owns_locals = 0;
 
-    if (TINYPY_CODE_LOCAL_COUNT(code) < 0 || TINYPY_CODE_STACK_SIZE(code) < 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "negative code object frame size", NULL);
-        return NULL;
+    /* The frame a code object kept from its previous call already has the
+       code's layout, cleared slots and an empty stack. */
+    tinypy_frame_object_t *frame = TINYPY_CODE_OBJECT(code)->cached_frame != NULL ? TINYPY_FRAME_OBJECT(TINYPY_CODE_OBJECT(code)->cached_frame) : NULL;
+    tinypy_value_t *builtins;
+    if (frame != NULL) {
+        builtins = __tinypy_internal_frame_make_builtins(vm, globals, function_frame);
+        if (builtins == NULL) {
+            return NULL;
+        }
+        TINYPY_CODE_OBJECT(code)->cached_frame = NULL;
+        frame->base.base.ref = 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_value_reuse(vm, &frame->base.base);
+#endif
     }
-    local_count = (size_t)TINYPY_CODE_LOCAL_COUNT(code);
-    tinypy_value_t *cellvars = TINYPY_CODE_CELLVARS(code);
-    cell_count = TINYPY_TUPLE_SIZE(cellvars);
-    tinypy_value_t *freevars = TINYPY_CODE_FREEVARS(code);
-    free_count = TINYPY_TUPLE_SIZE(freevars);
-    stack_size = (size_t)TINYPY_CODE_STACK_SIZE(code);
-    if (cell_count > SIZE_MAX - local_count || free_count > SIZE_MAX - local_count - cell_count
-        || stack_size > SIZE_MAX - local_count - cell_count - free_count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "frame is too large", NULL);
-        return NULL;
+    else {
+        if (TINYPY_CODE_LOCAL_COUNT(code) < 0 || TINYPY_CODE_STACK_SIZE(code) < 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "negative code object frame size", NULL);
+            return NULL;
+        }
+        size_t local_count = (size_t)TINYPY_CODE_LOCAL_COUNT(code);
+        tinypy_value_t *cellvars = TINYPY_CODE_CELLVARS(code);
+        size_t cell_count = TINYPY_TUPLE_SIZE(cellvars);
+        tinypy_value_t *freevars = TINYPY_CODE_FREEVARS(code);
+        size_t free_count = TINYPY_TUPLE_SIZE(freevars);
+        size_t stack_size = (size_t)TINYPY_CODE_STACK_SIZE(code);
+        if (cell_count > SIZE_MAX - local_count || free_count > SIZE_MAX - local_count - cell_count
+            || stack_size > SIZE_MAX - local_count - cell_count - free_count) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "frame is too large", NULL);
+            return NULL;
+        }
+        size_t extras = local_count + cell_count + free_count + stack_size;
+        if (extras > (SIZE_MAX - offsetof(tinypy_frame_object_t, locals_plus)) / sizeof(tinypy_value_t *)) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "frame is too large", NULL);
+            return NULL;
+        }
+        size_t allocation_size = offsetof(tinypy_frame_object_t, locals_plus) + extras * sizeof(tinypy_value_t *);
+        builtins = __tinypy_internal_frame_make_builtins(vm, globals, function_frame);
+        if (builtins == NULL) {
+            return NULL;
+        }
+        frame = __tinypy_internal_frame_allocate(vm, allocation_size, local_count + cell_count + free_count);
+        if (frame == NULL) {
+            TINYPY_DECREF(builtins);
+            return NULL;
+        }
+        TINYPY_SIZED_SIZE(&frame->base) = extras;
+        frame->value_stack = frame->locals_plus + local_count + cell_count + free_count;
     }
-    extras = local_count + cell_count + free_count + stack_size;
-    if (extras > (SIZE_MAX - offsetof(tinypy_frame_object_t, locals_plus)) / sizeof(tinypy_value_t *)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "frame is too large", NULL);
-        return NULL;
-    }
-    allocation_size = offsetof(tinypy_frame_object_t, locals_plus) + extras * sizeof(tinypy_value_t *);
-    tinypy_value_t *builtins = __tinypy_internal_frame_make_builtins(vm, globals, function_frame);
-    if (builtins == NULL) {
-        return NULL;
-    }
-    tinypy_frame_object_t *frame = __tinypy_internal_frame_allocate(code, allocation_size, local_count + cell_count + free_count);
-    if (frame == NULL) {
-        TINYPY_DECREF(builtins);
-        return NULL;
-    }
-    TINYPY_SIZED_SIZE(&frame->base) = extras;
     frame->back = vm->current_frame != NULL ? &vm->current_frame->base.base : NULL;
     frame->code = code;
     frame->builtins = builtins;
@@ -418,7 +411,6 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
     frame->previous_handled_type = NULL;
     frame->previous_handled_value = NULL;
     frame->previous_handled_traceback = NULL;
-    frame->value_stack = frame->locals_plus + local_count + cell_count + free_count;
     frame->stack_top = frame->value_stack;
     frame->last_instruction = -1;
 #if defined(TINYPY_DEBUGGER)

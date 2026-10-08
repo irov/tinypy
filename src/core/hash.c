@@ -348,31 +348,38 @@ static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinyp
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *mutable_value = (tinypy_value_t *)value;
 
-    if (overrides_only != 0 && tinypy_internal_object_has_special_override_key(mutable_value, vm->internal_special_hash_key) == 0) {
+    if (overrides_only != 0 && __tinypy_internal_object_overrides_dispatch(mutable_value, TINYPY_INTERNAL_DISPATCH_BIT(HASH)) == 0) {
         return INT32_C(0);
     }
-    tinypy_value_t *method;
-    int32_t found = tinypy_internal_object_lookup_special_key(mutable_value, vm->internal_special_hash_key, &method, out_error);
+    tinypy_value_t *function = tinypy_internal_type_function_key(mutable_value, vm->internal_special_hash_key);
+    tinypy_value_t *result;
 
-    if (found <= 0) {
-        return found;
+    if (function != NULL) {
+        result = tinypy_internal_call_type_function(function, mutable_value, NULL, 0U, out_error);
     }
-    if (TINYPY_VALUE_KIND(method) == TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE) {
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(mutable_value),
-            TINYPY_MESSAGE_PART_LITERAL("'"),
-        };
+    else {
+        tinypy_value_t *method;
+        int32_t found = tinypy_internal_object_lookup_special_key(mutable_value, vm->internal_special_hash_key, &method, out_error);
 
+        if (found <= 0) {
+            return found;
+        }
+        if (TINYPY_VALUE_KIND(method) == TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
+                TINYPY_MESSAGE_PART_TYPE_NAME(mutable_value),
+                TINYPY_MESSAGE_PART_LITERAL("'"),
+            };
+
+            TINYPY_DECREF(method);
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+            return INT32_C(-1);
+        }
+        tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
+        result = tinypy_call(method, empty, NULL, out_error);
+        TINYPY_DECREF(empty);
         TINYPY_DECREF(method);
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-        return INT32_C(-1);
     }
-    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
-    tinypy_value_t *result = tinypy_call(method, empty, NULL, out_error);
-
-    TINYPY_DECREF(empty);
-    TINYPY_DECREF(method);
     if (result == NULL) {
         return INT32_C(-1);
     }
@@ -635,6 +642,11 @@ static tinypy_bool_t __tinypy_internal_integer_equal(const tinypy_value_t *left,
     int32_t left_sign;
     int32_t right_sign;
 
+    if (TINYPY_VALUE_KIND(left) != TINYPY_VALUE_LONG && TINYPY_VALUE_KIND(right) != TINYPY_VALUE_LONG) {
+        tinypy_bool_t machine_equal = TINYPY_INTEGER_VALUE(left) == TINYPY_INTEGER_VALUE(right) ? TINYPY_TRUE : TINYPY_FALSE;
+
+        return machine_equal;
+    }
     left_count = __tinypy_internal_integer_digits(
         left, &left_sign, left_local, &left_digits);
     right_count = __tinypy_internal_integer_digits(
@@ -671,6 +683,12 @@ static int32_t __tinypy_internal_integer_order(const tinypy_value_t *left, const
     int32_t right_sign;
     int32_t magnitude_order;
 
+    if (TINYPY_VALUE_KIND(left) != TINYPY_VALUE_LONG && TINYPY_VALUE_KIND(right) != TINYPY_VALUE_LONG) {
+        int64_t left_integer = TINYPY_INTEGER_VALUE(left);
+        int64_t right_integer = TINYPY_INTEGER_VALUE(right);
+
+        return left_integer < right_integer ? -1 : (left_integer > right_integer ? 1 : 0);
+    }
     left_count = __tinypy_internal_integer_digits(left, &left_sign, left_local, &left_digits);
     right_count = __tinypy_internal_integer_digits(right, &right_sign, right_local, &right_digits);
     if (left_sign != right_sign) {

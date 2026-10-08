@@ -2044,6 +2044,83 @@ static int32_t __test_exception_state_lost_runtime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Runs source that raises and hands over the diagnostic it leaves. */
+static tinypy_error_t *__test_exception_diagnostic(tinypy_vm_t *vm, tinypy_value_t *globals, const char *source, size_t source_size) {
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *code = tinypy_compile_source(vm, source, source_size, "diagnostic.py", sizeof("diagnostic.py") - 1U, &options, &error);
+    if (code == NULL) {
+        return error;
+    }
+    tinypy_value_t *result = tinypy_eval_code(code, globals, NULL, &error);
+    if (result != NULL) {
+        tinypy_release(result);
+    }
+    tinypy_release(code);
+    tinypy_vm_clear_error(vm);
+    return error;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The message of a raised exception is rendered once, when it is first read,
+   and an unread one is rendered when the VM is destroyed. */
+static int32_t __test_exception_diagnostics(void) {
+    static const char define[] =
+        "calls = []\n"
+        "class Failure(Exception):\n"
+        "    def __str__(self):\n"
+        "        calls.append(1)\n"
+        "        return 'calls=%d' % len(calls)\n";
+    static const char raise_failure[] = "raise Failure()\n";
+    test_allocator_state_t state;
+    tinypy_error_t *error = NULL;
+    size_t size;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_t options;
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *code = tinypy_compile_source(vm, define, sizeof(define) - 1U, "diagnostic.py", sizeof("diagnostic.py") - 1U, &options, &error);
+    TEST_CHECK(code != NULL && error == NULL);
+    tinypy_value_t *result = tinypy_eval_code(code, globals, NULL, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_release(code);
+
+    tinypy_error_t *unread = __test_exception_diagnostic(vm, globals, raise_failure, sizeof(raise_failure) - 1U);
+    TEST_CHECK(unread != NULL);
+    tinypy_error_release(unread);
+    tinypy_error_t *read = __test_exception_diagnostic(vm, globals, raise_failure, sizeof(raise_failure) - 1U);
+    TEST_CHECK(read != NULL);
+    const char *message = tinypy_error_message(read, &size);
+    TEST_CHECK(size == 7U && memcmp(message, "calls=1", 7U) == 0);
+    message = tinypy_error_message(read, &size);
+    TEST_CHECK(size == 7U && memcmp(message, "calls=1", 7U) == 0);
+    tinypy_error_release(read);
+    tinypy_error_t *first = __test_exception_diagnostic(vm, globals, raise_failure, sizeof(raise_failure) - 1U);
+    tinypy_error_t *second = __test_exception_diagnostic(vm, globals, raise_failure, sizeof(raise_failure) - 1U);
+    TEST_CHECK(first != NULL && second != NULL);
+
+    /* The class and its globals stay alive until the VM collects them, after
+       the pending messages are rendered. */
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    const char *first_message = tinypy_error_message(first, &size);
+    TEST_CHECK(size == 7U && memcmp(first_message, "calls=", 6U) == 0);
+    const char *second_message = tinypy_error_message(second, &size);
+    TEST_CHECK(size == 7U && memcmp(second_message, "calls=", 6U) == 0);
+    TEST_CHECK(first_message[6] + second_message[6] == '2' + '3');
+    tinypy_error_release(first);
+    tinypy_error_release(second);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_operator_numeric_runtime(void) {
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
@@ -4589,6 +4666,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "exception_state_lost") == 0) {
         int return_value_24 = __test_exception_state_lost_runtime();
         return return_value_24;
+    }
+    if (strcmp(argv[1], "exception_diagnostics") == 0) {
+        int result = __test_exception_diagnostics();
+        return result;
     }
     if (strcmp(argv[1], "operator_numeric") == 0) {
         int return_value_19 = __test_operator_numeric_runtime();

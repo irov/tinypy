@@ -676,3 +676,142 @@ class BuiltinEdges(unittest.TestCase):
         stream.softspace = 1
         self.assertEqual(stream.softspace, 1)
         stream.softspace = previous
+
+    def test_handled_exceptions_do_not_render_messages(self):
+        events = []
+        class Key(object):
+            def __hash__(self):
+                return 1
+            def __repr__(self):
+                events.append('repr')
+                return 'Key'
+        class Failure(Exception):
+            def __str__(self):
+                events.append('str')
+                return 'failure'
+        def fail():
+            raise Failure()
+        try:
+            {}[Key()]
+        except KeyError as error:
+            self.assertEqual(len(error.args), 1)
+        try:
+            fail()
+        except Failure:
+            pass
+        self.assertEqual(events, [])
+        self.assertEqual(str(Failure()), 'failure')
+        self.assertEqual(events, ['str'])
+
+    def test_builtin_exception_initializer_fields(self):
+        error = EnvironmentError(2, 'missing', 'name')
+        self.assertEqual((error.args, error.errno, error.strerror, error.filename), ((2, 'missing'), 2, 'missing', 'name'))
+        error = SyntaxError('bad', ('file', 3, 4, 'text'))
+        self.assertEqual((error.msg, error.filename, error.lineno, error.offset, error.text), ('bad', 'file', 3, 4, 'text'))
+        error = UnicodeDecodeError('ascii', '\xff', 0, 1, 'bad')
+        self.assertEqual((error.encoding, error.object, error.start, error.end, error.reason), ('ascii', '\xff', 0, 1, 'bad'))
+        error = UnicodeTranslateError(u'x', 0, 1, 'bad')
+        self.assertEqual((error.object, error.start, error.end, error.reason), (u'x', 0, 1, 'bad'))
+        self.assertEqual((SystemExit(3).code, SystemExit(3, 4).code, SystemExit().code), (3, (3, 4), None))
+        self.assertEqual((KeyError('k').args, LookupError().args), (('k',), ()))
+        self.assertEqual(error_text(ValueError, a=1), 'TypeError: exceptions.ValueError does not take keyword arguments')
+        class Pair(KeyError):
+            def __init__(self, value):
+                KeyError.__init__(self, value, value)
+        self.assertEqual(Pair(1).args, (1, 1))
+        arguments = (1, 2)
+        self.assertEqual(ValueError(*arguments).args, arguments)
+
+    def test_native_calls_reenter_with_same_argument_count(self):
+        lookup = {'a': 1}
+        class Key(object):
+            def __init__(self, name):
+                self.name = name
+            def __hash__(self):
+                return hash(lookup.get(self.name, self.name))
+            def __eq__(self, other):
+                return lookup.get('a', 0) == 1 and self.name == getattr(other, 'name', other)
+        table = {Key('k'): 'v'}
+        for attempt in range(3):
+            self.assertEqual(table.get(Key('k'), 'missing'), 'v')
+            self.assertEqual(table.get(Key('z'), 'missing'), 'missing')
+            self.assertEqual(lookup.get('a', 0), 1)
+        kept = []
+        class Keeper(object):
+            def __eq__(self, other):
+                kept.append(sys.exc_info())
+                return False
+        self.assertEqual([Keeper()].count(Keeper()), 0)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(max(3, 7), 7)
+        self.assertEqual(divmod(7, 3), (2, 1))
+        self.assertEqual(divmod(9, 4), (2, 1))
+        self.assertEqual(isinstance(table, dict), True)
+
+    def test_float_text_rounds_the_exact_binary_value(self):
+        formats = ['%.2f', '%.0f', '%#.0f', '%.3f', '%.12g', '%.15g', '%#.6g', '%g']
+        cases = [
+            (0.125, ['0.12', '0', '0.', '0.125', '0.125', '0.125', '0.125000', '0.125'], '0.125'),
+            (0.375, ['0.38', '0', '0.', '0.375', '0.375', '0.375', '0.375000', '0.375'], '0.375'),
+            (2.5, ['2.50', '2', '2.', '2.500', '2.5', '2.5', '2.50000', '2.5'], '2.5'),
+            (3.5, ['3.50', '4', '4.', '3.500', '3.5', '3.5', '3.50000', '3.5'], '3.5'),
+            (1.0005, ['1.00', '1', '1.', '1.000', '1.0005', '1.0005', '1.00050', '1.0005'], '1.0005'),
+            (9.999999999999991e-05, ['0.00', '0', '0.', '0.000', '0.0001', '9.99999999999999e-05', '0.000100000', '0.0001'], '0.0001'),
+            (99999.99999999999, ['100000.00', '100000', '100000.', '100000.000', '100000', '100000', '100000.', '100000'], '100000.0'),
+            (999999999999.5, ['999999999999.50', '1000000000000', '1000000000000.', '999999999999.500', '1e+12', '999999999999.5', '1.00000e+12', '1e+12'], '1e+12'),
+            (123456.789, ['123456.79', '123457', '123457.', '123456.789', '123456.789', '123456.789', '123457.', '123457'], '123456.789'),
+            (5e-324, ['0.00', '0', '0.', '0.000', '4.94065645841e-324', '4.94065645841247e-324', '4.94066e-324', '4.94066e-324'], '4.94065645841e-324'),
+        ]
+        for value, expected, text in cases:
+            self.assertEqual([format_text % value for format_text in formats], expected)
+            self.assertEqual([format_text % -value for format_text in formats], ['-' + item for item in expected])
+            self.assertEqual(str(value), text)
+
+    def test_hasattr_suppresses_only_exceptions(self):
+        events = []
+        class Probe(object):
+            present = 1
+            @property
+            def missing_property(self):
+                events.append('property')
+                raise AttributeError('missing_property')
+            @property
+            def failing_property(self):
+                raise ValueError('failing_property')
+            @property
+            def interrupting_property(self):
+                raise KeyboardInterrupt
+            def __getattr__(self, name):
+                events.append(name)
+                if name == 'dynamic':
+                    return 5
+                raise AttributeError(name)
+        probe = Probe()
+        self.assertEqual([hasattr(probe, name) for name in ('present', 'dynamic', 'absent', 'missing_property', 'failing_property')], [True, True, False, False, False])
+        self.assertEqual(events, ['dynamic', 'absent', 'property', 'missing_property'])
+        self.assertEqual(sys.exc_info(), (None, None, None))
+        self.assertRaises(KeyboardInterrupt, hasattr, probe, 'interrupting_property')
+        self.assertEqual((hasattr(1, 'real'), hasattr(1, 'imaginary_part'), hasattr(Probe, 'absent')), (True, False, False))
+
+    def test_plain_text_conversions_keep_subclass_overrides(self):
+        class Text(str):
+            def __format__(self, spec):
+                return 'text:' + spec
+            def __str__(self):
+                return 'str'
+        class Number(int):
+            def __format__(self, spec):
+                return 'number:' + spec
+        class Real(float):
+            def __str__(self):
+                return 'real'
+        values = (Text('a'), Number(1), Real(1.5), 7, 0.25, 'x')
+        self.assertEqual('{}|{}|{}|{}|{}|{}'.format(*values), 'text:|number:|real|7|0.25|x')
+        self.assertEqual('%s|%s|%s|%s|%s|%s' % values, 'str|1|real|7|0.25|x')
+        self.assertEqual(u'{}|{}'.format(7, 'x'), u'7|x')
+
+    def test_round_uses_the_exact_binary_value(self):
+        values = (0.125, 0.375, -0.125, 2.675, 1.005, 0.285, -0.0001, 0.5, 2.5)
+        self.assertEqual([repr(round(value, 2)) for value in values], ['0.13', '0.38', '-0.13', '2.67', '1.0', '0.28', '-0.0', '0.5', '2.5'])
+        self.assertEqual([repr(round(value, digits)) for value, digits in ((123456789.987654321, 5), (1e15 + 0.5, 1), (0.1 + 0.2, 15), (5e-324, 19), (-2.5, 19))],
+                         ['123456789.98765', '1000000000000000.5', '0.3', '0.0', '-2.5'])

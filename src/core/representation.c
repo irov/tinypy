@@ -20,10 +20,14 @@ typedef struct tinypy_representation_builder_t {
 
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_initialize(tinypy_representation_builder_t *builder, tinypy_vm_t *vm) {
-    (void)memset(builder, 0, sizeof(*builder));
     builder->vm = vm;
+    builder->root = NULL;
     builder->bytes = builder->inline_bytes;
+    builder->size = 0U;
     builder->capacity = sizeof(builder->inline_bytes);
+    builder->failed = TINYPY_FALSE;
+    builder->memory_failed = TINYPY_FALSE;
+    builder->skip_root_special = TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_destroy(tinypy_representation_builder_t *builder) {
@@ -110,22 +114,19 @@ static void __tinypy_representation_leave(tinypy_representation_builder_t *build
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_unsigned_decimal(tinypy_representation_builder_t *builder, uint64_t value, size_t minimum_digits) {
-    uint8_t reverse[32];
-    size_t count = 0U;
+    uint8_t digits[32];
+    size_t offset = sizeof(digits);
 
     do {
-        reverse[count] = (uint8_t)('0' + value % UINT64_C(10));
-        count += 1U;
+        offset -= 1U;
+        digits[offset] = (uint8_t)('0' + value % UINT64_C(10));
         value /= UINT64_C(10);
     } while (value != UINT64_C(0));
-    while (count < minimum_digits) {
-        reverse[count] = (uint8_t)'0';
-        count += 1U;
+    while (sizeof(digits) - offset < minimum_digits) {
+        offset -= 1U;
+        digits[offset] = (uint8_t)'0';
     }
-    while (count != 0U) {
-        count -= 1U;
-        __tinypy_representation_append_character(builder, reverse[count]);
-    }
+    __tinypy_representation_append(builder, digits + offset, sizeof(digits) - offset);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_integer(tinypy_representation_builder_t *builder, int64_t value) {
@@ -261,6 +262,10 @@ static size_t __tinypy_representation_double_candidate(double value, tinypy_bool
     size_t size;
 
     if (raw != 0) {
+        size = tinypy_internal_double_format_text(value, (uint8_t)'g', TINYPY_FALSE, 12U, (uint8_t *)buffer);
+        if (size != 0U) {
+            return size;
+        }
         written = snprintf(buffer, capacity, "%.12g", value);
         if (written < 0 || (size_t)written >= capacity) {
             return 0U;
@@ -808,9 +813,10 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     tinypy_bool_t function_result;
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_value_t *special_name = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
+    uint64_t special = raw != 0 ? TINYPY_INTERNAL_DISPATCH_BIT(STR) : TINYPY_INTERNAL_DISPATCH_BIT(REPR);
     tinypy_unary_slot_t representation_slot = raw != 0 ? value->type->string : value->type->repr;
 
-    if ((builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override_key(value, special_name) != 0) {
+    if ((builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && __tinypy_internal_object_overrides_dispatch(value, special) != 0) {
         tinypy_value_t *custom = __tinypy_representation_custom(value, special_name, out_error);
 
         if (custom == NULL) {
@@ -822,7 +828,7 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     }
     if (raw != 0 && (builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U &&
         (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_DICT || kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) &&
-        tinypy_internal_object_has_special_override_key(value, vm->internal_special_repr_key) != 0) {
+        __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0) {
         tinypy_value_t *custom = __tinypy_representation_custom(value, vm->internal_special_repr_key, out_error);
 
         if (custom == NULL) {
@@ -1136,7 +1142,11 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tiny
     tinypy_representation_builder_t builder;
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
-    if (skip_root_special == 0 && tinypy_internal_object_has_special_override_key(value, raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key) != 0) {
+    /* _PyObject_Str returns an exact str itself. */
+    if (raw != 0 && value->type == &vm->types[TINYPY_VALUE_STRING]) {
+        return TINYPY_RET(value);
+    }
+    if (skip_root_special == 0 && __tinypy_internal_object_overrides_dispatch(value, raw != 0 ? TINYPY_INTERNAL_DISPATCH_BIT(STR) : TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0) {
         tinypy_value_t *custom = __tinypy_representation_custom(value, raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key, out_error);
 
         if (custom == NULL) {
@@ -1167,7 +1177,7 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tiny
         __tinypy_representation_destroy(&builder);
         return NULL;
     }
-    tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(builder.vm, builder.bytes, builder.size, out_error);
+    tinypy_value_t *result = tinypy_internal_string_from_bytes_uninterned_checked(builder.vm, builder.bytes, builder.size, out_error);
     __tinypy_representation_destroy(&builder);
     return result;
 }
@@ -1187,7 +1197,7 @@ static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *va
         tinypy_internal_make_vm_error(builder.vm, builder.memory_failed != 0 ? TINYPY_ERROR_MEMORY : TINYPY_ERROR_OVERFLOW, builder.memory_failed != 0 ? "memory allocation failed" : "representation is too large", out_error);
         return NULL;
     }
-    tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(builder.vm, builder.bytes, builder.size, out_error);
+    tinypy_value_t *result = tinypy_internal_string_from_bytes_uninterned_checked(builder.vm, builder.bytes, builder.size, out_error);
     __tinypy_representation_destroy(&builder);
     return result;
 }

@@ -1219,6 +1219,14 @@ static tinypy_value_t *__tinypy_string_format_convert(tinypy_vm_t *vm, tinypy_va
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Exact str, int and float values, whose immutable __str__, and __format__
+   with an empty spec, give str() of the value. */
+static tinypy_bool_t __tinypy_string_plain_value(tinypy_vm_t *vm, const tinypy_value_t *value) {
+    tinypy_bool_t plain = value->type == &vm->types[TINYPY_VALUE_STRING] || value->type == &vm->types[TINYPY_VALUE_INTEGER] || value->type == &vm->types[TINYPY_VALUE_FLOAT] ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return plain;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_format_render(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, const uint8_t *bytes, size_t size, tinypy_bool_t unicode, size_t *automatic_index, int32_t *numbering_mode, int32_t recursion_depth, tinypy_error_t **out_error) {
     size_t offset = 0U;
     tinypy_string_builder_t builder;
@@ -1287,7 +1295,12 @@ static tinypy_value_t *__tinypy_string_format_render(tinypy_vm_t *vm, tinypy_val
                     goto failure;
                 }
             }
-            formatted = tinypy_internal_string_format_value(vm, converted, 0, expanded_spec != NULL ? TINYPY_TEXT_BYTES(expanded_spec) : bytes + spec_begin, expanded_spec != NULL ? TINYPY_TEXT_BYTE_SIZE(expanded_spec) : end - spec_begin, unicode, &field_unicode, out_error);
+            if (unicode == 0 && spec_begin == end && __tinypy_string_plain_value(vm, converted) != 0) {
+                formatted = TINYPY_RET(converted);
+            }
+            else {
+                formatted = tinypy_internal_string_format_value(vm, converted, 0, expanded_spec != NULL ? TINYPY_TEXT_BYTES(expanded_spec) : bytes + spec_begin, expanded_spec != NULL ? TINYPY_TEXT_BYTE_SIZE(expanded_spec) : end - spec_begin, unicode, &field_unicode, out_error);
+            }
             TINYPY_DECREF(converted);
             if (expanded_spec != NULL) {
                 TINYPY_DECREF(expanded_spec);
@@ -1671,7 +1684,7 @@ static tinypy_value_t *__tinypy_string_from_span(tinypy_vm_t *vm, const tinypy_v
         return return_value_1;
     }
     const uint8_t *bytes = TINYPY_TEXT_BYTES(source);
-    tinypy_value_t *return_value_2 = tinypy_string_from_bytes(vm, bytes + begin, end - begin);
+    tinypy_value_t *return_value_2 = tinypy_internal_string_from_bytes_uninterned(vm, bytes + begin, end - begin);
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3913,21 +3926,22 @@ typedef struct tinypy_percent_arguments_t {
 
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_percent_unsigned(tinypy_string_builder_t *builder, uint64_t value, uint32_t base, tinypy_bool_t uppercase, size_t minimum_digits) {
-    uint8_t reverse[64];
-    size_t count = 0U;
+    uint8_t digits[64];
+    size_t offset = sizeof(digits);
 
     do {
         uint32_t digit = (uint32_t)(value % base);
 
-        reverse[count++] = digit < 10U ? (uint8_t)('0' + digit) : (uint8_t)((uppercase != 0 ? 'A' : 'a') + digit - 10U);
+        offset -= 1U;
+        digits[offset] = digit < 10U ? (uint8_t)('0' + digit) : (uint8_t)((uppercase != 0 ? 'A' : 'a') + digit - 10U);
         value /= base;
     } while (value != 0U);
+    size_t count = sizeof(digits) - offset;
+
     if (count < minimum_digits) {
         __tinypy_string_builder_repeat(builder, (const uint8_t *)"0", 1U, minimum_digits - count);
     }
-    while (count != 0U) {
-        __tinypy_string_builder_character(builder, reverse[--count]);
-    }
+    __tinypy_string_builder_append(builder, digits + offset, count);
 }
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_percent_u32_decimal_digits(uint32_t value) {
@@ -4104,6 +4118,191 @@ static tinypy_bool_t __tinypy_percent_append_integer(tinypy_vm_t *vm, tinypy_str
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+#define TINYPY_DOUBLE_FRACTION_BITS 52U
+#define TINYPY_DOUBLE_EXPONENT_MASK 0x7ffU
+#define TINYPY_DOUBLE_EXPONENT_OFFSET 1075
+//////////////////////////////////////////////////////////////////////////
+static const uint64_t TINYPY_DECIMAL_POWERS[20] = {
+    UINT64_C(1), UINT64_C(10), UINT64_C(100), UINT64_C(1000), UINT64_C(10000),
+    UINT64_C(100000), UINT64_C(1000000), UINT64_C(10000000), UINT64_C(100000000), UINT64_C(1000000000),
+    UINT64_C(10000000000), UINT64_C(100000000000), UINT64_C(1000000000000), UINT64_C(10000000000000), UINT64_C(100000000000000),
+    UINT64_C(1000000000000000), UINT64_C(10000000000000000), UINT64_C(100000000000000000), UINT64_C(1000000000000000000), UINT64_C(10000000000000000000)};
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_wide_bit(uint64_t high, uint64_t low, uint32_t position) {
+    uint64_t word = position < 64U ? low >> position : high >> (position - 64U);
+    tinypy_bool_t set = (word & 1U) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return set;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_wide_bits_below(uint64_t high, uint64_t low, uint32_t position) {
+    if (position <= 64U) {
+        tinypy_bool_t set = position == 64U ? low != 0U : (low & ((UINT64_C(1) << position) - 1U)) != 0U;
+
+        return set;
+    }
+    tinypy_bool_t set = low != 0U || (high & ((UINT64_C(1) << (position - 64U)) - 1U)) != 0U;
+
+    return set;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Scales a finite non-negative double by 10^scale exactly: the integer part
+   and the order of the remaining fraction against one half (-1, 0 or 1).
+   FALSE for other values and integer parts that need more than 64 bits. */
+tinypy_bool_t tinypy_internal_double_scaled_integer(double value, size_t scale, uint64_t *out_integer, int32_t *out_half_order) {
+    uint64_t bits;
+    (void)memcpy(&bits, &value, sizeof(bits));
+    uint32_t biased_exponent = (uint32_t)(bits >> TINYPY_DOUBLE_FRACTION_BITS) & TINYPY_DOUBLE_EXPONENT_MASK;
+    uint64_t mantissa = bits & ((UINT64_C(1) << TINYPY_DOUBLE_FRACTION_BITS) - 1U);
+    int32_t exponent = (biased_exponent == 0U ? 1 : (int32_t)biased_exponent) - TINYPY_DOUBLE_EXPONENT_OFFSET;
+    uint32_t product_bits = TINYPY_DOUBLE_FRACTION_BITS + 1U + 64U;
+
+    if (scale >= sizeof(TINYPY_DECIMAL_POWERS) / sizeof(TINYPY_DECIMAL_POWERS[0]) || biased_exponent == TINYPY_DOUBLE_EXPONENT_MASK || (bits >> 63U) != 0U) {
+        return TINYPY_FALSE;
+    }
+    if (biased_exponent != 0U) {
+        mantissa |= UINT64_C(1) << TINYPY_DOUBLE_FRACTION_BITS;
+    }
+    /* The 128-bit product mantissa * 10^scale, below 2^product_bits, from
+       32-bit halves. */
+    uint64_t factor = TINYPY_DECIMAL_POWERS[scale];
+    uint64_t low_low = (mantissa & 0xffffffffU) * (factor & 0xffffffffU);
+    uint64_t low_high = (mantissa & 0xffffffffU) * (factor >> 32U);
+    uint64_t high_low = (mantissa >> 32U) * (factor & 0xffffffffU);
+    uint64_t middle = (low_low >> 32U) + (low_high & 0xffffffffU) + (high_low & 0xffffffffU);
+    uint64_t low = (middle << 32U) | (low_low & 0xffffffffU);
+    uint64_t high = (mantissa >> 32U) * (factor >> 32U) + (low_high >> 32U) + (high_low >> 32U) + (middle >> 32U);
+
+    *out_half_order = -1;
+    if (exponent >= 0) {
+        if (high != 0U || exponent > 63 || low > (UINT64_MAX >> exponent)) {
+            return TINYPY_FALSE;
+        }
+        *out_integer = low << exponent;
+        return TINYPY_TRUE;
+    }
+    uint32_t shift = (uint32_t)(-exponent);
+    if (shift > product_bits) {
+        *out_integer = 0U;
+        return TINYPY_TRUE;
+    }
+    if (shift < 64U && (high >> shift) != 0U) {
+        return TINYPY_FALSE;
+    }
+    *out_integer = shift >= 64U ? high >> (shift - 64U) : (low >> shift) | (high << (64U - shift));
+    if (__tinypy_wide_bit(high, low, shift - 1U) != 0) {
+        *out_half_order = __tinypy_wide_bits_below(high, low, shift - 1U) != 0 ? 1 : 0;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Rounds a scaled double half to even, as a correctly rounded printf does. */
+static tinypy_bool_t __tinypy_double_scaled_even(double value, size_t scale, uint64_t *out_truncated, uint64_t *out_rounded) {
+    int32_t half_order;
+    if (tinypy_internal_double_scaled_integer(value, scale, out_truncated, &half_order) == 0) {
+        return TINYPY_FALSE;
+    }
+    uint64_t rounded = *out_truncated;
+
+    if (half_order > 0 || (half_order == 0 && (rounded & 1U) != 0U)) {
+        if (rounded == UINT64_MAX) {
+            return TINYPY_FALSE;
+        }
+        rounded += 1U;
+    }
+    *out_rounded = rounded;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The "%.*f" text of integer / 10^precision for a precision below 20. */
+static size_t __tinypy_decimal_fixed_text(uint64_t integer, size_t precision, tinypy_bool_t alternate, uint8_t *output) {
+    uint8_t digits[20];
+    size_t count = 0U;
+    size_t size = 0U;
+
+    do {
+        digits[count++] = (uint8_t)('0' + integer % 10U);
+        integer /= 10U;
+    } while (integer != 0U);
+    while (count <= precision) {
+        digits[count++] = (uint8_t)'0';
+    }
+    for (size_t index = count; index > precision; --index) {
+        output[size++] = digits[index - 1U];
+    }
+    if (precision != 0U || alternate != 0) {
+        output[size++] = (uint8_t)'.';
+    }
+    for (size_t index = precision; index != 0U; --index) {
+        output[size++] = digits[index - 1U];
+    }
+    return size;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The printf "%.*f" and fixed-notation "%.*g" text of a non-negative double
+   whose digits fit 64 bits, written without the C library into at least 32
+   bytes. 0 leaves other values and the exponent notation to snprintf. */
+size_t tinypy_internal_double_format_text(double magnitude, uint8_t conversion, tinypy_bool_t alternate, size_t precision, uint8_t *output) {
+    if (conversion == (uint8_t)'f' || conversion == (uint8_t)'F') {
+        uint64_t truncated;
+        uint64_t rounded;
+        if (__tinypy_double_scaled_even(magnitude, precision, &truncated, &rounded) == 0) {
+            return 0U;
+        }
+        size_t size = __tinypy_decimal_fixed_text(rounded, precision, alternate, output);
+        return size;
+    }
+    if ((conversion != (uint8_t)'g' && conversion != (uint8_t)'G') || magnitude <= 0.0 || isfinite(magnitude) == 0 || precision > 15U) {
+        return 0U;
+    }
+    /* The decimal exponent of the value is the one whose truncated digits
+       fill the precision; %g uses it, or the next one when the rounding
+       carries, and keeps the fixed notation from -4 below the precision. */
+    size_t significant = precision != 0U ? precision : 1U;
+    double logarithm = log10(magnitude);
+    int32_t exponent = (int32_t)floor(logarithm);
+
+    for (size_t attempt = 0U; attempt < 3U; ++attempt) {
+        if (exponent < -4 || exponent >= (int32_t)significant) {
+            return 0U;
+        }
+        size_t scale = (size_t)((int32_t)significant - 1 - exponent);
+        uint64_t truncated;
+        uint64_t rounded;
+        if (__tinypy_double_scaled_even(magnitude, scale, &truncated, &rounded) == 0) {
+            return 0U;
+        }
+        if (truncated >= TINYPY_DECIMAL_POWERS[significant]) {
+            exponent += 1;
+            continue;
+        }
+        if (truncated < TINYPY_DECIMAL_POWERS[significant - 1U]) {
+            exponent -= 1;
+            continue;
+        }
+        if (rounded == TINYPY_DECIMAL_POWERS[significant]) {
+            if (exponent + 1 >= (int32_t)significant) {
+                return 0U;
+            }
+            scale -= 1U;
+            rounded = TINYPY_DECIMAL_POWERS[significant - 1U];
+        }
+        size_t size = __tinypy_decimal_fixed_text(rounded, scale, alternate, output);
+        if (alternate != 0) {
+            return size;
+        }
+        while (scale != 0U && output[size - 1U] == (uint8_t)'0') {
+            size -= 1U;
+            scale -= 1U;
+        }
+        if (output[size - 1U] == (uint8_t)'.') {
+            size -= 1U;
+        }
+        return size;
+    }
+    return 0U;
+}
+//////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_percent_normalize_decimal(uint8_t *bytes, size_t size) {
     size_t decimal_begin = 0U;
     size_t exponent;
@@ -4144,6 +4343,11 @@ static tinypy_bool_t __tinypy_percent_float_text(tinypy_vm_t *vm, tinypy_string_
     if (precision > (size_t)INT_MAX) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "float format precision is too large", out_error);
         return TINYPY_FALSE;
+    }
+    size_t exact_size = tinypy_internal_double_format_text(magnitude, conversion, alternate, precision, local);
+    if (exact_size != 0U) {
+        __tinypy_string_builder_append(builder, local, exact_size);
+        return TINYPY_TRUE;
     }
     format[format_size++] = '%';
     if (alternate != 0) {
@@ -4662,7 +4866,7 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
                 /* %s in a unicode format goes through __unicode__. */
                 text = tinypy_internal_object_unicode(value, out_error);
             }
-            else if (conversion == (uint8_t)'s' && tinypy_internal_object_has_special_key(value, vm->internal_special_str_key) != 0) {
+            else if (conversion == (uint8_t)'s' && __tinypy_string_plain_value(vm, value) == 0 && tinypy_internal_object_has_special_key(value, vm->internal_special_str_key) != 0) {
                 tinypy_bool_t handled;
 
                 text = tinypy_internal_call_conversion(value, vm->internal_special_str_key, &handled, out_error);

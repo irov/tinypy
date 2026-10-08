@@ -270,8 +270,21 @@ void tinypy_list_append(tinypy_value_t *list, tinypy_value_t *item) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_list_append_checked(tinypy_value_t *list, tinypy_value_t *item, tinypy_error_t **out_error) {
+    tinypy_list_object_t *object = TINYPY_LIST_OBJECT(list);
+    size_t size = TINYPY_SIZED_SIZE(list);
     tinypy_value_t *items[1];
 
+    /* app1 stores into spare capacity directly; growing takes extend. */
+    if (size < object->allocated) {
+        TINYPY_INCREF(item);
+        object->items[size] = item;
+        TINYPY_SIZED_SIZE(list) = size + 1U;
+        object->mutation_version += UINT64_C(1);
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_list_extend(TINYPY_VALUE_VM(list), list, size, &item, 1U);
+#endif
+        return TINYPY_TRUE;
+    }
     items[0] = item;
     tinypy_bool_t return_value_1 = tinypy_internal_list_extend_checked(list, items, 1U, out_error);
     return return_value_1;

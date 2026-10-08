@@ -681,6 +681,13 @@ exception, сначала вызывает `tinypy_output_flush_line`: как `P
 `tinypy_error_t` — optional owned structured error. Он хранит копии message,
 logical filename, source line, line number и column offset.
 
+Message error для raised Python exception — это `str()` этого exception до
+первого NUL byte. Как traceback printer CPython, tinypy вычисляет его при первом
+чтении `tinypy_error_message`, а не при raise: до этого error держит ссылку на
+exception, и исключение, которое обработал Python-код, не форматируется.
+`tinypy_vm_destroy` сначала вычисляет message всех ещё не прочитанных errors,
+поэтому error остаётся пригодным и после уничтожения VM.
+
 Recoverable categories включают:
 
 - Python semantic errors;

@@ -919,6 +919,23 @@ static void __tinypy_internal_c_descriptor_refresh_owner(tinypy_c_descriptor_obj
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* Reports the slot that a writable __slots__ member addresses in instances of
+   type, so that attribute caches can access it directly. */
+tinypy_bool_t tinypy_internal_member_descriptor_slot(tinypy_value_t *descriptor_value, const tinypy_type_t *type, size_t *out_index) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor_value);
+
+    if (descriptor_value->type != &vm->types[TINYPY_VALUE_MEMBER_DESCRIPTOR]) {
+        return TINYPY_FALSE;
+    }
+    tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(descriptor_value);
+    __tinypy_internal_c_descriptor_refresh_owner(descriptor);
+    if (descriptor->field != (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_INSTANCE_SLOT || descriptor->writable == 0 || descriptor->owner == NULL || type->slots_offset == 0U || tinypy_type_is_subtype(type, descriptor->owner) == 0) {
+        return TINYPY_FALSE;
+    }
+    *out_index = descriptor->index;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_c_descriptor_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     static const char member_prefix[] = "<member '";
     static const char getset_prefix[] = "<attribute '";

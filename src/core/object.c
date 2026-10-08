@@ -967,6 +967,12 @@ static tinypy_value_t *__tinypy_object_get_special_class(tinypy_value_t *value) 
     return TINYPY_RET(&value->type->base.base);
 }
 //////////////////////////////////////////////////////////////////////////
+/* Whether objects of a kind have attributes that their type does not hold. */
+tinypy_bool_t tinypy_internal_object_kind_has_builtin_attributes(tinypy_value_type_e kind) {
+    tinypy_bool_t result = kind == TINYPY_VALUE_FUNCTION || kind == TINYPY_VALUE_MODULE || __tinypy_object_builtin_getters[kind] != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_builtin_attribute(tinypy_value_t *value, tinypy_value_t *key) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
@@ -1200,6 +1206,67 @@ tinypy_bool_t tinypy_internal_object_has_special_override_key(tinypy_value_t *va
     return attribute != builtin_attribute ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+static const size_t __tinypy_object_dispatch_offsets[TINYPY_INTERNAL_DISPATCH_COUNT] = {
+#define TINYPY_OBJECT_DISPATCH_OFFSET(name, field) offsetof(tinypy_vm_t, field),
+    TINYPY_INTERNAL_DISPATCH_LIST(TINYPY_OBJECT_DISPATCH_OFFSET)
+#undef TINYPY_OBJECT_DISPATCH_OFFSET
+};
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_dispatch_key(tinypy_vm_t *vm, tinypy_internal_dispatch_e special) {
+    tinypy_value_t *key = *(tinypy_value_t **)((uint8_t *)vm + __tinypy_object_dispatch_offsets[special]);
+
+    return key;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Types memoize the answers per name until the type lookup epoch moves on,
+   the version every change to a type's namespace, bases or MRO and every
+   type creation and release bumps. Classic instances, whose methods live in
+   their classes, and types whose MRO the lookup cache distrusts are asked
+   every time; the first name found answers. */
+tinypy_bool_t tinypy_internal_object_memoize_dispatch(tinypy_value_t *value, uint64_t specials, tinypy_bool_t overrides) {
+    tinypy_type_t *type = value->type;
+    tinypy_vm_t *vm = type->vm;
+    uint64_t epoch = vm->type_lookup_cache_epoch;
+    tinypy_bool_t memoize = epoch != 0U && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE && type->has_classic_mro == 0 && type->has_custom_mro == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    uint64_t missing = specials;
+    uint64_t found = 0U;
+
+    if (memoize != 0) {
+        if (type->dispatch_epoch != epoch) {
+            type->dispatch_epoch = epoch;
+            type->dispatch_known = 0U;
+            type->dispatch_defines = 0U;
+            type->dispatch_overrides = 0U;
+        }
+        missing &= ~type->dispatch_known;
+        found = (overrides != 0 ? type->dispatch_overrides : type->dispatch_defines) & specials;
+    }
+    for (size_t special = 0U; missing != 0U && found == 0U; ++special) {
+        uint64_t bit = UINT64_C(1) << special;
+
+        if ((missing & bit) == 0U) {
+            continue;
+        }
+        missing &= ~bit;
+        tinypy_value_t *key = tinypy_internal_dispatch_key(vm, (tinypy_internal_dispatch_e)special);
+        tinypy_bool_t defined = tinypy_internal_object_has_special_key(value, key);
+        tinypy_bool_t overridden = defined != 0 ? tinypy_internal_object_has_special_override_key(value, key) : TINYPY_FALSE;
+
+        /* A lookup comparing keys may have run Python code that changed a
+           type, leaving nothing more to memoize for this epoch. */
+        if (memoize != 0 && vm->type_lookup_cache_epoch == epoch) {
+            type->dispatch_known |= bit;
+            type->dispatch_defines |= defined != 0 ? bit : 0U;
+            type->dispatch_overrides |= overridden != 0 ? bit : 0U;
+        }
+        if ((overrides != 0 ? overridden : defined) != 0) {
+            found = bit;
+        }
+    }
+    tinypy_bool_t result = found != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_descriptor_has_get(tinypy_vm_t *vm, tinypy_value_t *attribute) {
     if (attribute->type->descriptor_get != NULL) {
         return TINYPY_TRUE;
@@ -1299,6 +1366,46 @@ tinypy_value_t *tinypy_internal_object_get_special_key(tinypy_value_t *value, ti
     }
     tinypy_value_t *result = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
 
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_type_function_key(tinypy_value_t *value, tinypy_value_t *key) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        return NULL;
+    }
+    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
+    if (attribute == NULL || attribute->type != &vm->types[TINYPY_VALUE_FUNCTION]) {
+        return NULL;
+    }
+    return attribute;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Binding the function and calling the bound method take two tinypy_call
+   recursion levels, which the direct call keeps. The call holds the function
+   in case it drops it from the type. */
+tinypy_value_t *tinypy_internal_call_type_function(tinypy_value_t *function, tinypy_value_t *receiver, tinypy_value_t *const *arguments, size_t argument_count, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
+    tinypy_value_t *items[3];
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (__tinypy_internal_call_enter(vm, out_error) == 0) {
+        return NULL;
+    }
+    if (__tinypy_internal_call_enter(vm, out_error) == 0) {
+        __tinypy_internal_call_leave(vm);
+        return NULL;
+    }
+    items[0] = receiver;
+    for (size_t index = 0U; index < argument_count; ++index) {
+        items[index + 1U] = arguments[index];
+    }
+    TINYPY_INCREF(function);
+    tinypy_value_t *result = tinypy_internal_eval_function_items(function, items, argument_count + 1U, NULL, out_error);
+    TINYPY_DECREF(function);
+    __tinypy_internal_call_leave(vm);
+    __tinypy_internal_call_leave(vm);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1570,7 +1677,7 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
             ((tinypy_type_t *)value)->flags &= ~TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
         }
     }
-    if (skip_custom == TINYPY_FALSE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_object_has_special_override_key(value, vm->internal_special_getattribute_key) != 0) {
+    if (skip_custom == TINYPY_FALSE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(GETATTRIBUTE)) != 0) {
         result = __tinypy_object_call_attribute_hook(vm, value, vm->internal_special_getattribute_key, key, out_error);
         tinypy_value_t *return_value_1 = __tinypy_object_getattr_fallback(value, key, result, suppress_missing, TINYPY_TRUE, out_missing, out_error);
         return return_value_1;
@@ -1883,7 +1990,7 @@ tinypy_bool_t tinypy_internal_object_set_attr_protocol_key(tinypy_value_t *value
         return return_value_0;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    if (tinypy_internal_object_has_special_override_key(value, vm->internal_special_setattr_key) != 0) {
+    if (__tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(SETATTR)) != 0) {
         tinypy_value_t *attribute = tinypy_type_get_attr_key(value->type, vm->internal_special_setattr_key);
         tinypy_value_t *method = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
         tinypy_value_t *items[2] = {key, attribute_value};
@@ -2021,7 +2128,7 @@ tinypy_bool_t tinypy_internal_object_delete_attr_protocol_key(tinypy_value_t *va
         return return_value_0;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    if (tinypy_internal_object_has_special_override_key(value, vm->internal_special_delattr_key) != 0) {
+    if (__tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(DELATTR)) != 0) {
         tinypy_value_t *attribute = tinypy_type_get_attr_key(value->type, vm->internal_special_delattr_key);
         tinypy_value_t *method = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
         tinypy_value_t *args;

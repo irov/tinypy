@@ -104,21 +104,54 @@ tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t 
     return &code->base;
 }
 //////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_internal_code_caches_size(size_t slot_count) {
+    size_t size = slot_count * (sizeof(tinypy_global_cache_entry_t) + TINYPY_ATTRIBUTE_LOOKUP_CACHE_WAYS * sizeof(tinypy_attribute_lookup_cache_entry_t) + sizeof(tinypy_attribute_store_cache_entry_t));
+    return size;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The caches share one zeroed allocation. */
+tinypy_bool_t tinypy_internal_code_allocate_caches(tinypy_code_object_t *code, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(&code->base);
+    size_t name_count = TINYPY_TUPLE_SIZE(code->names);
+    size_t slot_count = 1U;
+
+    while (slot_count < name_count && slot_count < TINYPY_CODE_CACHE_SLOTS_MAX) {
+        slot_count *= 2U;
+    }
+    size_t size = __tinypy_internal_code_caches_size(slot_count);
+    uint8_t *caches = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, size, out_error);
+    if (caches == NULL) {
+        return TINYPY_FALSE;
+    }
+    (void)memset(caches, 0, size);
+    code->cache_slot_count = slot_count;
+    code->global_cache = (tinypy_global_cache_entry_t *)caches;
+    code->attribute_cache = (tinypy_attribute_lookup_cache_entry_t *)(code->global_cache + slot_count);
+    code->attribute_store_cache = (tinypy_attribute_store_cache_entry_t *)(code->attribute_cache + slot_count * TINYPY_ATTRIBUTE_LOOKUP_CACHE_WAYS);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_code_destroy(tinypy_value_t *value) {
     tinypy_code_object_t *code = TINYPY_CODE_OBJECT(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
     if (code->cached_frame != NULL) {
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-
         tinypy_internal_value_destroy(code->cached_frame);
         TINYPY_DECREF(&vm->types[TINYPY_VALUE_FRAME].base.base);
         code->cached_frame = NULL;
+    }
+    if (code->global_cache != NULL) {
+        size_t caches_size = __tinypy_internal_code_caches_size(code->cache_slot_count);
+
+        tinypy_internal_vm_deallocate(vm, code->global_cache, caches_size);
+        code->global_cache = NULL;
+        code->attribute_cache = NULL;
+        code->attribute_store_cache = NULL;
     }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_code_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_code_object_t *code = TINYPY_CODE_OBJECT(value);
-    size_t index;
 
     visit(code->bytecode, user_data);
     visit(code->consts, user_data);
@@ -131,11 +164,6 @@ void tinypy_internal_code_release_references(tinypy_value_t *value, tinypy_relea
     visit(code->lnotab, user_data);
     if (code->parameter_indices != NULL) {
         visit(code->parameter_indices, user_data);
-    }
-    for (index = 0U; index < TINYPY_ATTRIBUTE_LOOKUP_CACHE_SIZE; ++index) {
-        if (code->attribute_cache[index].internal_dict_key != NULL) {
-            visit(code->attribute_cache[index].internal_dict_key, user_data);
-        }
     }
     if (code->compile_environment != NULL) {
         tinypy_internal_compile_environment_release(code->compile_environment);

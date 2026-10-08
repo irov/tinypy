@@ -1987,28 +1987,21 @@ static tinypy_value_t *__tinypy_constructor_type_init_method(tinypy_value_t *fun
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+/* object.__new__ with the arguments that follow the class, which class
+   calls pass without building the argument tuple. */
+tinypy_value_t *tinypy_internal_object_new_items(tinypy_type_t *class_type, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = class_type->vm;
 
-    (void)user_data;
-    if (TINYPY_TUPLE_SIZE(args) == 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ requires a type", out_error);
-        return NULL;
-    }
-    tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ argument is not a type", out_error);
-        return NULL;
-    }
-    tinypy_type_t *class_type = (tinypy_type_t *)class_value;
+    TINYPY_CLEAR_ERROR(out_error);
     /* tp_new_wrapper: the nearest base not created by Python code must
        still use object.__new__. */
     const tinypy_type_t *static_base = class_type;
     while ((static_base->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && static_base->base_type != NULL) {
         static_base = static_base->base_type;
     }
-    tinypy_value_t *object_new = tinypy_type_get_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_new_key);
-    if (tinypy_type_get_attr_key(static_base, vm->internal_special_new_key) != object_new) {
+    tinypy_bool_t object_base = static_base == &vm->types[TINYPY_VALUE_INSTANCE] ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_value_t *object_new = object_base == 0 ? tinypy_type_get_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_new_key) : NULL;
+    if (object_base == 0 && tinypy_type_get_attr_key(static_base, vm->internal_special_new_key) != object_new) {
         tinypy_message_part_t class_name[3];
         tinypy_message_part_t base_name[3];
 
@@ -2042,7 +2035,7 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ cannot create set instances", out_error);
         return NULL;
     }
-    if (__tinypy_constructor_has_mutable_builtin_layout(layout_kind) == 0 && __tinypy_constructor_object_has_excess_arguments(args, kwargs) != 0) {
+    if (__tinypy_constructor_has_mutable_builtin_layout(layout_kind) == 0 && (count != 0U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U))) {
         tinypy_value_t *type_init = tinypy_internal_type_lookup_key(vm, class_type, vm->internal_special_init_key);
         tinypy_value_t *object_init = tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_init_key);
 
@@ -2056,7 +2049,7 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
     }
     tinypy_value_t *return_value_1;
     if (layout_kind == TINYPY_VALUE_NATIVE_INSTANCE) {
-        tinypy_value_t *constructor_args = __tinypy_constructor_tail_arguments(vm, args);
+        tinypy_value_t *constructor_args = tinypy_tuple_from_items(vm, items, count);
 
         return_value_1 = tinypy_internal_object_allocate_checked(vm, class_type, class_type->basic_size, out_error);
         if (return_value_1 == NULL) {
@@ -2082,6 +2075,24 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
         }
     }
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (TINYPY_TUPLE_SIZE(args) == 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ requires a type", out_error);
+        return NULL;
+    }
+    tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ argument is not a type", out_error);
+        return NULL;
+    }
+    tinypy_value_t *const *items = tinypy_internal_tuple_items(args);
+    tinypy_value_t *result = tinypy_internal_object_new_items((tinypy_type_t *)class_value, items + 1U, TINYPY_TUPLE_SIZE(args) - 1U, kwargs, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_basestring_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

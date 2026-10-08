@@ -79,6 +79,7 @@
   "marshal_codec",
   "runtime_container_heap_limits",
   "runtime_eval_frame",
+  "runtime_exception_diagnostics",
   "runtime_exception_state_lost",
   "runtime_float_hex_locale",
   "runtime_function_call",

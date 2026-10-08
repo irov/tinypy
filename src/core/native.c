@@ -167,13 +167,17 @@ static tinypy_value_t *__tinypy_native_function_invoke(tinypy_value_t *callable,
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
+    size_t count = TINYPY_TUPLE_SIZE(args);
+    size_t supplied = count != 0U ? count - 1U : 0U;
+
+    if ((kwargs == NULL || TINYPY_DICT_SIZE(kwargs) == 0U) && count != 0U && supplied >= minimum && supplied <= maximum) {
+        return TINYPY_TRUE;
+    }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *name = tinypy_native_function_name(function);
+    tinypy_value_t *name = TINYPY_NATIVE_FUNCTION_OBJECT(function)->name;
     tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(function);
     tinypy_bool_t wrapper = function->type == vm->native_wrapper_descriptor_type
         || (native->function != NULL && native->function->type == vm->native_wrapper_descriptor_type);
-    size_t count = TINYPY_TUPLE_SIZE(args);
-    size_t supplied = count != 0U ? count - 1U : 0U;
 
     if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
         tinypy_message_part_t parts[] = {
@@ -185,27 +189,24 @@ tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return TINYPY_FALSE;
     }
-    if (count == 0U || supplied < minimum || supplied > maximum) {
-        const char *name_bytes = (const char *)TINYPY_TEXT_BYTES(name);
-        size_t name_size = TINYPY_TEXT_BYTE_SIZE(name);
+    const char *name_bytes = (const char *)TINYPY_TEXT_BYTES(name);
+    size_t name_size = TINYPY_TEXT_BYTE_SIZE(name);
 
-        if (wrapper != TINYPY_FALSE) {
-            if (style == TINYPY_ARITY_STYLE_PARSED) {
-                name_bytes = NULL;
-                name_size = 0U;
-            }
-            else if (style == TINYPY_ARITY_STYLE_UNPACK) {
-                name_bytes = "";
-                name_size = 0U;
-            }
-            else if (style == TINYPY_ARITY_STYLE_SINGLE) {
-                style = TINYPY_ARITY_STYLE_WRAPPER;
-            }
+    if (wrapper != TINYPY_FALSE) {
+        if (style == TINYPY_ARITY_STYLE_PARSED) {
+            name_bytes = NULL;
+            name_size = 0U;
         }
-        tinypy_internal_make_arity_error(vm, name_bytes, name_size, supplied, minimum, maximum, style, out_error);
-        return TINYPY_FALSE;
+        else if (style == TINYPY_ARITY_STYLE_UNPACK) {
+            name_bytes = "";
+            name_size = 0U;
+        }
+        else if (style == TINYPY_ARITY_STYLE_SINGLE) {
+            style = TINYPY_ARITY_STYLE_WRAPPER;
+        }
     }
-    return TINYPY_TRUE;
+    tinypy_internal_make_arity_error(vm, name_bytes, name_size, supplied, minimum, maximum, style, out_error);
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -238,8 +239,80 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Bound native calls build one owned argument tuple, including self. The
-   callback may retain it; its public ABI and recursion guard stay unchanged. */
+/* Fills an argument tuple that an earlier native call released unshared. */
+static tinypy_value_t *__tinypy_native_arguments_acquire(tinypy_vm_t *vm, tinypy_value_t *first, tinypy_value_t *const *items, size_t count, tinypy_error_t **out_error) {
+    size_t size = (first != NULL ? 1U : 0U) + count;
+
+    if (size == 0U || size > TINYPY_NATIVE_ARGUMENT_CACHE_SIZE || vm->native_argument_tuples[size - 1U] == NULL) {
+        tinypy_value_t *created = tinypy_internal_tuple_join_items_checked(vm, first, items, count, NULL, 0U, out_error);
+
+        return created;
+    }
+    tinypy_value_t *args = vm->native_argument_tuples[size - 1U];
+    tinypy_value_t **slots = TINYPY_TUPLE_OBJECT(args)->items;
+    size_t offset = size - count;
+
+    vm->native_argument_tuples[size - 1U] = NULL;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    __tinypy_internal_cycle_diagnostics_value_reuse(vm, args);
+#endif
+    if (first != NULL) {
+        slots[0] = TINYPY_RET(first);
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        slots[offset + index] = TINYPY_RET(items[index]);
+    }
+    TINYPY_SIZED_SIZE(args) = size;
+    return args;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Frees an emptied argument tuple of the given item count. */
+static void __tinypy_native_arguments_free(tinypy_vm_t *vm, tinypy_value_t *args, size_t size) {
+    TINYPY_SIZED_SIZE(args) = size;
+    args->type->base.base.ref -= 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    __tinypy_internal_cycle_diagnostics_value_unregister(vm, args);
+#endif
+    size_t allocation_size = tinypy_internal_value_allocation_size(args);
+    tinypy_internal_vm_deallocate(vm, args, allocation_size);
+}
+//////////////////////////////////////////////////////////////////////////
+/* A tuple the callback did not keep is emptied, so code its items run while
+   they are released cannot reach it, and then cached for the next call. */
+static void __tinypy_native_arguments_release(tinypy_vm_t *vm, tinypy_value_t *args) {
+    size_t size = TINYPY_TUPLE_SIZE(args);
+
+    if (TINYPY_REFCNT(args) != 1U || size == 0U || size > TINYPY_NATIVE_ARGUMENT_CACHE_SIZE || vm->state != TINYPY_VM_STATE_LIVE) {
+        TINYPY_DECREF(args);
+        return;
+    }
+    tinypy_value_t **items = TINYPY_TUPLE_OBJECT(args)->items;
+
+    TINYPY_SIZED_SIZE(args) = 0U;
+    for (size_t index = 0U; index < size; ++index) {
+        TINYPY_DECREF(items[index]);
+    }
+    if (vm->native_argument_tuples[size - 1U] != NULL) {
+        __tinypy_native_arguments_free(vm, args, size);
+        return;
+    }
+    vm->native_argument_tuples[size - 1U] = args;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_native_argument_cache_finalize(tinypy_vm_t *vm) {
+    for (size_t index = 0U; index < TINYPY_NATIVE_ARGUMENT_CACHE_SIZE; ++index) {
+        tinypy_value_t *args = vm->native_argument_tuples[index];
+
+        if (args == NULL) {
+            continue;
+        }
+        vm->native_argument_tuples[index] = NULL;
+        __tinypy_native_arguments_free(vm, args, index + 1U);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* Native calls pass one owned argument tuple, including self. The callback
+   may retain it; its public ABI and recursion guard stay unchanged. */
 tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
@@ -250,13 +323,13 @@ tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *calla
     if (function->self == NULL && __tinypy_native_function_check_receiver(callable, count != 0U ? items[0] : NULL, TINYPY_FALSE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *args = tinypy_internal_tuple_join_items_checked(vm, function->self, items, count, NULL, 0U, out_error);
+    tinypy_value_t *args = __tinypy_native_arguments_acquire(vm, function->self, items, count, out_error);
     if (args == NULL) {
         return NULL;
     }
     vm->evaluation_depth += 1U;
     tinypy_value_t *result = __tinypy_native_function_invoke(callable, args, kwargs, out_error);
-    TINYPY_DECREF(args);
+    __tinypy_native_arguments_release(vm, args);
     vm->evaluation_depth -= 1U;
     return result;
 }

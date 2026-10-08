@@ -74,6 +74,12 @@ tinypy_bool_t tinypy_internal_comparison_is_exact_builtin(const tinypy_value_t *
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_comparison_call_no_args(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *function = tinypy_internal_type_function_key(value, name);
+
+    if (function != NULL) {
+        tinypy_value_t *direct = tinypy_internal_call_type_function(function, value, NULL, 0U, out_error);
+        return direct;
+    }
     tinypy_value_t *method = tinypy_internal_object_get_special_key(value, name, out_error);
 
     if (method == NULL) {
@@ -124,7 +130,7 @@ static int32_t __tinypy_truth(tinypy_value_t *value, tinypy_bool_t dispatch_spec
     if (exact_builtin != 0) {
         goto builtin_truth;
     }
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_override_key(value, vm->internal_special_nonzero_key) != 0) {
+    if (dispatch_special != 0 && __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(NONZERO)) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_no_args(value, vm->internal_special_nonzero_key, out_error);
         int32_t truth;
 
@@ -149,7 +155,7 @@ static int32_t __tinypy_truth(tinypy_value_t *value, tinypy_bool_t dispatch_spec
     if (__tinypy_comparison_is_numeric(kind) != 0) {
         goto builtin_truth;
     }
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_override_key(value, vm->internal_special_length_key) != 0) {
+    if (dispatch_special != 0 && __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_no_args(value, vm->internal_special_length_key, out_error);
         int32_t truth;
 
@@ -880,7 +886,7 @@ static int32_t __tinypy_contains(tinypy_value_t *container, tinypy_value_t *item
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     TINYPY_CLEAR_ERROR(out_error);
-    if (dispatch_special != 0 && tinypy_internal_object_has_special_override_key(container, vm->internal_special_contains_key) != 0) {
+    if (dispatch_special != 0 && __tinypy_internal_object_overrides_dispatch(container, TINYPY_INTERNAL_DISPATCH_BIT(CONTAINS)) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_binary(container, vm->internal_special_contains_key, item, TINYPY_FALSE, out_error);
         int32_t truth;
 
@@ -1063,6 +1069,12 @@ int32_t tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver, tinypy_value_t *name, tinypy_value_t *argument, tinypy_bool_t missing_is_not_implemented, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
+    tinypy_value_t *function = tinypy_internal_type_function_key(receiver, name);
+
+    if (function != NULL) {
+        tinypy_value_t *direct = tinypy_internal_call_type_function(function, receiver, &argument, 1U, out_error);
+        return direct;
+    }
     tinypy_value_t *method;
     int32_t found = tinypy_internal_object_lookup_special_key(receiver, name, &method, out_error);
 
@@ -1140,28 +1152,32 @@ static tinypy_bool_t __tinypy_comparison_try_native_rich_slot(tinypy_value_t *re
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_comparison_has_python_rich_slot(tinypy_value_t *value) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *const rich_names[] = {vm->internal_special_lt_key, vm->internal_special_le_key, vm->internal_special_eq_key, vm->internal_special_ne_key, vm->internal_special_gt_key, vm->internal_special_ge_key};
+    const uint64_t rich_names = TINYPY_INTERNAL_DISPATCH_BIT(LT) | TINYPY_INTERNAL_DISPATCH_BIT(LE) | TINYPY_INTERNAL_DISPATCH_BIT(EQ) | TINYPY_INTERNAL_DISPATCH_BIT(NE) | TINYPY_INTERNAL_DISPATCH_BIT(GT) | TINYPY_INTERNAL_DISPATCH_BIT(GE);
+
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
         return TINYPY_FALSE;
     }
-    for (size_t index = 0U; index < 6U; ++index) {
-        if (tinypy_internal_object_has_special_override_key(value, rich_names[index]) != 0) {
-            return TINYPY_TRUE;
-        }
-    }
-    return TINYPY_FALSE;
+    tinypy_bool_t result = __tinypy_internal_object_overrides_dispatch(value, rich_names);
+    return result;
 }
+//////////////////////////////////////////////////////////////////////////
+/* The rich comparison specials follow the order of the operations. */
+typedef char tinypy_comparison_dispatch_follows_operations_t[
+    TINYPY_INTERNAL_DISPATCH_LE - TINYPY_INTERNAL_DISPATCH_LT == (int32_t)TINYPY_COMPARE_LESS_EQUAL
+    && TINYPY_INTERNAL_DISPATCH_EQ - TINYPY_INTERNAL_DISPATCH_LT == (int32_t)TINYPY_COMPARE_EQUAL
+    && TINYPY_INTERNAL_DISPATCH_NE - TINYPY_INTERNAL_DISPATCH_LT == (int32_t)TINYPY_COMPARE_NOT_EQUAL
+    && TINYPY_INTERNAL_DISPATCH_GT - TINYPY_INTERNAL_DISPATCH_LT == (int32_t)TINYPY_COMPARE_GREATER
+    && TINYPY_INTERNAL_DISPATCH_GE - TINYPY_INTERNAL_DISPATCH_LT == (int32_t)TINYPY_COMPARE_GREATER_EQUAL ? 1 : -1];
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_comparison_try_half_rich(tinypy_value_t *receiver, tinypy_value_t *argument, tinypy_compare_operation_e operation, tinypy_bool_t *out_handled, tinypy_value_t **out_value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
-    tinypy_value_t *const rich_names[] = {vm->internal_special_lt_key, vm->internal_special_le_key, vm->internal_special_eq_key, vm->internal_special_ne_key, vm->internal_special_gt_key, vm->internal_special_ge_key};
-    tinypy_value_t *name = rich_names[(size_t)operation];
+    tinypy_internal_dispatch_e special = (tinypy_internal_dispatch_e)(TINYPY_INTERNAL_DISPATCH_LT + (int32_t)operation);
+    tinypy_value_t *name = tinypy_internal_dispatch_key(vm, special);
     tinypy_bool_t not_implemented;
 
     /* half_richcompare reaches a classic __getattr__; a missing method is
        NotImplemented. */
-    if (TINYPY_VALUE_KIND(receiver) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(receiver, name) == 0) {
+    if (TINYPY_VALUE_KIND(receiver) != TINYPY_VALUE_OLD_INSTANCE && __tinypy_internal_object_defines_dispatch(receiver, TINYPY_INTERNAL_DISPATCH_MASK(special)) == 0) {
         return TINYPY_TRUE;
     }
     tinypy_value_t *result = __tinypy_comparison_call_binary(receiver, name, argument, TINYPY_TRUE, out_error);
@@ -1214,7 +1230,7 @@ static tinypy_bool_t __tinypy_comparison_try_three_way(tinypy_value_t *left, tin
     /* A built-in's ordering is already the default ordering, and its __cmp__
        wrapper type-checks its argument the way CPython's wrap_cmpfunc does, so
        the three-way protocol only applies to types defining __cmp__ in Python. */
-    if (TINYPY_VALUE_KIND(left) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_override_key(left, vm->internal_special_cmp_key) == 0) {
+    if (TINYPY_VALUE_KIND(left) != TINYPY_VALUE_OLD_INSTANCE && __tinypy_internal_object_overrides_dispatch(left, TINYPY_INTERNAL_DISPATCH_BIT(CMP)) == 0) {
         return TINYPY_TRUE;
     }
     result = __tinypy_comparison_call_binary(left, vm->internal_special_cmp_key, right, TINYPY_TRUE, out_error);
@@ -1286,8 +1302,6 @@ static tinypy_value_t *__tinypy_comparison_coerce_classic(tinypy_value_t *left, 
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_comparison_try_three_way_pair(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_bool_t *out_ordered, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_vm_t *right_vm = TINYPY_VALUE_VM(right);
     int64_t order = 0;
     tinypy_bool_t handled = TINYPY_FALSE;
 
@@ -1326,7 +1340,7 @@ static tinypy_bool_t __tinypy_comparison_try_three_way_pair(tinypy_value_t *left
     if (*out_ordered == 0 && __tinypy_comparison_try_three_way(right, left, TINYPY_TRUE, &order, out_ordered, &handled, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    if (*out_ordered == 0 && (tinypy_internal_object_has_special_override_key(left, vm->internal_special_cmp_key) != 0 || tinypy_internal_object_has_special_override_key(right, right_vm->internal_special_cmp_key) != 0)) {
+    if (*out_ordered == 0 && (__tinypy_internal_object_overrides_dispatch(left, TINYPY_INTERNAL_DISPATCH_BIT(CMP)) != 0 || __tinypy_internal_object_overrides_dispatch(right, TINYPY_INTERNAL_DISPATCH_BIT(CMP)) != 0)) {
         order = left == right ? 0 : ((uintptr_t)left < (uintptr_t)right ? -1 : 1);
         *out_ordered = TINYPY_TRUE;
     }
@@ -1356,28 +1370,77 @@ static tinypy_bool_t __tinypy_comparison_try_rich(tinypy_value_t *left, tinypy_v
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_comparison_order_holds(tinypy_compare_operation_e operation, int32_t order) {
+    switch (operation) {
+    case TINYPY_COMPARE_LESS:
+        return order < 0 ? 1 : 0;
+    case TINYPY_COMPARE_LESS_EQUAL:
+        return order <= 0 ? 1 : 0;
+    case TINYPY_COMPARE_EQUAL:
+        return order == 0 ? 1 : 0;
+    case TINYPY_COMPARE_NOT_EQUAL:
+        return order != 0 ? 1 : 0;
+    case TINYPY_COMPARE_GREATER:
+        return order > 0 ? 1 : 0;
+    default:
+        return order >= 0 ? 1 : 0;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_comparison_order_value(tinypy_vm_t *vm, tinypy_compare_operation_e operation, int32_t order) {
-    tinypy_bool_t comparison;
+    int32_t comparison = __tinypy_comparison_order_holds(operation, order);
+    tinypy_value_t *result = tinypy_bool_from_i32(vm, comparison);
 
-    if (operation == TINYPY_COMPARE_LESS) {
-        comparison = order < 0;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+typedef char tinypy_comparison_scalars_precede_float_t[TINYPY_VALUE_INTEGER < TINYPY_VALUE_FLOAT && TINYPY_VALUE_STRING < TINYPY_VALUE_FLOAT ? 1 : -1];
+//////////////////////////////////////////////////////////////////////////
+/* int_richcompare, float_richcompare and string_richcompare decide a rich
+   comparison of exact ints, floats and strs, ints and floats also mixed,
+   without any dispatch; -1 leaves every other pair to the general protocol.
+   Their kinds all precede TINYPY_VALUE_FLOAT's, which passes over containers
+   and objects at once. */
+static int32_t __tinypy_comparison_exact_scalar(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_compare_operation_e operation) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    const tinypy_type_t *integer_type = &vm->types[TINYPY_VALUE_INTEGER];
+    const tinypy_type_t *float_type = &vm->types[TINYPY_VALUE_FLOAT];
+    double left_number;
+    double right_number;
+    int32_t order;
+
+    if (operation > TINYPY_COMPARE_GREATER_EQUAL || TINYPY_VALUE_KIND(left) > TINYPY_VALUE_FLOAT || TINYPY_VALUE_KIND(right) > TINYPY_VALUE_FLOAT) {
+        return -1;
     }
-    else if (operation == TINYPY_COMPARE_LESS_EQUAL) {
-        comparison = order <= 0;
+    if (left->type == integer_type && right->type == integer_type) {
+        int64_t left_integer = TINYPY_INTEGER_VALUE(left);
+        int64_t right_integer = TINYPY_INTEGER_VALUE(right);
+
+        order = left_integer < right_integer ? -1 : (left_integer > right_integer ? 1 : 0);
     }
-    else if (operation == TINYPY_COMPARE_EQUAL) {
-        comparison = order == 0;
+    else if (__tinypy_internal_exact_double(left, &left_number) != 0 && __tinypy_internal_exact_double(right, &right_number) != 0) {
+        int32_t holds = __tinypy_internal_compare_doubles(operation, left_number, right_number);
+        return holds;
     }
-    else if (operation == TINYPY_COMPARE_NOT_EQUAL) {
-        comparison = order != 0;
+    else if ((left->type == integer_type || left->type == float_type) && (right->type == integer_type || right->type == float_type)) {
+        /* An int beyond 2**53 compares with a float through its digits. */
+        if (tinypy_internal_numeric_order(left, right, &order) == 0) {
+            return operation == TINYPY_COMPARE_NOT_EQUAL ? 1 : 0;
+        }
     }
-    else if (operation == TINYPY_COMPARE_GREATER) {
-        comparison = order > 0;
+    else if (left->type == &vm->types[TINYPY_VALUE_STRING] && right->type == left->type) {
+        if (operation == TINYPY_COMPARE_EQUAL || operation == TINYPY_COMPARE_NOT_EQUAL) {
+            size_t size = TINYPY_STRING_SIZE(left);
+            tinypy_bool_t equal = size == TINYPY_STRING_SIZE(right) && memcmp(TINYPY_STRING_OBJECT(left)->bytes, TINYPY_STRING_OBJECT(right)->bytes, size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+            return (equal != 0) == (operation == TINYPY_COMPARE_EQUAL) ? 1 : 0;
+        }
+        order = tinypy_internal_text_order(left, right);
     }
     else {
-        comparison = order >= 0;
+        return -1;
     }
-    tinypy_value_t *result = tinypy_bool_from_i32(vm, comparison);
+    int32_t result = __tinypy_comparison_order_holds(operation, order);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1423,7 +1486,6 @@ static tinypy_bool_t __tinypy_comparison_three_way_fallback(tinypy_value_t *left
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_comparison_try_special(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_bool_t *out_handled, tinypy_value_t **out_value, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     int32_t order = 0;
     tinypy_bool_t ordered = TINYPY_FALSE;
 
@@ -1437,7 +1499,7 @@ static tinypy_bool_t __tinypy_comparison_try_special(tinypy_value_t *left, tinyp
         if (*out_handled != 0) {
             return TINYPY_TRUE;
         }
-        if (tinypy_internal_object_has_special_override_key(left, vm->internal_special_cmp_key) != 0) {
+        if (__tinypy_internal_object_overrides_dispatch(left, TINYPY_INTERNAL_DISPATCH_BIT(CMP)) != 0) {
             if (__tinypy_comparison_try_three_way_pair(left, right, &order, &ordered, out_error) == 0) {
                 return TINYPY_FALSE;
             }
@@ -1650,6 +1712,10 @@ static int32_t __tinypy_comparison_bool_inner(tinypy_value_t *left, tinypy_value
     if (left == right && (operation == TINYPY_COMPARE_EQUAL || operation == TINYPY_COMPARE_NOT_EQUAL)) {
         return operation == TINYPY_COMPARE_EQUAL ? 1 : 0;
     }
+    int32_t exact = __tinypy_comparison_exact_scalar(left, right, operation);
+    if (exact >= 0) {
+        return exact;
+    }
     if (operation <= TINYPY_COMPARE_GREATER_EQUAL && (left->type->rich_compare != NULL || right->type->rich_compare != NULL || tinypy_internal_comparison_is_exact_builtin(left) == 0 || tinypy_internal_comparison_is_exact_builtin(right) == 0)) {
         tinypy_bool_t handled;
         tinypy_value_t *special_value = NULL;
@@ -1677,6 +1743,11 @@ static int32_t __tinypy_comparison_bool_inner(tinypy_value_t *left, tinypy_value
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_comparison_value_inner(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error) {
     TINYPY_CLEAR_ERROR(out_error);
+    int32_t exact = __tinypy_comparison_exact_scalar(left, right, operation);
+    if (exact >= 0) {
+        tinypy_value_t *outcome = tinypy_bool_from_i32(TINYPY_VALUE_VM(left), exact);
+        return outcome;
+    }
     if (operation <= TINYPY_COMPARE_GREATER_EQUAL && (left->type->rich_compare != NULL || right->type->rich_compare != NULL || tinypy_internal_comparison_is_exact_builtin(left) == 0 || tinypy_internal_comparison_is_exact_builtin(right) == 0)) {
         tinypy_bool_t handled;
         tinypy_value_t *special_value = NULL;
@@ -1743,7 +1814,7 @@ static tinypy_bool_t __tinypy_comparison_three_way_inner(tinypy_value_t *left, t
         return result;
     }
     if (left->type == right->type) {
-        if (kind == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(left, vm->internal_special_cmp_key) != 0) {
+        if (kind == TINYPY_VALUE_OLD_INSTANCE || __tinypy_internal_object_overrides_dispatch(left, TINYPY_INTERNAL_DISPATCH_BIT(CMP)) != 0) {
             if (__tinypy_comparison_try_three_way_pair(left, right, out_order, &ordered, out_error) == 0) {
                 return TINYPY_FALSE;
             }

@@ -685,6 +685,11 @@ tinypy_value_t *tinypy_internal_string_from_bytes_uninterned(tinypy_vm_t *vm, co
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_string_from_bytes_uninterned_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_internal_string_from_bytes(vm, bytes, size, TINYPY_FALSE, TINYPY_TRUE, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size) {
     *out_size = TINYPY_SIZED_SIZE(value);
     const void *bytes = TINYPY_STRING_OBJECT(value)->bytes;

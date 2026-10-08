@@ -280,7 +280,7 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
-    if (tinypy_internal_object_has_special_override_key(value, vm->internal_special_length_key) != 0) {
+    if (__tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) != 0) {
         tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_length_key, out_error);
         tinypy_value_t *empty;
         tinypy_value_t *result;
@@ -784,14 +784,16 @@ static tinypy_value_t *__tinypy_builtin_hasattr(tinypy_value_t *function, tinypy
     if (name == NULL) {
         return NULL;
     }
-    tinypy_value_t *attribute = tinypy_internal_object_get_attr_key(TINYPY_TUPLE_GET(args, 0U), name, out_error);
-    tinypy_bool_t found = attribute != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    /* A missing attribute answers False without raising an AttributeError. */
+    tinypy_value_t *attribute;
+    int32_t status = tinypy_internal_object_get_optional_attr_key(TINYPY_TUPLE_GET(args, 0U), name, &attribute, out_error);
+    tinypy_bool_t found = status > 0 ? TINYPY_TRUE : TINYPY_FALSE;
 
     TINYPY_DECREF(name);
-    if (attribute != NULL) {
+    if (status > 0) {
         TINYPY_DECREF(attribute);
     }
-    else {
+    else if (status < 0) {
         if (vm->raised_type != NULL && (TINYPY_VALUE_KIND(vm->raised_type) != TINYPY_VALUE_TYPE ||
             tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_EXCEPTION]) == 0)) {
             return NULL;
@@ -2743,6 +2745,34 @@ static tinypy_bool_t __tinypy_builtin_round_double(tinypy_vm_t *vm, double numbe
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The magnitude scaled by 10^digits is rounded half away from zero from its
+   exact value; when that fits the 53-bit mantissa, one correctly rounded
+   division by the exact power of ten gives the double of the decimal text. */
+static tinypy_bool_t __tinypy_builtin_round_scaled(double number, int32_t digits, double *out_result) {
+    if (digits <= 0) {
+        return TINYPY_FALSE;
+    }
+    double magnitude = fabs(number);
+    uint64_t scaled;
+    int32_t half_order;
+    if (tinypy_internal_double_scaled_integer(magnitude, (size_t)digits, &scaled, &half_order) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (scaled >= (UINT64_C(1) << DBL_MANT_DIG)) {
+        return TINYPY_FALSE;
+    }
+    if (half_order >= 0) {
+        scaled += 1U;
+    }
+    double power = 1.0;
+
+    for (int32_t index = 0; index < digits; ++index) {
+        power *= 10.0;
+    }
+    *out_result = copysign((double)scaled / power, number);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_round(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *const parameter_names[] = {vm->internal_number_key, vm->internal_ndigits_key};
@@ -2815,12 +2845,16 @@ static tinypy_value_t *__tinypy_builtin_round(tinypy_value_t *function, tinypy_v
         tinypy_value_t *return_value_4 = tinypy_float_from_double(vm, round(number));
         return return_value_4;
     }
+    if (__tinypy_builtin_round_scaled(number, (int32_t)digits, &result) != 0) {
+        tinypy_value_t *return_value_5 = tinypy_float_from_double(vm, result);
+        return return_value_5;
+    }
     if (__tinypy_builtin_round_double(vm, number, (int32_t)digits, &result) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "rounded value too large to represent", out_error);
         return NULL;
     }
-    tinypy_value_t *return_value_5 = tinypy_float_from_double(vm, result);
-    return return_value_5;
+    tinypy_value_t *return_value_6 = tinypy_float_from_double(vm, result);
+    return return_value_6;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_frame_dict(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

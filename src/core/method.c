@@ -116,6 +116,26 @@ void tinypy_internal_method_free_list_push(tinypy_vm_t *vm, tinypy_value_t *valu
     vm->method_free_count += 1U;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Drops a reference to a bound method. A method needs no finalization, so
+   the last reference to one without weak references returns it to the free
+   list directly. */
+void tinypy_internal_method_release(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(value);
+
+    if (TINYPY_REFCNT(value) != 1U || method->weakrefs != NULL || vm->state != TINYPY_VM_STATE_LIVE || vm->method_free_count >= TINYPY_METHOD_FREE_LIST_MAX) {
+        TINYPY_DECREF(value);
+        return;
+    }
+    value->ref = 0;
+    TINYPY_DECREF(method->function);
+    if (method->self != NULL) {
+        TINYPY_DECREF(method->self);
+    }
+    TINYPY_DECREF(method->owner);
+    tinypy_internal_method_free_list_push(vm, value);
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_method_free_list_finalize(tinypy_vm_t *vm) {
     while (vm->method_free_list != NULL) {
         tinypy_method_object_t *method = vm->method_free_list;
