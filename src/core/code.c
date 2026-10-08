@@ -117,7 +117,7 @@ static tinypy_bool_t __tinypy_internal_code_find_method_calls(tinypy_code_object
     size_t bytecode_size = TINYPY_SIZED_SIZE(code->bytecode);
     size_t load_limit = bytecode_size / 3U;
     size_t pending_capacity = (size_t)code->stack_size < load_limit ? (size_t)code->stack_size : load_limit;
-    size_t scratch_size = pending_capacity * sizeof(tinypy_bytecode_method_load_t) + (bytecode_size + 7U) / 8U;
+    size_t scratch_size = pending_capacity * sizeof(tinypy_bytecode_method_load_t) + bytecode_size * sizeof(tinypy_bytecode_method_target_t);
     uint8_t *scratch = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
 
     if (scratch == NULL) {
@@ -129,7 +129,7 @@ static tinypy_bool_t __tinypy_internal_code_find_method_calls(tinypy_code_object
         return TINYPY_FALSE;
     }
     tinypy_bytecode_method_load_t *pending = (tinypy_bytecode_method_load_t *)scratch;
-    uint8_t *targets = scratch + pending_capacity * sizeof(tinypy_bytecode_method_load_t);
+    tinypy_bytecode_method_target_t *targets = (tinypy_bytecode_method_target_t *)(scratch + pending_capacity * sizeof(tinypy_bytecode_method_load_t));
     size_t slots = tinypy_bytecode_find_method_calls(bytecode, bytecode_size, method_bytecode, targets, pending, pending_capacity);
 
     tinypy_internal_vm_deallocate(vm, scratch, scratch_size);

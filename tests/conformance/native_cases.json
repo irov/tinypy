@@ -69,6 +69,7 @@
   "core_independent_vms",
   "core_long_canonical",
   "core_native_embedding",
+  "core_native_items",
   "core_pool_allocator",
   "core_string_release_contract",
   "core_tuple_deep_release",

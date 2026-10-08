@@ -345,14 +345,15 @@ static tinypy_value_t *__tinypy_eval_load_type_attr(tinypy_vm_t *vm, tinypy_valu
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* With out_unbound, a function or method descriptor of the type that binding
-   would make a method of the object is returned as it is, for the method call
-   to run with the object as its first argument. */
+/* With out_unbound, a function or method descriptor of the type, or a
+   function of a classic instance's class, that binding would make a method of
+   the object is returned as it is, for the method call to run with the object
+   as its first argument. */
 static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_value_t *object, tinypy_value_t *name, size_t name_index, tinypy_bool_t *out_unbound, tinypy_error_t **out_error) {
     const uint8_t *name_bytes = TINYPY_TEXT_BYTES(name);
     size_t name_size = TINYPY_TEXT_BYTE_SIZE(name);
     tinypy_bool_t special_name = name_size >= 2U && name_bytes[0] == (uint8_t)'_' && name_bytes[1] == (uint8_t)'_';
-    if (TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE || object->type->get_attribute != NULL || (object->type->has_classic_mro != 0 || object->type->has_custom_mro != 0) || special_name != 0) {
+    if ((TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE && TINYPY_VALUE_KIND(object) != TINYPY_VALUE_NATIVE_INSTANCE) || object->type->get_attribute != NULL || (object->type->has_classic_mro != 0 || object->type->has_custom_mro != 0) || special_name != 0) {
         if (object->type == &vm->types[TINYPY_VALUE_TYPE] && special_name == 0) {
             tinypy_value_t *result = __tinypy_eval_load_class_attr(vm, code, object, name, name_index, out_error);
             return result;
@@ -371,6 +372,10 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         if (special_name == 0 && (object->type->flags & (TINYPY_TYPE_FLAG_HEAP | TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY)) == 0U && object->type->get_attribute == NULL && object->type->dict_offset == 0U
             && object->type->has_classic_mro == 0 && object->type->has_custom_mro == 0 && tinypy_internal_object_kind_has_builtin_attributes(TINYPY_VALUE_KIND(object)) == 0) {
             tinypy_value_t *result = __tinypy_eval_load_type_attr(vm, code, object, name, name_index, out_unbound, out_error);
+            return result;
+        }
+        if (out_unbound != NULL && TINYPY_VALUE_KIND(object) == TINYPY_VALUE_OLD_INSTANCE && special_name == 0) {
+            tinypy_value_t *result = tinypy_internal_old_instance_get_method(object, name, out_unbound, out_error);
             return result;
         }
         tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);

@@ -33,16 +33,35 @@ tinypy_value_t *tinypy_native_function_new_key(tinypy_value_t *name, tinypy_nati
     return &function->base;
 }
 //////////////////////////////////////////////////////////////////////////
-/* A builtin of the items convention; minimum and maximum bound the positional
+/* A function of the items convention; minimum and maximum bound the positional
    arguments after self unless the style is TINYPY_ARITY_STYLE_UNCHECKED. */
-tinypy_value_t *tinypy_internal_native_items_function_new(tinypy_value_t *name, tinypy_native_items_callback_t callback, void *user_data, size_t minimum, size_t maximum, tinypy_arity_style_e style) {
-    tinypy_value_t *function = tinypy_native_function_new_key(name, NULL, user_data, NULL);
+static tinypy_value_t *__tinypy_native_items_function_new(tinypy_value_t *name, tinypy_native_items_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize, size_t minimum, size_t maximum, tinypy_arity_style_e style) {
+    tinypy_value_t *function = tinypy_native_function_new_key(name, NULL, user_data, finalize);
     tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(function);
 
     native->items_callback = callback;
     native->minimum = minimum;
     native->maximum = maximum;
     native->arity_style = style;
+    return function;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_native_items_function_new(tinypy_value_t *name, tinypy_native_items_callback_t callback, void *user_data, size_t minimum, size_t maximum, tinypy_arity_style_e style) {
+    tinypy_value_t *function = __tinypy_native_items_function_new(name, callback, user_data, NULL, minimum, maximum, style);
+    return function;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_native_function_new_items(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_items_callback_t callback, size_t minimum, size_t maximum, void *user_data, tinypy_native_function_finalize_t finalize) {
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
+    tinypy_value_t *function = __tinypy_native_items_function_new(key, callback, user_data, finalize, minimum, maximum, TINYPY_ARITY_STYLE_PARSED);
+    TINYPY_DECREF(key);
+    return function;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_native_function_new_items_keywords(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_items_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
+    tinypy_value_t *function = __tinypy_native_items_function_new(key, callback, user_data, finalize, 0U, SIZE_MAX, TINYPY_ARITY_STYLE_UNCHECKED);
+    TINYPY_DECREF(key);
     return function;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -309,7 +328,11 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
 static tinypy_value_t *__tinypy_native_arguments_acquire(tinypy_vm_t *vm, tinypy_value_t *first, tinypy_value_t *const *items, size_t count, tinypy_error_t **out_error) {
     size_t size = (first != NULL ? 1U : 0U) + count;
 
-    if (size == 0U || size > TINYPY_NATIVE_ARGUMENT_CACHE_SIZE || vm->native_argument_tuples[size - 1U] == NULL) {
+    if (size == 0U) {
+        tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
+        return empty;
+    }
+    if (size > TINYPY_NATIVE_ARGUMENT_CACHE_SIZE || vm->native_argument_tuples[size - 1U] == NULL) {
         tinypy_value_t *created = tinypy_internal_tuple_join_items_checked(vm, first, items, count, NULL, 0U, out_error);
 
         return created;
@@ -344,8 +367,9 @@ static void __tinypy_native_arguments_free(tinypy_vm_t *vm, tinypy_value_t *args
 }
 //////////////////////////////////////////////////////////////////////////
 /* A tuple the callback did not keep is emptied, so code its items run while
-   they are released cannot reach it, and then cached for the next call. */
-static void __tinypy_native_arguments_release(tinypy_vm_t *vm, tinypy_value_t *args) {
+   they are released cannot reach it, and then cached for the next call. The
+   native call path keeps it inline although the public release shares it. */
+static TINYPY_ALWAYS_INLINE void __tinypy_native_arguments_release(tinypy_vm_t *vm, tinypy_value_t *args) {
     size_t size = TINYPY_TUPLE_SIZE(args);
 
     if (TINYPY_REFCNT(args) != 1U || size == 0U || size > TINYPY_NATIVE_ARGUMENT_CACHE_SIZE || vm->state != TINYPY_VM_STATE_LIVE) {
@@ -363,6 +387,16 @@ static void __tinypy_native_arguments_release(tinypy_vm_t *vm, tinypy_value_t *a
         return;
     }
     vm->native_argument_tuples[size - 1U] = args;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_native_arguments_acquire(tinypy_vm_t *vm, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_error_t **out_error) {
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_t *args = __tinypy_native_arguments_acquire(vm, self, items, count, out_error);
+    return args;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_native_arguments_release(tinypy_value_t *args) {
+    __tinypy_native_arguments_release(TINYPY_VALUE_VM(args), args);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_native_argument_cache_finalize(tinypy_vm_t *vm) {

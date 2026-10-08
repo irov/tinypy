@@ -310,6 +310,19 @@ kwargs без argument tuple. Вызывающий код проверяет о�
 отклоняет keywords с теми же диагностиками, что и PyArg-парсеры, кроме стиля
 `TINYPY_ARITY_STYLE_UNCHECKED`, при котором аргументы разбирает сам callback.
 Callbacks публичного `tinypy_native_function_new` по-прежнему получают tuple.
+Host использует ту же конвенцию через `tinypy_native_function_new_items`:
+вызывающий код проверяет `minimum <= count <= maximum` и отклоняет keywords
+диагностиками `PyArg_ParseTuple`; у `tinypy_native_function_new_items_keywords`
+callback получает kwargs и сам проверяет все аргументы. user_data читается
+через `tinypy_native_function_user_data(function)`. Функция, установленная в тип
+через `tinypy_type_set_attr`, становится method descriptor: при вызове через
+экземпляр, bound method или тип с проверенным получателем callback получает его
+как self, а method call вызывает descriptor без bound method. В остальных
+случаях, например как getter property, self равен NULL, а все аргументы лежат
+в items. Callback, которому нужен argument tuple, получает его через
+`tinypy_native_arguments_acquire`: self, если он не NULL, и items, как у
+tuple-конвенции; `tinypy_native_arguments_release` возвращает неудержанный
+tuple в кэш VM для следующего вызова.
 Все фиксированные имена production C-кода, включая module-local методы,
 исключения, codec aliases и `__future__`, заранее создаются из registry при
 инициализации VM. Поля этих строк имеют префикс `internal_`, например
@@ -446,15 +459,22 @@ Frame execution поддерживает closures, generators, exception blocks,
 comprehensions, `with`, imports и tracing data code object.
 
 После верификации evaluator находит method calls: `LOAD_ATTR` не от global или
-name, значение которого в той же линейной цепочке без входящих переходов
-используется только как callable следующего `CALL_FUNCTION`. Если они есть,
-code object хранит копию bytecode, где эти пары заменены внутренними opcodes
-evaluator, и frames этого кода получают по слоту стека на каждый вложенный
-method call; `co_code`, `co_stacksize`, `f_lasti`, marshal и compiler output
-не меняются. Когда атрибут разрешается в функцию или method descriptor типа
-получателя, вызов получает получателя первым аргументом без bound method;
-иначе под callable лежит пустой слот, а поиск атрибута и вызов идут обычным
-путём. `tinypy_frame_stack_depth` учитывает эти слоты.
+name, значение которого используется только как callable следующего
+`CALL_FUNCTION`. Каждый путь от `LOAD_ATTR`, который не прерывает исключение,
+доходит до этого вызова (yield его только приостанавливает), не читая стек ниже
+callable и не выходя из выражения; переходы между ними (условные выражения,
+`and`/`or`, list comprehensions в аргументах) остаются между ними, обратный
+переход возвращается на ту же глубину стека, и никакой другой переход туда не
+входит. Если они есть, code object хранит копию bytecode, где эти пары заменены
+внутренними opcodes evaluator, и frames этого кода получают по слоту стека на
+каждый вложенный method call; `co_code`, `co_stacksize`, `f_lasti`, marshal и
+compiler output не меняются. Когда атрибут разрешается в функцию или method
+descriptor типа получателя или, для classic instance, которому его словарь не
+даёт атрибута, в функцию его класса, вызов получает получателя первым аргументом
+без bound method; иначе под callable лежит пустой слот, а поиск атрибута и вызов
+идут обычным путём. `tinypy_frame_stack_depth` учитывает эти слоты. Экземпляры
+native types без `get_attribute` hook ищут атрибуты и вызывают методы так же,
+как экземпляры классов.
 
 `f_exc_type`, `f_exc_value` и `f_exc_traceback` показывают сохранённое
 состояние вызывающего frame; текущий обработчик читается через `sys.exc_info()`.

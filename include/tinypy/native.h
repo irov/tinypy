@@ -6,6 +6,11 @@
 #define TINYPY_NATIVE_TYPE_ABI_VERSION UINT32_C(1)
 
 typedef tinypy_value_t *(*tinypy_native_function_callback_t)(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error);
+/* The items convention, like METH_O and METH_VARARGS without an argument
+ * tuple: self is the instance a method of a type is called on and NULL for a
+ * plain function call, items borrows the count positional arguments after it
+ * for the duration of the call, and kwargs is NULL or a dict. */
+typedef tinypy_value_t *(*tinypy_native_items_callback_t)(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 /* Finalizers run exactly once: when the owning value is released, or during
  * tinypy_vm_destroy before any reachable value is freed. */
 typedef void (*tinypy_native_function_finalize_t)(void *user_data);
@@ -71,6 +76,19 @@ tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, si
 /* Borrows an existing byte-string name and retains it in the new
  * function. No string allocation, lookup or automatic interning is performed. */
 tinypy_value_t *tinypy_native_function_new_key(tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize);
+/* An items function checks minimum <= count <= maximum and rejects keyword
+ * arguments before its callback runs, reporting both as PyArg_ParseTuple
+ * does. Registered on a type through tinypy_type_set_attr it becomes a method
+ * descriptor that calls through an instance without a bound method.
+ * The callback reads user_data with tinypy_native_function_user_data. */
+tinypy_value_t *tinypy_native_function_new_items(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_items_callback_t callback, size_t minimum, size_t maximum, void *user_data, tinypy_native_function_finalize_t finalize);
+/* Passes keyword arguments to the callback, which checks all its arguments. */
+tinypy_value_t *tinypy_native_function_new_items_keywords(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_items_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize);
+/* The argument tuple a tuple callback would receive: self, unless NULL, then
+ * the items. Release it with tinypy_native_arguments_release, which keeps an
+ * unshared tuple for reuse by the next call. */
+tinypy_value_t *tinypy_native_arguments_acquire(tinypy_vm_t *vm, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_error_t **out_error);
+void tinypy_native_arguments_release(tinypy_value_t *args);
 tinypy_value_t *tinypy_native_function_name(const tinypy_value_t *function);
 void *tinypy_native_function_user_data(const tinypy_value_t *function);
 

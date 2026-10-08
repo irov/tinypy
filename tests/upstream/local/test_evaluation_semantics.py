@@ -821,3 +821,99 @@ class EvaluationSemantics(unittest.TestCase):
             call_again_until_recursion_limit(AgainUntilRecursionLimit())
         except RuntimeError as error:
             self.assertEqual(str(error), 'maximum recursion depth exceeded')
+
+    def test_method_call_arguments_with_branches_and_loops(self):
+        log = []
+        class Recorder(object):
+            def record(self, *values):
+                log.append(values)
+                return len(values)
+            def one(self):
+                return 1
+        recorder = Recorder()
+        def call(first, second, flag, items):
+            return [
+                recorder.record(first if flag else second),
+                recorder.record(first or second, first and second),
+                recorder.record(first < second < flag),
+                recorder.record([item.one() for item in items if item]),
+                recorder.record([[item.one() for item in items if item] for row in items if row or flag]),
+                recorder.record(recorder.record(1 if flag else recorder.one()), lambda value=recorder.one(): value),
+            ]
+        items = [recorder, None, recorder]
+        self.assertEqual([call(0, 2, flag, items) for flag in (0, 3, 0)], [[1, 2, 1, 1, 1, 2]] * 3)
+        self.assertEqual(log[:5], [(2,), (2, 0), (False,), ([1, 1],), ([[1, 1], [1, 1]],)])
+        del log[:]
+        def suspended():
+            yield recorder.record((yield 'a') if (yield 'b') else (yield 'c'), [(yield index) for index in range(2)])
+        running = suspended()
+        self.assertEqual([next(running)] + [running.send(value) for value in (0, 'x', 'y', 'z')], ['b', 'c', 0, 1, 2])
+        self.assertEqual(log, [('x', ['y', 'z'])])
+        def failing(items):
+            return recorder.record(len(items), [1 // item for item in items] if items else None)
+        for index in range(3):
+            self.assertRaises(ZeroDivisionError, failing, [1, 0])
+            try:
+                failing([0])
+            except ZeroDivisionError:
+                pass
+            self.assertEqual(failing([]), 2)
+
+    def test_method_call_on_classic_instances(self):
+        class Base:
+            def greet(self, suffix=''):
+                return 'base' + suffix
+        class Child(Base):
+            pass
+        def call(target):
+            return target.greet('!')
+        item = Child()
+        self.assertEqual([call(item) for index in range(3)], ['base!'] * 3)
+        item.greet = lambda suffix: 'instance' + suffix
+        self.assertEqual(call(item), 'instance!')
+        del item.greet
+        Child.greet = lambda self, suffix: 'child' + suffix
+        self.assertEqual(call(item), 'child!')
+        del Child.greet
+        Base.greet = staticmethod(lambda suffix: 'static' + suffix)
+        self.assertEqual(call(item), 'static!')
+        Base.greet = classmethod(lambda cls, suffix: cls.__name__ + suffix)
+        self.assertEqual(call(item), 'Child!')
+        class Getter(object):
+            def __get__(self, instance, owner):
+                return lambda suffix: 'getter' + suffix
+        Base.greet = Getter()
+        self.assertEqual(call(item), 'getter!')
+        class Other:
+            def greet(self, suffix):
+                return 'other' + suffix
+        Base.greet = Other.greet.im_func
+        self.assertEqual(call(item), 'other!')
+        Base.greet = Other.greet
+        self.assertRaises(TypeError, call, item)
+        del Base.greet
+        try:
+            call(item)
+        except AttributeError as error:
+            self.assertEqual(str(error), "Child instance has no attribute 'greet'")
+        lookups = []
+        def fallback(self, name):
+            lookups.append(name)
+            return lambda suffix: 'fallback' + suffix
+        Child.__getattr__ = fallback
+        self.assertEqual(call(item), 'fallback!')
+        Base.greet = lambda self, suffix: 'found' + suffix
+        self.assertEqual(call(item), 'found!')
+        self.assertEqual(lookups, ['greet'])
+        Child.__getattr__ = lambda self, name: 1 // 0
+        del Base.greet
+        self.assertRaises(ZeroDivisionError, call, item)
+        item.__class__ = Other
+        self.assertEqual(call(item), 'other!')
+        Child.__bases__ = (Other,)
+        self.assertEqual(call(Child()), 'other!')
+        try:
+            Other().greet()
+        except TypeError as error:
+            self.assertEqual(str(error), 'greet() takes exactly 2 arguments (1 given)')
+        self.assertEqual(Other().greet(suffix='?'), 'other?')

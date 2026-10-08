@@ -4581,6 +4581,190 @@ static int32_t __test_build_value(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct test_native_items_state_t {
+    tinypy_vm_t *vm;
+    size_t calls;
+    size_t finalized;
+} test_native_items_state_t;
+//////////////////////////////////////////////////////////////////////////
+/* Returns (self, items, kwargs, function), None standing for NULL. */
+static tinypy_value_t *__test_native_items_record(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    test_native_items_state_t *state = (test_native_items_state_t *)tinypy_native_function_user_data(function);
+    tinypy_value_t *none = tinypy_none_get(state->vm);
+
+    (void)out_error;
+    state->calls += 1U;
+    tinypy_value_t *arguments = tinypy_tuple_from_items(state->vm, items, count);
+    tinypy_value_t *record[] = {self != NULL ? self : none, arguments, kwargs != NULL ? kwargs : none, function};
+    tinypy_value_t *result = tinypy_tuple_from_items(state->vm, record, sizeof(record) / sizeof(record[0]));
+    tinypy_release(arguments);
+    tinypy_release(none);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_items_fail(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    test_native_items_state_t *state = (test_native_items_state_t *)tinypy_native_function_user_data(function);
+
+    (void)self;
+    (void)items;
+    (void)count;
+    (void)kwargs;
+    (void)out_error;
+    state->calls += 1U;
+    tinypy_vm_raise_error(state->vm, TINYPY_ERROR_VALUE, "items failure");
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __test_native_items_finalize(void *user_data) {
+    test_native_items_state_t *state = (test_native_items_state_t *)user_data;
+    state->finalized += 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_native_items(void) {
+    static const char source[] =
+        "def check(actual, expected):\n"
+        "    if actual != expected:\n"
+        "        raise AssertionError('%r != %r' % (actual, expected))\n"
+        "def expect_error(call, message):\n"
+        "    try:\n"
+        "        call()\n"
+        "    except TypeError as error:\n"
+        "        check(str(error), message)\n"
+        "    else:\n"
+        "        raise AssertionError(message)\n"
+        "check(function(1), (None, (1,), None, function))\n"
+        "check(function(1, 2), (None, (1, 2), None, function))\n"
+        "expect_error(lambda: function(), 'function() takes at least 1 argument (0 given)')\n"
+        "expect_error(lambda: function(1, 2, 3), 'function() takes at most 2 arguments (3 given)')\n"
+        "expect_error(lambda: function(1, key=2), 'function() takes no keyword arguments')\n"
+        "check(keywords(1, key=2), (None, (1,), {'key': 2}, keywords))\n"
+        "check(keywords(), (None, (), None, keywords))\n"
+        "method = Holder.__dict__['method']\n"
+        "def method_calls(holder):\n"
+        "    check(holder.method(), (holder, (), None, method))\n"
+        "    check(holder.method(5), (holder, (5,), None, method))\n"
+        "    check(holder.keywords(1, key=2), (holder, (1,), {'key': 2}, Holder.__dict__['keywords']))\n"
+        "    expect_error(lambda: holder.method(1, 2), 'method() takes at most 1 argument (2 given)')\n"
+        "    expect_error(lambda: holder.method(key=1), 'method() takes no keyword arguments')\n"
+        "class Derived(Holder):\n"
+        "    pass\n"
+        "holder = Holder()\n"
+        "method_calls(holder)\n"
+        "method_calls(Derived())\n"
+        "bound = holder.method\n"
+        "check(bound(5), (holder, (5,), None, bound))\n"
+        "check(holder.method(), (holder, (), None, bound))\n"
+        "check(Holder.method(holder, 5), (holder, (5,), None, method))\n"
+        "expect_error(lambda: Holder.method(), \"descriptor 'method' of 'Holder' object needs an argument\")\n"
+        "expect_error(lambda: Holder.method(1), \"descriptor 'method' requires a 'Holder' object but received a 'int'\")\n"
+        "class Shadow(object):\n"
+        "    value = property(function)\n"
+        "shadow = Shadow()\n"
+        "check(shadow.value, (None, (shadow,), None, function))\n"
+        "try:\n"
+        "    holder.fail()\n"
+        "except ValueError as error:\n"
+        "    check(str(error), 'items failure')\n"
+        "else:\n"
+        "    raise AssertionError('fail')\n"
+        "def call_method(target):\n"
+        "    return target.method()\n"
+        "check(call_method(holder), (holder, (), None, method))\n"
+        "holder.method = lambda: 'shadow'\n"
+        "check(call_method(holder), 'shadow')\n"
+        "del holder.method\n"
+        "check(call_method(holder), (holder, (), None, method))\n"
+        "Holder.method = lambda self: 'replaced'\n"
+        "check(call_method(holder), 'replaced')\n";
+    test_allocator_state_t allocator_state;
+    test_native_items_state_t state;
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_native_type_spec_t spec;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    (void)memset(&state, 0, sizeof(state));
+    allocator = __test_make_allocator(&allocator_state);
+    config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    state.vm = vm;
+
+    tinypy_value_t *released = tinypy_native_function_new_items(vm, "released", 8U, __test_native_items_record, 0U, 0U, &state, __test_native_items_finalize);
+    TEST_CHECK(tinypy_native_function_user_data(released) == &state);
+    tinypy_release(released);
+    TEST_CHECK(state.finalized == 1U);
+
+    /* An unshared argument tuple is reused; a retained one keeps its items. */
+    tinypy_value_t *items[] = {tinypy_integer_from_i64(vm, 1), tinypy_integer_from_i64(vm, 2)};
+    tinypy_ref_t references = tinypy_refcount(items[1]);
+    tinypy_value_t *empty = tinypy_native_arguments_acquire(vm, NULL, NULL, 0U, &error);
+    TEST_CHECK(empty != NULL && error == NULL && tinypy_tuple_size(empty) == 0U);
+    tinypy_native_arguments_release(empty);
+    tinypy_value_t *arguments = tinypy_native_arguments_acquire(vm, items[0], &items[1], 1U, &error);
+    TEST_CHECK(arguments != NULL && error == NULL && tinypy_tuple_size(arguments) == 2U);
+    TEST_CHECK(tinypy_tuple_get(arguments, 0U) == items[0] && tinypy_tuple_get(arguments, 1U) == items[1]);
+    TEST_CHECK(tinypy_refcount(items[1]) == references + 1);
+    tinypy_native_arguments_release(arguments);
+    TEST_CHECK(tinypy_refcount(items[1]) == references);
+    tinypy_value_t *reused = tinypy_native_arguments_acquire(vm, NULL, items, 2U, &error);
+    TEST_CHECK(reused == arguments && tinypy_tuple_get(reused, 0U) == items[0] && tinypy_tuple_get(reused, 1U) == items[1]);
+    tinypy_retain(reused);
+    tinypy_native_arguments_release(reused);
+    TEST_CHECK(tinypy_tuple_size(reused) == 2U && tinypy_tuple_get(reused, 1U) == items[1]);
+    tinypy_release(reused);
+    TEST_CHECK(tinypy_refcount(items[1]) == references);
+    tinypy_release(items[1]);
+    tinypy_release(items[0]);
+
+    tinypy_native_type_spec_init(&spec);
+    tinypy_type_t *holder = tinypy_native_type_new(vm, "Holder", 6U, NULL, 0U, NULL, &spec, &error);
+    TEST_CHECK(holder != NULL && error == NULL);
+    tinypy_value_t *method = tinypy_native_function_new_items(vm, "method", 6U, __test_native_items_record, 0U, 1U, &state, __test_native_items_finalize);
+    tinypy_value_t *method_keywords = tinypy_native_function_new_items_keywords(vm, "keywords", 8U, __test_native_items_record, &state, __test_native_items_finalize);
+    tinypy_value_t *fail = tinypy_native_function_new_items(vm, "fail", 4U, __test_native_items_fail, 0U, 0U, &state, __test_native_items_finalize);
+    tinypy_type_set_attr(holder, "method", 6U, method);
+    tinypy_type_set_attr(holder, "keywords", 8U, method_keywords);
+    tinypy_type_set_attr(holder, "fail", 4U, fail);
+    tinypy_release(fail);
+    tinypy_release(method_keywords);
+    tinypy_release(method);
+
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *function = tinypy_native_function_new_items(vm, "function", 8U, __test_native_items_record, 1U, 2U, &state, __test_native_items_finalize);
+    tinypy_value_t *keywords = tinypy_native_function_new_items_keywords(vm, "keywords", 8U, __test_native_items_record, &state, __test_native_items_finalize);
+    tinypy_value_t *function_key = tinypy_string_from_bytes(vm, "function", 8U);
+    tinypy_value_t *keywords_key = tinypy_string_from_bytes(vm, "keywords", 8U);
+    tinypy_value_t *holder_key = tinypy_string_from_bytes(vm, "Holder", 6U);
+    tinypy_value_t *holder_value = tinypy_type_as_value(holder);
+    tinypy_dict_set(globals, function_key, function);
+    tinypy_dict_set(globals, keywords_key, keywords);
+    tinypy_dict_set(globals, holder_key, holder_value);
+    tinypy_release(holder_key);
+    tinypy_release(keywords_key);
+    tinypy_release(function_key);
+    tinypy_release(keywords);
+    tinypy_release(function);
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "native_items.py", 15U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    TEST_CHECK(state.calls == 17U);
+    TEST_CHECK(state.finalized == 1U);
+
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_release(holder_value);
+    TEST_CHECK(tinypy_vm_has_error(vm) == 0);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.finalized == 6U);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
     if (argc != 2) {
         (void)fprintf(stderr, "usage: %s TEST_NAME\n", argv[0]);
@@ -4706,6 +4890,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "native_embedding") == 0) {
         int return_value_21 = __test_native_embedding();
         return return_value_21;
+    }
+    if (strcmp(argv[1], "native_items") == 0) {
+        int result = __test_native_items();
+        return result;
     }
     if (strcmp(argv[1], "module_finder") == 0) {
         int return_value_22 = __test_module_finder();

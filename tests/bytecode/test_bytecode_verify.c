@@ -881,7 +881,7 @@ static int32_t __test_status_names(void) {
 
 static size_t __test_find_method_calls(const uint8_t *code, size_t code_size, uint8_t *out_code) {
     tinypy_bytecode_method_load_t pending[4];
-    uint8_t targets[8];
+    tinypy_bytecode_method_target_t targets[64];
     size_t slots = tinypy_bytecode_find_method_calls(code, code_size, out_code, targets, pending, 4U);
 
     return slots;
@@ -916,14 +916,9 @@ static int32_t __test_method_calls(void) {
         TINYPY_OP_LOAD_ATTR, 0U, 0U,     /* 12 */
         TINYPY_OP_ROT_TWO,               /* 15 */
         TINYPY_OP_CALL_FUNCTION, 0U, 0U, /* 16 */
-        TINYPY_OP_LOAD_FAST, 0U, 0U,     /* 19 */
-        TINYPY_OP_LOAD_ATTR, 0U, 0U,     /* 22 */
-        TINYPY_OP_LOAD_FAST, 1U, 0U,     /* 25 */
-        TINYPY_OP_JUMP_FORWARD, 0U, 0U,  /* 28 -> 31 */
-        TINYPY_OP_CALL_FUNCTION, 1U, 0U, /* 31 */
-        TINYPY_OP_RETURN_VALUE           /* 34 */
+        TINYPY_OP_RETURN_VALUE           /* 19 */
     };
-    uint8_t out_code[sizeof(plain)];
+    uint8_t out_code[64];
 
     TEST_CHECK(__test_find_method_calls(simple, sizeof(simple), out_code) == 1U);
     TEST_CHECK(out_code[3] == TINYPY_OPCODE_LOAD_METHOD && out_code[15] == TINYPY_OPCODE_CALL_METHOD);
@@ -934,6 +929,90 @@ static int32_t __test_method_calls(void) {
     TEST_CHECK(out_code[15] == TINYPY_OP_LOAD_ATTR);
     TEST_CHECK(__test_find_method_calls(plain, sizeof(plain), out_code) == 0U);
     TEST_CHECK(memcmp(out_code, plain, sizeof(plain)) == 0);
+    return 0;
+}
+
+static int32_t __test_method_calls_with_jumps(void) {
+    /* x.m(a if c else b) */
+    static const uint8_t conditional[] = {
+        TINYPY_OP_LOAD_FAST, 0U, 0U,          /* 0 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,          /* 3 */
+        TINYPY_OP_LOAD_FAST, 3U, 0U,          /* 6 */
+        TINYPY_OP_POP_JUMP_IF_FALSE, 18U, 0U, /* 9 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,          /* 12 */
+        TINYPY_OP_JUMP_FORWARD, 3U, 0U,       /* 15 -> 21 */
+        TINYPY_OP_LOAD_FAST, 2U, 0U,          /* 18 */
+        TINYPY_OP_CALL_FUNCTION, 1U, 0U,      /* 21 */
+        TINYPY_OP_RETURN_VALUE                /* 24 */
+    };
+    /* x.m([y.k() for y in z if y]) */
+    static const uint8_t comprehension[] = {
+        TINYPY_OP_LOAD_FAST, 0U, 0U,          /* 0 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,          /* 3 */
+        TINYPY_OP_BUILD_LIST, 0U, 0U,         /* 6 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,          /* 9 */
+        TINYPY_OP_GET_ITER,                   /* 12 */
+        TINYPY_OP_FOR_ITER, 24U, 0U,          /* 13 -> 40 */
+        TINYPY_OP_STORE_FAST, 2U, 0U,         /* 16 */
+        TINYPY_OP_LOAD_FAST, 2U, 0U,          /* 19 */
+        TINYPY_OP_POP_JUMP_IF_FALSE, 13U, 0U, /* 22 */
+        TINYPY_OP_LOAD_FAST, 2U, 0U,          /* 25 */
+        TINYPY_OP_LOAD_ATTR, 1U, 0U,          /* 28 */
+        TINYPY_OP_CALL_FUNCTION, 0U, 0U,      /* 31 */
+        TINYPY_OP_LIST_APPEND, 2U, 0U,        /* 34 */
+        TINYPY_OP_JUMP_ABSOLUTE, 13U, 0U,     /* 37 */
+        TINYPY_OP_CALL_FUNCTION, 1U, 0U,      /* 40 */
+        TINYPY_OP_RETURN_VALUE                /* 43 */
+    };
+    /* The call at 15 is reached without the LOAD_ATTR from the jump at 6. */
+    static const uint8_t entered_before[] = {
+        TINYPY_OP_LOAD_FAST, 0U, 0U,          /* 0 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,          /* 3 */
+        TINYPY_OP_POP_JUMP_IF_FALSE, 15U, 0U, /* 6 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,          /* 9 */
+        TINYPY_OP_JUMP_FORWARD, 0U, 0U,       /* 12 -> 15 */
+        TINYPY_OP_CALL_FUNCTION, 0U, 0U,      /* 15 */
+        TINYPY_OP_RETURN_VALUE                /* 18 */
+    };
+    /* The call at 9 is reached again without the LOAD_ATTR from the jump at 12. */
+    static const uint8_t entered_after[] = {
+        TINYPY_OP_LOAD_FAST, 0U, 0U,          /* 0 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,          /* 3 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,          /* 6 */
+        TINYPY_OP_CALL_FUNCTION, 1U, 0U,      /* 9 */
+        TINYPY_OP_JUMP_ABSOLUTE, 6U, 0U,      /* 12 */
+        TINYPY_OP_RETURN_VALUE                /* 15 */
+    };
+    /* The jump at 9 runs the LOAD_ATTR again before its call. */
+    static const uint8_t left_backwards[] = {
+        TINYPY_OP_LOAD_FAST, 0U, 0U,          /* 0 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,          /* 3 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,          /* 6 */
+        TINYPY_OP_POP_JUMP_IF_TRUE, 3U, 0U,   /* 9 */
+        TINYPY_OP_CALL_FUNCTION, 0U, 0U,      /* 12 */
+        TINYPY_OP_RETURN_VALUE                /* 15 */
+    };
+    /* The jump at 9 leaves for the return at 18. */
+    static const uint8_t left_forwards[] = {
+        TINYPY_OP_LOAD_FAST, 0U, 0U,          /* 0 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,          /* 3 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,          /* 6 */
+        TINYPY_OP_JUMP_IF_TRUE_OR_POP, 18U, 0U, /* 9 */
+        TINYPY_OP_CALL_FUNCTION, 0U, 0U,      /* 12 */
+        TINYPY_OP_LOAD_FAST, 1U, 0U,          /* 15 */
+        TINYPY_OP_RETURN_VALUE                /* 18 */
+    };
+    uint8_t out_code[64];
+
+    TEST_CHECK(__test_find_method_calls(conditional, sizeof(conditional), out_code) == 1U);
+    TEST_CHECK(out_code[3] == TINYPY_OPCODE_LOAD_METHOD && out_code[21] == TINYPY_OPCODE_CALL_METHOD);
+    TEST_CHECK(__test_find_method_calls(comprehension, sizeof(comprehension), out_code) == 2U);
+    TEST_CHECK(out_code[3] == TINYPY_OPCODE_LOAD_METHOD && out_code[40] == TINYPY_OPCODE_CALL_METHOD);
+    TEST_CHECK(out_code[28] == TINYPY_OPCODE_LOAD_METHOD && out_code[31] == TINYPY_OPCODE_CALL_METHOD);
+    TEST_CHECK(__test_find_method_calls(entered_before, sizeof(entered_before), out_code) == 0U);
+    TEST_CHECK(__test_find_method_calls(entered_after, sizeof(entered_after), out_code) == 0U);
+    TEST_CHECK(__test_find_method_calls(left_backwards, sizeof(left_backwards), out_code) == 0U);
+    TEST_CHECK(__test_find_method_calls(left_forwards, sizeof(left_forwards), out_code) == 0U);
     return 0;
 }
 
@@ -987,6 +1066,9 @@ int main(void) {
         return 1;
     }
     if (__test_method_calls() != 0) {
+        return 1;
+    }
+    if (__test_method_calls_with_jumps() != 0) {
         return 1;
     }
     return 0;

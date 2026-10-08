@@ -96,24 +96,37 @@ const char *tinypy_bytecode_verify_status_name(tinypy_bytecode_verify_status_e s
 #define TINYPY_OPCODE_LOAD_METHOD 148U
 #define TINYPY_OPCODE_CALL_METHOD 149U
 
-/* A LOAD_ATTR waiting for the instruction that consumes its value. */
+/* A LOAD_ATTR waiting for the instruction that consumes its value, with the
+   furthest offset that control after it has reached or may jump to. */
 typedef struct tinypy_bytecode_method_load_t {
     size_t offset;
     ptrdiff_t position;
+    size_t reach;
 } tinypy_bytecode_method_load_t;
+
+/* The first and the last jump to an offset and the stack depth there. */
+typedef struct tinypy_bytecode_method_target_t {
+    size_t first_source;
+    size_t last_source;
+    ptrdiff_t depth;
+} tinypy_bytecode_method_target_t;
 
 /*
  * Finds the method calls of verified bytecode: a LOAD_ATTR, not of a global
- * or a name, whose value is only the callable of a later CALL_FUNCTION in the
- * same straight-line run, which no jump enters after the LOAD_ATTR and no
- * instruction between them reads below the callable. out_bytecode receives a
+ * or a name, whose value is only the callable of a later CALL_FUNCTION. Every
+ * path from the LOAD_ATTR that no exception ends reaches the CALL_FUNCTION, a
+ * yield only suspending it, without an instruction that reads below the
+ * callable or leaves the expression; jumps between them stay between them, a
+ * backward one returning to the same stack depth, and no other jump enters
+ * there. Such control flow comes from conditional expressions, boolean
+ * operators and list comprehensions in the arguments. out_bytecode receives a
  * copy of the bytecode with both opcodes of each method call rewritten to
  * TINYPY_OPCODE_LOAD_METHOD and TINYPY_OPCODE_CALL_METHOD. targets is scratch
- * of (bytecode_size + 7) / 8 bytes; pending holds the LOAD_ATTRs waiting at
- * once, and one beyond pending_capacity is not considered. Returns the largest
- * number of method calls whose operands are on the value stack at the same
- * time, zero when there are none.
+ * of bytecode_size entries; pending holds the LOAD_ATTRs waiting at once, and
+ * one beyond pending_capacity is not considered. Returns the largest number of
+ * method calls whose operands are on the value stack at the same time, zero
+ * when there are none.
  */
-size_t tinypy_bytecode_find_method_calls(const uint8_t *bytecode, size_t bytecode_size, uint8_t *out_bytecode, uint8_t *targets, tinypy_bytecode_method_load_t *pending, size_t pending_capacity);
+size_t tinypy_bytecode_find_method_calls(const uint8_t *bytecode, size_t bytecode_size, uint8_t *out_bytecode, tinypy_bytecode_method_target_t *targets, tinypy_bytecode_method_load_t *pending, size_t pending_capacity);
 
 #endif

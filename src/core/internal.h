@@ -4,10 +4,13 @@
 #if defined(_MSC_VER)
 #include <intrin.h>
 #define TINYPY_NATIVE_STACK_ADDRESS() ((uintptr_t)_AddressOfReturnAddress())
+#define TINYPY_ALWAYS_INLINE __forceinline
 #elif defined(__GNUC__) || defined(__clang__)
 #define TINYPY_NATIVE_STACK_ADDRESS() ((uintptr_t)__builtin_frame_address(0))
+#define TINYPY_ALWAYS_INLINE inline __attribute__((always_inline))
 #else
 #define TINYPY_NATIVE_STACK_ADDRESS() ((uintptr_t)0U)
+#define TINYPY_ALWAYS_INLINE inline
 #endif
 
 #if defined(TINYPY_CYCLE_DIAGNOSTICS) && defined(NDEBUG)
@@ -1669,13 +1672,6 @@ typedef enum tinypy_arity_style_e {
     TINYPY_ARITY_STYLE_UNCHECKED = 4
 } tinypy_arity_style_e;
 //////////////////////////////////////////////////////////////////////////
-/* The internal calling convention of builtins, like METH_O and METH_VARARGS
-   without an argument tuple: self is the receiver of a method and NULL for a
-   function, and items holds the count positional arguments after it. Unless
-   the function's arity style is TINYPY_ARITY_STYLE_UNCHECKED, its caller has
-   checked count against its bounds and rejected keyword arguments. */
-typedef tinypy_value_t *(*tinypy_native_items_callback_t)(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
-//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_native_function_object_t {
     tinypy_value_t base;
     tinypy_value_t *name;
@@ -2460,6 +2456,7 @@ tinypy_value_t *tinypy_internal_class_create(tinypy_type_t *type, tinypy_value_t
 void tinypy_internal_initialize_class_type(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_class_get_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_old_instance_get_method(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t *out_unbound, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_old_instance_call_hook(tinypy_value_t *instance_value, tinypy_value_t *hook, tinypy_value_t *name, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_old_instance_set_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error);

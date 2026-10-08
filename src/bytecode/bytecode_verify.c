@@ -2089,16 +2089,53 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify(const uint8_t *bytecode, 
     return TINYPY_BYTECODE_VERIFY_OK;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Instructions that leave the straight-line run or change the block stack. */
-static tinypy_bool_t __tinypy_verify_ends_run(uint8_t opcode) {
-    if ((tinypy_opcode_categories(opcode) & (TINYPY_OPCODE_CATEGORY_JREL | TINYPY_OPCODE_CATEGORY_JABS)) != 0U) {
-        return TINYPY_TRUE;
-    }
+/* Whether control may continue from an instruction to the next one. */
+static tinypy_bool_t __tinypy_verify_falls_through(uint8_t opcode) {
     switch (opcode) {
+    case TINYPY_OP_JUMP_FORWARD:
+    case TINYPY_OP_JUMP_ABSOLUTE:
+    case TINYPY_OP_CONTINUE_LOOP:
     case TINYPY_OP_RETURN_VALUE:
     case TINYPY_OP_RAISE_VARARGS:
     case TINYPY_OP_BREAK_LOOP:
+        return TINYPY_FALSE;
+    default:
+        return TINYPY_TRUE;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The jumps that expressions are made of, with the stack depth after their
+   branch is taken from the depth before them. */
+static tinypy_bool_t __tinypy_verify_expression_jump(uint8_t opcode, ptrdiff_t depth, ptrdiff_t *out_depth) {
+    switch (opcode) {
+    case TINYPY_OP_JUMP_FORWARD:
+    case TINYPY_OP_JUMP_ABSOLUTE:
+    case TINYPY_OP_JUMP_IF_FALSE_OR_POP:
+    case TINYPY_OP_JUMP_IF_TRUE_OR_POP:
+        *out_depth = depth;
+        return TINYPY_TRUE;
+    case TINYPY_OP_POP_JUMP_IF_FALSE:
+    case TINYPY_OP_POP_JUMP_IF_TRUE:
+    case TINYPY_OP_FOR_ITER:
+        *out_depth = depth - 1;
+        return TINYPY_TRUE;
+    default:
+        return TINYPY_FALSE;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* Instructions that leave an expression or change the block stack. */
+static tinypy_bool_t __tinypy_verify_ends_expression(uint8_t opcode) {
+    switch (opcode) {
+    case TINYPY_OP_SETUP_LOOP:
+    case TINYPY_OP_SETUP_EXCEPT:
+    case TINYPY_OP_SETUP_FINALLY:
+    case TINYPY_OP_SETUP_WITH:
     case TINYPY_OP_POP_BLOCK:
+    case TINYPY_OP_CONTINUE_LOOP:
+    case TINYPY_OP_BREAK_LOOP:
+    case TINYPY_OP_RETURN_VALUE:
+    case TINYPY_OP_RAISE_VARARGS:
     case TINYPY_OP_END_FINALLY:
     case TINYPY_OP_WITH_CLEANUP:
         return TINYPY_TRUE;
@@ -2107,18 +2144,36 @@ static tinypy_bool_t __tinypy_verify_ends_run(uint8_t opcode) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-size_t tinypy_bytecode_find_method_calls(const uint8_t *bytecode, size_t bytecode_size, uint8_t *out_bytecode, uint8_t *targets, tinypy_bytecode_method_load_t *pending, size_t pending_capacity) {
+/* The LOAD_ATTR below the top one inherits how far control from the top one
+   reaches, as the operands of the top one are among its own. */
+static void __tinypy_verify_pop_method_load(tinypy_bytecode_method_load_t *pending, size_t *pending_count) {
+    size_t count = *pending_count - 1U;
+
+    if (count != 0U && pending[count - 1U].reach < pending[count].reach) {
+        pending[count - 1U].reach = pending[count].reach;
+    }
+    *pending_count = count;
+}
+//////////////////////////////////////////////////////////////////////////
+size_t tinypy_bytecode_find_method_calls(const uint8_t *bytecode, size_t bytecode_size, uint8_t *out_bytecode, tinypy_bytecode_method_target_t *targets, tinypy_bytecode_method_load_t *pending, size_t pending_capacity) {
     size_t offset = 0U;
 
     (void)memcpy(out_bytecode, bytecode, bytecode_size);
-    (void)memset(targets, 0, (bytecode_size + 7U) / 8U);
+    for (size_t index = 0U; index < bytecode_size; ++index) {
+        targets[index].first_source = TINYPY_VERIFY_NO_TARGET;
+        targets[index].last_source = 0U;
+        targets[index].depth = 0;
+    }
     while (offset < bytecode_size) {
         tinypy_decoded_instruction_t instruction;
         size_t target;
 
         (void)tinypy_opcode_decode(bytecode, bytecode_size, offset, &instruction);
         if ((tinypy_opcode_categories(instruction.opcode) & (TINYPY_OPCODE_CATEGORY_JREL | TINYPY_OPCODE_CATEGORY_JABS)) != 0U && __tinypy_verify_jump_target(&instruction, &target) != 0 && target < bytecode_size) {
-            targets[target >> 3U] |= (uint8_t)(1U << (target & 7U));
+            if (targets[target].first_source == TINYPY_VERIFY_NO_TARGET) {
+                targets[target].first_source = instruction.offset;
+            }
+            targets[target].last_source = instruction.offset;
         }
         offset = instruction.next_offset;
     }
@@ -2137,29 +2192,74 @@ size_t tinypy_bytecode_find_method_calls(const uint8_t *bytecode, size_t bytecod
         (void)tinypy_opcode_decode(bytecode, bytecode_size, offset, &instruction);
         offset = instruction.next_offset;
         previous_opcode = instruction.opcode;
-        if ((targets[instruction.offset >> 3U] & (uint8_t)(1U << (instruction.offset & 7U))) != 0U) {
-            pending_count = 0U;
+        tinypy_bytecode_method_target_t *entry = &targets[instruction.offset];
+        /* A LOAD_ATTR keeps waiting at a jump target only when every jump
+           there comes after it, and then waits past the last of them. */
+        if (entry->first_source != TINYPY_VERIFY_NO_TARGET) {
+            while (pending_count != 0U && pending[pending_count - 1U].offset > entry->first_source) {
+                __tinypy_verify_pop_method_load(pending, &pending_count);
+            }
+            if (pending_count != 0U && pending[pending_count - 1U].reach < entry->last_source) {
+                pending[pending_count - 1U].reach = entry->last_source;
+            }
         }
+        /* After an unconditional transfer the depth is the one a forward
+           jump brought here; code only jumped to backwards is not followed. */
+        if (__tinypy_verify_falls_through(receiver_opcode) == 0) {
+            if (entry->first_source < instruction.offset) {
+                depth = entry->depth;
+            }
+            else {
+                pending_count = 0U;
+            }
+        }
+        entry->depth = depth;
         if (__tinypy_verify_get_effect(instruction.opcode, instruction.argument, &effect) == 0) {
             pending_count = 0U;
             continue;
         }
-        if (__tinypy_verify_ends_run(instruction.opcode) != 0) {
+        if (__tinypy_verify_ends_expression(instruction.opcode) != 0) {
             pending_count = 0U;
         }
         ptrdiff_t lowest = depth - (ptrdiff_t)effect.required;
+        /* Calls with *args or **kwargs stay plain: taking their receiver
+           first needs more code in the evaluation loop's call path, which
+           costs every other call more than these rare sites gain. */
         if (instruction.opcode == TINYPY_OP_CALL_FUNCTION) {
             while (pending_count != 0U && pending[pending_count - 1U].position > lowest) {
-                pending_count -= 1U;
+                __tinypy_verify_pop_method_load(pending, &pending_count);
             }
-            if (pending_count != 0U && pending[pending_count - 1U].position == lowest) {
-                pending_count -= 1U;
-                out_bytecode[pending[pending_count].offset] = (uint8_t)TINYPY_OPCODE_LOAD_METHOD;
+            if (pending_count != 0U && pending[pending_count - 1U].position == lowest && pending[pending_count - 1U].reach <= instruction.offset) {
+                out_bytecode[pending[pending_count - 1U].offset] = (uint8_t)TINYPY_OPCODE_LOAD_METHOD;
                 out_bytecode[instruction.next_offset - 3U] = (uint8_t)TINYPY_OPCODE_CALL_METHOD;
             }
         }
         while (pending_count != 0U && pending[pending_count - 1U].position >= lowest) {
-            pending_count -= 1U;
+            __tinypy_verify_pop_method_load(pending, &pending_count);
+        }
+        ptrdiff_t jump_depth;
+        tinypy_bool_t expression_jump = __tinypy_verify_expression_jump(instruction.opcode, depth, &jump_depth);
+        if (expression_jump != 0) {
+            size_t target;
+
+            (void)__tinypy_verify_jump_target(&instruction, &target);
+            /* A forward jump extends how far control from the LOAD_ATTRs
+               waiting reaches; a backward one leaves those after its target
+               and returns where the depth is the same. */
+            if (target > instruction.offset) {
+                targets[target].depth = jump_depth;
+                if (pending_count != 0U && pending[pending_count - 1U].reach < target) {
+                    pending[pending_count - 1U].reach = target;
+                }
+            }
+            else {
+                while (pending_count != 0U && pending[pending_count - 1U].offset >= target) {
+                    __tinypy_verify_pop_method_load(pending, &pending_count);
+                }
+                if (targets[target].depth != jump_depth) {
+                    pending_count = 0U;
+                }
+            }
         }
         depth = depth - (ptrdiff_t)effect.pop_count + (ptrdiff_t)effect.push_count;
         /* An attribute of a global is usually one of a module or a class,
@@ -2167,6 +2267,7 @@ size_t tinypy_bytecode_find_method_calls(const uint8_t *bytecode, size_t bytecod
         if (instruction.opcode == TINYPY_OP_LOAD_ATTR && receiver_opcode != TINYPY_OP_LOAD_GLOBAL && receiver_opcode != TINYPY_OP_LOAD_NAME && pending_count < pending_capacity) {
             pending[pending_count].offset = instruction.next_offset - 3U;
             pending[pending_count].position = depth - 1;
+            pending[pending_count].reach = 0U;
             pending_count += 1U;
         }
     }

@@ -374,7 +374,9 @@ tinypy_value_t *tinypy_internal_class_get_attribute(tinypy_value_t *class_value,
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_old_instance_get_direct(tinypy_vm_t *vm, tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_error_t **out_error) {
+/* With out_unbound, a function found on the class is returned as it is, for
+   a method call to pass the instance as its first argument. */
+static tinypy_value_t *__tinypy_old_instance_get_direct(tinypy_vm_t *vm, tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_bool_t *out_unbound, tinypy_error_t **out_error) {
     tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(instance_value);
 
     if (TINYPY_NAME_EQ(name, vm->internal_special_class_key) != 0) {
@@ -388,15 +390,22 @@ static tinypy_value_t *__tinypy_old_instance_get_direct(tinypy_vm_t *vm, tinypy_
         return TINYPY_RET(attribute);
     }
     attribute = tinypy_internal_class_lookup_key(vm, instance->class_object, name);
-    tinypy_value_t *return_value_1 = attribute != NULL ? __tinypy_class_bind(instance->class_object, attribute, instance_value, out_error) : NULL;
-    return return_value_1;
+    if (attribute == NULL) {
+        return NULL;
+    }
+    if (out_unbound != NULL && attribute->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
+        *out_unbound = TINYPY_TRUE;
+        return TINYPY_RET(attribute);
+    }
+    tinypy_value_t *result = __tinypy_class_bind(instance->class_object, attribute, instance_value, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_old_instance_get_attribute(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_bool_t *out_unbound, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(instance_value);
     tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(instance_value);
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_value_t *result = __tinypy_old_instance_get_direct(vm, instance_value, name, out_error);
+    tinypy_value_t *result = __tinypy_old_instance_get_direct(vm, instance_value, name, out_unbound, out_error);
     if (result != NULL || TINYPY_NAME_EQ(name, vm->internal_special_getattr_key) != 0) {
         return result;
     }
@@ -409,6 +418,24 @@ tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *insta
         return NULL;
     }
     result = tinypy_internal_old_instance_call_hook(instance_value, hook, name, NULL, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_old_instance_get_attribute(instance_value, name, NULL, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The attribute a method call finds on a classic instance, raising
+   AttributeError as getattr does when there is none; a function of the class
+   comes unbound, with out_unbound set. */
+tinypy_value_t *tinypy_internal_old_instance_get_method(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_bool_t *out_unbound, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(instance_value);
+    tinypy_value_t *result = __tinypy_old_instance_get_attribute(instance_value, name, out_unbound, out_error);
+
+    if (result == NULL && vm->raised_type == NULL && (out_error == NULL || *out_error == NULL)) {
+        tinypy_internal_object_make_attribute_error_key(instance_value, name, out_error);
+    }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
