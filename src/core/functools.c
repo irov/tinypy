@@ -306,7 +306,7 @@ tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinyp
         return NULL;
     }
     for (;;) {
-        if (call_args->ref > 1U) {
+        if (call_args->ref > 1) {
             TINYPY_DECREF(call_args);
             call_args = tinypy_internal_tuple_new_checked(vm, 2U, out_error);
             if (call_args == NULL) {

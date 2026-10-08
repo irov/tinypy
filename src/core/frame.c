@@ -190,7 +190,7 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
     }
     tinypy_value_t *code = frame->code;
     frame->code = NULL;
-    if (code->ref > 1U && TINYPY_CODE_OBJECT(code)->cached_frame == NULL && TINYPY_SIZED_SIZE(&frame->base) <= 1024U) {
+    if (code->ref > 1 && TINYPY_CODE_OBJECT(code)->cached_frame == NULL && TINYPY_SIZED_SIZE(&frame->base) <= 1024U) {
         TINYPY_CODE_OBJECT(code)->cached_frame = &frame->base.base;
         code->ref -= 1U;
         return;
