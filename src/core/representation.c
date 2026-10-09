@@ -1312,6 +1312,17 @@ static tinypy_value_t *__tinypy_object_class_property(tinypy_value_t *function, 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* object_set_class refuses to delete __class__. */
+static tinypy_value_t *__tinypy_object_class_delete(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)args;
+    (void)kwargs;
+    (void)user_data;
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can't delete __class__ attribute", out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 /* __class__ may be reassigned between Python-defined classes whose instances
    have the same layout, matching object_set_class in Python 2.7. */
 static tinypy_value_t *__tinypy_object_class_assign(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1435,7 +1446,8 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
 
     tinypy_value_t *class_getter = tinypy_native_function_new_key(vm->internal_special_class_key, __tinypy_object_class_property, NULL, NULL);
     tinypy_value_t *class_setter = tinypy_native_function_new_key(vm->internal_special_class_key, __tinypy_object_class_assign, NULL, NULL);
-    tinypy_value_t *class_property = tinypy_property_new(vm, class_getter, class_setter, NULL, NULL);
+    tinypy_value_t *class_deleter = tinypy_native_function_new_key(vm->internal_special_class_key, __tinypy_object_class_delete, NULL, NULL);
+    tinypy_value_t *class_property = tinypy_property_new(vm, class_getter, class_setter, class_deleter, NULL);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_sizeof_key, __tinypy_object_sizeof_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 
     tinypy_type_set_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_class_key, class_property);
@@ -1448,6 +1460,7 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
         tinypy_internal_type_add_method(&vm->types[kind], vm->internal_special_repr_key, __tinypy_builtin_representation_method, (void *)(intptr_t)kind, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
     TINYPY_DECREF(class_property);
+    TINYPY_DECREF(class_deleter);
     TINYPY_DECREF(class_setter);
     TINYPY_DECREF(class_getter);
 }

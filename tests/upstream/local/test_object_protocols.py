@@ -380,6 +380,350 @@ class ObjectProtocols(unittest.TestCase):
         self.assertRaises(TypeError, instance_type, 1)
         self.assertRaises(TypeError, instance_type, Classic, 1)
 
+    def assert_message(self, exception, message, function, *args):
+        try:
+            function(*args)
+        except exception as error:
+            self.assertEqual(str(error), message)
+        else:
+            self.fail(message)
+
+    def test_layout_conflict_with_builtin_base(self):
+        class Error(Exception):
+            pass
+
+        class Slotted(object):
+            __slots__ = ('a',)
+
+        def make_class(bases):
+            class Made(bases[0], bases[1]):
+                pass
+            return Made
+
+        conflict = 'multiple bases have instance lay-out conflict'
+        for base in (int, tuple, str, list, dict, float, long, unicode, set):
+            self.assert_message(TypeError, 'Error when calling the metaclass bases\n    ' + conflict, make_class, (Error, base))
+            self.assert_message(TypeError, conflict, type, 'Made', (base, Error), {})
+        self.assert_message(TypeError, conflict, type, 'Made', (Exception, Slotted), {})
+        self.assert_message(TypeError, conflict, type, 'Made', (UnicodeEncodeError, UnicodeDecodeError), {})
+        self.assert_message(TypeError, conflict, type, 'Made', (SystemExit, EnvironmentError), {})
+        for bases in ((Error, object), (ValueError, KeyError), (IOError, OSError), (UnicodeEncodeError, ValueError), (SystemExit, ValueError), (Slotted, Error)):
+            if bases[0] is Slotted:
+                self.assert_message(TypeError, conflict, type, 'Made', bases, {})
+            else:
+                self.assertIs(type('Made', bases, {}).__mro__[1], bases[0])
+
+    def test_uncreatable_builtin_types(self):
+        def generator():
+            yield 1
+
+        def closure():
+            value = 1
+            def inner():
+                return value
+            return inner
+
+        try:
+            raise ValueError
+        except ValueError:
+            traceback = sys.exc_info()[2]
+        for value in (generator(), None, Ellipsis, NotImplemented, iter([]), closure().func_closure[0], sys._getframe(), traceback):
+            kind = type(value)
+            unsafe = 'object.__new__(%s) is not safe, use %s.__new__()' % (kind.__name__, kind.__name__)
+            self.assert_message(TypeError, "cannot create '%s' instances" % kind.__name__, kind)
+            self.assert_message(TypeError, unsafe, kind.__new__, kind)
+            self.assert_message(TypeError, unsafe, object.__new__, kind)
+        dictproxy = type(type.__dict__)
+        self.assert_message(TypeError, "cannot create 'dictproxy' instances", dictproxy)
+        self.assert_message(TypeError, 'object.__new__(dictproxy) is not safe, use dictproxy.__new__()', object.__new__, dictproxy)
+
+    def test_recursion_limit_below_depth(self):
+        limit = sys.getrecursionlimit()
+        self.assertEqual([lowered_recursion_limit(value) for value in (3, 2, 1)], [3, 2, 1])
+        self.assertEqual(bounded_recursion(limit, 10), 10)
+        self.assertEqual(bounded_recursion(100, 2000), 'maximum recursion depth exceeded')
+        self.assertEqual(sys.getrecursionlimit(), limit)
+
+    def test_exception_members(self):
+        self.assertEqual(SystemExit(1).__dict__, {})
+        self.assertEqual(EnvironmentError(1, 'a', 'f').__dict__, {})
+        self.assertEqual(SyntaxError('m', ('f', 1, 2, 'l')).__dict__, {})
+        self.assertEqual(EnvironmentError(1, 'a', 'f').__reduce__(), (EnvironmentError, (1, 'a', 'f')))
+        self.assertEqual(IOError(1, 'a').__reduce__(), (IOError, (1, 'a')))
+        self.assertEqual(SystemExit(1).__reduce__(), (SystemExit, (1,)))
+        self.assertEqual(SyntaxError('m', ('f', 1, 2, 'l')).__reduce__(), (SyntaxError, ('m', ('f', 1, 2, 'l'))))
+        error = SystemExit(1)
+        error.code = 'x'
+        self.assertEqual((error.__dict__, error.code, error.args), ({}, 'x', (1,)))
+        del error.code
+        self.assertIs(error.code, None)
+        error.extra = 2
+        self.assertEqual(error.__reduce__(), (SystemExit, (1,), {'extra': 2}))
+        self.assertEqual((EnvironmentError().errno, EnvironmentError().filename, str(EnvironmentError())), (None, None, ''))
+        self.assertEqual(str(EnvironmentError(None, None)), '[Errno None] None')
+        self.assertEqual((SyntaxError().msg, str(SyntaxError()), SyntaxError('m', ('f.py', 3, 1, 'x')).lineno), (None, 'None', 3))
+        try:
+            compile('x = (', 'parcel.py', 'exec')
+        except SyntaxError as error:
+            self.assertEqual((error.filename, error.lineno, error.__dict__), ('parcel.py', 1, {}))
+        self.assert_message(TypeError, 'state is not a dictionary', ValueError().__setstate__, 1)
+
+        class Returning(Exception):
+            def __init__(self):
+                return 1
+
+        self.assert_message(TypeError, "__init__() should return None, not 'int'", Returning)
+        self.assertEqual(sorted(vars(ValueError)), ['__doc__', '__init__', '__new__'])
+        self.assertEqual(sorted(vars(SystemExit)), ['__doc__', '__init__', '__new__', 'code'])
+        self.assertEqual(sorted(vars(KeyError)), ['__doc__', '__init__', '__new__', '__str__'])
+        self.assertEqual(sorted(vars(EnvironmentError)), ['__doc__', '__init__', '__new__', '__reduce__', '__str__', 'errno', 'filename', 'strerror'])
+        self.assertEqual(sorted(vars(SyntaxError)), ['__doc__', '__init__', '__new__', '__str__', 'filename', 'lineno', 'msg', 'offset', 'print_file_and_line', 'text'])
+        self.assertEqual(sorted(vars(UnicodeDecodeError)), ['__doc__', '__init__', '__new__', '__str__', 'encoding', 'end', 'object', 'reason', 'start'])
+        self.assertEqual(sorted(vars(BaseException)), ['__delattr__', '__dict__', '__doc__', '__getattribute__', '__getitem__', '__getslice__', '__init__', '__new__', '__reduce__', '__repr__', '__setattr__', '__setstate__', '__str__', '__unicode__', 'args', 'message'])
+        for kind in (list, int, str, dict, type, slice, type(iter([])), type(type.__dict__)):
+            self.assertIn('__getattribute__', vars(kind))
+        self.assertNotIn('__getattribute__', vars(bool))
+
+    def test_system_exit_arguments(self):
+        def exit_code(*args):
+            try:
+                sys.exit(*args)
+            except SystemExit as error:
+                return (error.code, error.args)
+
+        self.assertEqual(exit_code(None), (None, ()))
+        self.assertEqual(exit_code(), (None, ()))
+        self.assertEqual(exit_code(1), (1, (1,)))
+        self.assertEqual(exit_code((1, 2)), ((1, 2), (1, 2)))
+        self.assertEqual(exit_code([1]), ([1], ([1],)))
+
+    def test_unicode_of_environment_error(self):
+        accent = u'\xe9'
+        self.assertEqual(unicode(EnvironmentError(accent, accent, accent)), u"[Errno \xe9] \xe9: u'\\xe9'")
+        self.assertEqual(unicode(IOError(1, accent)), u'[Errno 1] \xe9')
+        self.assertEqual(u'%s' % EnvironmentError(accent, accent, accent), u"[Errno \xe9] \xe9: u'\\xe9'")
+        self.assertEqual(unicode(EnvironmentError(1, 'a', accent)), u"[Errno 1] a: u'\\xe9'")
+        self.assert_message(UnicodeEncodeError, "'ascii' codec can't encode character u'\\xe9' in position 7: ordinal not in range(128)", str, EnvironmentError(accent, accent, accent))
+
+    def test_metaclass_bases_prefix(self):
+        prefix = 'Error when calling the metaclass bases\n    '
+
+        class Old:
+            pass
+
+        def classic_metaclass():
+            class Made:
+                __metaclass__ = Old
+
+        def builtin_metaclass():
+            class Made(object):
+                __metaclass__ = len
+
+        def python_new():
+            class Meta(type):
+                def __new__(meta, name, bases, namespace):
+                    return type.__new__(meta, name, bases, namespace, 1)
+
+            class Made(object):
+                __metaclass__ = Meta
+
+        def python_raise():
+            class Meta(type):
+                def __new__(meta, name, bases, namespace):
+                    raise TypeError('from python')
+
+            class Made(object):
+                __metaclass__ = Meta
+
+        class PropertyBase:
+            __class__ = property(lambda self: int)
+
+        def property_metaclass():
+            class Made(PropertyBase):
+                pass
+
+        class TypeBase:
+            __class__ = type
+
+        def type_metaclass():
+            class Made(TypeBase):
+                pass
+
+        self.assert_message(TypeError, prefix + 'this constructor takes no arguments', classic_metaclass)
+        self.assert_message(TypeError, prefix + 'len() takes exactly one argument (3 given)', builtin_metaclass)
+        self.assert_message(TypeError, prefix + 'type() takes 1 or 3 arguments', python_new)
+        self.assert_message(TypeError, 'from python', python_raise)
+        self.assert_message(TypeError, prefix + "'property' object is not callable", property_metaclass)
+        self.assert_message(TypeError, prefix + "a new-style class can't have only classic bases", type_metaclass)
+        conflict = 'metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases'
+        self.assert_message(TypeError, conflict, type, 'Made', (1,), {})
+        self.assert_message(TypeError, 'bases must be types', type, 'Made', (object(),), {})
+
+    def test_classic_instance_generic_lookup(self):
+        class Classic:
+            attribute = 'class'
+            def __getattr__(self, name):
+                return 'dynamic'
+
+        class Hooked:
+            def __getattribute__(self, name):
+                return object.__getattribute__(self, name)
+            def __getattr__(self, name):
+                raise AttributeError(name)
+
+        class Failing:
+            def __getattr__(self, name):
+                raise AttributeError(name)
+
+        instance = Classic()
+        instance.own = 1
+        for name in ('attribute', 'own', 'missing', '__dict__'):
+            self.assert_message(AttributeError, "'instance' object has no attribute '%s'" % name, object.__getattribute__, instance, name)
+        self.assertIs(object.__getattribute__(instance, '__class__'), type(instance))
+        hooked = Hooked()
+        hooked.own = 1
+        self.assertEqual(hooked.own, 1)
+        self.assert_message(AttributeError, "'instance' object has no attribute 'own'", Hooked.__getattribute__, hooked, 'own')
+        self.assert_message(TypeError, 'instance has no next() method', next, Failing())
+        self.assert_message(TypeError, 'iteration over non-sequence', list, Failing())
+
+    def test_readonly_descriptor_errors(self):
+        class Plain(object):
+            pass
+
+        def closure():
+            value = 1
+            def inner():
+                return value
+            return inner
+
+        def empty_cell():
+            def inner():
+                return later
+            return inner.func_closure[0].cell_contents
+            later = 1
+
+        plain = Plain()
+        unwritable = "attribute '__weakref__' of 'Plain' objects is not writable"
+        self.assert_message(AttributeError, unwritable, setattr, plain, '__weakref__', 1)
+        self.assert_message(AttributeError, unwritable, delattr, plain, '__weakref__')
+        self.assert_message(AttributeError, unwritable, Plain.__dict__['__weakref__'].__set__, plain, 1)
+        self.assert_message(AttributeError, unwritable, Plain.__dict__['__weakref__'].__delete__, plain)
+        self.assert_message(AttributeError, "attribute 'cell_contents' of 'cell' objects is not writable", setattr, closure().func_closure[0], 'cell_contents', 2)
+        self.assert_message(ValueError, 'Cell is empty', empty_cell)
+        self.assert_message(TypeError, "can't delete __class__ attribute", delattr, plain, '__class__')
+        self.assert_message(TypeError, "can't delete __class__ attribute", object.__delattr__, plain, '__class__')
+        self.assert_message(ValueError, 'f_lineno can only be set by a trace function', setattr, sys._getframe(), 'f_lineno', 1)
+
+    def test_bases_assignment_layout(self):
+        class Plain(object):
+            pass
+
+        class Tuple(tuple):
+            pass
+
+        class List(list):
+            pass
+
+        class Value(ValueError):
+            pass
+
+        class Environment(IOError):
+            pass
+
+        self.assert_message(TypeError, "Plain.__bases__ must be tuple of old- or new-style classes, not 'int'", setattr, Plain, '__bases__', (1,))
+        self.assert_message(TypeError, "__bases__ assignment: 'object' deallocator differs from 'tuple'", setattr, Tuple, '__bases__', (object,))
+        self.assert_message(TypeError, "__bases__ assignment: 'int' deallocator differs from 'tuple'", setattr, Tuple, '__bases__', (int,))
+        self.assert_message(TypeError, "__bases__ assignment: 'dict' deallocator differs from 'list'", setattr, List, '__bases__', (dict,))
+        self.assert_message(TypeError, 'multiple bases have instance lay-out conflict', setattr, Plain, '__bases__', (int, str))
+        self.assert_message(TypeError, "__bases__ assignment: 'exceptions.ValueError' deallocator differs from 'exceptions.IOError'", setattr, Environment, '__bases__', (ValueError,))
+        Value.__bases__ = (KeyError,)
+        self.assertEqual([kind.__name__ for kind in Value.__mro__], ['Value', 'KeyError', 'LookupError', 'StandardError', 'Exception', 'BaseException', 'object'])
+
+    def test_classic_class_has_no_class_attribute(self):
+        class Old:
+            pass
+
+        self.assert_message(AttributeError, "class Old has no attribute '__class__'", getattr, Old, '__class__')
+        self.assertEqual(getattr(Old, '__class__', 'absent'), 'absent')
+        self.assertFalse(hasattr(Old, '__class__'))
+        self.assertIs(Old().__class__, Old)
+        self.assertEqual(type(Old).__name__, 'classobj')
+        self.assertIsInstance(type(Old).__call__(Old), Old)
+        Old.__class__ = 5
+        self.assertEqual((Old.__dict__['__class__'], Old().__class__ is Old), (5, True))
+        del Old.__class__
+        self.assert_message(AttributeError, "class Old has no attribute '__class__'", delattr, Old, '__class__')
+
+    def test_assorted_object_messages(self):
+        class Plain(object):
+            pass
+
+        class Tuple(tuple):
+            pass
+
+        class Old:
+            pass
+
+        def keywords(**keywords):
+            return keywords
+
+        keywords.func_defaults = (9, 9)
+        error = KeyError(1, 2)
+
+        def delete_item():
+            del error[1]
+
+        self.assert_message(TypeError, 'super() argument 1 must be type, not None', super, None, Plain())
+        self.assert_message(TypeError, 'keywords() takes at most 0 arguments (2 given)', keywords, 1, 2)
+        self.assertEqual((Tuple.__itemsize__, Plain.__itemsize__), (8, 0))
+        self.assert_message(TypeError, 'tuple.__new__(int): int is not a subtype of tuple', Tuple.__new__, int)
+        self.assert_message(TypeError, 'tuple() takes at most 1 argument (2 given)', Tuple, 1, 2)
+        self.assertEqual(tuple.__new__(Tuple, sequence=[1, 2]), (1, 2))
+        self.assert_message(TypeError, 'object() takes no parameters', lambda: object(a=1))
+        self.assert_message(TypeError, '__format__() takes exactly 1 argument (0 given)', Plain().__format__)
+        self.assert_message(TypeError, 'argument to __format__ must be unicode or str', Plain().__format__, 1)
+        self.assert_message(AttributeError, "Old instance has no attribute '__trunc__'", compile, '1', 'parcel', 'exec', Old())
+        self.assert_message(TypeError, "'exceptions.KeyError' object doesn't support item deletion", delete_item)
+
+    def test_filter_text_returns_new_string(self):
+        text = 'abc'
+        self.assertIsNot(filter(lambda character: True, text), text)
+        self.assertIs(filter(None, text), text)
+        self.assertEqual(filter(lambda character: character != 'b', text), 'ac')
+
+    def test_length_protocol_of_offsets(self):
+        class FloatLength:
+            def __len__(self):
+                return 1.5
+            def __getitem__(self, item):
+                return item
+
+        class NegativeLength:
+            def __len__(self):
+                return -1
+            def __getitem__(self, item):
+                return item
+
+        calls = []
+
+        class Bytes(bytearray):
+            def __len__(self):
+                calls.append('len')
+                return 2
+
+        class Huge(Exception):
+            def __len__(self):
+                return 2 ** 70
+
+        self.assert_message(TypeError, '__len__() should return an int', lambda: FloatLength()[-1:-1])
+        self.assert_message(ValueError, '__len__() should return >= 0', lambda: NegativeLength()[-1:-1])
+        self.assertEqual(list(reversed(Bytes('abcd'))), [98, 97])
+        self.assertTrue(calls)
+        self.assert_message(OverflowError, 'long int too large to convert to int', lambda: Huge(1, 2)[-1])
+        self.assert_message(OverflowError, 'long int too large to convert to int', lambda: Huge(1, 2)[-5:-5])
+        self.assertEqual((Huge(1, 2)[1], Huge(1, 2)[0:1]), (2, (1,)))
+
 def truth_check(value, expected):
     def check(self):
         self.assertIs(bool(value), expected)
@@ -395,6 +739,32 @@ def length_check(length):
 
         self.assertIs(bool(Sized()), length != 0)
     return check
+
+
+def lowered_recursion_limit(value):
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(value)
+    try:
+        return sys.getrecursionlimit()
+    finally:
+        sys.setrecursionlimit(limit)
+
+
+def deep_recursion(count):
+    if count == 0:
+        return 0
+    return deep_recursion(count - 1) + 1
+
+
+def bounded_recursion(value, count):
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(value)
+    try:
+        return deep_recursion(count)
+    except RuntimeError as error:
+        return str(error)[:32]
+    finally:
+        sys.setrecursionlimit(limit)
 
 
 for label, value, expected in (

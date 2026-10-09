@@ -2423,7 +2423,21 @@ static tinypy_value_t *__tinypy_string_replace_method(tinypy_value_t *function, 
     tinypy_value_t *text = self;
     tinypy_value_t *old_argument = items[0U];
     tinypy_value_t *new_argument = items[1U];
-    tinypy_bool_t unicode = TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE || TINYPY_VALUE_KIND(old_argument) == TINYPY_VALUE_UNICODE || TINYPY_VALUE_KIND(new_argument) == TINYPY_VALUE_UNICODE;
+    tinypy_bool_t unicode = TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE || TINYPY_VALUE_KIND(old_argument) == TINYPY_VALUE_UNICODE;
+    tinypy_bool_t new_unicode = TINYPY_VALUE_KIND(new_argument) == TINYPY_VALUE_UNICODE;
+
+    /* string_replace reads old as a character buffer before a unicode new
+       argument hands both to PyUnicode_Replace, which coerces old again
+       the way unicode() does. */
+    if (unicode == 0 && new_unicode != 0 && TINYPY_VALUE_KIND(old_argument) != TINYPY_VALUE_STRING) {
+        tinypy_value_t *buffer_value = tinypy_internal_string_argument_text(vm, old_argument, TINYPY_FALSE, out_error);
+
+        if (buffer_value == NULL) {
+            return NULL;
+        }
+        TINYPY_DECREF(buffer_value);
+    }
+    unicode = unicode != 0 || new_unicode != 0;
     tinypy_value_t *old_value = tinypy_internal_string_argument_text(vm, old_argument, unicode, out_error);
 
     if (old_value == NULL) {
@@ -2889,16 +2903,6 @@ static tinypy_value_t *__tinypy_unicode_translate_method(tinypy_value_t *functio
     }
     text = TINYPY_TUPLE_GET(args, 0U);
     table = TINYPY_TUPLE_GET(args, 1U);
-    if (TINYPY_TEXT_BYTE_SIZE(text) != 0U && TINYPY_VALUE_KIND(table) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(table, vm->internal_special_getitem_key) == 0 && (table->type->mapping_slots == NULL || table->type->mapping_slots->get_item == NULL) && (table->type->sequence_slots == NULL || table->type->sequence_slots->get_item == NULL)) {
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("'"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(table),
-            TINYPY_MESSAGE_PART_LITERAL("' object has no attribute '__getitem__'"),
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        return NULL;
-    }
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
     while (offset < TINYPY_TEXT_BYTE_SIZE(text)) {
@@ -3842,7 +3846,10 @@ tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text
                     uint8_t first = bytes[offset];
                     size_t expected = first < 0xe0U ? 2U : (first < 0xf0U ? 3U : 4U);
 
-                    if (final == 0 && first >= 0xc2U && first <= 0xf4U && remaining < expected && invalid_size == remaining) {
+                    /* PyUnicode_DecodeUTF8Stateful defers a sequence whose
+                       length exceeds the remaining input before it looks at
+                       the continuation bytes. */
+                    if (final == 0 && first >= 0xc2U && first <= 0xf4U && remaining < expected) {
                         if (out_consumed != NULL) {
                             *out_consumed = offset;
                         }
@@ -3970,6 +3977,16 @@ typedef struct tinypy_percent_arguments_t {
     int64_t index;
 } tinypy_percent_arguments_t;
 
+//////////////////////////////////////////////////////////////////////////
+/* kwd_as_string: a keyword argument name is reported as it is when it is a
+   str, otherwise through the default encoding with the replace handler. */
+tinypy_value_t *tinypy_internal_keyword_as_string(tinypy_vm_t *vm, tinypy_value_t *keyword, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(keyword) != TINYPY_VALUE_UNICODE) {
+        return TINYPY_RET(keyword);
+    }
+    tinypy_value_t *encoded = tinypy_internal_text_codec(vm, keyword, NULL, vm->internal_replace_key, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+    return encoded;
+}
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_percent_unsigned(tinypy_string_builder_t *builder, uint64_t value, uint32_t base, tinypy_bool_t uppercase, size_t minimum_digits) {
     uint8_t digits[64];

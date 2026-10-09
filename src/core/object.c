@@ -960,10 +960,14 @@ static const tinypy_builtin_attribute_getter_t *const __tinypy_object_builtin_ge
     [TINYPY_VALUE_TRACEBACK] = __tinypy_object_traceback_getters,
 };
 //////////////////////////////////////////////////////////////////////////
+/* A classic class has no __class__ beyond what its dictionary holds. */
 static tinypy_value_t *__tinypy_object_get_special_class(tinypy_value_t *value) {
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
         tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(value);
         return TINYPY_RET(instance->class_object);
+    }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_CLASS) {
+        return NULL;
     }
     return TINYPY_RET(&value->type->base.base);
 }
@@ -1738,6 +1742,27 @@ tinypy_value_t *tinypy_internal_object_get_attr_key(tinypy_value_t *value, tinyp
 tinypy_value_t *tinypy_internal_object_get_base_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_bool_t missing;
 
+    /* PyObject_GenericGetAttr on a classic instance sees the attributes of
+       the instance type alone: neither its dictionary nor its class. */
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+        tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
+
+        if (attribute == NULL) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("'"),
+                TINYPY_MESSAGE_PART_TYPE_NAME(value),
+                TINYPY_MESSAGE_PART_LITERAL("' object has no attribute '"),
+                TINYPY_MESSAGE_PART_TEXT(key),
+                TINYPY_MESSAGE_PART_LITERAL("'"),
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            return NULL;
+        }
+        tinypy_value_t *bound = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
+        return bound;
+    }
     tinypy_value_t *return_value_1 = __tinypy_object_get_attr_key(value, key, TINYPY_FALSE, TINYPY_TRUE, &missing, out_error);
     return return_value_1;
 }
@@ -1810,6 +1835,12 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
         tinypy_bool_t stored = tinypy_internal_object_set_attr_key(value, name, attribute_value, out_error);
 
         TINYPY_DECREF(name);
+        return stored;
+    }
+    /* class_setattr stores into the class dictionary without consulting the
+       descriptors of classobj, so __class__ is an ordinary entry there. */
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_CLASS) {
+        tinypy_bool_t stored = tinypy_internal_class_set_attribute(value, key, attribute_value, out_error);
         return stored;
     }
     tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
@@ -2049,6 +2080,10 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
         TINYPY_DECREF(name);
         return deleted;
     }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_CLASS) {
+        tinypy_bool_t return_value_2 = tinypy_internal_class_delete_attribute(value, key, out_error);
+        return return_value_2;
+    }
     tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
     tinypy_bool_t has_attribute = descriptor != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     if (descriptor != NULL) {
@@ -2060,10 +2095,6 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
             return stored;
         }
         TINYPY_DECREF(descriptor);
-    }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_CLASS) {
-        tinypy_bool_t return_value_2 = tinypy_internal_class_delete_attribute(value, key, out_error);
-        return return_value_2;
     }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
         tinypy_bool_t return_value_3 = tinypy_internal_old_instance_delete_attribute(value, key, out_error);

@@ -172,14 +172,6 @@ static tinypy_bool_t __tinypy_constructor_function_argument_count(tinypy_value_t
     return accepted;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_constructor_object_argument_count(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_error_t **out_error) {
-    if (TINYPY_TUPLE_SIZE(args) != 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object() takes no parameters", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_constructor_object_has_excess_arguments(tinypy_value_t *args, tinypy_value_t *kwargs) {
     tinypy_bool_t return_value_1 = TINYPY_TUPLE_SIZE(args) > 1U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U);
     return return_value_1;
@@ -1101,10 +1093,8 @@ static tinypy_value_t *__tinypy_constructor_type_new(tinypy_vm_t *vm, tinypy_typ
         if (TINYPY_VALUE_KIND(base) == TINYPY_VALUE_CLASS) {
             continue;
         }
-        if (TINYPY_VALUE_KIND(base) != TINYPY_VALUE_TYPE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bases must be types or classic classes", out_error);
-            return NULL;
-        }
+        /* type_new weighs the type of every base, so an object that is not a
+           class reports a metaclass conflict before best_base rejects it. */
         tinypy_type_t *candidate = base->type;
         if (tinypy_type_is_subtype(winner, candidate) != 0) {
             continue;
@@ -1262,7 +1252,9 @@ tinypy_value_t *tinypy_internal_type_create(tinypy_type_t *type, tinypy_value_t 
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    if (__tinypy_constructor_no_keywords(type->vm, kwargs, out_error) == 0 || __tinypy_constructor_object_argument_count(type->vm, args, out_error) == 0) {
+    /* object_new: excess arguments of either kind take one message. */
+    if (TINYPY_TUPLE_SIZE(args) != 0U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U)) {
+        tinypy_internal_make_vm_error(type->vm, TINYPY_ERROR_TYPE, "object() takes no parameters", out_error);
         return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_internal_object_allocate_checked(type->vm, type, type->basic_size, out_error);
@@ -1906,11 +1898,12 @@ tinypy_value_t *tinypy_internal_unicode_create(tinypy_type_t *type, tinypy_value
             return NULL;
         }
         if (kind == TINYPY_VALUE_BUFFER) {
-            const uint8_t *bytes;
-            size_t size;
-
-            (void)tinypy_internal_bytes_view(value, &bytes, &size);
-            source = tinypy_string_from_bytes(vm, bytes, size);
+            /* PyObject_AsCharBuffer reads the character buffer of a
+               legacy buffer, not its raw code units. */
+            source = tinypy_internal_buffer_character_string(value, out_error);
+            if (source == NULL) {
+                return NULL;
+            }
         }
         else if (kind != TINYPY_VALUE_STRING) {
             tinypy_message_part_t parts[] = {
@@ -2167,14 +2160,16 @@ tinypy_value_t *tinypy_internal_object_new_items(tinypy_type_t *class_type, tiny
 
     TINYPY_CLEAR_ERROR(out_error);
     /* tp_new_wrapper: the nearest base not created by Python code must
-       still use object.__new__. */
+       still use object.__new__, which only object itself and a native type
+       without a __new__ of its own do; the other built-in types have their
+       own constructor or none at all. */
     const tinypy_type_t *static_base = class_type;
     while ((static_base->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && static_base->base_type != NULL) {
         static_base = static_base->base_type;
     }
     tinypy_bool_t object_base = static_base == &vm->types[TINYPY_VALUE_INSTANCE] ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *object_new = object_base == 0 ? tinypy_type_get_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_new_key) : NULL;
-    if (object_base == 0 && tinypy_type_get_attr_key(static_base, vm->internal_special_new_key) != object_new) {
+    if (object_base == 0 && (static_base->layout_kind != TINYPY_VALUE_NATIVE_INSTANCE || tinypy_type_get_attr_key(static_base, vm->internal_special_new_key) != object_new)) {
         tinypy_message_part_t class_name[3];
         tinypy_message_part_t base_name[3];
 
@@ -2503,10 +2498,16 @@ static tinypy_value_t *__tinypy_constructor_object_delattr_method(tinypy_value_t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The __getattribute__ entry of a type whose tp_getattro is the generic
+   attribute lookup. */
+void tinypy_internal_type_add_object_getattribute_method(tinypy_type_t *type) {
+    tinypy_internal_type_add_method(type, type->vm->internal_special_getattribute_key, __tinypy_constructor_object_getattribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_type_add_object_attribute_methods(tinypy_type_t *type) {
     tinypy_vm_t *vm = type->vm;
 
-    tinypy_internal_type_add_method(type, vm->internal_special_getattribute_key, __tinypy_constructor_object_getattribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_object_getattribute_method(type);
     tinypy_internal_type_add_method(type, vm->internal_special_setattr_key, __tinypy_constructor_object_setattr_method, (void *)(intptr_t)TINYPY_VALUE_INSTANCE, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(type, vm->internal_special_delattr_key, __tinypy_constructor_object_delattr_method, (void *)(intptr_t)TINYPY_VALUE_INSTANCE, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 }
@@ -2530,12 +2531,12 @@ static tinypy_value_t *__tinypy_constructor_object_format_method(tinypy_value_t 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 2U, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *spec = TINYPY_TUPLE_GET(args, 1U);
     if (TINYPY_VALUE_KIND(spec) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(spec) != TINYPY_VALUE_UNICODE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__format__ requires str or unicode", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument to __format__ must be unicode or str", out_error);
         return NULL;
     }
     /* object.__format__ stringifies and then applies the spec to that string,
@@ -3186,24 +3187,13 @@ static tinypy_value_t *__tinypy_constructor_tuple_new_method(tinypy_value_t *fun
     tinypy_value_t *result;
 
     (void)user_data;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 1U, 2U, out_error) == 0) {
+    /* tuple_new parses the arguments after the type as tuple() does. */
+    tinypy_type_t *requested = __tinypy_constructor_new_receiver(vm, &vm->types[TINYPY_VALUE_TUPLE], args, out_error);
+    if (requested == NULL) {
         return NULL;
     }
-    tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(type_value) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype((tinypy_type_t *)type_value, &vm->types[TINYPY_VALUE_TUPLE]) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "tuple.__new__ requires a tuple subtype", out_error);
-        return NULL;
-    }
-    tinypy_value_t *selected_value_4;
-    if (TINYPY_TUPLE_SIZE(args) == 1U) {
-        selected_value_4 = TINYPY_RET_EMPTY_TUPLE(vm);
-    }
-    else {
-        tinypy_value_t *const *tuple_items = tinypy_internal_tuple_items(args);
-        selected_value_4 = tinypy_tuple_from_items(vm, &tuple_items[1], 1U);
-    }
-    tinypy_value_t *constructor_args = selected_value_4;
-    result = tinypy_internal_tuple_create((tinypy_type_t *)type_value, constructor_args, NULL, out_error);
+    tinypy_value_t *constructor_args = __tinypy_constructor_tail_arguments(vm, args);
+    result = tinypy_internal_tuple_create(requested, constructor_args, kwargs, out_error);
     TINYPY_DECREF(constructor_args);
     return result;
 }

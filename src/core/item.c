@@ -362,6 +362,10 @@ static tinypy_bool_t __tinypy_item_has_sequence_protocol(const tinypy_value_t *c
     default:
         break;
     }
+    /* BaseException has sq_item. */
+    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_NATIVE_INSTANCE && tinypy_type_is_subtype(container->type, TINYPY_VALUE_VM(container)->exception_types[TINYPY_EXCEPTION_BASE]) != 0) {
+        return TINYPY_TRUE;
+    }
     return (container->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -749,12 +753,15 @@ static tinypy_value_t *__tinypy_item_call_attribute(tinypy_value_t *container, t
 }
 //////////////////////////////////////////////////////////////////////////
 /* The sq_length slot behind a negative sequence offset: a classic instance
-   always has it, and raises the AttributeError of a missing __len__. */
+   always has it, and raises the AttributeError of a missing __len__.
+   instance_length takes only an int or long result, slot_sq_length reads
+   any integer, and both refuse a negative length. */
 static int32_t __tinypy_item_sequence_length(tinypy_value_t *container, int64_t *out_length, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    tinypy_bool_t classic = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *length_value;
 
-    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE) {
+    if (classic != 0) {
         length_value = __tinypy_item_call_attribute(container, vm->internal_special_length_key, NULL, 0U, out_error);
     }
     else if (tinypy_internal_object_has_special_key(container, vm->internal_special_length_key) != 0) {
@@ -766,9 +773,21 @@ static int32_t __tinypy_item_sequence_length(tinypy_value_t *container, int64_t 
     if (length_value == NULL) {
         return INT32_C(-1);
     }
-    tinypy_bool_t converted = tinypy_internal_index_as_i64(length_value, out_length, TINYPY_TRUE, out_error);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(length_value);
+    tinypy_bool_t converted;
 
+    if (classic != 0 && kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__len__() should return an int", out_error);
+        converted = TINYPY_FALSE;
+    }
+    else {
+        converted = tinypy_internal_number_as_ssize(length_value, out_length, out_error);
+    }
     TINYPY_DECREF(length_value);
+    if (converted != 0 && *out_length < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__() should return >= 0", out_error);
+        converted = TINYPY_FALSE;
+    }
     return converted != 0 ? INT32_C(1) : INT32_C(-1);
 }
 //////////////////////////////////////////////////////////////////////////

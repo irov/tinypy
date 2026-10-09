@@ -403,6 +403,10 @@ tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, s
     size_t index;
     tinypy_value_t **displaced;
 
+    /* list_ass_slice leaves the list untouched when nothing is replaced. */
+    if (count == 0U && item_count == 0U) {
+        return TINYPY_TRUE;
+    }
     if (item_count > count && item_count - count > SIZE_MAX / sizeof(tinypy_value_t *) - size) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "list is too large", out_error);
         return TINYPY_FALSE;
@@ -549,6 +553,10 @@ void tinypy_list_clear(tinypy_value_t *list) {
     size_t item_count = TINYPY_SIZED_SIZE(list);
     size_t allocated = TINYPY_LIST_OBJECT(list)->allocated;
 
+    /* list_clear leaves a list without storage untouched. */
+    if (items == NULL) {
+        return;
+    }
     TINYPY_LIST_OBJECT(list)->items = NULL;
     TINYPY_LIST_OBJECT(list)->allocated = 0U;
     TINYPY_LIST_OBJECT(list)->base.size = 0U;
@@ -560,7 +568,5 @@ void tinypy_list_clear(tinypy_value_t *list) {
     for (size_t index = item_count; index != 0U; --index) {
         TINYPY_DECREF(items[index - 1U]);
     }
-    if (items != NULL) {
-        tinypy_internal_vm_deallocate(vm, items, allocated * sizeof(*items));
-    }
+    tinypy_internal_vm_deallocate(vm, items, allocated * sizeof(*items));
 }

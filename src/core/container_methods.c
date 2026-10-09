@@ -1387,10 +1387,14 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     if (sort_storage != NULL) {
         tinypy_internal_vm_deallocate(vm, sort_storage, sort_storage_size);
     }
-    modified = TINYPY_LIST_OBJECT(list)->mutation_version != saved_version;
+    /* listsort reports a modification once the detached list acquired
+       storage: it still holds some, or a mutation (which may have released
+       it again) advanced the version. Callbacks that leave it empty, such
+       as del l[:], are accepted. */
     tinypy_value_t **added_items = TINYPY_LIST_OBJECT(list)->items;
     size_t added_size = TINYPY_LIST_SIZE(list);
     size_t added_allocated = TINYPY_LIST_OBJECT(list)->allocated;
+    modified = added_items != NULL || TINYPY_LIST_OBJECT(list)->mutation_version != saved_version;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_clear(vm, list);
 #endif

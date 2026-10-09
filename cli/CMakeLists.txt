@@ -79,6 +79,7 @@ if(BUILD_TESTING)
     endforeach()
 
     add_test(NAME cli_python_error_format COMMAND ${CMAKE_COMMAND} -DTINYPY_EXECUTABLE=$<TARGET_FILE:tinypy_console> -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/error_format.cmake)
+    add_test(NAME cli_host_semantics COMMAND ${CMAKE_COMMAND} -DTINYPY_EXECUTABLE=$<TARGET_FILE:tinypy_console> -DTINYPY_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/host_semantics -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/host_semantics.cmake)
     add_test(NAME cli_allocator_accounting COMMAND tinypy_console --stats -c "pass")
     add_test(NAME cli_stress_speed COMMAND tinypy_console --stats ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_stress.py speed 1000)
     add_test(NAME cli_stress_calls COMMAND tinypy_console --stats ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_stress.py calls 1000)

@@ -1107,7 +1107,8 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, s
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reversed argument must be a sequence", out_error);
         return TINYPY_FALSE;
     }
-    if (length_slot != NULL) {
+    /* The sq_length of a subclass defining __len__ calls it instead. */
+    if (length_slot != NULL && __tinypy_internal_object_overrides_dispatch(sequence, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) == 0) {
         ptrdiff_t length = length_slot(sequence, out_error);
 
         if (length < 0) {
@@ -1555,10 +1556,16 @@ tinypy_value_t *tinypy_internal_next_raw(tinypy_value_t *iterator, tinypy_error_
         if (TINYPY_VALUE_KIND(iterator) == TINYPY_VALUE_OLD_INSTANCE) {
             int32_t status = tinypy_internal_object_get_optional_attr_key(iterator, vm->internal_special_next_key, &method, out_error);
 
-            if (status < 0) {
-                return NULL;
-            }
-            if (status == 0) {
+            /* instance_iternext reports any failure of the lookup, the error
+               of a __getattr__ included, as the missing method. */
+            if (status <= 0) {
+                if (status < 0) {
+                    if (out_error != NULL && *out_error != NULL) {
+                        tinypy_error_release(*out_error);
+                        *out_error = NULL;
+                    }
+                    tinypy_internal_exception_clear_raised(vm);
+                }
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "instance has no next() method", out_error);
                 return NULL;
             }

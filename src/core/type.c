@@ -1029,69 +1029,90 @@ cleanup:
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The layout a type gives its instances; basestring, whose kind is the
+   invalid placeholder, lays them out as object does. */
+static tinypy_value_type_e __tinypy_internal_type_storage_kind(const tinypy_type_t *type) {
+    tinypy_value_type_e kind = type->layout_kind != TINYPY_VALUE_INVALID ? type->layout_kind : TINYPY_VALUE_INSTANCE;
+
+    return kind;
+}
+//////////////////////////////////////////////////////////////////////////
+/* extra_ivars in Python 2.7: whether instances of a type add storage to
+   those of its base. A __dict__ or __weakref__ slot of a heap type does not
+   count, except that the __dict__ of a subclass of the variable-size str,
+   long and tuple follows the items there. */
+static tinypy_bool_t __tinypy_internal_type_adds_storage(const tinypy_type_t *type, const tinypy_type_t *base) {
+    tinypy_bool_t variable_base = base->layout_kind == TINYPY_VALUE_STRING || base->layout_kind == TINYPY_VALUE_LONG || base->layout_kind == TINYPY_VALUE_TUPLE ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t adds = __tinypy_internal_type_storage_kind(type) != __tinypy_internal_type_storage_kind(base) || type->slot_count != base->slot_count
+                             || type->native_payload_size != base->native_payload_size
+                             || type->native_payload_offset != base->native_payload_offset
+                             || (variable_base != 0 && type->dict_offset != 0U && base->dict_offset == 0U)
+                             ? TINYPY_TRUE
+                             : TINYPY_FALSE;
+
+    return adds;
+}
+//////////////////////////////////////////////////////////////////////////
+/* solid_base in Python 2.7: the nearest type in the base chain whose
+   instances add storage to those of its own base. */
+static const tinypy_type_t *__tinypy_internal_type_solid_base(const tinypy_type_t *type) {
+    while (type->base_type != NULL && __tinypy_internal_type_adds_storage(type, type->base_type) == 0) {
+        type = type->base_type;
+    }
+    return type;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The types a host registers through tinypy_native_type_new: their
+   instances are released by the native instance hook, while the built-in
+   types with a native layout, the exception families, have hooks of their
+   own. */
+static tinypy_bool_t __tinypy_internal_type_is_host_native(const tinypy_type_t *type) {
+    tinypy_bool_t host_native = type->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE && type->release_references == tinypy_internal_native_instance_release_references ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return host_native;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Host native types share one deallocator, so two solid host native bases
+   laying their payload and slots out identically are one layout, as the
+   C++ classes a host binds with several bases need. */
+static tinypy_bool_t __tinypy_internal_type_native_layouts_match(const tinypy_type_t *left, const tinypy_type_t *right) {
+    tinypy_bool_t match = __tinypy_internal_type_is_host_native(left) != 0 && __tinypy_internal_type_is_host_native(right) != 0
+                                  && left->native_payload_offset == right->native_payload_offset
+                                  && left->native_payload_size == right->native_payload_size
+                                  && left->native_payload_alignment == right->native_payload_alignment
+                                  && left->slot_count == right->slot_count
+                              ? TINYPY_TRUE
+                              : TINYPY_FALSE;
+
+    return match;
+}
+//////////////////////////////////////////////////////////////////////////
+/* best_base in Python 2.7: the base whose solid base is the most derived;
+   every other solid base must be one of its ancestors or a host native
+   type of the same layout, and the first base keeps the layout. */
 static const tinypy_type_t *__tinypy_internal_select_layout_base(tinypy_vm_t *vm, const tinypy_type_t *const *bases, size_t base_count, tinypy_error_t **out_error) {
-    const tinypy_type_t *layout_base = bases[0];
-    const tinypy_type_t *native_base = NULL;
-    tinypy_value_type_e builtin_layout_kind = TINYPY_VALUE_INVALID;
+    const tinypy_type_t *layout_base = NULL;
+    const tinypy_type_t *winner = NULL;
     size_t index;
 
     for (index = 0U; index < base_count; ++index) {
-        const tinypy_type_t *candidate = bases[index];
+        const tinypy_type_t *candidate = __tinypy_internal_type_solid_base(bases[index]);
 
-        if (candidate->layout_kind != TINYPY_VALUE_NATIVE_INSTANCE) {
-            continue;
-        }
-        if (native_base == NULL) {
-            native_base = candidate;
-            continue;
-        }
-        if (candidate->native_payload_offset != native_base->native_payload_offset || candidate->native_payload_size != native_base->native_payload_size || candidate->native_payload_alignment != native_base->native_payload_alignment) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have incompatible native instance layouts", out_error);
-            return NULL;
-        }
-    }
-    if (native_base != NULL) {
-        return native_base;
-    }
-    for (index = 0U; index < base_count; ++index) {
-        const tinypy_type_t *candidate = bases[index];
-        tinypy_value_type_e candidate_kind = candidate->layout_kind;
+        if (winner != NULL) {
+            tinypy_bool_t covered = tinypy_type_is_subtype(winner, candidate) != 0 || __tinypy_internal_type_native_layouts_match(winner, candidate) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
 
-        if (candidate_kind == TINYPY_VALUE_INVALID || candidate_kind == TINYPY_VALUE_INSTANCE) {
-            continue;
-        }
-        if (builtin_layout_kind == TINYPY_VALUE_INVALID) {
-            builtin_layout_kind = candidate_kind;
-            layout_base = candidate;
-            continue;
-        }
-        if (candidate_kind != builtin_layout_kind) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have instance lay-out conflict", out_error);
-            return NULL;
-        }
-    }
-    for (index = 0U; index < base_count; ++index) {
-        const tinypy_type_t *candidate = bases[index];
+            if (covered != 0) {
+                continue;
+            }
+            if (tinypy_type_is_subtype(candidate, winner) == 0) {
+                const char *message = __tinypy_internal_type_is_host_native(winner) != 0 && __tinypy_internal_type_is_host_native(candidate) != 0 ? "multiple bases have incompatible native instance layouts" : "multiple bases have instance lay-out conflict";
 
-        if (candidate->slot_count == 0U || candidate == layout_base) {
-            continue;
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, message, out_error);
+                return NULL;
+            }
         }
-        if (builtin_layout_kind != TINYPY_VALUE_INVALID && candidate->layout_kind == TINYPY_VALUE_INSTANCE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have instance lay-out conflict", out_error);
-            return NULL;
-        }
-        if (layout_base->slot_count == 0U) {
-            layout_base = candidate;
-            continue;
-        }
-        if (tinypy_type_is_subtype(candidate, layout_base) != 0) {
-            layout_base = candidate;
-            continue;
-        }
-        if (tinypy_type_is_subtype(layout_base, candidate) == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "multiple bases have instance lay-out conflict", out_error);
-            return NULL;
-        }
+        winner = candidate;
+        layout_base = bases[index];
     }
     return layout_base;
 }
@@ -1249,20 +1270,6 @@ tinypy_value_t *tinypy_internal_type_compute_mro(tinypy_type_t *type, tinypy_err
 //////////////////////////////////////////////////////////////////////////
 /* Dict/weakref fields do not change the solid layout; declared slots and
    builtin/native payload changes do. This mirrors Python 2's solid_base. */
-static const tinypy_type_t *__tinypy_internal_type_solid_base(const tinypy_type_t *type) {
-    while (type->base_type != NULL) {
-        const tinypy_type_t *base = type->base_type;
-
-        if (type->layout_kind != base->layout_kind || type->slot_count != base->slot_count
-            || type->native_payload_size != base->native_payload_size
-            || type->native_payload_offset != base->native_payload_offset) {
-            break;
-        }
-        type = base;
-    }
-    return type;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_rebase_mro(tinypy_type_t *type, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     tinypy_value_t *result;
@@ -1387,14 +1394,17 @@ static tinypy_bool_t __tinypy_internal_type_same_slots_added(const tinypy_type_t
 }
 //////////////////////////////////////////////////////////////////////////
 /* compatible_for_assignment in Python 2.7, shared by __class__ and __bases__
-   assignment; the deallocator test maps to the heap/static distinction. */
+   assignment. Heap types share one deallocator, and a built-in type has its
+   own unless it only extends the storage of another, as the exception
+   families do. */
 tinypy_bool_t tinypy_internal_type_layout_compatible(const tinypy_type_t *old_type, const tinypy_type_t *new_type, const char *attribute, size_t attribute_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = old_type->vm;
     const tinypy_type_t *new_base = new_type;
     const tinypy_type_t *old_base = old_type;
     const char *reason = NULL;
+    tinypy_bool_t static_types = ((old_type->flags | new_type->flags) & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U ? TINYPY_TRUE : TINYPY_FALSE;
 
-    if (((old_type->flags ^ new_type->flags) & TINYPY_TYPE_FLAG_HEAP) != 0U || old_type->destroy != new_type->destroy) {
+    if (((old_type->flags ^ new_type->flags) & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U || (static_types != 0 && __tinypy_internal_type_solid_base(old_type) != __tinypy_internal_type_solid_base(new_type))) {
         reason = "' deallocator differs from '";
     }
     else {
@@ -1500,12 +1510,13 @@ tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t
 
         if (TINYPY_VALUE_KIND(base_value) != TINYPY_VALUE_TYPE && TINYPY_VALUE_KIND(base_value) != TINYPY_VALUE_CLASS) {
             tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_LITERAL("__bases__ must be tuple of old- or new-style classes, not '"),
+                {type->name, type->name_size},
+                TINYPY_MESSAGE_PART_LITERAL(".__bases__ must be tuple of old- or new-style classes, not '"),
                 TINYPY_MESSAGE_PART_TYPE_NAME(base_value),
                 TINYPY_MESSAGE_PART_LITERAL("'"),
             };
 
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 4U, out_error);
             return TINYPY_FALSE;
         }
         if (base_value == &type->base.base || (TINYPY_VALUE_KIND(base_value) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)base_value, type) != 0)) {
@@ -1883,6 +1894,7 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_value_t *internal_name_k
         type->flags |= TINYPY_TYPE_FLAG_TYPE_SUBCLASS;
     }
     type->base_type = (tinypy_type_t *)layout_base;
+    type->item_size = layout_base->item_size;
     type->number_slots = layout_base->number_slots == &layout_base->native_number_slots ? &type->native_number_slots : layout_base->number_slots;
     type->sequence_slots = layout_base->sequence_slots == &layout_base->native_sequence_slots ? &type->native_sequence_slots : layout_base->sequence_slots;
     type->mapping_slots = layout_base->mapping_slots == &layout_base->native_mapping_slots ? &type->native_mapping_slots : layout_base->mapping_slots;
@@ -2448,6 +2460,17 @@ static tinypy_value_t *__tinypy_internal_type_call_arguments(tinypy_vm_t *vm, ti
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* type_call of a type without tp_new. */
+void tinypy_internal_type_uncreatable_error(tinypy_type_t *type, tinypy_error_t **out_error) {
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("cannot create '"),
+        {type->name, type->name_size},
+        TINYPY_MESSAGE_PART_LITERAL("' instances"),
+    };
+
+    tinypy_internal_make_vm_error_parts(type->vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 /* type_call over the arguments in place; args is their tuple when the caller
    has one, and a tuple is built only for the callables that take one. */
 static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_value_t *const *items, size_t count, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -2458,11 +2481,7 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
     tinypy_value_t *instance;
 
     if (type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] || type == vm->native_method_descriptor_type || type == vm->native_wrapper_descriptor_type || type == vm->native_method_wrapper_type || type == vm->native_class_method_descriptor_type) {
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("cannot create '"), {type->name, type->name_size}, TINYPY_MESSAGE_PART_LITERAL("' instances")
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        tinypy_internal_type_uncreatable_error(type, out_error);
         return NULL;
     }
     if (vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0) {
@@ -2479,10 +2498,6 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         TINYPY_DECREF(call_args);
         return result;
     }
-    if ((type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "builtin type has no public constructor", out_error);
-        return NULL;
-    }
     if (__tinypy_internal_type_constructors_current(type) == 0) {
         __tinypy_internal_type_lookup_constructors(type);
     }
@@ -2493,6 +2508,18 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         return NULL;
     }
     if (object_new != 0) {
+        /* A type that Python code did not create takes object.__new__ only
+           when it is object itself or a native type: the tp_new of the other
+           built-in types without a constructor of their own is NULL. */
+        const tinypy_type_t *static_base = type;
+
+        while ((static_base->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && static_base->base_type != NULL) {
+            static_base = static_base->base_type;
+        }
+        if (static_base != &vm->types[TINYPY_VALUE_INSTANCE] && static_base->layout_kind != TINYPY_VALUE_NATIVE_INSTANCE) {
+            tinypy_internal_type_uncreatable_error(type, out_error);
+            return NULL;
+        }
         /* object.__new__ is entered directly, at the recursion level of its
            call. */
         if (__tinypy_internal_call_enter(vm, out_error) == 0) {

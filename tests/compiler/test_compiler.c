@@ -320,11 +320,14 @@ static int32_t __test_source_decoding(void) {
     static const char coding_in_code[] = "value = 'coding: koala'\n";
     static const char second_cookie_after_code[] = "value = 1\n# coding: koala\n";
     static const char unknown_cookie[] = "# comment\n# coding: koala\nvalue = 1\n";
+    static const char encoding_problem[] = "encoding problem: koala";
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
     tinypy_compile_options_t options;
     tinypy_error_t *error = NULL;
     tinypy_value_t *code;
+    const char *message;
+    size_t message_size;
 
     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
     code = tinypy_compile_source(vm, latin1_source, sizeof(latin1_source) - 1U, "latin1.py", 9U, &options, NULL);
@@ -352,10 +355,13 @@ static int32_t __test_source_decoding(void) {
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SOURCE_DECODING);
     tinypy_error_release(error);
     error = NULL;
+    /* The file tokenizer reports a cookie it cannot honour on its line. */
     code = tinypy_compile_source(vm, unknown_cookie, sizeof(unknown_cookie) - 1U, "unknown.py", 10U, &options, &error);
-    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SOURCE_DECODING);
     assert(tinypy_error_line_number(error) == 2);
-    assert(tinypy_error_column_offset(error) == 1);
+    assert(tinypy_error_column_offset(error) == 0);
+    message = tinypy_error_message(error, &message_size);
+    assert(message_size == sizeof(encoding_problem) - 1U && memcmp(message, encoding_problem, message_size) == 0);
     tinypy_error_release(error);
     error = NULL;
     code = tinypy_compile_source(vm, embedded_nul, sizeof(embedded_nul), "nul.py", 6U, &options, &error);
@@ -1071,9 +1077,99 @@ static int32_t __test_indentation_diagnostics(void) {
     assert(tinypy_error_line_number(error) == 2 && tinypy_error_column_offset(error) == 4);
     tinypy_error_release(error);
     error = NULL;
+    /* Python checks tabs against spaces only with -tt. */
+    code = tinypy_compile_source(vm, mixed_tabs, sizeof(mixed_tabs) - 1U, "tabs.py", 7U, &options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_release(code);
+    options.flags = (uint32_t)TINYPY_COMPILE_FLAG_TAB_ERROR;
     code = tinypy_compile_source(vm, mixed_tabs, sizeof(mixed_tabs) - 1U, "tabs.py", 7U, &options, &error);
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TAB);
+    assert(tinypy_error_line_number(error) == 3);
     tinypy_error_release(error);
+
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_file_source_diagnostics(void) {
+    static const char open_paren[] = "x = (1,\n";
+    static const char triple[] = "x = 1\ny = '''abc\ndef\n";
+    static const char triple_text[] = "y = '''abc\ndef\n\n";
+    static const char triple_message[] = "EOF while scanning triple-quoted string literal";
+    static const char non_ascii[] = "x = 1\ny = '\xe9'\n";
+    static const char non_ascii_message[] = "Non-ASCII character '\\xe9' in file script.py on line 2, but no encoding declared; see http://python.org/dev/peps/pep-0263/ for details";
+    static const char bom_cookie[] = "\xef\xbb\xbf\n# coding: latin1\nx = 1\n";
+    static const char bom_message[] = "encoding problem: latin1 with BOM";
+    static const char missing_block[] = "if 1:\n    if 2:\nx = 1\n";
+    static const char block_message[] = "expected an indented block";
+    static const char eof_message[] = "unexpected EOF while parsing";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *code;
+    const char *message;
+    const char *line;
+    size_t message_size;
+    size_t line_size;
+
+    /* A host module is file text: the end of the file is one more line
+       whose text is empty, and an open token first gets one more newline. */
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    code = tinypy_compile_source(vm, open_paren, sizeof(open_paren) - 1U, "script.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    assert(tinypy_error_line_number(error) == 2 && tinypy_error_column_offset(error) == 8);
+    assert(tinypy_error_source_line(error, &line_size) == NULL && line_size == 0U);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, triple, sizeof(triple) - 1U, "script.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    message = tinypy_error_message(error, &message_size);
+    assert(message_size == sizeof(triple_message) - 1U && memcmp(message, triple_message, message_size) == 0);
+    assert(tinypy_error_line_number(error) == 5 && tinypy_error_column_offset(error) == 16);
+    line = tinypy_error_source_line(error, &line_size);
+    assert(line_size == sizeof(triple_text) - 1U && memcmp(line, triple_text, line_size) == 0);
+    tinypy_error_release(error);
+    error = NULL;
+    /* Without a declared encoding the file is ASCII; a BOM and a cookie
+       that names another encoding conflict on the cookie line. */
+    code = tinypy_compile_source(vm, non_ascii, sizeof(non_ascii) - 1U, "script.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SOURCE_DECODING);
+    message = tinypy_error_message(error, &message_size);
+    assert(message_size == sizeof(non_ascii_message) - 1U && memcmp(message, non_ascii_message, message_size) == 0);
+    assert(tinypy_error_line_number(error) == 2 && tinypy_error_column_offset(error) == 0);
+    assert(tinypy_error_source_line(error, &line_size) == NULL);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, bom_cookie, sizeof(bom_cookie) - 1U, "script.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SOURCE_DECODING);
+    message = tinypy_error_message(error, &message_size);
+    assert(message_size == sizeof(bom_message) - 1U && memcmp(message, bom_message, message_size) == 0);
+    assert(tinypy_error_line_number(error) == 2 && tinypy_error_column_offset(error) == 0);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, missing_block, sizeof(missing_block) - 1U, "script.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDENTATION);
+    message = tinypy_error_message(error, &message_size);
+    assert(message_size == sizeof(block_message) - 1U && memcmp(message, block_message, message_size) == 0);
+    assert(tinypy_error_line_number(error) == 3);
+    tinypy_error_release(error);
+    error = NULL;
+    /* The string of compile() ends where its text ends and holds any bytes. */
+    options.flags = (uint32_t)TINYPY_COMPILE_FLAG_STRING_SOURCE;
+    code = tinypy_compile_source(vm, open_paren, sizeof(open_paren) - 1U, "script.py", 9U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    message = tinypy_error_message(error, &message_size);
+    assert(message_size == sizeof(eof_message) - 1U && memcmp(message, eof_message, message_size) == 0);
+    assert(tinypy_error_line_number(error) == 1 && tinypy_error_column_offset(error) == 8);
+    line = tinypy_error_source_line(error, &line_size);
+    assert(line_size == sizeof(open_paren) - 1U && memcmp(line, open_paren, line_size) == 0);
+    tinypy_error_release(error);
+    error = NULL;
+    code = tinypy_compile_source(vm, non_ascii, sizeof(non_ascii) - 1U, "script.py", 9U, &options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_release(code);
 
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
@@ -1235,7 +1331,8 @@ static int32_t __test_codegen_syntax_errors(void) {
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
     message = tinypy_error_message(error, &message_size);
     assert(message_size == sizeof(block_message) - 1U && memcmp(message, block_message, message_size) == 0);
-    assert(tinypy_error_line_number(error) > 0);
+    /* Python raises this error without any location. */
+    assert(tinypy_error_line_number(error) == 0 && tinypy_error_column_offset(error) == 0);
     tinypy_error_release(error);
 
     tinypy_vm_destroy(vm);
@@ -1624,9 +1721,11 @@ static int32_t __test_source_positions_and_literals(void) {
     size_t index;
 
     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    /* A file without a declared encoding fails on its first non-ASCII
+       line, as decoding_fgets reports it: on the line, without a column. */
     code = tinypy_compile_source(vm, invalid_utf8, sizeof(invalid_utf8) - 1U, "utf8.py", 7U, &options, &error);
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SOURCE_DECODING);
-    assert(tinypy_error_line_number(error) == 3 && tinypy_error_column_offset(error) == 6);
+    assert(tinypy_error_line_number(error) == 3 && tinypy_error_column_offset(error) == 0);
     tinypy_error_release(error);
     error = NULL;
     code = tinypy_compile_source(vm, tab_width, sizeof(tab_width) - 1U, "tabs.py", 7U, &options, &error);
@@ -2128,6 +2227,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_indentation_diagnostics() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_file_source_diagnostics() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_dont_imply_dedent() != 0) {

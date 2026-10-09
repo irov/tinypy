@@ -23,8 +23,17 @@ typedef enum tinypy_compile_feature_e {
     TINYPY_COMPILE_FEATURE_META = UINT32_C(1) << 1
 } tinypy_compile_feature_e;
 
+/* A host source is the text of a file named by its logical filename and
+ * decodes like Python's file tokenizer: ASCII unless a PEP 263 cookie or a
+ * UTF-8 BOM declares its encoding. TINYPY_COMPILE_FLAG_STRING_SOURCE compiles
+ * it as the byte string of compile(), exec and eval instead. Python checks
+ * the consistency of tabs and spaces in indentation only with -t (a warning
+ * on sys.stderr) or -tt (TabError); the two tab flags select those checks. */
 typedef enum tinypy_compile_flag_e {
     TINYPY_COMPILE_FLAG_DONT_IMPLY_DEDENT = 0x0200,
+    TINYPY_COMPILE_FLAG_STRING_SOURCE = 0x0400,
+    TINYPY_COMPILE_FLAG_TAB_WARNING = 0x0800,
+    TINYPY_COMPILE_FLAG_TAB_ERROR = 0x1000,
     TINYPY_COMPILE_FLAG_FUTURE_DIVISION = 0x2000,
     TINYPY_COMPILE_FLAG_FUTURE_ABSOLUTE_IMPORT = 0x4000,
     TINYPY_COMPILE_FLAG_FUTURE_WITH_STATEMENT = 0x8000,

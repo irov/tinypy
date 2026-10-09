@@ -682,8 +682,26 @@ static tinypy_value_t *__tinypy_class_representation_method(tinypy_value_t *func
     return representation;
 }
 //////////////////////////////////////////////////////////////////////////
-/* classobj exposes class_repr and class_str as __repr__ and __str__;
-   instance has instance_new. */
+/* The __call__ of classobj makes an instance, as calling the class does. */
+static tinypy_value_t *__tinypy_class_call_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *const *items = tinypy_internal_tuple_items(args);
+    size_t count = TINYPY_TUPLE_SIZE(args);
+
+    (void)user_data;
+    if (count == 0U || TINYPY_VALUE_KIND(items[0]) != TINYPY_VALUE_CLASS) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "classobj.__call__ requires a classic class", out_error);
+        return NULL;
+    }
+    tinypy_value_t *call_args = tinypy_tuple_from_items(vm, items + 1U, count - 1U);
+    tinypy_value_t *result = tinypy_internal_class_call(items[0], call_args, kwargs, out_error);
+
+    TINYPY_DECREF(call_args);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* classobj exposes class_repr, class_str and PyInstance_New as __repr__,
+   __str__ and __call__; instance has instance_new. */
 void tinypy_internal_initialize_class_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_CLASS];
     tinypy_type_t *instance_type = &vm->types[TINYPY_VALUE_OLD_INSTANCE];
@@ -694,6 +712,7 @@ void tinypy_internal_initialize_class_type(tinypy_vm_t *vm) {
     tinypy_internal_constructor_add_builtin_new(type);
     tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_class_representation_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(type, vm->internal_special_str_key, __tinypy_class_representation_method, (void *)(intptr_t)1, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_call_key, __tinypy_class_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_name(const tinypy_value_t *class_value) {

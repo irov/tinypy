@@ -268,6 +268,7 @@ typedef struct tinypy_intern_entry_t {
     X(internal_step_key, "step", 1) \
     X(internal_encoding_key, "encoding", 1) \
     X(internal_errors_key, "errors", 1) \
+    X(internal_input_key, "input", 1) \
     X(internal_reverse_key, "reverse", 1) \
     X(internal_cmp_key, "cmp", 1) \
     X(internal_default_key, "default", 1) \
@@ -1292,6 +1293,15 @@ typedef struct tinypy_internal_exception_payload_t {
     tinypy_value_t *message;
 } tinypy_internal_exception_payload_t;
 //////////////////////////////////////////////////////////////////////////
+/* The T_OBJECT members of the exception families with fields of their own:
+   SystemExit (code), EnvironmentError (errno, strerror, filename) and
+   SyntaxError (msg, filename, lineno, offset, text, print_file_and_line).
+   An unset member is NULL and reads as None. */
+typedef struct tinypy_internal_exception_members_payload_t {
+    tinypy_internal_exception_payload_t base;
+    tinypy_value_t *members[];
+} tinypy_internal_exception_members_payload_t;
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_internal_unicode_error_payload_t {
     tinypy_internal_exception_payload_t base;
     tinypy_value_t *encoding;
@@ -2076,6 +2086,7 @@ tinypy_value_t *tinypy_internal_iterator_length_hint_method(tinypy_value_t *func
 void tinypy_internal_initialize_native_function_descriptors(tinypy_vm_t *vm);
 tinypy_bool_t tinypy_internal_native_function_compare_three_way(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error);
 void tinypy_internal_initialize_struct_descriptors(tinypy_type_t *type);
+void tinypy_internal_type_add_object_getattribute_method(tinypy_type_t *type);
 void tinypy_internal_type_add_object_attribute_methods(tinypy_type_t *type);
 tinypy_value_t *tinypy_internal_struct_get_field(tinypy_value_t *instance, tinypy_value_t *name, tinypy_error_t **out_error);
 void tinypy_internal_make_vm_error_location(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, const char *logical_filename, size_t filename_size, int32_t line_number, int32_t column_offset, const char *source_line, size_t source_line_size, tinypy_bool_t include_location, tinypy_error_t **out_error);
@@ -2322,6 +2333,7 @@ tinypy_bool_t tinypy_internal_integer_as_ssize(tinypy_value_t *value, int64_t *o
 tinypy_bool_t tinypy_internal_number_as_ssize(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_number_as_i64(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t *out_consumed, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_keyword_as_string(tinypy_vm_t *vm, tinypy_value_t *keyword, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_encode_attribute_name(tinypy_value_t *key, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_codecs_validate_name(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error);
 /* The codecs the runtime implements, by encodings module. */
@@ -2451,6 +2463,7 @@ void tinypy_internal_type_modified(tinypy_type_t *type);
 void tinypy_internal_type_lookup_cache_finalize(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_type_lookup_key(tinypy_vm_t *vm, const tinypy_type_t *type, tinypy_value_t *key);
 void tinypy_internal_type_message_name(const tinypy_type_t *type, tinypy_message_part_t out_parts[3]);
+void tinypy_internal_type_uncreatable_error(tinypy_type_t *type, tinypy_error_t **out_error);
 void tinypy_internal_type_set_attr_key(tinypy_type_t *type, tinypy_value_t *key, tinypy_value_t *value);
 const char *tinypy_internal_type_short_name(const tinypy_type_t *type, size_t *out_size);
 tinypy_bool_t tinypy_internal_type_set_name(tinypy_type_t *type, tinypy_value_t *value, tinypy_error_t **out_error);
@@ -2644,6 +2657,7 @@ tinypy_value_t *tinypy_internal_super_descriptor_get(tinypy_value_t *descriptor,
 void tinypy_internal_initialize_super_type(tinypy_vm_t *vm);
 void tinypy_internal_initialize_descriptor_types(tinypy_vm_t *vm);
 void tinypy_internal_initialize_exception_descriptors(tinypy_type_t *type);
+void tinypy_internal_initialize_exception_members(tinypy_type_t *type, tinypy_value_t *const *names, size_t count);
 tinypy_bool_t tinypy_internal_descriptor_is_data(tinypy_vm_t *vm, tinypy_value_t *attribute);
 tinypy_bool_t tinypy_internal_descriptor_has_get(tinypy_vm_t *vm, tinypy_value_t *attribute);
 tinypy_value_t *tinypy_internal_object_get_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);

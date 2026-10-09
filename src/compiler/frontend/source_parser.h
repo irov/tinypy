@@ -3,12 +3,16 @@
 
 #include "parser_error.h"
 
+/* text is the tokenizer buffer of the failing logical line, NULL when the
+   failure has no text; message is set for TINYPY_PARSER_DECODE_ERROR. */
 typedef struct tinypy_parser_error_detail_t {
     tinypy_parser_result_e result;
     const char *filename;
     int32_t line_number;
     int32_t offset;
-    char *text;
+    const char *text;
+    size_t text_size;
+    const char *message;
     int32_t token;
     int32_t expected;
 } tinypy_parser_error_detail_t;

@@ -479,6 +479,14 @@ descriptor типа получателя или, для classic instance, кот
 native types без `get_attribute` hook ищут атрибуты и вызывают методы так же,
 как экземпляры классов.
 
+Класс может наследовать несколько host native types, созданных через
+`tinypy_native_type_new`, если их solid bases совпадают по геометрии payload
+(offset, size, alignment) и числу слотов: раскладку задаёт первая база,
+остальные входят в MRO; иная геометрия отвергается с TypeError «multiple bases
+have incompatible native instance layouts». Built-in типы с native layout,
+семейства исключений, подчиняются правилу solid base CPython и дают «multiple
+bases have instance lay-out conflict».
+
 `f_exc_type`, `f_exc_value` и `f_exc_traceback` показывают сохранённое
 состояние вызывающего frame; текущий обработчик читается через `sys.exc_info()`.
 Эти getset descriptors допускают запись и удаление. `None` очищает поле;
@@ -535,6 +543,34 @@ Source decoder поддерживает:
 - embedded NUL diagnostics;
 - structured syntax, indentation, tab и decoding errors.
 
+Source host API в режиме exec — текст файла, который читается как file
+tokenizer CPython: без cookie и BOM допустимы только ASCII bytes (SyntaxError
+«Non-ASCII character '\xe9' in file ... but no encoding declared», без text),
+cookie с неизвестной кодировкой или cookie, противоречащий BOM, отвергается на
+своей строке («encoding problem: ...»), конец файла читается как ещё одна
+строка с пустым `text` (ошибка на нём — «invalid syntax» на строке, следующей
+за последней), а открытый многострочный token получает перед концом файла ещё
+один перевод строки. Флаг `TINYPY_COMPILE_FLAG_STRING_SOURCE`, режимы eval и
+single, а также `compile`, `exec` и `eval` из Python компилируют строку как
+string tokenizer CPython: bytes принимаются как есть, конец строки — «unexpected
+EOF while parsing», а завершающий CRLF в режиме exec добавляет пустую строку,
+как `translate_newlines`.
+
+Cookie нормализуется как `get_normal_name`: написания `utf-8`, `latin-1`,
+`iso-8859-1`, `iso-latin-1` и их суффиксы идут по fast path, остальные ищутся
+в codec registry по правилам `encodings.aliases` и декодируют источник через
+codec: для строки — целиком («'utf8' codec can't decode byte ... in position
+N», lineno 0), для файла — построчно после строки cookie, как StreamReader.
+`text` и `offset` SyntaxError восстанавливаются в объявленную кодировку как
+`PyTokenizer_RestoreEncoding`, `text` покрывает всю логическую строку
+многострочного token, а «expected an indented block» предшествует
+«unexpected unindent», как в `err_input`.
+
+Согласованность табуляций и пробелов в отступах по умолчанию не проверяется,
+как в CPython без `-t`: табуляция расширяется до кратного восьми.
+`TINYPY_COMPILE_FLAG_TAB_WARNING` воспроизводит `-t` (одно предупреждение в
+`sys.stderr` на файл), `TINYPY_COMPILE_FLAG_TAB_ERROR` — `-tt` (TabError).
+
 Numeric parsing locale-independent. Integer literal создаёт integer при
 попадании в signed 64-bit range, иначе arbitrary-precision long. Float и
 complex сохраняют binary value; float literal любой длины округляется
@@ -572,15 +608,19 @@ tinypy_value_t *tinypy_exec_code(...);
 ```
 
 `tinypy_compile_options_t` задаёт mode, future flags, `dont_inherit`, optimize,
-feature flags, limits и optional immutable build profile.
+feature flags, limits, optional immutable build profile и флаги источника
+`TINYPY_COMPILE_FLAG_STRING_SOURCE`, `TINYPY_COMPILE_FLAG_TAB_WARNING` и
+`TINYPY_COMPILE_FLAG_TAB_ERROR` (§8).
 
 При `dont_inherit == 0` явно переданные flags объединяются с future flags
 текущего frame. Imports компилируют source с `dont_inherit == 1`.
 
-Source host API считается текстом файла с logical filename: semantic
-SyntaxError из AST, future scanner и symbol table получает в `text` свою строку
-без начальных пробелов, как `PyErr_ProgramText`. Строки `compile`, `exec` и
-`eval` не являются файлами, и `text` таких ошибок равен `None`.
+Source host API в режиме exec считается текстом файла с logical filename:
+semantic SyntaxError из AST, future scanner и symbol table получает в `text`
+свою строку без начальных пробелов, как `PyErr_ProgramText`, а SyntaxWarning
+дописывает её в `sys.stderr`, как `_Py_DisplaySourceLine`. Строки `compile`,
+`exec` и `eval`, host source с `TINYPY_COMPILE_FLAG_STRING_SOURCE` и режимы
+eval и single не являются файлами, и `text` таких ошибок равен `None`.
 
 Compiler limits охватывают:
 
@@ -710,8 +750,10 @@ Core не строит filesystem paths. Resolver получает canonical mod
 - native module descriptor.
 
 Artifact содержит logical filename, canonical name, package metadata и release
-callback. `sys.modules` поддерживает packages, circular imports и rollback при
-ошибке resolution, compilation или execution.
+callback; `package_token` package artifact — путь каталога пакета, единственный
+элемент его `__path__`, без него `__path__` пуст. `sys.modules` поддерживает
+packages, circular imports и rollback при ошибке resolution, compilation или
+execution.
 Если loader при `reload` заменяет зарегистрированный объект, результатом
 становится этот объект; исходный модуль сохраняет свой namespace. Replacement
 не обязан быть модулем. Обычная повторная загрузка source artifact исполняется
@@ -723,6 +765,15 @@ callbacks. Callback input действителен только на время 
 exception, сначала вызывает `tinypy_output_flush_line`: как `Py_FlushLine`,
 она дописывает в `sys.stdout` перевод строки, отложенный print statement с
 завершающей запятой, игнорирует ошибку записи и сохраняет raised exception.
+
+Отчёт об uncaught exception — обязанность host: он читает raised exception,
+её type и traceback через public API и пишет отчёт в объект `sys.stderr`.
+Host, завершающий программу как `Py_Finalize`, до `tinypy_vm_destroy` вызывает
+`sys.exitfunc`, а затем заменяет значения module namespaces на `None` в
+порядке `PyImport_Cleanup`, чтобы finalizers ещё живых объектов выполнились;
+значения, которые это переживают, host оставляет достижимыми для VM, так как
+без cyclic GC освобождённый namespace иначе оставил бы cycle недостижимым.
+CLI (`cli/README.md`) реализует оба контракта.
 
 ## 14. Errors
 

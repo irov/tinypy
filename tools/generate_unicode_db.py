@@ -91,7 +91,7 @@ def main():
     range_begin = 0
     range_flags = 0
     decimal_begin = None
-    decimal_end = None
+    decimal_value = 0
     numeric_begin = None
 
     for code_point in xrange(sys.maxunicode + 1):
@@ -115,17 +115,16 @@ def main():
             decimal = unicodedata.decimal(character)
         except ValueError:
             decimal = None
-        if decimal is not None and decimal == 0:
+        # A range covers consecutive code points whose decimal values count
+        # up from the value of its first one; a digit outside such a run
+        # (U+19DA has value 1 after a 0..9 run) gets a range of its own.
+        if decimal is None or decimal_begin is None or decimal != decimal_value + (code_point - decimal_begin):
             if decimal_begin is not None:
-                decimal_ranges.append((decimal_begin, decimal_end))
-            decimal_begin = code_point
-            decimal_end = code_point
-        elif decimal_begin is not None and decimal == code_point - decimal_begin and decimal <= 9:
-            decimal_end = code_point
-        elif decimal_begin is not None:
-            decimal_ranges.append((decimal_begin, decimal_end))
-            decimal_begin = None
-            decimal_end = None
+                decimal_ranges.append((decimal_begin, code_point - 1, decimal_value))
+                decimal_begin = None
+            if decimal is not None:
+                decimal_begin = code_point
+                decimal_value = decimal
 
         try:
             unicodedata.numeric(character)
@@ -141,7 +140,7 @@ def main():
     if range_flags != 0:
         ranges.append((range_begin, sys.maxunicode, range_flags))
     if decimal_begin is not None:
-        decimal_ranges.append((decimal_begin, decimal_end))
+        decimal_ranges.append((decimal_begin, sys.maxunicode, decimal_value))
     if numeric_begin is not None:
         numeric_ranges.append((numeric_begin, sys.maxunicode))
 
@@ -186,8 +185,8 @@ def main():
         write_uint16_table(output, "__tinypy_unicode_mapping_page_index", mapping_pages)
         print("", file=output)
         print("static const tinypy_unicode_decimal_range_t __tinypy_unicode_decimal_ranges[] = {", file=output)
-        for begin, end in decimal_ranges:
-            print("    {UINT32_C(0x%06x), UINT32_C(0x%06x)}," % (begin, end), file=output)
+        for begin, end, digit in decimal_ranges:
+            print("    {UINT32_C(0x%06x), UINT32_C(0x%06x), UINT8_C(0x%02x)}," % (begin, end, digit), file=output)
         print("};", file=output)
         print("", file=output)
         print("static const tinypy_unicode_numeric_range_t __tinypy_unicode_numeric_ranges[] = {", file=output)

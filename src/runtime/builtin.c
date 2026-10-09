@@ -864,7 +864,9 @@ static tinypy_value_t *__tinypy_builtin_next(tinypy_value_t *function, tinypy_va
     (void)self;
     (void)kwargs;
     tinypy_value_t *item = items[0U];
-    if (item->type->next == NULL && tinypy_internal_object_has_special_key(item, vm->internal_special_next_key) == 0) {
+    /* PyIter_Check accepts every classic instance; instance_iternext then
+       reports a missing next method. */
+    if (item->type->next == NULL && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(item, vm->internal_special_next_key) == 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_TYPE_NAME(item),
             TINYPY_MESSAGE_PART_LITERAL(" object is not an iterator")
@@ -1449,7 +1451,9 @@ static tinypy_value_t *__tinypy_builtin_filter_text(tinypy_vm_t *vm, tinypy_valu
         }
     }
     else {
-        result = tinypy_internal_string_from_bytes_checked(vm, output, output_size, out_error);
+        /* filterstring builds a new string; only the None predicate above
+           returns the input itself. */
+        result = tinypy_internal_string_from_bytes_uninterned_checked(vm, output, output_size, out_error);
     }
     if (output != NULL) {
         tinypy_internal_vm_deallocate(vm, output, byte_size);
@@ -3758,11 +3762,18 @@ static tinypy_bool_t __tinypy_builtin_compile_integer(tinypy_value_t *value, int
         return TINYPY_FALSE;
     }
     if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && value->type != &vm->types[TINYPY_VALUE_LONG]) {
-        if (tinypy_internal_object_has_special_key(value, vm->internal_special_int_key) == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "an integer is required", out_error);
-            return TINYPY_FALSE;
+        tinypy_value_t *name = vm->internal_special_int_key;
+
+        if (tinypy_internal_object_has_special_key(value, name) == 0) {
+            if (kind != TINYPY_VALUE_OLD_INSTANCE) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "an integer is required", out_error);
+                return TINYPY_FALSE;
+            }
+            /* instance_int falls back to __trunc__, found like any attribute
+               of a classic instance, and reports its absence. */
+            name = vm->internal_special_trunc_key;
         }
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_int_key, out_error);
+        tinypy_value_t *method = name == vm->internal_special_trunc_key ? tinypy_internal_object_get_attr_key(value, name, out_error) : tinypy_internal_object_get_special_key(value, name, out_error);
         if (method == NULL) {
             return TINYPY_FALSE;
         }

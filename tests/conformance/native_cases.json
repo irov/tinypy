@@ -4,6 +4,7 @@
   "bytecode_opcode",
   "cli_allocator_accounting",
   "cli_command",
+  "cli_host_semantics",
   "cli_python_error_format",
   "cli_runtime_buffer_runtime",
   "cli_runtime_builtin_semantics_runtime",

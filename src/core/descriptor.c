@@ -100,7 +100,8 @@ typedef enum tinypy_internal_c_descriptor_field_e {
     TINYPY_INTERNAL_C_DESCRIPTOR_PROPERTY_SETTER = 93,
     TINYPY_INTERNAL_C_DESCRIPTOR_PROPERTY_DELETER = 94,
     TINYPY_INTERNAL_C_DESCRIPTOR_PROPERTY_DOC = 95,
-    TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC = 96
+    TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC = 96,
+    TINYPY_INTERNAL_C_DESCRIPTOR_EXCEPTION_MEMBER = 97
 } tinypy_internal_c_descriptor_field_e;
 
 //////////////////////////////////////////////////////////////////////////
@@ -1161,7 +1162,7 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         tinypy_value_t *content = TINYPY_CELL_OBJECT(instance)->content;
 
         if (content == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "cell is empty", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "Cell is empty", out_error);
             return NULL;
         }
         return TINYPY_RET(content);
@@ -1223,6 +1224,12 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
             return NULL;
         }
         return TINYPY_RET(payload->message);
+    }
+    if (field == TINYPY_INTERNAL_C_DESCRIPTOR_EXCEPTION_MEMBER) {
+        tinypy_internal_exception_members_payload_t *payload = (tinypy_internal_exception_members_payload_t *)tinypy_native_instance_payload(instance);
+
+        function_result = __tinypy_internal_c_descriptor_optional(vm, payload->members[descriptor->index]);
+        return function_result;
     }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_ENCODING && field <= TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_END) {
         tinypy_internal_unicode_error_payload_t *payload = (tinypy_internal_unicode_error_payload_t *)tinypy_native_instance_payload(instance);
@@ -1437,7 +1444,13 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         return TINYPY_FALSE;
     }
     if (descriptor->writable == 0) {
-        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME || field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC || (TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR && field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC)) {
+        /* frame_setlineno refuses the assignment outside a trace function;
+           the getset descriptors of Python 2.7 without a setter name the
+           attribute, and its read-only members do not. */
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "f_lineno can only be set by a trace function", out_error);
+        }
+        else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME || field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_CELL_CONTENT || field == TINYPY_INTERNAL_C_DESCRIPTOR_INSTANCE_WEAKREF || (TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR && field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC)) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("attribute '"), {(const char *)TINYPY_TEXT_BYTES(descriptor->name), TINYPY_TEXT_BYTE_SIZE(descriptor->name)},
                 TINYPY_MESSAGE_PART_LITERAL("' of '"), {descriptor->owner->name, descriptor->owner->name_size},
@@ -1613,41 +1626,26 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, *dict_slot, key, value, out_error);
         return stored;
     }
+    if (field == TINYPY_INTERNAL_C_DESCRIPTOR_EXCEPTION_MEMBER) {
+        tinypy_internal_exception_members_payload_t *payload = (tinypy_internal_exception_members_payload_t *)tinypy_native_instance_payload(instance);
+
+        /* A T_OBJECT member may be deleted while it is already unset. */
+        __tinypy_internal_c_descriptor_replace(&payload->members[descriptor->index], value);
+        return TINYPY_TRUE;
+    }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_ENCODING && field <= TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_END) {
         tinypy_internal_unicode_error_payload_t *payload = (tinypy_internal_unicode_error_payload_t *)tinypy_native_instance_payload(instance);
 
         if (field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_START || field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_END) {
             int64_t *position = field == TINYPY_INTERNAL_C_DESCRIPTOR_UNICODE_START ? &payload->start : &payload->end;
             int64_t integer;
-            tinypy_bool_t converted;
 
             if (value == NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can't delete numeric attribute", out_error);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can't delete numeric/char attribute", out_error);
                 return TINYPY_FALSE;
             }
-            tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-            if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG) {
-                converted = tinypy_internal_index_as_i64(value, &integer, TINYPY_FALSE, out_error);
-            }
-            else {
-                tinypy_bool_t handled;
-                tinypy_value_t *number = tinypy_internal_call_conversion(value, vm->internal_special_int_key, &handled, out_error);
-
-                converted = TINYPY_FALSE;
-                if (handled == 0) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "an integer is required", out_error);
-                }
-                else if (number != NULL) {
-                    kind = TINYPY_VALUE_KIND(number);
-                    if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG) {
-                        converted = tinypy_internal_index_as_i64(number, &integer, TINYPY_FALSE, out_error);
-                    }
-                    else {
-                        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__int__ returned a non-integer", out_error);
-                    }
-                    TINYPY_DECREF(number);
-                }
-            }
+            /* PyMember_SetOne stores the T_PYSSIZET conversion even when it fails. */
+            tinypy_bool_t converted = tinypy_internal_number_as_ssize(value, &integer, out_error);
             *position = converted != 0 ? integer : INT64_C(-1);
             return converted;
         }
@@ -1963,6 +1961,21 @@ void tinypy_internal_initialize_exception_descriptors(tinypy_type_t *type) {
     tinypy_type_set_attr_key(type, type->vm->internal_message_key, message);
     TINYPY_DECREF(message);
     TINYPY_DECREF(args);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The T_OBJECT members of an exception family, in the order of its member
+   payload. */
+void tinypy_internal_initialize_exception_members(tinypy_type_t *type, tinypy_value_t *const *names, size_t count) {
+    tinypy_vm_t *vm = type->vm;
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        tinypy_value_t *descriptor = __tinypy_internal_c_descriptor_new_with_owner(vm, TINYPY_VALUE_MEMBER_DESCRIPTOR, type, names[index], TINYPY_INTERNAL_C_DESCRIPTOR_EXCEPTION_MEMBER, TINYPY_TRUE, TINYPY_FALSE);
+
+        TINYPY_C_DESCRIPTOR_OBJECT(descriptor)->index = index;
+        tinypy_type_set_attr_key(type, names[index], descriptor);
+        TINYPY_DECREF(descriptor);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_property_getter(const tinypy_value_t *property) {

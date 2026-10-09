@@ -271,6 +271,38 @@ class ContainerSemantics(unittest.TestCase):
             source.update(iter([('added', 4), ('bad', 5, 6), ('unused', 7)]))
         self.assertEqual(source, {'original': 1, 'added': 4})
 
+    def test_dict_merge_probes_keys_like_hasattr(self):
+        lookups = []
+        class Source(object):
+            def __init__(self, keys_attribute):
+                self.keys_attribute = keys_attribute
+            def __getattr__(self, name):
+                lookups.append(name)
+                if isinstance(self.keys_attribute, BaseException):
+                    raise self.keys_attribute
+                return self.keys_attribute
+            def __getitem__(self, key):
+                return ('value', key)
+            def __iter__(self):
+                return iter([('x', 1), ('y', 2)])
+        class Recursive(object):
+            def __getattr__(self, name):
+                return getattr(self, name + '_')
+            def __iter__(self):
+                return iter([('z', 3)])
+        self.assertEqual(dict(Source(lambda: ['a', 'b'])), {'a': ('value', 'a'), 'b': ('value', 'b')})
+        self.assertEqual(lookups, ['keys', 'keys'])
+        del lookups[:]
+        merged = {}
+        merged.update(Source(KeyError('keys')))
+        self.assertEqual(merged, {'x': 1, 'y': 2})
+        self.assertEqual(lookups, ['keys'])
+        self.assertEqual(dict(Source(RuntimeError('probe'))), {'x': 1, 'y': 2})
+        self.assertEqual(dict(Recursive()), {'z': 3})
+        with self.assertRaises(TypeError) as failure:
+            dict(Source('text'))
+        self.assertEqual(str(failure.exception), "attribute of type 'str' is not callable")
+
     def test_dict_iterator_value_replacement_is_allowed(self):
         source = {'first': 1, 'second': 2}
         iterator = source.iteritems()
@@ -641,6 +673,47 @@ class ContainerSemantics(unittest.TestCase):
         self.assertEqual(str(failure.exception), 'list modified during sort')
         self.assertEqual(values, [1, 2, 3])
         self.assertRaises(TypeError, [1, 2].sort, cmp=lambda left, right: 1L)
+
+    def test_sort_callbacks_may_leave_the_list_empty(self):
+        def sort_through(mutate, use_cmp):
+            values = [3, 1, 2]
+            def key(value):
+                mutate(values)
+                return value
+            def compare(left, right):
+                mutate(values)
+                return cmp(left, right)
+            try:
+                if use_cmp:
+                    values.sort(cmp=compare)
+                else:
+                    values.sort(key=key)
+            except ValueError as failure:
+                return str(failure), values
+            return None, values
+        def pop_empty(values):
+            self.assertRaises(IndexError, values.pop)
+        accepted = [lambda values: values.__delslice__(0, 3), lambda values: values.__setslice__(0, 3, []),
+                    lambda values: values.__setslice__(1, 3, ()), lambda values: values.__delitem__(slice(None, None, 2)),
+                    lambda values: values.__setitem__(slice(None, None, 2), []), lambda values: values.extend([]),
+                    lambda values: values.extend(values), lambda values: values.__iadd__(()), lambda values: values.__imul__(0),
+                    lambda values: values.__imul__(2), lambda values: values.reverse(), lambda values: values.sort(),
+                    lambda values: values.__init__(), lambda values: values.__init__([]), pop_empty]
+        for mutate in accepted:
+            for use_cmp in (False, True):
+                self.assertEqual(sort_through(mutate, use_cmp), (None, [1, 2, 3]))
+        def append_and_pop(values):
+            values.append(1)
+            values.pop()
+        def append_and_clear(values):
+            values.append(1)
+            del values[:]
+        rejected = [lambda values: values.append(1), lambda values: values.insert(0, 1), lambda values: values.__setslice__(0, 3, [1]),
+                    lambda values: values.extend([1]), lambda values: values.extend(value for value in []),
+                    lambda values: values.__init__([1]), append_and_pop, append_and_clear]
+        for mutate in rejected:
+            for use_cmp in (False, True):
+                self.assertEqual(sort_through(mutate, use_cmp), ('list modified during sort', [1, 2, 3]))
 
     def test_deep_nesting_in_repr_and_hash(self):
         nested_list = []

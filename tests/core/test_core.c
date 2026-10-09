@@ -4193,7 +4193,34 @@ static int32_t __test_native_embedding(void) {
     invalid_type = tinypy_type_new(vm, "Invalid", 7U, invalid_bases, 2U, NULL, NULL, &error);
     TEST_CHECK(invalid_type == NULL);
     TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+    bytes = tinypy_error_message(error, &byte_size);
+    TEST_CHECK(byte_size == 56U && memcmp(bytes, "multiple bases have incompatible native instance layouts", 56U) == 0);
     tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+
+    /* Native roots laying their payload out identically combine as bases,
+       the way C++ classes bound with several bases do; the first base
+       keeps the layout. */
+    tinypy_native_type_spec_t twin_spec;
+    tinypy_native_type_spec_init(&twin_spec);
+    twin_spec.payload_size = sizeof(test_native_payload_t);
+    tinypy_type_t *twin_type = tinypy_native_type_new(vm, "Twin", 4U, NULL, 0U, NULL, &twin_spec, &error);
+    TEST_CHECK(twin_type != NULL && error == NULL);
+    const tinypy_type_t *twin_bases[2] = {native_type, twin_type};
+    tinypy_type_t *combined_type = tinypy_native_type_new(vm, "Combined", 8U, twin_bases, 2U, NULL, &twin_spec, &error);
+    TEST_CHECK(combined_type != NULL && error == NULL);
+    TEST_CHECK(tinypy_type_is_subtype(combined_type, native_type) != 0);
+    TEST_CHECK(tinypy_type_is_subtype(combined_type, twin_type) != 0);
+    tinypy_value_t *combined_instance = tinypy_native_instance_new(combined_type);
+    ((test_native_payload_t *)tinypy_native_instance_payload(combined_instance))->value = 91;
+    TEST_CHECK(tinypy_object_type(combined_instance) == combined_type);
+    TEST_CHECK(((test_native_payload_t *)tinypy_native_instance_payload(combined_instance))->value == 91);
+    tinypy_release(combined_instance);
+    tinypy_value_t *combined_value = tinypy_type_as_value(combined_type);
+    tinypy_release(combined_value);
+    tinypy_value_t *twin_value = tinypy_type_as_value(twin_type);
+    tinypy_release(twin_value);
 
     tinypy_value_t *type_value = tinypy_type_as_value(incompatible_type);
     tinypy_release(type_value);

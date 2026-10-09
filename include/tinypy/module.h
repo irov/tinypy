@@ -35,6 +35,8 @@ struct tinypy_module_artifact_t {
     size_t canonical_name_size;
     const char *logical_filename;
     size_t logical_filename_size;
+    /* The directory of a package, the one entry of its __path__; NULL
+     * leaves __path__ empty. */
     const void *package_token;
     size_t package_token_size;
     tinypy_native_module_initialize_t native_initialize;

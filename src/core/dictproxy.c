@@ -357,6 +357,18 @@ static tinypy_value_t *__tinypy_dictproxy_cmp_method(tinypy_value_t *function, t
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
+/* dictproxy has no tp_new: its __new__ refuses every call, and object.__new__
+   finds a constructor of its own in the way. */
+static tinypy_value_t *__tinypy_dictproxy_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)args;
+    (void)kwargs;
+    (void)user_data;
+    tinypy_internal_type_uncreatable_error(vm->dictproxy_type, out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_dictproxy_type(tinypy_vm_t *vm) {
     const struct {
         tinypy_value_t *name;
@@ -391,6 +403,7 @@ void tinypy_internal_initialize_dictproxy_type(tinypy_vm_t *vm) {
     vm->dictproxy_type->release_references = __tinypy_dictproxy_release_references;
     vm->dictproxy_type->traverse_references = __tinypy_dictproxy_traverse_references;
     vm->dictproxy_type->flags = (vm->dictproxy_type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
+    tinypy_internal_type_add_static_method(vm->dictproxy_type, vm->internal_special_new_key, __tinypy_dictproxy_new_method, NULL, NULL);
     for (index = 0U; index < sizeof(methods) / sizeof(methods[0]); ++index) {
         tinypy_value_t *method_name = methods[index].name;
         tinypy_internal_type_add_method(vm->dictproxy_type, method_name, __tinypy_dictproxy_method, (void *)(intptr_t)methods[index].method, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

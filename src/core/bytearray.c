@@ -1606,6 +1606,17 @@ static tinypy_value_t *__tinypy_bytearray_bridge_method(tinypy_value_t *function
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, integer < INT32_MIN ? "signed integer is less than minimum" : "signed integer is greater than maximum", out_error);
             goto normalized_error;
         }
+        /* PyByteArray_FromStringAndSize has no size limit of its own: a
+           padding width the str methods refuse only fails to allocate. */
+        if (scalar_begin == 1U && c_integer == 0 && integer > 0) {
+            tinypy_error_t *size_error = NULL;
+
+            if (tinypy_internal_string_size_check(vm, (uint64_t)integer, &size_error) == 0) {
+                tinypy_error_release(size_error);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "", out_error);
+                goto normalized_error;
+            }
+        }
         normalized[index - 1U] = tinypy_integer_from_i64(vm, integer);
     }
     if (argument_count == 3U && (name == vm->internal_center_key || name == vm->internal_ljust_key || name == vm->internal_rjust_key)) {

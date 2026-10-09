@@ -103,16 +103,17 @@ static void __tinypy_internal_set_syntax_exception_location(tinypy_vm_t *vm, con
     args_items[0] = message_value;
     args_items[1] = location;
     args = tinypy_tuple_from_items(vm, args_items, include_location != 0 ? 2U : 1U);
-    tinypy_error_t *attribute_error = NULL;
-    (void)tinypy_object_set_attr_value(exception, vm->internal_args_key, args, &attribute_error);
-    if (attribute_error != NULL) {
-        tinypy_error_release(attribute_error);
+    /* The members of SyntaxError are descriptors of its type. */
+    tinypy_value_t *const attribute_names[6] = {vm->internal_args_key, vm->internal_msg_key, vm->internal_filename_key, vm->internal_lineno_key, vm->internal_offset_key, vm->internal_text_key};
+    tinypy_value_t *const attribute_values[6] = {args, message_value, filename_value, line_value, offset_value, text_value};
+    for (size_t index = 0U; index < 6U; ++index) {
+        tinypy_error_t *attribute_error = NULL;
+
+        (void)tinypy_object_set_attr_value(exception, attribute_names[index], attribute_values[index], &attribute_error);
+        if (attribute_error != NULL) {
+            tinypy_error_release(attribute_error);
+        }
     }
-    tinypy_instance_set_attr_key(exception, vm->internal_msg_key, message_value);
-    tinypy_instance_set_attr_key(exception, vm->internal_filename_key, filename_value);
-    tinypy_instance_set_attr_key(exception, vm->internal_lineno_key, line_value);
-    tinypy_instance_set_attr_key(exception, vm->internal_offset_key, offset_value);
-    tinypy_instance_set_attr_key(exception, vm->internal_text_key, text_value);
     TINYPY_DECREF(args);
     TINYPY_DECREF(location);
     TINYPY_DECREF(text_value);
@@ -155,9 +156,10 @@ static void __tinypy_internal_error_unlink(tinypy_error_t *error) {
 }
 //////////////////////////////////////////////////////////////////////////
 /* The message is str() of the exception up to its first NUL byte, rendered
-   with the pending exception state of the VM set aside. */
+   with the pending exception state of the VM set aside; a failed str() reads
+   as PyErr_Display reports it. */
 static void __tinypy_internal_error_render(tinypy_error_t *error) {
-    static const char fallback_message[] = "Python exception";
+    static const char fallback_message[] = "<exception str() failed>";
     tinypy_vm_t *vm = error->vm;
     tinypy_value_t *exception = error->exception;
 

@@ -655,3 +655,146 @@ class TextProtocolEdges(unittest.TestCase):
                               [28, 9, 0, unbounded, 21, 0, 19, 97, 21, 1, 23, 28, 12, 1, unbounded, 13, 0, 6, 19, 97, 18, 3, 19, 98, 22, 1],
                               1, {u'n': 1}, [None, u'n'])
         self.assertEqual(list(exists.finditer('a.b')), [])
+
+    def test_decimal_digit_value_outside_zero_run(self):
+        # U+19DA NEW TAI LUE THAM DIGIT ONE carries decimal value 1 after the 0..9 run.
+        digit = unichr(0x19da)
+        self.assertTrue(digit.isdecimal())
+        self.assertEqual((int(digit), long(digit), float(digit)), (1, 1L, 1.0))
+        self.assertEqual(int(unichr(0x19d0) + unichr(0x19d9) + digit), 91)
+        self.assertEqual(int(digit * 3), 111)
+
+    def test_utf8_stateful_decoder_defers_truncated_tails(self):
+        import _codecs
+        replacement = unichr(0xfffd)
+        for data in ('\xe2A', '\xf0A', '\xf0\x90A', '\xe2\x82'):
+            for errors in ('strict', 'ignore', 'replace'):
+                self.assertEqual(_codecs.utf_8_decode(data, errors, False), (u'', 0))
+        self.assertEqual(_codecs.utf_8_decode('\xc2\xf3x', 'replace', False), (replacement, 1))
+        self.assertEqual(_codecs.utf_8_decode('\xc2\xf3x', 'ignore', False), (u'', 1))
+        self.assertEqual(_codecs.utf_8_decode('\xf0\xf2\xf0\xc0', 'replace', False), (replacement, 1))
+        self.assertRaises(UnicodeDecodeError, _codecs.utf_8_decode, '\xe2A', 'strict', True)
+        self.assertEqual(_codecs.utf_8_decode('\xe2A', 'replace', True), (replacement + u'A', 2))
+
+    def test_unicode_constructor_reads_buffer_character_buffer(self):
+        self.assertEqual(unicode(buffer(u'ab'), 'ascii'), u'ab')
+        self.assertEqual(unicode(buffer(u'ab', 1), 'ascii'), u'b')
+        self.assertEqual(unicode(buffer(u'abcd', 2, 1), 'ascii'), u'c')
+        with self.assertRaises(UnicodeEncodeError) as caught:
+            unicode(buffer(unichr(0xe9)), 'latin-1')
+        self.assertEqual(str(caught.exception), "'ascii' codec can't encode character u'\\xe9' in position 0: ordinal not in range(128)")
+        self.assertTrue(buffer(u'a') in u'ab')
+        self.assertTrue(u'abc'.__contains__(buffer('ab')))
+        self.assertTrue(buffer(u'ab') == u'ab')
+        self.assertEqual(str(buffer(u'ab')), 'a\x00\x00\x00b\x00\x00\x00')
+
+    def test_unicode_in_buffer_searches_items(self):
+        source = buffer('ab')
+        self.assertEqual((u'ab' in source, u'' in source, u'a' in source, 'ab' in source, 'a' in source), (False, False, True, False, True))
+        with self.assertRaises(TypeError) as caught:
+            bytearray('a') in u'ab'
+        self.assertEqual(str(caught.exception), 'decoding bytearray is not supported')
+        self.assertRaises(UnicodeDecodeError, lambda: buffer('\xe9') in u'ab')
+
+    def test_hex_codec_buffer_arguments_and_keywords(self):
+        import _codecs
+        hex_encode, hex_decode = _codecs.lookup('hex')[:2]
+        for value, message in ((1, 'b2a_hex() argument 1 must be string or buffer, not int'),
+                               (None, 'b2a_hex() argument 1 must be string or buffer, not None')):
+            with self.assertRaises(TypeError) as caught:
+                hex_encode(value)
+            self.assertEqual(str(caught.exception), message)
+        with self.assertRaises(TypeError) as caught:
+            hex_decode(1)
+        self.assertEqual(str(caught.exception), 'a2b_hex() argument 1 must be string or buffer, not int')
+        self.assertEqual(hex_encode(bytearray('ab')), ('6162', 2))
+        self.assertEqual(hex_encode(buffer('ab')), ('6162', 2))
+        self.assertEqual(hex_encode(u'ab'), ('6162', 2))
+        self.assertEqual(hex_decode(bytearray('6162')), ('ab', 4))
+        self.assertEqual(hex_encode(input='ab', errors='strict'), ('6162', 2))
+        self.assertEqual(hex_decode('6162', errors='strict'), ('ab', 4))
+        self.assertEqual(_codecs.encode(buffer(u'a'), 'hex'), '61000000')
+        self.assertRaises(AssertionError, hex_encode, 1, 'ignore')
+        for call, message in ((lambda: hex_encode(), 'hex_encode() takes at least 1 argument (0 given)'),
+                              (lambda: hex_encode(errors='strict'), 'hex_encode() takes at least 1 argument (1 given)'),
+                              (lambda: hex_encode('a', 'strict', 1), 'hex_encode() takes at most 2 arguments (3 given)'),
+                              (lambda: hex_encode('a', input='b'), "hex_encode() got multiple values for keyword argument 'input'"),
+                              (lambda: hex_decode('61', bad=1), "hex_decode() got an unexpected keyword argument 'bad'")):
+            with self.assertRaises(TypeError) as caught:
+                call()
+            self.assertEqual(str(caught.exception), message)
+
+    def test_unicode_error_position_member_messages(self):
+        error = UnicodeEncodeError('ascii', u'x', 0, 1, 'bad')
+        for name in ('start', 'end'):
+            with self.assertRaises(TypeError) as caught:
+                delattr(error, name)
+            self.assertEqual(str(caught.exception), "can't delete numeric/char attribute")
+            with self.assertRaises(OverflowError) as caught:
+                setattr(error, name, 2 ** 70)
+            self.assertEqual(str(caught.exception), 'long int too large to convert to int')
+            self.assertEqual(getattr(error, name), -1)
+            setattr(error, name, 3L)
+            self.assertEqual(getattr(error, name), 3)
+
+    def test_syntax_error_object_members(self):
+        error = SyntaxError('x', ('f', 1, 2, 'txt'))
+        for name in ('msg', 'filename', 'lineno', 'offset', 'text', 'print_file_and_line'):
+            self.assertEqual(type(getattr(SyntaxError, name)).__name__, 'member_descriptor')
+        self.assertEqual((error.lineno, error.offset, error.text, error.filename, error.msg, error.print_file_and_line), (1, 2, 'txt', 'f', 'x', None))
+        del error.print_file_and_line
+        self.assertIs(error.print_file_and_line, None)
+        del error.lineno
+        del error.lineno
+        self.assertIs(error.lineno, None)
+        self.assertEqual(str(error), 'x (f)')
+        error.lineno = 7
+        self.assertEqual(str(error), 'x (f, line 7)')
+        self.assertEqual(repr(SyntaxError.lineno), "<member 'lineno' of 'exceptions.SyntaxError' objects>")
+        class Derived(SyntaxError):
+            pass
+        derived = Derived('m', ('g', 5, 6, 'u'))
+        self.assertEqual((derived.lineno, derived.filename), (5, 'g'))
+        with self.assertRaises(TypeError):
+            SyntaxError.lineno = 5
+
+    def test_unexpected_unicode_keyword_name_message(self):
+        def target(a=1):
+            pass
+        for name, shown in ((unichr(0x3c0) + unichr(0x3b9), '??'), (u'ab', 'ab'), (unichr(0xe9), '?'), ('abc', 'abc')):
+            with self.assertRaises(TypeError) as caught:
+                target(**{name: 1})
+            self.assertEqual(str(caught.exception), "target() got an unexpected keyword argument '%s'" % shown)
+        with self.assertRaises(TypeError) as caught:
+            target(1, **{u'a': 2})
+        self.assertEqual(str(caught.exception), "target() got multiple values for keyword argument 'a'")
+
+    def test_next_classic_instance_without_next_method(self):
+        class Iterable:
+            def __iter__(self):
+                return self
+        with self.assertRaises(TypeError) as caught:
+            next(iter(Iterable()))
+        self.assertEqual(str(caught.exception), 'instance has no next() method')
+        with self.assertRaises(TypeError) as caught:
+            next(Iterable(), 5)
+        self.assertEqual(str(caught.exception), 'instance has no next() method')
+
+    def test_replace_argument_coercion_order(self):
+        for call, message in ((lambda: 'a.b'.replace(3.3, u'x', 1), 'expected a string or other character buffer object'),
+                              (lambda: 'a.b'.replace(bytearray('a'), u'x'), 'decoding bytearray is not supported'),
+                              (lambda: 'a.b'.replace(u'x', 3.3), 'coercing to Unicode: need string or buffer, float found'),
+                              (lambda: 'a.b'.replace('a', 3), 'expected a string or other character buffer object')):
+            with self.assertRaises(TypeError) as caught:
+                call()
+            self.assertEqual(str(caught.exception), message)
+        self.assertEqual('a.b'.replace(buffer('a'), u'x'), u'x.b')
+        self.assertEqual('a.b'.replace(bytearray('a'), 'x'), 'x.b')
+
+    def test_unicode_translate_table_subscript_messages(self):
+        for table, message in ((set([1]), "'set' object does not support indexing"),
+                               (1, "'int' object has no attribute '__getitem__'")):
+            with self.assertRaises(TypeError) as caught:
+                u'abc'.translate(table)
+            self.assertEqual(str(caught.exception), message)
+        self.assertEqual(u''.translate(set()), u'')

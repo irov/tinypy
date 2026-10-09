@@ -6,6 +6,8 @@
 #include "tokenizer.h"
 #include "parser_error.h"
 
+#include <stdio.h>
+
 /* Don't ever change this -- it would break the portability of Python code */
 #define TINYPY_TOKENIZER_TAB_SIZE 8
 
@@ -93,14 +95,24 @@ static tinypy_tokenizer_t *__tok_new(tinypy_compile_ctx_t *ctx) {
     tok->level = 0;
     tok->filename = NULL;
     tok->alterror = 0;
+    tok->altwarning = 0;
     tok->alttabsize = 1;
     tok->altindstack[0] = 0;
     tok->cont_line = 0;
+    tok->line_start = NULL;
+    tok->file_input = 0;
+    tok->ascii_lines = 0;
+    tok->newline_faked = 0;
+    tok->phantom_line = 0;
+    tok->decode_error_line = 0;
+    tok->decode_error_message = NULL;
+    tok->error_message = NULL;
     return tok;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The copy has room for the newline the file tokenizer fakes at the end. */
 static char *__new_string(tinypy_compile_ctx_t *ctx, const char *s, tinypy_compiler_size_t len) {
-    char *result = (char *)tinypy_internal_compiler_arena_allocate(ctx, (size_t)len + 1U);
+    char *result = (char *)tinypy_internal_compiler_arena_allocate(ctx, (size_t)len + 2U);
     if (result != NULL) {
         memcpy(result, s, len);
         result[len] = '\0';
@@ -142,6 +154,73 @@ void tinypy_internal_tokenizer_release(tinypy_tokenizer_t *tok) {
     (void)tok;
 }
 
+/* A line of a file fails to read when the declared codec cannot decode it
+   or, without a declared encoding, when it holds a non-ASCII byte. */
+
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tok_decode_line(tinypy_tokenizer_t *tok, const char *begin, const char *end) {
+    int32_t line_number = tok->line_number + 1;
+    const char *message = NULL;
+
+    if (tok->decode_error_line == line_number) {
+        message = tok->decode_error_message;
+    }
+    else if (line_number <= tok->ascii_lines) {
+        const char *cursor = begin;
+
+        while (cursor != end && TINYPY_COMPILER_CHARMASK(*cursor) < 0x80U) {
+            cursor += 1;
+        }
+        if (cursor != end) {
+            /* decoding_fgets counts a continuation line of an open token
+               before it reads the line, so its message names the next one. */
+            int32_t reported_line = tok->start != NULL ? line_number + 1 : line_number;
+            char *buffer = (char *)tinypy_internal_compiler_arena_allocate(tok->ctx, 500U);
+
+            if (buffer == NULL) {
+                tok->done = TINYPY_PARSER_OUT_OF_MEMORY;
+                tok->cur = tok->inp;
+                return TINYPY_FALSE;
+            }
+            size_t filename_size = tok->ctx->filename_size < 200U ? tok->ctx->filename_size : 200U;
+
+            (void)snprintf(buffer, 500U, "Non-ASCII character '\\x%.2x' in file %.*s on line %i, but no encoding declared; see http://python.org/dev/peps/pep-0263/ for details", (unsigned int)TINYPY_COMPILER_CHARMASK(*cursor), (int)filename_size, tok->filename, (int)reported_line);
+            message = buffer;
+        }
+    }
+    if (message == NULL) {
+        return TINYPY_TRUE;
+    }
+    tok->line_number = line_number;
+    tok->done = TINYPY_PARSER_DECODE_ERROR;
+    tok->error_message = message;
+    tok->cur = tok->inp;
+    return TINYPY_FALSE;
+}
+
+/* The end of a file: an open token first reads one more newline, unless the
+   newline of the last line was already supplied, then the end of the file
+   counts as a line whose text is empty. */
+
+//////////////////////////////////////////////////////////////////////////
+static int32_t __tok_file_end(tinypy_tokenizer_t *tok) {
+    if (tok->start != NULL && tok->newline_faked == 0) {
+        tok->inp[0] = '\n';
+        tok->inp[1] = '\0';
+        tok->newline_faked = 1;
+        tok->line_start = tok->cur;
+        tok->line_number += 1;
+        tok->inp += 1;
+        int32_t return_value_1 = TINYPY_COMPILER_CHARMASK(*tok->cur++);
+        return return_value_1;
+    }
+    tok->line_number += 1;
+    tok->phantom_line = tok->start == NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    tok->done = TINYPY_PARSER_EOF;
+    tok->cur = tok->inp;
+    return TINYPY_TOKENIZER_END_OF_INPUT;
+}
+
 /* Get next char, updating state; error code goes into tok->done */
 
 //////////////////////////////////////////////////////////////////////////
@@ -162,9 +241,16 @@ static int32_t __tok_nextc(register tinypy_tokenizer_t *tok) {
     else {
         end = strchr(tok->inp, '\0');
         if (end == tok->inp) {
+            if (tok->file_input) {
+                int32_t return_value_2 = __tok_file_end(tok);
+                return return_value_2;
+            }
             tok->done = TINYPY_PARSER_EOF;
             return TINYPY_TOKENIZER_END_OF_INPUT;
         }
+    }
+    if (tok->file_input && __tok_decode_line(tok, tok->inp, end) == 0) {
+        return TINYPY_TOKENIZER_END_OF_INPUT;
     }
     if (tok->start == NULL) {
         tok->buf = tok->cur;
@@ -172,8 +258,8 @@ static int32_t __tok_nextc(register tinypy_tokenizer_t *tok) {
     tok->line_start = tok->cur;
     tok->line_number += 1;
     tok->inp = end;
-    int32_t return_value_2 = TINYPY_COMPILER_CHARMASK(*tok->cur++);
-    return return_value_2;
+    int32_t return_value_3 = TINYPY_COMPILER_CHARMASK(*tok->cur++);
+    return return_value_3;
 }
 
 /* Back-up one character */
@@ -385,6 +471,14 @@ static tinypy_bool_t __indenterror(tinypy_tokenizer_t *tok) {
         tok->done = TINYPY_PARSER_TAB_SPACE_ERROR;
         tok->cur = tok->inp;
         return TINYPY_TRUE;
+    }
+    if (tok->altwarning) {
+        tok->altwarning = 0;
+        if (tinypy_internal_compiler_tab_warning(tok->ctx) == 0) {
+            tok->done = TINYPY_PARSER_EXECUTION_ERROR;
+            tok->cur = tok->inp;
+            return TINYPY_TRUE;
+        }
     }
     return TINYPY_FALSE;
 }
@@ -825,6 +919,16 @@ letter_quote:
         goto again; /* Read next line */
     }
 
+    /* A transcoded Latin-1 byte is one character of the host source, so its
+       continuation byte belongs to this token and not to the lookahead. */
+    if ((c == 0xc2 || c == 0xc3) && tok->ctx->source_is_latin1 != 0 && tok->ctx->source_diagnostic_transcoded == 0) {
+        int32_t continuation = __tok_nextc(tok);
+
+        if ((continuation & 0xc0) != 0x80) {
+            __tok_backup(tok, continuation);
+        }
+    }
+
     /* Check for two-character token */
     int32_t c2 = __tok_nextc(tok);
     int32_t token = __tinypy_token_two_characters(c, c2);
@@ -865,6 +969,13 @@ letter_quote:
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_tokenizer_get(tinypy_tokenizer_t *tok, char **p_start, char **p_end) {
-    int32_t return_value_1 = __tok_get(tok, p_start, p_end);
-    return return_value_1;
+    int32_t result = __tok_get(tok, p_start, p_end);
+
+    /* PyTokenizer_Get: a line that failed to decode is the error, whatever
+       token the scan of its data produced. */
+    if (tok->error_message != NULL) {
+        tok->done = TINYPY_PARSER_DECODE_ERROR;
+        result = TINYPY_TOKEN_ERROR;
+    }
+    return result;
 }

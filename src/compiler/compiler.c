@@ -97,7 +97,12 @@ static tinypy_error_kind_e __tinypy_compiler_parser_error_kind(int32_t error, in
     return TINYPY_ERROR_SYNTAX;
 }
 //////////////////////////////////////////////////////////////////////////
-static const char *__tinypy_compiler_parser_error_message(int32_t error, int32_t token, int32_t expected) {
+/* err_input: the message of a tokenizer or parser failure. */
+static const char *__tinypy_compiler_parser_error_message(const tinypy_parser_error_detail_t *detail) {
+    int32_t error = detail->result;
+    int32_t token = detail->token;
+    int32_t expected = detail->expected;
+
     if (error == TINYPY_PARSER_EOF) {
         return "unexpected EOF while parsing";
     }
@@ -114,7 +119,7 @@ static const char *__tinypy_compiler_parser_error_message(int32_t error, int32_t
         return "unindent does not match any outer indentation level";
     }
     if (error == TINYPY_PARSER_DECODE_ERROR) {
-        return "source decoding failed";
+        return detail->message != NULL ? detail->message : "unknown decode error";
     }
     if (error == TINYPY_PARSER_EOF_TRIPLE_STRING) {
         return "EOF while scanning triple-quoted string literal";
@@ -128,14 +133,14 @@ static const char *__tinypy_compiler_parser_error_message(int32_t error, int32_t
     if (error == TINYPY_PARSER_OUT_OF_MEMORY || error == TINYPY_PARSER_OVERFLOW) {
         return "parser exceeds compiler limits";
     }
+    if (error == TINYPY_PARSER_SYNTAX_ERROR && expected == TINYPY_TOKEN_INDENT) {
+        return "expected an indented block";
+    }
     if (error == TINYPY_PARSER_SYNTAX_ERROR && token == TINYPY_TOKEN_INDENT) {
         return "unexpected indent";
     }
     if (error == TINYPY_PARSER_SYNTAX_ERROR && token == TINYPY_TOKEN_DEDENT) {
         return "unexpected unindent";
-    }
-    if (error == TINYPY_PARSER_SYNTAX_ERROR && expected == TINYPY_TOKEN_INDENT) {
-        return "expected an indented block";
     }
     return "invalid syntax";
 }
@@ -156,8 +161,8 @@ static tinypy_cst_node_t *__tinypy_compiler_parse(tinypy_compile_ctx_t *ctx, int
         return tree;
     }
     tinypy_error_kind_e compiler_parser_error_kind = __tinypy_compiler_parser_error_kind(detail.result, detail.token, detail.expected);
-    const char *compiler_parser_error_message = __tinypy_compiler_parser_error_message(detail.result, detail.token, detail.expected);
-    tinypy_internal_compiler_error(ctx, compiler_parser_error_kind, compiler_parser_error_message, detail.line_number, detail.offset, out_error);
+    const char *compiler_parser_error_message = __tinypy_compiler_parser_error_message(&detail);
+    tinypy_internal_compiler_error_text(ctx, compiler_parser_error_kind, compiler_parser_error_message, detail.line_number, detail.offset, detail.text, detail.text_size, out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -259,6 +264,7 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
     ctx.filename_size = filename_size;
     ctx.source_is_unicode = source_is_unicode;
     ctx.source_default_latin1 = source_default_latin1;
+    ctx.source_is_file = program_text;
     ctx.out_error = out_error;
     if (program_text != 0) {
         ctx.program_text.bytes = (const uint8_t *)source;
@@ -280,8 +286,19 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
     return code;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A host source compiled as a module is file text, which Python's file
+   tokenizer reads; the options can select the string of compile() instead,
+   which the tokenizer reads as raw bytes, and interactive and expression
+   input is never a file. */
+static tinypy_bool_t __tinypy_compiler_string_source(const tinypy_compile_options_t *options) {
+    tinypy_bool_t string_source = (options->flags & (uint32_t)TINYPY_COMPILE_FLAG_STRING_SOURCE) != 0U || options->mode != TINYPY_COMPILE_EXEC ? TINYPY_TRUE : TINYPY_FALSE;
+    return string_source;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, TINYPY_FALSE, TINYPY_FALSE, TINYPY_TRUE, logical_filename, filename_size, options, out_error);
+    tinypy_bool_t string_source = __tinypy_compiler_string_source(options);
+    tinypy_bool_t file_text = string_source != 0 ? TINYPY_FALSE : TINYPY_TRUE;
+    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, TINYPY_FALSE, string_source, file_text, logical_filename, filename_size, options, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -298,8 +315,12 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     ctx.options = *options;
     ctx.logical_filename = logical_filename;
     ctx.filename_size = filename_size;
-    ctx.program_text.bytes = (const uint8_t *)source;
-    ctx.program_text.size = source_size;
+    ctx.source_default_latin1 = __tinypy_compiler_string_source(options);
+    ctx.source_is_file = ctx.source_default_latin1 != 0 ? TINYPY_FALSE : TINYPY_TRUE;
+    if (ctx.source_is_file != 0) {
+        ctx.program_text.bytes = (const uint8_t *)source;
+        ctx.program_text.size = source_size;
+    }
     ctx.out_error = out_error;
     if (options->limits != NULL) {
         ctx.limits = *options->limits;

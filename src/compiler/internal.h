@@ -70,9 +70,30 @@ typedef struct tinypy_compile_ctx_t {
     tinypy_bool_t source_is_unicode;
     tinypy_bool_t source_encoding_declared;
     tinypy_bool_t source_default_latin1;
+    /* The source is file text: the tokenizer reads it line by line like
+       Python's file tokenizer, with a PEP 263 check unless an encoding is
+       declared and one more line at the end of the file. */
+    tinypy_bool_t source_is_file;
+    /* The lines of a file read before an encoding is declared must be
+       ASCII: all of them without a cookie or BOM, those before the cookie
+       line otherwise. */
+    int32_t source_ascii_lines;
+    tinypy_bool_t source_final_newline_added;
+    /* The tokenizer text is the UTF-8 transcoding of Latin-1 host bytes;
+       byte literals transcode back. */
     tinypy_bool_t source_is_latin1;
+    /* Diagnostics restore their text and offset to the declared encoding
+       like PyTokenizer_RestoreEncoding; a transcoded diagnostic quotes the
+       tokenizer text itself, as Python decoded such a source before
+       tokenizing it. */
     tinypy_bool_t source_diagnostic_latin1;
     tinypy_bool_t source_diagnostic_utf8;
+    tinypy_bool_t source_diagnostic_transcoded;
+    /* The line of a file whose read fails, in the declared codec or on the
+       cookie itself, and the message of that failure; zero when every line
+       reads. */
+    int32_t source_decode_line;
+    const char *source_decode_message;
     tinypy_bool_t failed;
     tinypy_error_t **out_error;
 } tinypy_compile_ctx_t;
@@ -84,11 +105,14 @@ void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx);
 int32_t tinypy_internal_compiler_arena_add_value(tinypy_compile_ctx_t *ctx, tinypy_value_t *value);
 tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const void *source, size_t source_size, tinypy_error_t **out_error);
 void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, tinypy_error_t **out_error);
+void tinypy_internal_compiler_error_text(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, const char *text, size_t text_size, tinypy_error_t **out_error);
 void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, int32_t column_offset);
+void tinypy_internal_compiler_plain_error(tinypy_compile_ctx_t *ctx, const char *message);
 void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number, tinypy_bool_t include_location);
 void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, tinypy_bool_t include_location);
 void tinypy_internal_compiler_decode_error(tinypy_compile_ctx_t *ctx, tinypy_value_t *exception, int32_t line_number, tinypy_bool_t literal);
 tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number);
+tinypy_bool_t tinypy_internal_compiler_tab_warning(tinypy_compile_ctx_t *ctx);
 tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx, const char *text, int32_t line_number, int32_t column_offset);
 tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const char *text, size_t size, double *out_value, int32_t line_number, int32_t column_offset);

@@ -192,9 +192,14 @@ static void __tinypy_import_set_metadata(tinypy_vm_t *vm, tinypy_value_t *module
     }
     tinypy_module_add_value_key(module, vm->internal_builtins_key, vm->builtins);
     if ((artifact->flags & TINYPY_MODULE_ARTIFACT_PACKAGE) != 0U) {
-        value = tinypy_list_from_items(vm, NULL, 0U);
+        tinypy_value_t *directory = artifact->package_token != NULL ? tinypy_string_from_bytes(vm, artifact->package_token, artifact->package_token_size) : NULL;
+
+        value = tinypy_list_from_items(vm, &directory, directory != NULL ? 1U : 0U);
         tinypy_module_add_value_key(module, vm->internal_special_path_key, value);
         TINYPY_DECREF(value);
+        if (directory != NULL) {
+            TINYPY_DECREF(directory);
+        }
     }
 }
 //////////////////////////////////////////////////////////////////////////

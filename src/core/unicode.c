@@ -26,6 +26,7 @@ typedef struct tinypy_unicode_mapping_t {
 typedef struct tinypy_unicode_decimal_range_t {
     uint32_t begin;
     uint32_t end;
+    uint8_t digit;
 } tinypy_unicode_decimal_range_t;
 
 typedef struct tinypy_unicode_numeric_range_t {
@@ -446,7 +447,7 @@ tinypy_bool_t tinypy_internal_unicode_decimal_digit(uint32_t code_point, uint8_t
             begin = middle + 1U;
         }
         else {
-            *out_digit = (uint8_t)(code_point - range->begin);
+            *out_digit = (uint8_t)(range->digit + (code_point - range->begin));
             return TINYPY_TRUE;
         }
     }

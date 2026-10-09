@@ -434,13 +434,14 @@ static tinypy_value_t *__tinypy_native_function_call_self(tinypy_vm_t *vm, tinyp
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The call of a built-in function by the evaluation loop: like a C function
+   called by ceval it takes no recursion check, so lowering the limit below
+   the current depth fails only the next deeper call; its level still counts
+   for the Python calls it makes. */
 tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
     TINYPY_CLEAR_ERROR(out_error);
-    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded while calling a Python object", out_error) == 0) {
-        return NULL;
-    }
     tinypy_value_t *self = function->self;
     if (self == NULL && function->owner != NULL) {
         if (__tinypy_native_function_check_receiver(callable, count != 0U ? items[0] : NULL, TINYPY_FALSE, out_error) == TINYPY_FALSE) {

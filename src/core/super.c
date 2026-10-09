@@ -126,9 +126,15 @@ static tinypy_bool_t __tinypy_super_arguments(tinypy_vm_t *vm, tinypy_value_t *c
         return TINYPY_FALSE;
     }
     if (TINYPY_VALUE_KIND(items[0]) != TINYPY_VALUE_TYPE) {
+        tinypy_message_part_t type_name = TINYPY_MESSAGE_PART_TYPE_NAME(items[0]);
+
+        /* The O! conversion names None rather than its type. */
+        if (TINYPY_VALUE_KIND(items[0]) == TINYPY_VALUE_NONE) {
+            type_name = (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("None");
+        }
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("super() argument 1 must be type, not "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(items[0]),
+            type_name,
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);

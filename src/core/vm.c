@@ -714,7 +714,12 @@ static tinypy_value_t *__tinypy_internal_sys_exit(tinypy_value_t *function, tiny
     if (__tinypy_internal_sys_arguments(function, args, kwargs, 0U, 1U, TINYPY_ARITY_STYLE_UNPACK, out_error) == 0) {
         return NULL;
     }
-    exception = tinypy_exception_new(vm->exception_types[TINYPY_EXCEPTION_SYSTEM_EXIT], args, out_error);
+    /* PyErr_SetObject with the code: PyErr_NormalizeException turns None
+       into no arguments and keeps a tuple as the arguments themselves. */
+    tinypy_value_t *code = TINYPY_TUPLE_SIZE(args) != 0U ? TINYPY_TUPLE_GET(args, 0U) : NULL;
+    tinypy_value_t *exception_args = code == NULL || TINYPY_VALUE_KIND(code) == TINYPY_VALUE_NONE ? TINYPY_RET_EMPTY_TUPLE(vm) : (TINYPY_VALUE_KIND(code) == TINYPY_VALUE_TUPLE ? TINYPY_RET(code) : TINYPY_RET(args));
+    exception = tinypy_exception_new(vm->exception_types[TINYPY_EXCEPTION_SYSTEM_EXIT], exception_args, out_error);
+    TINYPY_DECREF(exception_args);
     if (exception == NULL) {
         return NULL;
     }
@@ -1214,6 +1219,42 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     TINYPY_DECREF(builtin_module);
 }
 //////////////////////////////////////////////////////////////////////////
+/* The built-in types whose tp_getattro is the generic attribute lookup list
+   __getattribute__ in their dictionaries. The iterator types share the entry
+   of the type their instances are looked up by, and the native types that of
+   object, so no entry counts as an override. */
+static void __tinypy_internal_initialize_generic_attribute_methods(tinypy_vm_t *vm) {
+    static const tinypy_value_type_e kinds[] = {
+        TINYPY_VALUE_TYPE, TINYPY_VALUE_ELLIPSIS, TINYPY_VALUE_INTEGER, TINYPY_VALUE_LONG, TINYPY_VALUE_FLOAT, TINYPY_VALUE_COMPLEX,
+        TINYPY_VALUE_STRING, TINYPY_VALUE_UNICODE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_LIST, TINYPY_VALUE_DICT,
+        TINYPY_VALUE_SET, TINYPY_VALUE_FROZENSET, TINYPY_VALUE_SLICE, TINYPY_VALUE_GENERATOR, TINYPY_VALUE_FUNCTION,
+        TINYPY_VALUE_CELL, TINYPY_VALUE_CODE, TINYPY_VALUE_FRAME, TINYPY_VALUE_CLASS, TINYPY_VALUE_OLD_INSTANCE,
+        TINYPY_VALUE_NATIVE_FUNCTION, TINYPY_VALUE_XRANGE, TINYPY_VALUE_ITERATOR, TINYPY_VALUE_REVERSED, TINYPY_VALUE_ENUMERATE,
+        TINYPY_VALUE_BUFFER, TINYPY_VALUE_BYTEARRAY, TINYPY_VALUE_PROPERTY, TINYPY_VALUE_STATIC_METHOD, TINYPY_VALUE_CLASS_METHOD,
+        TINYPY_VALUE_SUPER, TINYPY_VALUE_MODULE, TINYPY_VALUE_METHOD, TINYPY_VALUE_GETSET_DESCRIPTOR, TINYPY_VALUE_MEMBER_DESCRIPTOR,
+        TINYPY_VALUE_DICT_KEYS, TINYPY_VALUE_DICT_VALUES, TINYPY_VALUE_DICT_ITEMS, TINYPY_VALUE_PARTIAL, TINYPY_VALUE_OUTPUT_STREAM,
+    };
+    tinypy_type_t *const descriptor_types[] = {vm->native_method_descriptor_type, vm->native_wrapper_descriptor_type, vm->native_method_wrapper_type, vm->native_class_method_descriptor_type};
+    tinypy_type_t *const native_types[] = {vm->dictproxy_type, vm->memoryview_type};
+    tinypy_value_t *name = vm->internal_special_getattribute_key;
+    size_t index;
+
+    for (index = 0U; index < sizeof(kinds) / sizeof(kinds[0]); ++index) {
+        tinypy_internal_type_add_object_getattribute_method(&vm->types[kinds[index]]);
+    }
+    for (index = 0U; index < sizeof(descriptor_types) / sizeof(descriptor_types[0]); ++index) {
+        tinypy_internal_type_add_object_getattribute_method(descriptor_types[index]);
+    }
+    for (index = 0U; index < (size_t)TINYPY_ITERATOR_TYPE_COUNT; ++index) {
+        tinypy_type_t *iterator_type = vm->iterator_types[index];
+
+        tinypy_internal_type_set_attr_key(iterator_type, name, tinypy_internal_type_lookup_key(vm, &vm->types[iterator_type->layout_kind], name));
+    }
+    for (index = 0U; index < sizeof(native_types) / sizeof(native_types[0]); ++index) {
+        tinypy_internal_type_set_attr_key(native_types[index], name, tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_INSTANCE], name));
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_internal_initialize_none(tinypy_none_object_t *value, tinypy_type_t *type) {
     (void)memset(value, 0, sizeof(*value));
     value->base.ref = 1U;
@@ -1438,6 +1479,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     tinypy_internal_initialize_set_types(vm);
     tinypy_internal_initialize_dict_view_types(vm);
     tinypy_internal_initialize_output_type(vm);
+    __tinypy_internal_initialize_generic_attribute_methods(vm);
     __tinypy_internal_initialize_builtins(vm);
     tinypy_internal_initialize_exceptions(vm);
     tinypy_internal_initialize_builtin_functions(vm);

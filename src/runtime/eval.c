@@ -819,6 +819,17 @@ static tinypy_value_t *__tinypy_eval_compare(tinypy_vm_t *vm, tinypy_value_t *le
         tinypy_value_t *identity = tinypy_bool_from_i32(vm, (left == right) == (operation == (size_t)TINYPY_COMPARE_IS));
         return identity;
     }
+    /* It matches an exception class without the recursion level of a
+       comparison, so an except clause still works below a lowered limit. */
+    if (operation == (size_t)TINYPY_COMPARE_EXCEPTION_MATCH) {
+        int32_t matched = tinypy_exception_matches(left, right, out_error);
+
+        if (matched < 0) {
+            return NULL;
+        }
+        tinypy_value_t *match = tinypy_bool_from_i32(vm, matched);
+        return match;
+    }
     if (left->type == &vm->types[TINYPY_VALUE_INTEGER] && right->type == &vm->types[TINYPY_VALUE_INTEGER] && operation <= (size_t)TINYPY_COMPARE_GREATER_EQUAL) {
         int64_t left_integer = TINYPY_INTEGER_VALUE(left);
         int64_t right_integer = TINYPY_INTEGER_VALUE(right);
@@ -2253,7 +2264,7 @@ static tinypy_value_t *__tinypy_eval_build_class(tinypy_vm_t *vm, tinypy_frame_o
         class_value = tinypy_call(metaclass, class_arguments, NULL, out_error);
         TINYPY_DECREF(class_arguments);
     }
-    if (class_value == NULL && TINYPY_VALUE_KIND(metaclass) == TINYPY_VALUE_TYPE && (((tinypy_type_t *)metaclass)->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) {
+    if (class_value == NULL) {
         (void)tinypy_internal_exception_prefix_raised(vm, TINYPY_EXCEPTION_TYPE_ERROR, metaclass_prefix, sizeof(metaclass_prefix) - 1U, out_error);
     }
     TINYPY_DECREF(metaclass);
@@ -2329,34 +2340,28 @@ static tinypy_bool_t __tinypy_eval_bind_keyword(tinypy_vm_t *vm, tinypy_frame_ob
             }
         }
     }
-    if (parameter_index != SIZE_MAX) {
-        if (frame->locals_plus[parameter_index] != NULL) {
-            tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(code)),
-                TINYPY_MESSAGE_PART_LITERAL("() got multiple values for keyword argument '"),
-                TINYPY_MESSAGE_PART_TEXT(key),
-                TINYPY_MESSAGE_PART_LITERAL("'"),
-            };
-
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-            return TINYPY_FALSE;
-        }
+    if (parameter_index != SIZE_MAX && frame->locals_plus[parameter_index] == NULL) {
         frame->locals_plus[parameter_index] = value;
         TINYPY_INCREF(value);
         return TINYPY_TRUE;
     }
-    if (extra_keywords != NULL) {
+    if (parameter_index == SIZE_MAX && extra_keywords != NULL) {
         tinypy_bool_t result = tinypy_internal_dict_set_checked(vm, extra_keywords, key, value, out_error);
         return result;
     }
+    tinypy_value_t *reported_key = tinypy_internal_keyword_as_string(vm, key, out_error);
+    if (reported_key == NULL) {
+        return TINYPY_FALSE;
+    }
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_TEXT(TINYPY_CODE_NAME(code)),
-        TINYPY_MESSAGE_PART_LITERAL("() got an unexpected keyword argument '"),
-        TINYPY_MESSAGE_PART_TEXT(key),
+        {parameter_index != SIZE_MAX ? "() got multiple values for keyword argument '" : "() got an unexpected keyword argument '", parameter_index != SIZE_MAX ? 45U : 39U},
+        TINYPY_MESSAGE_PART_TEXT(reported_key),
         TINYPY_MESSAGE_PART_LITERAL("'"),
     };
 
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    TINYPY_DECREF(reported_key);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2411,6 +2416,9 @@ static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_
     tinypy_value_t *extra_keywords = NULL;
     tinypy_bool_t result = TINYPY_FALSE;
 
+    /* The wording counts the defaults the function carries, as
+       PyEval_EvalCodeEx does, even beyond its positional parameters. */
+    tinypy_bool_t has_defaults = default_count != 0U ? TINYPY_TRUE : TINYPY_FALSE;
     size_t default_offset = default_count > arg_count ? default_count - arg_count : 0U;
     default_count -= default_offset;
     first_default = arg_count - default_count;
@@ -2434,7 +2442,7 @@ static tinypy_bool_t __tinypy_eval_bind_arguments(tinypy_vm_t *vm, tinypy_frame_
     if (positional_count > arg_count && has_varargs == 0) {
         size_t given = positional_count + keyword_count + (kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U);
 
-        if (default_count != 0U) {
+        if (has_defaults != 0) {
             __tinypy_eval_make_arity_error(vm, code, "at most ", 8U, arg_count, given, out_error);
         }
         else {

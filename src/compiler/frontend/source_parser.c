@@ -16,6 +16,8 @@ static void __tinypy_frontend_init_error(tinypy_parser_error_detail_t *error, co
     error->line_number = 0;
     error->offset = 0;
     error->text = NULL;
+    error->text_size = 0U;
+    error->message = NULL;
     error->token = -1;
     error->expected = -1;
 }
@@ -35,6 +37,46 @@ static char *__tinypy_frontend_token_copy(tinypy_compile_ctx_t *ctx, const char 
     return copy;
 }
 //////////////////////////////////////////////////////////////////////////
+/* parsetok reports the tokenizer buffer of the failing logical line and the
+   offset of the scan position in it; a line that failed to decode has
+   neither, and the end of a file reads as an empty line. */
+static void __tinypy_frontend_error_location(tinypy_tokenizer_t *tok, tinypy_parser_error_detail_t *error) {
+    if (tok->line_number <= 1 && tok->done == TINYPY_PARSER_EOF) {
+        error->result = TINYPY_PARSER_EOF;
+    }
+    error->line_number = tok->line_number;
+    if (error->result == TINYPY_PARSER_DECODE_ERROR) {
+        error->message = tok->error_message;
+        return;
+    }
+    if (tok->buf == NULL || tok->cur == NULL || tok->cur < tok->buf) {
+        return;
+    }
+    error->offset = (int32_t)(tok->cur - tok->buf);
+    error->text = tok->buf;
+    error->text_size = (size_t)(tok->inp - tok->buf);
+    if (tok->phantom_line == 0) {
+        return;
+    }
+    /* The buffer of the file tokenizer is empty at the end of the file, but
+       its offset is still the length of the last line in the bytes Python
+       tokenized. */
+    error->text = "";
+    error->text_size = 0U;
+    if (tok->ctx->source_is_latin1 != 0 && tok->ctx->source_diagnostic_transcoded == 0) {
+        int32_t characters = 0;
+        const char *cursor = tok->buf;
+
+        while (cursor != tok->cur) {
+            if ((TINYPY_COMPILER_CHARMASK(*cursor) & 0xc0U) != 0x80U) {
+                characters += 1;
+            }
+            cursor += 1;
+        }
+        error->offset = characters;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const char *source, size_t source_size, const char *filename, const tinypy_parser_grammar_t *g, int32_t start, tinypy_parser_error_detail_t *error, int32_t *flags) {
     tinypy_cst_node_t *result = NULL;
     tinypy_bool_t started = TINYPY_FALSE;
@@ -46,7 +88,13 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
         return NULL;
     }
     tok->filename = filename;
-    tok->alterror = 1;
+    tok->alterror = (ctx->options.flags & (uint32_t)TINYPY_COMPILE_FLAG_TAB_ERROR) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+    tok->altwarning = (ctx->options.flags & (uint32_t)TINYPY_COMPILE_FLAG_TAB_WARNING) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+    tok->file_input = ctx->source_is_file;
+    tok->ascii_lines = ctx->source_ascii_lines;
+    tok->newline_faked = ctx->source_final_newline_added;
+    tok->decode_error_line = ctx->source_decode_line;
+    tok->decode_error_message = ctx->source_decode_message;
     tinypy_parser_t *parser = tinypy_internal_parser_new(ctx, g, start);
     if (parser == NULL) {
         error->result = TINYPY_PARSER_OUT_OF_MEMORY;
@@ -108,11 +156,7 @@ tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const
     }
     *flags = (int32_t)parser->flags;
     if (result == NULL) {
-        if (tok->line_number <= 1 && tok->done == TINYPY_PARSER_EOF) {
-            error->result = TINYPY_PARSER_EOF;
-        }
-        error->line_number = tok->line_number;
-        error->offset = tok->cur != NULL && tok->line_start != NULL && tok->cur >= tok->line_start ? (int32_t)(tok->cur - tok->line_start) : 0;
+        __tinypy_frontend_error_location(tok, error);
     }
     tinypy_internal_parser_release(parser);
     tinypy_internal_tokenizer_release(tok);

@@ -861,6 +861,21 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
         tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(container), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return -1;
     }
+    if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_BUFFER) {
+        tinypy_value_t *characters = tinypy_internal_buffer_character_string(item, out_error);
+
+        if (characters == NULL) {
+            return -1;
+        }
+        int32_t contained = __tinypy_comparison_text_contains(container, characters, out_error);
+
+        TINYPY_DECREF(characters);
+        return contained;
+    }
+    if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_BYTEARRAY) {
+        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(container), TINYPY_ERROR_TYPE, "decoding bytearray is not supported", out_error);
+        return -1;
+    }
     if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_UNICODE) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("coercing to Unicode: need string or buffer, "),
@@ -1697,15 +1712,13 @@ static tinypy_value_t *__tinypy_comparison_builtin_value_inner(tinypy_value_t *l
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
 
-    if ((kind == TINYPY_VALUE_UNICODE && right_kind == TINYPY_VALUE_BUFFER) || (kind == TINYPY_VALUE_BUFFER && right_kind == TINYPY_VALUE_UNICODE)) {
+    /* PyUnicode_FromObject coerces a legacy buffer through its character
+       buffer; containment leaves the operands as they are, since a buffer
+       container is searched item by item and a unicode container coerces
+       its probe itself. */
+    if (((kind == TINYPY_VALUE_UNICODE && right_kind == TINYPY_VALUE_BUFFER) || (kind == TINYPY_VALUE_BUFFER && right_kind == TINYPY_VALUE_UNICODE)) && operation != TINYPY_COMPARE_IN && operation != TINYPY_COMPARE_NOT_IN) {
         tinypy_value_t *buffer = kind == TINYPY_VALUE_BUFFER ? left : right;
-        const uint8_t *bytes;
-        size_t size;
-
-        if (tinypy_internal_bytes_view(buffer, &bytes, &size) == 0) {
-            return NULL;
-        }
-        tinypy_value_t *text = tinypy_internal_string_from_bytes_checked(TINYPY_VALUE_VM(left), bytes, size, out_error);
+        tinypy_value_t *text = tinypy_internal_buffer_character_string(buffer, out_error);
 
         if (text == NULL) {
             return NULL;

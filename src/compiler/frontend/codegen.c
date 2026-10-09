@@ -3098,9 +3098,7 @@ static tinypy_bool_t __tinypy_codegen_augassign(tinypy_codegen_t *c, tinypy_ast_
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_codegen_push_fblock(tinypy_codegen_t *c, tinypy_codegen_frame_block_e t, tinypy_codegen_block_t *b) {
     if (c->u->u_nfblocks >= TINYPY_COMPILER_MAX_BLOCKS) {
-        tinypy_internal_compiler_semantic_error(c->c_arena,
-                                                "too many statically nested blocks",
-                                                c->u->u_lineno, TINYPY_TRUE);
+        tinypy_internal_compiler_plain_error(c->c_arena, "too many statically nested blocks");
         return TINYPY_FALSE;
     }
     tinypy_codegen_frame_block_t *f = &c->u->u_fblock[c->u->u_nfblocks++];

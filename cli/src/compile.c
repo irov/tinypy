@@ -144,6 +144,8 @@ int32_t tinypy_cli_compile_run(int32_t argc, char **argv) {
     vm = tinypy_vm_create(&config);
 
     tinypy_compile_options_init(&options, mode);
+    /* The reference compiles the bytes of the file with compile(). */
+    options.flags = (uint32_t)TINYPY_COMPILE_FLAG_STRING_SOURCE;
     options.optimize_level = optimize;
     filename_size = strlen(argv[3]);
     code = tinypy_compile_source(vm, source, source_size, argv[3], filename_size, &options, &error);
