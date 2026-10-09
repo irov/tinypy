@@ -1116,49 +1116,34 @@ static tinypy_value_t *__tinypy_memoryview_repr_method(tinypy_value_t *function,
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_memoryview_property(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    intptr_t field = (intptr_t)user_data;
+/* The getset descriptors of a memoryview: format, itemsize, ndim, readonly,
+   shape, strides and suboffsets, by index. */
+tinypy_value_t *tinypy_internal_memoryview_field(tinypy_value_t *value, size_t index) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
-    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
-        return NULL;
-    }
-    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    if (tinypy_internal_memoryview_check(self) == 0) {
-        tinypy_value_t *name = tinypy_native_function_name(function);
-        const tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("descriptor '"),
-            TINYPY_MESSAGE_PART_TEXT(name),
-            TINYPY_MESSAGE_PART_LITERAL("' for 'memoryview' objects doesn't apply to '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(self),
-            TINYPY_MESSAGE_PART_LITERAL("' object")
-        };
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        return NULL;
-    }
-    if (field == 0) {
+    if (index == 0U) {
         tinypy_value_t *result = tinypy_string_from_bytes(vm, "B", 1U);
 
         return result;
     }
-    if (field == 1 || field == 2) {
-        tinypy_value_t *result = tinypy_long_from_i64(vm, INT64_C(1));
+    if (index == 1U || index == 2U) {
+        tinypy_value_t *result = tinypy_integer_from_i64(vm, INT64_C(1));
 
         return result;
     }
-    if (field == 3) {
-        tinypy_value_t *result = tinypy_bool_from_i32(vm, __tinypy_memoryview_const_payload(self)->readonly);
+    if (index == 3U) {
+        tinypy_value_t *result = tinypy_bool_from_i32(vm, __tinypy_memoryview_const_payload(value)->readonly);
 
         return result;
     }
-    if (field == 6) {
+    if (index == 6U) {
         tinypy_value_t *result = TINYPY_RET_NONE(vm);
 
         return result;
     }
     size_t size;
-    (void)tinypy_internal_memoryview_view(self, &size);
-    tinypy_value_t *item = tinypy_long_from_i64(vm, field == 4 ? (int64_t)size : INT64_C(1));
+    (void)tinypy_internal_memoryview_view(value, &size);
+    tinypy_value_t *item = tinypy_long_from_i64(vm, index == 4U ? (int64_t)size : INT64_C(1));
     tinypy_value_t *result = tinypy_tuple_from_items(vm, &item, 1U);
 
     TINYPY_DECREF(item);
@@ -1200,12 +1185,6 @@ void tinypy_internal_initialize_memoryview_type(tinypy_vm_t *vm) {
     }
     tinypy_internal_type_add_method(vm->memoryview_type, vm->internal_tobytes_key, __tinypy_memoryview_tobytes_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(vm->memoryview_type, vm->internal_tolist_key, __tinypy_memoryview_tolist_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    tinypy_internal_type_add_property(vm->memoryview_type, vm->internal_format_key, __tinypy_memoryview_property, (void *)0, NULL);
-    tinypy_internal_type_add_property(vm->memoryview_type, vm->internal_itemsize_key, __tinypy_memoryview_property, (void *)1, NULL);
-    tinypy_internal_type_add_property(vm->memoryview_type, vm->internal_ndim_key, __tinypy_memoryview_property, (void *)2, NULL);
-    tinypy_internal_type_add_property(vm->memoryview_type, vm->internal_readonly_key, __tinypy_memoryview_property, (void *)3, NULL);
-    tinypy_internal_type_add_property(vm->memoryview_type, vm->internal_shape_key, __tinypy_memoryview_property, (void *)4, NULL);
-    tinypy_internal_type_add_property(vm->memoryview_type, vm->internal_strides_key, __tinypy_memoryview_property, (void *)5, NULL);
-    tinypy_internal_type_add_property(vm->memoryview_type, vm->internal_suboffsets_key, __tinypy_memoryview_property, (void *)6, NULL);
+    tinypy_internal_initialize_memoryview_descriptors(vm->memoryview_type);
     vm->memoryview_type->flags = (vm->memoryview_type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
 }

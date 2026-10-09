@@ -1590,6 +1590,7 @@ static tinypy_value_t *__tinypy_bytearray_bridge_method(tinypy_value_t *function
         scalar_begin = 3U;
     }
     size_t scalar_end = bounds != 0 ? argument_count : scalar_begin + 1U;
+    int64_t padding_width = 0;
     for (index = scalar_begin; scalar_begin != 0U && index < scalar_end; ++index) {
         tinypy_value_t *source = TINYPY_TUPLE_GET(args, index);
         int64_t integer;
@@ -1606,16 +1607,8 @@ static tinypy_value_t *__tinypy_bytearray_bridge_method(tinypy_value_t *function
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, integer < INT32_MIN ? "signed integer is less than minimum" : "signed integer is greater than maximum", out_error);
             goto normalized_error;
         }
-        /* PyByteArray_FromStringAndSize has no size limit of its own: a
-           padding width the str methods refuse only fails to allocate. */
-        if (scalar_begin == 1U && c_integer == 0 && integer > 0) {
-            tinypy_error_t *size_error = NULL;
-
-            if (tinypy_internal_string_size_check(vm, (uint64_t)integer, &size_error) == 0) {
-                tinypy_error_release(size_error);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "", out_error);
-                goto normalized_error;
-            }
+        if (scalar_begin == 1U && c_integer == 0) {
+            padding_width = integer;
         }
         normalized[index - 1U] = tinypy_integer_from_i64(vm, integer);
     }
@@ -1628,6 +1621,18 @@ static tinypy_value_t *__tinypy_bytearray_bridge_method(tinypy_value_t *function
                 {fill_kind == TINYPY_VALUE_NONE ? "None" : fill->type->name, fill_kind == TINYPY_VALUE_NONE ? 4U : fill->type->name_size},
             };
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            goto normalized_error;
+        }
+    }
+    /* PyByteArray_FromStringAndSize has no size limit of its own: a padding
+       width the str methods refuse only fails to allocate, once the
+       arguments have parsed. */
+    if (padding_width > 0) {
+        tinypy_error_t *size_error = NULL;
+
+        if (tinypy_internal_string_size_check(vm, (uint64_t)padding_width, &size_error) == 0) {
+            tinypy_error_release(size_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "", out_error);
             goto normalized_error;
         }
     }

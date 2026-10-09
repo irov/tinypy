@@ -178,6 +178,12 @@ class CompilerDiagnostics(unittest.TestCase):
         self.assertEqual((error.msg, error.filename, error.lineno, error.offset, error.text), ('too many statically nested blocks', None, None, None, None))
         self.assertEqual((error.args, str(error)), (('too many statically nested blocks',), 'too many statically nested blocks'))
 
+    def test_delete_of_nested_scope_variable_has_no_location(self):
+        error = self.syntax_error('def f():\n x = 1\n def a(): return x\n del x\n', 'exec')
+        message = "can not delete variable 'x' referenced in nested scope"
+        self.assertEqual((error.msg, error.filename, error.lineno, error.offset, error.text), (message, None, None, None, None))
+        self.assertEqual((error.args, str(error)), ((message,), message))
+
 
 if __name__ == '__main__':
     unittest.main()

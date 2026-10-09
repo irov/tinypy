@@ -268,17 +268,13 @@ static int32_t __tinypy_import_compile_optimize_level(const tinypy_module_artifa
     return artifact->compile_optimize_level;
 }
 //////////////////////////////////////////////////////////////////////////
+/* load_next names the rest of the dotted name from the missing component on;
+   import_submodule and reload() name just the component. */
 static void __tinypy_import_make_not_found_error(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_error_t **out_error) {
     static const char prefix[] = "No module named ";
     size_t message_size;
     char *message;
-    size_t component_start = name_size;
 
-    while (component_start != 0U && name[component_start - 1U] != '.') {
-        component_start -= 1U;
-    }
-    name += component_start;
-    name_size -= component_start;
     message_size = (sizeof(prefix) - 1U) + name_size;
     message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U);
     (void)memcpy(message, prefix, sizeof(prefix) - 1U);
@@ -388,6 +384,8 @@ static tinypy_value_t *__tinypy_import_load_finder(tinypy_vm_t *vm, const char *
     return module;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A module nobody provides is reported through out_not_found without an
+   error: the caller quotes the name the way its CPython counterpart does. */
 static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *name, size_t name_size, const char *importer, size_t importer_size, tinypy_value_t *globals, tinypy_value_t *parent, tinypy_value_t *reload_module, tinypy_bool_t *out_fresh, tinypy_bool_t *out_not_found, tinypy_error_t **out_error) {
     tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
     tinypy_module_request_t request;
@@ -402,7 +400,6 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
     if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_NONE && reload_module == NULL) {
         *out_not_found = 1;
         TINYPY_DECREF(key);
-        __tinypy_import_make_not_found_error(vm, name, name_size, out_error);
         return NULL;
     }
     if (module != NULL && reload_module == NULL) {
@@ -416,7 +413,6 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
     if (path == NULL) {
         *out_not_found = TINYPY_TRUE;
         TINYPY_DECREF(key);
-        __tinypy_import_make_not_found_error(vm, name, name_size, out_error);
         return NULL;
     }
     if (vm->module_finder != NULL) {
@@ -432,7 +428,6 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
     if (vm->has_host == 0 || vm->host.resolve_module == NULL) {
         *out_not_found = 1;
         TINYPY_DECREF(key);
-        __tinypy_import_make_not_found_error(vm, name, name_size, out_error);
         return NULL;
     }
     (void)memset(&request, 0, sizeof(request));
@@ -455,7 +450,6 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
     if (artifact == NULL) {
         *out_not_found = 1;
         TINYPY_DECREF(key);
-        __tinypy_import_make_not_found_error(vm, name, name_size, out_error);
         return NULL;
     }
     if (__tinypy_import_artifact_valid(artifact, name, name_size) == 0) {
@@ -542,7 +536,6 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
     tinypy_value_t *registered = tinypy_internal_dict_get_optional(vm, vm->modules, key);
     if (registered != NULL && TINYPY_VALUE_KIND(registered) == TINYPY_VALUE_NONE && reload_module == NULL) {
         *out_not_found = 1;
-        __tinypy_import_make_not_found_error(vm, name, name_size, out_error);
         TINYPY_DECREF(module);
         TINYPY_DECREF(key);
         return NULL;
@@ -620,6 +613,9 @@ static tinypy_value_t *__tinypy_import_load_path(tinypy_vm_t *vm, const char *na
         module = __tinypy_import_load_one(vm, name, offset, NULL, 0U, globals, parent, NULL, &fresh, &not_found, out_error);
         if (module == NULL) {
             *out_not_found = not_found;
+            if (not_found != 0) {
+                __tinypy_import_make_not_found_error(vm, name + component_start, name_size - component_start, out_error);
+            }
             goto failure;
         }
         if (offset == return_name_size) {
@@ -730,10 +726,7 @@ static tinypy_bool_t __tinypy_import_ensure_fromlist_impl(tinypy_vm_t *vm, tinyp
             }
             TINYPY_DECREF(submodule);
         }
-        else if (not_found != 0) {
-            __tinypy_import_discard_error(vm, out_error);
-        }
-        else {
+        else if (not_found == 0) {
             TINYPY_DECREF(item);
             success = TINYPY_FALSE;
             break;
@@ -927,6 +920,23 @@ tinypy_value_t *tinypy_import_module_key(tinypy_value_t *internal_name_key, tiny
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* is_builtin: the modules the VM itself provides are the ones it lists in
+   sys.builtin_module_names. */
+static tinypy_bool_t __tinypy_import_is_builtin_name(tinypy_vm_t *vm, tinypy_value_t *key) {
+    tinypy_value_t *names = tinypy_module_get_value_key(vm->sys_module, vm->internal_builtin_module_names_key);
+
+    if (names == NULL || TINYPY_VALUE_KIND(names) != TINYPY_VALUE_TUPLE) {
+        return TINYPY_FALSE;
+    }
+    size_t count = TINYPY_TUPLE_SIZE(names);
+    for (size_t index = 0U; index < count; ++index) {
+        if (TINYPY_NAME_EQ(TINYPY_TUPLE_GET(names, index), key) != TINYPY_FALSE) {
+            return TINYPY_TRUE;
+        }
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module);
     tinypy_value_t *name_value;
@@ -988,12 +998,16 @@ tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_err
         }
     }
     loaded = __tinypy_import_load_one(vm, name, name_size, name, name_size, NULL, NULL, module, &fresh, &not_found, out_error);
-    if (loaded == NULL && not_found != 0 && tinypy_module_get_value_key(module, vm->internal_special_file_key) == NULL) {
-        /* Modules without a source artifact are the VM's built-in modules,
-           which reload() leaves as they are. */
-        __tinypy_import_discard_error(vm, out_error);
-        TINYPY_INCREF(module);
-        loaded = module;
+    if (loaded == NULL && not_found != 0) {
+        /* init_builtin re-registers the built-in module as it is; any other
+           module nobody provides is missing. */
+        if (__tinypy_import_is_builtin_name(vm, key) != TINYPY_FALSE) {
+            TINYPY_INCREF(module);
+            loaded = module;
+        }
+        else {
+            __tinypy_import_make_not_found_error(vm, name + parent_size, name_size - parent_size, out_error);
+        }
     }
     if (loaded == NULL) {
         tinypy_dict_set(vm->modules, key, module);

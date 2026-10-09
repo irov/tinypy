@@ -175,6 +175,42 @@ static tinypy_bool_t __tinypy_class_namespace_defaults(tinypy_vm_t *vm, tinypy_v
     return stored;
 }
 //////////////////////////////////////////////////////////////////////////
+/* set_slot: the hooks are owned, and a lookup result is borrowed. */
+static void __tinypy_class_set_hook(tinypy_value_t **slot, tinypy_value_t *hook) {
+    tinypy_value_t *previous = *slot;
+
+    if (hook != NULL) {
+        TINYPY_INCREF(hook);
+    }
+    *slot = hook;
+    if (previous != NULL) {
+        TINYPY_DECREF(previous);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* set_attr_slots: the hooks a class resolves through its bases. */
+static void __tinypy_class_refresh_hooks(tinypy_value_t *class_value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
+    tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
+
+    __tinypy_class_set_hook(&class_object->getattr_hook, __tinypy_class_lookup_key(vm, class_value, vm->internal_special_getattr_key));
+    __tinypy_class_set_hook(&class_object->setattr_hook, __tinypy_class_lookup_key(vm, class_value, vm->internal_special_setattr_key));
+    __tinypy_class_set_hook(&class_object->delattr_hook, __tinypy_class_lookup_key(vm, class_value, vm->internal_special_delattr_key));
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_class_hook(tinypy_value_t *class_value, tinypy_value_t *name) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
+    tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
+
+    if (TINYPY_NAME_EQ(name, vm->internal_special_getattr_key) != 0) {
+        return class_object->getattr_hook;
+    }
+    if (TINYPY_NAME_EQ(name, vm->internal_special_setattr_key) != 0) {
+        return class_object->setattr_hook;
+    }
+    return class_object->delattr_hook;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_value_t *bases, tinypy_value_t *namespace_dict, tinypy_error_t **out_error) {
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
@@ -214,6 +250,7 @@ tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_valu
     class_object->dict = namespace_dict;
     TINYPY_INCREF(bases);
     TINYPY_INCREF(namespace_dict);
+    __tinypy_class_refresh_hooks(&class_object->base);
     return &class_object->base;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -335,6 +372,15 @@ void tinypy_internal_class_release_references(tinypy_value_t *value, tinypy_rele
     visit(class_object->name, user_data);
     visit(class_object->bases, user_data);
     visit(class_object->dict, user_data);
+    if (class_object->getattr_hook != NULL) {
+        visit(class_object->getattr_hook, user_data);
+    }
+    if (class_object->setattr_hook != NULL) {
+        visit(class_object->setattr_hook, user_data);
+    }
+    if (class_object->delattr_hook != NULL) {
+        visit(class_object->delattr_hook, user_data);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_old_instance_new(tinypy_value_t *class_value) {
@@ -453,7 +499,7 @@ static tinypy_value_t *__tinypy_old_instance_get_attribute(tinypy_value_t *insta
     if (result != NULL || TINYPY_NAME_EQ(name, vm->internal_special_getattr_key) != 0) {
         return result;
     }
-    tinypy_value_t *hook = __tinypy_class_lookup_key_checked(vm, instance->class_object, vm->internal_special_getattr_key, out_error);
+    tinypy_value_t *hook = TINYPY_CLASS_OBJECT(instance->class_object)->getattr_hook;
 
     if (hook == NULL) {
         return NULL;
@@ -495,6 +541,16 @@ tinypy_value_t *tinypy_internal_old_instance_call_hook(tinypy_value_t *instance_
     TINYPY_DECREF(args);
     TINYPY_DECREF(hook);
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_class_delete_from_dict(tinypy_value_t *owner, tinypy_value_t *dict, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(owner);
+
+    if (tinypy_internal_dict_delete_optional(vm, dict, name) == 0) {
+        tinypy_internal_object_make_attribute_error_key(owner, name, out_error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
@@ -546,9 +602,27 @@ tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, t
         TINYPY_INCREF(attribute_value);
         *field = attribute_value;
         TINYPY_DECREF(previous);
+        if (field == &class_object->bases) {
+            __tinypy_class_refresh_hooks(class_value);
+        }
         return TINYPY_TRUE;
     }
-    tinypy_bool_t stored = tinypy_internal_dict_set_checked(TINYPY_VALUE_VM(class_value), class_object->dict, name, attribute_value, out_error);
+    /* class_setattr replaces the hook of this class alone, and then updates
+       the dictionary as well. */
+    if (TINYPY_NAME_EQ(name, vm->internal_special_getattr_key) != 0) {
+        __tinypy_class_set_hook(&class_object->getattr_hook, attribute_value);
+    }
+    else if (TINYPY_NAME_EQ(name, vm->internal_special_setattr_key) != 0) {
+        __tinypy_class_set_hook(&class_object->setattr_hook, attribute_value);
+    }
+    else if (TINYPY_NAME_EQ(name, vm->internal_special_delattr_key) != 0) {
+        __tinypy_class_set_hook(&class_object->delattr_hook, attribute_value);
+    }
+    if (attribute_value == NULL) {
+        tinypy_bool_t deleted = __tinypy_class_delete_from_dict(class_value, class_object->dict, name, out_error);
+        return deleted;
+    }
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, class_object->dict, name, attribute_value, out_error);
     return stored;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -593,26 +667,9 @@ tinypy_bool_t tinypy_internal_old_instance_set_dict(tinypy_value_t *instance_val
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_class_delete_from_dict(tinypy_value_t *owner, tinypy_value_t *dict, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(owner);
-
-    if (tinypy_internal_dict_delete_optional(vm, dict, name) == 0) {
-        tinypy_internal_object_make_attribute_error_key(owner, name, out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_class_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    if (TINYPY_NAME_EQ(name, vm->internal_special_name_key) != TINYPY_FALSE ||
-        TINYPY_NAME_EQ(name, vm->internal_special_dict_key) != TINYPY_FALSE ||
-        TINYPY_NAME_EQ(name, vm->internal_special_bases_key) != TINYPY_FALSE) {
-        tinypy_bool_t stored = tinypy_internal_class_set_attribute(value, name, NULL, out_error);
-        return stored;
-    }
-    tinypy_bool_t return_value_1 = __tinypy_class_delete_from_dict(value, TINYPY_CLASS_OBJECT(value)->dict, name, out_error);
-    return return_value_1;
+    tinypy_bool_t deleted = tinypy_internal_class_set_attribute(value, name, NULL, out_error);
+    return deleted;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_old_instance_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {

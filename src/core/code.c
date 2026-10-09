@@ -327,30 +327,56 @@ tinypy_value_t *tinypy_code_lnotab(const tinypy_value_t *code) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_code_integer(tinypy_vm_t *vm, tinypy_value_t *value, int32_t *out_value, tinypy_error_t **out_error) {
-    int64_t integer;
+/* The "iiiiSO!O!O!SSiS|O!O!" of code_new, checked argument by argument. */
+static const char __tinypy_code_argument_formats[14] = {'i', 'i', 'i', 'i', 'S', 'T', 'T', 'T', 'S', 'S', 'i', 'S', 'T', 'T'};
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_code_argument(tinypy_vm_t *vm, tinypy_value_t *value, size_t index, int32_t *integers, tinypy_error_t **out_error) {
+    char format = __tinypy_code_argument_formats[index];
 
-    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_INTEGER) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code integer field is not an integer", out_error);
-        return TINYPY_FALSE;
+    if (format == 'i') {
+        int64_t integer;
+
+        if (tinypy_internal_integer_as_ssize(value, &integer, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        if (integer < INT32_MIN || integer > INT32_MAX) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, integer < INT32_MIN ? "signed integer is less than minimum" : "signed integer is greater than maximum", out_error);
+            return TINYPY_FALSE;
+        }
+        integers[index] = (int32_t)integer;
+        return TINYPY_TRUE;
     }
-    integer = TINYPY_INTEGER_VALUE(value);
-    if (integer < INT32_MIN || integer > INT32_MAX) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "code integer field is out of range", out_error);
-        return TINYPY_FALSE;
+    if (TINYPY_VALUE_KIND(value) == (format == 'S' ? TINYPY_VALUE_STRING : TINYPY_VALUE_TUPLE)) {
+        return TINYPY_TRUE;
     }
-    *out_value = (int32_t)integer;
-    return TINYPY_TRUE;
+    char position_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+    size_t position_size = tinypy_internal_format_size(position_buffer, index + 1U);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("code() argument "),
+        {position_buffer, position_size},
+        TINYPY_MESSAGE_PART_LITERAL(" must be "),
+        TINYPY_MESSAGE_PART_LITERAL("string"),
+        TINYPY_MESSAGE_PART_LITERAL(", not "),
+        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+    };
+
+    if (format != 'S') {
+        parts[3].bytes = "tuple";
+        parts[3].size = 5U;
+    }
+    /* converterr names None itself rather than its type. */
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
+        parts[5].bytes = "None";
+        parts[5].size = 4U;
+    }
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* validate_and_copy_tuple: identifiers are copied into exact str objects so
    later name lookups never run str subclass methods, and interning them
    leaves the caller's tuple untouched. */
 static tinypy_value_t *__tinypy_code_copy_identifiers(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
-    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_TUPLE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code free variables must be tuples of strings", out_error);
-        return NULL;
-    }
     tinypy_value_t *const *items = tinypy_internal_tuple_items(value);
     size_t size = TINYPY_TUPLE_SIZE(value);
     for (size_t index = 0U; index < size; ++index) {
@@ -381,27 +407,31 @@ static tinypy_value_t *__tinypy_code_copy_identifiers(tinypy_vm_t *vm, tinypy_va
 tinypy_value_t *tinypy_internal_code_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t count = TINYPY_TUPLE_SIZE(args);
-    int32_t integers[5];
+    int32_t integers[11];
     size_t index;
 
-    if (type != &vm->types[TINYPY_VALUE_CODE] || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || count < 12U || count > 14U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code() requires 12 to 14 positional arguments", out_error);
+    /* code_new parses the positional tuple alone, so keywords are ignored. */
+    (void)kwargs;
+    if (count < 12U || count > 14U) {
+        tinypy_internal_make_arity_error(vm, "code", 4U, count, 12U, 14U, TINYPY_ARITY_STYLE_PARSED, out_error);
         return NULL;
     }
-    for (index = 0U; index < 4U; ++index) {
-        if (__tinypy_code_integer(vm, TINYPY_TUPLE_GET(args, index), &integers[index], out_error) == 0) {
+    for (index = 0U; index < count; ++index) {
+        if (__tinypy_code_argument(vm, TINYPY_TUPLE_GET(args, index), index, integers, out_error) == 0) {
             return NULL;
         }
     }
-    if (__tinypy_code_integer(vm, TINYPY_TUPLE_GET(args, 10U), &integers[4], out_error) == 0) {
+    if (integers[0] < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code: argcount must not be negative", out_error);
         return NULL;
     }
-    if (integers[0] < 0 || integers[1] < 0 || integers[2] < 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code() argcount, nlocals and stacksize must not be negative", out_error);
+    if (integers[1] < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code: nlocals must not be negative", out_error);
         return NULL;
     }
-    if (TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 4U)) != TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 5U)) != TINYPY_VALUE_TUPLE || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 6U)) != TINYPY_VALUE_TUPLE || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 7U)) != TINYPY_VALUE_TUPLE || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 8U)) != TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 9U)) != TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 11U)) != TINYPY_VALUE_STRING) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code() received an invalid string or tuple field", out_error);
+    /* A frame cannot be laid out for a negative stack size. */
+    if (integers[2] < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code: stacksize must not be negative", out_error);
         return NULL;
     }
     tinypy_value_t *empty = &vm->empty_tuple_object.base.base;
@@ -424,7 +454,7 @@ tinypy_value_t *tinypy_internal_code_create(tinypy_type_t *type, tinypy_value_t 
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code() argcount exceeds nlocals", out_error);
         goto cleanup;
     }
-    result = tinypy_code_new(integers[0], integers[1], integers[2], integers[3], TINYPY_TUPLE_GET(args, 4U), TINYPY_TUPLE_GET(args, 5U), identifiers[0], identifiers[1], identifiers[2], identifiers[3], TINYPY_TUPLE_GET(args, 8U), TINYPY_TUPLE_GET(args, 9U), integers[4], TINYPY_TUPLE_GET(args, 11U));
+    result = tinypy_code_new(integers[0], integers[1], integers[2], integers[3], TINYPY_TUPLE_GET(args, 4U), TINYPY_TUPLE_GET(args, 5U), identifiers[0], identifiers[1], identifiers[2], identifiers[3], TINYPY_TUPLE_GET(args, 8U), TINYPY_TUPLE_GET(args, 9U), integers[10], TINYPY_TUPLE_GET(args, 11U));
 cleanup:
     for (index = 0U; index < sizeof(identifiers) / sizeof(identifiers[0]); ++index) {
         if (identifiers[index] != NULL) {

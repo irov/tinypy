@@ -1311,7 +1311,8 @@ static int32_t __test_codegen_syntax_errors(void) {
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
     message = tinypy_error_message(error, &message_size);
     assert(message_size == sizeof(delete_message) - 1U && memcmp(message, delete_message, message_size) == 0);
-    assert(tinypy_error_line_number(error) == 4);
+    /* Python raises this error without any location. */
+    assert(tinypy_error_line_number(error) == 0 && tinypy_error_column_offset(error) == 0);
     tinypy_error_release(error);
     error = NULL;
 

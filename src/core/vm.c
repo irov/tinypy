@@ -460,7 +460,14 @@ static void __tinypy_internal_initialize_type_docs(tinypy_vm_t *vm) {
         const char *doc;
     } docs[] = {
         {TINYPY_VALUE_INSTANCE, "The most base type"},
-        {TINYPY_VALUE_TYPE, "type(object) -> the object's type; type(name, bases, dict) -> a new type"},
+        {TINYPY_VALUE_TYPE, "type(object) -> the object's type\ntype(name, bases, dict) -> a new type"},
+        {TINYPY_VALUE_FUNCTION, "function(code, globals[, name[, argdefs[, closure]]])\n\nCreate a function object from a code object and a dictionary.\nThe optional name string overrides the name from the code object.\nThe optional argdefs tuple specifies the default argument values.\nThe optional closure tuple supplies the bindings for free variables."},
+        {TINYPY_VALUE_METHOD, "instancemethod(function, instance, class)\n\nCreate an instance method object."},
+        {TINYPY_VALUE_MODULE, "module(name[, doc])\n\nCreate a module object.\nThe name must be a string; the optional doc argument can have any type."},
+        {TINYPY_VALUE_CLASS_METHOD, "classmethod(function) -> method\n\nConvert a function to be a class method.\n\nA class method receives the class as implicit first argument,\njust like an instance method receives the instance.\nTo declare a class method, use this idiom:\n\n  class C:\n      @classmethod\n      def f(cls, arg1, arg2, ...):\n          ...\n\nIt can be called either on the class (e.g. C.f()) or on an instance\n(e.g. C().f()).  The instance is ignored except for its class.\nIf a class method is called for a derived class, the derived class\nobject is passed as the implied first argument.\n\nClass methods are different than C++ or Java static methods.\nIf you want those, see the staticmethod builtin."},
+        {TINYPY_VALUE_STATIC_METHOD, "staticmethod(function) -> method\n\nConvert a function to be a static method.\n\nA static method does not receive an implicit first argument.\nTo declare a static method, use this idiom:\n\n     class C:\n         @staticmethod\n         def f(arg1, arg2, ...):\n             ...\n\nIt can be called either on the class (e.g. C.f()) or on an instance\n(e.g. C().f()).  The instance is ignored except for its class.\n\nStatic methods in Python are similar to those found in Java or C++.\nFor a more advanced concept, see the classmethod builtin."},
+        {TINYPY_VALUE_SUPER, "super(type, obj) -> bound super object; requires isinstance(obj, type)\nsuper(type) -> unbound super object\nsuper(type, type2) -> bound super object; requires issubclass(type2, type)\nTypical use to call a cooperative superclass method:\nclass C(B):\n    def meth(self, arg):\n        super(C, self).meth(arg)"},
+        {TINYPY_VALUE_PROPERTY, "property(fget=None, fset=None, fdel=None, doc=None) -> property attribute\n\nfget is a function to be used for getting an attribute value, and likewise\nfset is a function for setting, and fdel a function for del'ing, an\nattribute.  Typical use is to define a managed attribute x:\n\nclass C(object):\n    def getx(self): return self._x\n    def setx(self, value): self._x = value\n    def delx(self): del self._x\n    x = property(getx, setx, delx, \"I'm the 'x' property.\")\n\nDecorators make defining new properties or modifying existing ones easy:\n\nclass C(object):\n    @property\n    def x(self):\n        \"I am the 'x' property.\"\n        return self._x\n    @x.setter\n    def x(self, value):\n        self._x = value\n    @x.deleter\n    def x(self):\n        del self._x\n"},
         {TINYPY_VALUE_BOOL, "bool(x) -> bool"},
         {TINYPY_VALUE_INTEGER, "int(x=0) -> int or long"},
         {TINYPY_VALUE_LONG, "long(x=0) -> long"},
@@ -490,6 +497,7 @@ static void __tinypy_internal_initialize_type_docs(tinypy_vm_t *vm) {
         size_t doc_size = strlen(docs[index].doc);
         tinypy_value_t *doc = tinypy_string_from_bytes(vm, docs[index].doc, doc_size);
 
+        vm->types[docs[index].kind].doc = docs[index].doc;
         tinypy_type_set_attr_key(&vm->types[docs[index].kind], vm->internal_special_doc_key, doc);
         TINYPY_DECREF(doc);
     }
@@ -933,27 +941,390 @@ static void __tinypy_future_add_feature(tinypy_vm_t *vm, tinypy_value_t *module,
     TINYPY_DECREF(instance);
 }
 //////////////////////////////////////////////////////////////////////////
-/* sys exposes several tuples whose members are also reachable by name, the
-   way CPython struct sequences are. */
-static tinypy_value_t *__tinypy_internal_sys_named_tuple(tinypy_value_t *type_name, tinypy_value_t *const *field_names, tinypy_value_t *const *values, size_t count) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(type_name);
-    const tinypy_type_t *bases[1] = {&vm->types[TINYPY_VALUE_TUPLE]};
-    tinypy_type_t *type = tinypy_type_new_key(type_name, bases, 1U, NULL, NULL, NULL);
-    tinypy_value_t *members = tinypy_tuple_from_items(vm, values, count);
-    tinypy_value_t *arguments = tinypy_tuple_from_items(vm, &members, 1U);
-    tinypy_value_t *instance = tinypy_call(&type->base.base, arguments, NULL, NULL);
+/* PyStructSequence: a read-only sequence of a static type whose items are
+   also reachable through member descriptors, like the sys info objects. */
+typedef struct tinypy_internal_struct_sequence_payload_t {
+    tinypy_value_t *items;
+    tinypy_value_t *names;
+} tinypy_internal_struct_sequence_payload_t;
+
+typedef enum tinypy_internal_struct_sequence_method_e {
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_LENGTH = 0,
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_GET_ITEM = 1,
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_GET_SLICE = 2,
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_CONTAINS = 3,
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_ADD = 4,
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_MULTIPLY = 5,
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_REFLECTED_MULTIPLY = 6,
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_HASH = 7,
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_REPR = 8,
+    TINYPY_INTERNAL_STRUCT_SEQUENCE_REDUCE = 9
+} tinypy_internal_struct_sequence_method_e;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_internal_struct_sequence_payload_t *__tinypy_internal_struct_sequence_payload(tinypy_value_t *value) {
+    tinypy_internal_struct_sequence_payload_t *return_value_1 = (tinypy_internal_struct_sequence_payload_t *)tinypy_native_instance_payload(value);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_struct_sequence_item(tinypy_value_t *value, size_t index) {
+    tinypy_internal_struct_sequence_payload_t *payload = __tinypy_internal_struct_sequence_payload(value);
+    tinypy_value_t *return_value_1 = TINYPY_TUPLE_GET(payload->items, index);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_struct_sequence_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_internal_struct_sequence_payload_t *payload = __tinypy_internal_struct_sequence_payload(value);
+    tinypy_value_t *items = payload->items;
+    tinypy_value_t *names = payload->names;
+
+    tinypy_internal_instance_release_references(value, visit, user_data);
+    payload->items = NULL;
+    payload->names = NULL;
+    if (items != NULL) {
+        visit(items, user_data);
+    }
+    if (names != NULL) {
+        visit(names, user_data);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_struct_sequence_traverse_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_internal_struct_sequence_payload_t *payload = __tinypy_internal_struct_sequence_payload(value);
+
+    tinypy_internal_instance_release_references(value, visit, user_data);
+    if (payload->items != NULL) {
+        visit(payload->items, user_data);
+    }
+    if (payload->names != NULL) {
+        visit(payload->names, user_data);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_struct_sequence_append(tinypy_vm_t *vm, tinypy_value_t **in_out_text, const char *bytes, size_t size, tinypy_error_t **out_error) {
+    tinypy_value_t *grown = tinypy_internal_string_concat_in_place(vm, *in_out_text, (const uint8_t *)bytes, size);
+
+    if (grown == NULL) {
+        TINYPY_DECREF(*in_out_text);
+        *in_out_text = NULL;
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "struct sequence representation is too large", out_error);
+        return TINYPY_FALSE;
+    }
+    *in_out_text = grown;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* structseq_repr: "sys.version_info(major=2, ...)" with the full type name. */
+static tinypy_value_t *__tinypy_internal_struct_sequence_repr(tinypy_value_t *instance, void *payload_value, void *user_data, tinypy_error_t **out_error) {
+    tinypy_internal_struct_sequence_payload_t *payload = (tinypy_internal_struct_sequence_payload_t *)payload_value;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(instance);
+    size_t count = TINYPY_TUPLE_SIZE(payload->items);
     size_t index;
 
-    TINYPY_DECREF(arguments);
-    TINYPY_DECREF(members);
-    TINYPY_DECREF(&type->base.base);
-    if (instance == NULL) {
+    (void)user_data;
+    /* The text grows in place, so it starts as an unshared copy of the name. */
+    uint8_t *bytes;
+    tinypy_value_t *text = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, instance->type->name_size, instance->type->name_size, &bytes, out_error);
+    if (text == NULL) {
+        return NULL;
+    }
+    (void)memcpy(bytes, instance->type->name, instance->type->name_size);
+    if (__tinypy_internal_struct_sequence_append(vm, &text, "(", 1U, out_error) == 0) {
         return NULL;
     }
     for (index = 0U; index < count; ++index) {
-        (void)tinypy_object_set_attr_value(instance, field_names[index], values[index], NULL);
+        tinypy_value_t *name = TINYPY_TUPLE_GET(payload->names, index);
+        tinypy_value_t *item = TINYPY_TUPLE_GET(payload->items, index);
+
+        if (index != 0U && __tinypy_internal_struct_sequence_append(vm, &text, ", ", 2U, out_error) == 0) {
+            return NULL;
+        }
+        if (__tinypy_internal_struct_sequence_append(vm, &text, (const char *)TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name), out_error) == 0 || __tinypy_internal_struct_sequence_append(vm, &text, "=", 1U, out_error) == 0) {
+            return NULL;
+        }
+        tinypy_value_t *item_repr = tinypy_object_repr(item, out_error);
+        if (item_repr == NULL) {
+            TINYPY_DECREF(text);
+            return NULL;
+        }
+        tinypy_bool_t appended = __tinypy_internal_struct_sequence_append(vm, &text, (const char *)TINYPY_TEXT_BYTES(item_repr), TINYPY_TEXT_BYTE_SIZE(item_repr), out_error);
+        TINYPY_DECREF(item_repr);
+        if (appended == 0) {
+            return NULL;
+        }
     }
+    if (__tinypy_internal_struct_sequence_append(vm, &text, ")", 1U, out_error) == 0) {
+        return NULL;
+    }
+    return text;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_hash_t __tinypy_internal_struct_sequence_hash(tinypy_value_t *instance, void *payload_value, void *user_data, tinypy_error_t **out_error) {
+    tinypy_internal_struct_sequence_payload_t *payload = (tinypy_internal_struct_sequence_payload_t *)payload_value;
+
+    (void)instance;
+    (void)user_data;
+    tinypy_hash_t return_value_1 = tinypy_internal_hash_builtin_value(payload->items, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+/* structseq_richcompare compares the items as a tuple with the other
+   operand as it is, so two struct sequences fall back to identity. */
+static tinypy_value_t *__tinypy_internal_struct_sequence_compare(tinypy_value_t *instance, void *payload_value, tinypy_value_t *other, tinypy_compare_operation_e operation, void *user_data, tinypy_error_t **out_error) {
+    tinypy_internal_struct_sequence_payload_t *payload = (tinypy_internal_struct_sequence_payload_t *)payload_value;
+
+    (void)instance;
+    (void)user_data;
+    tinypy_value_t *return_value_1 = tinypy_compare_value(payload->items, other, operation, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_struct_sequence_get_item(tinypy_value_t *instance, void *payload_value, tinypy_value_t *key, void *user_data, tinypy_error_t **out_error) {
+    tinypy_internal_struct_sequence_payload_t *payload = (tinypy_internal_struct_sequence_payload_t *)payload_value;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(instance);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(key);
+
+    (void)user_data;
+    if (kind != TINYPY_VALUE_SLICE && kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER && kind != TINYPY_VALUE_LONG && tinypy_internal_object_has_special_key(key, vm->internal_special_index_key) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "structseq index must be integer", out_error);
+        return NULL;
+    }
+    tinypy_value_t *return_value_1 = tinypy_internal_get_item_builtin(payload->items, key, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static ptrdiff_t __tinypy_internal_struct_sequence_length(tinypy_value_t *instance, void *payload_value, void *user_data, tinypy_error_t **out_error) {
+    tinypy_internal_struct_sequence_payload_t *payload = (tinypy_internal_struct_sequence_payload_t *)payload_value;
+
+    (void)instance;
+    (void)user_data;
+    TINYPY_CLEAR_ERROR(out_error);
+    ptrdiff_t return_value_1 = (ptrdiff_t)TINYPY_TUPLE_SIZE(payload->items);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_internal_struct_sequence_contains(tinypy_value_t *instance, void *payload_value, tinypy_value_t *item, void *user_data, tinypy_error_t **out_error) {
+    tinypy_internal_struct_sequence_payload_t *payload = (tinypy_internal_struct_sequence_payload_t *)payload_value;
+
+    (void)instance;
+    (void)user_data;
+    int32_t return_value_1 = tinypy_contains(payload->items, item, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_struct_sequence_add(tinypy_value_t *instance, void *payload_value, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) {
+    tinypy_internal_struct_sequence_payload_t *payload = (tinypy_internal_struct_sequence_payload_t *)payload_value;
+
+    (void)instance;
+    (void)user_data;
+    tinypy_value_t *return_value_1 = tinypy_add(payload->items, other, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_struct_sequence_multiply(tinypy_value_t *instance, void *payload_value, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) {
+    tinypy_internal_struct_sequence_payload_t *payload = (tinypy_internal_struct_sequence_payload_t *)payload_value;
+
+    (void)instance;
+    (void)user_data;
+    tinypy_value_t *return_value_1 = tinypy_multiply(payload->items, other, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_struct_sequence_reflected_multiply(tinypy_value_t *instance, void *payload_value, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) {
+    tinypy_internal_struct_sequence_payload_t *payload = (tinypy_internal_struct_sequence_payload_t *)payload_value;
+
+    (void)instance;
+    (void)user_data;
+    tinypy_value_t *return_value_1 = tinypy_multiply(other, payload->items, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_struct_sequence_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_internal_struct_sequence_method_e method = (tinypy_internal_struct_sequence_method_e)(intptr_t)user_data;
+    size_t count = method == TINYPY_INTERNAL_STRUCT_SEQUENCE_GET_SLICE ? 2U : (method >= TINYPY_INTERNAL_STRUCT_SEQUENCE_GET_ITEM && method <= TINYPY_INTERNAL_STRUCT_SEQUENCE_REFLECTED_MULTIPLY ? 1U : 0U);
+
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, count, count, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_internal_struct_sequence_payload_t *payload = __tinypy_internal_struct_sequence_payload(self);
+    switch (method) {
+    case TINYPY_INTERNAL_STRUCT_SEQUENCE_LENGTH: {
+        tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, (int64_t)TINYPY_TUPLE_SIZE(payload->items));
+        return return_value_1;
+    }
+    case TINYPY_INTERNAL_STRUCT_SEQUENCE_GET_ITEM: {
+        tinypy_value_t *return_value_2 = __tinypy_internal_struct_sequence_get_item(self, payload, TINYPY_TUPLE_GET(args, 1U), NULL, out_error);
+        return return_value_2;
+    }
+    case TINYPY_INTERNAL_STRUCT_SEQUENCE_GET_SLICE: {
+        tinypy_value_t *slice = tinypy_internal_legacy_slice_new(args, out_error);
+
+        if (slice == NULL) {
+            return NULL;
+        }
+        tinypy_value_t *return_value_3 = tinypy_internal_get_item_builtin(payload->items, slice, out_error);
+        TINYPY_DECREF(slice);
+        return return_value_3;
+    }
+    case TINYPY_INTERNAL_STRUCT_SEQUENCE_CONTAINS: {
+        int32_t contains = tinypy_contains(payload->items, TINYPY_TUPLE_GET(args, 1U), out_error);
+
+        tinypy_value_t *return_value_4 = contains >= 0 ? tinypy_bool_from_i32(vm, contains) : NULL;
+        return return_value_4;
+    }
+    case TINYPY_INTERNAL_STRUCT_SEQUENCE_ADD: {
+        tinypy_value_t *return_value_5 = tinypy_add(payload->items, TINYPY_TUPLE_GET(args, 1U), out_error);
+        return return_value_5;
+    }
+    case TINYPY_INTERNAL_STRUCT_SEQUENCE_MULTIPLY: {
+        tinypy_value_t *return_value_6 = tinypy_multiply(payload->items, TINYPY_TUPLE_GET(args, 1U), out_error);
+        return return_value_6;
+    }
+    case TINYPY_INTERNAL_STRUCT_SEQUENCE_REFLECTED_MULTIPLY: {
+        tinypy_value_t *return_value_7 = tinypy_multiply(TINYPY_TUPLE_GET(args, 1U), payload->items, out_error);
+        return return_value_7;
+    }
+    case TINYPY_INTERNAL_STRUCT_SEQUENCE_HASH: {
+        tinypy_hash_t hash = tinypy_internal_hash_builtin_value(payload->items, out_error);
+
+        if (tinypy_vm_has_error(vm) != 0) {
+            return NULL;
+        }
+        tinypy_value_t *return_value_8 = tinypy_integer_from_i64(vm, hash);
+        return return_value_8;
+    }
+    case TINYPY_INTERNAL_STRUCT_SEQUENCE_REPR: {
+        tinypy_value_t *return_value_9 = __tinypy_internal_struct_sequence_repr(self, payload, NULL, out_error);
+        return return_value_9;
+    }
+    default: {
+        tinypy_value_t *state = tinypy_dict_new(vm);
+        tinypy_value_t *arguments[2] = {payload->items, state};
+        tinypy_value_t *argument_tuple = tinypy_tuple_from_items(vm, arguments, 2U);
+        tinypy_value_t *reduction[2] = {&self->type->base.base, argument_tuple};
+        tinypy_value_t *return_value_10 = tinypy_tuple_from_items(vm, reduction, 2U);
+
+        TINYPY_DECREF(argument_tuple);
+        TINYPY_DECREF(state);
+        return return_value_10;
+    }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_struct_sequence_compare_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_compare_operation_e operation = (tinypy_compare_operation_e)(intptr_t)user_data;
+
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_internal_struct_sequence_payload_t *payload = __tinypy_internal_struct_sequence_payload(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_value_t *return_value_1 = tinypy_compare_value(payload->items, TINYPY_TUPLE_GET(args, 1U), operation, out_error);
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The sys struct sequence types drop tp_new after their creation. */
+static tinypy_value_t *__tinypy_internal_struct_sequence_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    (void)function;
+    (void)args;
+    (void)kwargs;
+    tinypy_internal_type_uncreatable_error((tinypy_type_t *)user_data, out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_type_t *__tinypy_internal_struct_sequence_type_new(tinypy_vm_t *vm, tinypy_value_t *name, const char *doc, size_t doc_size, tinypy_value_t *const *field_names, size_t count) {
+    const struct {
+        tinypy_value_t *name;
+        tinypy_internal_struct_sequence_method_e method;
+    } methods[] = {
+        {vm->internal_special_length_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_LENGTH},
+        {vm->internal_special_getitem_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_GET_ITEM},
+        {vm->internal_special_getslice_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_GET_SLICE},
+        {vm->internal_special_contains_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_CONTAINS},
+        {vm->internal_special_add_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_ADD},
+        {vm->internal_special_mul_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_MULTIPLY},
+        {vm->internal_special_rmul_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_REFLECTED_MULTIPLY},
+        {vm->internal_special_hash_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_HASH},
+        {vm->internal_special_repr_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_REPR},
+        {vm->internal_special_reduce_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_REDUCE}
+    };
+    tinypy_value_t *const comparison_names[] = {vm->internal_special_lt_key, vm->internal_special_le_key, vm->internal_special_eq_key, vm->internal_special_ne_key, vm->internal_special_gt_key, vm->internal_special_ge_key};
+    tinypy_native_type_spec_t spec;
+    size_t index;
+
+    tinypy_native_type_spec_init(&spec);
+    spec.payload_size = sizeof(tinypy_internal_struct_sequence_payload_t);
+    spec.repr = __tinypy_internal_struct_sequence_repr;
+    spec.hash = __tinypy_internal_struct_sequence_hash;
+    spec.compare = __tinypy_internal_struct_sequence_compare;
+    spec.sequence_get = __tinypy_internal_struct_sequence_get_item;
+    spec.sequence_length = __tinypy_internal_struct_sequence_length;
+    spec.contains = __tinypy_internal_struct_sequence_contains;
+    spec.add = __tinypy_internal_struct_sequence_add;
+    spec.multiply = __tinypy_internal_struct_sequence_multiply;
+    spec.reflected_multiply = __tinypy_internal_struct_sequence_reflected_multiply;
+    spec.has_instance_dict = TINYPY_FALSE;
+    spec.has_weakrefs = TINYPY_FALSE;
+    tinypy_type_t *type = tinypy_native_type_new_key(name, NULL, 0U, NULL, &spec, NULL);
+    type->release_references = __tinypy_internal_struct_sequence_release_references;
+    type->traverse_references = __tinypy_internal_struct_sequence_traverse_references;
+    type->flags = (type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
+    tinypy_value_t *doc_value = tinypy_string_from_bytes(vm, doc, doc_size);
+    tinypy_type_set_attr_key(type, vm->internal_special_doc_key, doc_value);
+    TINYPY_DECREF(doc_value);
+    tinypy_internal_type_add_static_method(type, vm->internal_special_new_key, __tinypy_internal_struct_sequence_new_method, type, NULL);
+    for (index = 0U; index < sizeof(methods) / sizeof(methods[0]); ++index) {
+        tinypy_value_t *method_name = methods[index].name;
+        tinypy_internal_type_add_method(type, method_name, __tinypy_internal_struct_sequence_method, (void *)(intptr_t)methods[index].method, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    }
+    for (index = 0U; index < sizeof(comparison_names) / sizeof(comparison_names[0]); ++index) {
+        tinypy_value_t *method_name = comparison_names[index];
+        tinypy_internal_type_add_method(type, method_name, __tinypy_internal_struct_sequence_compare_method, (void *)(intptr_t)index, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    }
+    for (index = 0U; index < count; ++index) {
+        tinypy_value_t *member = tinypy_internal_struct_sequence_member_new(type, field_names[index], index);
+
+        tinypy_type_set_attr_key(type, field_names[index], member);
+        TINYPY_DECREF(member);
+    }
+    tinypy_value_t *field_count = tinypy_integer_from_i64(vm, (int64_t)count);
+    tinypy_value_t *unnamed_count = tinypy_integer_from_i64(vm, INT64_C(0));
+    tinypy_type_set_attr_key(type, vm->internal_n_fields_key, field_count);
+    tinypy_type_set_attr_key(type, vm->internal_n_sequence_fields_key, field_count);
+    tinypy_type_set_attr_key(type, vm->internal_n_unnamed_fields_key, unnamed_count);
+    TINYPY_DECREF(unnamed_count);
+    TINYPY_DECREF(field_count);
+    return type;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The one instance of a sys struct sequence type; the type is released with
+   it, the way the module entry keeps both alive. */
+static tinypy_value_t *__tinypy_internal_struct_sequence_new(tinypy_vm_t *vm, tinypy_value_t *name, const char *doc, size_t doc_size, tinypy_value_t *const *field_names, tinypy_value_t *const *values, size_t count) {
+    tinypy_type_t *type = __tinypy_internal_struct_sequence_type_new(vm, name, doc, doc_size, field_names, count);
+    tinypy_value_t *instance = tinypy_native_instance_new(type);
+    tinypy_internal_struct_sequence_payload_t *payload = __tinypy_internal_struct_sequence_payload(instance);
+
+    payload->items = tinypy_tuple_from_items(vm, values, count);
+    payload->names = tinypy_tuple_from_items(vm, field_names, count);
+    TINYPY_DECREF(&type->base.base);
     return instance;
+}
+//////////////////////////////////////////////////////////////////////////
+#define TINYPY_INTERNAL_STRUCT_SEQUENCE_DOC(text) text, sizeof(text) - 1U
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_sys_long_info(tinypy_vm_t *vm) {
+    tinypy_value_t *const field_names[] = {vm->internal_bits_per_digit_key, vm->internal_sizeof_digit_key};
+    tinypy_value_t *values[2];
+    tinypy_value_t *result;
+    size_t index;
+
+    values[0] = tinypy_integer_from_i64(vm, INT64_C(30));
+    values[1] = tinypy_integer_from_i64(vm, INT64_C(4));
+    result = __tinypy_internal_struct_sequence_new(vm, vm->internal_sys_dot_long_info_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_DOC("sys.long_info\n\nA struct sequence that holds information about Python's\ninternal representation of integers.  The attributes are read only."), field_names, values, 2U);
+    for (index = 0U; index < 2U; ++index) {
+        TINYPY_DECREF(values[index]);
+    }
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_sys_float_info(tinypy_vm_t *vm) {
@@ -973,7 +1344,7 @@ static tinypy_value_t *__tinypy_internal_sys_float_info(tinypy_vm_t *vm) {
     values[8] = tinypy_float_from_double(vm, DBL_EPSILON);
     values[9] = tinypy_integer_from_i64(vm, (int64_t)FLT_RADIX);
     values[10] = tinypy_integer_from_i64(vm, (int64_t)FLT_ROUNDS);
-    result = __tinypy_internal_sys_named_tuple(vm->internal_sys_dot_floatinfo_key, field_names, values, 11U);
+    result = __tinypy_internal_struct_sequence_new(vm, vm->internal_sys_dot_float_info_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_DOC("sys.float_info\n\nA structseq holding information about the float type. It contains low level\ninformation about the precision and internal representation. Please study\nyour system's :file:`float.h` for more information."), field_names, values, 11U);
     for (index = 0U; index < 11U; ++index) {
         TINYPY_DECREF(values[index]);
     }
@@ -1146,7 +1517,7 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     version_items[3] = tinypy_string_from_bytes(vm, "final", 5U);
     version_items[4] = tinypy_integer_from_i64(vm, INT64_C(0));
     tinypy_value_t *const version_fields[] = {vm->internal_major_key, vm->internal_minor_key, vm->internal_micro_key, vm->internal_releaselevel_key, vm->internal_serial_key};
-    tinypy_value_t *version_info = __tinypy_internal_sys_named_tuple(vm->internal_sys_dot_version_info_key, version_fields, version_items, 5U);
+    tinypy_value_t *version_info = __tinypy_internal_struct_sequence_new(vm, vm->internal_sys_dot_version_info_key, TINYPY_INTERNAL_STRUCT_SEQUENCE_DOC("sys.version_info\n\nVersion information as a named tuple."), version_fields, version_items, 5U);
     for (size_t version_index = 0U; version_index != 5U; ++version_index) {
         TINYPY_DECREF(version_items[version_index]);
     }
@@ -1156,6 +1527,10 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
 
     tinypy_module_add_value_key(sys_module, vm->internal_float_info_key, float_info);
     TINYPY_DECREF(float_info);
+    tinypy_value_t *long_info = __tinypy_internal_sys_long_info(vm);
+
+    tinypy_module_add_value_key(sys_module, vm->internal_long_info_key, long_info);
+    TINYPY_DECREF(long_info);
     tinypy_module_add_value_key(sys_module, vm->internal_exc_type_key, &vm->none_object.base);
     name = tinypy_integer_from_i64(vm, INT64_C(1013));
     tinypy_module_add_value_key(sys_module, vm->internal_api_version_key, name);
@@ -1227,7 +1602,7 @@ static void __tinypy_internal_initialize_generic_attribute_methods(tinypy_vm_t *
     static const tinypy_value_type_e kinds[] = {
         TINYPY_VALUE_TYPE, TINYPY_VALUE_ELLIPSIS, TINYPY_VALUE_INTEGER, TINYPY_VALUE_LONG, TINYPY_VALUE_FLOAT, TINYPY_VALUE_COMPLEX,
         TINYPY_VALUE_STRING, TINYPY_VALUE_UNICODE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_LIST, TINYPY_VALUE_DICT,
-        TINYPY_VALUE_SET, TINYPY_VALUE_FROZENSET, TINYPY_VALUE_SLICE, TINYPY_VALUE_GENERATOR, TINYPY_VALUE_FUNCTION,
+        TINYPY_VALUE_SET, TINYPY_VALUE_FROZENSET, TINYPY_VALUE_SLICE, TINYPY_VALUE_GENERATOR,
         TINYPY_VALUE_CELL, TINYPY_VALUE_CODE, TINYPY_VALUE_FRAME, TINYPY_VALUE_CLASS, TINYPY_VALUE_OLD_INSTANCE,
         TINYPY_VALUE_NATIVE_FUNCTION, TINYPY_VALUE_XRANGE, TINYPY_VALUE_ITERATOR, TINYPY_VALUE_REVERSED, TINYPY_VALUE_ENUMERATE,
         TINYPY_VALUE_BUFFER, TINYPY_VALUE_BYTEARRAY, TINYPY_VALUE_PROPERTY, TINYPY_VALUE_STATIC_METHOD, TINYPY_VALUE_CLASS_METHOD,
@@ -1242,6 +1617,8 @@ static void __tinypy_internal_initialize_generic_attribute_methods(tinypy_vm_t *
     for (index = 0U; index < sizeof(kinds) / sizeof(kinds[0]); ++index) {
         tinypy_internal_type_add_object_getattribute_method(&vm->types[kinds[index]]);
     }
+    /* function sets tp_setattro to the generic function as well. */
+    tinypy_internal_type_add_object_attribute_methods(&vm->types[TINYPY_VALUE_FUNCTION]);
     for (index = 0U; index < sizeof(descriptor_types) / sizeof(descriptor_types[0]); ++index) {
         tinypy_internal_type_add_object_getattribute_method(descriptor_types[index]);
     }

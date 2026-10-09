@@ -2065,11 +2065,10 @@ static tinypy_value_t *__tinypy_constructor_type_new_method(tinypy_value_t *func
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     (void)user_data;
 
-    if (TINYPY_TUPLE_SIZE(args) == 0U || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype((tinypy_type_t *)TINYPY_TUPLE_GET(args, 0U), &vm->types[TINYPY_VALUE_TYPE]) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type.__new__ requires a subtype of type", out_error);
+    tinypy_type_t *metaclass = tinypy_internal_constructor_new_receiver(vm, &vm->types[TINYPY_VALUE_TYPE], args, out_error);
+    if (metaclass == NULL) {
         return NULL;
     }
-    tinypy_type_t *metaclass = (tinypy_type_t *)TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *arguments = __tinypy_constructor_tail_arguments(vm, args);
     tinypy_value_t *result = __tinypy_constructor_type_create_new(metaclass, arguments, kwargs, out_error);
 
@@ -2093,9 +2092,7 @@ static tinypy_value_t *__tinypy_constructor_type_init_method(tinypy_value_t *fun
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* tp_new_wrapper: the class that the __new__ of owner receives first,
-   which must be a subtype of owner. */
-static tinypy_type_t *__tinypy_constructor_new_receiver(tinypy_vm_t *vm, const tinypy_type_t *owner, tinypy_value_t *args, tinypy_error_t **out_error) {
+tinypy_type_t *tinypy_internal_constructor_new_receiver(tinypy_vm_t *vm, const tinypy_type_t *owner, tinypy_value_t *args, tinypy_error_t **out_error) {
     tinypy_message_part_t owner_name[3];
 
     tinypy_internal_type_message_name(owner, owner_name);
@@ -2153,6 +2150,41 @@ static tinypy_type_t *__tinypy_constructor_new_receiver(tinypy_vm_t *vm, const t
     return type;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The static base of a class: the nearest one not created by Python code. */
+static const tinypy_type_t *__tinypy_constructor_static_base(const tinypy_type_t *type) {
+    while ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && type->base_type != NULL) {
+        type = type->base_type;
+    }
+    return type;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_constructor_unsafe_new_error(const tinypy_type_t *owner, const tinypy_type_t *type, tinypy_error_t **out_error) {
+    const tinypy_type_t *static_base = __tinypy_constructor_static_base(type);
+    tinypy_message_part_t owner_name[3];
+    tinypy_message_part_t type_name[3];
+    tinypy_message_part_t base_name[3];
+
+    tinypy_internal_type_message_name(owner, owner_name);
+    tinypy_internal_type_message_name(type, type_name);
+    tinypy_internal_type_message_name(static_base, base_name);
+    tinypy_message_part_t parts[] = {
+        owner_name[0],
+        owner_name[1],
+        owner_name[2],
+        TINYPY_MESSAGE_PART_LITERAL(".__new__("),
+        type_name[0],
+        type_name[1],
+        type_name[2],
+        TINYPY_MESSAGE_PART_LITERAL(") is not safe, use "),
+        base_name[0],
+        base_name[1],
+        base_name[2],
+        TINYPY_MESSAGE_PART_LITERAL(".__new__()"),
+    };
+
+    tinypy_internal_make_vm_error_parts(owner->vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 /* object.__new__ with the arguments that follow the class, which class
    calls pass without building the argument tuple. */
 tinypy_value_t *tinypy_internal_object_new_items(tinypy_type_t *class_type, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -2163,31 +2195,11 @@ tinypy_value_t *tinypy_internal_object_new_items(tinypy_type_t *class_type, tiny
        still use object.__new__, which only object itself and a native type
        without a __new__ of its own do; the other built-in types have their
        own constructor or none at all. */
-    const tinypy_type_t *static_base = class_type;
-    while ((static_base->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && static_base->base_type != NULL) {
-        static_base = static_base->base_type;
-    }
+    const tinypy_type_t *static_base = __tinypy_constructor_static_base(class_type);
     tinypy_bool_t object_base = static_base == &vm->types[TINYPY_VALUE_INSTANCE] ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *object_new = object_base == 0 ? tinypy_type_get_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_new_key) : NULL;
     if (object_base == 0 && (static_base->layout_kind != TINYPY_VALUE_NATIVE_INSTANCE || tinypy_type_get_attr_key(static_base, vm->internal_special_new_key) != object_new)) {
-        tinypy_message_part_t class_name[3];
-        tinypy_message_part_t base_name[3];
-
-        tinypy_internal_type_message_name(class_type, class_name);
-        tinypy_internal_type_message_name(static_base, base_name);
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("object.__new__("),
-            class_name[0],
-            class_name[1],
-            class_name[2],
-            TINYPY_MESSAGE_PART_LITERAL(") is not safe, use "),
-            base_name[0],
-            base_name[1],
-            base_name[2],
-            TINYPY_MESSAGE_PART_LITERAL(".__new__()"),
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        tinypy_internal_constructor_unsafe_new_error(&vm->types[TINYPY_VALUE_INSTANCE], class_type, out_error);
         return NULL;
     }
     if ((class_type->flags & TINYPY_TYPE_FLAG_ABSTRACT) != 0U) {
@@ -2249,7 +2261,7 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    tinypy_type_t *class_type = __tinypy_constructor_new_receiver(vm, &vm->types[TINYPY_VALUE_INSTANCE], args, out_error);
+    tinypy_type_t *class_type = tinypy_internal_constructor_new_receiver(vm, &vm->types[TINYPY_VALUE_INSTANCE], args, out_error);
     if (class_type == NULL) {
         return NULL;
     }
@@ -2260,11 +2272,19 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_basestring_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    const tinypy_type_t *owner = &vm->types[TINYPY_VALUE_INVALID];
 
-    (void)args;
     (void)kwargs;
     (void)user_data;
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "The basestring type cannot be instantiated", out_error);
+    tinypy_type_t *type = tinypy_internal_constructor_new_receiver(vm, owner, args, out_error);
+    if (type == NULL) {
+        return NULL;
+    }
+    if (type == owner) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "The basestring type cannot be instantiated", out_error);
+        return NULL;
+    }
+    tinypy_internal_constructor_unsafe_new_error(owner, type, out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3188,7 +3208,7 @@ static tinypy_value_t *__tinypy_constructor_tuple_new_method(tinypy_value_t *fun
 
     (void)user_data;
     /* tuple_new parses the arguments after the type as tuple() does. */
-    tinypy_type_t *requested = __tinypy_constructor_new_receiver(vm, &vm->types[TINYPY_VALUE_TUPLE], args, out_error);
+    tinypy_type_t *requested = tinypy_internal_constructor_new_receiver(vm, &vm->types[TINYPY_VALUE_TUPLE], args, out_error);
     if (requested == NULL) {
         return NULL;
     }
@@ -3357,12 +3377,12 @@ static tinypy_value_t *__tinypy_constructor_immutable_new_method(tinypy_value_t 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_type_e kind = (tinypy_value_type_e)(intptr_t)user_data;
 
-    tinypy_type_t *type = __tinypy_constructor_new_receiver(vm, &vm->types[kind], args, out_error);
+    tinypy_type_t *type = tinypy_internal_constructor_new_receiver(vm, &vm->types[kind], args, out_error);
     if (type == NULL) {
         return NULL;
     }
     if (type->layout_kind != kind) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "immutable __new__ received an incompatible type", out_error);
+        tinypy_internal_constructor_unsafe_new_error(&vm->types[kind], type, out_error);
         return NULL;
     }
     tinypy_value_t *constructor_args = __tinypy_constructor_tail_arguments(vm, args);
@@ -3380,7 +3400,7 @@ static tinypy_value_t *__tinypy_constructor_builtin_new_method(tinypy_value_t *f
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_type_t *base_type = (tinypy_type_t *)user_data;
 
-    tinypy_type_t *type = __tinypy_constructor_new_receiver(vm, base_type, args, out_error);
+    tinypy_type_t *type = tinypy_internal_constructor_new_receiver(vm, base_type, args, out_error);
     if (type == NULL) {
         return NULL;
     }

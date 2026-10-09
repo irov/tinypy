@@ -493,6 +493,14 @@ static tinypy_value_t *__tinypy_object_get_type_special_module(tinypy_value_t *v
 static tinypy_value_t *__tinypy_object_get_type_special_doc(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = (tinypy_type_t *)value;
+    /* type_get_doc: a static type reports its tp_doc, which the descriptor
+       its dictionary holds for its instances would otherwise shadow. */
+    if ((type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U && type->doc != NULL) {
+        size_t doc_size = strlen(type->doc);
+        tinypy_value_t *result = tinypy_string_from_bytes(vm, type->doc, doc_size);
+
+        return result;
+    }
     tinypy_value_t *doc = tinypy_internal_dict_get_optional(vm, type->dict, vm->internal_special_doc_key);
 
     /* type_get_doc binds a descriptor of a class; the type.__doc__ getset
@@ -1446,6 +1454,7 @@ tinypy_bool_t tinypy_internal_object_is_mapping(tinypy_vm_t *vm, tinypy_value_t 
     case TINYPY_VALUE_STRING:
     case TINYPY_VALUE_UNICODE:
     case TINYPY_VALUE_BUFFER:
+    case TINYPY_VALUE_XRANGE:
         return TINYPY_FALSE;
     default:
         break;
@@ -1843,6 +1852,11 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
         tinypy_bool_t stored = tinypy_internal_class_set_attribute(value, key, attribute_value, out_error);
         return stored;
     }
+    /* type_setattro refuses a static type before any descriptor. */
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE && (((tinypy_type_t *)value)->flags & TINYPY_TYPE_FLAG_IMMUTABLE) != 0U) {
+        __tinypy_object_immutable_type_error(value, out_error);
+        return TINYPY_FALSE;
+    }
     tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
     tinypy_bool_t has_attribute = descriptor != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     if (descriptor != NULL) {
@@ -1878,10 +1892,6 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
         const char *name = NULL;
         size_t name_size = 0U;
 
-        if ((type->flags & TINYPY_TYPE_FLAG_IMMUTABLE) != 0U) {
-            __tinypy_object_immutable_type_error(value, out_error);
-            return TINYPY_FALSE;
-        }
         if (__tinypy_object_key_text(key, &name, &name_size) != 0) {
             if (TINYPY_NAME_EQ(key, vm->internal_special_bases_key) != 0) {
                 tinypy_bool_t return_value_3 = tinypy_internal_type_set_bases(type, attribute_value, out_error);
@@ -1936,7 +1946,7 @@ static tinypy_bool_t __tinypy_object_old_instance_set_attr(tinypy_value_t *value
         tinypy_bool_t return_value_2 = tinypy_internal_old_instance_set_dict(value, attribute_value, out_error);
         return return_value_2;
     }
-    tinypy_value_t *hook = tinypy_internal_class_lookup_key(vm, tinypy_old_instance_class(value), vm->internal_special_setattr_key);
+    tinypy_value_t *hook = tinypy_internal_class_hook(tinypy_old_instance_class(value), vm->internal_special_setattr_key);
     if (hook != NULL) {
         tinypy_value_t *result = tinypy_internal_old_instance_call_hook(value, hook, key, attribute_value, out_error);
 
@@ -1961,7 +1971,7 @@ static tinypy_bool_t __tinypy_object_old_instance_delete_attr(tinypy_value_t *va
         tinypy_bool_t return_value_2 = tinypy_internal_old_instance_set_dict(value, NULL, out_error);
         return return_value_2;
     }
-    tinypy_value_t *hook = tinypy_internal_class_lookup_key(vm, tinypy_old_instance_class(value), vm->internal_special_delattr_key);
+    tinypy_value_t *hook = tinypy_internal_class_hook(tinypy_old_instance_class(value), vm->internal_special_delattr_key);
     if (hook != NULL) {
         tinypy_value_t *result = tinypy_internal_old_instance_call_hook(value, hook, key, NULL, out_error);
 
@@ -2084,6 +2094,10 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
         tinypy_bool_t return_value_2 = tinypy_internal_class_delete_attribute(value, key, out_error);
         return return_value_2;
     }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE && (((tinypy_type_t *)value)->flags & TINYPY_TYPE_FLAG_IMMUTABLE) != 0U) {
+        __tinypy_object_immutable_type_error(value, out_error);
+        return TINYPY_FALSE;
+    }
     tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, value->type, key);
     tinypy_bool_t has_attribute = descriptor != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     if (descriptor != NULL) {
@@ -2110,10 +2124,6 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
         const char *name = NULL;
         size_t name_size = 0U;
 
-        if ((type->flags & TINYPY_TYPE_FLAG_IMMUTABLE) != 0U) {
-            __tinypy_object_immutable_type_error(value, out_error);
-            return TINYPY_FALSE;
-        }
         if (__tinypy_object_key_text(key, &name, &name_size) != 0 && (TINYPY_NAME_EQ(key, vm->internal_special_name_key) != 0 || TINYPY_NAME_EQ(key, vm->internal_special_module_key) != 0 || __tinypy_object_type_metadata_read_only(key) != 0)) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type metadata cannot be deleted", out_error);
             return TINYPY_FALSE;

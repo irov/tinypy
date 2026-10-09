@@ -617,7 +617,7 @@ static tinypy_bool_t __tinypy_length_hint_result(tinypy_value_t *result, int64_t
     int64_t hint;
 
     if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG) {
-        if (tinypy_internal_index_as_i64(result, &hint, TINYPY_FALSE, out_error) == 0) {
+        if (tinypy_internal_number_as_ssize(result, &hint, out_error) == 0) {
             return TINYPY_FALSE;
         }
     }
@@ -654,7 +654,9 @@ tinypy_bool_t tinypy_internal_length_hint(tinypy_value_t *value, int64_t default
     tinypy_length_slot_t length_slot;
     int64_t length;
 
-    if (__tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) != 0) {
+    /* instance_length finds __len__ like any attribute of a classic
+       instance, __getattr__ included. */
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE || __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) != 0) {
         result = __tinypy_length_hint_call(value, vm->internal_special_length_key, NULL, out_error);
         if (result == NULL) {
             if (__tinypy_length_hint_consume_fallback_error(vm, out_error) == 0) {
@@ -1096,13 +1098,30 @@ tinypy_value_t *tinypy_internal_enumerate_next(tinypy_value_t *value, tinypy_err
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, size_t *out_size, tinypy_error_t **out_error) {
+/* reversed_new checks PySequence_Check before PySequence_Size; reversed_len
+   reads the size alone. */
+static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, tinypy_bool_t check_sequence, size_t *out_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
     tinypy_length_slot_t length_slot = sequence->type->sequence_slots != NULL ? sequence->type->sequence_slots->length : NULL;
-    tinypy_bool_t has_get_item = sequence->type->sequence_slots != NULL && sequence->type->sequence_slots->get_item != NULL
-                               ? TINYPY_TRUE
-                               : tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key);
+    tinypy_bool_t has_get_item = check_sequence == 0 || (sequence->type->sequence_slots != NULL && sequence->type->sequence_slots->get_item != NULL) ? TINYPY_TRUE : TINYPY_FALSE;
 
+    /* PySequence_Check fetches the __getitem__ of a classic instance like
+       any attribute, __getattr__ included. */
+    if (has_get_item == 0 && TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_value_t *method;
+        int32_t found = tinypy_internal_object_lookup_special_key(sequence, vm->internal_special_getitem_key, &method, out_error);
+
+        if (found < 0) {
+            return TINYPY_FALSE;
+        }
+        if (found > 0) {
+            TINYPY_DECREF(method);
+            has_get_item = TINYPY_TRUE;
+        }
+    }
+    else if (has_get_item == 0) {
+        has_get_item = tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key);
+    }
     if (has_get_item == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reversed argument must be a sequence", out_error);
         return TINYPY_FALSE;
@@ -1150,7 +1169,7 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, s
         }
         TINYPY_DECREF(length_value);
         if (length < 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__ returned a negative value", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__() should return >= 0", out_error);
             return TINYPY_FALSE;
         }
         *out_size = (size_t)length;
@@ -1173,13 +1192,13 @@ static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t
 
     /* PySequence_Check excludes dictionaries outright and otherwise demands an
        item protocol, so mappings never reach the index-counting path. */
-    if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key) == 0) {
+    if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || (TINYPY_VALUE_KIND(sequence) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key) == 0)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument to reversed() must be a sequence", out_error);
         return NULL;
     }
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(sequence);
     if (kind != TINYPY_VALUE_LIST && ((size_t)kind >= TINYPY_BUILTIN_TYPE_COUNT || sequence->type != &vm->types[kind])) {
-        if (__tinypy_reversed_sequence_size(sequence, &size, out_error) == 0) {
+        if (__tinypy_reversed_sequence_size(sequence, TINYPY_TRUE, &size, out_error) == 0) {
             return NULL;
         }
     }
@@ -1195,7 +1214,7 @@ static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t
     else if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_XRANGE) {
         size = TINYPY_XRANGE_OBJECT(sequence)->length;
     }
-    else if (__tinypy_reversed_sequence_size(sequence, &size, out_error) == 0) {
+    else if (__tinypy_reversed_sequence_size(sequence, TINYPY_TRUE, &size, out_error) == 0) {
         return NULL;
     }
     tinypy_reversed_object_t *reversed = (tinypy_reversed_object_t *)tinypy_internal_object_allocate(vm, type, type->basic_size);
@@ -1236,7 +1255,7 @@ size_t tinypy_internal_reversed_size_hint(tinypy_value_t *value, tinypy_error_t 
     if (TINYPY_VALUE_KIND(reversed->sequence) == TINYPY_VALUE_LIST) {
         size = TINYPY_LIST_SIZE(reversed->sequence);
     }
-    else if (__tinypy_reversed_sequence_size(reversed->sequence, &size, out_error) == 0) {
+    else if (__tinypy_reversed_sequence_size(reversed->sequence, TINYPY_FALSE, &size, out_error) == 0) {
         return 0U;
     }
     return size < reversed->index ? 0U : reversed->index;
@@ -1492,9 +1511,14 @@ static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispat
             }
             return result;
         }
-        /* instance_getiter fetches __getitem__ through __getattr__ too. */
+        /* instance_getiter fetches __getitem__ through __getattr__ too, and
+           PySeqIter_New fetches it once more for PySequence_Check. */
         if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
             found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_getitem_key, &method, out_error);
+            if (found > 0) {
+                TINYPY_DECREF(method);
+                found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_getitem_key, &method, out_error);
+            }
             if (found > 0) {
                 TINYPY_DECREF(method);
             }

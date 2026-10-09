@@ -977,23 +977,23 @@ static tinypy_value_t *__tinypy_exception_init(tinypy_value_t *function, tinypy_
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The __new__ entry of each built-in exception type, whose tp_new_wrapper
+   names that type. */
 static tinypy_value_t *__tinypy_exception_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    (void)user_data;
     (void)kwargs;
-    if (TINYPY_TUPLE_SIZE(args) == 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "BaseException.__new__ requires an exception type", out_error);
+    tinypy_type_t *type = tinypy_internal_constructor_new_receiver(vm, (const tinypy_type_t *)user_data, args, out_error);
+    if (type == NULL) {
         return NULL;
     }
-    tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(type_value) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype((tinypy_type_t *)type_value, vm->exception_types[TINYPY_EXCEPTION_BASE]) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "BaseException.__new__ requires an exception subtype", out_error);
-        return NULL;
-    }
-    tinypy_value_t *result = __tinypy_exception_allocate_blank((tinypy_type_t *)type_value);
+    tinypy_value_t *result = __tinypy_exception_allocate_blank(type);
 
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_exception_type_add_new(tinypy_type_t *type) {
+    tinypy_internal_type_add_static_method(type, type->vm->internal_special_new_key, __tinypy_exception_new_method, type, NULL);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_exception_type_index_e __tinypy_exception_index_from_error(tinypy_error_kind_e kind) {
@@ -1132,7 +1132,7 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
 
             type = tinypy_internal_type_new_configured(type_name, &base, 1U, NULL, NULL, TINYPY_TRUE, TINYPY_FALSE, NULL);
             __tinypy_exception_type_share_attribute(type, base_exception, vm->internal_special_init_key);
-            __tinypy_exception_type_share_attribute(type, base_exception, vm->internal_special_new_key);
+            __tinypy_exception_type_add_new(type);
             if (index == (size_t)TINYPY_EXCEPTION_KEY_ERROR || index == (size_t)TINYPY_EXCEPTION_ENVIRONMENT_ERROR || index == (size_t)TINYPY_EXCEPTION_SYNTAX_ERROR || index == (size_t)TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR || index == (size_t)TINYPY_EXCEPTION_UNICODE_DECODE_ERROR || index == (size_t)TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR) {
                 __tinypy_exception_type_share_attribute(type, base_exception, vm->internal_special_str_key);
             }
@@ -1153,12 +1153,7 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
 
         if (index == (size_t)TINYPY_EXCEPTION_BASE) {
             tinypy_internal_type_add_method(type, vm->internal_special_init_key, __tinypy_exception_init, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-            tinypy_value_t *new_function = tinypy_native_function_new_key(vm->internal_special_new_key, __tinypy_exception_new_method, NULL, NULL);
-            tinypy_value_t *new_descriptor = tinypy_static_method_new(new_function);
-
-            tinypy_type_set_attr_key(type, type->vm->internal_special_new_key, new_descriptor);
-            TINYPY_DECREF(new_descriptor);
-            TINYPY_DECREF(new_function);
+            __tinypy_exception_type_add_new(type);
             tinypy_internal_initialize_exception_descriptors(type);
             /* BaseException sets tp_getattro and tp_setattro to the generic
                functions: the entries are object's own. */

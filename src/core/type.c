@@ -332,8 +332,7 @@ static void __tinypy_internal_mro_entry_name(tinypy_value_t *entry, const char *
         *out_size = TINYPY_TEXT_BYTE_SIZE(name);
         return;
     }
-    *out_bytes = ((tinypy_type_t *)entry)->name;
-    *out_size = ((tinypy_type_t *)entry)->name_size;
+    *out_bytes = tinypy_internal_type_short_name((tinypy_type_t *)entry, out_size);
 }
 //////////////////////////////////////////////////////////////////////////
 /* Depth-first, left-to-right linearisation of a classic class, as
@@ -1478,7 +1477,12 @@ tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t
 
     TINYPY_CLEAR_ERROR(out_error);
     if ((type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type attributes are read-only", out_error);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("can't set "), {type->name, type->name_size},
+            TINYPY_MESSAGE_PART_LITERAL(".__bases__")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
         return TINYPY_FALSE;
     }
     if (TINYPY_VALUE_KIND(bases_value) != TINYPY_VALUE_TUPLE) {
@@ -1709,25 +1713,15 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_value_t *internal_name_k
         return NULL;
     }
     tinypy_value_t *module_key = vm->internal_special_module_key;
-    tinypy_value_t *internal_doc_key = vm->internal_special_doc_key;
     tinypy_value_t *module = vm->current_frame != NULL ? tinypy_internal_dict_get_optional(vm, vm->current_frame->globals, vm->internal_special_name_key) : NULL;
     if (module != NULL) {
         TINYPY_INCREF(module);
     }
     tinypy_bool_t has_module = TINYPY_FALSE;
-    tinypy_bool_t has_doc = TINYPY_FALSE;
-    tinypy_value_t *none = TINYPY_RET_NONE(vm);
     tinypy_bool_t metadata_ok = tinypy_internal_dict_contains_checked(vm, dict, module_key, &has_module, out_error);
-    if (metadata_ok != 0) {
-        metadata_ok = tinypy_internal_dict_contains_checked(vm, dict, internal_doc_key, &has_doc, out_error);
-    }
     if (metadata_ok != 0 && has_module == 0 && module != NULL) {
         metadata_ok = tinypy_internal_dict_set_checked(vm, dict, module_key, module, out_error);
     }
-    if (metadata_ok != 0 && has_doc == 0) {
-        metadata_ok = tinypy_internal_dict_set_checked(vm, dict, internal_doc_key, none, out_error);
-    }
-    TINYPY_DECREF(none);
     if (module != NULL) {
         TINYPY_DECREF(module);
     }
@@ -1978,6 +1972,11 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_value_t *internal_name_k
         if (owned_key != 0) {
             TINYPY_DECREF(key);
         }
+    }
+    /* PyType_Ready adds the __doc__ default after the __slots__ members, so
+       a slot of that name keeps its member descriptor. */
+    if (tinypy_dict_get_optional(type->dict, vm->internal_special_doc_key) == NULL) {
+        tinypy_dict_set(type->dict, vm->internal_special_doc_key, &vm->none_object.base);
     }
     if (type->has_instance_dict != 0 && layout_base->has_instance_dict == 0 && tinypy_dict_get_optional(type->dict, vm->internal_special_dict_key) == NULL) {
         tinypy_value_t *key = TINYPY_RET(vm->internal_special_dict_key);

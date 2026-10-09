@@ -356,6 +356,35 @@ void tinypy_internal_hash_unhashable_error(const tinypy_value_t *value, tinypy_e
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_internal_hash_classic_comparable(tinypy_value_t *value, tinypy_error_t **out_error);
+//////////////////////////////////////////////////////////////////////////
+static tinypy_hash_t __tinypy_internal_hash_identity(const tinypy_value_t *value) {
+    tinypy_hash_t return_value_1 = __tinypy_internal_hash_fix((uint64_t)((uintptr_t)value >> 4U));
+    return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+/* slot_tp_hash: a __hash__ that fails to bind counts as absent, so the
+   object is unhashable when it compares and hashes by identity otherwise. */
+static int32_t __tinypy_internal_hash_unbound_special(tinypy_value_t *value, tinypy_hash_t *out_hash, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+    if (out_error != NULL && *out_error != NULL) {
+        tinypy_error_release(*out_error);
+        *out_error = NULL;
+    }
+    tinypy_internal_exception_clear_raised(vm);
+    int32_t comparable = __tinypy_internal_hash_classic_comparable(value, out_error);
+    if (comparable < 0) {
+        return comparable;
+    }
+    if (comparable > 0) {
+        tinypy_internal_hash_unhashable_error(value, out_error);
+        return INT32_C(-1);
+    }
+    *out_hash = __tinypy_internal_hash_identity(value);
+    return INT32_C(1);
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinypy_bool_t overrides_only, tinypy_hash_t *out_hash, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *mutable_value = (tinypy_value_t *)value;
@@ -373,6 +402,10 @@ static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinyp
         tinypy_value_t *method;
         int32_t found = tinypy_internal_object_lookup_special_key(mutable_value, vm->internal_special_hash_key, &method, out_error);
 
+        if (found < 0 && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE) {
+            int32_t return_value_1 = __tinypy_internal_hash_unbound_special(mutable_value, out_hash, out_error);
+            return return_value_1;
+        }
         if (found <= 0) {
             return found;
         }
@@ -581,11 +614,26 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
                 return (tinypy_hash_t)0;
             }
         }
-        function_result = __tinypy_internal_hash_fix(
-                    (uint64_t)((uintptr_t)value >> 4U));
+        function_result = __tinypy_internal_hash_identity(value);
         return function_result;
     }
     }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The __hash__ slot wrapper of a built-in type. */
+tinypy_value_t *tinypy_internal_hash_builtin_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_hash_t hash = tinypy_internal_hash_builtin_value(TINYPY_TUPLE_GET(args, 0U), out_error);
+    if (tinypy_vm_has_error(vm) != 0) {
+        return NULL;
+    }
+    tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, hash);
+    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 static inline tinypy_bool_t __tinypy_internal_value_is_numeric(const tinypy_value_t *value) {

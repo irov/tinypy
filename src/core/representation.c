@@ -362,9 +362,10 @@ static void __tinypy_representation_double(tinypy_representation_builder_t *buil
         digit_count -= first_significant;
         (void)memmove(digits, digits + first_significant, digit_count * sizeof(*digits));
     }
-    /* %.12g with ADD_DOT_0 moves to the exponent form once the integer
-       part would need all twelve digits; repr keeps seventeen. */
-    scientific = exponent < -4 || exponent >= (raw != 0 ? 11 : 16);
+    /* %.12g moves to the exponent form once the integer part would need
+       more than twelve digits, one less with ADD_DOT_0 (float_str); repr
+       keeps sixteen with or without it (complex components). */
+    scientific = exponent < -4 || exponent >= (raw != 0 ? (add_dot_zero != 0 ? 11 : 12) : 16);
     if (scientific != 0) {
         while (digit_count > 1U && digits[digit_count - 1U] == 0U) {
             digit_count -= 1U;
@@ -1423,6 +1424,7 @@ static tinypy_value_t *__tinypy_object_sizeof_method(tinypy_value_t *function, t
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
     static const tinypy_value_type_e semantic_repr_types[] = {
+        TINYPY_VALUE_NONE,
         TINYPY_VALUE_CODE,
         TINYPY_VALUE_FUNCTION,
         TINYPY_VALUE_CELL,
@@ -1459,6 +1461,7 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
         tinypy_value_type_e kind = semantic_repr_types[index];
         tinypy_internal_type_add_method(&vm->types[kind], vm->internal_special_repr_key, __tinypy_builtin_representation_method, (void *)(intptr_t)kind, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_NONE], vm->internal_special_hash_key, tinypy_internal_hash_builtin_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     TINYPY_DECREF(class_property);
     TINYPY_DECREF(class_deleter);
     TINYPY_DECREF(class_setter);

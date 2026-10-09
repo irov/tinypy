@@ -2983,13 +2983,19 @@ static tinypy_value_t *__tinypy_builtin_dir_sort(tinypy_vm_t *vm, tinypy_value_t
 }
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_builtin_print_affix(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_builtin_print_affix(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (kind == TINYPY_VALUE_NONE || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
         return TINYPY_TRUE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sep and end must be strings or None", out_error);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_TEXT(name),
+        TINYPY_MESSAGE_PART_LITERAL(" must be None, str or unicode, not "),
+        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3036,13 +3042,19 @@ static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_v
                 target = iterator->value;
             }
             else {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "print() received an unexpected keyword argument", out_error);
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_LITERAL("'"),
+                    TINYPY_MESSAGE_PART_TEXT(iterator->key),
+                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function"),
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
                 return NULL;
             }
         }
     }
-    if (__tinypy_builtin_print_affix(vm, separator, out_error) == 0
-        || __tinypy_builtin_print_affix(vm, ending, out_error) == 0) {
+    if (__tinypy_builtin_print_affix(vm, vm->internal_sep_key, separator, out_error) == 0
+        || __tinypy_builtin_print_affix(vm, vm->internal_end_key, ending, out_error) == 0) {
         return NULL;
     }
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_NONE) {
@@ -3922,7 +3934,7 @@ static tinypy_value_t *__tinypy_builtin_eval(tinypy_value_t *function, tinypy_va
     tinypy_value_t *locals;
 
     (void)user_data;
-    if (__tinypy_builtin_no_keywords(function, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(function, args, 1U, 3U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
+    if (__tinypy_builtin_no_keywords(function, kwargs, out_error) == 0 || __tinypy_builtin_argument_count(function, args, 1U, 3U, TINYPY_ARITY_STYLE_UNPACK, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *source = TINYPY_TUPLE_GET(args, 0U);

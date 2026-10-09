@@ -597,6 +597,17 @@ class TextProtocolEdges(unittest.TestCase):
                 call()
             self.assertEqual(str(caught.exception), message)
 
+    def test_bytearray_padding_checks_fill_before_size(self):
+        for name in ('ljust', 'rjust', 'center'):
+            method = getattr(bytearray('ab'), name)
+            for fill, kind in (('ab', 'str'), ('', 'str'), (1, 'int'), (2 ** 70, 'long'), (u'x', 'unicode'), (None, 'None')):
+                with self.assertRaises(TypeError) as caught:
+                    method(sys.maxint, fill)
+                self.assertEqual(str(caught.exception), '%s() argument 2 must be char, not %s' % (name, kind))
+            self.assertRaises(MemoryError, method, sys.maxint, 'x')
+            self.assertRaises(TypeError, method, 'z', 'ab')
+        self.assertEqual(bytearray('ab').center(5, '-'), bytearray('--ab-'))
+
     def test_unraisable_native_error_writes_message(self):
         class Capture(object):
             def __init__(self):

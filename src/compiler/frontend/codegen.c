@@ -2303,7 +2303,8 @@ static tinypy_bool_t __tinypy_codegen_nameop(tinypy_codegen_t *c, tinypy_ast_ide
                              TINYPY_COMPILER_STRING_AS_STRING(name), name_size);
                 (void)memcpy(message + sizeof(prefix) - 1U + name_size,
                              suffix, sizeof(suffix));
-                tinypy_internal_compiler_semantic_error(c->c_arena, message, c->u->u_lineno, TINYPY_TRUE);
+                /* compiler_nameop raises this one without a location. */
+                tinypy_internal_compiler_plain_error(c->c_arena, message);
             }
             TINYPY_COMPILER_DECREF(mangled);
             return TINYPY_FALSE;

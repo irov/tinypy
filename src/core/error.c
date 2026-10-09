@@ -238,6 +238,15 @@ size_t tinypy_internal_format_size(char *buffer, size_t value) {
     return count;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A part is formatted like the "%s" of a C string in PyErr_Format: it ends
+   at its first NUL. */
+static size_t __tinypy_internal_message_part_size(const tinypy_message_part_t *part) {
+    const char *nul = part->size != 0U ? (const char *)memchr(part->bytes, 0, part->size) : NULL;
+    size_t size = nul != NULL ? (size_t)(nul - part->bytes) : part->size;
+
+    return size;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_make_vm_error_parts(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const tinypy_message_part_t *parts, size_t part_count, tinypy_error_t **out_error) {
     size_t message_size = 0U;
     size_t offset = 0U;
@@ -245,13 +254,15 @@ void tinypy_internal_make_vm_error_parts(tinypy_vm_t *vm, tinypy_error_kind_e er
     char *message;
 
     for (index = 0U; index < part_count; ++index) {
-        message_size += parts[index].size;
+        message_size += __tinypy_internal_message_part_size(&parts[index]);
     }
     message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U);
     for (index = 0U; index < part_count; ++index) {
-        if (parts[index].size != 0U) {
-            (void)memcpy(message + offset, parts[index].bytes, parts[index].size);
-            offset += parts[index].size;
+        size_t part_size = __tinypy_internal_message_part_size(&parts[index]);
+
+        if (part_size != 0U) {
+            (void)memcpy(message + offset, parts[index].bytes, part_size);
+            offset += part_size;
         }
     }
     message[message_size] = '\0';

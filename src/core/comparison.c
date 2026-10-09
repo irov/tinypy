@@ -1464,12 +1464,36 @@ static int32_t __tinypy_comparison_three_way_family(const tinypy_value_t *value)
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* try_3way_compare coerces a float and a long through float_coerce before
+   the default ordering applies; a long beyond the double range fails. */
+static tinypy_bool_t __tinypy_comparison_coerce_long_to_float(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
+    tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
+    const tinypy_value_t *long_value;
+
+    if (left_kind == TINYPY_VALUE_FLOAT && right_kind == TINYPY_VALUE_LONG) {
+        long_value = right;
+    }
+    else if (left_kind == TINYPY_VALUE_LONG && right_kind == TINYPY_VALUE_FLOAT) {
+        long_value = left;
+    }
+    else {
+        return TINYPY_TRUE;
+    }
+    double number;
+    tinypy_bool_t converted = tinypy_long_as_double(long_value, &number, out_error);
+    return converted;
+}
+//////////////////////////////////////////////////////////////////////////
 /* try_3way_compare and default_3way_compare once the rich comparison
    declined: only operands sharing a built-in tp_compare compare their values
    (set_nocmp refuses), everything else takes the default ordering. */
 static tinypy_bool_t __tinypy_comparison_three_way_fallback(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
     int32_t family = __tinypy_comparison_three_way_family(left);
 
+    if (__tinypy_comparison_coerce_long_to_float(left, right, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
     if (family == 0 || family != __tinypy_comparison_three_way_family(right)) {
         *out_order = tinypy_internal_comparison_fallback_order(left, right);
         return TINYPY_TRUE;

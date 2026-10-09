@@ -845,6 +845,101 @@ static tinypy_value_t *__tinypy_weakref_proxy_unary_method(tinypy_value_t *funct
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef enum tinypy_weakref_proxy_sequence_operation_e {
+    TINYPY_WEAKREF_PROXY_LENGTH = 0,
+    TINYPY_WEAKREF_PROXY_ITER = 1,
+    TINYPY_WEAKREF_PROXY_NEXT = 2,
+    TINYPY_WEAKREF_PROXY_GET_ITEM = 3,
+    TINYPY_WEAKREF_PROXY_DELETE_ITEM = 4,
+    TINYPY_WEAKREF_PROXY_CONTAINS = 5,
+    TINYPY_WEAKREF_PROXY_SET_ITEM = 6,
+    TINYPY_WEAKREF_PROXY_GET_SLICE = 7,
+    TINYPY_WEAKREF_PROXY_DELETE_SLICE = 8,
+    TINYPY_WEAKREF_PROXY_SET_SLICE = 9
+} tinypy_weakref_proxy_sequence_operation_e;
+//////////////////////////////////////////////////////////////////////////
+/* The sequence, mapping and iteration slot wrappers of a proxy forward to
+   the referent. */
+static tinypy_value_t *__tinypy_weakref_proxy_sequence_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_weakref_proxy_sequence_operation_e operation = (tinypy_weakref_proxy_sequence_operation_e)(intptr_t)user_data;
+    size_t count = operation <= TINYPY_WEAKREF_PROXY_NEXT ? 0U : (operation <= TINYPY_WEAKREF_PROXY_CONTAINS ? 1U : (operation <= TINYPY_WEAKREF_PROXY_DELETE_SLICE ? 2U : 3U));
+
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, count, count, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *proxy = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *object = __tinypy_weakref_proxy_referent(proxy, out_error);
+    if (object == NULL) {
+        return NULL;
+    }
+    switch (operation) {
+    case TINYPY_WEAKREF_PROXY_LENGTH: {
+        ptrdiff_t length = __tinypy_weakref_proxy_length(proxy, out_error);
+
+        tinypy_value_t *return_value_1 = length >= 0 ? tinypy_integer_from_i64(vm, (int64_t)length) : NULL;
+        return return_value_1;
+    }
+    case TINYPY_WEAKREF_PROXY_ITER: {
+        tinypy_value_t *return_value_2 = tinypy_iter(object, out_error);
+        return return_value_2;
+    }
+    case TINYPY_WEAKREF_PROXY_NEXT: {
+        tinypy_value_t *item = tinypy_next(object, out_error);
+
+        if (item == NULL && tinypy_vm_has_error(vm) == 0 && (out_error == NULL || *out_error == NULL)) {
+            tinypy_internal_exception_raise_stop_iteration(vm, out_error);
+        }
+        return item;
+    }
+    case TINYPY_WEAKREF_PROXY_GET_ITEM: {
+        tinypy_value_t *return_value_3 = tinypy_get_item(object, TINYPY_TUPLE_GET(args, 1U), out_error);
+        return return_value_3;
+    }
+    case TINYPY_WEAKREF_PROXY_DELETE_ITEM: {
+        tinypy_value_t *return_value_4 = tinypy_delete_item(object, TINYPY_TUPLE_GET(args, 1U), out_error) != 0 ? TINYPY_RET_NONE(vm) : NULL;
+        return return_value_4;
+    }
+    case TINYPY_WEAKREF_PROXY_CONTAINS: {
+        int32_t contains = tinypy_contains(object, TINYPY_TUPLE_GET(args, 1U), out_error);
+
+        tinypy_value_t *return_value_5 = contains >= 0 ? tinypy_bool_from_i32(vm, contains) : NULL;
+        return return_value_5;
+    }
+    case TINYPY_WEAKREF_PROXY_SET_ITEM: {
+        tinypy_value_t *return_value_6 = tinypy_set_item(object, TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), out_error) != 0 ? TINYPY_RET_NONE(vm) : NULL;
+        return return_value_6;
+    }
+    case TINYPY_WEAKREF_PROXY_GET_SLICE: {
+        tinypy_value_t *return_value_7 = tinypy_internal_get_slice(object, TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), out_error);
+        return return_value_7;
+    }
+    case TINYPY_WEAKREF_PROXY_DELETE_SLICE: {
+        tinypy_value_t *return_value_8 = tinypy_internal_delete_slice(object, TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), out_error) != 0 ? TINYPY_RET_NONE(vm) : NULL;
+        return return_value_8;
+    }
+    default: {
+        tinypy_value_t *return_value_9 = tinypy_internal_set_slice(object, TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), TINYPY_TUPLE_GET(args, 3U), out_error) != 0 ? TINYPY_RET_NONE(vm) : NULL;
+        return return_value_9;
+    }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_weakref_proxy_call_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (TINYPY_TUPLE_SIZE(args) == 0U || __tinypy_weakref_is_proxy(vm, TINYPY_TUPLE_GET(args, 0U)) == TINYPY_FALSE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "weak proxy operation requires a proxy", out_error);
+        return NULL;
+    }
+    tinypy_value_t *const *items = tinypy_internal_tuple_items(args);
+    tinypy_value_t *call_args = tinypy_tuple_from_items(vm, items + 1U, TINYPY_TUPLE_SIZE(args) - 1U);
+    tinypy_value_t *result = __tinypy_weakref_proxy_call(TINYPY_TUPLE_GET(args, 0U), call_args, kwargs, out_error);
+    TINYPY_DECREF(call_args);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *callback = NULL;
@@ -1092,6 +1187,14 @@ static tinypy_type_t *__tinypy_weakref_proxy_type_new(tinypy_value_t *name, tiny
     } unary_methods[] = {
         {vm->internal_special_pos_key, 0}, {vm->internal_special_neg_key, 1}, {vm->internal_special_invert_key, 2}, {vm->internal_special_abs_key, 3},
         {vm->internal_special_int_key, 4}, {vm->internal_special_long_key, 5}, {vm->internal_special_float_key, 6}, {vm->internal_special_index_key, 7}, {vm->internal_special_nonzero_key, 8}};
+    const struct {
+        tinypy_value_t *name;
+        tinypy_weakref_proxy_sequence_operation_e operation;
+    } sequence_methods[] = {
+        {vm->internal_special_length_key, TINYPY_WEAKREF_PROXY_LENGTH}, {vm->internal_special_iter_key, TINYPY_WEAKREF_PROXY_ITER}, {vm->internal_special_next_key, TINYPY_WEAKREF_PROXY_NEXT},
+        {vm->internal_special_getitem_key, TINYPY_WEAKREF_PROXY_GET_ITEM}, {vm->internal_special_delitem_key, TINYPY_WEAKREF_PROXY_DELETE_ITEM}, {vm->internal_special_contains_key, TINYPY_WEAKREF_PROXY_CONTAINS},
+        {vm->internal_special_setitem_key, TINYPY_WEAKREF_PROXY_SET_ITEM}, {vm->internal_special_getslice_key, TINYPY_WEAKREF_PROXY_GET_SLICE}, {vm->internal_special_delslice_key, TINYPY_WEAKREF_PROXY_DELETE_SLICE},
+        {vm->internal_special_setslice_key, TINYPY_WEAKREF_PROXY_SET_SLICE}};
     tinypy_type_t *type = tinypy_internal_type_new_configured(name, NULL, 0U, NULL, NULL, TINYPY_FALSE, TINYPY_FALSE, NULL);
 
     type->layout_kind = TINYPY_VALUE_WEAKREF;
@@ -1130,6 +1233,13 @@ static tinypy_type_t *__tinypy_weakref_proxy_type_new(tinypy_value_t *name, tiny
     for (size_t index = 0U; index < sizeof(unary_methods) / sizeof(unary_methods[0]); ++index) {
         tinypy_value_t *method_name = unary_methods[index].name;
         tinypy_internal_type_add_method(type, method_name, __tinypy_weakref_proxy_unary_method, (void *)unary_methods[index].operation, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    }
+    for (size_t index = 0U; index < sizeof(sequence_methods) / sizeof(sequence_methods[0]); ++index) {
+        tinypy_value_t *method_name = sequence_methods[index].name;
+        tinypy_internal_type_add_method(type, method_name, __tinypy_weakref_proxy_sequence_method, (void *)(intptr_t)sequence_methods[index].operation, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    }
+    if (callable != TINYPY_FALSE) {
+        tinypy_internal_type_add_method(type, vm->internal_special_call_key, __tinypy_weakref_proxy_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     }
     return type;
 }

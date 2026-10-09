@@ -261,14 +261,18 @@ tinypy_value_t *tinypy_internal_method_create(tinypy_type_t *type, tinypy_value_
     tinypy_value_t *owner;
     tinypy_bool_t owned_owner = TINYPY_FALSE;
 
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || count < 2U || count > 3U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "instancemethod constructor received invalid arguments", out_error);
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "instancemethod does not take keyword arguments", out_error);
+        return NULL;
+    }
+    if (count < 2U || count > 3U) {
+        tinypy_internal_make_arity_error(vm, "instancemethod", 14U, count, 2U, 3U, TINYPY_ARITY_STYLE_UNPACK, out_error);
         return NULL;
     }
     callable = TINYPY_TUPLE_GET(args, 0U);
     self = TINYPY_TUPLE_GET(args, 1U);
     if (tinypy_is_callable(callable) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "first instancemethod argument must be callable", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "first argument must be callable", out_error);
         return NULL;
     }
     if (TINYPY_VALUE_KIND(self) == TINYPY_VALUE_NONE) {
@@ -276,7 +280,7 @@ tinypy_value_t *tinypy_internal_method_create(tinypy_type_t *type, tinypy_value_
     }
     if (count == 2U) {
         if (self == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unbound instancemethod requires an owner", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unbound methods must have non-NULL im_class", out_error);
             return NULL;
         }
         owner = TINYPY_RET_NONE(vm);

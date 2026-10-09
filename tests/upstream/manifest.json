@@ -720,11 +720,14 @@
         "ObjectProtocols.test_class_assignment_checks_layout",
         "ObjectProtocols.test_class_doc_descriptor_is_bound",
         "ObjectProtocols.test_classic_class_has_no_class_attribute",
+        "ObjectProtocols.test_classic_hook_slots_snapshot",
         "ObjectProtocols.test_classic_instance_constructor",
         "ObjectProtocols.test_classic_instance_generic_lookup",
+        "ObjectProtocols.test_classic_instance_protocol_lookups",
         "ObjectProtocols.test_classic_lookup_recursion_is_raised",
         "ObjectProtocols.test_classmethod_new_receives_class_twice",
         "ObjectProtocols.test_code_is_weakly_referenceable",
+        "ObjectProtocols.test_constructor_and_builtin_messages",
         "ObjectProtocols.test_descriptor_receives_owner",
         "ObjectProtocols.test_diamond_resolution",
         "ObjectProtocols.test_dict_assignment_uses_builtin_base",
@@ -732,12 +735,14 @@
         "ObjectProtocols.test_exception_members",
         "ObjectProtocols.test_exception_unicode_follows_str",
         "ObjectProtocols.test_filter_text_returns_new_string",
+        "ObjectProtocols.test_function_attribute_wrappers",
         "ObjectProtocols.test_layout_conflict_with_builtin_base",
         "ObjectProtocols.test_length_0",
         "ObjectProtocols.test_length_1",
         "ObjectProtocols.test_length_23",
         "ObjectProtocols.test_length_protocol_of_offsets",
         "ObjectProtocols.test_metaclass_bases_prefix",
+        "ObjectProtocols.test_none_type_slot_wrappers",
         "ObjectProtocols.test_nonzero_precedes_length",
         "ObjectProtocols.test_notimplemented_uses_reflected_operation",
         "ObjectProtocols.test_property_data_descriptor",
@@ -746,6 +751,10 @@
         "ObjectProtocols.test_recursion_limit_below_depth",
         "ObjectProtocols.test_secondary_base_provides_dict",
         "ObjectProtocols.test_short_circuit_retains_operands",
+        "ObjectProtocols.test_slot_named_doc_keeps_member",
+        "ObjectProtocols.test_static_type_attribute_assignment",
+        "ObjectProtocols.test_static_type_doc_is_text",
+        "ObjectProtocols.test_struct_sequences",
         "ObjectProtocols.test_system_exit_arguments",
         "ObjectProtocols.test_truth_empty_list",
         "ObjectProtocols.test_truth_empty_mapping",
@@ -765,10 +774,12 @@
         "ObjectProtocols.test_truth_wide_zero",
         "ObjectProtocols.test_truth_zero",
         "ObjectProtocols.test_type_has_no_abstractmethods",
+        "ObjectProtocols.test_unbound_hash_wrapper_falls_back",
         "ObjectProtocols.test_uncreatable_builtin_types",
         "ObjectProtocols.test_unicode_error_argument_types",
         "ObjectProtocols.test_unicode_of_environment_error",
         "ObjectProtocols.test_weak_proxy_compares_only_proxies",
+        "ObjectProtocols.test_weak_proxy_slot_wrappers",
         "ObjectProtocols.test_weakref_subclass_holding_its_referent"
       ]
     },
@@ -1455,6 +1466,7 @@
         "CompilerDiagnostics.test_byte_escape_message",
         "CompilerDiagnostics.test_codec_path_cookie_decodes_the_whole_string",
         "CompilerDiagnostics.test_cookie_spellings",
+        "CompilerDiagnostics.test_delete_of_nested_scope_variable_has_no_location",
         "CompilerDiagnostics.test_eol_offsets_count_host_bytes",
         "CompilerDiagnostics.test_escape_spans_use_source_encoding_domain",
         "CompilerDiagnostics.test_expected_indented_block_precedes_unexpected_unindent",
@@ -1505,6 +1517,7 @@
         "TextProtocolEdges.test_base_conversion_overflow_and_error_order",
         "TextProtocolEdges.test_base_uses_int_protocol_once",
         "TextProtocolEdges.test_bytearray_decode_argument_types",
+        "TextProtocolEdges.test_bytearray_padding_checks_fill_before_size",
         "TextProtocolEdges.test_bytes_translate_unicode_table_promotes",
         "TextProtocolEdges.test_complex_second_numeric_subtype_float",
         "TextProtocolEdges.test_complex_second_string_before_callback",
@@ -2487,6 +2500,43 @@
         "DescriptorCallAudit.test_unbound_method_subclass_callback_controls_binding",
         "DescriptorCallAudit.test_unbound_method_validates_explicit_owner",
         "DescriptorCallAudit.test_unrelated_owner_keeps_unbound_method_identity"
+      ]
+    },
+    "local.test_numeric_semantics": {
+      "path": "local/test_numeric_semantics.py",
+      "origin": "project-authored",
+      "cases": [
+        "NumericSemantics.test_cmp_coercion_to_long_beyond_double_overflows",
+        "NumericSemantics.test_cmp_nan_against_long_beyond_double_overflows",
+        "NumericSemantics.test_cmp_nan_against_representable_integers_orders_by_type",
+        "NumericSemantics.test_complex_repr_keeps_sixteen_integer_digits",
+        "NumericSemantics.test_complex_str_keeps_twelve_integer_digits",
+        "NumericSemantics.test_float_str_keeps_eleven_integer_digits"
+      ]
+    },
+    "local.test_statement_semantics": {
+      "path": "local/test_statement_semantics.py",
+      "origin": "project-authored",
+      "cases": [
+        "StatementSemantics.test_call_messages_truncate_names",
+        "StatementSemantics.test_code_constructor_messages",
+        "StatementSemantics.test_eval_argument_count_messages",
+        "StatementSemantics.test_exec_binds_through_locals",
+        "StatementSemantics.test_exec_locals_must_be_a_mapping",
+        "StatementSemantics.test_exec_of_code_with_parameters",
+        "StatementSemantics.test_function_code_runs_in_its_own_locals",
+        "StatementSemantics.test_name_lookup_leaves_locals_snapshot_alone",
+        "StatementSemantics.test_name_opcodes_without_locals"
+      ]
+    },
+    "local.test_import_semantics": {
+      "path": "local/test_import_semantics.py",
+      "origin": "project-authored",
+      "cases": [
+        "ImportSemantics.test_missing_dotted_name_reports_the_rest",
+        "ImportSemantics.test_reload_of_builtin_module",
+        "ImportSemantics.test_reload_of_submodule_names_the_component",
+        "ImportSemantics.test_reload_of_unresolvable_module"
       ]
     }
   },

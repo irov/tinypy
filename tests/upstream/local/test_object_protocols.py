@@ -686,6 +686,259 @@ class ObjectProtocols(unittest.TestCase):
         self.assert_message(AttributeError, "Old instance has no attribute '__trunc__'", compile, '1', 'parcel', 'exec', Old())
         self.assert_message(TypeError, "'exceptions.KeyError' object doesn't support item deletion", delete_item)
 
+    def test_slot_named_doc_keeps_member(self):
+        class Slot(object):
+            __slots__ = ('__doc__', 'x')
+
+        self.assertEqual(repr(Slot.__dict__['__doc__']), "<member '__doc__' of 'Slot' objects>")
+        self.assertIs(Slot.__doc__, Slot.__dict__['__doc__'])
+        instance = Slot()
+        instance.__doc__ = 'parcel'
+        self.assertEqual(instance.__doc__, 'parcel')
+
+    def test_static_type_doc_is_text(self):
+        class Meta(type):
+            pass
+
+        self.assertEqual(type.__doc__, "type(object) -> the object's type\ntype(name, bases, dict) -> a new type")
+        self.assertEqual(type(type.__dict__['__doc__']).__name__, 'getset_descriptor')
+        self.assertIs(Meta.__doc__, None)
+        self.assertIs(Meta('Made', (), {}).__doc__, None)
+        for kind in (type(lambda: 0), property, type((lambda: 0).__get__(1)), type(sys), classmethod, staticmethod, super):
+            self.assertTrue(kind.__doc__.startswith(kind.__name__ + '('), kind.__name__)
+        self.assertEqual(repr(object.__doc__), "'The most base type'")
+        self.assertEqual(type(type(len).__doc__).__name__, 'getset_descriptor')
+
+    def test_none_type_slot_wrappers(self):
+        self.assertEqual(None.__repr__(), 'None')
+        self.assertEqual(type(None).__repr__(None), 'None')
+        self.assertEqual(sorted(type(None).__dict__.keys()), ['__doc__', '__hash__', '__repr__'])
+        self.assertEqual(None.__hash__(), hash(None))
+        self.assert_message(TypeError, "descriptor '__hash__' requires a 'NoneType' object but received a 'int'", type(None).__hash__, 1)
+        self.assert_message(TypeError, "descriptor '__repr__' of 'NoneType' object needs an argument", type(None).__repr__)
+
+    def test_function_attribute_wrappers(self):
+        function = lambda: 0
+        kind = type(function)
+
+        self.assertEqual(sorted(name for name in vars(kind) if name in ('__delattr__', '__getattribute__', '__setattr__')), ['__delattr__', '__getattribute__', '__setattr__'])
+        kind.__setattr__(function, 'parcel', 1)
+        self.assertEqual(function.parcel, 1)
+        kind.__delattr__(function, 'parcel')
+        self.assertFalse(hasattr(function, 'parcel'))
+        self.assert_message(TypeError, "descriptor '__setattr__' requires a 'function' object but received a 'int'", kind.__setattr__, 1, 'parcel', 1)
+
+    def test_unbound_hash_wrapper_falls_back(self):
+        Plain = type('Plain', (object,), {'__hash__': int.__hash__})
+        Text = type('Text', (object,), {'__hash__': str.__hash__})
+        Wide = type('Wide', (int,), {'__hash__': str.__hash__})
+        Equal = type('Equal', (object,), {'__hash__': int.__hash__, '__eq__': lambda self, other: True})
+
+        self.assertIsInstance(hash(Plain()), int)
+        self.assertIsInstance(hash(Text()), int)
+        self.assert_message(TypeError, "unhashable type: 'Wide'", hash, Wide(5))
+        self.assert_message(TypeError, "unhashable type: 'Equal'", hash, Equal())
+
+    def test_static_type_attribute_assignment(self):
+        self.assert_message(TypeError, "can't set attributes of built-in/extension type 'int'", setattr, int, '__doc__', 'x')
+        self.assert_message(TypeError, "can't set attributes of built-in/extension type 'int'", delattr, int, '__doc__')
+        self.assert_message(TypeError, "can't set attributes of built-in/extension type 'int'", setattr, int, '__bases__', (object,))
+        self.assert_message(TypeError, "can't set attributes of built-in/extension type 'exceptions.ValueError'", setattr, ValueError, '__name__', 'Q')
+        self.assert_message(TypeError, "can't set int.__bases__", type.__dict__['__bases__'].__set__, int, (object,))
+        self.assert_message(TypeError, "can't set int.__name__", type.__dict__['__name__'].__set__, int, 'x')
+        self.assert_message(TypeError, "can't set int.__module__", type.__dict__['__module__'].__delete__, int)
+        self.assert_message(TypeError, "can't delete Plain.__module__", type.__dict__['__module__'].__delete__, type('Plain', (object,), {}))
+        self.assert_message(AttributeError, "attribute '__doc__' of 'type' objects is not writable", type.__dict__['__doc__'].__set__, int, 'x')
+        view = memoryview('a')
+        self.assertEqual(type(memoryview.__dict__['format']).__name__, 'getset_descriptor')
+        self.assertEqual((view.format, view.itemsize, view.ndim, view.readonly, view.shape, view.strides, view.suboffsets), ('B', 1, 1, True, (1L,), (1L,), None))
+        self.assert_message(AttributeError, "attribute 'format' of 'memoryview' objects is not writable", setattr, view, 'format', 1)
+        self.assert_message(AttributeError, "attribute 'shape' of 'memoryview' objects is not writable", delattr, view, 'shape')
+        self.assert_message(TypeError, "descriptor 'format' for 'memoryview' objects doesn't apply to 'int' object", memoryview.__dict__['format'].__get__, 1, memoryview)
+
+    def test_classic_instance_protocol_lookups(self):
+        log = []
+
+        class Dynamic:
+            def __getattr__(self, name):
+                log.append(name)
+                if name == '__getitem__':
+                    return lambda index: [10, 20][index]
+                if name == '__len__':
+                    return lambda: 2
+                raise AttributeError(name)
+
+        class Negative:
+            def __len__(self):
+                return -1
+            def __getitem__(self, index):
+                return index
+
+        self.assertEqual(list(Dynamic()), [10, 20])
+        self.assertEqual(log, ['__iter__', '__getitem__', '__getitem__', '__len__', '__getitem__', '__getitem__', '__getitem__'])
+        del log[:]
+        self.assertEqual(len(Dynamic()), 2)
+        self.assertEqual(20 in Dynamic(), True)
+        self.assertEqual(log, ['__len__', '__contains__', '__iter__', '__getitem__', '__getitem__', '__getitem__', '__getitem__'])
+        del log[:]
+        self.assertEqual(list(reversed(Dynamic())), [20, 10])
+        self.assertEqual(log, ['__reversed__', '__getitem__', '__len__', '__len__', '__getitem__', '__getitem__'])
+        self.assert_message(ValueError, '__len__() should return >= 0', reversed, Negative())
+        self.assert_message(ValueError, '__len__() should return >= 0', list, type('Wide', (object,), {'__len__': lambda self: -1, '__iter__': lambda self: iter([1])})())
+        self.assert_message(OverflowError, 'long int too large to convert to int', list, type('Huge', (object,), {'__length_hint__': lambda self: 2 ** 70, '__iter__': lambda self: iter([1])})())
+
+    def test_struct_sequences(self):
+        info = sys.version_info
+        kind = type(info)
+
+        self.assertEqual((kind.__name__, kind.__module__, repr(kind)), ('version_info', 'sys', "<type 'sys.version_info'>"))
+        self.assertEqual(kind.__mro__, (kind, object))
+        self.assertFalse(isinstance(info, tuple))
+        self.assertEqual(repr(info), "sys.version_info(major=2, minor=7, micro=18, releaselevel='final', serial=0)")
+        self.assertEqual(str(info), repr(info))
+        self.assertEqual((kind.n_fields, kind.n_sequence_fields, kind.n_unnamed_fields), (5, 5, 0))
+        self.assertEqual(sorted(name for name in kind.__dict__ if not name.startswith('__')), ['major', 'micro', 'minor', 'n_fields', 'n_sequence_fields', 'n_unnamed_fields', 'releaselevel', 'serial'])
+        self.assertEqual(repr(kind.__dict__['major']), "<member 'major' of 'sys.version_info' objects>")
+        self.assertEqual(kind.__doc__, 'sys.version_info\n\nVersion information as a named tuple.')
+        major, minor, micro, level, serial = info
+        self.assertEqual((major, minor, micro, level, serial), (info[0], info.minor, info[-3], info.releaselevel, info[4]))
+        self.assertEqual((info[:2], info[1:3], info[::2], len(info), list(info), tuple(info)), ((2, 7), (7, 18), (2, 18, 0), 5, [2, 7, 18, 'final', 0], (2, 7, 18, 'final', 0)))
+        self.assertEqual((info == (2, 7, 18, 'final', 0), info >= (2, 7), info < (3,), (3,) > info, info == 1, info != 1), (True, True, True, True, False, True))
+        self.assertEqual((hash(info), 7 in info, info + (1,), info * 2, 2 * info), (hash((2, 7, 18, 'final', 0)), True, (2, 7, 18, 'final', 0, 1), (2, 7, 18, 'final', 0) * 2, (2, 7, 18, 'final', 0) * 2))
+        self.assertEqual(info.__reduce__(), (kind, ((2, 7, 18, 'final', 0), {})))
+        self.assert_message(TypeError, 'structseq index must be integer', info.__getitem__, 'major')
+        self.assert_message(IndexError, 'tuple index out of range', info.__getitem__, 5)
+        self.assert_message(TypeError, 'readonly attribute', setattr, info, 'major', 3)
+        self.assert_message(AttributeError, "'sys.version_info' object has no attribute 'parcel'", setattr, info, 'parcel', 3)
+        self.assert_message(TypeError, "cannot create 'sys.version_info' instances", kind, (1, 2, 3, 'a', 0))
+        self.assert_message(TypeError, "can't set attributes of built-in/extension type 'sys.version_info'", setattr, kind, 'n_fields', 1)
+        self.assert_message(TypeError, "descriptor 'major' for 'sys.version_info' objects doesn't apply to 'tuple' object", kind.major.__get__, (1, 2, 3, 4, 5), kind)
+        self.assertEqual(repr(sys.long_info), 'sys.long_info(bits_per_digit=30, sizeof_digit=4)')
+        self.assertEqual((type(sys.long_info).__name__, sys.long_info.bits_per_digit, sys.long_info.sizeof_digit, len(sys.long_info), sys.long_info == (30, 4)), ('long_info', 30, 4, 2, True))
+        self.assertEqual(type(sys.float_info).__name__, 'float_info')
+        self.assertTrue(repr(sys.float_info).startswith('sys.float_info(max='))
+        self.assertEqual((sys.float_info.max, sys.float_info[8], sys.float_info.n_fields), (sys.float_info[0], sys.float_info.epsilon, 11))
+
+    def test_constructor_and_builtin_messages(self):
+        method = type((lambda: 0).__get__(1))
+
+        def print_call(source):
+            return eval(compile('from __future__ import print_function\n' + source, 'parcel', 'exec'))
+
+        self.assert_message(TypeError, 'instancemethod does not take keyword arguments', lambda: method(len, 1, int, parcel=1))
+        self.assert_message(TypeError, 'instancemethod expected at least 2 arguments, got 1', method, len)
+        self.assert_message(TypeError, 'instancemethod expected at most 3 arguments, got 4', method, len, 1, int, 2)
+        self.assert_message(TypeError, 'first argument must be callable', method, 1, 1)
+        self.assert_message(TypeError, 'unbound methods must have non-NULL im_class', method, len, None)
+        self.assert_message(TypeError, 'instancemethod expected at least 2 arguments, got 1', method.__new__, method, len)
+        self.assert_message(TypeError, 'instancemethod.__new__(int): int is not a subtype of instancemethod', method.__new__, int, len, 1)
+        self.assert_message(TypeError, 'exceptions.BaseException.__new__(int): int is not a subtype of exceptions.BaseException', BaseException.__new__, int)
+        self.assert_message(TypeError, 'exceptions.ValueError.__new__(exceptions.BaseException): exceptions.BaseException is not a subtype of exceptions.ValueError', ValueError.__new__, BaseException)
+        self.assert_message(TypeError, 'exceptions.BaseException.__new__(): not enough arguments', BaseException.__new__)
+        self.assert_message(TypeError, 'int.__new__(bool) is not safe, use bool.__new__()', int.__new__, bool, 5)
+        self.assert_message(TypeError, 'type.__new__(int): int is not a subtype of type', type.__new__, int, 'X', (), {})
+        self.assert_message(TypeError, 'type.__new__(): not enough arguments', type.__new__)
+        self.assert_message(TypeError, 'basestring.__new__(str) is not safe, use str.__new__()', basestring.__new__, str, 'a')
+        self.assert_message(TypeError, 'basestring.__new__(int): int is not a subtype of basestring', basestring.__new__, int)
+        self.assert_message(TypeError, 'The basestring type cannot be instantiated', basestring.__new__, basestring)
+        self.assert_message(TypeError, 'property() takes at most 4 arguments (5 given)', property, None, None, None, None, None)
+        self.assert_message(TypeError, 'property() takes at most 4 arguments (5 given)', lambda: property(None, None, None, None, doc=1))
+        self.assert_message(TypeError, "'bogus' is an invalid keyword argument for this function", lambda: property(bogus=1))
+        self.assert_message(TypeError, "Argument given by name ('fget') and position (1)", lambda: property(None, fget=None))
+        self.assert_message(TypeError, "'foo' is an invalid keyword argument for this function", print_call, "print('a', foo=1)")
+        self.assert_message(TypeError, 'sep must be None, str or unicode, not int', print_call, "print('a', sep=1)")
+        self.assert_message(TypeError, 'end must be None, str or unicode, not list', print_call, "print('a', end=[])")
+        try:
+            type('Made', (object, ValueError), {})
+        except TypeError as error:
+            prefix = 'Cannot create a consistent method resolution\norder (MRO) for bases '
+            self.assertTrue(str(error).startswith(prefix))
+            self.assertEqual(sorted(str(error)[len(prefix):].split(', ')), ['ValueError', 'object'])
+        else:
+            self.fail('an inconsistent MRO must be rejected')
+
+    def test_weak_proxy_slot_wrappers(self):
+        class Sequence(object):
+            def __init__(self):
+                self.items = [1, 2, 3]
+            def __len__(self):
+                return len(self.items)
+            def __getitem__(self, key):
+                return self.items[key]
+            def __setitem__(self, key, value):
+                self.items[key] = value
+            def __delitem__(self, key):
+                del self.items[key]
+            def __contains__(self, item):
+                return item in self.items
+            def __iter__(self):
+                return iter(self.items)
+            def __call__(self, *args):
+                return args
+
+        class Counter(object):
+            def __init__(self):
+                self.count = 0
+            def __iter__(self):
+                return self
+            def next(self):
+                if self.count:
+                    raise StopIteration
+                self.count += 1
+                return 'parcel'
+
+        for name in ('__contains__', '__delitem__', '__delslice__', '__getitem__', '__getslice__', '__iter__', '__len__', '__setitem__', '__setslice__', 'next'):
+            self.assertIn(name, _weakref.ProxyType.__dict__, name)
+            self.assertIn(name, _weakref.CallableProxyType.__dict__, name)
+        self.assertNotIn('__call__', _weakref.ProxyType.__dict__)
+        self.assertEqual(repr(_weakref.CallableProxyType.__dict__['__call__']), "<slot wrapper '__call__' of 'weakcallableproxy' objects>")
+        sequence = Sequence()
+        proxy = _weakref.proxy(sequence)
+        kind = type(proxy)
+        self.assertIs(kind, _weakref.CallableProxyType)
+        self.assertEqual((kind.__len__(proxy), kind.__getitem__(proxy, 1), kind.__contains__(proxy, 3), list(kind.__iter__(proxy)), kind.__call__(proxy, 1, 2)), (3, 2, True, [1, 2, 3], (1, 2)))
+        kind.__setitem__(proxy, 0, 9)
+        kind.__delitem__(proxy, 2)
+        self.assertEqual((sequence.items, kind.__getslice__(proxy, 0, 1)), ([9, 2], [9]))
+        counter = Counter()
+        counter_proxy = _weakref.proxy(counter)
+        self.assertEqual(_weakref.ProxyType.next(counter_proxy), 'parcel')
+        self.assertRaises(StopIteration, _weakref.ProxyType.next, counter_proxy)
+        self.assert_message(TypeError, "descriptor '__len__' requires a 'weakproxy' object but received a 'list'", _weakref.ProxyType.__len__, [])
+
+    def test_classic_hook_slots_snapshot(self):
+        class Base:
+            pass
+
+        class Early(Base):
+            pass
+
+        Base.__setattr__ = lambda self, name, value: self.__dict__.__setitem__('set:' + name, value)
+        Base.__getattr__ = lambda self, name: ('get', name)
+        Base.__delattr__ = lambda self, name: self.__dict__.__setitem__('del:' + name, 1)
+
+        class Late(Base):
+            pass
+
+        def exercise(kind):
+            instance = kind()
+            instance.parcel = 1
+            try:
+                value = instance.absent
+            except AttributeError:
+                value = 'AttributeError'
+            del instance.parcel
+            return sorted(instance.__dict__.items()), value
+
+        hooked = ([('del:parcel', 1), ('set:parcel', 1)], ('get', 'absent'))
+        self.assertEqual((exercise(Base), exercise(Early), exercise(Late)), (hooked, ([], 'AttributeError'), hooked))
+        Early.__bases__ = (Base,)
+        self.assertEqual(exercise(Early), hooked)
+        Early.__getattr__ = lambda self, name: 'own'
+        self.assertEqual(Early().absent, 'own')
+        del Early.__getattr__
+        self.assert_message(AttributeError, "Early instance has no attribute 'absent'", getattr, Early(), 'absent')
+
     def test_filter_text_returns_new_string(self):
         text = 'abc'
         self.assertIsNot(filter(lambda character: True, text), text)

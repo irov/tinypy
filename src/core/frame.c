@@ -427,20 +427,17 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
     frame->code = code;
     frame->builtins = builtins;
     frame->globals = globals;
-    if (locals != NULL) {
-        frame->locals = locals;
+    /* PyFrame_New decides the locals from the code flags alone: a function
+       code object never runs in the mapping its caller passes. */
+    if ((TINYPY_CODE_FLAGS(code) & (TINYPY_CODE_NEW_LOCALS | TINYPY_CODE_OPTIMIZED)) == (TINYPY_CODE_NEW_LOCALS | TINYPY_CODE_OPTIMIZED)) {
+        frame->locals = NULL;
     }
-    else if (function_frame != 0 && (TINYPY_CODE_FLAGS(code) & TINYPY_CODE_NEW_LOCALS) != 0) {
-        if ((TINYPY_CODE_FLAGS(code) & TINYPY_CODE_OPTIMIZED) != 0) {
-            frame->locals = NULL;
-        }
-        else {
-            frame->locals = tinypy_dict_new(vm);
-            owns_locals = 1;
-        }
+    else if ((TINYPY_CODE_FLAGS(code) & TINYPY_CODE_NEW_LOCALS) != 0) {
+        frame->locals = tinypy_dict_new(vm);
+        owns_locals = 1;
     }
     else {
-        frame->locals = globals;
+        frame->locals = locals != NULL ? locals : globals;
     }
     frame->trace = NULL;
     frame->handled_state_saved = TINYPY_FALSE;
