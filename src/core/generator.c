@@ -14,13 +14,38 @@ tinypy_value_t *tinypy_internal_generator_from_frame(tinypy_value_t *frame) {
     return &generator->base;
 }
 //////////////////////////////////////////////////////////////////////////
+/* gen_dealloc leaves a suspended frame to the cycle collector: its value
+   stack can hold the traceback of a handled exception, which refers back to
+   the frame. Only the generator resumes the frame, so the stack goes with
+   the generator. */
 void tinypy_internal_generator_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_generator_object_t *generator = TINYPY_GENERATOR_OBJECT(value);
+
+    if (generator->frame != NULL) {
+        tinypy_internal_frame_release_stack(TINYPY_FRAME_OBJECT(generator->frame), visit, user_data);
+    }
+    tinypy_internal_generator_traverse_references(value, visit, user_data);
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_generator_traverse_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_generator_object_t *generator = TINYPY_GENERATOR_OBJECT(value);
 
     if (generator->frame != NULL) {
         visit(generator->frame, user_data);
     }
     visit(generator->code, user_data);
+}
+//////////////////////////////////////////////////////////////////////////
+/* gen_send_ex: a frame that cannot resume is detached and releases its
+   locals once the generator no longer runs, so finalizers that re-enter
+   the generator find it finished. */
+static void __tinypy_generator_finish(tinypy_generator_object_t *generator) {
+    tinypy_value_t *frame = generator->frame;
+
+    generator->finished = 1;
+    generator->frame = NULL;
+    tinypy_internal_frame_clear_local_slots(TINYPY_FRAME_OBJECT(frame));
+    TINYPY_DECREF(frame);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_generator_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -52,9 +77,7 @@ tinypy_value_t *tinypy_generator_send(tinypy_value_t *generator_value, tinypy_va
     if (yielded != 0) {
         return result;
     }
-    generator->finished = 1;
-    TINYPY_DECREF(generator->frame);
-    generator->frame = NULL;
+    __tinypy_generator_finish(generator);
     if (result != NULL) {
         TINYPY_DECREF(result);
         return NULL;
@@ -92,9 +115,7 @@ static tinypy_value_t *__tinypy_generator_throw(tinypy_value_t *generator_value,
     if (yielded != 0) {
         return result;
     }
-    generator->finished = 1;
-    TINYPY_DECREF(generator->frame);
-    generator->frame = NULL;
+    __tinypy_generator_finish(generator);
     if (result != NULL) {
         TINYPY_DECREF(result);
         return NULL;
@@ -470,7 +491,7 @@ void tinypy_internal_initialize_generator_types(tinypy_vm_t *vm) {
         if (index == (size_t)TINYPY_ITERATOR_TYPE_LIST_REVERSE) {
             tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_length_hint_key, __tinypy_reversed_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
-        else if (index != (size_t)TINYPY_ITERATOR_TYPE_CALLABLE) {
+        else if (index != (size_t)TINYPY_ITERATOR_TYPE_CALLABLE && index != (size_t)TINYPY_ITERATOR_TYPE_FORMATTER && index != (size_t)TINYPY_ITERATOR_TYPE_FIELD_NAME) {
             tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_length_hint_key, tinypy_internal_iterator_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
     }

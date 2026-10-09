@@ -50,6 +50,16 @@ tinypy_value_t *tinypy_internal_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A lookup that fails with a pending error, such as the recursion limit,
+   reports it through out_error too, unless that already holds one. */
+static tinypy_value_t *__tinypy_class_lookup_key_checked(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key, tinypy_error_t **out_error) {
+    tinypy_value_t *attribute = tinypy_internal_class_lookup_key(vm, class_value, key);
+    if (attribute == NULL && out_error != NULL && *out_error == NULL) {
+        tinypy_internal_exception_make_diagnostic(vm, out_error);
+    }
+    return attribute;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base) {
     tinypy_value_t *const *iterator;
     tinypy_value_t *const *iterator_end;
@@ -336,6 +346,40 @@ tinypy_value_t *tinypy_old_instance_new(tinypy_value_t *class_value) {
     return &instance->base;
 }
 //////////////////////////////////////////////////////////////////////////
+/* instance_new: instance(class[, dict]) makes a classic instance without
+   calling __init__, using the given dictionary itself. */
+tinypy_value_t *tinypy_internal_old_instance_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = type->vm;
+    size_t count = TINYPY_TUPLE_SIZE(args);
+
+    (void)kwargs;
+    TINYPY_CLEAR_ERROR(out_error);
+    if (count < 1U || count > 2U) {
+        tinypy_internal_make_arity_error(vm, "instance", 8U, count, 1U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error);
+        return NULL;
+    }
+    tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_CLASS) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("instance() argument 1 must be classobj, not "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(class_value),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    tinypy_value_t *dict = count == 2U ? TINYPY_TUPLE_GET(args, 1U) : NULL;
+    if (dict != NULL && TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_DICT) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "instance() second arg must be dictionary or None", out_error);
+        return NULL;
+    }
+    tinypy_value_t *instance = tinypy_old_instance_new(class_value);
+    if (dict != NULL && TINYPY_VALUE_KIND(dict) == TINYPY_VALUE_DICT) {
+        (void)tinypy_internal_old_instance_set_dict(instance, dict, NULL);
+    }
+    return instance;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_old_instance_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(value);
     visit(instance->class_object, user_data);
@@ -369,7 +413,7 @@ tinypy_value_t *tinypy_internal_class_get_attribute(tinypy_value_t *class_value,
     if (special != NULL) {
         return special;
     }
-    tinypy_value_t *attribute = tinypy_internal_class_lookup_key(vm, class_value, name);
+    tinypy_value_t *attribute = __tinypy_class_lookup_key_checked(vm, class_value, name, out_error);
     tinypy_value_t *return_value_1 = attribute != NULL ? __tinypy_class_bind(class_value, attribute, NULL, out_error) : NULL;
     return return_value_1;
 }
@@ -389,7 +433,7 @@ static tinypy_value_t *__tinypy_old_instance_get_direct(tinypy_vm_t *vm, tinypy_
     if (attribute != NULL) {
         return TINYPY_RET(attribute);
     }
-    attribute = tinypy_internal_class_lookup_key(vm, instance->class_object, name);
+    attribute = __tinypy_class_lookup_key_checked(vm, instance->class_object, name, out_error);
     if (attribute == NULL) {
         return NULL;
     }
@@ -409,7 +453,7 @@ static tinypy_value_t *__tinypy_old_instance_get_attribute(tinypy_value_t *insta
     if (result != NULL || TINYPY_NAME_EQ(name, vm->internal_special_getattr_key) != 0) {
         return result;
     }
-    tinypy_value_t *hook = tinypy_internal_class_lookup_key(vm, instance->class_object, vm->internal_special_getattr_key);
+    tinypy_value_t *hook = __tinypy_class_lookup_key_checked(vm, instance->class_object, vm->internal_special_getattr_key, out_error);
 
     if (hook == NULL) {
         return NULL;
@@ -579,9 +623,13 @@ tinypy_bool_t tinypy_internal_old_instance_delete_attribute(tinypy_value_t *valu
 tinypy_value_t *tinypy_internal_class_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     tinypy_value_t *instance = tinypy_old_instance_new(callable);
-    tinypy_value_t *initializer_attribute = tinypy_internal_class_lookup_key(vm, callable, vm->internal_special_init_key);
+    tinypy_value_t *initializer_attribute = __tinypy_class_lookup_key_checked(vm, callable, vm->internal_special_init_key, out_error);
 
     if (initializer_attribute == NULL) {
+        if (tinypy_vm_has_error(vm) != 0) {
+            TINYPY_DECREF(instance);
+            return NULL;
+        }
         if (TINYPY_TUPLE_SIZE(args) != 0U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U)) {
             TINYPY_DECREF(instance);
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "this constructor takes no arguments", out_error);
@@ -634,9 +682,14 @@ static tinypy_value_t *__tinypy_class_representation_method(tinypy_value_t *func
     return representation;
 }
 //////////////////////////////////////////////////////////////////////////
-/* classobj exposes class_repr and class_str as __repr__ and __str__. */
+/* classobj exposes class_repr and class_str as __repr__ and __str__;
+   instance has instance_new. */
 void tinypy_internal_initialize_class_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_CLASS];
+    tinypy_type_t *instance_type = &vm->types[TINYPY_VALUE_OLD_INSTANCE];
+
+    instance_type->create = tinypy_internal_old_instance_create;
+    tinypy_internal_constructor_add_builtin_new(instance_type);
 
     tinypy_internal_constructor_add_builtin_new(type);
     tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_class_representation_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

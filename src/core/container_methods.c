@@ -399,7 +399,7 @@ static tinypy_value_t *__tinypy_sequence_index_method(tinypy_value_t *function, 
     tinypy_bool_t condition = count >= 2U;
     if (condition != 0) {
         tinypy_value_t *item_2 = items[1U];
-        condition = tinypy_internal_index_as_i64(item_2, &start, TINYPY_TRUE, out_error) == 0;
+        condition = tinypy_internal_slice_index_not_none(item_2, &start, out_error) == 0;
     }
     if (condition) {
         return NULL;
@@ -407,7 +407,7 @@ static tinypy_value_t *__tinypy_sequence_index_method(tinypy_value_t *function, 
     tinypy_bool_t condition_2 = count == 3U;
     if (condition_2 != 0) {
         tinypy_value_t *item_2 = items[2U];
-        condition_2 = tinypy_internal_index_as_i64(item_2, &stop, TINYPY_TRUE, out_error) == 0;
+        condition_2 = tinypy_internal_slice_index_not_none(item_2, &stop, out_error) == 0;
     }
     if (condition_2) {
         return NULL;
@@ -1834,7 +1834,8 @@ static tinypy_value_t *__tinypy_container_binary_method(tinypy_value_t *function
     tinypy_bool_t sequence_repeat = operation == 2 && owner != NULL
         && (owner->layout_kind == TINYPY_VALUE_LIST || owner->layout_kind == TINYPY_VALUE_TUPLE
             || owner->layout_kind == TINYPY_VALUE_STRING || owner->layout_kind == TINYPY_VALUE_UNICODE);
-    tinypy_arity_style_e style = sequence_repeat != TINYPY_FALSE ? TINYPY_ARITY_STYLE_UNPACK : TINYPY_ARITY_STYLE_WRAPPER;
+    /* wrap_ternaryfunc unpacks its arguments like sq_repeat's wrapper. */
+    tinypy_arity_style_e style = sequence_repeat != TINYPY_FALSE || operation == 8 ? TINYPY_ARITY_STYLE_UNPACK : TINYPY_ARITY_STYLE_WRAPPER;
 
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, maximum, style, out_error) == TINYPY_FALSE) {
         return NULL;
@@ -1907,15 +1908,24 @@ static tinypy_value_t *__tinypy_container_compare_method(tinypy_value_t *functio
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_compare_operation_e operation = (tinypy_compare_operation_e)(intptr_t)user_data;
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
     tinypy_bool_t compatible = left_kind == right_kind ? TINYPY_TRUE : TINYPY_FALSE;
 
+    /* float_richcompare leaves complex operands, string_richcompare unicode
+       ones and dict_richcompare any ordering to the other operand. */
     if (left_kind == TINYPY_VALUE_BOOL || left_kind == TINYPY_VALUE_INTEGER || left_kind == TINYPY_VALUE_LONG || left_kind == TINYPY_VALUE_FLOAT || left_kind == TINYPY_VALUE_COMPLEX) {
-        compatible = right_kind == TINYPY_VALUE_BOOL || right_kind == TINYPY_VALUE_INTEGER || right_kind == TINYPY_VALUE_LONG || right_kind == TINYPY_VALUE_FLOAT || right_kind == TINYPY_VALUE_COMPLEX ? TINYPY_TRUE : TINYPY_FALSE;
+        compatible = right_kind == TINYPY_VALUE_BOOL || right_kind == TINYPY_VALUE_INTEGER || right_kind == TINYPY_VALUE_LONG || right_kind == TINYPY_VALUE_FLOAT || (right_kind == TINYPY_VALUE_COMPLEX && left_kind != TINYPY_VALUE_FLOAT) ? TINYPY_TRUE : TINYPY_FALSE;
     }
-    else if (left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE) {
-        compatible = right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE || (left_kind == TINYPY_VALUE_UNICODE && right_kind == TINYPY_VALUE_BUFFER) ? TINYPY_TRUE : TINYPY_FALSE;
+    else if (left_kind == TINYPY_VALUE_STRING) {
+        compatible = right_kind == TINYPY_VALUE_STRING ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    else if (left_kind == TINYPY_VALUE_UNICODE) {
+        compatible = right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE || right_kind == TINYPY_VALUE_BUFFER ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    else if (left_kind == TINYPY_VALUE_DICT) {
+        compatible = right_kind == TINYPY_VALUE_DICT && (operation == TINYPY_COMPARE_EQUAL || operation == TINYPY_COMPARE_NOT_EQUAL) ? TINYPY_TRUE : TINYPY_FALSE;
     }
     else if (left_kind == TINYPY_VALUE_SET || left_kind == TINYPY_VALUE_FROZENSET) {
         compatible = right_kind == TINYPY_VALUE_SET || right_kind == TINYPY_VALUE_FROZENSET ? TINYPY_TRUE : TINYPY_FALSE;
@@ -1930,7 +1940,7 @@ static tinypy_value_t *__tinypy_container_compare_method(tinypy_value_t *functio
         tinypy_value_t *not_implemented = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return not_implemented;
     }
-    tinypy_value_t *return_value_1 = tinypy_internal_compare_builtin_value(left, right, (tinypy_compare_operation_e)(intptr_t)user_data, out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_compare_builtin_value(left, right, operation, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1951,7 +1961,7 @@ static tinypy_value_t *__tinypy_container_cmp_method(tinypy_value_t *function, t
     tinypy_bool_t accepted = expected == TINYPY_VALUE_DICT ? right_kind == TINYPY_VALUE_DICT
         : right_kind == TINYPY_VALUE_SET || right_kind == TINYPY_VALUE_FROZENSET;
     if (accepted == TINYPY_FALSE) {
-        const tinypy_type_t *owner = &vm->types[expected];
+        const tinypy_type_t *owner = left->type;
         tinypy_message_part_t parts[] = {
             {owner->name, owner->name_size},
             TINYPY_MESSAGE_PART_LITERAL(".__cmp__(x,y) requires y to be a '"),
@@ -2121,16 +2131,34 @@ static tinypy_value_t *__tinypy_container_format_method(tinypy_value_t *function
     }
     tinypy_value_t *spec = TINYPY_TUPLE_GET(args, 1U);
     tinypy_value_type_e spec_kind = TINYPY_VALUE_KIND(spec);
-    if (spec_kind != TINYPY_VALUE_STRING && spec_kind != TINYPY_VALUE_UNICODE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, numeric != TINYPY_FALSE ? "__format__ requires str or unicode" : "format specification must be a string or unicode", out_error);
+    if (spec_kind != TINYPY_VALUE_STRING && spec_kind != TINYPY_VALUE_UNICODE && numeric != TINYPY_FALSE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__format__ requires str or unicode", out_error);
         return NULL;
     }
-    tinypy_value_t *converted = numeric != TINYPY_FALSE && spec_kind == TINYPY_VALUE_UNICODE ? tinypy_object_str(spec, out_error) : NULL;
-    if (numeric != TINYPY_FALSE && spec_kind == TINYPY_VALUE_UNICODE && converted == NULL) {
+    if (spec_kind != TINYPY_VALUE_STRING && spec_kind != TINYPY_VALUE_UNICODE) {
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("__format__ arg must be str or unicode, not "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(spec)
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    /* Only unicode.__format__ reads a unicode spec as unicode; the others
+       take its str(). An empty spec formats as str() or unicode() of the
+       value, which honours an overriding subtype. */
+    tinypy_value_t *converted = kind != TINYPY_VALUE_UNICODE && spec_kind == TINYPY_VALUE_UNICODE ? tinypy_object_str(spec, out_error) : NULL;
+    if (kind != TINYPY_VALUE_UNICODE && spec_kind == TINYPY_VALUE_UNICODE && converted == NULL) {
         return NULL;
     }
     tinypy_value_t *format_spec = converted != NULL ? converted : spec;
-    tinypy_value_t *result = tinypy_internal_string_format_builtin_value(vm, self, 0, TINYPY_TEXT_BYTES(format_spec), TINYPY_TEXT_BYTE_SIZE(format_spec), numeric == TINYPY_FALSE && spec_kind == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE, &result_unicode, out_error);
+    tinypy_value_t *result;
+    if (TINYPY_TEXT_BYTE_SIZE(format_spec) == 0U) {
+        result = kind == TINYPY_VALUE_UNICODE ? tinypy_internal_object_unicode(self, out_error) : tinypy_object_str(self, out_error);
+    }
+    else {
+        result = tinypy_internal_string_format_builtin_value(vm, self, 0, TINYPY_TEXT_BYTES(format_spec), TINYPY_TEXT_BYTE_SIZE(format_spec), kind == TINYPY_VALUE_UNICODE && spec_kind == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE, &result_unicode, out_error);
+    }
     if (converted != NULL) {
         TINYPY_DECREF(converted);
     }

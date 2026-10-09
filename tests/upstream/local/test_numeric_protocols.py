@@ -162,6 +162,69 @@ class NumericDispatch(unittest.TestCase):
             self.assertEqual(float.fromhex(text), expected)
             self.assertEqual(float.fromhex(u'-' + text), -expected)
 
+    def test_new_style_coercion_of_unchecked_operands(self):
+        log = []
+
+        class Pair(Exception):
+            def __coerce__(self, other):
+                log.append(type(other).__name__)
+                return (1, 2.5)
+        Declining = type('Declining', (object,), {'__coerce__': lambda self, other: log.append('declining')})
+        self.assertEqual((divmod(IOError(1, 2), Pair()), IOError() - Pair()), ((2.0, 0.5), 1.5))
+        self.assertEqual(_error(lambda: Declining() + 5), ('TypeError', ("unsupported operand type(s) for +: 'Declining' and 'int'",)))
+        self.assertEqual(_error(lambda: [] + Declining()), ('TypeError', ("__coerce__ didn't return a 2-tuple",)))
+        self.assertEqual(log, ['IOError', 'IOError', 'declining'])
+
+    def test_coerce_builtin_uses_number_coercion(self):
+        log = []
+
+        class Lookup:
+            def __getattr__(self, name):
+                log.append(name)
+                return 1
+
+        class Swapping:
+            def __coerce__(self, other):
+                return (other, 'swapped')
+        Malformed = type('Malformed', (object,), {'__coerce__': lambda self, other: 'x'})
+        self.assertEqual(_error(coerce, Malformed(), 1), ('TypeError', ("__coerce__ didn't return a 2-tuple",)))
+        self.assertEqual(_error(coerce, Lookup(), 1), ('TypeError', ("'int' object is not callable",)))
+        self.assertEqual(log, ['__coerce__'])
+        self.assertEqual((coerce(1, 2.5), coerce(True, 2L), coerce([], []), coerce(1, Swapping())), ((1.0, 2.5), (1L, 2L), ([], []), ('swapped', 1)))
+        self.assertEqual(_error(coerce, 'a', 'b'), ('TypeError', ('number coercion failed',)))
+
+    def test_ternary_slot_wrapper_arity(self):
+        for method in ((2).__pow__, (2.0).__rpow__, (1j).__pow__, (2L).__rpow__):
+            self.assertEqual(_error(method), ('TypeError', (' expected at least 1 arguments, got 0',)))
+            self.assertEqual(_error(method, 1, 2, 3), ('TypeError', (' expected at most 2 arguments, got 3',)))
+
+    def test_truth_result_validation(self):
+        class Classic:
+            def __init__(self, result):
+                self.result = result
+
+            def __nonzero__(self):
+                return self.result
+
+        class ClassicLength:
+            def __init__(self, result):
+                self.result = result
+
+            def __len__(self):
+                return self.result
+        Integer = type('Integer', (int,), {})
+        Length = type('Length', (object,), {'__len__': lambda self: -1})
+
+        def truth(result):
+            return type('Truth', (object,), {'__nonzero__': lambda self: result})()
+        for result in ('x', Integer(1), 1L):
+            self.assertEqual(_error(bool, truth(result)), ('TypeError', ('__nonzero__ should return bool or int, returned %s' % type(result).__name__,)))
+        self.assertEqual((bool(truth(True)), bool(truth(0)), bool(Classic(Integer(1))), bool(ClassicLength(0))), (True, False, True, False))
+        for value in (Classic(1L), ClassicLength('x')):
+            self.assertEqual(_error(bool, value), ('TypeError', ('__nonzero__ should return an int',)))
+        self.assertEqual(_error(bool, ClassicLength(-1)), ('ValueError', ('__nonzero__ should return >= 0',)))
+        self.assertEqual(_error(bool, Length()), ('ValueError', ('__len__() should return >= 0',)))
+
 
 def _inplace_power(left, right):
     left **= right
@@ -198,6 +261,121 @@ class NumericOrdering(unittest.TestCase):
         self.assertTrue(Mapping(a=1) == Mapping(a=1))
         Items = type('Items', (set,), methods)
         self.assertEqual(_error(lambda: Items([1]) == Items([1])), ('TypeError', ('cannot compare sets using cmp()',)))
+
+    def test_comparison_coerces_new_style_operands(self):
+        log = []
+        Declining = type('Declining', (object,), {'__coerce__': lambda self, other: log.append(type(other).__name__)})
+        Refusing = type('Refusing', (Exception,), {'__coerce__': lambda self, other: log.append(type(other).__name__) or NotImplemented})
+        Items = type('Items', (list,), {'__coerce__': lambda self, other: log.append(type(other).__name__)})
+        for operation in (lambda: Declining() == 1, lambda: cmp(Declining(), 2), lambda: 1j < Declining(), lambda: max(Items([1]), 2.5)):
+            self.assertEqual(_error(operation), ('TypeError', ("__coerce__ didn't return a 2-tuple",)))
+        self.assertEqual(('x' == Refusing(), Items([1]) == [1]), (False, True))
+        self.assertEqual(log, ['int', 'int', 'complex', 'float', 'str'])
+        Pairing = type('Pairing', (object,), {'__coerce__': lambda self, other: (3, other)})
+        self.assertEqual((Pairing() < 5, Pairing() == 3, cmp(Pairing(), 3), Pairing() < 5L, Pairing() < 5.0), (True, True, 0, False, False))
+
+        class CoerceTo(object):
+            def __coerce__(self, other):
+                return 42, other
+
+        class Classic:
+            def __cmp__(self, other):
+                log.append(other)
+                return 0
+        del log[:]
+        self.assertEqual(cmp(Classic(), CoerceTo()), 0)
+        self.assertEqual(log, [42])
+
+    def test_rich_comparison_slots_decline_foreign_operands(self):
+        for method, operand in (((1.5).__eq__, 1j), ((1.5).__lt__, 1j), ((1.5).__ne__, complex(0, float('nan'))), ('a'.__eq__, u'a'), ('a'.__lt__, u'b'),
+                                ('\xe9'.__ge__, u'x'), ({}.__lt__, {}), ({1: 2}.__gt__, {}), ({}.__eq__, [])):
+            self.assertIs(method(operand), NotImplemented)
+        self.assertEqual((u'a'.__eq__('a'), {}.__eq__({}), (1.5).__eq__(1L)), (True, True, False))
+        log = []
+        Mapping = type('Mapping', (dict,), {'__cmp__': lambda self, other: log.append('cmp') or 0})
+        self.assertEqual((Mapping() >= Mapping(), Mapping() < {}), (True, False))
+        self.assertEqual(log, ['cmp', 'cmp'])
+
+
+class NumericConversions(unittest.TestCase):
+    def test_integer_conversion_falls_back_to_trunc_attribute(self):
+        log = []
+
+        class Lookup(object):
+            def __getattr__(self, name):
+                log.append(name)
+                return lambda: 7
+
+        class Truncating:
+            def __trunc__(self):
+                return self
+        Text = type('Text', (str,), {'__getattr__': lambda self, name: lambda: 5})
+        self.assertEqual((int(Lookup()), long(Lookup()), int(Text('12')), long(u'12')), (7, 7L, 5, 12L))
+        self.assertEqual(log, ['__trunc__', '__trunc__'])
+        self.assertEqual(_error(long, int), ('TypeError', ("descriptor '__trunc__' of 'int' object needs an argument",)))
+        self.assertEqual(_error(int, Truncating()), ('TypeError', ('__trunc__ returned non-Integral (type Truncating)',)))
+
+    def test_conversions_keep_returned_subclasses(self):
+        Integer = type('Integer', (int,), {})
+        Long = type('Long', (long,), {})
+        Real = type('Real', (float,), {})
+        Converting = type('Converting', (object,), {'__int__': lambda self: Integer(5), '__long__': lambda self: Long(6), '__float__': lambda self: Real(1.5)})
+
+        class Classic:
+            def __int__(self):
+                return Integer(5)
+
+            def __long__(self):
+                return Long(6)
+
+            def __float__(self):
+                return Real(1.5)
+        for value in (Converting(), Classic()):
+            self.assertEqual([type(convert(value)) for convert in (int, long, float)], [Integer, Long, Real])
+        Truncating = type('Truncating', (object,), {'__trunc__': lambda self: True})
+        self.assertEqual((type(int(Truncating())), type(Integer(Truncating())), Integer(Truncating())), (bool, Integer, 1))
+        self.assertIs(type(long(type('Big', (object,), {'__trunc__': lambda self: Long(2)})())), Long)
+        real, imaginary = 1.5, 2j
+        self.assertEqual((float(real) is real, complex(imaginary) is imaginary), (True, True))
+
+    def test_int_subclass_construction_takes_a_c_long(self):
+        Integer = type('Integer', (int,), {})
+        for argument in (2 ** 64, '99999999999999999999', -2 ** 63 - 1):
+            self.assertEqual(_error(Integer, argument), ('OverflowError', ('Python int too large to convert to C long',)))
+        self.assertEqual((Integer(2 ** 63 - 1), type(Integer(5L))), (2 ** 63 - 1, Integer))
+
+    def test_conversion_result_messages(self):
+        Real = type('Real', (object,), {'__init__': lambda self, value: setattr(self, 'value', value), '__float__': lambda self: self.value})
+        Complex = type('Complex', (object,), {'__init__': lambda self, value: setattr(self, 'value', value), '__complex__': lambda self: self.value})
+
+        class Classic:
+            def __init__(self, value):
+                self.value = value
+
+            def __float__(self):
+                return self.value
+        for value in (True, None, 3, 2j):
+            message = ('TypeError', ('__float__ returned non-float (type %s)' % type(value).__name__,))
+            for convert in (float, complex):
+                self.assertEqual(_error(convert, Real(value)), message)
+                self.assertEqual(_error(convert, Classic(value)), message)
+        self.assertEqual((complex(1, Real(True)), complex(1, Real(3L)), complex(Real(2.5), Real(0.5))), (1 + 1j, 1 + 3j, 2.5 + 0.5j))
+        self.assertEqual((complex(Complex(True)), complex(Complex(3)), complex(Complex(Real(1.5)))), (1 + 0j, 3 + 0j, 1.5 + 0j))
+        self.assertEqual(_error(complex, Complex(None)), ('TypeError', ('complex() argument must be a string or a number',)))
+        self.assertEqual(_error(long, type('Long', (object,), {'__long__': lambda self: 1.5})()), ('TypeError', ('__long__ returned non-long (type float)',)))
+        self.assertEqual((repr(complex(1, -0.0)), repr(complex(1j, -0.0)), repr(complex(-0.0, 1j))), ('(1-0j)', '1j', '(-1+0j)'))
+
+    def test_unicode_literals_turn_spaces_into_blanks(self):
+        self.assertEqual(_error(int, u'\r\n\x1c\x85'), ('ValueError', ("invalid literal for int() with base 10: ''",)))
+        self.assertEqual(_error(float, u'a\tb'), ('ValueError', ('could not convert string to float: a b',)))
+        self.assertEqual(_error(long, u'\r\n\x1c\x85', 36), ('ValueError', ("invalid literal for long() with base 36: '    '",)))
+        self.assertEqual((int(u'\x1c12\u2003'), float(u'\t1.5\x1f')), (12, 1.5))
+
+    def test_base_zero_literals_beyond_a_c_long(self):
+        self.assertEqual((int('0xcb090AAe7bF5cb13fL', 0), int(' 0x8000000000000000L ', 0), int('0' + '7' * 25 + 'l', 0)), (0xcb090AAe7bF5cb13fL, 2 ** 63, int('7' * 25, 8)))
+        self.assertEqual(_error(int, '0x123456789abcdef0123zz', 0), ('ValueError', ("invalid literal for long() with base 16: '0x123456789abcdef0123zz'",)))
+        for text in ('0x7fffffffffffffffL', '-0x8000000000000001L', '99999999999999999999L'):
+            self.assertEqual(_error(int, text, 0), ('ValueError', ('invalid literal for int() with base 0: %r' % text,)))
 
 
 class NumericSlots(unittest.TestCase):

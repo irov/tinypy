@@ -186,28 +186,10 @@ static tinypy_bool_t __tinypy_constructor_object_has_excess_arguments(tinypy_val
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_constructor_sequence_argument(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t **out_value, tinypy_error_t **out_error) {
-    size_t count = TINYPY_TUPLE_SIZE(args);
+    tinypy_value_t *const names[1] = {vm->internal_sequence_key};
+    tinypy_bool_t result = __tinypy_constructor_optional_arguments(vm, name, name_size, args, kwargs, names, 1U, 0U, out_value, NULL, NULL, out_error);
 
-    if (count > 1U) {
-        tinypy_internal_make_arity_error(vm, name, name_size, count, 0U, 1U, TINYPY_ARITY_STYLE_PARSED, out_error);
-        return TINYPY_FALSE;
-    }
-    *out_value = count == 1U ? TINYPY_TUPLE_GET(args, 0U) : NULL;
-    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
-        tinypy_value_t *key = vm->internal_sequence_key;
-        tinypy_value_t *keyword = tinypy_dict_get_optional(kwargs, key);
-
-        if (keyword == NULL || TINYPY_DICT_SIZE(kwargs) != 1U) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "constructor received an invalid keyword argument", out_error);
-            return TINYPY_FALSE;
-        }
-        if (*out_value != NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "constructor received multiple values for sequence", out_error);
-            return TINYPY_FALSE;
-        }
-        *out_value = keyword;
-    }
-    return TINYPY_TRUE;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_constructor_has_mutable_builtin_layout(tinypy_value_type_e kind) {
@@ -361,7 +343,13 @@ static tinypy_value_t *__tinypy_constructor_unicode_from_default_encoding(tinypy
         return TINYPY_RET(text);
     }
     if (TINYPY_VALUE_KIND(text) != TINYPY_VALUE_STRING) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "coercing to Unicode requires a string", out_error);
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("coercing to Unicode: need string or buffer, "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(text),
+            TINYPY_MESSAGE_PART_LITERAL(" found")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
     }
     bytes = (const uint8_t *)tinypy_string_view(text, &size);
@@ -381,10 +369,14 @@ tinypy_value_t *tinypy_internal_object_unicode(tinypy_value_t *value, tinypy_err
     tinypy_value_t *text;
     tinypy_value_t *result;
 
+    /* PyObject_Unicode copies a unicode subtype that keeps the builtin
+       conversion to an exact unicode. */
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE && tinypy_internal_object_has_special_override_key(value, vm->internal_special_unicode_key) == 0) {
-        return TINYPY_RET(value);
+        tinypy_value_t *exact = tinypy_internal_immutable_subclass_copy(&vm->types[TINYPY_VALUE_UNICODE], TINYPY_RET(value), out_error);
+        return exact;
     }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING && tinypy_internal_object_has_special_override_key(value, vm->internal_special_unicode_key) == 0) {
+    /* A str subtype that overrides __str__ is converted through it. */
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING && tinypy_internal_object_has_special_override_key(value, vm->internal_special_unicode_key) == 0 && tinypy_internal_object_has_special_override_key(value, vm->internal_special_str_key) == 0) {
         tinypy_value_t *return_value = __tinypy_constructor_unicode_from_default_encoding(vm, value, out_error);
         return return_value;
     }
@@ -430,14 +422,12 @@ static tinypy_bool_t __tinypy_constructor_text_view_initialize(tinypy_vm_t *vm, 
         uint8_t digit;
         size_t width = tinypy_internal_utf8_decode(bytes + input, size - input, &code_point);
 
-        if (code_point != 0U && code_point < UINT32_C(0x80)) {
-            view->owned[output++] = (uint8_t)code_point;
+        /* PyUnicode_EncodeDecimal turns every Unicode space into ' '. */
+        if (tinypy_internal_unicode_is_space(code_point) != 0) {
+            view->owned[output++] = (uint8_t)' ';
         }
         else if (tinypy_internal_unicode_decimal_digit(code_point, &digit) != 0) {
             view->owned[output++] = (uint8_t)('0' + digit);
-        }
-        else if (tinypy_internal_unicode_is_space(code_point) != 0) {
-            view->owned[output++] = (uint8_t)' ';
         }
         else if (code_point != 0U && code_point < UINT32_C(0x100)) {
             view->owned[output++] = (uint8_t)code_point;
@@ -618,6 +608,25 @@ static void __tinypy_constructor_integer_literal_error(tinypy_vm_t *vm, const ui
     TINYPY_DECREF(literal);
 }
 //////////////////////////////////////////////////////////////////////////
+/* Whether the digits PyOS_strtoul reads from the front exceed a C long. */
+static tinypy_bool_t __tinypy_constructor_digits_exceed_long(const uint8_t *bytes, size_t size, int32_t base) {
+    uint64_t magnitude = 0U;
+    size_t index;
+
+    for (index = 0U; index < size; ++index) {
+        int32_t digit = __tinypy_constructor_digit(bytes[index]);
+
+        if (digit < 0 || digit >= base) {
+            break;
+        }
+        if (magnitude > ((uint64_t)INT64_MAX - (uint64_t)digit) / (uint64_t)base) {
+            return TINYPY_TRUE;
+        }
+        magnitude = magnitude * (uint64_t)base + (uint64_t)digit;
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_integer_bytes(tinypy_vm_t *vm, const uint8_t *bytes, size_t size, int32_t base, int32_t force_long, tinypy_error_t **out_error) {
     size_t begin = 0U;
     size_t end = size;
@@ -645,6 +654,8 @@ static tinypy_value_t *__tinypy_constructor_integer_bytes(tinypy_vm_t *vm, const
     while (begin < end && __tinypy_constructor_ascii_space(bytes[begin]) != 0) {
         begin += 1U;
     }
+    size_t literal_begin = begin;
+
     while (end > begin && __tinypy_constructor_ascii_space(bytes[end - 1U]) != 0) {
         end -= 1U;
     }
@@ -680,6 +691,12 @@ static tinypy_value_t *__tinypy_constructor_integer_bytes(tinypy_vm_t *vm, const
         if ((actual_base == 16 && (prefix == (uint8_t)'x' || prefix == (uint8_t)'X')) || (actual_base == 8 && (prefix == (uint8_t)'o' || prefix == (uint8_t)'O')) || (actual_base == 2 && (prefix == (uint8_t)'b' || prefix == (uint8_t)'B'))) {
             begin += 2U;
         }
+    }
+    /* PyInt_FromString passes an unsigned base 0 literal that exceeds a C
+       long to PyLong_FromString, which also takes a trailing L. */
+    if (force_long == 0 && base == 0 && literal_begin < end && bytes[literal_begin] == (uint8_t)'0' && __tinypy_constructor_digits_exceed_long(bytes + begin, end - begin, actual_base) != 0) {
+        tinypy_value_t *long_result = __tinypy_constructor_integer_bytes(vm, bytes + literal_begin, size - literal_begin, 0, 1, out_error);
+        return long_result;
     }
     if (force_long != 0 && actual_base <= 21 && begin < end && (bytes[end - 1U] == (uint8_t)'L' || bytes[end - 1U] == (uint8_t)'l')) {
         end -= 1U;
@@ -1310,59 +1327,85 @@ static tinypy_value_t *__tinypy_constructor_classic_conversion(tinypy_value_t *v
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* complex_new asks a classic instance for __complex__ through its own
-   attribute lookup and falls back to instance_float. */
-static tinypy_value_t *__tinypy_constructor_classic_complex(tinypy_value_t *value, tinypy_bool_t *out_used_complex, tinypy_error_t **out_error) {
+/* PyNumber_Int and _PyNumber_ConvertIntegralToInt call what PyObject_GetAttr
+   finds and clear any failure of the lookup. Returns 1 with the call's
+   result, 0 when the attribute is unavailable and -1 when the call fails. */
+static int32_t __tinypy_constructor_call_found_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t **out_result, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-
+    tinypy_error_t *lookup_error = NULL;
     tinypy_value_t *method;
-    int32_t status = tinypy_internal_object_get_optional_attr_key(value, vm->internal_special_complex_key, &method, out_error);
-    *out_used_complex = status > 0 ? TINYPY_TRUE : TINYPY_FALSE;
-    if (status < 0) {
-        return NULL;
+    int32_t found = tinypy_internal_object_get_optional_attr_key(value, name, &method, &lookup_error);
+
+    *out_result = NULL;
+    if (found < 0) {
+        if (lookup_error != NULL) {
+            tinypy_error_release(lookup_error);
+        }
+        tinypy_vm_clear_error(vm);
+        return INT32_C(0);
     }
-    if (status == 0) {
-        tinypy_value_t *number = __tinypy_constructor_classic_conversion(value, vm->internal_special_float_key, out_error);
-        return number;
+    if (found == 0) {
+        return INT32_C(0);
     }
     tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
-    tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
+    *out_result = tinypy_call(method, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(method);
-    return result;
+    return *out_result != NULL ? INT32_C(1) : -INT32_C(1);
+}
+//////////////////////////////////////////////////////////////////////////
+/* _PyNumber_ConvertIntegralToInt names a classic instance by its class. */
+static void __tinypy_constructor_non_integral_error(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE) {
+        __tinypy_constructor_conversion_error(vm, "__trunc__", 9U, "non-Integral", 12U, value, out_error);
+        return;
+    }
+    tinypy_value_t *class_name = TINYPY_CLASS_OBJECT(TINYPY_OLD_INSTANCE_OBJECT(value)->class_object)->name;
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("__trunc__ returned non-Integral (type "),
+        TINYPY_MESSAGE_PART_TEXT(class_name),
+        TINYPY_MESSAGE_PART_LITERAL(")"),
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_constructor_is_integral(const tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    return kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG;
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyNumber_Int and PyNumber_Long check what __int__, __long__ or __trunc__
-   returned; a truncated value that is no integer goes through __int__. */
+   returned and keep int and long subclasses; a truncated value that is no
+   integer goes through its __int__ attribute. */
 static tinypy_value_t *__tinypy_constructor_integer_result(tinypy_vm_t *vm, tinypy_value_t *conversion_result, tinypy_value_t *method_name, tinypy_bool_t truncated, int32_t force_long, tinypy_error_t **out_error) {
-    tinypy_value_type_e converted_kind;
-
     if (conversion_result == NULL) {
         return NULL;
     }
-    converted_kind = TINYPY_VALUE_KIND(conversion_result);
-    if (truncated != 0 && converted_kind != TINYPY_VALUE_BOOL && converted_kind != TINYPY_VALUE_INTEGER && converted_kind != TINYPY_VALUE_LONG) {
+    if (truncated != 0 && __tinypy_constructor_is_integral(conversion_result) == 0) {
         tinypy_value_t *truncated_result = conversion_result;
-        tinypy_bool_t integral_handled;
+        int32_t found = __tinypy_constructor_call_found_attribute(truncated_result, vm->internal_special_int_key, &conversion_result, out_error);
 
-        conversion_result = tinypy_internal_call_conversion(truncated_result, vm->internal_special_int_key, &integral_handled, out_error);
-        if (integral_handled == 0) {
-            __tinypy_constructor_conversion_error(vm, "__trunc__", 9U, "non-Integral", 12U, truncated_result, out_error);
-            TINYPY_DECREF(truncated_result);
-            return NULL;
+        if (found == 0) {
+            __tinypy_constructor_non_integral_error(vm, truncated_result, out_error);
         }
         TINYPY_DECREF(truncated_result);
         if (conversion_result == NULL) {
             return NULL;
         }
-        converted_kind = TINYPY_VALUE_KIND(conversion_result);
+        if (__tinypy_constructor_is_integral(conversion_result) == 0) {
+            __tinypy_constructor_non_integral_error(vm, conversion_result, out_error);
+            TINYPY_DECREF(conversion_result);
+            return NULL;
+        }
     }
-    if (converted_kind != TINYPY_VALUE_BOOL && converted_kind != TINYPY_VALUE_INTEGER && converted_kind != TINYPY_VALUE_LONG) {
-        __tinypy_constructor_conversion_error(vm, truncated != 0 ? "__trunc__" : (const char *)TINYPY_TEXT_BYTES(method_name), truncated != 0 ? 9U : TINYPY_TEXT_BYTE_SIZE(method_name), truncated != 0 ? "non-Integral" : (force_long != 0 ? "non-long" : "non-int"), truncated != 0 ? 12U : (force_long != 0 ? 8U : 7U), conversion_result, out_error);
+    else if (__tinypy_constructor_is_integral(conversion_result) == 0) {
+        __tinypy_constructor_conversion_error(vm, (const char *)TINYPY_TEXT_BYTES(method_name), TINYPY_TEXT_BYTE_SIZE(method_name), force_long != 0 ? "non-long" : "non-int", force_long != 0 ? 8U : 7U, conversion_result, out_error);
         TINYPY_DECREF(conversion_result);
         return NULL;
     }
-    if (force_long != 0 && converted_kind != TINYPY_VALUE_LONG) {
+    if (force_long != 0 && TINYPY_VALUE_KIND(conversion_result) != TINYPY_VALUE_LONG) {
         tinypy_value_t *long_result = tinypy_long_from_i64(vm, TINYPY_INTEGER_VALUE(conversion_result));
 
         TINYPY_DECREF(conversion_result);
@@ -1447,7 +1490,8 @@ static tinypy_value_t *__tinypy_constructor_integer_common(tinypy_type_t *type, 
     if (tinypy_internal_object_has_special_override_key(value, force_long != 0 ? vm->internal_special_long_key : vm->internal_special_int_key) != 0) {
         goto integer_conversion;
     }
-    if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
+    /* A text subclass may still answer __trunc__ before it is parsed. */
+    if ((kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) && value->type == &vm->types[kind]) {
         tinypy_value_t *result = __tinypy_constructor_integer_text(vm, value, 10, force_long, out_error);
         return result;
     }
@@ -1463,25 +1507,11 @@ static tinypy_value_t *__tinypy_constructor_integer_common(tinypy_type_t *type, 
             tinypy_value_t *exact_long = __tinypy_constructor_long_exact(vm, value, out_error);
             return exact_long;
         }
-        if (TINYPY_LONG_DIGIT_COUNT(value) <= 5U) {
-            uint64_t magnitude = 0U;
-            size_t index = TINYPY_LONG_DIGIT_COUNT(value);
-            tinypy_bool_t fits = TINYPY_TRUE;
+        int64_t converted;
 
-            while (index != 0U) {
-                index -= 1U;
-                if (magnitude > (UINT64_MAX >> 15U)) {
-                    fits = TINYPY_FALSE;
-                    break;
-                }
-                magnitude = (magnitude << 15U) | TINYPY_LONG_OBJECT(value)->digits[index];
-            }
-            if (fits != 0 && ((TINYPY_LONG_SIGN(value) >= 0 && magnitude <= (uint64_t)INT64_MAX) || (TINYPY_LONG_SIGN(value) < 0 && magnitude <= (uint64_t)INT64_MAX + UINT64_C(1)))) {
-                int64_t converted = TINYPY_LONG_SIGN(value) < 0 ? (magnitude == (uint64_t)INT64_MAX + UINT64_C(1) ? INT64_MIN : -(int64_t)magnitude) : (int64_t)magnitude;
-
-                tinypy_value_t *return_value_5 = tinypy_integer_from_i64(vm, converted);
-                return return_value_5;
-            }
+        if (tinypy_internal_long_digits_as_i64(TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value), &converted) != 0) {
+            tinypy_value_t *return_value_5 = tinypy_integer_from_i64(vm, converted);
+            return return_value_5;
         }
         if (value->type == &vm->types[TINYPY_VALUE_LONG]) {
             return TINYPY_RET(value);
@@ -1511,12 +1541,16 @@ integer_conversion:
     method_name = force_long != 0 ? vm->internal_special_long_key : vm->internal_special_int_key;
     conversion_result = tinypy_internal_call_conversion(value, method_name, &handled, out_error);
     if (handled == 0) {
-        conversion_result = tinypy_internal_call_conversion(value, vm->internal_special_trunc_key, &handled, out_error);
-        truncated = handled;
+        truncated = __tinypy_constructor_call_found_attribute(value, vm->internal_special_trunc_key, &conversion_result, out_error) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        handled = truncated;
     }
     if (handled != 0) {
         tinypy_value_t *integer = __tinypy_constructor_integer_result(vm, conversion_result, method_name, truncated, force_long, out_error);
         return integer;
+    }
+    if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *text_integer = __tinypy_constructor_integer_text(vm, value, 10, force_long, out_error);
+        return text_integer;
     }
     if (kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_BYTEARRAY) {
         const uint8_t *bytes;
@@ -1561,15 +1595,82 @@ integer_conversion:
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_integer_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = type->vm;
     tinypy_value_t *value = __tinypy_constructor_integer_common(type, args, kwargs, INT32_C(0), out_error);
-    tinypy_value_t *return_value_1 = tinypy_internal_immutable_subclass_copy(type, value, out_error);
+
+    if (value == NULL || type == &vm->types[TINYPY_VALUE_INTEGER]) {
+        return value;
+    }
+    /* int_subtype_new keeps the C long of whatever int() produced. */
+    int64_t number = INT64_C(0);
+    tinypy_bool_t fits = TINYPY_TRUE;
+
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG) {
+        fits = tinypy_internal_long_digits_as_i64(TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value), &number);
+    }
+    else {
+        number = TINYPY_INTEGER_VALUE(value);
+    }
+    TINYPY_DECREF(value);
+    if (fits == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "Python int too large to convert to C long", out_error);
+        return NULL;
+    }
+    tinypy_value_t *integer = tinypy_integer_from_i64(vm, number);
+    tinypy_value_t *return_value_1 = tinypy_internal_immutable_subclass_copy(type, integer, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_long_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_value_t *value = __tinypy_constructor_integer_common(type, args, kwargs, INT32_C(1), out_error);
+
+    if (type == &type->vm->types[TINYPY_VALUE_LONG]) {
+        return value;
+    }
     tinypy_value_t *return_value_1 = tinypy_internal_immutable_subclass_copy(type, value, out_error);
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Whether the value has nb_float: a builtin number, a classic instance or a
+   type with __float__. */
+static tinypy_bool_t __tinypy_constructor_has_float(tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (__tinypy_constructor_is_integral(value) != 0 || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX || kind == TINYPY_VALUE_OLD_INSTANCE) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t has_float = tinypy_internal_object_has_special_key(value, TINYPY_VALUE_VM(value)->internal_special_float_key);
+    return has_float;
+}
+//////////////////////////////////////////////////////////////////////////
+/* nb_float of a value that has one: what __float__ returned, the exact
+   float itself or a new float of another builtin number. */
+static tinypy_value_t *__tinypy_constructor_call_float(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_value_t *classic = __tinypy_constructor_classic_conversion(value, vm->internal_special_float_key, out_error);
+        return classic;
+    }
+    if (value->type == &vm->types[TINYPY_VALUE_FLOAT]) {
+        return TINYPY_RET(value);
+    }
+    if ((__tinypy_constructor_is_integral(value) != 0 || kind == TINYPY_VALUE_FLOAT) && tinypy_internal_object_has_special_override_key(value, vm->internal_special_float_key) == 0) {
+        double number;
+
+        if (__tinypy_constructor_number_as_double(vm, value, &number, INT32_C(0), out_error) == 0) {
+            return NULL;
+        }
+        tinypy_value_t *builtin = tinypy_float_from_double(vm, number);
+        return builtin;
+    }
+    tinypy_bool_t handled;
+    tinypy_value_t *converted = tinypy_internal_call_conversion(value, vm->internal_special_float_key, &handled, out_error);
+
+    if (handled == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "a float is required", out_error);
+    }
+    return converted;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_float_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -1587,78 +1688,161 @@ tinypy_value_t *tinypy_internal_float_create(tinypy_type_t *type, tinypy_value_t
         return return_value_1;
     }
     tinypy_value_t *value = values[0];
-    if ((TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE) && tinypy_internal_object_has_special_override_key(value, vm->internal_special_float_key) == 0) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    if ((kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) && tinypy_internal_object_has_special_override_key(value, vm->internal_special_float_key) == 0) {
         if (__tinypy_constructor_float_text(vm, value, &number, out_error) == 0) {
             return NULL;
         }
     }
-    else if ((TINYPY_VALUE_KIND(value) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_LONG || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_FLOAT)
-        && tinypy_internal_object_has_special_override_key(value, vm->internal_special_float_key) == 0) {
-        if (__tinypy_constructor_number_as_double(vm, value, &number, INT32_C(0), out_error) == 0) {
+    else if (__tinypy_constructor_has_float(value) != 0) {
+        tinypy_value_t *converted = __tinypy_constructor_call_float(vm, value, out_error);
+
+        if (converted == NULL) {
             return NULL;
         }
-    }
-    else {
-        tinypy_bool_t handled = TINYPY_TRUE;
-        tinypy_value_t *converted = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE
-            ? __tinypy_constructor_classic_conversion(value, vm->internal_special_float_key, out_error)
-            : tinypy_internal_call_conversion(value, vm->internal_special_float_key, &handled, out_error);
-
-        if (handled == 0) {
-            tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-            const uint8_t *bytes;
-            size_t size;
-            tinypy_value_t *character_string = NULL;
-            tinypy_bool_t has_buffer = TINYPY_FALSE;
-
-            if (kind == TINYPY_VALUE_BUFFER) {
-                tinypy_internal_exception_state_t state;
-                tinypy_error_t *conversion_error = NULL;
-
-                tinypy_internal_exception_preserve_begin(vm, &state);
-                character_string = tinypy_internal_buffer_character_string(value, &conversion_error);
-                if (conversion_error != NULL) {
-                    tinypy_error_release(conversion_error);
-                }
-                tinypy_internal_exception_preserve_end(vm, &state);
-                has_buffer = character_string != NULL;
-                if (has_buffer != 0) {
-                    bytes = (const uint8_t *)tinypy_string_view(character_string, &size);
-                }
-            } else if (kind == TINYPY_VALUE_BYTEARRAY) {
-                has_buffer = tinypy_internal_bytes_view(value, &bytes, &size);
-            }
-            if (has_buffer != 0) {
-                tinypy_bool_t parsed = __tinypy_constructor_float_bytes(vm, bytes, size, &number, TINYPY_TRUE, out_error);
-
-                if (character_string != NULL) {
-                    TINYPY_DECREF(character_string);
-                }
-                if (parsed == 0) {
-                    return NULL;
-                }
-            }
-            else {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "float() argument must be a string or a number", out_error);
-                return NULL;
-            }
-        }
-        else if (converted == NULL) {
-            return NULL;
-        }
-        else if (TINYPY_VALUE_KIND(converted) != TINYPY_VALUE_FLOAT) {
+        if (TINYPY_VALUE_KIND(converted) != TINYPY_VALUE_FLOAT) {
             __tinypy_constructor_conversion_error(vm, "__float__", 9U, "non-float", 9U, converted, out_error);
             TINYPY_DECREF(converted);
             return NULL;
         }
+        /* PyNumber_Float keeps a float subclass that __float__ returned. */
+        if (type == &vm->types[TINYPY_VALUE_FLOAT]) {
+            return converted;
+        }
+        number = TINYPY_FLOAT_OBJECT(converted)->value;
+        TINYPY_DECREF(converted);
+    }
+    else {
+        const uint8_t *bytes;
+        size_t size;
+        tinypy_value_t *character_string = NULL;
+        tinypy_bool_t has_buffer = TINYPY_FALSE;
+
+        if (kind == TINYPY_VALUE_BUFFER) {
+            tinypy_internal_exception_state_t state;
+            tinypy_error_t *conversion_error = NULL;
+
+            tinypy_internal_exception_preserve_begin(vm, &state);
+            character_string = tinypy_internal_buffer_character_string(value, &conversion_error);
+            if (conversion_error != NULL) {
+                tinypy_error_release(conversion_error);
+            }
+            tinypy_internal_exception_preserve_end(vm, &state);
+            has_buffer = character_string != NULL;
+            if (has_buffer != 0) {
+                bytes = (const uint8_t *)tinypy_string_view(character_string, &size);
+            }
+        } else if (kind == TINYPY_VALUE_BYTEARRAY) {
+            has_buffer = tinypy_internal_bytes_view(value, &bytes, &size);
+        }
+        if (has_buffer != 0) {
+            tinypy_bool_t parsed = __tinypy_constructor_float_bytes(vm, bytes, size, &number, TINYPY_TRUE, out_error);
+
+            if (character_string != NULL) {
+                TINYPY_DECREF(character_string);
+            }
+            if (parsed == 0) {
+                return NULL;
+            }
+        }
         else {
-            number = TINYPY_FLOAT_OBJECT(converted)->value;
-            TINYPY_DECREF(converted);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "float() argument must be a string or a number", out_error);
+            return NULL;
         }
     }
     tinypy_value_t *value_result = tinypy_float_from_double(vm, number);
     tinypy_value_t *return_value_2 = tinypy_internal_immutable_subclass_copy(type, value_result, out_error);
     return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
+/* try_complex_special_method: a classic instance's __complex__ attribute or
+   any other value's special method. Returns 1 with the result, 0 when there
+   is none and -1 on error. */
+static int32_t __tinypy_constructor_complex_special(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t **out_result, tinypy_error_t **out_error) {
+    tinypy_value_t *method;
+    int32_t found = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE
+        ? tinypy_internal_object_get_optional_attr_key(value, vm->internal_special_complex_key, &method, out_error)
+        : tinypy_internal_object_lookup_special_key(value, vm->internal_special_complex_key, &method, out_error);
+
+    *out_result = NULL;
+    if (found <= 0) {
+        return found;
+    }
+    tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
+    *out_result = tinypy_call(method, args, NULL, out_error);
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(method);
+    return *out_result != NULL ? INT32_C(1) : -INT32_C(1);
+}
+//////////////////////////////////////////////////////////////////////////
+/* complex_new keeps a complex operand whole and takes any other through
+   nb_float: PyNumber_Float wants a float for the real part, while
+   PyFloat_AsDouble also reads an integer for the imaginary one. */
+static tinypy_bool_t __tinypy_constructor_complex_part(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_bool_t imaginary, double *out_parts, tinypy_error_t **out_error) {
+    out_parts[1] = 0.0;
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_COMPLEX) {
+        out_parts[0] = TINYPY_COMPLEX_OBJECT(value)->real;
+        out_parts[1] = TINYPY_COMPLEX_OBJECT(value)->imaginary;
+        return TINYPY_TRUE;
+    }
+    tinypy_value_t *converted = __tinypy_constructor_call_float(vm, value, out_error);
+
+    if (converted == NULL) {
+        return TINYPY_FALSE;
+    }
+    if (TINYPY_VALUE_KIND(converted) != TINYPY_VALUE_FLOAT && (imaginary == 0 || __tinypy_constructor_is_integral(converted) == 0)) {
+        __tinypy_constructor_conversion_error(vm, "__float__", 9U, "non-float", 9U, converted, out_error);
+        TINYPY_DECREF(converted);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t result = __tinypy_constructor_number_as_double(vm, converted, &out_parts[0], INT32_C(0), out_error);
+
+    TINYPY_DECREF(converted);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* complex_new checks that both operands have nb_float before it combines
+   them into real + imaginary * 1j. */
+static tinypy_bool_t __tinypy_constructor_complex_numbers(tinypy_vm_t *vm, tinypy_value_t *first, tinypy_value_t *second, double *out_real, double *out_imaginary, tinypy_error_t **out_error) {
+    tinypy_value_t *special = NULL;
+    double real_parts[2] = {0.0, 0.0};
+    double imaginary_parts[2] = {0.0, 0.0};
+
+    if (first != NULL) {
+        int32_t found = __tinypy_constructor_complex_special(vm, first, &special, out_error);
+
+        if (found < 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    tinypy_value_t *real_value = special != NULL ? special : first;
+    tinypy_bool_t real_is_complex = real_value != NULL && TINYPY_VALUE_KIND(real_value) == TINYPY_VALUE_COMPLEX ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t converted = (real_value == NULL || __tinypy_constructor_has_float(real_value) != 0) && (second == NULL || __tinypy_constructor_has_float(second) != 0) ? TINYPY_TRUE : TINYPY_FALSE;
+
+    if (converted == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "complex() argument must be a string or a number", out_error);
+    }
+    else if (real_value != NULL) {
+        converted = __tinypy_constructor_complex_part(vm, real_value, TINYPY_FALSE, real_parts, out_error);
+    }
+    if (special != NULL) {
+        TINYPY_DECREF(special);
+    }
+    if (converted != 0 && second != NULL) {
+        converted = __tinypy_constructor_complex_part(vm, second, TINYPY_TRUE, imaginary_parts, out_error);
+    }
+    *out_real = real_parts[0];
+    *out_imaginary = real_parts[1];
+    if (second != NULL) {
+        *out_imaginary = imaginary_parts[0];
+        if (TINYPY_VALUE_KIND(second) == TINYPY_VALUE_COMPLEX) {
+            *out_real -= imaginary_parts[1];
+        }
+        if (real_is_complex != 0) {
+            *out_imaginary += real_parts[1];
+        }
+    }
+    return converted;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_complex_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -1667,120 +1851,31 @@ tinypy_value_t *tinypy_internal_complex_create(tinypy_type_t *type, tinypy_value
     tinypy_value_t *values[2];
     double real = 0.0;
     double imaginary = 0.0;
-    tinypy_bool_t first_is_complex = TINYPY_FALSE;
 
     if (tinypy_internal_constructor_optional_arguments(vm, "complex", 7U, args, kwargs, names, 2U, 0U, values, out_error) == 0) {
         return NULL;
     }
-    if (values[0] != NULL && (TINYPY_VALUE_KIND(values[0]) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(values[0]) == TINYPY_VALUE_UNICODE) && values[1] != NULL) {
+    tinypy_value_t *first = values[0];
+    tinypy_value_t *second = values[1];
+    tinypy_bool_t first_is_text = first != NULL && (TINYPY_VALUE_KIND(first) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(first) == TINYPY_VALUE_UNICODE) ? TINYPY_TRUE : TINYPY_FALSE;
+    if (first_is_text != 0 && second != NULL) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "complex() can't take second arg if first is a string", out_error);
         return NULL;
     }
-    if (values[1] != NULL && (TINYPY_VALUE_KIND(values[1]) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(values[1]) == TINYPY_VALUE_UNICODE)) {
+    if (second != NULL && (TINYPY_VALUE_KIND(second) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(second) == TINYPY_VALUE_UNICODE)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "complex() second arg can't be a string", out_error);
         return NULL;
     }
-    if (values[0] != NULL) {
-        tinypy_value_t *first = values[0];
-
-        if (TINYPY_VALUE_KIND(first) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(first) == TINYPY_VALUE_UNICODE) {
-            if (__tinypy_constructor_complex_text(vm, first, &real, &imaginary, out_error) == 0) {
-                return NULL;
-            }
-        }
-        else if (TINYPY_VALUE_KIND(first) == TINYPY_VALUE_COMPLEX && tinypy_internal_object_has_special_override_key(first, vm->internal_special_complex_key) == 0) {
-            real = TINYPY_COMPLEX_OBJECT(first)->real;
-            imaginary = TINYPY_COMPLEX_OBJECT(first)->imaginary;
-            first_is_complex = TINYPY_TRUE;
-        }
-        else if ((TINYPY_VALUE_KIND(first) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(first) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(first) == TINYPY_VALUE_LONG || TINYPY_VALUE_KIND(first) == TINYPY_VALUE_FLOAT)
-            && tinypy_internal_object_has_special_override_key(first, vm->internal_special_complex_key) == 0 && tinypy_internal_object_has_special_override_key(first, vm->internal_special_float_key) == 0) {
-            if (__tinypy_constructor_number_as_double(vm, first, &real, INT32_C(0), out_error) == 0) {
-                return NULL;
-            }
-        }
-        else {
-            tinypy_bool_t handled = TINYPY_TRUE;
-            tinypy_bool_t used_complex_method;
-            tinypy_value_t *converted;
-
-            if (TINYPY_VALUE_KIND(first) == TINYPY_VALUE_OLD_INSTANCE) {
-                converted = __tinypy_constructor_classic_complex(first, &used_complex_method, out_error);
-            }
-            else {
-                converted = tinypy_internal_call_conversion(first, vm->internal_special_complex_key, &handled, out_error);
-                used_complex_method = handled;
-                if (handled == 0) {
-                    converted = tinypy_internal_call_conversion(first, vm->internal_special_float_key, &handled, out_error);
-                }
-            }
-            if (handled == 0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "complex() argument must be a string or a number", out_error);
-                return NULL;
-            }
-            if (converted == NULL) {
-                return NULL;
-            }
-            if (TINYPY_VALUE_KIND(converted) == TINYPY_VALUE_COMPLEX) {
-                real = TINYPY_COMPLEX_OBJECT(converted)->real;
-                imaginary = TINYPY_COMPLEX_OBJECT(converted)->imaginary;
-                first_is_complex = TINYPY_TRUE;
-            }
-            else if ((used_complex_method != 0 || TINYPY_VALUE_KIND(converted) == TINYPY_VALUE_FLOAT) &&
-                     (TINYPY_VALUE_KIND(converted) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(converted) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(converted) == TINYPY_VALUE_LONG || TINYPY_VALUE_KIND(converted) == TINYPY_VALUE_FLOAT)) {
-                if (__tinypy_constructor_number_as_double(vm, converted, &real, INT32_C(0), out_error) == 0) {
-                    TINYPY_DECREF(converted);
-                    return NULL;
-                }
-            }
-            else {
-                TINYPY_DECREF(converted);
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "complex() argument must be a string or a number", out_error);
-                return NULL;
-            }
-            TINYPY_DECREF(converted);
+    if (first_is_text != 0) {
+        if (__tinypy_constructor_complex_text(vm, first, &real, &imaginary, out_error) == 0) {
+            return NULL;
         }
     }
-    if (values[1] != NULL) {
-        double second_real;
-        tinypy_value_t *second = values[1];
-
-        if (TINYPY_VALUE_KIND(second) == TINYPY_VALUE_COMPLEX) {
-            second_real = TINYPY_COMPLEX_OBJECT(second)->real;
-            real -= TINYPY_COMPLEX_OBJECT(second)->imaginary;
-        }
-        else if ((TINYPY_VALUE_KIND(second) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(second) == TINYPY_VALUE_INTEGER || TINYPY_VALUE_KIND(second) == TINYPY_VALUE_LONG || TINYPY_VALUE_KIND(second) == TINYPY_VALUE_FLOAT) && tinypy_internal_object_has_special_override_key(second, vm->internal_special_float_key) == 0) {
-            if (__tinypy_constructor_number_as_double(vm, second, &second_real, INT32_C(0), out_error) == 0) {
-                return NULL;
-            }
-        }
-        else {
-            tinypy_bool_t handled = TINYPY_TRUE;
-            tinypy_value_t *converted = TINYPY_VALUE_KIND(second) == TINYPY_VALUE_OLD_INSTANCE
-                ? __tinypy_constructor_classic_conversion(second, vm->internal_special_float_key, out_error)
-                : tinypy_internal_call_conversion(second, vm->internal_special_float_key, &handled, out_error);
-
-            if (handled == 0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "complex() argument must be a string or a number", out_error);
-                return NULL;
-            }
-            if (converted == NULL) {
-                return NULL;
-            }
-            if (TINYPY_VALUE_KIND(converted) != TINYPY_VALUE_FLOAT) {
-                __tinypy_constructor_conversion_error(vm, "__float__", 9U, "non-float", 9U, converted, out_error);
-                TINYPY_DECREF(converted);
-                return NULL;
-            }
-            second_real = TINYPY_FLOAT_OBJECT(converted)->value;
-            TINYPY_DECREF(converted);
-        }
-        if (first_is_complex != 0) {
-            imaginary += second_real;
-        }
-        else {
-            imaginary = second_real;
-        }
+    else if (first != NULL && second == NULL && first->type == &vm->types[TINYPY_VALUE_COMPLEX] && type == first->type) {
+        return TINYPY_RET(first);
+    }
+    else if (__tinypy_constructor_complex_numbers(vm, first, second, &real, &imaginary, out_error) == 0) {
+        return NULL;
     }
     tinypy_value_t *value_result = tinypy_complex_from_doubles(vm, real, imaginary);
     tinypy_value_t *return_value_1 = tinypy_internal_immutable_subclass_copy(type, value_result, out_error);
@@ -1827,14 +1922,32 @@ tinypy_value_t *tinypy_internal_unicode_create(tinypy_type_t *type, tinypy_value
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
             return NULL;
         }
-        result = tinypy_internal_text_codec(vm, source, values[1], values[2], TINYPY_TRUE, TINYPY_TRUE, NULL, out_error);
+        /* PyUnicode_FromEncodedObject decodes no empty input, and the
+           decoder must return unicode. */
+        result = TINYPY_TEXT_BYTE_SIZE(source) == 0U ? tinypy_unicode_from_utf8(vm, NULL, 0U) : tinypy_internal_text_codec(vm, source, values[1], values[2], TINYPY_TRUE, TINYPY_TRUE, NULL, out_error);
         if (source != value) {
             TINYPY_DECREF(source);
+        }
+        if (result != NULL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_UNICODE) {
+            const tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("decoder did not return an unicode object (type="),
+                TINYPY_MESSAGE_PART_TYPE_NAME(result),
+                TINYPY_MESSAGE_PART_LITERAL(")")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            TINYPY_DECREF(result);
+            return NULL;
         }
         tinypy_value_t *return_value_1 = tinypy_internal_immutable_subclass_copy(type, result, out_error);
         return return_value_1;
     }
+    /* unicode(x) returns what PyObject_Unicode returns, which keeps a unicode
+       subtype instance that __unicode__ returned. */
     tinypy_value_t *converted = tinypy_internal_object_unicode(value, out_error);
+    if (type == &vm->types[TINYPY_VALUE_UNICODE]) {
+        return converted;
+    }
     tinypy_value_t *return_value_2 = tinypy_internal_immutable_subclass_copy(type, converted, out_error);
     return return_value_2;
 }
@@ -1987,6 +2100,66 @@ static tinypy_value_t *__tinypy_constructor_type_init_method(tinypy_value_t *fun
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* tp_new_wrapper: the class that the __new__ of owner receives first,
+   which must be a subtype of owner. */
+static tinypy_type_t *__tinypy_constructor_new_receiver(tinypy_vm_t *vm, const tinypy_type_t *owner, tinypy_value_t *args, tinypy_error_t **out_error) {
+    tinypy_message_part_t owner_name[3];
+
+    tinypy_internal_type_message_name(owner, owner_name);
+    if (TINYPY_TUPLE_SIZE(args) == 0U) {
+        tinypy_message_part_t parts[] = {
+            owner_name[0],
+            owner_name[1],
+            owner_name[2],
+            TINYPY_MESSAGE_PART_LITERAL(".__new__(): not enough arguments"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    tinypy_value_t *receiver = TINYPY_TUPLE_GET(args, 0U);
+    if (TINYPY_VALUE_KIND(receiver) != TINYPY_VALUE_TYPE) {
+        tinypy_message_part_t parts[] = {
+            owner_name[0],
+            owner_name[1],
+            owner_name[2],
+            TINYPY_MESSAGE_PART_LITERAL(".__new__(X): X is not a type object ("),
+            TINYPY_MESSAGE_PART_TYPE_NAME(receiver),
+            TINYPY_MESSAGE_PART_LITERAL(")"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    tinypy_type_t *type = (tinypy_type_t *)receiver;
+    if (tinypy_type_is_subtype(type, owner) == 0) {
+        tinypy_message_part_t type_name[3];
+
+        tinypy_internal_type_message_name(type, type_name);
+        tinypy_message_part_t parts[] = {
+            owner_name[0],
+            owner_name[1],
+            owner_name[2],
+            TINYPY_MESSAGE_PART_LITERAL(".__new__("),
+            type_name[0],
+            type_name[1],
+            type_name[2],
+            TINYPY_MESSAGE_PART_LITERAL("): "),
+            type_name[0],
+            type_name[1],
+            type_name[2],
+            TINYPY_MESSAGE_PART_LITERAL(" is not a subtype of "),
+            owner_name[0],
+            owner_name[1],
+            owner_name[2],
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    return type;
+}
+//////////////////////////////////////////////////////////////////////////
 /* object.__new__ with the arguments that follow the class, which class
    calls pass without building the argument tuple. */
 tinypy_value_t *tinypy_internal_object_new_items(tinypy_type_t *class_type, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -2081,17 +2254,12 @@ static tinypy_value_t *__tinypy_constructor_object_new_method(tinypy_value_t *fu
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (TINYPY_TUPLE_SIZE(args) == 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ requires a type", out_error);
-        return NULL;
-    }
-    tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ argument is not a type", out_error);
+    tinypy_type_t *class_type = __tinypy_constructor_new_receiver(vm, &vm->types[TINYPY_VALUE_INSTANCE], args, out_error);
+    if (class_type == NULL) {
         return NULL;
     }
     tinypy_value_t *const *items = tinypy_internal_tuple_items(args);
-    tinypy_value_t *result = tinypy_internal_object_new_items((tinypy_type_t *)class_value, items + 1U, TINYPY_TUPLE_SIZE(args) - 1U, kwargs, out_error);
+    tinypy_value_t *result = tinypy_internal_object_new_items(class_type, items + 1U, TINYPY_TUPLE_SIZE(args) - 1U, kwargs, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2128,7 +2296,7 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
         tinypy_value_t *constructor_args = __tinypy_constructor_tail_arguments(vm, args);
         tinypy_bool_t merged = TINYPY_TRUE;
 
-        if (__tinypy_constructor_function_argument_count(function, constructor_args, 0U, 1U, out_error) == 0) {
+        if (__tinypy_constructor_argument_count(vm, "dict", 4U, constructor_args, 0U, 1U, TINYPY_ARITY_STYLE_UNPACK, out_error) == 0) {
             merged = TINYPY_FALSE;
         }
         else if (TINYPY_TUPLE_SIZE(constructor_args) == 1U) {
@@ -2163,17 +2331,12 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
     }
     if (layout_kind == TINYPY_VALUE_SET) {
         tinypy_value_t *constructor_args = __tinypy_constructor_tail_arguments(vm, args);
+        tinypy_bool_t initialized = tinypy_internal_set_initialize(self, constructor_args, kwargs, out_error);
 
-        if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, constructor_args, 0U, 1U, out_error) == 0) {
-            TINYPY_DECREF(constructor_args);
-            return NULL;
-        }
-        tinypy_set_clear(self);
-        if (TINYPY_TUPLE_SIZE(constructor_args) == 1U && tinypy_internal_set_update_iterable(self, TINYPY_TUPLE_GET(constructor_args, 0U), out_error) == 0) {
-            TINYPY_DECREF(constructor_args);
-            return NULL;
-        }
         TINYPY_DECREF(constructor_args);
+        if (initialized == 0) {
+            return NULL;
+        }
         tinypy_value_t *initialized_result = TINYPY_RET_NONE(vm);
         return initialized_result;
     }
@@ -2512,6 +2675,18 @@ static tinypy_value_t *__tinypy_constructor_reduce_optional_attribute(tinypy_val
     }
     tinypy_internal_exception_preserve_end(vm, &state);
     return value;
+}
+//////////////////////////////////////////////////////////////////////////
+/* set_reduce and bytearray_reduce pass the instance __dict__ as the state,
+   or None when getting it fails. */
+static tinypy_value_t *__tinypy_constructor_reduce_instance_dict(tinypy_value_t *self) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
+    tinypy_value_t *dict = __tinypy_constructor_reduce_optional_attribute(self, vm->internal_special_dict_key);
+
+    if (dict == NULL) {
+        return TINYPY_RET_NONE(vm);
+    }
+    return dict;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t *self, tinypy_value_t *protocol_value, int64_t protocol, tinypy_error_t **out_error) {
@@ -3192,12 +3367,11 @@ static tinypy_value_t *__tinypy_constructor_immutable_new_method(tinypy_value_t 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_type_e kind = (tinypy_value_type_e)(intptr_t)user_data;
 
-    if (TINYPY_TUPLE_SIZE(args) == 0U || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_TYPE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "immutable __new__ requires a type", out_error);
+    tinypy_type_t *type = __tinypy_constructor_new_receiver(vm, &vm->types[kind], args, out_error);
+    if (type == NULL) {
         return NULL;
     }
-    tinypy_type_t *type = (tinypy_type_t *)TINYPY_TUPLE_GET(args, 0U);
-    if (type->layout_kind != kind || tinypy_type_is_subtype(type, &vm->types[kind]) == 0) {
+    if (type->layout_kind != kind) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "immutable __new__ received an incompatible type", out_error);
         return NULL;
     }
@@ -3216,13 +3390,8 @@ static tinypy_value_t *__tinypy_constructor_builtin_new_method(tinypy_value_t *f
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_type_t *base_type = (tinypy_type_t *)user_data;
 
-    if (TINYPY_TUPLE_SIZE(args) == 0U || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_TYPE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "builtin __new__ requires a type", out_error);
-        return NULL;
-    }
-    tinypy_type_t *type = (tinypy_type_t *)TINYPY_TUPLE_GET(args, 0U);
-    if (tinypy_type_is_subtype(type, base_type) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "builtin __new__ received an incompatible type", out_error);
+    tinypy_type_t *type = __tinypy_constructor_new_receiver(vm, base_type, args, out_error);
+    if (type == NULL) {
         return NULL;
     }
     tinypy_value_type_e kind = base_type->layout_kind;
@@ -3237,7 +3406,7 @@ static tinypy_value_t *__tinypy_constructor_builtin_new_method(tinypy_value_t *f
         }
         return result;
     }
-    if (kind == TINYPY_VALUE_PROPERTY || kind == TINYPY_VALUE_CLASS_METHOD || kind == TINYPY_VALUE_STATIC_METHOD || kind == TINYPY_VALUE_MODULE) {
+    if (kind == TINYPY_VALUE_PROPERTY || kind == TINYPY_VALUE_CLASS_METHOD || kind == TINYPY_VALUE_STATIC_METHOD || kind == TINYPY_VALUE_MODULE || kind == TINYPY_VALUE_SUPER) {
         tinypy_value_t *result = tinypy_internal_object_allocate_checked(vm, type, type->basic_size, out_error);
 
         return result;
@@ -3261,8 +3430,11 @@ static tinypy_value_t *__tinypy_constructor_builtin_reduce_method(tinypy_value_t
     tinypy_value_t *owned[4] = {NULL, NULL, NULL, NULL};
     size_t owned_count = 0U;
     size_t result_count = 2U;
+    /* range_reduce is METH_VARARGS and ignores its arguments; the others are
+       METH_NOARGS. */
+    size_t maximum = declaring_type->layout_kind == TINYPY_VALUE_XRANGE ? SIZE_MAX : 0U;
 
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 1U, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, maximum, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -3290,45 +3462,20 @@ static tinypy_value_t *__tinypy_constructor_builtin_reduce_method(tinypy_value_t
     }
     case TINYPY_VALUE_SET:
     case TINYPY_VALUE_FROZENSET: {
-        tinypy_value_t *list = tinypy_list_from_items(vm, NULL, 0U);
-        tinypy_value_t *iterator = tinypy_internal_set_iter(self, out_error);
-        tinypy_error_t *iteration_error = NULL;
+        /* set_reduce takes PySequence_List(self), which iterates through an
+           overridden __iter__. */
+        tinypy_value_t *list = tinypy_internal_list_from_items_checked(vm, NULL, 0U, out_error);
 
-        if (iterator == NULL || tinypy_internal_list_reserve_checked(vm, list, TINYPY_DICT_SIZE(TINYPY_SET_OBJECT(self)->dict), out_error) == 0) {
-            if (iterator != NULL) {
-                TINYPY_DECREF(iterator);
-            }
-            TINYPY_DECREF(list);
+        if (list == NULL) {
             return NULL;
         }
-        for (;;) {
-            tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
-
-            if (item == NULL) {
-                break;
-            }
-            if (tinypy_internal_list_append_checked(list, item, out_error) == 0) {
-                TINYPY_DECREF(item);
-                TINYPY_DECREF(iterator);
-                TINYPY_DECREF(list);
-                return NULL;
-            }
-            TINYPY_DECREF(item);
-        }
-        TINYPY_DECREF(iterator);
-        if (iteration_error != NULL) {
+        if (tinypy_internal_list_extend_iterable(list, self, "error return without exception set", out_error) == TINYPY_FALSE) {
             TINYPY_DECREF(list);
-            if (out_error != NULL) {
-                *out_error = iteration_error;
-            }
-            else {
-                tinypy_error_release(iteration_error);
-            }
             return NULL;
         }
         constructor_args = tinypy_tuple_from_items(vm, &list, 1U);
         TINYPY_DECREF(list);
-        state = TINYPY_RET_NONE(vm);
+        state = __tinypy_constructor_reduce_instance_dict(self);
         result_count = 3U;
         break;
     }
@@ -3354,7 +3501,7 @@ static tinypy_value_t *__tinypy_constructor_builtin_reduce_method(tinypy_value_t
         constructor_args = tinypy_tuple_from_items(vm, items, 2U);
         TINYPY_DECREF(unicode);
         TINYPY_DECREF(encoding);
-        state = TINYPY_RET_NONE(vm);
+        state = __tinypy_constructor_reduce_instance_dict(self);
         result_count = 3U;
         break;
     }

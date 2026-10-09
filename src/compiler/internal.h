@@ -42,6 +42,9 @@ typedef struct tinypy_compile_ctx_t {
     tinypy_compile_options_t options;
     tinypy_compile_limits_t limits;
     tinypy_source_view_t source;
+    /* The host source as its file holds it, which semantic errors quote like
+       PyErr_ProgramText; empty for the strings of compile, exec and eval. */
+    tinypy_source_view_t program_text;
     const char *logical_filename;
     size_t filename_size;
     tinypy_compiler_arena_block_t *arena_blocks;

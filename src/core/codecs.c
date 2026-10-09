@@ -407,7 +407,7 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
             goto cleanup_input;
         }
         if (integer < INT32_MIN || integer > INT32_MAX) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "Python int too large to convert to C int", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, integer < INT32_MIN ? "signed integer is less than minimum" : "signed integer is greater than maximum", out_error);
             goto cleanup_input;
         }
         final = integer != 0 ? TINYPY_TRUE : TINYPY_FALSE;

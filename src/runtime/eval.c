@@ -567,18 +567,6 @@ static void __tinypy_eval_unwind_stack(tinypy_frame_object_t *frame, size_t dept
     }
 }
 //////////////////////////////////////////////////////////////////////////
-/* The local, cell and free slots precede the value stack. */
-static void __tinypy_eval_clear_local_slots(tinypy_frame_object_t *frame) {
-    for (tinypy_value_t **slot = frame->locals_plus; slot != frame->value_stack; ++slot) {
-        if (*slot != NULL) {
-            tinypy_value_t *value = *slot;
-
-            *slot = NULL;
-            TINYPY_DECREF(value);
-        }
-    }
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_lookup_name(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *name, size_t name_index, int32_t include_locals, tinypy_error_t **out_error) {
     tinypy_global_cache_entry_t *cache = NULL;
 
@@ -978,7 +966,7 @@ static tinypy_bool_t __tinypy_eval_exec_statement(tinypy_vm_t *vm, tinypy_frame_
             options.optimize_level = vm->optimize_level;
         }
         options.dont_inherit = 0;
-        execution_code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, "<string>", 8U, &options, out_error);
+        execution_code = tinypy_internal_compiler_compile_source(vm, source_bytes, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, TINYPY_FALSE, "<string>", 8U, &options, out_error);
         if (execution_code != NULL) {
             execution_result = tinypy_exec_code(execution_code, execution_globals, execution_locals, out_error);
             TINYPY_DECREF(execution_code);
@@ -3856,14 +3844,14 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             TINYPY_DECREF(frame->back);
             frame->back = NULL;
         }
+        /* The generator clears the locals once it no longer runs. */
         if (reason != TINYPY_EVAL_REASON_YIELD) {
             __tinypy_eval_unwind_stack(frame, 0U);
-            __tinypy_eval_clear_local_slots(frame);
         }
     }
     else {
         __tinypy_eval_unwind_stack(frame, 0U);
-        __tinypy_eval_clear_local_slots(frame);
+        tinypy_internal_frame_clear_local_slots(frame);
         if (TINYPY_REFCNT(frame_value) == 1U) {
             tinypy_internal_frame_release_fast(frame);
         }

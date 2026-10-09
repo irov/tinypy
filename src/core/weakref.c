@@ -401,24 +401,91 @@ static tinypy_value_t *__tinypy_weakref_proxy_string(tinypy_value_t *proxy, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_hash_t __tinypy_weakref_proxy_hash(tinypy_value_t *proxy, tinypy_error_t **out_error) {
-    tinypy_internal_make_vm_error(TINYPY_VALUE_VM(proxy), TINYPY_ERROR_TYPE, "unhashable type", out_error);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(proxy),
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+    };
+
+    tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(proxy), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
     return (tinypy_hash_t)0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* proxy_compare: a proxy has only tp_compare, which compares the referents
+   of two proxies; any other operand gets the default comparison. */
+static tinypy_bool_t __tinypy_weakref_proxy_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
+    tinypy_value_t *left_object = __tinypy_weakref_proxy_referent(left, out_error);
+    if (left_object == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *right_object = __tinypy_weakref_proxy_referent(right, out_error);
+    if (right_object == NULL) {
+        return TINYPY_FALSE;
+    }
+    TINYPY_INCREF(left_object);
+    TINYPY_INCREF(right_object);
+    tinypy_bool_t ordered = tinypy_internal_compare_three_way(left_object, right_object, out_order, out_error);
+    TINYPY_DECREF(right_object);
+    TINYPY_DECREF(left_object);
+    return ordered;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_proxy_compare(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_value_t *left_object = __tinypy_weakref_proxy_referent(left, out_error);
-    tinypy_value_t *right_object;
+    int32_t order;
+    tinypy_bool_t result;
 
-    if (left_object == NULL) {
+    if (__tinypy_weakref_is_proxy(vm, right) == 0) {
+        tinypy_value_t *not_implemented = TINYPY_RET_NOT_IMPLEMENTED(vm);
+        return not_implemented;
+    }
+    if (__tinypy_weakref_proxy_order(left, right, &order, out_error) == 0) {
         return NULL;
     }
-    right_object = __tinypy_weakref_proxy_operand(vm, right, out_error);
-    if (right_object == NULL) {
+    switch (operation) {
+    case TINYPY_COMPARE_LESS:
+        result = order < 0;
+        break;
+    case TINYPY_COMPARE_LESS_EQUAL:
+        result = order <= 0;
+        break;
+    case TINYPY_COMPARE_EQUAL:
+        result = order == 0;
+        break;
+    case TINYPY_COMPARE_NOT_EQUAL:
+        result = order != 0;
+        break;
+    case TINYPY_COMPARE_GREATER:
+        result = order > 0;
+        break;
+    default:
+        result = order >= 0;
+        break;
+    }
+    tinypy_value_t *compared = tinypy_bool_from_i32(vm, result);
+    return compared;
+}
+//////////////////////////////////////////////////////////////////////////
+/* __cmp__ wraps proxy_compare for two proxies. The comparison fallback asks
+   it about other operands too, which it leaves to the default comparison. */
+static tinypy_value_t *__tinypy_weakref_proxy_cmp_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    int32_t order;
+
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_UNPACK, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_compare_value(left_object, right_object, (tinypy_compare_operation_e)operation, out_error);
-    return return_value_1;
+    tinypy_value_t *other = TINYPY_TUPLE_GET(args, 1U);
+    if (__tinypy_weakref_is_proxy(vm, other) == 0) {
+        tinypy_value_t *not_implemented = TINYPY_RET_NOT_IMPLEMENTED(vm);
+        return not_implemented;
+    }
+    if (__tinypy_weakref_proxy_order(TINYPY_TUPLE_GET(args, 0U), other, &order, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, order);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_weakref_proxy_nonzero(tinypy_value_t *proxy, tinypy_error_t **out_error) {
@@ -1052,6 +1119,7 @@ static tinypy_type_t *__tinypy_weakref_proxy_type_new(tinypy_value_t *name, tiny
     tinypy_type_set_attr_key(type, type->vm->internal_special_hash_key, &vm->none_object.base);
     tinypy_internal_type_add_method(type, vm->internal_special_delattr_key, __tinypy_weakref_proxy_delete_attribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_weakref_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    tinypy_internal_type_add_method(type, vm->internal_special_cmp_key, __tinypy_weakref_proxy_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     if (callable == TINYPY_FALSE) {
         tinypy_internal_type_add_method(type, vm->internal_special_unicode_key, __tinypy_weakref_proxy_unicode_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_METHOD);
     }

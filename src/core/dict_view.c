@@ -2,8 +2,6 @@
 
 #include "internal.h"
 
-#include <string.h>
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_dict_view_new(tinypy_value_t *dict, tinypy_dict_view_kind_e kind) {
     tinypy_value_type_e value_kind;
@@ -264,77 +262,6 @@ static tinypy_value_t *__tinypy_dict_view_contains_method(tinypy_value_t *functi
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_dict_view_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
-    static const char *const prefixes[] = {"dict_keys(", "dict_values(", "dict_items("};
-    static const size_t prefix_sizes[] = {10U, 12U, 11U};
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *list = tinypy_list_from_items(vm, NULL, 0U);
-    tinypy_value_t *iterator = tinypy_internal_dict_view_iter(value, out_error);
-    tinypy_error_t *iteration_error = NULL;
-
-    if (iterator == NULL) {
-        TINYPY_DECREF(list);
-        return NULL;
-    }
-    if (tinypy_internal_list_reserve_checked(vm, list, TINYPY_DICT_SIZE(TINYPY_DICT_VIEW_OBJECT(value)->dict), out_error) == 0) {
-        TINYPY_DECREF(iterator);
-        TINYPY_DECREF(list);
-        return NULL;
-    }
-    for (;;) {
-        tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
-
-        if (item == NULL) {
-            break;
-        }
-        if (tinypy_internal_list_append_checked(list, item, out_error) == 0) {
-            TINYPY_DECREF(item);
-            TINYPY_DECREF(iterator);
-            TINYPY_DECREF(list);
-            return NULL;
-        }
-        TINYPY_DECREF(item);
-    }
-    TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
-        TINYPY_DECREF(list);
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
-        return NULL;
-    }
-    tinypy_value_t *list_repr = tinypy_object_repr(list, out_error);
-    TINYPY_DECREF(list);
-    if (list_repr == NULL) {
-        return NULL;
-    }
-    tinypy_dict_view_kind_e view_kind = TINYPY_DICT_VIEW_OBJECT(value)->kind;
-    size_t list_size;
-    const char *list_bytes = tinypy_string_view(list_repr, &list_size);
-    if (list_size > SIZE_MAX - prefix_sizes[view_kind] - 1U) {
-        TINYPY_DECREF(list_repr);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "dictionary view representation is too large", out_error);
-        return NULL;
-    }
-    size_t result_size = prefix_sizes[view_kind] + list_size + 1U;
-    uint8_t *result_bytes;
-    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, result_size, result_size, &result_bytes, out_error);
-
-    if (result == NULL) {
-        TINYPY_DECREF(list_repr);
-        return NULL;
-    }
-
-    (void)memcpy(result_bytes, prefixes[view_kind], prefix_sizes[view_kind]);
-    (void)memcpy(result_bytes + prefix_sizes[view_kind], list_bytes, list_size);
-    result_bytes[result_size - 1U] = (uint8_t)')';
-    TINYPY_DECREF(list_repr);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dict_view_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -348,13 +275,13 @@ static tinypy_value_t *__tinypy_dict_view_repr_method(tinypy_value_t *function, 
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__repr__ requires a dict view", out_error);
         return NULL;
     }
-    tinypy_value_t *result = __tinypy_dict_view_repr(self, out_error);
+    tinypy_value_t *result = tinypy_internal_object_repr_builtin(self, out_error);
 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_hash_t __tinypy_dict_view_unhashable(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "unhashable type", out_error);
+    tinypy_internal_hash_unhashable_error(value, out_error);
     return (tinypy_hash_t)0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -391,7 +318,4 @@ void tinypy_internal_initialize_dict_view_types(tinypy_vm_t *vm) {
     }
     __tinypy_dict_view_initialize_set_like(vm, &vm->types[TINYPY_VALUE_DICT_KEYS]);
     __tinypy_dict_view_initialize_set_like(vm, &vm->types[TINYPY_VALUE_DICT_ITEMS]);
-    vm->types[TINYPY_VALUE_DICT_KEYS].repr = __tinypy_dict_view_repr;
-    vm->types[TINYPY_VALUE_DICT_VALUES].repr = __tinypy_dict_view_repr;
-    vm->types[TINYPY_VALUE_DICT_ITEMS].repr = __tinypy_dict_view_repr;
 }

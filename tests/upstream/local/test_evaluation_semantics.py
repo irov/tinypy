@@ -1,5 +1,6 @@
 """Project-authored Python 2.7 execution and evaluation-order checks."""
 
+import sys
 import unittest
 
 
@@ -917,3 +918,225 @@ class EvaluationSemantics(unittest.TestCase):
         except TypeError as error:
             self.assertEqual(str(error), 'greet() takes exactly 2 arguments (1 given)')
         self.assertEqual(Other().greet(suffix='?'), 'other?')
+
+    def test_dir_without_arguments_lists_keys_of_mapping_locals(self):
+        class Mapping:
+            def __getitem__(self, key):
+                if key == 'a':
+                    return 12
+                raise KeyError(key)
+            def __setitem__(self, key, value):
+                self.stored = (key, value)
+            def keys(self):
+                return list('zyx')
+        class Names(list):
+            pass
+        class NamedKeys(Mapping):
+            def keys(self):
+                return Names('ba')
+        class TupleKeys(Mapping):
+            def keys(self):
+                return ('a',)
+        class OverridingKeys(dict):
+            def keys(self):
+                return ['d', 'c']
+        mapping = Mapping()
+        self.assertEqual(eval('a', {}, mapping), 12)
+        self.assertEqual(eval('dir()', {}, mapping), ['x', 'y', 'z'])
+        exec 'value = dir()' in {}, mapping
+        self.assertEqual(mapping.stored, ('value', ['x', 'y', 'z']))
+        names = eval('dir()', {}, NamedKeys())
+        self.assertEqual(names, ['a', 'b'])
+        self.assertIs(type(names), Names)
+        self.assertEqual(eval('dir()', {}, OverridingKeys(e=1)), ['c', 'd'])
+        try:
+            eval('dir()', {}, TupleKeys())
+        except TypeError as error:
+            self.assertEqual(str(error), "dir(): expected keys() of locals to be a list, not 'tuple'")
+        else:
+            self.fail('dir() accepted keys() of locals that is not a list')
+
+    def test_locals_with_getslice_are_not_a_mapping(self):
+        class Sliceable(dict):
+            def __getslice__(self, start, stop):
+                return start
+        class Indexable(object):
+            def __getitem__(self, key):
+                raise KeyError(key)
+        class SliceableIndexable(Indexable):
+            def __getslice__(self, start, stop):
+                return start
+        for namespaces in ((Sliceable(),), ({}, Sliceable()), ({}, SliceableIndexable())):
+            try:
+                exec 'value = 1' in namespaces[0], namespaces[-1]
+            except TypeError as error:
+                self.assertEqual(str(error), 'exec: arg 3 must be a mapping or None')
+            else:
+                self.fail('exec accepted locals with __getslice__')
+        self.assertRaises(TypeError, eval, 'value', {}, SliceableIndexable())
+        exec 'pass' in {}, Indexable()
+        self.assertEqual(eval('1', {}, Indexable()), 1)
+
+    def test_generator_releases_finished_frame_after_it_stops_running(self):
+        log = []
+        class Probe(object):
+            def __del__(self):
+                for operation in (generator.next, generator.close, lambda: generator.throw(ValueError)):
+                    try:
+                        log.append(operation())
+                    except Exception as error:
+                        log.append(type(error).__name__)
+                log.append(generator.gi_running)
+        def produce():
+            probe = Probe()
+            yield probe
+        generator = produce()
+        generator.next()
+        self.assertRaises(StopIteration, generator.next)
+        self.assertEqual(log, ['StopIteration', None, 'ValueError', 0])
+        del log[:]
+        generator = produce()
+        generator.next()
+        generator.close()
+        self.assertEqual(log, ['StopIteration', None, 'ValueError', 0])
+        self.assertIs(generator.gi_frame, None)
+
+    def test_generator_ignoring_exit_while_released_drops_its_frame(self):
+        class Sink(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                self.parts.append(text)
+        def produce():
+            try:
+                yield 1
+            finally:
+                yield 2
+        generator = produce()
+        generator.next()
+        sink, previous = Sink(), sys.stderr
+        sys.stderr = sink
+        try:
+            del generator
+        finally:
+            sys.stderr = previous
+        diagnostic = ''.join(sink.parts)
+        self.assertTrue(diagnostic.startswith('Exception RuntimeError: '))
+        self.assertTrue('generator ignored GeneratorExit' in diagnostic)
+        self.assertTrue(diagnostic.endswith(' ignored\n'))
+
+    def test_map_reports_pending_length_error_like_builtin_map(self):
+        class BadLength(object):
+            def __init__(self, iterator):
+                self.iterator = iterator
+            def __iter__(self):
+                return self.iterator
+            def __len__(self):
+                raise RuntimeError('length')
+        class BadHint(BadLength):
+            __len__ = None
+            def __length_hint__(self):
+                raise RuntimeError('hint')
+        class Countdown(object):
+            def __init__(self, count):
+                self.count = count
+            def __iter__(self):
+                return self
+            def next(self):
+                if self.count == 0:
+                    raise StopIteration
+                self.count -= 1
+                return self.count
+        calls = []
+        def record(*items):
+            calls.append(items)
+            return items
+        self.assertRaises(RuntimeError, map, record, BadLength(iter([1, 2])))
+        self.assertEqual(calls, [(1,), (2,)])
+        self.assertRaises(RuntimeError, map, record, BadHint(iter([3])))
+        self.assertEqual(map(record, BadLength(Countdown(2))), [(1,), (0,)])
+        self.assertEqual(map(None, BadLength(iter([1, 2])), iter([3])), [(1, 3), (2, None)])
+        self.assertRaises(RuntimeError, map, None, BadLength(iter([1])), [3, 4])
+        self.assertRaises(RuntimeError, map, None, [3, 4], BadLength(iter([1])))
+        self.assertRaises(RuntimeError, list, BadLength(iter([1])))
+        self.assertRaises(RuntimeError, map, None, BadLength(iter([1])))
+
+    def test_range_long_operands_keep_their_own_protocols(self):
+        events = []
+        class BadZero(int):
+            def __cmp__(self, other):
+                raise RuntimeError('compare')
+            __hash__ = None
+        class FailingLong(long):
+            def __int__(self):
+                events.append('int')
+                raise IndexError(1)
+        class ConvertingLong(long):
+            def __int__(self):
+                events.append('int')
+                return 3
+        start = 10 * sys.maxint
+        self.assertRaises(RuntimeError, range, start, start + 1, BadZero(1))
+        result = range(FailingLong(2))
+        self.assertEqual(result, [0, 1])
+        self.assertEqual([type(item) for item in result], [long, long])
+        result = range(ConvertingLong(2))
+        self.assertEqual(result, [0, 1, 2])
+        self.assertEqual([type(item) for item in result], [int, int, int])
+        self.assertEqual(events, ['int', 'int'])
+        self.assertEqual(range(start + 3, start, -1), [start + 3, start + 2, start + 1])
+        self.assertEqual(range(sys.maxint, sys.maxint + 2), [sys.maxint, sys.maxint + 1])
+
+    def test_unstarted_generator_frame_is_on_the_definition_line(self):
+        def produce():
+            value = 1
+            yield value
+        generator = produce()
+        first_line = produce.func_code.co_firstlineno
+        self.assertEqual(generator.gi_frame.f_lineno, first_line)
+        generator.next()
+        self.assertEqual(generator.gi_frame.f_lineno, first_line + 2)
+
+    def test_parsed_builtin_arguments_name_the_function(self):
+        cases = (
+            (lambda: round(1, 2, 3), 'round() takes at most 2 arguments (3 given)'),
+            (lambda: round(1, 2, ndigits=3), 'round() takes at most 2 arguments (3 given)'),
+            (lambda: round(x=1), "Required argument 'number' (pos 1) not found"),
+            (lambda: round(1, x=2), "'x' is an invalid keyword argument for this function"),
+            (lambda: round(1, ndigits=2, number=3), 'round() takes at most 2 arguments (3 given)'),
+            (lambda: compile('1', 'name', 'eval', 0, 0, 0), 'compile() takes at most 5 arguments (6 given)'),
+            (lambda: compile('1', 'name', None), 'compile() argument 3 must be string, not None'),
+            (lambda: intern(None), 'intern() argument 1 must be string, not None'),
+            (lambda: intern(1), 'intern() argument 1 must be string, not int'),
+        )
+        for call, message in cases:
+            try:
+                call()
+            except TypeError as error:
+                self.assertEqual(str(error), message)
+            else:
+                self.fail(message)
+
+    def test_flat_operator_chains_compile(self):
+        namespace = {'x': 1}
+        exec compile('total = 1' + ' + 1' * 2500, '<chain>', 'exec') in namespace
+        self.assertEqual(namespace['total'], 2501)
+        exec compile('difference = ' + ' - '.join(['x'] * 3000), '<chain>', 'exec') in namespace
+        self.assertEqual(namespace['difference'], -2998)
+        exec compile('value = x or ' + '-x' * 2500, '<chain>', 'exec') in namespace
+        self.assertEqual(namespace['value'], 1)
+        functions = eval(' + '.join(['[lambda: %d]' % index for index in range(1200)]), namespace)
+        self.assertEqual([function() for function in functions[::400]], [0, 400, 800])
+
+    def test_code_objects_support_weak_references(self):
+        import _weakref
+        called = []
+        namespace = {}
+        exec 'def function(): pass' in namespace
+        function = namespace.pop('function')
+        reference = _weakref.ref(function.func_code, called.append)
+        self.assertIs(reference(), function.func_code)
+        self.assertEqual(_weakref.getweakrefcount(function.func_code), 1)
+        del function
+        self.assertIs(reference(), None)
+        self.assertEqual(called, [reference])

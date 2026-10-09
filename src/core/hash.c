@@ -344,6 +344,18 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, t
     return hash;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyObject_HashNotImplemented. */
+void tinypy_internal_hash_unhashable_error(const tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinypy_bool_t overrides_only, tinypy_hash_t *out_hash, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *mutable_value = (tinypy_value_t *)value;
@@ -365,14 +377,8 @@ static int32_t __tinypy_internal_hash_special(const tinypy_value_t *value, tinyp
             return found;
         }
         if (TINYPY_VALUE_KIND(method) == TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE) {
-            tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
-                TINYPY_MESSAGE_PART_TYPE_NAME(mutable_value),
-                TINYPY_MESSAGE_PART_LITERAL("'"),
-            };
-
             TINYPY_DECREF(method);
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+            tinypy_internal_hash_unhashable_error(value, out_error);
             return INT32_C(-1);
         }
         tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
@@ -547,17 +553,9 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
     case TINYPY_VALUE_LIST:
     case TINYPY_VALUE_DICT:
     case TINYPY_VALUE_SET:
-    case TINYPY_VALUE_BYTEARRAY: {
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(value),
-            TINYPY_MESSAGE_PART_LITERAL("'"),
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+    case TINYPY_VALUE_BYTEARRAY:
+        tinypy_internal_hash_unhashable_error(value, out_error);
         return (tinypy_hash_t)0;
-    }
     default: {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
         tinypy_hash_t hash;

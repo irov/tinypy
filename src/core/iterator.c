@@ -85,17 +85,20 @@ tinypy_value_t *tinypy_internal_dict_iterator_new(tinypy_value_t *dict, int32_t 
     return &iterator->base;
 }
 //////////////////////////////////////////////////////////////////////////
+/* setiterator keeps the set itself alive; the set never replaces its dict. */
 tinypy_value_t *tinypy_internal_set_iterator_new(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *dict = TINYPY_SET_OBJECT(value)->dict;
-    tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(__tinypy_internal_iterator_new_with_type(dict, vm->iterator_types[TINYPY_ITERATOR_TYPE_SET]));
+    tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(__tinypy_internal_iterator_new_with_type(value, vm->iterator_types[TINYPY_ITERATOR_TYPE_SET]));
 
     iterator->mode = INT32_C(0);
+    iterator->expected_state = (uint64_t)TINYPY_DICT_OBJECT(TINYPY_SET_OBJECT(value)->dict)->used;
     return &iterator->base;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_formatter_iterator_new(tinypy_value_t *text, int32_t mode) {
-    tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(__tinypy_internal_iterator_new(text));
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(text);
+    tinypy_type_t *type = vm->iterator_types[mode == INT32_C(6) ? TINYPY_ITERATOR_TYPE_FORMATTER : TINYPY_ITERATOR_TYPE_FIELD_NAME];
+    tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(__tinypy_internal_iterator_new_with_type(text, type));
 
     iterator->mode = mode;
     return &iterator->base;
@@ -227,9 +230,7 @@ static tinypy_value_t *__tinypy_internal_iterator_dict_item(tinypy_iterator_obje
     return pair;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_iterator_next_dict(tinypy_iterator_object_t *iterator, tinypy_error_t **out_error) {
-    tinypy_dict_object_t *dict = TINYPY_DICT_OBJECT(iterator->iterable);
-
+static tinypy_value_t *__tinypy_internal_iterator_next_dict(tinypy_iterator_object_t *iterator, tinypy_dict_object_t *dict, tinypy_error_t **out_error) {
     if ((uint64_t)dict->used != iterator->expected_state) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator->iterable);
         iterator->expected_state = UINT64_MAX;
@@ -276,7 +277,7 @@ static tinypy_value_t *__tinypy_internal_dict_iterator_next(tinypy_value_t *valu
     tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(value);
 
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_value_t *return_value_1 = iterator->iterable != NULL ? __tinypy_internal_iterator_next_dict(iterator, out_error) : NULL;
+    tinypy_value_t *return_value_1 = iterator->iterable != NULL ? __tinypy_internal_iterator_next_dict(iterator, TINYPY_DICT_OBJECT(iterator->iterable), out_error) : NULL;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -287,12 +288,14 @@ static tinypy_value_t *__tinypy_internal_set_iterator_next(tinypy_value_t *value
     if (iterator->iterable == NULL) {
         return NULL;
     }
-    if ((uint64_t)TINYPY_DICT_OBJECT(iterator->iterable)->used != iterator->expected_state) {
+    tinypy_dict_object_t *dict = TINYPY_DICT_OBJECT(TINYPY_SET_OBJECT(iterator->iterable)->dict);
+
+    if ((uint64_t)dict->used != iterator->expected_state) {
         iterator->expected_state = UINT64_MAX;
         tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_RUNTIME, "Set changed size during iteration", out_error);
         return NULL;
     }
-    tinypy_value_t *return_value_1 = __tinypy_internal_iterator_next_dict(iterator, out_error);
+    tinypy_value_t *return_value_1 = __tinypy_internal_iterator_next_dict(iterator, dict, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -430,7 +433,7 @@ tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_erro
         function_result = __tinypy_internal_iterator_next_unicode(iterator);
         return function_result;
     case TINYPY_VALUE_DICT:
-        function_result = __tinypy_internal_iterator_next_dict(iterator, out_error);
+        function_result = __tinypy_internal_iterator_next_dict(iterator, TINYPY_DICT_OBJECT(iterator->iterable), out_error);
         return function_result;
     default:
         return NULL;
@@ -486,6 +489,9 @@ size_t tinypy_internal_iterator_size_hint(const tinypy_iterator_object_t *iterat
         return 0U;
     }
     if (TINYPY_VALUE_KIND(iterator->iterable) == TINYPY_VALUE_DICT && (uint64_t)TINYPY_DICT_SIZE(iterator->iterable) != iterator->expected_state) {
+        return 0U;
+    }
+    if (iterator->base.type == TINYPY_VALUE_VM(iterator->iterable)->iterator_types[TINYPY_ITERATOR_TYPE_SET] && (uint64_t)TINYPY_DICT_SIZE(TINYPY_SET_OBJECT(iterator->iterable)->dict) != iterator->expected_state) {
         return 0U;
     }
     size = tinypy_internal_iterable_size_hint(iterator->iterable);
@@ -996,12 +1002,12 @@ tinypy_value_t *tinypy_internal_reversed_create(tinypy_type_t *type, tinypy_valu
         return NULL;
     }
     tinypy_value_t *sequence = TINYPY_TUPLE_GET(args, 0U);
-    if (tinypy_internal_object_has_special_key(sequence, vm->internal_special_reversed_key) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(sequence, vm->internal_special_reversed_key, out_error);
-
-        if (method == NULL) {
-            return NULL;
-        }
+    tinypy_value_t *method;
+    int32_t found = tinypy_internal_object_lookup_special_key(sequence, vm->internal_special_reversed_key, &method, out_error);
+    if (found < 0) {
+        return NULL;
+    }
+    if (found > 0) {
         tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
         tinypy_value_t *result = tinypy_call(method, empty, NULL, out_error);
         TINYPY_DECREF(empty);
@@ -1082,9 +1088,11 @@ tinypy_value_t *tinypy_internal_enumerate_next(tinypy_value_t *value, tinypy_err
     items[0] = enumerate->index;
     items[1] = item;
     tinypy_value_t *result = tinypy_tuple_from_items(vm, items, 2U);
-    TINYPY_DECREF(item);
-    TINYPY_DECREF(enumerate->index);
+    tinypy_value_t *previous_index = enumerate->index;
+
     enumerate->index = next_index;
+    TINYPY_DECREF(item);
+    TINYPY_DECREF(previous_index);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1111,7 +1119,15 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, s
         *out_size = (size_t)length;
         return TINYPY_TRUE;
     }
-    if (tinypy_internal_object_has_special_key(sequence, vm->internal_special_length_key) != 0) {
+    /* A classic instance reports its missing __len__ attribute; the __len__
+       of a memoryview is its mapping length, which PySequence_Size does not
+       read. */
+    tinypy_bool_t has_length = TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
+
+    if (has_length == 0 && tinypy_internal_memoryview_check(sequence) == 0) {
+        has_length = tinypy_internal_object_has_special_key(sequence, vm->internal_special_length_key);
+    }
+    if (has_length != 0) {
         tinypy_value_t *method = tinypy_internal_object_get_special_key(sequence, vm->internal_special_length_key, out_error);
         tinypy_value_t *empty;
         tinypy_value_t *length_value;
@@ -1139,7 +1155,14 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, s
         *out_size = (size_t)length;
         return TINYPY_TRUE;
     }
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "reversed argument must be a sequence", out_error);
+    /* PySequence_Size reads only the sequence length slot. */
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("object of type '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(sequence),
+        TINYPY_MESSAGE_PART_LITERAL("' has no len()"),
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1149,7 +1172,7 @@ static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t
 
     /* PySequence_Check excludes dictionaries outright and otherwise demands an
        item protocol, so mappings never reach the index-counting path. */
-    if (tinypy_internal_memoryview_check(sequence) != 0 || TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key) == 0) {
+    if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument to reversed() must be a sequence", out_error);
         return NULL;
     }
@@ -1218,6 +1241,16 @@ size_t tinypy_internal_reversed_size_hint(tinypy_value_t *value, tinypy_error_t 
     return size < reversed->index ? 0U : reversed->index;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The exhausted iterator forgets the sequence before releasing it: a __del__
+   of the sequence may re-enter next() on this iterator. */
+static void __tinypy_reversed_clear(tinypy_reversed_object_t *reversed) {
+    tinypy_value_t *sequence = reversed->sequence;
+
+    reversed->sequence = NULL;
+    reversed->index = 0U;
+    TINYPY_DECREF(sequence);
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_reversed_object_t *reversed = TINYPY_REVERSED_OBJECT(value);
 
@@ -1225,16 +1258,13 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
         return NULL;
     }
     if (reversed->index == 0U) {
-        TINYPY_DECREF(reversed->sequence);
-        reversed->sequence = NULL;
+        __tinypy_reversed_clear(reversed);
         return NULL;
     }
     reversed->index -= 1U;
     if (TINYPY_VALUE_KIND(reversed->sequence) == TINYPY_VALUE_LIST) {
         if (reversed->index >= TINYPY_LIST_SIZE(reversed->sequence)) {
-            TINYPY_DECREF(reversed->sequence);
-            reversed->sequence = NULL;
-            reversed->index = 0U;
+            __tinypy_reversed_clear(reversed);
             return NULL;
         }
         tinypy_value_t *result = TINYPY_LIST_GET(reversed->sequence, reversed->index);
@@ -1254,21 +1284,17 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
     tinypy_value_t *result = tinypy_get_item(reversed->sequence, key, &item_error);
     TINYPY_DECREF(key);
     if (result == NULL && (tinypy_internal_exception_consume_stop_iteration(vm, &item_error) != 0 || (vm->raised_value != NULL && tinypy_type_is_subtype(vm->raised_value->type, vm->exception_types[TINYPY_EXCEPTION_INDEX_ERROR]) != 0))) {
-        reversed->index = 0U;
         if (item_error != NULL) {
             tinypy_error_release(item_error);
         }
         if (vm->raised_value != NULL) {
             tinypy_internal_exception_clear_raised(vm);
         }
-        TINYPY_DECREF(reversed->sequence);
-        reversed->sequence = NULL;
+        __tinypy_reversed_clear(reversed);
         return NULL;
     }
     if (result == NULL) {
-        reversed->index = 0U;
-        TINYPY_DECREF(reversed->sequence);
-        reversed->sequence = NULL;
+        __tinypy_reversed_clear(reversed);
         if (out_error != NULL) {
             *out_error = item_error;
         }
@@ -1347,7 +1373,9 @@ void tinypy_internal_initialize_iterator_types(tinypy_vm_t *vm) {
         vm->internal_rangeiterator_key,
         vm->internal_callable_hyphen_iterator_key,
         vm->internal_listreverseiterator_key,
-        vm->internal_bytearray_iterator_key};
+        vm->internal_bytearray_iterator_key,
+        vm->internal_formatteriterator_key,
+        vm->internal_fieldnameiterator_key};
     static tinypy_next_slot_t const next_slots[TINYPY_ITERATOR_TYPE_COUNT] = {
         __tinypy_internal_list_iterator_next,
         __tinypy_internal_tuple_iterator_next,
@@ -1358,6 +1386,8 @@ void tinypy_internal_initialize_iterator_types(tinypy_vm_t *vm) {
         __tinypy_internal_range_iterator_next,
         tinypy_internal_iterator_next,
         tinypy_internal_reversed_next,
+        tinypy_internal_iterator_next,
+        tinypy_internal_iterator_next,
         tinypy_internal_iterator_next};
     tinypy_type_t *xrange_type = &vm->types[TINYPY_VALUE_XRANGE];
     size_t index;

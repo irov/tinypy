@@ -135,6 +135,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         sizeof(tinypy_code_object_t), 0U,
         TINYPY_TYPE_FLAG_IMMUTABLE, &vm->types[TINYPY_VALUE_INSTANCE],
         tinypy_internal_code_release_references, tinypy_internal_code_destroy);
+    vm->types[TINYPY_VALUE_CODE].weakref_offset = offsetof(tinypy_code_object_t, weakrefs);
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_FRAME], &vm->types[TINYPY_VALUE_TYPE], "frame", 5U,
         offsetof(tinypy_frame_object_t, locals_plus), sizeof(tinypy_value_t *),
@@ -230,6 +231,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         sizeof(tinypy_generator_object_t), 0U,
         TINYPY_TYPE_FLAG_IMMUTABLE, &vm->types[TINYPY_VALUE_INSTANCE],
         tinypy_internal_generator_release_references, NULL);
+    vm->types[TINYPY_VALUE_GENERATOR].traverse_references = tinypy_internal_generator_traverse_references;
     vm->types[TINYPY_VALUE_GENERATOR].iter = tinypy_internal_generator_iter;
     vm->types[TINYPY_VALUE_GENERATOR].next = tinypy_internal_generator_next;
     vm->types[TINYPY_VALUE_GENERATOR].weakref_offset = offsetof(tinypy_generator_object_t, weakrefs);

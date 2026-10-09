@@ -201,8 +201,8 @@ Dict и set воспроизводят таблицы CPython 2.7: рост по
 CPython 2.7, включая число сравнений и частично отсортированный порядок после
 исключения в сравнении.
 
-Functions, bound Python methods, generators, set и frozenset поддерживают
-weak references. У генератора weakref callbacks выполняются перед `finally`
+Functions, bound Python methods, code objects, generators, set и frozenset
+поддерживают weak references. У генератора weakref callbacks выполняются перед `finally`
 при закрытии во время уничтожения. Basic ref/proxy caches сохраняют порядок
 references и callbacks; изменение callable protocol referent не создаёт второй
 basic proxy. Lookup из `_remove_dead_weakref` выполняется один раз и подавляет
@@ -210,6 +210,9 @@ basic proxy. Lookup из `_remove_dead_weakref` выполняется один 
 объекта, который не был воскрешён, очищаются без вызова их callbacks. Объекты,
 которые финализатор освобождает напрямую, не откладываются очередью
 освобождения, поэтому глубокая цепочка вызывает каждый `__del__` один раз.
+Уничтожаемая weak reference отсоединяется от referent до освобождения своих
+`__dict__` и slots, поэтому её собственный callback не вызывается, даже если
+только они удерживали referent.
 
 Legacy `buffer` хранит запрошенные offset и size, а доступ ограничивает их
 текущей длиной owner. Уменьшение и последующее увеличение bytearray owner не
@@ -574,13 +577,20 @@ feature flags, limits и optional immutable build profile.
 При `dont_inherit == 0` явно переданные flags объединяются с future flags
 текущего frame. Imports компилируют source с `dont_inherit == 1`.
 
+Source host API считается текстом файла с logical filename: semantic
+SyntaxError из AST, future scanner и symbol table получает в `text` свою строку
+без начальных пробелов, как `PyErr_ProgramText`. Строки `compile`, `exec` и
+`eval` не являются файлами, и `text` таких ошибок равен `None`.
+
 Compiler limits охватывают:
 
 - source bytes;
 - tokens;
 - CST и AST nodes;
 - nesting: глубина parser stack и глубина AST выражения, включая плоские
-  цепочки бинарных операторов, attribute, call и subscript trailers;
+  цепочки attribute, call и subscript trailers; symbol table и code generator
+  обходят плоские цепочки бинарных операторов без рекурсии, поэтому они
+  учитываются только с preprocessor или meta features;
 - symbols;
 - basic blocks;
 - instructions;

@@ -91,6 +91,7 @@ tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t 
     code->lnotab = lnotab;
     code->parameter_indices = NULL;
     code->compile_environment = NULL;
+    code->weakrefs = NULL;
 
     TINYPY_INCREF(bytecode);
     TINYPY_INCREF(consts);

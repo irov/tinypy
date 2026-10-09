@@ -617,15 +617,22 @@ static tinypy_bool_t __tinypy_representation_dict(tinypy_representation_builder_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* set_repr represents a list of the elements, taken by iteration first, in
-   the name of the set type. */
-static tinypy_bool_t __tinypy_representation_set(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_error_t **out_error) {
+/* set_repr and dictview_repr represent a list of the elements, taken by
+   iteration first, in the name of the type; a dictionary view met again
+   inside its own representation is shown as "...". */
+static tinypy_bool_t __tinypy_representation_elements(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_representation_frame_t frame;
 
     if (__tinypy_representation_enter(builder, &frame, value) == 0) {
-        __tinypy_representation_append(builder, value->type->name, value->type->name_size);
-        __tinypy_representation_append(builder, "(...)", 5U);
+        if (kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
+            __tinypy_representation_append(builder, value->type->name, value->type->name_size);
+            __tinypy_representation_append(builder, "(...)", 5U);
+        }
+        else {
+            __tinypy_representation_append(builder, "...", 3U);
+        }
         return TINYPY_TRUE;
     }
     tinypy_value_t *keys = tinypy_internal_list_from_items_checked(vm, NULL, 0U, out_error);
@@ -663,7 +670,9 @@ static void __tinypy_representation_pointer(tinypy_representation_builder_t *bui
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
+/* reported names the method in the non-string error: object.__str__ calls
+   __repr__ but PyObject_Str reports the result as __str__'s. */
+static tinypy_value_t *__tinypy_representation_custom_reported(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t *reported, tinypy_error_t **out_error) {
     tinypy_value_t *args;
     tinypy_value_t *result;
 
@@ -681,7 +690,7 @@ static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tin
     }
     if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_UNICODE) {
         tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_TEXT(name),
+            TINYPY_MESSAGE_PART_TEXT(reported),
             TINYPY_MESSAGE_PART_LITERAL(" returned non-string (type "),
             TINYPY_MESSAGE_PART_TYPE_NAME(result),
             TINYPY_MESSAGE_PART_LITERAL(")")
@@ -691,6 +700,11 @@ static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tin
         TINYPY_DECREF(result);
         return NULL;
     }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_representation_custom_reported(value, name, name, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -913,7 +927,10 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         return function_result;
     case TINYPY_VALUE_SET:
     case TINYPY_VALUE_FROZENSET:
-        function_result = __tinypy_representation_set(builder, value, out_error);
+    case TINYPY_VALUE_DICT_KEYS:
+    case TINYPY_VALUE_DICT_VALUES:
+    case TINYPY_VALUE_DICT_ITEMS:
+        function_result = __tinypy_representation_elements(builder, value, out_error);
         return function_result;
     case TINYPY_VALUE_TYPE: {
         tinypy_type_t *type_value = (tinypy_type_t *)value;
@@ -1021,7 +1038,12 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         tinypy_super_object_t *super_value = TINYPY_SUPER_OBJECT(value);
 
         __tinypy_representation_append(builder, "<super: <class '", 16U);
-        __tinypy_representation_append(builder, super_value->type->name, super_value->type->name_size);
+        if (super_value->type == NULL) {
+            __tinypy_representation_append(builder, "NULL", 4U);
+        }
+        else {
+            __tinypy_representation_append(builder, super_value->type->name, super_value->type->name_size);
+        }
         if (super_value->object == NULL) {
             __tinypy_representation_append(builder, "'>, NULL>", 9U);
             return TINYPY_TRUE;
@@ -1225,27 +1247,12 @@ tinypy_value_t *tinypy_internal_object_str_builtin(tinypy_value_t *value, tinypy
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    tinypy_bool_t condition = (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U;
-    if (condition == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_FLOAT;
-    }
-    if (condition) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor requires a float object", out_error);
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *selected_value;
-    if (user_data != NULL) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        selected_value = tinypy_object_str(item, out_error);
-    }
-    else {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        selected_value = tinypy_object_repr(item, out_error);
-    }
-    return selected_value;
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *result = user_data != NULL ? tinypy_internal_object_str_builtin(self, out_error) : tinypy_internal_object_repr_builtin(self, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_representation_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1253,6 +1260,13 @@ static tinypy_value_t *__tinypy_object_representation_method(tinypy_value_t *fun
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    /* object_str returns what tp_repr returns, so an overriding __repr__
+       keeps a unicode result. */
+    if (user_data != NULL && __tinypy_internal_object_overrides_dispatch(self, TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0) {
+        tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
+        tinypy_value_t *custom = __tinypy_representation_custom_reported(self, vm->internal_special_repr_key, vm->internal_special_str_key, out_error);
+        return custom;
+    }
     if (user_data != NULL) {
         tinypy_value_t *return_value_1 = tinypy_object_repr(self, out_error);
         return return_value_1;
@@ -1312,7 +1326,13 @@ static tinypy_value_t *__tinypy_object_class_assign(tinypy_value_t *function, ti
     tinypy_value_t *replacement = TINYPY_TUPLE_GET(args, 1U);
 
     if (TINYPY_VALUE_KIND(replacement) != TINYPY_VALUE_TYPE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ must be set to a class", out_error);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("__class__ must be set to new-style class, not '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(replacement),
+            TINYPY_MESSAGE_PART_LITERAL("' object")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
         return NULL;
     }
     tinypy_type_t *current = self->type;

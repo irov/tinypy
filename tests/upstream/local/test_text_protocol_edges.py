@@ -2,6 +2,10 @@
 
 import unittest
 import sys
+import _sre
+
+
+_ALIVE_AT_EXIT = []
 
 
 class TextProtocolEdges(unittest.TestCase):
@@ -396,3 +400,258 @@ class TextProtocolEdges(unittest.TestCase):
             self.assertEqual(str(error), 'character mapping must be in range(0x%lx)')
         else:
             self.fail('mapping outside Unicode range must fail')
+
+    def test_memoryview_requires_object_argument(self):
+        for create in (memoryview, lambda: memoryview.__new__(memoryview)):
+            with self.assertRaises(TypeError) as caught:
+                create()
+            self.assertEqual(str(caught.exception), "Required argument 'object' (pos 1) not found")
+
+    def test_percent_long_subtype_conversion_methods(self):
+        class Long(long):
+            def __hex__(self):
+                return '0xHEX'
+            def __oct__(self):
+                return '-017L'
+            def __str__(self):
+                return 'STR'
+        self.assertEqual('%x|%#X|%d|%u|%o|%#o' % ((Long(255),) * 6), 'HEX|0XHEX|STR|STR|-17|-017')
+        self.assertEqual(u'%5x|%+o' % (Long(1), Long(1)), u'  HEX|-17')
+        self.assertEqual('%d|%x' % (True, 255), '1|ff')
+        for result, conversion, message in ((1, 'd', 'expected string or Unicode object, int found'),
+                                             ('abc', 'x', '%x format: invalid result of __hex__ (type=Bad)'),
+                                             ('0x', 'X', '%X format: invalid result of __hex__ (type=Bad)'),
+                                             ('L', 'o', '%o format: invalid result of __oct__ (type=Bad)')):
+            class Bad(long):
+                def __str__(self):
+                    return result
+                __hex__ = __oct__ = __str__
+            error = ValueError if isinstance(result, str) else TypeError
+            with self.assertRaises(error) as caught:
+                ('%' + conversion) % Bad()
+            self.assertEqual(str(caught.exception), message)
+        class Truncated:
+            def __trunc__(self):
+                return 3
+        self.assertEqual('%d %x' % (Truncated(), Truncated()), '3 3')
+        class NotString(object):
+            def __str__(self):
+                return 5
+        with self.assertRaises(TypeError) as caught:
+            '%s' % NotString()
+        self.assertEqual(str(caught.exception), '__str__ returned non-string (type int)')
+
+    def test_percent_mapping_requires_mapping_subscript(self):
+        with self.assertRaises(TypeError) as caught:
+            '%(a)s' % Exception()
+        self.assertEqual(str(caught.exception), 'format requires a mapping')
+        for format, value in (('', Exception()), ('%%', xrange(3)), (u'x', xrange(3))):
+            with self.assertRaises(TypeError) as caught:
+                format % value
+            self.assertEqual(str(caught.exception), 'not all arguments converted during string formatting')
+        class Indexed(Exception):
+            def __getitem__(self, key):
+                return key.upper()
+        self.assertEqual('%(a)s' % Indexed(), 'A')
+        self.assertEqual('' % [1], '')
+
+    def test_text_conversion_honours_subtype_overrides(self):
+        class Integer(int):
+            def __str__(self):
+                return 'I!'
+        class Complex(complex):
+            def __str__(self):
+                return 'C!'
+        class String(str):
+            def __str__(self):
+                return 'S!'
+        class Unicode(unicode):
+            def __unicode__(self):
+                return u'U!'
+        class Plain(unicode):
+            pass
+        self.assertEqual('{0}'.format(Integer(3)), 'I!')
+        self.assertEqual(format(Complex(1), ''), 'C!')
+        self.assertEqual('{}'.format(String('ab')), 'S!')
+        self.assertEqual('{}'.format(Unicode(u'ab')), 'U!')
+        self.assertEqual(unicode(String('ab')), u'S!')
+        self.assertEqual('%s' % Unicode(u'ab'), u'U!')
+        self.assertEqual(u'%s' % Unicode(u'ab'), u'U!')
+        self.assertIs(type('%s' % Plain(u'ab')), unicode)
+        self.assertIs(type(unicode(Plain(u'ab'))), unicode)
+        class Kept(unicode):
+            def __unicode__(self):
+                return self
+        kept = Kept(u'ab')
+        self.assertIs(unicode(kept), kept)
+        class Representation(object):
+            def __repr__(self):
+                return u'\xe9'
+        self.assertEqual(object.__str__(Representation()), u'\xe9')
+        self.assertEqual(u'%s' % (Representation(),), u'\xe9')
+        self.assertEqual(unicode(Representation()), u'\xe9')
+        self.assertIs(type('%s' % (Representation(),)), unicode)
+
+    def test_format_spec_types_digits_and_spec_kinds(self):
+        for value, spec, message in ((u'x', '\x00', "Unknown format code '\\x0' for object of type 'unicode'"),
+                                     ('x', '\x00', "Unknown format code '\x00' for object of type 'str'"),
+                                     (1, ',\x00', "Unknown format code '\x00' for object of type 'int'"),
+                                     ({'a': 1}, u'\x00', "Unknown format code '\\x0' for object of type 'unicode'")):
+            with self.assertRaises(ValueError) as caught:
+                format(value, spec)
+            self.assertEqual(caught.exception.args[0], message)
+        with self.assertRaises(ValueError) as caught:
+            '{0:{1}}'.format({'a': 1}, u'\x00')
+        self.assertEqual(caught.exception.args[0], "Unknown format code '\x00' for object of type 'str'")
+        with self.assertRaises(ValueError) as caught:
+            '{0!r:d}'.format(1)
+        self.assertEqual(str(caught.exception), "Unknown format code 'd' for object of type 'str'")
+        self.assertEqual(format(1.5, u'\x00'), u'1.5')
+        self.assertEqual(format(u'ab', u'\u0665'), u'ab   ')
+        self.assertEqual(format(u'ab', u'.\u0661'), u'a')
+        self.assertEqual(u'{0:{1}}'.format(None, u'\u0665'), u'None ')
+        result = 'ab'.__format__(u'^6')
+        self.assertIs(type(result), str)
+        self.assertEqual(result, '  ab  ')
+        with self.assertRaises(UnicodeDecodeError) as caught:
+            format('\xff\xfe', u'^7')
+        self.assertEqual(caught.exception.start, 2)
+        for value in ('a', u'a'):
+            with self.assertRaises(TypeError) as caught:
+                value.__format__(set())
+            self.assertEqual(str(caught.exception), '__format__ arg must be str or unicode, not set')
+        self.assertEqual(True.__format__(''), 'True')
+
+    def test_float_presentation_non_float_results(self):
+        class Long(long):
+            def __float__(self):
+                return None
+        class Other(object):
+            def __float__(self):
+                return None
+        for call, message in ((lambda: format(Long(1), '.0%'), '__float__ returned non-float (type NoneType)'),
+                              (lambda: u'%f' % Other(), 'nb_float should return float object'),
+                              (lambda: '%f' % Other(), 'float argument required, not Other')):
+            with self.assertRaises(TypeError) as caught:
+                call()
+            self.assertEqual(str(caught.exception), message)
+
+    def test_text_codec_error_ranges_and_decoder_results(self):
+        for call in (lambda: u'\x80\xff'.decode('utf-8'), lambda: u'\u20ac\xff'.decode('ascii', 'ignore')):
+            with self.assertRaises(UnicodeEncodeError) as caught:
+                call()
+            self.assertEqual((caught.exception.start, caught.exception.end), (0, 2))
+        with self.assertRaises(TypeError) as caught:
+            unicode('abcd', 'hex')
+        self.assertEqual(str(caught.exception), 'decoder did not return an unicode object (type=str)')
+        self.assertEqual(unicode('', 'hex'), u'')
+        self.assertEqual(unicode('', 'bogus'), u'')
+        self.assertEqual(unicode(buffer(''), 'bogus'), u'')
+
+    def test_containment_operand_errors(self):
+        for call, error, message in ((lambda: 1 in 'abc', TypeError, "'in <string>' requires string as left operand, not int"),
+                                     (lambda: 1 in u'abc', TypeError, 'coercing to Unicode: need string or buffer, int found'),
+                                     (lambda: 1.5 in bytearray('a'), TypeError, "Type float doesn't support the buffer API"),
+                                     (lambda: 2**63 in bytearray('a'), TypeError, "Type long doesn't support the buffer API"),
+                                     (lambda: None in bytearray('a'), TypeError, "Type NoneType doesn't support the buffer API"),
+                                     (lambda: 256 in bytearray('a'), ValueError, 'byte must be in range(0, 256)'),
+                                     (lambda: -1 in bytearray('a'), ValueError, 'byte must be in range(0, 256)')):
+            with self.assertRaises(error) as caught:
+                call()
+            self.assertEqual(str(caught.exception), message)
+        class Index(object):
+            def __index__(self):
+                return 97
+        self.assertTrue(Index() in bytearray('a'))
+        self.assertTrue(True in bytearray('\x01'))
+
+    def test_bytearray_decode_argument_types(self):
+        for args, message in ((('latin-1', bytearray()), 'decode() argument 2 must be string, not bytearray'),
+                              ((bytearray(3),), 'decode() argument 1 must be string, not bytearray'),
+                              ((buffer('ascii'),), 'decode() argument 1 must be string, not buffer')):
+            with self.assertRaises(TypeError) as caught:
+                bytearray('a').decode(*args)
+            self.assertEqual(str(caught.exception), message)
+        self.assertEqual(bytearray('a').decode(u'ascii', u'strict'), u'a')
+
+    def test_formatter_iterator_type_names(self):
+        parser = 'a{0}'._formatter_parser()
+        fields = 'a.b'._formatter_field_name_split()[1]
+        self.assertEqual(type(parser).__name__, 'formatteriterator')
+        self.assertEqual(type(fields).__name__, 'fieldnameiterator')
+        self.assertFalse(hasattr(parser, '__length_hint__'))
+        self.assertEqual(list(parser), [('a', '0', '', None)])
+        self.assertEqual(list(fields), [(True, 'b')])
+
+    def test_size_overflow_diagnostics(self):
+        for call, error, message in ((lambda: buffer('ab') * sys.maxint, MemoryError, 'result too large'),
+                                     (lambda: buffer('a') * sys.maxint, OverflowError, 'string is too large'),
+                                     (lambda: 'ab'.center(sys.maxint), OverflowError, 'string is too large'),
+                                     (lambda: 'a'.zfill(sys.maxint), OverflowError, 'string is too large'),
+                                     (lambda: '{0:{1}}'.format(1, sys.maxint), OverflowError, 'string is too large'),
+                                     (lambda: u'{0:{1}}'.format(1, sys.maxint), OverflowError, 'string is too large'),
+                                     (lambda: 'a\tb'.expandtabs(sys.maxint), OverflowError, 'signed integer is greater than maximum'),
+                                     (lambda: u'a'.splitlines(-sys.maxint), OverflowError, 'signed integer is less than minimum'),
+                                     (lambda: bytearray('a').expandtabs(sys.maxint), OverflowError, 'signed integer is greater than maximum')):
+            with self.assertRaises(error) as caught:
+                call()
+            self.assertEqual(str(caught.exception), message)
+
+    def test_unraisable_native_error_writes_message(self):
+        class Capture(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                self.parts.append(text)
+        def ignoring():
+            try:
+                yield 1
+            except GeneratorExit:
+                pass
+            yield 2
+        class Raising(object):
+            def __del__(self):
+                raise ValueError('in del')
+        saved = sys.stderr
+        sys.stderr = capture = Capture()
+        try:
+            generator = ignoring()
+            next(generator)
+            del generator
+            value = Raising()
+            del value
+        finally:
+            sys.stderr = saved
+        text = ''.join(capture.parts)
+        self.assertTrue(text.startswith("Exception RuntimeError: 'generator ignored GeneratorExit' in <generator object ignoring at "), text)
+        self.assertIn("Exception ValueError: ValueError('in del',) in <bound method Raising.__del__ of ", text)
+
+    def test_sre_scanner_pattern_and_code_overflow(self):
+        for code in ([2**32], [-1], [2**128]):
+            with self.assertRaises(OverflowError) as caught:
+                _sre.compile('abc', 0, code)
+            self.assertEqual(str(caught.exception), 'regular expression code size limit exceeded')
+        pattern = _sre.compile('a', 0, [17, 8, 3, 1, 1, 1, 1, 97, 0, 19, 97, 1])
+        self.assertIs(pattern.groupindex, None)
+        self.assertEqual(pattern.match('a').groupdict(), {})
+        scanner = pattern.scanner('aa')
+        self.assertIs(scanner.pattern, pattern)
+        self.assertEqual(scanner.search().span(), (0, 1))
+        # A scanner alive at shutdown is the only owner of its pattern.
+        _ALIVE_AT_EXIT.append(_sre.compile('a', 0, [17, 8, 3, 1, 1, 1, 1, 97, 0, 19, 97, 1], 0, {}, [None]).scanner('a'))
+
+    def test_sre_search_keeps_marks_of_failed_candidates(self):
+        unbounded = 4294967295
+        lazy = _sre.compile(u'(?P<n>a)*?a?$', 0, [28, 9, 0, unbounded, 21, 0, 19, 97, 21, 1, 23, 29, 6, 0, 1, 19, 97, 1, 6, 5, 1],
+                            1, {u'n': 1}, [None, u'n'])
+        match = lazy.search(u'AaBb')
+        self.assertEqual((match.groupdict(), match.regs, match.lastindex), ({u'n': u''}, ((4, 4), (3, 2)), 1))
+        reference = _sre.compile('(?(1)a|b){,2}\xe9*?(a)*?\\1{2,}?', 16,
+                                 [28, 12, 0, 2, 13, 0, 6, 19, 97, 18, 3, 19, 98, 22, 31, 6, 0, unbounded, 19, 233, 1,
+                                  28, 9, 0, unbounded, 21, 0, 19, 97, 21, 1, 23, 28, 5, 2, unbounded, 12, 0, 23, 1],
+                                 1, {}, [None, None])
+        self.assertEqual(reference.search('a.b').regs, ((1, 1), (1, 1)))
+        exists = _sre.compile(u'(?P<n>a)*?(?(1)a|b)+', 0,
+                              [28, 9, 0, unbounded, 21, 0, 19, 97, 21, 1, 23, 28, 12, 1, unbounded, 13, 0, 6, 19, 97, 18, 3, 19, 98, 22, 1],
+                              1, {u'n': 1}, [None, u'n'])
+        self.assertEqual(list(exists.finditer('a.b')), [])

@@ -109,6 +109,20 @@ static void __tinypy_internal_type_error(tinypy_vm_t *vm, const char *message, t
 }
 
 //////////////////////////////////////////////////////////////////////////
+/* The name after the last dot of the type name, as Python 2.7 shows a
+   tp_name such as "exceptions.ValueError" in __name__ and tracebacks. */
+const char *tinypy_internal_type_short_name(const tinypy_type_t *type, size_t *out_size) {
+    size_t offset = 0U;
+
+    for (size_t index = 0U; index < type->name_size; ++index) {
+        if (type->name[index] == '.') {
+            offset = index + 1U;
+        }
+    }
+    *out_size = type->name_size - offset;
+    return type->name + offset;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_type_set_name(tinypy_type_t *type, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t name_size;
@@ -1351,10 +1365,16 @@ static tinypy_bool_t __tinypy_internal_type_equivalent_layout(const tinypy_type_
     return equivalent;
 }
 //////////////////////////////////////////////////////////////////////////
-/* same_slots_added in Python 2.7: siblings that add identical slots. */
+/* same_slots_added in Python 2.7: siblings that add identical slots. The
+   __dict__ of a subclass of the variable-size str, long and tuple follows
+   the items there, so it is never counted as an identical slot. */
 static tinypy_bool_t __tinypy_internal_type_same_slots_added(const tinypy_type_t *left, const tinypy_type_t *right) {
     tinypy_bool_t same = TINYPY_TRUE;
+    tinypy_value_type_e base_kind = left->base_type->layout_kind;
 
+    if (left->dict_offset != 0U && (base_kind == TINYPY_VALUE_STRING || base_kind == TINYPY_VALUE_LONG || base_kind == TINYPY_VALUE_TUPLE)) {
+        return TINYPY_FALSE;
+    }
     if (left->basic_size != right->basic_size || left->slot_count != right->slot_count || left->dict_offset != right->dict_offset || left->weakref_offset != right->weakref_offset) {
         return TINYPY_FALSE;
     }
@@ -1754,6 +1774,26 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_value_t *internal_name_k
     type->slot_count = inherited_slot_count + TINYPY_TUPLE_SIZE(own_slots);
     tinypy_bool_t add_instance_dict = configured_instance_dict >= 0 ? (configured_instance_dict != 0 ? TINYPY_TRUE : TINYPY_FALSE) : (slots_declared == 0 || dict_slot != 0 ? TINYPY_TRUE : TINYPY_FALSE);
     tinypy_bool_t add_weakrefs = configured_weakrefs >= 0 ? (configured_weakrefs != 0 ? TINYPY_TRUE : TINYPY_FALSE) : ((slots_declared == 0 && instance_kind != TINYPY_VALUE_LONG && instance_kind != TINYPY_VALUE_STRING && instance_kind != TINYPY_VALUE_TUPLE) || weakref_slot != 0 ? TINYPY_TRUE : TINYPY_FALSE);
+    if (configured_instance_dict < 0 && slots_declared != 0) {
+        /* type_new: secondary bases may provide the __dict__ and __weakref__
+           that __slots__ leave out; a classic base provides both. */
+        tinypy_bool_t may_add_weakrefs = layout_base->weakref_offset == 0U && instance_kind != TINYPY_VALUE_LONG && instance_kind != TINYPY_VALUE_STRING && instance_kind != TINYPY_VALUE_TUPLE ? TINYPY_TRUE : TINYPY_FALSE;
+
+        for (index = 0U; index < actual_base_count; ++index) {
+            tinypy_value_t *base = actual_bases[index];
+            tinypy_bool_t classic = TINYPY_VALUE_KIND(base) == TINYPY_VALUE_CLASS ? TINYPY_TRUE : TINYPY_FALSE;
+
+            if (base == &layout_base->base.base) {
+                continue;
+            }
+            if (layout_base->has_instance_dict == 0 && (classic != 0 || ((tinypy_type_t *)base)->has_instance_dict != 0)) {
+                add_instance_dict = TINYPY_TRUE;
+            }
+            if (may_add_weakrefs != 0 && (classic != 0 || ((tinypy_type_t *)base)->weakref_offset != 0U)) {
+                add_weakrefs = TINYPY_TRUE;
+            }
+        }
+    }
 
     type->has_instance_dict = layout_base->has_instance_dict != 0 || add_instance_dict != 0 ? INT32_C(1) : INT32_C(0);
     type->layout_kind = instance_kind;
@@ -2354,16 +2394,19 @@ void tinypy_instance_set_attr_key(tinypy_value_t *instance_value, tinypy_value_t
     tinypy_dict_set(*dict_slot, key, value);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_type_raw_callable(tinypy_value_t *attribute) {
+/* slot_tp_new gets __new__ from the type: a static method yields its
+   function and a class method is bound to the type, which the call then
+   receives a second time. */
+static tinypy_value_t *__tinypy_internal_type_new_callable(tinypy_type_t *type, tinypy_value_t *attribute, tinypy_error_t **out_error) {
     if (TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_STATIC_METHOD) {
-        tinypy_value_t *return_value_1 = tinypy_static_method_callable(attribute);
-        return return_value_1;
+        tinypy_value_t *callable = tinypy_static_method_callable(attribute);
+        return TINYPY_RET(callable);
     }
     if (TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_CLASS_METHOD) {
-        tinypy_value_t *return_value_2 = tinypy_class_method_callable(attribute);
-        return return_value_2;
+        tinypy_value_t *method = tinypy_internal_class_method_bind(attribute, &type->base.base, out_error);
+        return method;
     }
-    return attribute;
+    return TINYPY_RET(attribute);
 }
 //////////////////////////////////////////////////////////////////////////
 /* A type keeps the constructors of its calls until a type changes; the
@@ -2459,13 +2502,17 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         __tinypy_internal_call_leave(vm);
     }
     else {
-        tinypy_value_t *type_raw_callable = __tinypy_internal_type_raw_callable(new_attribute);
+        tinypy_value_t *constructor = __tinypy_internal_type_new_callable(type, new_attribute, out_error);
+        if (constructor == NULL) {
+            return NULL;
+        }
         tinypy_value_t *call_args = tinypy_internal_tuple_join_items_checked(vm, &type->base.base, items, count, NULL, 0U, out_error);
 
-        instance = call_args != NULL ? tinypy_call(type_raw_callable, call_args, kwargs, out_error) : NULL;
+        instance = call_args != NULL ? tinypy_call(constructor, call_args, kwargs, out_error) : NULL;
         if (call_args != NULL) {
             TINYPY_DECREF(call_args);
         }
+        TINYPY_DECREF(constructor);
     }
     if (instance == NULL) {
         return NULL;

@@ -143,6 +143,36 @@ int64_t tinypy_long_as_i64(const tinypy_value_t *value) {
     return INT64_C(0);
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_long_digits_as_i64(int32_t sign, const uint16_t *digits, size_t count, int64_t *out_value) {
+    uint64_t magnitude = 0U;
+    size_t index;
+
+    if (count > 5U) {
+        return TINYPY_FALSE;
+    }
+    for (index = count; index != 0U; index -= 1U) {
+        if (magnitude > (UINT64_MAX >> 15U)) {
+            return TINYPY_FALSE;
+        }
+        magnitude = (magnitude << 15U) | digits[index - 1U];
+    }
+    if (sign >= 0) {
+        if (magnitude > (uint64_t)INT64_MAX) {
+            return TINYPY_FALSE;
+        }
+        *out_value = (int64_t)magnitude;
+    }
+    else {
+        uint64_t limit = (uint64_t)INT64_MAX + UINT64_C(1);
+
+        if (magnitude > limit) {
+            return TINYPY_FALSE;
+        }
+        *out_value = magnitude == limit ? INT64_MIN : -(int64_t)magnitude;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_long_as_double(const tinypy_value_t *value, double *out_value, tinypy_error_t **out_error) {
     const tinypy_long_object_t *long_value = TINYPY_LONG_OBJECT((tinypy_value_t *)value);
     size_t digit_count = long_value->digit_count;

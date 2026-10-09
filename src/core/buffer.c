@@ -365,11 +365,14 @@ static tinypy_value_t *__tinypy_buffer_repeat(tinypy_value_t *buffer, tinypy_val
 
         return result;
     }
-    if ((uint64_t)count > (uint64_t)(SIZE_MAX / unit_size) || unit_size * (size_t)count >= (size_t)PTRDIFF_MAX) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "repeated buffer is too large", out_error);
+    if ((uint64_t)count > (uint64_t)PTRDIFF_MAX / unit_size) {
+        tinypy_internal_raise_text_exception(vm, TINYPY_EXCEPTION_MEMORY_ERROR, "result too large", 16U, out_error);
         return NULL;
     }
     total_size = unit_size * (size_t)count;
+    if (tinypy_internal_string_size_check(vm, total_size, out_error) == 0) {
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, total_size, total_size, &output, out_error);
     if (result == NULL) {
         return NULL;
@@ -710,7 +713,7 @@ static tinypy_value_t *__tinypy_memoryview_create(tinypy_type_t *type, tinypy_va
         tinypy_internal_make_arity_error(vm, "memoryview", 10U, supplied, 0U, 1U, TINYPY_ARITY_STYLE_PARSED, out_error);
         return NULL;
     }
-    tinypy_value_t *owner = count != 0U ? TINYPY_TUPLE_GET(args, 0U) : tinypy_internal_constructor_keyword_optional(kwargs, vm->internal_object_key);
+    tinypy_value_t *owner = count != 0U ? TINYPY_TUPLE_GET(args, 0U) : (supplied != 0U ? tinypy_internal_constructor_keyword_optional(kwargs, vm->internal_object_key) : NULL);
     if (owner == NULL) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Required argument 'object' (pos 1) not found", out_error);
         return NULL;
@@ -758,8 +761,10 @@ static void __tinypy_memoryview_finalize(tinypy_value_t *instance, void *payload
     if (payload->readonly == 0) {
         __tinypy_memoryview_export(instance, -1);
     }
-    TINYPY_DECREF(payload->owner);
+    tinypy_value_t *owner = payload->owner;
+
     payload->owner = NULL;
+    TINYPY_DECREF(owner);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_memoryview_repr(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
@@ -794,7 +799,7 @@ static tinypy_value_t *__tinypy_memoryview_repr(tinypy_value_t *instance, void *
 static tinypy_hash_t __tinypy_memoryview_hash(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
     (void)payload;
     (void)user_data;
-    tinypy_internal_make_vm_error(TINYPY_VALUE_VM(instance), TINYPY_ERROR_TYPE, "memoryview objects are unhashable", out_error);
+    tinypy_internal_hash_unhashable_error(instance, out_error);
     return (tinypy_hash_t)0;
 }
 //////////////////////////////////////////////////////////////////////////

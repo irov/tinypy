@@ -1007,3 +1007,241 @@ class ContainerSemantics(unittest.TestCase):
         mixed = [1 < 1.5, 2 == 2.0, 2 != 2.0, -0.0 == 0, 3 > nan, 3 != nan, 2 ** 53 + 1 == float(2 ** 53 + 1), sys.maxint < float(sys.maxint), float('inf') > sys.maxint, -float('inf') < smallest, 0.5 <= 0, 7 >= 6.999]
         self.assertEqual(mixed, [True, True, False, True, False, True, False, True, True, True, False, True])
         self.assertEqual(repr(sorted([3, 1.5, -2, 2.0, 0, -0.0, 2])), '[-2, 0, -0.0, 1.5, 2.0, 2, 3]')
+
+    def test_exhausted_iterators_release_their_sequence_once(self):
+        state = {'iterator': None, 'deleted': 0}
+        def make(base):
+            class Reentrant(base):
+                def __del__(self):
+                    state['deleted'] += 1
+                    try:
+                        next(state['iterator'])
+                    except StopIteration:
+                        pass
+            return Reentrant
+        kinds = ((list, reversed), (tuple, reversed), (str, reversed), (bytearray, reversed), (set, iter), (frozenset, iter), (list, enumerate))
+        for count, (base, factory) in enumerate(kinds):
+            state['iterator'] = factory(make(base)())
+            self.assertEqual(state['deleted'], count)
+            self.assertRaises(StopIteration, next, state['iterator'])
+            self.assertEqual(state['deleted'], count + 1)
+            self.assertRaises(StopIteration, next, state['iterator'])
+            state['iterator'] = None
+
+    def test_base_repr_called_from_an_overriding_subclass(self):
+        class Set(set):
+            def __repr__(self):
+                return 'S<' + set.__repr__(self) + '>'
+        class Frozen(frozenset):
+            def __repr__(self):
+                return 'Z<' + frozenset.__repr__(self) + '>'
+        class Float(float):
+            def __repr__(self):
+                return 'F<' + float.__repr__(self) + '>'
+            def __str__(self):
+                return 'f<' + float.__str__(self) + '>'
+        self.assertEqual((repr(Set([1])), repr(Frozen([2])), repr(Float(1.5)), str(Float(0.1))), ('S<Set([1])>', 'Z<Frozen([2])>', 'F<1.5>', 'f<0.1>'))
+        def message(function, *args, **keywords):
+            try:
+                function(*args, **keywords)
+            except TypeError as exception:
+                return str(exception)
+            raise AssertionError('no TypeError')
+        self.assertEqual(message((1.5).__str__, 1), 'expected 0 arguments, got 1')
+        self.assertEqual(message((1.5).__repr__, x=1), "wrapper __repr__ doesn't take keyword arguments")
+
+    def test_dict_view_repr_marks_recursion(self):
+        values = {}
+        values[42] = values.viewvalues()
+        items = {}
+        items[1] = items.viewitems()
+        keys = {}
+        keys[1] = keys.viewkeys()
+        self.assertEqual((repr(values), repr(items), str(keys)), ('{42: dict_values([...])}', '{1: dict_items([(1, ...)])}', '{1: dict_keys([1])}'))
+        del values[42], items[1], keys[1]
+
+    def test_hashable_set_subclass_is_found_by_its_own_hash(self):
+        for base in (set, frozenset):
+            class Hashed(base):
+                def __hash__(self):
+                    return id(self) & 0x7fffffff
+            element = Hashed()
+            container = set([element])
+            self.assertIn(element, container)
+            container.remove(element)
+            container.add(element)
+            container.discard(element)
+            self.assertEqual(len(container), 0)
+        container = set([frozenset([1]), 2])
+        self.assertIn(set([1]), container)
+        container.remove(set([1]))
+        container.discard(set([2]))
+        self.assertEqual(container, set([2]))
+        class Unhashable(set):
+            def __hash__(self):
+                raise ValueError('no hash')
+        self.assertRaises(ValueError, set().__contains__, Unhashable())
+        with self.assertRaises(KeyError) as failure:
+            set().remove(set([5]))
+        self.assertEqual(failure.exception.args, (set([5]),))
+
+    def test_builtin_reduce_keeps_instance_state_and_iteration(self):
+        class Set(set):
+            pass
+        class Bytes(bytearray):
+            pass
+        class Iterated(frozenset):
+            def __iter__(self):
+                return iter([9])
+        values = Set([1])
+        values.x = 10
+        data = Bytes('a')
+        data.y = [1]
+        self.assertEqual(values.__reduce__(), (Set, ([1],), {'x': 10}))
+        self.assertEqual(data.__reduce__(), (Bytes, (u'a', 'latin-1'), {'y': [1]}))
+        self.assertEqual(data.__reduce_ex__(2), (Bytes, (u'a', 'latin-1'), {'y': [1]}))
+        self.assertEqual(Iterated([1]).__reduce__(), (Iterated, ([9],), {}))
+        self.assertEqual((set([1]).__reduce__(), bytearray('a').__reduce__()), ((set, ([1],), None), (bytearray, (u'a', 'latin-1'), None)))
+        self.assertEqual(xrange(3).__reduce__(1, 2), (xrange, (0, 3, 1)))
+        def message(function, *args, **keywords):
+            try:
+                function(*args, **keywords)
+            except TypeError as exception:
+                return str(exception)
+            raise AssertionError('no TypeError')
+        self.assertEqual(message(set().__reduce__, 1), '__reduce__() takes no arguments (1 given)')
+        self.assertEqual(message(frozenset().__reduce__, k=1), '__reduce__() takes no keyword arguments')
+        self.assertEqual(message(slice(1).__reduce__, 1, 2), '__reduce__() takes no arguments (2 given)')
+
+    def test_initializer_argument_errors(self):
+        class Set(set):
+            pass
+        def message(function, *args, **keywords):
+            try:
+                function(*args, **keywords)
+            except TypeError as exception:
+                return str(exception)
+            raise AssertionError('no TypeError')
+        self.assertEqual(message([].__init__, 1, x=1), 'list() takes at most 1 argument (2 given)')
+        self.assertEqual(message([].__init__, x=1), "'x' is an invalid keyword argument for this function")
+        self.assertEqual(message(list, x=1), "'x' is an invalid keyword argument for this function")
+        self.assertEqual(message(tuple, x=1), "'x' is an invalid keyword argument for this function")
+        self.assertEqual(message(set().__init__, 'a', k=1), 'set() does not take keyword arguments')
+        self.assertEqual(message(Set, k=1), 'set() does not take keyword arguments')
+        self.assertEqual(message(Set().__init__, 1, 2), 'Set expected at most 1 arguments, got 2')
+        self.assertEqual(message({}.__init__, 1, 2), 'dict expected at most 1 arguments, got 2')
+        self.assertEqual(list(sequence=(1, 2)), [1, 2])
+        target = [5]
+        target.__init__(sequence='ab')
+        self.assertEqual(target, ['a', 'b'])
+
+    def test_dict_ordering_falls_back_to_cmp(self):
+        calls = []
+        class Compared(dict):
+            def __cmp__(self, other):
+                calls.append('cmp')
+                return 0
+        class Plain(dict):
+            pass
+        self.assertEqual(({}.__lt__({}), {1: 2}.__gt__({}), {}.__le__(1), {}.__eq__({}), {}.__ne__([])), (NotImplemented, NotImplemented, NotImplemented, True, NotImplemented))
+        self.assertEqual((Compared() >= Compared(), Compared() < {}, {1: 2} < {1: 3}), (True, False, True))
+        self.assertEqual(calls, ['cmp', 'cmp'])
+        with self.assertRaises(TypeError) as failure:
+            Plain().__cmp__(1)
+        self.assertEqual(str(failure.exception), "Plain.__cmp__(x,y) requires y to be a 'Plain', not a 'int'")
+
+    def test_unhashable_messages_name_the_type(self):
+        def message(value):
+            try:
+                hash(value)
+            except TypeError as exception:
+                return str(exception)
+            raise AssertionError('no TypeError')
+        self.assertEqual([message(bytearray()), message({}.viewkeys()), message({}.viewitems()), message(memoryview('a')), message([])], ["unhashable type: 'bytearray'", "unhashable type: 'dict_keys'", "unhashable type: 'dict_items'", "unhashable type: 'memoryview'", "unhashable type: 'list'"])
+        self.assertRaises(TypeError, set().discard, memoryview('ab'))
+        self.assertEqual({}.pop(bytearray('a'), 1), 1)
+
+    def test_sequence_index_bounds_require_indices(self):
+        class Index(object):
+            def __index__(self):
+                return 1
+        for bound in (None, 1.0, '1'):
+            with self.assertRaises(TypeError) as failure:
+                [1, 2].index(2, bound)
+            self.assertEqual(str(failure.exception), 'slice indices must be integers or have an __index__ method')
+            self.assertRaises(TypeError, (1, 2).index, 2, 0, bound)
+        self.assertEqual(([1, 2].index(2, Index()), (1, 2).index(2, 0, 2 ** 70)), (1, 1))
+
+    def test_reversed_requires_a_sequence_length(self):
+        class Error(Exception):
+            pass
+        class Classic:
+            def __getitem__(self, index):
+                return index
+        def message(error, value):
+            try:
+                reversed(value)
+            except error as exception:
+                return str(exception)
+            raise AssertionError('no %s' % error.__name__)
+        self.assertEqual(message(TypeError, Error()), "object of type 'Error' has no len()")
+        self.assertEqual(message(TypeError, memoryview('ab')), "object of type 'memoryview' has no len()")
+        self.assertEqual(message(TypeError, {}), 'argument to reversed() must be a sequence')
+        self.assertEqual(message(AttributeError, Classic()), "Classic instance has no attribute '__len__'")
+
+    def test_simple_slices_use_the_sequence_slot(self):
+        calls = []
+        class Tuple(tuple):
+            def __getitem__(self, index):
+                calls.append('getitem')
+                return 'item'
+        class Text(unicode):
+            def __getitem__(self, index):
+                return None
+        class Sized(list):
+            def __len__(self):
+                calls.append('len')
+                return 5
+        class Deleting(list):
+            def __delitem__(self, index):
+                calls.append('delitem')
+            def __setitem__(self, index, value):
+                calls.append('setitem')
+        class Error(Exception):
+            def __len__(self):
+                calls.append('len')
+                return 2
+        self.assertEqual((Tuple((1, 2, 3))[1:3], Text(u'abc')[0:0], Sized([1, 2])[-1:-1]), ((2, 3), u'', []))
+        values = Deleting([1, 2, 3])
+        del values[0:1]
+        values[0:1] = [7]
+        self.assertEqual(values, [7, 3])
+        self.assertEqual(Tuple((1, 2))[::2], 'item')
+        self.assertEqual((Error(1, 2)[-1], Exception(1, 2)[-1], Exception(1, 2, 3)[-2:], Exception(1)[-100:-100]), (2, 2, (2, 3), ()))
+        self.assertEqual(calls, ['len', 'getitem', 'len'])
+        for key in (slice(None, None, 2), (1, 2)):
+            with self.assertRaises(TypeError) as failure:
+                Exception(1, 2, 3)[key]
+            self.assertEqual(str(failure.exception), "sequence index must be integer, not '%s'" % type(key).__name__)
+        self.assertRaises(IndexError, lambda: Exception(1)[1])
+
+    def test_item_methods_defined_in_pairs(self):
+        class Deleter(object):
+            def __delitem__(self, key):
+                pass
+        class Setter(object):
+            def __setitem__(self, key, value):
+                pass
+        def message(function):
+            try:
+                function()
+            except AttributeError as exception:
+                return str(exception)
+            raise AssertionError('no AttributeError')
+        def store():
+            Deleter()[0] = 1
+        def remove():
+            del Setter()[0]
+        def remove_slice():
+            del Setter()[0:1]
+        self.assertEqual((message(store), message(remove), message(remove_slice)), ('__setitem__', '__delitem__', '__delitem__'))

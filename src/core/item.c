@@ -157,6 +157,16 @@ tinypy_bool_t tinypy_internal_index_as_i64(tinypy_value_t *value, int64_t *out_i
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* _PyEval_SliceIndexNotNone reads the bounds of list.index and tuple.index. */
+tinypy_bool_t tinypy_internal_slice_index_not_none(tinypy_value_t *value, int64_t *out_index, tinypy_error_t **out_error) {
+    if (__tinypy_item_is_index(value) == 0) {
+        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "slice indices must be integers or have an __index__ method", out_error);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t converted = tinypy_internal_index_as_i64(value, out_index, TINYPY_TRUE, out_error);
+    return converted;
+}
+//////////////////////////////////////////////////////////////////////////
 /* _PyEval_SliceIndex */
 static tinypy_bool_t __tinypy_item_slice_index(tinypy_value_t *value, int64_t *out_index, tinypy_error_t **out_error) {
     if (__tinypy_item_is_index(value) == 0) {
@@ -284,6 +294,18 @@ static void __tinypy_item_indices_error(tinypy_vm_t *vm, tinypy_message_part_t s
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyObject_GetItem refuses a key without __index__ for a type that has only
+   the sequence item slot. */
+static void __tinypy_item_sequence_index_error(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error) {
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("sequence index must be integer, not '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(key),
+        TINYPY_MESSAGE_PART_LITERAL("'")
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 /* list_subscript and its siblings word a key without __index__ after the
    sequence type and report a key too large for an index as IndexError. The
    size is read after the conversion, since __index__ may resize the list. */
@@ -303,13 +325,7 @@ static tinypy_bool_t __tinypy_item_position(tinypy_value_t *container, tinypy_va
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "string indices must be integers", out_error);
         }
         else if (kind == TINYPY_VALUE_XRANGE) {
-            tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_LITERAL("sequence index must be integer, not '"),
-                TINYPY_MESSAGE_PART_TYPE_NAME(key),
-                TINYPY_MESSAGE_PART_LITERAL("'")
-            };
-
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+            __tinypy_item_sequence_index_error(vm, key, out_error);
         }
         else {
             __tinypy_item_indices_error(vm, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("list"), key, out_error);
@@ -366,6 +382,21 @@ static void __tinypy_item_unsupported(tinypy_value_t *container, tinypy_value_t 
         message
     };
     tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(container), TINYPY_ERROR_TYPE, parts, 3U, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+/* slot_mp_ass_subscript serves assignment and deletion alike once a class
+   defines either method, and the missing one then raises an AttributeError
+   naming it. */
+static tinypy_bool_t __tinypy_item_missing_pair_method(tinypy_value_t *container, tinypy_value_t *name, tinypy_value_t *pair_name, tinypy_error_t **out_error) {
+    if ((container->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U || tinypy_internal_object_has_special_key(container, pair_name) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_TEXT(name)
+    };
+
+    tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(container), TINYPY_ERROR_ATTRIBUTE, parts, 1U, out_error);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_item_call_method(tinypy_value_t *container, tinypy_value_t *name, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
@@ -717,6 +748,76 @@ static tinypy_value_t *__tinypy_item_call_attribute(tinypy_value_t *container, t
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The sq_length slot behind a negative sequence offset: a classic instance
+   always has it, and raises the AttributeError of a missing __len__. */
+static int32_t __tinypy_item_sequence_length(tinypy_value_t *container, int64_t *out_length, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    tinypy_value_t *length_value;
+
+    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE) {
+        length_value = __tinypy_item_call_attribute(container, vm->internal_special_length_key, NULL, 0U, out_error);
+    }
+    else if (tinypy_internal_object_has_special_key(container, vm->internal_special_length_key) != 0) {
+        length_value = __tinypy_item_call_method(container, vm->internal_special_length_key, NULL, 0U, out_error);
+    }
+    else {
+        return INT32_C(0);
+    }
+    if (length_value == NULL) {
+        return INT32_C(-1);
+    }
+    tinypy_bool_t converted = tinypy_internal_index_as_i64(length_value, out_length, TINYPY_TRUE, out_error);
+
+    TINYPY_DECREF(length_value);
+    return converted != 0 ? INT32_C(1) : INT32_C(-1);
+}
+//////////////////////////////////////////////////////////////////////////
+/* An exception still subscripted by the __getitem__ of BaseException. */
+static tinypy_bool_t __tinypy_item_is_exception_sequence(tinypy_value_t *container) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    tinypy_type_t *base = vm->exception_types[TINYPY_EXCEPTION_BASE];
+
+    if (TINYPY_VALUE_KIND(container) != TINYPY_VALUE_NATIVE_INSTANCE || tinypy_type_is_subtype(container->type, base) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *method = tinypy_internal_type_lookup_key(vm, container->type, vm->internal_special_getitem_key);
+    tinypy_value_t *base_method = tinypy_internal_type_lookup_key(vm, base, vm->internal_special_getitem_key);
+
+    return method == base_method ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* BaseException has only sq_item: PyObject_GetItem demands an index, adds
+   the length of a class defining __len__ to a negative one, and the item is
+   read from the arguments. */
+static tinypy_value_t *__tinypy_item_exception_get(tinypy_value_t *container, tinypy_value_t *key, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    int64_t index;
+    int64_t length;
+
+    if (__tinypy_item_is_index(key) == 0) {
+        __tinypy_item_sequence_index_error(vm, key, out_error);
+        return NULL;
+    }
+    if (__tinypy_item_number_as_ssize(key, TINYPY_FALSE, TINYPY_ERROR_INDEX, &index, out_error) == 0) {
+        return NULL;
+    }
+    if (index < 0) {
+        int32_t measured = __tinypy_item_sequence_length(container, &length, out_error);
+
+        if (measured < 0) {
+            return NULL;
+        }
+        if (measured > 0) {
+            index += length;
+        }
+    }
+    tinypy_value_t *position = tinypy_integer_from_i64(vm, index);
+    tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &position, 1U, out_error);
+
+    TINYPY_DECREF(position);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_item_get_missing(tinypy_value_t *container, tinypy_value_t *key, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
 
@@ -725,13 +826,7 @@ static tinypy_value_t *__tinypy_item_get_missing(tinypy_value_t *container, tiny
         return result;
     }
     if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_XRANGE) {
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("sequence index must be integer, not '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(key),
-            TINYPY_MESSAGE_PART_LITERAL("'")
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        __tinypy_item_sequence_index_error(vm, key, out_error);
         return NULL;
     }
     __tinypy_item_unsupported(container, key, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object does not support indexing"), (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object has no attribute '__getitem__'"), out_error);
@@ -747,7 +842,9 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
     TINYPY_CLEAR_ERROR(out_error);
     /* instance_subscript fetches a classic __getitem__ like any attribute. */
     if (dispatch_special != 0 && (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE || __tinypy_internal_object_overrides_dispatch(container, TINYPY_INTERNAL_DISPATCH_BIT(GETITEM)) != 0)) {
-        tinypy_value_t *return_value_1 = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &key, 1U, out_error);
+        tinypy_value_t *return_value_1 = __tinypy_item_is_exception_sequence(container) != 0
+                                             ? __tinypy_item_exception_get(container, key, out_error)
+                                             : __tinypy_item_call_method(container, vm->internal_special_getitem_key, &key, 1U, out_error);
         return return_value_1;
     }
     if (container->type->mapping_slots != NULL && container->type->mapping_slots->get_item != NULL) {
@@ -867,11 +964,8 @@ static tinypy_bool_t __tinypy_item_is_slice_offset(tinypy_value_t *bound) {
 }
 //////////////////////////////////////////////////////////////////////////
 /* apply_slice reads offsets like _PyEval_SliceIndex, and PySequence_GetSlice
-   adds the length to a negative one; a classic instance has a length slot
-   even without __len__, which then raises its AttributeError. */
+   adds the length to a negative one. */
 static tinypy_bool_t __tinypy_item_slice_offsets(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, int64_t *out_start, int64_t *out_stop, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
-    tinypy_value_t *length_value;
     int64_t length;
 
     *out_start = 0;
@@ -885,23 +979,11 @@ static tinypy_bool_t __tinypy_item_slice_offsets(tinypy_value_t *container, tiny
     if (*out_start >= 0 && *out_stop >= 0) {
         return TINYPY_TRUE;
     }
-    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE) {
-        length_value = __tinypy_item_call_attribute(container, vm->internal_special_length_key, NULL, 0U, out_error);
+    int32_t measured = __tinypy_item_sequence_length(container, &length, out_error);
+
+    if (measured <= 0) {
+        return measured == 0 ? TINYPY_TRUE : TINYPY_FALSE;
     }
-    else if (tinypy_internal_object_has_special_key(container, vm->internal_special_length_key) != 0) {
-        length_value = __tinypy_item_call_method(container, vm->internal_special_length_key, NULL, 0U, out_error);
-    }
-    else {
-        return TINYPY_TRUE;
-    }
-    if (length_value == NULL) {
-        return TINYPY_FALSE;
-    }
-    if (tinypy_internal_index_as_i64(length_value, &length, TINYPY_TRUE, out_error) == 0) {
-        TINYPY_DECREF(length_value);
-        return TINYPY_FALSE;
-    }
-    TINYPY_DECREF(length_value);
     if (*out_start < 0) {
         *out_start += length;
     }
@@ -933,11 +1015,31 @@ static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tin
     if (__tinypy_item_slice_offsets(container, start, stop, &low, &high, out_error) == 0) {
         return NULL;
     }
-    if (tinypy_internal_object_has_special_override_key(container, slice_name) != 0) {
+    /* instance_slice finds __getslice__ and its siblings like any attribute
+       of a classic instance, __getattr__ included. */
+    tinypy_value_t *method = NULL;
+    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE) {
+        int32_t found = tinypy_internal_object_lookup_special_key(container, slice_name, &method, out_error);
+
+        if (found < 0) {
+            return NULL;
+        }
+    }
+    if (TINYPY_VALUE_KIND(container) != TINYPY_VALUE_OLD_INSTANCE || method != NULL) {
         items[0] = tinypy_integer_from_i64(vm, low);
         items[1] = tinypy_integer_from_i64(vm, high);
         items[2] = value;
-        tinypy_value_t *result = __tinypy_item_call_method(container, slice_name, items, value != NULL ? 3U : 2U, out_error);
+        size_t item_count = value != NULL ? 3U : 2U;
+        tinypy_value_t *result;
+        if (method != NULL) {
+            tinypy_value_t *args = tinypy_tuple_from_items(vm, items, item_count);
+            result = tinypy_call(method, args, NULL, out_error);
+            TINYPY_DECREF(args);
+            TINYPY_DECREF(method);
+        }
+        else {
+            result = __tinypy_item_call_method(container, slice_name, items, item_count, out_error);
+        }
         TINYPY_DECREF(items[1]);
         TINYPY_DECREF(items[0]);
         return result;
@@ -950,15 +1052,24 @@ static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tin
 }
 //////////////////////////////////////////////////////////////////////////
 /* Whether apply_slice and assign_slice use sq_slice and sq_ass_slice: both
-   bounds must be offsets, and only classic instances, lists and types that
-   define the legacy method have the slot. */
+   bounds must be offsets, and only classic instances and types with the
+   legacy method have the slot, which subclasses keep even when they override
+   __getitem__ and its siblings. A built-in type itself slices the same way
+   without it. */
 static tinypy_bool_t __tinypy_item_uses_offsets(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *start, tinypy_value_t *stop) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(container);
 
     if (__tinypy_item_is_slice_offset(start) == 0 || __tinypy_item_is_slice_offset(stop) == 0) {
         return TINYPY_FALSE;
     }
-    tinypy_bool_t slot = kind == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_override_key(container, slice_name) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+        return TINYPY_TRUE;
+    }
+    if ((size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && container->type == &vm->types[kind]) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t slot = tinypy_internal_object_has_special_key(container, slice_name);
     return slot;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -979,18 +1090,11 @@ tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_bool_t stored;
 
-    if (__tinypy_item_uses_offsets(container, vm->internal_special_setslice_key, start, stop) != 0) {
-        tinypy_value_t *result = __tinypy_item_call_offsets(container, vm->internal_special_setslice_key, vm->internal_special_setitem_key, start, stop, value, out_error);
-
-        if (result == NULL) {
-            return TINYPY_FALSE;
-        }
-        TINYPY_DECREF(result);
-        return TINYPY_TRUE;
-    }
-    /* list_ass_slice clamps the offsets only after collecting the
+    /* list_ass_slice, also the slot of a list subclass that keeps
+       __setslice__, clamps the offsets only after collecting the
        replacement, which may resize the list. */
-    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_LIST && __tinypy_item_is_slice_offset(start) != 0 && __tinypy_item_is_slice_offset(stop) != 0) {
+    if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_LIST && __tinypy_item_is_slice_offset(start) != 0 && __tinypy_item_is_slice_offset(stop) != 0
+        && tinypy_internal_object_has_special_override_key(container, vm->internal_special_setslice_key) == 0) {
         int64_t low;
         int64_t high;
 
@@ -1001,6 +1105,15 @@ tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_
         stored = __tinypy_item_list_set_slice(container, slice, value, TINYPY_FALSE, TINYPY_TRUE, out_error);
         TINYPY_DECREF(slice);
         return stored;
+    }
+    if (__tinypy_item_uses_offsets(container, vm->internal_special_setslice_key, start, stop) != 0) {
+        tinypy_value_t *result = __tinypy_item_call_offsets(container, vm->internal_special_setslice_key, vm->internal_special_setitem_key, start, stop, value, out_error);
+
+        if (result == NULL) {
+            return TINYPY_FALSE;
+        }
+        TINYPY_DECREF(result);
+        return TINYPY_TRUE;
     }
     tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
     stored = tinypy_set_item(container, slice, value, out_error);
@@ -1090,6 +1203,9 @@ static tinypy_bool_t __tinypy_set_item(tinypy_value_t *container, tinypy_value_t
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
     }
+    if (dispatch_special != 0 && __tinypy_item_missing_pair_method(container, vm->internal_special_setitem_key, vm->internal_special_delitem_key, out_error) != 0) {
+        return TINYPY_FALSE;
+    }
     __tinypy_item_unsupported(container, key, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object does not support item assignment"), (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object does not support item assignment"), out_error);
     return TINYPY_FALSE;
 }
@@ -1159,6 +1275,9 @@ static tinypy_bool_t __tinypy_delete_item(tinypy_value_t *container, tinypy_valu
         }
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
+    }
+    if (dispatch_special != 0 && __tinypy_item_missing_pair_method(container, vm->internal_special_delitem_key, vm->internal_special_setitem_key, out_error) != 0) {
+        return TINYPY_FALSE;
     }
     __tinypy_item_unsupported(container, key, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object doesn't support item deletion"), (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object does not support item deletion"), out_error);
     return TINYPY_FALSE;

@@ -36,6 +36,23 @@ static void __tinypy_output_unraisable_repr(tinypy_value_t *stream, tinypy_value
     tinypy_internal_exception_clear_raised(TINYPY_VALUE_VM(stream));
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyErr_WriteUnraisable writes the value as raised. An error the VM raised
+   with a message and that never unwound through Python code, so has no
+   traceback, is written as that message rather than as the exception. */
+static tinypy_value_t *__tinypy_output_unraisable_value(tinypy_vm_t *vm, const tinypy_internal_exception_state_t *state) {
+    tinypy_value_t *value = state->value;
+
+    if (state->traceback != NULL || tinypy_type_is_subtype(value->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) == 0) {
+        return value;
+    }
+    const tinypy_internal_exception_payload_t *payload = (const tinypy_internal_exception_payload_t *)tinypy_native_instance_payload(value);
+    if (payload->args != NULL && TINYPY_TUPLE_SIZE(payload->args) == 1U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(payload->args, 0U)) == TINYPY_VALUE_STRING) {
+        tinypy_value_t *message = TINYPY_TUPLE_GET(payload->args, 0U);
+        return message;
+    }
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
 /* The caller has already separated the exception that was pending before
    its callback. Reporting consumes only the callback's ignored exception. */
 void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object) {
@@ -72,9 +89,10 @@ void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object) 
         }
         tinypy_internal_exception_clear_raised(vm);
         if (TINYPY_VALUE_KIND(state.type) == TINYPY_VALUE_TYPE) {
-            tinypy_type_t *type = (tinypy_type_t *)state.type;
+            size_t name_size;
+            const char *name = tinypy_internal_type_short_name((tinypy_type_t *)state.type, &name_size);
 
-            __tinypy_output_unraisable_text(stream, type->name, type->name_size);
+            __tinypy_output_unraisable_text(stream, name, name_size);
         }
         else if (TINYPY_VALUE_KIND(state.type) == TINYPY_VALUE_CLASS) {
             tinypy_value_t *name = TINYPY_CLASS_OBJECT(state.type)->name;
@@ -83,7 +101,7 @@ void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object) 
         }
         if (state.value != NULL && TINYPY_VALUE_KIND(state.value) != TINYPY_VALUE_NONE) {
             __tinypy_output_unraisable_text(stream, ": ", 2U);
-            __tinypy_output_unraisable_repr(stream, state.value, "<exception repr() failed>");
+            __tinypy_output_unraisable_repr(stream, __tinypy_output_unraisable_value(vm, &state), "<exception repr() failed>");
         }
         __tinypy_output_unraisable_text(stream, " in ", 4U);
         __tinypy_output_unraisable_repr(stream, object, "<object repr() failed>");

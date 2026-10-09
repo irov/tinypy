@@ -10,11 +10,16 @@ static int32_t __tinypy_internal_frame_line_number(const tinypy_frame_object_t *
     const tinypy_code_object_t *code = TINYPY_CODE_OBJECT(frame->code);
     const uint8_t *bytes = TINYPY_STRING_OBJECT(code->lnotab)->bytes;
     size_t size = TINYPY_SIZED_SIZE(code->lnotab);
-    size_t instruction_offset = frame->last_instruction >= 0 ? (size_t)frame->last_instruction : 0U;
     size_t address = 0U;
     size_t index;
     int32_t line = code->first_line_number;
 
+    /* PyCode_Addr2Line(code, -1): a frame that has not started is on the
+       first line of its code. */
+    if (frame->last_instruction < 0) {
+        return line;
+    }
+    size_t instruction_offset = (size_t)frame->last_instruction;
     for (index = 0U; index + 1U < size; index += 2U) {
         address += bytes[index];
         if (address > instruction_offset) {
@@ -202,6 +207,33 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
     else {
         tinypy_internal_value_destroy(&frame->base.base);
         TINYPY_DECREF(&vm->types[TINYPY_VALUE_FRAME].base.base);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The local, cell and free slots precede the value stack. */
+void tinypy_internal_frame_clear_local_slots(tinypy_frame_object_t *frame) {
+    for (tinypy_value_t **slot = frame->locals_plus; slot != frame->value_stack; ++slot) {
+        if (*slot != NULL) {
+            tinypy_value_t *value = *slot;
+
+            *slot = NULL;
+            TINYPY_DECREF(value);
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* Empties the value and block stacks of a suspended frame that can no
+   longer resume before visiting the values they held. */
+void tinypy_internal_frame_release_stack(tinypy_frame_object_t *frame, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_value_t **stack_top = frame->stack_top;
+
+    frame->stack_top = frame->value_stack;
+    frame->block_count = 0U;
+    while (stack_top != frame->value_stack) {
+        --stack_top;
+        if (*stack_top != NULL) {
+            visit(*stack_top, user_data);
+        }
     }
 }
 //////////////////////////////////////////////////////////////////////////

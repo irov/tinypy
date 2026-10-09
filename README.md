@@ -55,8 +55,9 @@ Source decoding supports UTF-8 BOM, PEP 263 cookies, ASCII, UTF-8, Latin-1,
 CRLF/CR normalization and structured syntax diagnostics. Compiler limits cover
 source bytes, tokens, syntax nodes, nesting, symbols, blocks, instructions,
 constants and arena memory. The nesting limit bounds both the parser stack and
-the AST depth of an expression, so very long flat operator, attribute or call
-chains need a raised `max_nesting`.
+the AST depth of an expression, so very long flat attribute or call chains, and
+flat operator chains compiled with the preprocessor or meta features, need a
+raised `max_nesting`.
 
 Trusted source can opt into two compiler-only features. The build
 preprocessor replaces reserved `__UPPERCASE__` names with immutable typed

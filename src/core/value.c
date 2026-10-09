@@ -406,6 +406,12 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
         tinypy_internal_string_unintern(value);
     }
+    /* A dying weak reference leaves its referent's list before its dict and
+       slots are released or deferred: they may hold the last reference to
+       the referent, whose callbacks must not see it (CPython bug #3110). */
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_WEAKREF) {
+        tinypy_internal_weakref_destroy(value);
+    }
     /* Only already-finalized zero-ref objects are deferred. Their ref word
        temporarily links the queue; no registry or extra allocation is needed. */
     if (vm->release_depth >= TINYPY_RELEASE_DEFER_DEPTH) {

@@ -2871,26 +2871,48 @@ static tinypy_bool_t __tinypy_codegen_with(tinypy_codegen_t *c, tinypy_ast_state
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
-    tinypy_bool_t function_result;
-    int32_t i, n;
-
-    /* If expr e has a different line number than the last expr/stmt,
-       set a new line number for the next instruction.
-    */
+/* If expr e has a different line number than the last expr/stmt,
+   set a new line number for the next instruction.
+*/
+static void __tinypy_codegen_expression_line(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
     if (e->lineno > c->u->u_lineno) {
         c->u->u_lineno = e->lineno;
         c->u->u_lineno_set = TINYPY_COMPILER_FALSE;
     }
+}
+//////////////////////////////////////////////////////////////////////////
+/* Each BinOp of the chain takes its line as if it were visited on the way
+   down to the first operand. */
+static tinypy_bool_t __tinypy_codegen_binop(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+    size_t count;
+    tinypy_ast_expression_t *chain = tinypy_internal_ast_operator_chain(c->c_arena, e, &count);
+
+    if (chain == NULL) {
+        return TINYPY_FALSE;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        __tinypy_codegen_expression_line(c, chain[index]);
+    }
+    TINYPY_CODEGEN_VISIT(c, expr, chain[0]->v.BinOp.left);
+    for (size_t index = 0U; index < count; ++index) {
+        TINYPY_CODEGEN_VISIT(c, expr, chain[index]->v.BinOp.right);
+        TINYPY_CODEGEN_ADD_OPCODE(c, __tinypy_codegen_binary_operator(c, chain[index]->v.BinOp.op));
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_codegen_visit_expr(tinypy_codegen_t *c, tinypy_ast_expression_t e) {
+    tinypy_bool_t function_result;
+    int32_t i, n;
+
+    __tinypy_codegen_expression_line(c, e);
     switch (e->kind) {
     case TINYPY_AST_KIND_BOOL_OP:
         function_result = __tinypy_codegen_boolop(c, e);
         return function_result;
     case TINYPY_AST_KIND_BIN_OP:
-        TINYPY_CODEGEN_VISIT(c, expr, e->v.BinOp.left);
-        TINYPY_CODEGEN_VISIT(c, expr, e->v.BinOp.right);
-        TINYPY_CODEGEN_ADD_OPCODE(c, __tinypy_codegen_binary_operator(c, e->v.BinOp.op));
-        break;
+        function_result = __tinypy_codegen_binop(c, e);
+        return function_result;
     case TINYPY_AST_KIND_UNARY_OP:
         TINYPY_CODEGEN_VISIT(c, expr, e->v.UnaryOp.operand);
         TINYPY_CODEGEN_ADD_OPCODE(c, __tinypy_codegen_unary_operator(e->v.UnaryOp.op));

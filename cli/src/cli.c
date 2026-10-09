@@ -488,8 +488,17 @@ static const char *__tinypy_cli_exception_type_name(const tinypy_vm_t *vm, const
             const char *return_value_1 = (const char *)tinypy_string_view(name, out_size);
             return return_value_1;
         }
-        const char *return_value_2 = tinypy_type_name(tinypy_value_as_const_type(raised_type), out_size);
-        return return_value_2;
+        /* PyErr_Display shows the part of tp_name after its last dot. */
+        const char *type_name = tinypy_type_name(tinypy_value_as_const_type(raised_type), out_size);
+        size_t offset = 0U;
+
+        for (size_t index = 0U; index < *out_size; ++index) {
+            if (type_name[index] == '.') {
+                offset = index + 1U;
+            }
+        }
+        *out_size -= offset;
+        return type_name + offset;
     }
     const char *return_value_3 = __tinypy_cli_error_type_name(tinypy_error_kind(error), out_size);
     return return_value_3;

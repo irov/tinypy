@@ -1,5 +1,7 @@
 #include "value_ops.h"
 #include "ast_nodes.h"
+#include "cst.h"
+#include "ast_builder.h"
 #include "codegen.h"
 #include "symbol_table.h"
 
@@ -1180,10 +1182,19 @@ static tinypy_bool_t __tinypy_symbol_visit_expr(tinypy_symbol_table_t *st, tinyp
     case TINYPY_AST_KIND_BOOL_OP:
         TINYPY_SYMBOL_VISIT_SEQUENCE(st, expr, e->v.BoolOp.values);
         break;
-    case TINYPY_AST_KIND_BIN_OP:
-        TINYPY_SYMBOL_VISIT(st, expr, e->v.BinOp.left);
-        TINYPY_SYMBOL_VISIT(st, expr, e->v.BinOp.right);
+    case TINYPY_AST_KIND_BIN_OP: {
+        size_t count;
+        tinypy_ast_expression_t *chain = tinypy_internal_ast_operator_chain(st->arena, e, &count);
+
+        if (chain == NULL) {
+            return TINYPY_FALSE;
+        }
+        TINYPY_SYMBOL_VISIT(st, expr, chain[0]->v.BinOp.left);
+        for (size_t index = 0U; index < count; ++index) {
+            TINYPY_SYMBOL_VISIT(st, expr, chain[index]->v.BinOp.right);
+        }
         break;
+    }
     case TINYPY_AST_KIND_UNARY_OP:
         TINYPY_SYMBOL_VISIT(st, expr, e->v.UnaryOp.operand);
         break;

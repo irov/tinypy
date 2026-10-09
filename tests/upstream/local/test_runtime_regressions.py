@@ -305,3 +305,45 @@ class Regressions(unittest.TestCase):
         self.assertRaises(TypeError, delattr, iterator, "label")
         self.assertEqual(iterator.__length_hint__(), 2)
         self.assertRaises(AttributeError, setattr, iterator, "label", 1)
+
+    def test_classic_getattr_supplies_legacy_protocols(self):
+        class Legacy:
+            def __getattr__(self, name):
+                if name == "__getslice__":
+                    return lambda low, high: ("slice", low, high)
+                if name == "__format__":
+                    return lambda spec: "format:" + spec
+                if name == "__reversed__":
+                    return lambda: iter("ab")
+                raise AttributeError(name)
+
+        self.assertEqual(Legacy()[1:2], ("slice", 1, 2))
+        self.assertEqual("{0:x}".format(Legacy()), "format:x")
+        self.assertEqual(list(reversed(Legacy())), ["a", "b"])
+
+    def test_cmp_wrapper_and_str_fallback_messages(self):
+        class Long(long):
+            pass
+
+        class Repr(object):
+            def __repr__(self):
+                return 1
+
+        try:
+            Long(1).__cmp__("a")
+        except TypeError as error:
+            self.assertEqual(str(error), "Long.__cmp__(x,y) requires y to be a 'Long', not a 'str'")
+        else:
+            self.fail("__cmp__ accepted a str")
+        try:
+            str(Repr())
+        except TypeError as error:
+            self.assertEqual(str(error), "__str__ returned non-string (type int)")
+        else:
+            self.fail("str accepted a non-string __repr__ result")
+        try:
+            repr(Repr())
+        except TypeError as error:
+            self.assertEqual(str(error), "__repr__ returned non-string (type int)")
+        else:
+            self.fail("repr accepted a non-string __repr__ result")

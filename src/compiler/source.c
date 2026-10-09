@@ -219,18 +219,18 @@ static void __tinypy_compiler_byte_position(const uint8_t *bytes, size_t offset,
 }
 //////////////////////////////////////////////////////////////////////////
 /* Locates the text of a source line, including its newline, for diagnostics. */
-static void __tinypy_compiler_source_line(const tinypy_compile_ctx_t *ctx, int32_t line_number, const char **out_bytes, size_t *out_size) {
+static void __tinypy_compiler_source_line(const tinypy_source_view_t *source, int32_t line_number, const char **out_bytes, size_t *out_size) {
     size_t position = 0U;
     int32_t line = 1;
     size_t end;
 
     *out_bytes = NULL;
     *out_size = 0U;
-    if (line_number <= 0 || ctx->source.bytes == NULL) {
+    if (line_number <= 0 || source->bytes == NULL) {
         return;
     }
-    while (position < ctx->source.size && line < line_number) {
-        if (ctx->source.bytes[position] == '\n') {
+    while (position < source->size && line < line_number) {
+        if (source->bytes[position] == '\n') {
             line += 1;
         }
         position += 1U;
@@ -239,11 +239,11 @@ static void __tinypy_compiler_source_line(const tinypy_compile_ctx_t *ctx, int32
         return;
     }
     end = position;
-    while (end < ctx->source.size && ctx->source.bytes[end] != '\n') {
+    while (end < source->size && source->bytes[end] != '\n') {
         end += 1U;
     }
-    *out_bytes = (const char *)(ctx->source.bytes + position);
-    *out_size = end - position + (end < ctx->source.size ? 1U : 0U);
+    *out_bytes = (const char *)(source->bytes + position);
+    *out_size = end - position + (end < source->size ? 1U : 0U);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, tinypy_error_t **out_error) {
@@ -254,7 +254,7 @@ void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind
         return;
     }
     ctx->failed = 1;
-    __tinypy_compiler_source_line(ctx, line_number, &line_bytes, &line_size);
+    __tinypy_compiler_source_line(&ctx->source, line_number, &line_bytes, &line_size);
     if (line_bytes != NULL && (ctx->source_is_latin1 != 0 || ctx->source_diagnostic_latin1 != 0)) {
         uint8_t *original = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, line_size + 1U);
         uint8_t *restored = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, line_size + 1U);
@@ -376,7 +376,15 @@ void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const ch
         return;
     }
     ctx->failed = 1;
-    tinypy_internal_make_vm_error_location(ctx->vm, TINYPY_ERROR_SYNTAX, message, ctx->logical_filename, ctx->filename_size, line_number, -1, NULL, 0U, include_location, ctx->out_error);
+    const char *line_bytes;
+    size_t line_size;
+    __tinypy_compiler_source_line(&ctx->program_text, line_number, &line_bytes, &line_size);
+    /* PyErr_ProgramText quotes the line without its indentation. */
+    while (line_size != 0U && (*line_bytes == ' ' || *line_bytes == '\t' || *line_bytes == '\f')) {
+        line_bytes += 1;
+        line_size -= 1U;
+    }
+    tinypy_internal_make_vm_error_location(ctx->vm, TINYPY_ERROR_SYNTAX, message, ctx->logical_filename, ctx->filename_size, line_number, -1, line_bytes, line_size, include_location, ctx->out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, tinypy_bool_t include_location) {

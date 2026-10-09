@@ -355,13 +355,9 @@ static tinypy_value_t *__tinypy_object_get_type_special_name(tinypy_value_t *val
     if ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U) {
         return TINYPY_RET(type->name_object);
     }
-    size_t offset = 0U;
-    for (size_t index = 0U; index < type->name_size; ++index) {
-        if (type->name[index] == '.') {
-            offset = index + 1U;
-        }
-    }
-    tinypy_value_t *result = tinypy_string_from_bytes(vm, type->name + offset, type->name_size - offset);
+    size_t name_size;
+    const char *name = tinypy_internal_type_short_name(type, &name_size);
+    tinypy_value_t *result = tinypy_string_from_bytes(vm, name, name_size);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -485,8 +481,8 @@ static tinypy_value_t *__tinypy_object_get_type_special_module(tinypy_value_t *v
             return result;
         }
     }
-    /* Builtin exception types keep a short C name and a declared module.
-       Instance descriptors such as function.__module__ are not type metadata. */
+    /* Native types may declare a module in their dict. Instance descriptors
+       such as function.__module__ are not type metadata. */
     tinypy_value_t *module = tinypy_internal_dict_get_optional_suppressed(vm, type->dict, vm->internal_special_module_key);
     if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING) {
         return TINYPY_RET(module);
@@ -499,6 +495,11 @@ static tinypy_value_t *__tinypy_object_get_type_special_doc(tinypy_value_t *valu
     tinypy_type_t *type = (tinypy_type_t *)value;
     tinypy_value_t *doc = tinypy_internal_dict_get_optional(vm, type->dict, vm->internal_special_doc_key);
 
+    /* type_get_doc binds a descriptor of a class; the type.__doc__ getset
+       does that with an error channel. */
+    if (doc != NULL && (type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && tinypy_internal_descriptor_has_get(vm, doc) != 0) {
+        return NULL;
+    }
     tinypy_value_t *result = __tinypy_object_optional(vm, doc);
     return result;
 }
@@ -1418,13 +1419,10 @@ tinypy_value_t *tinypy_internal_type_mro_tuple(tinypy_type_t *type) {
     return type->mro;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Mirrors PyMapping_Check: subscriptable objects other than the built-in
-   sequences count as mappings. */
+/* Mirrors PyMapping_Check: subscriptable objects without the sq_slice slot
+   of __getslice__ count as mappings. */
 tinypy_bool_t tinypy_internal_object_is_mapping(tinypy_vm_t *vm, tinypy_value_t *value) {
     switch (TINYPY_VALUE_KIND(value)) {
-    case TINYPY_VALUE_DICT:
-    case TINYPY_VALUE_BYTEARRAY:
-        return TINYPY_TRUE;
     case TINYPY_VALUE_OLD_INSTANCE: {
         tinypy_internal_exception_state_t state;
         tinypy_value_t *attribute;
@@ -1448,9 +1446,9 @@ tinypy_bool_t tinypy_internal_object_is_mapping(tinypy_vm_t *vm, tinypy_value_t 
     default:
         break;
     }
-    tinypy_bool_t subscriptable = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getitem_key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t mapping = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getitem_key) != NULL && tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getslice_key) == NULL ? TINYPY_TRUE : TINYPY_FALSE;
 
-    return subscriptable;
+    return mapping;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_descriptor_set_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_value_t *value, tinypy_error_t **out_error) {

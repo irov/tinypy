@@ -278,6 +278,7 @@ static int32_t __test_source_diagnostic(void) {
     tinypy_error_t *error = NULL;
     tinypy_value_t *code;
     const char source[] = "value =\r\nnext = 2\r";
+    const char semantic[] = "if 1:\n\f \tdel 1\n";
     const char *filename;
     const char *line;
     size_t filename_size;
@@ -294,6 +295,15 @@ static int32_t __test_source_diagnostic(void) {
     assert(filename_size == 13U && memcmp(filename, "diagnostic.py", 13U) == 0);
     line = tinypy_error_source_line(error, &line_size);
     assert(line_size == 8U && memcmp(line, "value =\n", 8U) == 0);
+    tinypy_error_release(error);
+    error = NULL;
+    /* A semantic error quotes the line of the host source without its
+       indentation, as PyErr_ProgramText reads it from the file. */
+    code = tinypy_compile_source(vm, semantic, sizeof(semantic) - 1U, "semantic.py", 11U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    assert(tinypy_error_line_number(error) == 2);
+    line = tinypy_error_source_line(error, &line_size);
+    assert(line_size == 6U && memcmp(line, "del 1\n", 6U) == 0);
     tinypy_error_release(error);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U);
@@ -1554,8 +1564,10 @@ static int32_t __test_expression_nesting_limit(void) {
     size_t trailer_size;
     size_t index;
 
-    /* A flat chain of 1200 operands nests 1200 levels deep in the AST, which
-       the default nesting limit rejects while a raised limit accepts. */
+    /* A flat chain of 1200 operands nests 1200 levels deep in the AST. The
+       symbol table and the code generator walk it without recursion, so only
+       the compile-time features, which recurse through it, need a raised
+       limit like a flat trailer chain does. */
     chain_size = __test_append_text(chain, 0U, "x = 1");
     for (index = 0U; index < 1199U; index += 1U) {
         chain_size = __test_append_text(chain, chain_size, " + 1");
@@ -1568,9 +1580,14 @@ static int32_t __test_expression_nesting_limit(void) {
     trailer_size = __test_append_text(trailers, trailer_size, "\n");
     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
     code = tinypy_compile_source(vm, chain, chain_size, "chain.py", 8U, &options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_release(code);
+    options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_META;
+    code = tinypy_compile_source(vm, chain, chain_size, "chain.py", 8U, &options, &error);
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
     tinypy_error_release(error);
     error = NULL;
+    options.feature_flags = 0U;
     code = tinypy_compile_source(vm, trailers, trailer_size, "chain.py", 8U, &options, &error);
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
     tinypy_error_release(error);
@@ -1578,9 +1595,11 @@ static int32_t __test_expression_nesting_limit(void) {
     tinypy_compile_limits_init(&limits);
     limits.max_nesting = 2000U;
     options.limits = &limits;
+    options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_META;
     code = tinypy_compile_source(vm, chain, chain_size, "chain.py", 8U, &options, &error);
     assert(code != NULL && error == NULL);
     tinypy_release(code);
+    options.feature_flags = 0U;
     code = tinypy_compile_source(vm, trailers, trailer_size, "chain.py", 8U, &options, &error);
     assert(code != NULL && error == NULL);
     tinypy_release(code);

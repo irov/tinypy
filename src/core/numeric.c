@@ -211,17 +211,17 @@ static tinypy_value_t *__tinypy_numeric_cmp_method(tinypy_value_t *function, tin
         return NULL;
     }
     if (right_valid == 0) {
-        tinypy_type_t *type = &vm->types[expected];
-        const tinypy_message_part_t parts[] = {
-            {type->name, type->name_size},
+        /* wrap_cmpfunc names the receiver's own type twice. */
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_TYPE_NAME(left),
             TINYPY_MESSAGE_PART_LITERAL(".__cmp__(x,y) requires y to be a '"),
-            {type->name, type->name_size},
+            TINYPY_MESSAGE_PART_TYPE_NAME(left),
             TINYPY_MESSAGE_PART_LITERAL("', not a '"),
             TINYPY_MESSAGE_PART_TYPE_NAME(right),
-            TINYPY_MESSAGE_PART_LITERAL("'")
+            TINYPY_MESSAGE_PART_LITERAL("'"),
         };
 
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 6U, out_error);
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
     }
     tinypy_value_t *comparison = tinypy_internal_compare_builtin_value(left, right, TINYPY_COMPARE_EQUAL, out_error);

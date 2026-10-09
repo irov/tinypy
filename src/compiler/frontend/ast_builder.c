@@ -84,6 +84,28 @@ static tinypy_bool_t __ast_nesting_check(tinypy_ast_builder_t *c, const tinypy_c
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A flat operator chain is a left-deep spine of BinOps. The spine comes back
+   bottom-up, so that a walker visits the first operand and then every right
+   operand in order without one recursion level per operator. */
+tinypy_ast_expression_t *tinypy_internal_ast_operator_chain(tinypy_compile_ctx_t *arena, tinypy_ast_expression_t expression, size_t *out_count) {
+    size_t count = 0U;
+
+    for (tinypy_ast_expression_t node = expression; node->kind == TINYPY_AST_KIND_BIN_OP; node = node->v.BinOp.left) {
+        count += 1U;
+    }
+    tinypy_ast_expression_t *chain = (tinypy_ast_expression_t *)tinypy_internal_compiler_arena_allocate_uninitialized(arena, count * sizeof(*chain));
+
+    if (chain == NULL) {
+        return NULL;
+    }
+    size_t index = count;
+    for (tinypy_ast_expression_t node = expression; index != 0U; node = node->v.BinOp.left) {
+        chain[--index] = node;
+    }
+    *out_count = count;
+    return chain;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__ast_arena_value(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, tinypy_value_t *value) {
     if (TINYPY_COMPILER_ARENA_ADD_VALUE(c->c_arena, value) != 0) {
         TINYPY_DECREF(value);
@@ -1636,8 +1658,12 @@ static tinypy_ast_expression_t __ast_for_binop(tinypy_ast_builder_t *c, const ti
         tinypy_ast_expression_t tmp_result, tmp;
         const tinypy_cst_node_t *next_oper = TINYPY_CST_CHILD(n, i * 2 + 1);
 
-        if (__ast_nesting_check(c, next_oper, c->c_depth + i) == 0) {
-            return NULL;
+        /* The symbol table and the code generator walk an operator chain
+           without recursion; the compile-time features recurse through it. */
+        if ((c->c_arena->options.feature_flags & (uint32_t)(TINYPY_COMPILE_FEATURE_PREPROCESSOR | TINYPY_COMPILE_FEATURE_META)) != 0U) {
+            if (__ast_nesting_check(c, next_oper, c->c_depth + i) == 0) {
+                return NULL;
+            }
         }
         newoperator = __get_operator(next_oper);
         if (!newoperator) {

@@ -1603,7 +1603,7 @@ static tinypy_value_t *__tinypy_bytearray_bridge_method(tinypy_value_t *function
             goto normalized_error;
         }
         if (c_integer != 0 && (integer < INT32_MIN || integer > INT32_MAX)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "Python int too large to convert to C int", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, integer < INT32_MIN ? "signed integer is less than minimum" : "signed integer is greater than maximum", out_error);
             goto normalized_error;
         }
         normalized[index - 1U] = tinypy_integer_from_i64(vm, integer);
@@ -1675,7 +1675,8 @@ static tinypy_value_t *__tinypy_bytearray_bridge_method(tinypy_value_t *function
     }
     for (index = 1U; index < argument_count; ++index) {
         tinypy_value_t *value = normalized[index - 1U] != NULL ? normalized[index - 1U] : TINYPY_TUPLE_GET(args, index);
-        converted[index - 1U] = __tinypy_bytearray_bridge_argument(vm, value, out_error);
+        /* decode reads its encoding and errors as str.decode does. */
+        converted[index - 1U] = decode != TINYPY_FALSE ? TINYPY_RET(value) : __tinypy_bytearray_bridge_argument(vm, value, out_error);
         if (converted[index - 1U] == NULL) {
             while (index > 1U) {
                 TINYPY_DECREF(converted[--index - 1U]);
@@ -1950,7 +1951,7 @@ static tinypy_hash_t __tinypy_bytearray_hash(tinypy_value_t *value, tinypy_error
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
     if (value->type == &vm->types[TINYPY_VALUE_BYTEARRAY]) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable type", out_error);
+        tinypy_internal_hash_unhashable_error(value, out_error);
         return (tinypy_hash_t)0;
     }
     tinypy_hash_t hash = (tinypy_hash_t)((uintptr_t)value >> 4U);

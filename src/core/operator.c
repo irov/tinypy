@@ -1061,36 +1061,6 @@ static tinypy_value_t *__tinypy_operator_concat_text(tinypy_vm_t *vm, tinypy_val
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_operator_digits_as_i64(int32_t sign, const uint16_t *digits, size_t count, int64_t *out_value) {
-    uint64_t magnitude = 0U;
-    size_t index;
-
-    if (count > 5U) {
-        return TINYPY_FALSE;
-    }
-    for (index = count; index != 0U; index -= 1U) {
-        if (magnitude > (UINT64_MAX >> 15U)) {
-            return TINYPY_FALSE;
-        }
-        magnitude = (magnitude << 15U) | digits[index - 1U];
-    }
-    if (sign >= 0) {
-        if (magnitude > (uint64_t)INT64_MAX) {
-            return TINYPY_FALSE;
-        }
-        *out_value = (int64_t)magnitude;
-    }
-    else {
-        uint64_t limit = (uint64_t)INT64_MAX + UINT64_C(1);
-
-        if (magnitude > limit) {
-            return TINYPY_FALSE;
-        }
-        *out_value = magnitude == limit ? INT64_MIN : -(int64_t)magnitude;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_integer_from_digits(tinypy_vm_t *vm, int32_t sign, uint16_t *digits, size_t count, tinypy_bool_t prefer_long, tinypy_error_t **out_error) {
     int64_t integer;
 
@@ -1098,7 +1068,7 @@ static tinypy_value_t *__tinypy_operator_integer_from_digits(tinypy_vm_t *vm, in
     if (count == 0U) {
         sign = 0;
     }
-    if (prefer_long == 0 && __tinypy_operator_digits_as_i64(sign, digits, count, &integer) != 0) {
+    if (prefer_long == 0 && tinypy_internal_long_digits_as_i64(sign, digits, count, &integer) != 0) {
         tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, integer);
         return return_value_1;
     }
@@ -2077,12 +2047,14 @@ static tinypy_value_t *__tinypy_operator_call_slot(const tinypy_operator_binary_
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* NEW_STYLE_NUMBER: every type but the built-in non-numbers checks the types
-   of its operands itself; the others are coerced first. */
+/* NEW_STYLE_NUMBER: classes, weak proxies and the built-in numbers, strings
+   and sets check the types of their operands themselves; other built-in
+   types, exceptions among them, are coerced first. */
 static tinypy_bool_t __tinypy_operator_new_style_number(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
-    if (__tinypy_operator_is_exact_builtin(value) == 0) {
+    if ((value->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U || value->type == vm->weak_proxy_type || value->type == vm->callable_weak_proxy_type) {
         return TINYPY_TRUE;
     }
     switch (kind) {
@@ -2454,7 +2426,7 @@ tinypy_bool_t tinypy_internal_number_as_index(tinypy_value_t *value, tinypy_erro
         return TINYPY_FALSE;
     }
     if (TINYPY_VALUE_KIND(index) == TINYPY_VALUE_LONG) {
-        fits = __tinypy_operator_digits_as_i64(TINYPY_LONG_SIGN(index), TINYPY_LONG_OBJECT(index)->digits, TINYPY_LONG_DIGIT_COUNT(index), out_index);
+        fits = tinypy_internal_long_digits_as_i64(TINYPY_LONG_SIGN(index), TINYPY_LONG_OBJECT(index)->digits, TINYPY_LONG_DIGIT_COUNT(index), out_index);
     }
     else {
         *out_index = TINYPY_INTEGER_VALUE(index);

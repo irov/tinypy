@@ -66,7 +66,10 @@ tinypy_value_t *tinypy_super_new(tinypy_type_t *type, tinypy_value_t *object, ti
 void tinypy_internal_super_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_super_object_t *super_value = TINYPY_SUPER_OBJECT(value);
 
-    visit(&super_value->type->base.base, user_data);
+    /* super.__new__ leaves every field empty until __init__ runs. */
+    if (super_value->type != NULL) {
+        visit(&super_value->type->base.base, user_data);
+    }
     if (super_value->object != NULL) {
         visit(super_value->object, user_data);
     }
@@ -155,6 +158,12 @@ tinypy_value_t *tinypy_internal_super_descriptor_get(tinypy_value_t *descriptor,
         return TINYPY_RET(descriptor);
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+    /* super_descr_get calls the type with su->type, which ends the argument
+       list when it is NULL. */
+    if (super_value->type == NULL) {
+        (void)__tinypy_super_arguments(vm, NULL, 0U, NULL, out_error);
+        return NULL;
+    }
     if (descriptor->type != &vm->types[TINYPY_VALUE_SUPER]) {
         tinypy_value_t *items[2] = {&super_value->type->base.base, instance};
         tinypy_value_t *args = tinypy_tuple_from_items(vm, items, 2U);

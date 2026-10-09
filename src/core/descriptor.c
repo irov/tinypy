@@ -1101,13 +1101,22 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
             return NULL;
         }
         if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_ABSTRACT_METHODS) {
-            tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, ((tinypy_type_t *)instance)->dict, descriptor->name);
+            /* type_abstractmethods: type's own entry is this descriptor. */
+            tinypy_value_t *value = instance != &vm->types[TINYPY_VALUE_TYPE].base.base ? tinypy_internal_dict_get_optional(vm, ((tinypy_type_t *)instance)->dict, descriptor->name) : NULL;
 
             if (value == NULL) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "type has no __abstractmethods__ attribute", out_error);
+                tinypy_internal_make_attribute_name_error(vm, descriptor->name, out_error);
                 return NULL;
             }
             return TINYPY_RET(value);
+        }
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC && (((tinypy_type_t *)instance)->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U) {
+            tinypy_value_t *doc = tinypy_internal_dict_get_optional(vm, ((tinypy_type_t *)instance)->dict, descriptor->name);
+
+            if (doc != NULL && tinypy_internal_descriptor_has_get(vm, doc) != 0) {
+                tinypy_value_t *bound_doc = tinypy_internal_descriptor_get_value(vm, doc, NULL, (tinypy_type_t *)instance, out_error);
+                return bound_doc;
+            }
         }
         tinypy_value_t *return_value_1 = tinypy_internal_object_builtin_attribute(instance, descriptor->name);
         return return_value_1;
@@ -1171,9 +1180,11 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         tinypy_super_object_t *super_value = TINYPY_SUPER_OBJECT(instance);
 
         if (field == TINYPY_INTERNAL_C_DESCRIPTOR_SUPER_THISCLASS) {
-            return TINYPY_RET(&super_value->type->base.base);
+            function_result = super_value->type != NULL ? &super_value->type->base.base : NULL;
         }
-        function_result = field == TINYPY_INTERNAL_C_DESCRIPTOR_SUPER_SELF ? super_value->object : (super_value->object_type != NULL ? &super_value->object_type->base.base : NULL);
+        else {
+            function_result = field == TINYPY_INTERNAL_C_DESCRIPTOR_SUPER_SELF ? super_value->object : (super_value->object_type != NULL ? &super_value->object_type->base.base : NULL);
+        }
         tinypy_value_t *return_value_1 = __tinypy_internal_c_descriptor_optional(vm, function_result);
         return return_value_1;
     }
@@ -1405,6 +1416,16 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* get_builtin_base_with_dict in Python 2.7. */
+static tinypy_type_t *__tinypy_internal_builtin_base_with_dict(tinypy_type_t *type) {
+    for (; type->base_type != NULL; type = type->base_type) {
+        if ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U && (type->dict_offset != 0U || type->has_instance_dict != 0)) {
+            return type;
+        }
+    }
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value, tinypy_value_t *instance, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_c_descriptor_object_t *descriptor = TINYPY_C_DESCRIPTOR_OBJECT(descriptor_value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor_value);
@@ -1519,6 +1540,20 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
 
         if (dict_slot == NULL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "This object has no __dict__", out_error);
+            return TINYPY_FALSE;
+        }
+        /* subtype_setdict: the __dict__ of a builtin base is set through
+           that base's own descriptor. */
+        tinypy_type_t *dict_base = __tinypy_internal_builtin_base_with_dict(instance->type);
+        tinypy_value_t *base_descriptor = dict_base != NULL ? tinypy_internal_type_lookup_key(vm, dict_base, vm->internal_special_dict_key) : NULL;
+        if (base_descriptor != NULL && base_descriptor != descriptor_value) {
+            tinypy_bool_t stored = value != NULL
+                                       ? tinypy_internal_descriptor_set_value(vm, base_descriptor, instance, value, out_error)
+                                       : tinypy_internal_descriptor_delete_value(vm, base_descriptor, instance, out_error);
+            return stored;
+        }
+        if (tinypy_type_is_subtype(instance->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0 && (value == NULL || TINYPY_VALUE_KIND(value) != TINYPY_VALUE_DICT)) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, value == NULL ? "__dict__ may not be deleted" : "__dict__ must be a dictionary", out_error);
             return TINYPY_FALSE;
         }
         if (TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_PARTIAL && (value == NULL || TINYPY_VALUE_KIND(value) != TINYPY_VALUE_DICT)) {
