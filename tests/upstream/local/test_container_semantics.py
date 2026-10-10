@@ -1366,6 +1366,30 @@ class ContainerSemantics(unittest.TestCase):
         self.assertEqual(iterator.__length_hint__(), 0)
         self.assertEqual(list(iterator), [])
 
+    def test_sequence_iteration_ends_at_the_raised_type(self):
+        import sys
+        class Exiting(object):
+            def __len__(self):
+                return 3
+            def __getitem__(self, index):
+                if index == 1:
+                    sys.exit(IndexError('stop'))
+                return index
+        for iterate in (list, lambda sequence: list(reversed(sequence)), lambda sequence: 5 in sequence):
+            with self.assertRaises(SystemExit) as failure:
+                iterate(Exiting())
+            self.assertEqual(type(failure.exception.code), IndexError)
+
+    def test_enumerate_subclass_next_overrides_the_slot(self):
+        class Empty(enumerate):
+            def next(self):
+                raise StopIteration
+        class Custom(enumerate):
+            def next(self):
+                return 'custom'
+        self.assertEqual(list(Empty([1, 2, 3])), [])
+        self.assertEqual(next(Custom([10, 20])), 'custom')
+
     def test_bytearray_append_and_insert_take_the_size_before_converting(self):
         def converting(target, value, *arguments):
             class Converted(object):
@@ -1479,3 +1503,132 @@ class ContainerSemantics(unittest.TestCase):
         self.assertEqual(buffer('abc', 2 ** 32 + 1)[:], '')
         self.assertEqual(buffer('abc', 1, 2 ** 32 + 1)[:], 'bc')
         self.assertEqual(buffer(buffer('abcdef', 1, 2 ** 32 + 1), 2 ** 32)[:], '')
+
+    def test_keyword_values_outlive_a_colliding_key_clearing_them(self):
+        class Colliding(object):
+            def __init__(self, name):
+                self.name = name
+            def __hash__(self):
+                return hash(self.name)
+            def __eq__(self, other):
+                keywords.clear()
+                return False
+        class Number(object):
+            def __float__(self):
+                return 2.5
+        keywords = {'number': Number(), Colliding('ndigits'): 1}
+        self.assertEqual(apply(round, (), keywords), 3.0)
+        self.assertEqual(keywords, {})
+
+    def test_frame_locals_sync_holds_values_across_key_comparisons(self):
+        armed = [False]
+        class Value(object):
+            pass
+        class Name(str):
+            def __hash__(self):
+                return hash('x')
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    next(generator)
+                return str.__eq__(self, other)
+            def __ne__(self, other):
+                return not self.__eq__(other)
+        def produce():
+            x = Value()
+            yield 1
+            x = None
+            yield 2
+        generator = produce()
+        next(generator)
+        names = generator.gi_frame.f_locals
+        del names['x']
+        names[Name('y')] = 0
+        armed[0] = True
+        names = generator.gi_frame.f_locals
+        self.assertTrue(type(names['x']) is Value)
+
+    def test_bytearray_copies_string_subclasses_with_index(self):
+        class Text(str):
+            def __index__(self):
+                return 7
+        class Counted(bytearray):
+            def __index__(self):
+                return 3
+        self.assertEqual(bytearray(Text('hello')), bytearray('hello'))
+        target = bytearray('xy')
+        target.__init__(Text('hello'))
+        self.assertEqual(target, bytearray('hello'))
+        self.assertEqual(bytearray(Counted('ab')), bytearray(3))
+
+    def test_bytearray_init_appends_the_codec_result_like_iconcat(self):
+        import _codecs
+        target = bytearray()
+        other = bytearray('pq')
+        def encode_self(text, errors='strict'):
+            target.extend('A' * 100)
+            return (target, len(text))
+        def encode_other(text, errors='strict'):
+            return (other, len(text))
+        def decode(data, errors='strict'):
+            return (unicode(data), len(data))
+        def search(name):
+            if name == 'containersemanticsself':
+                return (encode_self, decode, None, None)
+            if name == 'containersemanticsother':
+                return (encode_other, decode, None, None)
+            return None
+        _codecs.register(search)
+        self.assertRaises(BufferError, target.__init__, u'x', 'containersemanticsself')
+        self.assertEqual(target, bytearray('A' * 100))
+        target.__init__(u'x', 'containersemanticsother')
+        self.assertEqual(target, bytearray('pq'))
+
+    def test_classic_truth_tries_nonzero_before_len_through_getattr(self):
+        class Lengthy:
+            def __len__(self):
+                return 5
+            def __getattr__(self, name):
+                if name == '__nonzero__':
+                    return lambda: 0
+                raise AttributeError(name)
+        self.assertFalse(Lengthy())
+        self.assertEqual((bool(Lengthy()), not Lengthy(), 1 if Lengthy() else 2), (False, True, 2))
+        class Empty:
+            def __len__(self):
+                return 0
+        empty = Empty()
+        empty.__nonzero__ = lambda: 1
+        self.assertTrue(empty)
+        class Proxy:
+            def __getattr__(self, name):
+                if name == '__len__':
+                    return lambda: 0
+                raise AttributeError(name)
+        self.assertFalse(Proxy())
+        class Failing:
+            def __len__(self):
+                return 1
+            def __getattr__(self, name):
+                raise KeyError(name)
+        self.assertRaises(KeyError, bool, Failing())
+
+    def test_keyword_parsers_reject_keys_that_are_not_strings(self):
+        import __builtin__
+        emit = getattr(__builtin__, 'print')
+        class Stream(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                self.parts.append(text)
+        stream = Stream()
+        apply(emit, ('a', 'b'), {u'sep': '-', 'file': stream})
+        self.assertEqual(stream.parts, ['a', '-', 'b', '\n'])
+        calls = ((__import__, ('sys',), {1.5: 2, u'level': 0}), (emit, (1, 2), {1.5: 2}), (round, (1.5,), {1.5: 2}))
+        for function, arguments, keywords in calls:
+            with self.assertRaises(TypeError) as failure:
+                apply(function, arguments, keywords)
+            self.assertEqual(str(failure.exception), 'keywords must be strings')
+        with self.assertRaises(TypeError) as failure:
+            apply(emit, (), {'sep': 1, 'end': 2, 'file': 3, 'flush': 4})
+        self.assertEqual(str(failure.exception), 'print() takes at most 3 arguments (4 given)')

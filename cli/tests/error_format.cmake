@@ -76,6 +76,26 @@ finally:
 
 tinypy_expect(rendering_once CODES 1 ARGS -c "${rendering_source}" STDERR "Failure: calls=1")
 
+# do_raise checks the traceback of a bare raise, which f_exc_traceback may
+# have replaced, before the report walks it.
+set(bare_raise_source [=[import sys
+def f():
+    try:
+        raise ValueError('inner')
+    except ValueError:
+        pass
+    sys._getframe().f_exc_traceback = ['not', 'a', 'traceback']
+def g():
+    try:
+        raise KeyError('outer')
+    except KeyError:
+        f()
+        raise
+g()]=])
+
+tinypy_expect(bare_raise_bad_traceback CODES 1 ARGS -c "${bare_raise_source}"
+    STDERR_EQUAL "Traceback (most recent call last):\n  File \"<string>\", line 14, in <module>\n  File \"<string>\", line 13, in g\nTypeError: raise: arg 3 must be a traceback or None\n")
+
 # PyErr_Display: the traceback precedes the location of a SyntaxError, which
 # comes from the attributes of the exception, and the message carries no
 # "(file, line)" suffix.
@@ -130,6 +150,13 @@ tinypy_expect(system_exit_caught CODES 0 ARGS -c "import sys\ntry:\n    sys.exit
 tinypy_expect(system_exit_subclass_caught CODES 0 ARGS -c "import sys\nclass MyExit(SystemExit):\n    pass\ntry:\n    sys.exit(MyExit(5))\nexcept MyExit as e:\n    print type(e).__name__, sys.exc_info()[0].__name__, e.code"
     STDOUT_EQUAL "MyExit MyExit 5\n" STDERR_EQUAL "")
 
+# The host knows BaseException and SystemExit as the classes of the VM, which
+# the program cannot remove from __builtin__.
+tinypy_expect(system_exit_without_builtin_name CODES 5 ARGS -c "import sys, __builtin__\ndel __builtin__.BaseException\nsys.exit(SystemExit(5))" STDERR_EQUAL "")
+tinypy_expect(system_exit_without_builtin_names CODES 6 ARGS -c "import sys, __builtin__\nexit = SystemExit(6)\ndel __builtin__.BaseException\ndel __builtin__.SystemExit\nsys.exit(exit)" STDERR_EQUAL "")
+tinypy_expect(uncaught_without_builtin_name CODES 1 ARGS -c "import __builtin__\ndel __builtin__.BaseException\nraise ValueError('x')"
+    STDERR_EQUAL "Traceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nValueError: x\n")
+
 # PyErr_PrintEx: sys.excepthook reports uncaught exceptions, with its own
 # failure and absence reported around the original exception.
 tinypy_expect(excepthook_called CODES 1 ARGS -c "import sys\ndef hook(t, v, tb):\n    sys.stdout.write('hook %s %s\\n' % (t.__name__, v))\nsys.excepthook = hook\nraise ValueError('hooked')"
@@ -176,11 +203,20 @@ tinypy_expect(exitfunc_raises CODES 0 ARGS -c "import sys\ndef ef():\n    raise 
 tinypy_expect(exitfunc_exits CODES 5 ARGS -c "import sys\ndef ef():\n    sys.exit(5)\nsys.exitfunc = ef" STDERR_EQUAL "")
 tinypy_expect(exitfunc_exits_with_tuple CODES 1 ARGS -c "import sys\nsys.exitfunc = lambda: sys.exit((4,))" STDERR_EQUAL "(4,)\n")
 tinypy_expect(exitfunc_lost_stderr CODES 0 ARGS -c "import sys\nsys.exitfunc = lambda: 1 / 0\nsys.stderr = None" STDERR_EQUAL "Error in sys.exitfunc:\nlost sys.stderr\n")
+tinypy_expect(exitfunc_exits_after_uncaught CODES 3 ARGS -c "import sys\ndef ef():\n    sys.exit(3)\nsys.exitfunc = ef\nraise KeyError('k')"
+    STDERR_EQUAL "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nKeyError: 'k'\n")
 
 # A finalizer run by clearing a module namespace may remove the module from
 # sys.modules.
 tinypy_expect(finalize_module_removed CODES 0 ARGS -c "import sys\nm = type(sys)('ghost')\nclass K(object):\n    def __init__(self, modules):\n        self.modules = modules\n    def __del__(self):\n        del self.modules['ghost']\n        print 'ghost removed'\nm.k = K(sys.modules)\nsys.modules['ghost'] = m\ndel m"
     STDOUT_EQUAL "ghost removed\n" STDERR_EQUAL "")
+
+# The host reads sys of the VM, whatever sys.modules holds, and holds the
+# sys module it finalizes while finalizers may remove it from sys.modules.
+tinypy_expect(finalize_replaced_sys_removed CODES 0 ARGS -c "import sys, __builtin__\nclass D(object):\n    def __del__(self, modules=sys.modules):\n        modules.pop('sys', None)\n__builtin__._ = D()\nfake = type(sys)('sys')\nsys.modules['sys'] = fake\ndel fake"
+    STDOUT_EQUAL "" STDERR_EQUAL "")
+tinypy_expect(replaced_sys_removed_by_lookup CODES 1 ARGS -c "import sys\nclass K(str):\n    def __hash__(self):\n        return hash('excepthook')\n    def __eq__(self, other, modules=sys.modules, real_sys=sys):\n        modules['sys'] = real_sys\n        return False\nfake = type(sys)('sys')\nfake.__dict__[K('k')] = 1\nsys.modules['sys'] = fake\ndel fake\nraise ValueError('boom')"
+    STDERR_EQUAL "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\nValueError: boom\n")
 
 # __main__ and sys.path of a command.
 tinypy_expect(command_namespace CODES 0 ARGS -c "import sys\nprint repr(__package__), type(__builtins__).__name__, '__file__' in globals(), repr(sys.path[0]), repr(sys.argv)" x

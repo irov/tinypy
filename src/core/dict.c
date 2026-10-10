@@ -172,41 +172,6 @@ restart:
     }
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_dict_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-
-    if (left == right) {
-        return TINYPY_TRUE;
-    }
-    if (TINYPY_DICT_OBJECT(left)->used !=
-        TINYPY_DICT_OBJECT(right)->used) {
-        return TINYPY_FALSE;
-    }
-    const tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(left);
-    const tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(left);
-    for (; iterator != iterator_end; ++iterator) {
-        tinypy_dict_lookup_t lookup;
-
-        if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-            continue;
-        }
-        if (__tinypy_internal_dict_lookup(
-                vm, right, iterator->key, iterator->hash, &lookup, NULL) == 0) {
-            return TINYPY_FALSE;
-        }
-        if (lookup.found == 0) {
-            return TINYPY_FALSE;
-        }
-        if (tinypy_internal_equal_value(
-                iterator->value,
-                TINYPY_DICT_OBJECT(right)->table[lookup.index].value,
-                1) == 0) {
-            return TINYPY_FALSE;
-        }
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_dict_equal_checked(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     size_t index;
@@ -712,11 +677,11 @@ tinypy_bool_t tinypy_internal_dict_set_checked(tinypy_vm_t *vm, tinypy_value_t *
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The common store into a key found without the table changing. */
+/* The common store into a key found without the table changing; takes the
+   reference to the value. */
 static inline void __tinypy_internal_dict_replace_value(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_dict_entry_t *entry, tinypy_value_t *value) {
     tinypy_value_t *previous = entry->value;
 
-    TINYPY_INCREF(value);
     entry->value = value;
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_dict_set(vm, dict, entry->key, value, TINYPY_FALSE);
@@ -735,7 +700,8 @@ static inline void __tinypy_internal_dict_replace_value(tinypy_vm_t *vm, tinypy_
    examined as it is now: a key comparison of the lookup may have filled the
    free slot, and a live entry there only takes the new value. A growing table
    is allocated before anything is stored, so running out of memory leaves the
-   dictionary as it was; an unchecked table ignores the heap budget. */
+   dictionary as it was; an unchecked table ignores the heap budget. Takes the
+   reference to the value. */
 static tinypy_bool_t __tinypy_internal_dict_store(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, size_t index, size_t used, tinypy_bool_t grow, tinypy_bool_t checked, tinypy_error_t **out_error) {
     tinypy_dict_object_t *object = TINYPY_DICT_OBJECT(dict);
     tinypy_dict_entry_t *entry = &object->table[index];
@@ -750,14 +716,15 @@ static tinypy_bool_t __tinypy_internal_dict_store(tinypy_vm_t *vm, tinypy_value_
         size_t growth = used_after > 50000U ? 2U : 4U;
 
         if (__tinypy_internal_dict_capacity(vm, used_after * growth, &capacity, out_error) == 0) {
+            TINYPY_DECREF(value);
             return TINYPY_FALSE;
         }
         entries = __tinypy_internal_dict_table_allocate(vm, dict, capacity, checked, out_error);
         if (entries == NULL) {
+            TINYPY_DECREF(value);
             return TINYPY_FALSE;
         }
     }
-    TINYPY_INCREF(value);
     if (added != 0) {
         TINYPY_INCREF(key);
         entry->hash = hash;
@@ -785,11 +752,16 @@ static tinypy_bool_t __tinypy_internal_dict_store(tinypy_vm_t *vm, tinypy_value_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Like PyDict_SetItem, the value is held across the lookup, whose key
+   comparisons can run code that releases the caller's reference to it; the
+   key, as for any lookup, is the caller's to hold. */
 static tinypy_bool_t __tinypy_internal_dict_insert(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, tinypy_bool_t grow, tinypy_bool_t checked, tinypy_error_t **out_error) {
     size_t used = TINYPY_DICT_SIZE(dict);
     tinypy_dict_lookup_t lookup;
 
+    TINYPY_INCREF(value);
     if (__tinypy_internal_dict_lookup(vm, dict, key, hash, &lookup, out_error) == 0) {
+        TINYPY_DECREF(value);
         return TINYPY_FALSE;
     }
     if (lookup.found != 0 && TINYPY_DICT_SIZE(dict) == used) {
@@ -843,6 +815,7 @@ tinypy_value_t *tinypy_internal_dict_setdefault_checked(tinypy_value_t *dict, ti
 
         return TINYPY_RET(result);
     }
+    TINYPY_INCREF(default_value);
     if (__tinypy_internal_dict_store(vm, dict, key, default_value, hash, lookup.index, TINYPY_DICT_SIZE(dict), TINYPY_TRUE, TINYPY_TRUE, out_error) == 0) {
         return NULL;
     }

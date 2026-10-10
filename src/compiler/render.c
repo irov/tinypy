@@ -155,12 +155,7 @@ static tinypy_bool_t __tinypy_render_repr_literal(tinypy_render_builder_t *build
     size_t size;
 
     if (representation == NULL) {
-        const char *message = error != NULL ? tinypy_error_message(error, NULL) : "unable to render literal";
-        tinypy_internal_exception_clear_raised(builder->compile->vm);
-        (void)__tinypy_render_fail(builder, message, 1, 0);
-        if (error != NULL) {
-            tinypy_error_release(error);
-        }
+        tinypy_internal_compiler_operation_error(builder->compile, TINYPY_ERROR_PREPROCESSOR, error, "unable to render literal", 1, 1);
         return TINYPY_FALSE;
     }
     bytes = tinypy_string_view(representation, &size);

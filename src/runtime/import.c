@@ -663,10 +663,9 @@ static tinypy_bool_t __tinypy_import_ensure_fromlist_impl(tinypy_vm_t *vm, tinyp
         size_t item_size;
 
         if (item == NULL) {
-            if (vm->raised_value != NULL && tinypy_type_is_subtype(vm->raised_value->type, vm->exception_types[TINYPY_EXCEPTION_INDEX_ERROR]) != TINYPY_FALSE) {
-                __tinypy_import_discard_error(vm, out_error);
-            }
-            else {
+            /* The end of the sequence is the raised type IndexError, not a
+               value of that class that sys.exit raised as SystemExit. */
+            if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_INDEX_ERROR, out_error) == 0) {
                 success = TINYPY_FALSE;
             }
             break;
@@ -1087,10 +1086,9 @@ tinypy_bool_t tinypy_internal_import_star(tinypy_value_t *module, tinypy_value_t
     for (position = 0; ; position += 1) {
         tinypy_value_t *key = __tinypy_import_sequence_item(all, position, out_error);
         if (key == NULL) {
-            if (vm->raised_value != NULL && tinypy_type_is_subtype(vm->raised_value->type, vm->exception_types[TINYPY_EXCEPTION_INDEX_ERROR]) != TINYPY_FALSE) {
-                __tinypy_import_discard_error(vm, out_error);
-            }
-            else {
+            /* The end of the sequence is the raised type IndexError, not a
+               value of that class that sys.exit raised as SystemExit. */
+            if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_INDEX_ERROR, out_error) == 0) {
                 success = TINYPY_FALSE;
             }
             break;

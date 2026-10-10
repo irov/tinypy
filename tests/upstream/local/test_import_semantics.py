@@ -49,3 +49,31 @@ class ImportSemantics(unittest.TestCase):
         finally:
             del sys.modules['tinypy_empty_package']
         self.assertEqual(self.failure(__import__, ''), 'ValueError: Empty module name')
+
+    def test_system_exit_with_an_index_error_ends_no_name_walk(self):
+        class Names(object):
+            def __getitem__(self, index):
+                if index == 1:
+                    sys.exit(IndexError('stop'))
+                return ['present'][index]
+
+        def exit_code(function, *args):
+            try:
+                function(*args)
+            except SystemExit as error:
+                return repr(error.code)
+            return 'finished'
+
+        def import_star():
+            exec 'from tinypy_exit_names import *' in {}
+
+        package = type(sys)('tinypy_exit_names')
+        package.__all__ = Names()
+        package.__path__ = []
+        package.present = 1
+        sys.modules['tinypy_exit_names'] = package
+        try:
+            self.assertEqual(exit_code(import_star), "IndexError('stop',)")
+            self.assertEqual(exit_code(__import__, 'tinypy_exit_names', {}, {}, Names()), "IndexError('stop',)")
+        finally:
+            del sys.modules['tinypy_exit_names']

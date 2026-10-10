@@ -649,6 +649,9 @@ static tinypy_ast_expression_t __compiler_complex_args(tinypy_ast_builder_t *c, 
     }
 
     result = __tinypy_ast_tuple(args, TINYPY_AST_CONTEXT_STORE, TINYPY_AST_LINE_NUMBER(n), n->column_offset, c->c_arena);
+    if (!result) {
+        return NULL;
+    }
     if (!__set_context(c, result, TINYPY_AST_CONTEXT_STORE, n)) {
         return NULL;
     }
@@ -2982,6 +2985,7 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
 
         if (has_else) {
             tinypy_ast_sequence_t *suite_seq2;
+            tinypy_ast_statement_t elif_statement;
 
             orelse = TINYPY_AST_SEQUENCE_NEW(1, c->c_arena);
             if (!orelse) {
@@ -3000,17 +3004,21 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
                 return NULL;
             }
 
-            TINYPY_AST_SEQUENCE_SET(orelse, 0,
-                                    __tinypy_ast_if(expression, suite_seq, suite_seq2,
-                                                    TINYPY_AST_LINE_NUMBER(TINYPY_CST_CHILD(n, TINYPY_CST_CHILD_COUNT(n) - 6)),
-                                                    TINYPY_CST_CHILD(n, TINYPY_CST_CHILD_COUNT(n) - 6)->column_offset,
-                                                    c->c_arena));
+            elif_statement = __tinypy_ast_if(expression, suite_seq, suite_seq2,
+                                             TINYPY_AST_LINE_NUMBER(TINYPY_CST_CHILD(n, TINYPY_CST_CHILD_COUNT(n) - 6)),
+                                             TINYPY_CST_CHILD(n, TINYPY_CST_CHILD_COUNT(n) - 6)->column_offset,
+                                             c->c_arena);
+            if (!elif_statement) {
+                return NULL;
+            }
+            TINYPY_AST_SEQUENCE_SET(orelse, 0, elif_statement);
             /* the just-created orelse handled the last elif */
             n_elif--;
         }
 
         for (i = 0; i < n_elif; i++) {
             int32_t off = 5 + (n_elif - i - 1) * 4;
+            tinypy_ast_statement_t elif_statement;
             tinypy_ast_sequence_t *newobj = TINYPY_AST_SEQUENCE_NEW(1, c->c_arena);
             if (!newobj) {
                 return NULL;
@@ -3024,10 +3032,13 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
                 return NULL;
             }
 
-            TINYPY_AST_SEQUENCE_SET(newobj, 0,
-                                    __tinypy_ast_if(expression, suite_seq, orelse,
-                                                    TINYPY_AST_LINE_NUMBER(TINYPY_CST_CHILD(n, off)),
-                                                    TINYPY_CST_CHILD(n, off)->column_offset, c->c_arena));
+            elif_statement = __tinypy_ast_if(expression, suite_seq, orelse,
+                                             TINYPY_AST_LINE_NUMBER(TINYPY_CST_CHILD(n, off)),
+                                             TINYPY_CST_CHILD(n, off)->column_offset, c->c_arena);
+            if (!elif_statement) {
+                return NULL;
+            }
+            TINYPY_AST_SEQUENCE_SET(newobj, 0, elif_statement);
             orelse = newobj;
         }
         expression = __ast_for_expr(c, TINYPY_CST_CHILD(n, 1));
@@ -3261,6 +3272,9 @@ static tinypy_ast_statement_t __ast_for_try_stmt(tinypy_ast_builder_t *c, const 
 
         except_st = __tinypy_ast_try_except(body, handlers, orelse, TINYPY_AST_LINE_NUMBER(n),
                                             n->column_offset, c->c_arena);
+        if (!except_st) {
+            return NULL;
+        }
         if (!finally) {
             return except_st;
         }

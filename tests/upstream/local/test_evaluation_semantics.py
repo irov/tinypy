@@ -534,6 +534,132 @@ class EvaluationSemantics(unittest.TestCase):
             return number.real
         self.assertEqual([real(3), real(2.5), real(1j), real(True)], [3, 2.5, 0.0, 1])
 
+    def test_attribute_caches_follow_every_class_of_the_mro(self):
+        class Root(object):
+            value = 'root'
+        class Left(Root):
+            pass
+        class Right(Root):
+            pass
+        class Bottom(Left, Right):
+            pass
+        class Unrelated(object):
+            value = 'unrelated'
+        class Other(object):
+            pass
+        bottom = Bottom()
+        def read(target):
+            try:
+                return target.value
+            except AttributeError:
+                return None
+        def snapshot():
+            return [read(bottom), read(Bottom), read(Left()), read(Unrelated())]
+        self.assertEqual([snapshot() for _ in range(2)], [['root', 'root', 'root', 'unrelated']] * 2)
+        Right.value = 'right'
+        self.assertEqual(snapshot(), ['right', 'right', 'root', 'unrelated'])
+        Left.value = 'left'
+        self.assertEqual(snapshot(), ['left', 'left', 'left', 'unrelated'])
+        Unrelated.value = 'changed'
+        self.assertEqual(snapshot(), ['left', 'left', 'left', 'changed'])
+        del Left.value
+        Root.value = 'new root'
+        self.assertEqual(snapshot(), ['right', 'right', 'new root', 'changed'])
+        Left.__bases__ = (Other,)
+        self.assertEqual(snapshot(), ['right', 'right', None, 'changed'])
+        del Right.value
+        self.assertEqual(snapshot(), ['new root', 'new root', None, 'changed'])
+        Left.__bases__ = (Root,)
+        Root.value = 'last'
+        self.assertEqual(snapshot(), ['last', 'last', 'last', 'changed'])
+
+    def test_attribute_caches_follow_the_bases_of_descriptor_classes(self):
+        events = []
+        class Protocol(object):
+            pass
+        class Descriptor(Protocol):
+            pass
+        class Owner(object):
+            attribute = Descriptor()
+        owner = Owner()
+        def read(target):
+            return target.attribute
+        def write(target, value):
+            target.attribute = value
+        for _ in range(2):
+            self.assertIsInstance(read(owner), Descriptor)
+            self.assertIsInstance(read(Owner), Descriptor)
+        Protocol.__get__ = lambda self, instance, owner: ('get', instance is not None)
+        self.assertEqual((read(owner), read(Owner)), (('get', True), ('get', False)))
+        for value in range(2):
+            write(owner, value)
+        self.assertEqual(read(owner), 1)
+        Protocol.__set__ = lambda self, instance, value: events.append(value)
+        write(owner, 2)
+        self.assertEqual((read(owner), owner.__dict__, events), (('get', True), {'attribute': 1}, [2]))
+        del Protocol.__get__, Protocol.__set__
+        write(owner, 3)
+        self.assertEqual((read(owner), events), (3, [2]))
+        self.assertIsInstance(read(Owner), Descriptor)
+
+    def test_special_method_caches_follow_base_classes(self):
+        events = []
+        class Base(object):
+            def __init__(self):
+                self.tag = 'base'
+        class Child(Base):
+            pass
+        def missing(target):
+            try:
+                return target.missing
+            except AttributeError:
+                return 'missing'
+        child = Child()
+        self.assertEqual([missing(child) for _ in range(2)], ['missing'] * 2)
+        Base.__getattr__ = lambda self, name: ('getattr', name)
+        self.assertEqual(missing(child), ('getattr', 'missing'))
+        del Base.__getattr__
+        self.assertEqual(missing(child), 'missing')
+        self.assertEqual([Child().tag for _ in range(2)], ['base'] * 2)
+        def initialize(self):
+            self.tag = 'replaced'
+        Base.__init__ = initialize
+        self.assertEqual(Child().tag, 'replaced')
+        Base.__new__ = staticmethod(lambda cls: 'created')
+        self.assertEqual(Child(), 'created')
+        del Base.__new__
+        Child()
+        Base.__del__ = lambda self: events.append(type(self).__name__)
+        Child()
+        self.assertEqual(events, ['Child'])
+        del Base.__del__
+        Child()
+        self.assertEqual(events, ['Child'])
+
+    def test_attribute_caches_follow_changes_through_many_subclasses(self):
+        class Base(object):
+            count = 0
+        classes = [type('Sub%d' % index, (Base,), {}) for index in range(40)]
+        instances = [cls() for cls in classes]
+        def read(target):
+            return target.count
+        for expected in range(3):
+            self.assertEqual([read(instance) for instance in instances], [expected] * 40)
+            self.assertEqual([read(cls) for cls in classes], [expected] * 40)
+            Base.count += 1
+
+    def test_attribute_caches_follow_recreated_classes(self):
+        def fresh(value):
+            class Fresh(object):
+                probe = value
+                def method(self):
+                    return value
+            return Fresh()
+        def read(target):
+            return (target.probe, target.method(), type(target).probe)
+        for value in range(16):
+            self.assertEqual(read(fresh(value)), (value, value, value))
+
     def test_comparisons_reach_the_recursion_limit_like_ceval(self):
         messages = []
         for left, right in ((1, 2), (1.5, 2.5), (1, 2.5), (1 << 60, 2.5), ('a', 'b'), ((1,), (2,))):

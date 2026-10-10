@@ -991,9 +991,13 @@ static tinypy_value_t *__tinypy_operator_numeric_add(tinypy_vm_t *vm, tinypy_val
             return NULL;
         }
         /* Like c_diff, a difference subtracts rather than adds the negated
-           operand. */
+           operand, which would flip the sign of a NaN. Compilers may merge a
+           difference and a sum that share their continuation into such an
+           addition; storing the difference keeps the subtraction. */
         if (subtract != 0) {
-            tinypy_value_t *difference = tinypy_complex_from_doubles(vm, left_real - right_real, left_imaginary - right_imaginary);
+            volatile double real_difference = left_real - right_real;
+            volatile double imaginary_difference = left_imaginary - right_imaginary;
+            tinypy_value_t *difference = tinypy_complex_from_doubles(vm, real_difference, imaginary_difference);
             return difference;
         }
         tinypy_value_t *return_value_1 = tinypy_complex_from_doubles(vm, left_real + right_real, left_imaginary + right_imaginary);
@@ -1006,8 +1010,14 @@ static tinypy_value_t *__tinypy_operator_numeric_add(tinypy_vm_t *vm, tinypy_val
         if (__tinypy_operator_as_double(left, &operator_as_double, out_error) == 0 || __tinypy_operator_as_double(right, &right_value, out_error) == 0) {
             return NULL;
         }
-        double result = subtract != 0 ? operator_as_double - right_value : operator_as_double + right_value;
-        tinypy_value_t *return_value_2 = tinypy_float_from_double(vm, result);
+        /* Like float_sub, a difference subtracts, stored like the complex
+           one. */
+        if (subtract != 0) {
+            volatile double float_difference = operator_as_double - right_value;
+            tinypy_value_t *difference = tinypy_float_from_double(vm, float_difference);
+            return difference;
+        }
+        tinypy_value_t *return_value_2 = tinypy_float_from_double(vm, operator_as_double + right_value);
         return return_value_2;
     }
     if (__tinypy_operator_is_integer(left_kind) != 0 && __tinypy_operator_is_integer(right_kind) != 0) {

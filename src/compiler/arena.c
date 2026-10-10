@@ -5,6 +5,13 @@
 #define TINYPY_COMPILER_ARENA_BLOCK_SIZE ((size_t)4096U)
 
 //////////////////////////////////////////////////////////////////////////
+/* Every request the arena refuses fails the compilation, so ctx->failed
+   tells each stage that a result built past a refused request may lack
+   parts. */
+static void __tinypy_compiler_arena_refuse(tinypy_compile_ctx_t *ctx) {
+    tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "compiler arena limit exceeded", 0, 0, ctx->out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 void *tinypy_internal_compiler_arena_allocate_uninitialized(tinypy_compile_ctx_t *ctx, size_t size) {
     size_t aligned_size;
     size_t header_size;
@@ -13,6 +20,7 @@ void *tinypy_internal_compiler_arena_allocate_uninitialized(tinypy_compile_ctx_t
     void *memory;
 
     if (size > SIZE_MAX - (TINYPY_INTERNAL_ALIGNMENT - 1U)) {
+        __tinypy_compiler_arena_refuse(ctx);
         return NULL;
     }
     aligned_size = (size + (TINYPY_INTERNAL_ALIGNMENT - 1U)) & ~(TINYPY_INTERNAL_ALIGNMENT - 1U);
@@ -26,10 +34,12 @@ void *tinypy_internal_compiler_arena_allocate_uninitialized(tinypy_compile_ctx_t
     header_size = offsetof(tinypy_compiler_arena_block_t, data);
     payload_size = aligned_size > TINYPY_COMPILER_ARENA_BLOCK_SIZE ? aligned_size : TINYPY_COMPILER_ARENA_BLOCK_SIZE;
     if (payload_size > SIZE_MAX - header_size) {
+        __tinypy_compiler_arena_refuse(ctx);
         return NULL;
     }
     allocation_size = header_size + payload_size;
     if (ctx->limits.max_arena_bytes != 0U && (ctx->arena_bytes > ctx->limits.max_arena_bytes || allocation_size > ctx->limits.max_arena_bytes - ctx->arena_bytes)) {
+        __tinypy_compiler_arena_refuse(ctx);
         return NULL;
     }
 

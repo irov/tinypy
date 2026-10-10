@@ -176,3 +176,38 @@ except TypeError:
     pass
 else:
     raise AssertionError("__class__ accepted a non-class")
+
+
+# Comparing cells holds both contents: the equality test resumes the
+# generator owning the first cell, which rebinds it before the order test.
+class RebindingContent(object):
+    def __eq__(self, other):
+        next(cell_owner)
+        return False
+
+    def __lt__(self, other):
+        return True
+
+
+def own_cell():
+    content = RebindingContent()
+
+    def read():
+        return content
+    yield read.__closure__[0]
+    content = None
+    yield None
+
+
+def other_cell():
+    number = 5
+
+    def read():
+        return number
+    yield read.__closure__[0]
+
+
+cell_owner = own_cell()
+rebound_cell = next(cell_owner)
+assert cmp(rebound_cell, next(other_cell())) == -1
+assert rebound_cell.cell_contents is None

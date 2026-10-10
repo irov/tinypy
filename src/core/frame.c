@@ -205,6 +205,18 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
         TINYPY_DECREF(frame->trace);
         frame->trace = NULL;
     }
+    /* An exited frame may still hold f_exc_value and f_exc_traceback, or
+       f_exc_* that a finalizer assigned while the frame cleared its locals. */
+    tinypy_value_t *const handled[] = {frame->previous_handled_type, frame->previous_handled_value, frame->previous_handled_traceback};
+
+    frame->previous_handled_type = NULL;
+    frame->previous_handled_value = NULL;
+    frame->previous_handled_traceback = NULL;
+    for (size_t index = 0U; index < sizeof(handled) / sizeof(handled[0]); ++index) {
+        if (handled[index] != NULL) {
+            TINYPY_DECREF(handled[index]);
+        }
+    }
     tinypy_value_t *code = frame->code;
     frame->code = NULL;
     if (code->ref > 1 && TINYPY_CODE_OBJECT(code)->cached_frame == NULL && TINYPY_SIZED_SIZE(&frame->base) <= 1024U) {

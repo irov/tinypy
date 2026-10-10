@@ -3722,18 +3722,21 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
     if (values[0] != NULL) {
         encoding = tinypy_internal_string_from_bytes_checked(vm, TINYPY_TEXT_BYTES(values[0]), TINYPY_TEXT_BYTE_SIZE(values[0]), out_error);
         if (encoding == NULL) {
+            tinypy_internal_constructor_release_arguments(values, 2U);
             return NULL;
         }
     }
     if (values[1] != NULL) {
         errors = tinypy_internal_string_from_bytes_checked(vm, TINYPY_TEXT_BYTES(values[1]), TINYPY_TEXT_BYTE_SIZE(values[1]), out_error);
         if (errors == NULL) {
+            tinypy_internal_constructor_release_arguments(values, 2U);
             if (encoding != NULL) {
                 TINYPY_DECREF(encoding);
             }
             return NULL;
         }
     }
+    tinypy_internal_constructor_release_arguments(values, 2U);
     result = tinypy_internal_text_codec(vm, self, encoding, errors, decode, TINYPY_TRUE, NULL, out_error);
     if (errors != NULL) {
         TINYPY_DECREF(errors);

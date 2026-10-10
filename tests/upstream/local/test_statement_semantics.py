@@ -1,5 +1,6 @@
 """Project-authored Python 2 statement semantics: exec, the name opcodes and code objects."""
 
+import sys
 import unittest
 
 
@@ -298,3 +299,181 @@ class StatementSemantics(unittest.TestCase):
             message = self.failure(run, pushes + operation + rest)
             self.assertTrue(message.startswith('SystemError: '), message)
             self.assertTrue(message.endswith('bad argument to internal function'), message)
+
+    def test_instance_dict_lookup_ignores_key_comparison_errors(self):
+        calls = []
+
+        class Key(object):
+            def __init__(self, name):
+                self.name = name
+
+            def __hash__(self):
+                return hash(self.name)
+
+            def __eq__(self, other):
+                calls.append(other)
+                raise ValueError('comparison')
+
+        class Holder(object):
+            x = 'class'
+
+        def get(value):
+            return value.x
+
+        def get_missing(value):
+            return value.y
+
+        holder = Holder()
+        holder.__dict__[Key('x')] = 1
+        holder.__dict__[Key('y')] = 2
+        for repeat in range(2):
+            del calls[:]
+            self.assertEqual(get(holder), 'class')
+
+            class Unaffected(object):
+                pass
+
+            self.assertEqual(self.failure(get_missing, holder), "AttributeError: 'Holder' object has no attribute 'y'")
+            self.assertEqual(calls, ['x', 'y'])
+            self.assertFalse(hasattr(holder, 'y'))
+
+    def test_class_statement_finds_its_metaclass(self):
+        class Key(object):
+            def __hash__(self):
+                return hash('__metaclass__')
+
+            def __eq__(self, other):
+                raise RuntimeError('comparison')
+
+        class Body(object):
+            locals()[Key()] = 1
+
+        namespace = {Key(): 1}
+        exec 'class Classic: pass\nclassic_kind = type(Classic).__name__' in namespace
+
+        class Old:
+            pass
+
+        class FromClassic(Old):
+            pass
+
+        class Meta(type):
+            @property
+            def __class__(cls):
+                raise RuntimeError('no class')
+
+        Base = Meta('Base', (object,), {})
+
+        class Derived(Base):
+            pass
+
+        self.assertTrue(type(Body) is type)
+        self.assertEqual(namespace['classic_kind'], 'classobj')
+        self.assertTrue(type(FromClassic) is type(Old))
+        self.assertTrue(type(Derived) is Meta)
+
+    def test_bare_raise_checks_the_handled_traceback(self):
+        def replace(traceback):
+            try:
+                raise ValueError('inner')
+            except ValueError:
+                pass
+            sys._getframe().f_exc_traceback = traceback
+
+        def reraise(traceback):
+            try:
+                raise KeyError('outer')
+            except KeyError:
+                replace(traceback)
+                raise
+
+        for traceback in (12345, ['not', 'a', 'traceback']):
+            self.assertEqual(self.failure(reraise, traceback), 'TypeError: raise: arg 3 must be a traceback or None')
+
+    def test_sys_exit_raises_system_exit_with_a_subclass_instance(self):
+        class Code(SystemExit):
+            pass
+
+        class Capture(object):
+            def __init__(self):
+                self.parts = []
+
+            def write(self, text):
+                self.parts.append(text)
+
+        class Exiting(object):
+            def __del__(self):
+                sys.exit(Code(7))
+
+        capture = Capture()
+        saved = sys.stderr
+        sys.stderr = capture
+        try:
+            Exiting()
+        finally:
+            sys.stderr = saved
+        self.assertTrue(''.join(capture.parts).startswith('Exception SystemExit: Code(7,) in '))
+        try:
+            sys.exit(Code(8))
+        except SystemExit:
+            self.assertTrue(sys.exc_info()[0] is Code)
+
+    def test_frame_exception_fields_outlive_exit_and_yield(self):
+        def keep():
+            frame = sys._getframe()
+            frame.f_exc_value = KeyError('value')
+            frame.f_exc_traceback = 'traceback'
+            return frame
+
+        def generator():
+            frame = sys._getframe()
+            frame.f_exc_value = KeyError('stray')
+            yield 1
+            yield repr(frame.f_exc_value)
+
+        frame = keep()
+        self.assertEqual((repr(frame.f_exc_value), frame.f_exc_traceback), ("KeyError('value',)", 'traceback'))
+        self.assertEqual(list(generator()), [1, "KeyError('stray',)"])
+        self.assertEqual(sys.exc_info(), (None, None, None))
+
+    def test_finalizer_assigns_exception_fields_of_a_returning_frame(self):
+        class Assigner(object):
+            def __init__(self, holder):
+                self.holder = holder
+
+            def __del__(self):
+                frame = self.holder.pop()
+                frame.f_exc_type = KeyError
+                frame.f_exc_value = KeyError('assigned while the frame returns')
+
+        def run():
+            holder = [sys._getframe()]
+            assigner = Assigner(holder)
+            del holder
+
+        for repeat in range(3):
+            run()
+        self.assertEqual(sys.exc_info(), (None, None, None))
+
+    def test_inplace_concatenation_keeps_other_references(self):
+        def build(count, piece):
+            text = ''
+            snapshots = []
+            for index in xrange(count):
+                text += piece
+                if index % 97 == 0:
+                    snapshots.append(text)
+            return text, snapshots
+
+        class Text(str):
+            pass
+
+        for count in (1, 9, 1000, 20000):
+            text, snapshots = build(count, 'ab')
+            self.assertEqual(text, 'ab' * count)
+            self.assertEqual(snapshots, ['ab' * (index + 1) for index in range(0, count, 97)])
+            self.assertEqual({text: count}['ab' * count], count)
+            self.assertEqual(Text(text), text)
+        namespace = {}
+        exec "text = ''\nfor index in range(300):\n    text += 'ab'" in namespace
+        self.assertEqual(namespace['text'], 'ab' * 300)

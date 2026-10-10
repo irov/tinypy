@@ -80,8 +80,9 @@ static size_t __tinypy_builtin_hint_size(int64_t hint) {
 //////////////////////////////////////////////////////////////////////////
 /* vgetargskeywords: the argument count comes first, then each parameter in
    order takes its positional or keyword value, and only then are the
-   keywords no parameter took rejected. The values come back owned: the
-   keywords may be the caller's dict, which converting one value can clear. */
+   keywords no parameter took rejected. Each value is held as soon as it is
+   taken: the keywords may be the caller's dict, which a colliding key's
+   comparison in a later lookup, or converting a value, can clear. */
 static tinypy_bool_t __tinypy_builtin_named_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t *const *names, size_t parameter_count, size_t required_count, tinypy_value_t **out_values, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t positional_count = TINYPY_TUPLE_SIZE(args);
@@ -112,6 +113,7 @@ static tinypy_bool_t __tinypy_builtin_named_arguments(tinypy_value_t *function, 
             };
 
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            __tinypy_builtin_release_arguments(out_values, index);
             return TINYPY_FALSE;
         }
         out_values[index] = index < positional_count ? TINYPY_TUPLE_GET(args, index) : keyword_value;
@@ -127,10 +129,9 @@ static tinypy_bool_t __tinypy_builtin_named_arguments(tinypy_value_t *function, 
             };
 
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            __tinypy_builtin_release_arguments(out_values, index);
             return TINYPY_FALSE;
         }
-    }
-    for (index = 0U; index < parameter_count; ++index) {
         if (out_values[index] != NULL) {
             TINYPY_INCREF(out_values[index]);
         }
@@ -371,10 +372,12 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
                                                ? value->type->mapping_slots->length
                                                : (value->type->sequence_slots != NULL ? value->type->sequence_slots->length : NULL);
         if (length_slot != NULL) {
+            /* A native slot may report its failure through the VM error. */
+            tinypy_value_t *previous_raised = vm->raised_value;
             ptrdiff_t length = length_slot(value, out_error);
 
             if (length < 0) {
-                if (out_error == NULL || *out_error == NULL) {
+                if ((out_error == NULL || *out_error == NULL) && vm->raised_value == previous_raised) {
                     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "length slot returned a negative value", out_error);
                 }
                 return NULL;
@@ -3058,11 +3061,13 @@ static tinypy_value_t *__tinypy_builtin_print_affix_value(tinypy_vm_t *vm, tinyp
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
+/* builtin_print parses its keywords with PyArg_ParseTupleAndKeywords; the
+   values are held while the output runs code. */
 static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *separator = &vm->none_object.base;
-    tinypy_value_t *ending = &vm->none_object.base;
-    tinypy_value_t *target = &vm->none_object.base;
+    tinypy_value_t *const parameter_names[] = {vm->internal_sep_key, vm->internal_end_key, vm->internal_file_key};
+    tinypy_value_t *arguments[3];
+    tinypy_value_t *output = NULL;
     tinypy_value_t *separator_text = NULL;
     tinypy_value_t *ending_text = NULL;
     tinypy_bool_t unicode_default = TINYPY_FALSE;
@@ -3071,38 +3076,19 @@ static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_v
     size_t index;
 
     (void)user_data;
-    if (kwargs != NULL) {
-        tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
-        tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(kwargs);
+    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
+    tinypy_bool_t parsed = __tinypy_builtin_named_arguments(function, empty, kwargs, parameter_names, 3U, 0U, arguments, out_error);
 
-        for (; iterator != iterator_end; ++iterator) {
-            if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator) == 0) {
-                continue;
-            }
-            if (TINYPY_NAME_EQ(iterator->key, vm->internal_sep_key) != 0) {
-                separator = iterator->value;
-            }
-            else if (TINYPY_NAME_EQ(iterator->key, vm->internal_end_key) != 0) {
-                ending = iterator->value;
-            }
-            else if (TINYPY_NAME_EQ(iterator->key, vm->internal_file_key) != 0) {
-                target = iterator->value;
-            }
-            else {
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    TINYPY_MESSAGE_PART_TEXT(iterator->key),
-                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function"),
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                return NULL;
-            }
-        }
+    TINYPY_DECREF(empty);
+    if (parsed == 0) {
+        return NULL;
     }
+    tinypy_value_t *separator = arguments[0] != NULL ? arguments[0] : &vm->none_object.base;
+    tinypy_value_t *ending = arguments[1] != NULL ? arguments[1] : &vm->none_object.base;
+    tinypy_value_t *target = arguments[2] != NULL ? arguments[2] : &vm->none_object.base;
     if (__tinypy_builtin_print_affix(vm, vm->internal_sep_key, separator, out_error) == 0
         || __tinypy_builtin_print_affix(vm, vm->internal_end_key, ending, out_error) == 0) {
-        return NULL;
+        goto cleanup;
     }
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_NONE) {
         tinypy_value_t *sys_dict = TINYPY_MODULE_OBJECT(vm->sys_module)->dict;
@@ -3110,14 +3096,14 @@ static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_v
         target = tinypy_internal_dict_get_optional(vm, sys_dict, vm->internal_stdout_key);
         if (target == NULL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "lost sys.stdout", out_error);
-            return NULL;
+            goto cleanup;
         }
         if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_NONE) {
-            tinypy_value_t *silent = TINYPY_RET_NONE(vm);
-            return silent;
+            result = TINYPY_RET_NONE(vm);
+            goto cleanup;
         }
     }
-    TINYPY_INCREF(target);
+    output = TINYPY_RET(target);
     unicode_default = TINYPY_VALUE_KIND(separator) == TINYPY_VALUE_UNICODE || TINYPY_VALUE_KIND(ending) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
     for (index = 0U; unicode_default == 0 && index < argument_count; ++index) {
         if (TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, index)) == TINYPY_VALUE_UNICODE) {
@@ -3133,7 +3119,7 @@ static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_v
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, index);
         tinypy_value_type_e item_kind = TINYPY_VALUE_KIND(item);
 
-        if (index != 0U && tinypy_internal_output_write_value(target, separator_text, out_error) == 0) {
+        if (index != 0U && tinypy_internal_output_write_value(output, separator_text, out_error) == 0) {
             goto cleanup;
         }
         if (item_kind == TINYPY_VALUE_STRING || item_kind == TINYPY_VALUE_UNICODE) {
@@ -3145,13 +3131,13 @@ static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_v
                 goto cleanup;
             }
         }
-        if (tinypy_internal_output_write_value(target, text, out_error) == 0) {
+        if (tinypy_internal_output_write_value(output, text, out_error) == 0) {
             TINYPY_DECREF(text);
             goto cleanup;
         }
         TINYPY_DECREF(text);
     }
-    if (tinypy_internal_output_write_value(target, ending_text, out_error) != 0) {
+    if (tinypy_internal_output_write_value(output, ending_text, out_error) != 0) {
         result = TINYPY_RET_NONE(vm);
     }
 cleanup:
@@ -3161,7 +3147,10 @@ cleanup:
     if (separator_text != NULL) {
         TINYPY_DECREF(separator_text);
     }
-    TINYPY_DECREF(target);
+    if (output != NULL) {
+        TINYPY_DECREF(output);
+    }
+    __tinypy_builtin_release_arguments(arguments, 3U);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3444,6 +3433,10 @@ static tinypy_value_t *__tinypy_builtin_import(tinypy_value_t *function, tinypy_
 
             if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) == TINYPY_FALSE) {
                 continue;
+            }
+            if (TINYPY_VALUE_KIND(entry->key) != TINYPY_VALUE_STRING) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
+                goto complete;
             }
             for (index = 0U; index < 5U; index += 1U) {
                 if (TINYPY_NAME_EQ(entry->key, parameter_names[index]) != TINYPY_FALSE) {

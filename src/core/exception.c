@@ -233,6 +233,21 @@ static tinypy_value_t *__tinypy_exception_base_string(tinypy_value_t *value, tin
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The value whose str() BaseException_str gives for the instance that an
+   unnormalized value makes: None and an empty tuple give no arguments, a
+   tuple gives its items and any other value is the only argument. The
+   result is borrowed. */
+static tinypy_value_t *__tinypy_exception_base_display(tinypy_vm_t *vm, tinypy_value_t *value) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE || (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE && TINYPY_TUPLE_SIZE(value) == 0U)) {
+        return &vm->empty_string_object.base.base;
+    }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TUPLE && TINYPY_TUPLE_SIZE(value) == 1U) {
+        tinypy_value_t *argument = TINYPY_TUPLE_GET(value, 0U);
+        return argument;
+    }
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
 /* KeyError_str: the repr of the only argument. */
 static tinypy_value_t *__tinypy_exception_key_string(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_t *args = __tinypy_exception_payload(value)->args;
@@ -513,9 +528,10 @@ static tinypy_value_t *__tinypy_exception_allocate_blank(tinypy_type_t *type) {
     return instance;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The exception type whose __init__ or __str__ slot wrapper attribute is;
-   NULL for any other attribute, a bound wrapper included. */
-static const tinypy_type_t *__tinypy_exception_entry_owner(tinypy_value_t *attribute, tinypy_native_function_callback_t callback) {
+/* The exception type whose __init__, __new__ or __str__ slot wrapper
+   attribute is, when that wrapper applies to type, a subtype of it; NULL for
+   any other attribute, a bound wrapper or one of another family included. */
+static const tinypy_type_t *__tinypy_exception_entry_owner(const tinypy_type_t *type, tinypy_value_t *attribute, tinypy_native_function_callback_t callback) {
     if (attribute == NULL || TINYPY_VALUE_KIND(attribute) != TINYPY_VALUE_NATIVE_FUNCTION) {
         return NULL;
     }
@@ -524,6 +540,9 @@ static const tinypy_type_t *__tinypy_exception_entry_owner(tinypy_value_t *attri
         return NULL;
     }
     const tinypy_type_t *owner = (const tinypy_type_t *)function->user_data;
+    if (tinypy_type_is_subtype(type, owner) == 0) {
+        return NULL;
+    }
     return owner;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -630,7 +649,7 @@ static tinypy_value_t *__tinypy_exception_str_method(tinypy_value_t *function, t
 static tinypy_value_t *__tinypy_exception_string(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *method = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_str_key);
-    const tinypy_type_t *owner = __tinypy_exception_entry_owner(method, __tinypy_exception_str_method);
+    const tinypy_type_t *owner = __tinypy_exception_entry_owner(value->type, method, __tinypy_exception_str_method);
 
     tinypy_value_t *result = __tinypy_exception_owner_string(value, owner != NULL ? owner : vm->exception_types[TINYPY_EXCEPTION_BASE], out_error);
     return result;
@@ -1042,6 +1061,17 @@ static tinypy_value_t *__tinypy_exception_new_method(tinypy_value_t *function, t
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The exception type whose __new__ entry attribute is, the static method of
+   its slot wrapper, when that applies to type. */
+static const tinypy_type_t *__tinypy_exception_new_owner(const tinypy_type_t *type, tinypy_value_t *attribute) {
+    if (attribute == NULL || attribute->type != &type->vm->types[TINYPY_VALUE_STATIC_METHOD]) {
+        return NULL;
+    }
+    tinypy_value_t *function = tinypy_static_method_callable(attribute);
+    const tinypy_type_t *owner = __tinypy_exception_entry_owner(type, function, __tinypy_exception_new_method);
+    return owner;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_exception_type_add_init(tinypy_type_t *type) {
     tinypy_internal_type_add_method(type, type->vm->internal_special_init_key, __tinypy_exception_init, type, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 }
@@ -1286,8 +1316,9 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
 
     tinypy_value_t *instance;
     tinypy_value_t *new_attribute = tinypy_internal_type_constructor_new(type);
-    tinypy_value_t *base_new = tinypy_internal_type_constructor_new(vm->exception_types[TINYPY_EXCEPTION_BASE]);
-    if (new_attribute != NULL && new_attribute != base_new) {
+    /* The tp_new of every built-in exception type is BaseException_new,
+       entered directly when its __new__ entry applies to type. */
+    if (new_attribute != NULL && __tinypy_exception_new_owner(type, new_attribute) == NULL) {
         tinypy_value_t *constructor = tinypy_internal_descriptor_get_value(vm, new_attribute, NULL, type, out_error);
         if (constructor == NULL) {
             return NULL;
@@ -1307,7 +1338,7 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
     }
 
     initializer_attribute = tinypy_internal_type_constructor_init(instance->type);
-    const tinypy_type_t *initializer_owner = __tinypy_exception_entry_owner(initializer_attribute, __tinypy_exception_init);
+    const tinypy_type_t *initializer_owner = __tinypy_exception_entry_owner(instance->type, initializer_attribute, __tinypy_exception_init);
     if (initializer_owner != NULL) {
         /* The built-in __init__ of a type runs under the call guard of
            tinypy_call but without a bound method, and keeps an exact args
@@ -1524,10 +1555,6 @@ void tinypy_internal_exception_restore_handled(tinypy_vm_t *vm, tinypy_value_t *
     __tinypy_exception_release_triple(type, value, traceback);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_exception_restore_raised_from_handled(tinypy_vm_t *vm) {
-    tinypy_internal_exception_set_raised_type(vm, vm->handled_type, vm->handled_value, vm->handled_traceback);
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e kind, const char *message) {
     tinypy_value_t *value;
 
@@ -1566,16 +1593,23 @@ void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e k
     TINYPY_DECREF(value);
 }
 //////////////////////////////////////////////////////////////////////////
+/* The diagnostic reads as str() of the exception. A value that its built-in
+   exception class has not normalized yet, such as the code of sys.exit,
+   reads as BaseException_str of the arguments normalization passes it. */
 void tinypy_internal_exception_make_diagnostic(tinypy_vm_t *vm, tinypy_error_t **out_error) {
     tinypy_error_kind_e kind = TINYPY_ERROR_RUNTIME;
 
     if (out_error == NULL || vm->raised_value == NULL) {
         return;
     }
+    tinypy_value_t *value = vm->raised_value;
     if (vm->raised_type != NULL && TINYPY_VALUE_KIND(vm->raised_type) == TINYPY_VALUE_TYPE) {
         kind = __tinypy_exception_error_from_type(vm, (tinypy_type_t *)vm->raised_type);
+        if (__tinypy_exception_is_instance(vm, value) == 0) {
+            value = __tinypy_exception_base_display(vm, value);
+        }
     }
-    tinypy_internal_make_exception_error(vm, kind, vm->raised_value, out_error);
+    tinypy_internal_make_exception_error(vm, kind, value, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_raise_key_error(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error) {
@@ -1682,6 +1716,19 @@ tinypy_bool_t tinypy_internal_exception_prefix_raised(tinypy_vm_t *vm, tinypy_ex
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyExceptionInstance_Class: the class of an exception instance, borrowed;
+   NULL for any other value. */
+static tinypy_value_t *__tinypy_exception_instance_class(tinypy_vm_t *vm, tinypy_value_t *value) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_value_t *class_value = TINYPY_OLD_INSTANCE_OBJECT(value)->class_object;
+        return class_value;
+    }
+    if (tinypy_type_is_subtype(value->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) == 0) {
+        return NULL;
+    }
+    return &value->type->base.base;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_exception_matches_tuple(tinypy_value_t *exception, tinypy_value_t *candidate, tinypy_error_t **out_error) {
     tinypy_value_t *const *iterator = TINYPY_TUPLE_ITERATOR_BEGIN(candidate);
     tinypy_value_t *const *iterator_end = TINYPY_TUPLE_ITERATOR_END(candidate);
@@ -1697,9 +1744,10 @@ static int32_t __tinypy_exception_matches_tuple(tinypy_value_t *exception, tinyp
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyErr_GivenExceptionMatches matches the class of an instance, and values
+   other than exception classes by identity, without raising: the failure of
+   a check that runs Python code is reported as unraisable. */
 int32_t tinypy_exception_matches(tinypy_value_t *exception, tinypy_value_t *candidate, tinypy_error_t **out_error) {
-    tinypy_type_t *exception_type = NULL;
-
     tinypy_vm_t *vm = TINYPY_VALUE_VM(exception);
     TINYPY_CLEAR_ERROR(out_error);
     if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_TUPLE) {
@@ -1712,75 +1760,116 @@ int32_t tinypy_exception_matches(tinypy_value_t *exception, tinypy_value_t *cand
         vm->evaluation_depth -= 1U;
         return matched;
     }
-    if (__tinypy_exception_is_class(vm, candidate) == 0) {
-        int32_t identical = exception == candidate ? 1 : 0;
+    tinypy_value_t *instance_class = __tinypy_exception_instance_class(vm, exception);
+    tinypy_value_t *exception_class = instance_class != NULL ? instance_class : exception;
 
+    if (__tinypy_exception_is_class(vm, exception_class) == 0 || __tinypy_exception_is_class(vm, candidate) == 0) {
+        int32_t identical = exception_class == candidate ? 1 : 0;
         return identical;
     }
-    if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_CLASS) {
-        tinypy_value_t *exception_class = NULL;
+    if (TINYPY_VALUE_KIND(exception_class) == TINYPY_VALUE_TYPE && candidate->type == &vm->types[TINYPY_VALUE_TYPE]) {
+        int32_t subtype = tinypy_type_is_subtype((tinypy_type_t *)exception_class, (tinypy_type_t *)candidate) != 0 ? 1 : 0;
+        return subtype;
+    }
+    if (TINYPY_VALUE_KIND(exception_class) == TINYPY_VALUE_CLASS && TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_CLASS) {
+        int32_t classic = tinypy_class_is_subclass(exception_class, candidate) != 0 ? 1 : 0;
+        return classic;
+    }
+    /* PyObject_IsSubclass, which asks a metaclass __subclasscheck__ and the
+       __bases__ of classic classes, runs with the pending exception set
+       aside. */
+    tinypy_internal_exception_state_t state;
 
-        if (TINYPY_VALUE_KIND(exception) == TINYPY_VALUE_CLASS) {
-            exception_class = exception;
-        }
-        else if (TINYPY_VALUE_KIND(exception) == TINYPY_VALUE_OLD_INSTANCE) {
-            exception_class = TINYPY_OLD_INSTANCE_OBJECT(exception)->class_object;
-        }
-        if (exception_class == NULL) {
-            return 0;
-        }
-        int32_t return_value_1 = tinypy_class_is_subclass(exception_class, candidate) != 0 ? 1 : 0;
-        return return_value_1;
+    TINYPY_INCREF(exception_class);
+    TINYPY_INCREF(candidate);
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    int32_t subclass = tinypy_internal_object_instance_check(exception_class, candidate, TINYPY_TRUE, NULL);
+    if (subclass < 0) {
+        tinypy_internal_output_unraisable(vm, exception_class);
+        subclass = 0;
     }
-    if (__tinypy_exception_is_class(vm, exception) != 0) {
-        if (TINYPY_VALUE_KIND(exception) != TINYPY_VALUE_TYPE) {
-            return 0;
-        }
-        exception_type = (tinypy_type_t *)exception;
+    tinypy_internal_exception_preserve_end(vm, &state);
+    TINYPY_DECREF(candidate);
+    TINYPY_DECREF(exception_class);
+    return subclass;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyErr_NormalizeException of the pending exception. A value of an exception
+   class that is not an instance of a subclass of it, by PyObject_IsSubclass,
+   becomes the arguments of a call to the class; an instance of a subclass
+   names its own class. When the call fails, the error raised instead is
+   pending with the traceback of the exception unless it has its own, and the
+   result is false. */
+tinypy_bool_t tinypy_internal_exception_normalize_raised(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    tinypy_value_t *type = vm->raised_type;
+    tinypy_value_t *value = vm->raised_value;
+    tinypy_value_t *value_type = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_OLD_INSTANCE_OBJECT(value)->class_object : &value->type->base.base;
+
+    /* An instance of exactly the class is normalized, unless a metaclass
+       __subclasscheck__ may disagree. */
+    if (value_type == type && (TINYPY_VALUE_KIND(type) == TINYPY_VALUE_CLASS || type->type == &vm->types[TINYPY_VALUE_TYPE])) {
+        return TINYPY_TRUE;
     }
-    else if (__tinypy_exception_is_instance(vm, exception) != 0) {
-        if (TINYPY_VALUE_KIND(exception) == TINYPY_VALUE_OLD_INSTANCE) {
-            return 0;
+    if (__tinypy_exception_is_class(vm, type) == 0) {
+        return TINYPY_TRUE;
+    }
+    tinypy_internal_exception_state_t state;
+    tinypy_bool_t normalized = TINYPY_FALSE;
+    int32_t subclass = 0;
+    tinypy_value_t *value_class = __tinypy_exception_instance_class(vm, value);
+
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    if (out_error != NULL && *out_error != NULL) {
+        tinypy_error_release(*out_error);
+        *out_error = NULL;
+    }
+    if (value_class != NULL) {
+        /* The check may assign the __class__ of the value. Python 2.7
+           believes the instance when the check fails, and restoring the
+           exception drops the error of the check. */
+        TINYPY_INCREF(value_class);
+        subclass = tinypy_internal_object_instance_check(value_class, state.type, TINYPY_TRUE, NULL);
+        if (subclass < 0) {
+            tinypy_internal_exception_clear_raised(vm);
         }
-        exception_type = exception->type;
+    }
+    if (subclass != 0) {
+        tinypy_internal_exception_set_raised_type(vm, value_class, state.value, state.traceback);
+        normalized = TINYPY_TRUE;
     }
     else {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exception match operand is not an exception", out_error);
-        return -1;
+        tinypy_value_t *args;
+
+        if (TINYPY_VALUE_KIND(state.value) == TINYPY_VALUE_NONE) {
+            args = TINYPY_RET_EMPTY_TUPLE(vm);
+        }
+        else if (TINYPY_VALUE_KIND(state.value) == TINYPY_VALUE_TUPLE) {
+            args = TINYPY_RET(state.value);
+        }
+        else {
+            args = tinypy_tuple_from_items(vm, &state.value, 1U);
+        }
+        tinypy_value_t *instance = tinypy_call(state.type, args, NULL, out_error);
+
+        TINYPY_DECREF(args);
+        if (instance != NULL) {
+            tinypy_internal_exception_set_raised_type(vm, state.type, instance, state.traceback);
+            TINYPY_DECREF(instance);
+            normalized = TINYPY_TRUE;
+        }
     }
-    if (candidate->type != &vm->types[TINYPY_VALUE_TYPE] && tinypy_internal_type_lookup_key(vm, candidate->type, vm->internal_special_subclasscheck_key) != NULL) {
-        tinypy_internal_exception_state_t state;
-        tinypy_error_t *callback_error = NULL;
-        tinypy_value_t *exception_class = TINYPY_RET(tinypy_type_as_value(exception_type));
-        TINYPY_INCREF(candidate);
-        tinypy_internal_exception_preserve_begin(vm, &state);
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(candidate, vm->internal_special_subclasscheck_key, &callback_error);
-        tinypy_value_t *call_args = method != NULL ? tinypy_tuple_from_items(vm, &exception_class, 1U) : NULL;
-        tinypy_value_t *checked = call_args != NULL ? tinypy_call(method, call_args, NULL, &callback_error) : NULL;
-        int32_t truth = checked != NULL ? tinypy_truth(checked, &callback_error) : -1;
-        if (checked != NULL) {
-            TINYPY_DECREF(checked);
-        }
-        if (call_args != NULL) {
-            TINYPY_DECREF(call_args);
-        }
-        if (method != NULL) {
-            TINYPY_DECREF(method);
-        }
-        if (callback_error != NULL) {
-            tinypy_internal_output_unraisable(vm, exception_class);
-            tinypy_error_release(callback_error);
-        }
-        TINYPY_DECREF(candidate);
-        TINYPY_DECREF(exception_class);
-        tinypy_internal_exception_preserve_end(vm, &state);
-        /* Exception matching cannot replace the pending exception with a
-           failure raised by a metaclass check. */
-        int32_t matched = truth > 0 ? 1 : 0;
-        return matched;
+    if (value_class != NULL) {
+        TINYPY_DECREF(value_class);
     }
-    int32_t return_value_2 = tinypy_type_is_subtype(exception_type, (tinypy_type_t *)candidate) != 0 ? 1 : 0;
-    return return_value_2;
+    if (normalized == 0 && vm->raised_value != NULL && vm->raised_traceback == NULL && state.traceback != NULL) {
+        vm->raised_traceback = TINYPY_RET(state.traceback);
+    }
+    TINYPY_DECREF(state.type);
+    TINYPY_DECREF(state.value);
+    if (state.traceback != NULL) {
+        TINYPY_DECREF(state.traceback);
+    }
+    return normalized;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_exception_raise(tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {

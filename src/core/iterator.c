@@ -318,6 +318,64 @@ static tinypy_value_t *__tinypy_internal_range_iterator_next(tinypy_value_t *val
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The sq_item a sequence iterator calls, NULL for a type without one or
+   with a Python __getitem__, which takes over sq_item and mp_subscript. */
+static tinypy_get_item_slot_t __tinypy_iterator_sequence_item_slot(tinypy_value_t *sequence) {
+    if (sequence->type->sequence_slots == NULL || sequence->type->sequence_slots->get_item == NULL || __tinypy_internal_object_overrides_dispatch(sequence, TINYPY_INTERNAL_DISPATCH_BIT(GETITEM)) != 0) {
+        return NULL;
+    }
+    /* The override lookup may run Python code that resets the slots. */
+    tinypy_sequence_slots_t *slots = sequence->type->sequence_slots;
+    tinypy_get_item_slot_t get_item = slots != NULL ? slots->get_item : NULL;
+
+    return get_item;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PySequence_GetItem, which seqiter and reversed call: a type with both
+   protocols, as a native type with mapping_get and sequence_get, gives its
+   items through sq_item. The sequence lives through the call, which may
+   exhaust the iterator that holds it. */
+static tinypy_value_t *__tinypy_iterator_sequence_item(tinypy_value_t *sequence, size_t index, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
+    tinypy_value_t *key = tinypy_integer_from_i64(vm, (int64_t)index);
+    tinypy_value_t *item;
+
+    TINYPY_INCREF(sequence);
+    tinypy_get_item_slot_t get_item = __tinypy_iterator_sequence_item_slot(sequence);
+    if (get_item != NULL) {
+        item = get_item(sequence, key, out_error);
+    }
+    else {
+        item = tinypy_get_item(sequence, key, out_error);
+    }
+    TINYPY_DECREF(sequence);
+    TINYPY_DECREF(key);
+    return item;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A sequence iterator ends at IndexError or StopIteration, matched by the
+   raised type as PyErr_ExceptionMatches does, so a SystemExit carrying an
+   IndexError value propagates. Any other failure passes on, also one that a
+   native callback reports through the VM error alone. */
+static tinypy_bool_t __tinypy_iterator_sequence_ended(tinypy_vm_t *vm, tinypy_error_t *item_error, tinypy_error_t **out_error) {
+    if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_INDEX_ERROR, &item_error) != 0) {
+        return TINYPY_TRUE;
+    }
+    if (tinypy_internal_exception_consume_stop_iteration(vm, &item_error) != 0) {
+        return TINYPY_TRUE;
+    }
+    if (item_error == NULL) {
+        tinypy_internal_exception_make_diagnostic(vm, &item_error);
+    }
+    if (out_error != NULL) {
+        *out_error = item_error;
+    }
+    else if (item_error != NULL) {
+        tinypy_error_release(item_error);
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_t * function_result;
     tinypy_iterator_object_t *iterator = TINYPY_ITERATOR_OBJECT(value);
@@ -346,30 +404,15 @@ tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_erro
     }
     if (iterator->mode == INT32_C(4)) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-        tinypy_value_t *key = tinypy_integer_from_i64(vm, (int64_t)iterator->index);
         tinypy_error_t *item_error = NULL;
-        tinypy_value_t *result = tinypy_get_item(iterator->iterable, key, &item_error);
+        tinypy_value_t *result = __tinypy_iterator_sequence_item(iterator->iterable, iterator->index, &item_error);
 
-        TINYPY_DECREF(key);
         if (result != NULL) {
             iterator->index += 1U;
             return result;
         }
-        if (tinypy_internal_exception_consume_stop_iteration(vm, &item_error) != 0 || (vm->raised_value != NULL && tinypy_type_is_subtype(vm->raised_value->type, vm->exception_types[TINYPY_EXCEPTION_INDEX_ERROR]) != 0)) {
-            if (item_error != NULL) {
-                tinypy_error_release(item_error);
-            }
-            if (vm->raised_value != NULL) {
-                tinypy_internal_exception_clear_raised(vm);
-            }
+        if (__tinypy_iterator_sequence_ended(vm, item_error, out_error) != 0) {
             tinypy_internal_iterator_clear(iterator);
-            return NULL;
-        }
-        if (out_error != NULL) {
-            *out_error = item_error;
-        }
-        else if (item_error != NULL) {
-            tinypy_error_release(item_error);
         }
         return NULL;
     }
@@ -753,6 +796,19 @@ length_unavailable:
     return converted;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The sq_length that PySequence_Size calls, NULL for a type without one or
+   with a Python __len__, which takes it over. */
+static tinypy_length_slot_t __tinypy_iterator_sequence_length_slot(tinypy_value_t *sequence) {
+    if (sequence->type->sequence_slots == NULL || sequence->type->sequence_slots->length == NULL || __tinypy_internal_object_overrides_dispatch(sequence, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) != 0) {
+        return NULL;
+    }
+    /* The override lookup may run Python code that resets the slots. */
+    tinypy_sequence_slots_t *slots = sequence->type->sequence_slots;
+    tinypy_length_slot_t length = slots != NULL ? slots->length : NULL;
+
+    return length;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_iterator_length_hint_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
@@ -769,11 +825,11 @@ tinypy_value_t *tinypy_internal_iterator_length_hint_method(tinypy_value_t *func
 
     if (iterator->mode == INT32_C(4) && iterator->iterable != NULL) {
         tinypy_value_t *source = TINYPY_RET(iterator->iterable);
-        tinypy_length_slot_t length_slot = source->type->sequence_slots != NULL ? source->type->sequence_slots->length : NULL;
+        tinypy_length_slot_t length_slot = __tinypy_iterator_sequence_length_slot(source);
         int64_t length = 0;
         tinypy_bool_t valid = TINYPY_FALSE;
 
-        if (__tinypy_internal_object_overrides_dispatch(source, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) != TINYPY_FALSE || length_slot == NULL) {
+        if (length_slot == NULL) {
             if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_object_has_special_key(source, vm->internal_special_length_key) != TINYPY_FALSE) {
                 tinypy_value_t *result = __tinypy_length_hint_call(source, vm->internal_special_length_key, NULL, out_error);
 
@@ -795,6 +851,9 @@ tinypy_value_t *tinypy_internal_iterator_length_hint_method(tinypy_value_t *func
         else {
             length = (int64_t)length_slot(source, out_error);
             valid = length >= 0 ? TINYPY_TRUE : TINYPY_FALSE;
+            if (valid == TINYPY_FALSE && tinypy_vm_has_error(vm) == 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "length slot returned a negative value", out_error);
+            }
         }
         if (valid != TINYPY_FALSE && length < 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__() should return >= 0", out_error);
@@ -889,6 +948,15 @@ tinypy_value_t *tinypy_internal_xrange_create(tinypy_type_t *type, tinypy_value_
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Releases the arguments enumerate holds while it parses them. */
+static void __tinypy_enumerate_release_arguments(tinypy_value_t *const values[2]) {
+    for (size_t parameter = 0U; parameter < 2U; ++parameter) {
+        if (values[parameter] != NULL) {
+            TINYPY_DECREF(values[parameter]);
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     tinypy_value_t *const names[2] = {vm->internal_sequence_key, vm->internal_start_key};
@@ -901,10 +969,13 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
         tinypy_internal_make_arity_error(vm, "enumerate", 9U, positional_count + keyword_count, 1U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error);
         return NULL;
     }
+    /* The keywords may be the caller's dict, which the key comparisons of a
+       later lookup or the conversion of start can clear, so each value is
+       held once it is read. */
     for (size_t parameter = 0U; parameter < 2U; ++parameter) {
         tinypy_value_t *keyword = NULL;
 
-        values[parameter] = parameter < positional_count ? TINYPY_TUPLE_GET(args, parameter) : NULL;
+        values[parameter] = parameter < positional_count ? TINYPY_RET(TINYPY_TUPLE_GET(args, parameter)) : NULL;
         if (recognized_keyword_count < keyword_count) {
             keyword = tinypy_internal_constructor_keyword_optional(kwargs, names[parameter]);
         }
@@ -920,9 +991,10 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
                     TINYPY_MESSAGE_PART_LITERAL(")"),
                 };
                 tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+                __tinypy_enumerate_release_arguments(values);
                 return NULL;
             }
-            values[parameter] = keyword;
+            values[parameter] = TINYPY_RET(keyword);
         }
         if (parameter == 0U && values[parameter] == NULL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Required argument 'sequence' (pos 1) not found", out_error);
@@ -959,13 +1031,12 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
                     TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function"),
                 };
                 tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+                __tinypy_enumerate_release_arguments(values);
                 return NULL;
             }
         }
     }
-    /* The keywords may be the caller's dict, which the start can clear while
-       it converts. */
-    tinypy_value_t *iterable = TINYPY_RET(values[0]);
+    tinypy_value_t *iterable = values[0];
     tinypy_value_t *start = values[1];
     if (start != NULL && TINYPY_VALUE_KIND(start) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(start) != TINYPY_VALUE_INTEGER && TINYPY_VALUE_KIND(start) != TINYPY_VALUE_LONG
         && tinypy_internal_object_has_special_key(start, vm->internal_special_index_key) == TINYPY_FALSE) {
@@ -975,13 +1046,13 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
             TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index"),
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        TINYPY_DECREF(iterable);
+        __tinypy_enumerate_release_arguments(values);
         return NULL;
     }
     tinypy_value_t *counter = start != NULL ? tinypy_internal_index_value(start, out_error) : tinypy_integer_from_i64(vm, INT64_C(0));
 
     if (counter == NULL) {
-        TINYPY_DECREF(iterable);
+        __tinypy_enumerate_release_arguments(values);
         return NULL;
     }
     tinypy_internal_exception_state_t exception_state;
@@ -1000,7 +1071,7 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
     }
     tinypy_value_t *result = __tinypy_enumerate_new(type, iterable, counter, out_error);
     TINYPY_DECREF(counter);
-    TINYPY_DECREF(iterable);
+    __tinypy_enumerate_release_arguments(values);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1114,7 +1185,6 @@ tinypy_value_t *tinypy_internal_enumerate_next(tinypy_value_t *value, tinypy_err
    reads the size alone. */
 static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, tinypy_bool_t check_sequence, size_t *out_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
-    tinypy_length_slot_t length_slot = sequence->type->sequence_slots != NULL ? sequence->type->sequence_slots->length : NULL;
     tinypy_bool_t has_get_item = check_sequence == 0 || (sequence->type->sequence_slots != NULL && sequence->type->sequence_slots->get_item != NULL) ? TINYPY_TRUE : TINYPY_FALSE;
 
     /* PySequence_Check fetches the __getitem__ of a classic instance like
@@ -1138,12 +1208,14 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument to reversed() must be a sequence", out_error);
         return TINYPY_FALSE;
     }
-    /* The sq_length of a subclass defining __len__ calls it instead. */
-    if (length_slot != NULL && __tinypy_internal_object_overrides_dispatch(sequence, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) == 0) {
+    /* The slot is read after the lookups above, which may run Python code
+       that resets it. */
+    tinypy_length_slot_t length_slot = __tinypy_iterator_sequence_length_slot(sequence);
+    if (length_slot != NULL) {
         ptrdiff_t length = length_slot(sequence, out_error);
 
         if (length < 0) {
-            if (out_error == NULL || *out_error == NULL) {
+            if (tinypy_vm_has_error(vm) == 0) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "length slot returned a negative value", out_error);
             }
             return TINYPY_FALSE;
@@ -1209,8 +1281,10 @@ static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t
     size_t size;
 
     /* PySequence_Check excludes dictionaries outright and otherwise demands an
-       item protocol, so mappings never reach the index-counting path. */
-    if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || (TINYPY_VALUE_KIND(sequence) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key) == 0)) {
+       item protocol, so mappings never reach the index-counting path; the
+       sq_item of a native type with sequence_get is one. */
+    tinypy_bool_t item_slot = sequence->type->sequence_slots != NULL && sequence->type->sequence_slots->get_item != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || (TINYPY_VALUE_KIND(sequence) != TINYPY_VALUE_OLD_INSTANCE && item_slot == 0 && tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key) == 0)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument to reversed() must be a sequence", out_error);
         return NULL;
     }
@@ -1329,10 +1403,8 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
         return return_value_1;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *key = tinypy_integer_from_i64(vm, (int64_t)index);
     tinypy_error_t *item_error = NULL;
-    tinypy_value_t *result = tinypy_get_item(reversed->sequence, key, &item_error);
-    TINYPY_DECREF(key);
+    tinypy_value_t *result = __tinypy_iterator_sequence_item(reversed->sequence, index, &item_error);
     /* reversed_next steps past an item only once it has it: __getitem__ may
        have advanced this iterator meanwhile, up to its exhaustion. */
     if (result != NULL) {
@@ -1341,23 +1413,8 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
         }
         return result;
     }
-    if (tinypy_internal_exception_consume_stop_iteration(vm, &item_error) != 0 || (vm->raised_value != NULL && tinypy_type_is_subtype(vm->raised_value->type, vm->exception_types[TINYPY_EXCEPTION_INDEX_ERROR]) != 0)) {
-        if (item_error != NULL) {
-            tinypy_error_release(item_error);
-        }
-        if (vm->raised_value != NULL) {
-            tinypy_internal_exception_clear_raised(vm);
-        }
-        __tinypy_reversed_clear(reversed);
-        return NULL;
-    }
+    (void)__tinypy_iterator_sequence_ended(vm, item_error, out_error);
     __tinypy_reversed_clear(reversed);
-    if (out_error != NULL) {
-        *out_error = item_error;
-    }
-    else if (item_error != NULL) {
-        tinypy_error_release(item_error);
-    }
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1609,18 +1666,25 @@ tinypy_value_t *tinypy_iter(tinypy_value_t *value, tinypy_error_t **out_error) {
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* instance_iternext finds next like any attribute of a classic instance. */
+/* instance_iternext finds next like any attribute of a classic instance. A
+   class calls the next its Python code defines, as slot_tp_iternext does,
+   even over the slot of a built-in or native iterator base. */
 tinypy_value_t *tinypy_internal_next_raw(tinypy_value_t *iterator, tinypy_error_t **out_error) {
     TINYPY_CLEAR_ERROR(out_error);
+    if (iterator->type->next != NULL && (iterator->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U) {
+        tinypy_value_t *item = iterator->type->next(iterator, out_error);
+        return item;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator);
+    tinypy_value_t *function = tinypy_internal_type_function_key(iterator, vm->internal_special_next_key);
+    if (function != NULL) {
+        tinypy_value_t *direct = tinypy_internal_call_type_function(function, iterator, NULL, 0U, out_error);
+        return direct;
+    }
+    /* The lookup may run Python code that changes the slot. */
     if (iterator->type->next == NULL) {
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(iterator);
-        tinypy_value_t *function = tinypy_internal_type_function_key(iterator, vm->internal_special_next_key);
         tinypy_value_t *method = NULL;
 
-        if (function != NULL) {
-            tinypy_value_t *direct = tinypy_internal_call_type_function(function, iterator, NULL, 0U, out_error);
-            return direct;
-        }
         if (TINYPY_VALUE_KIND(iterator) == TINYPY_VALUE_OLD_INSTANCE) {
             int32_t status = tinypy_internal_object_get_optional_attr_key(iterator, vm->internal_special_next_key, &method, out_error);
 

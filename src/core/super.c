@@ -81,55 +81,27 @@ void tinypy_internal_super_release_references(tinypy_value_t *value, tinypy_rele
 }
 //////////////////////////////////////////////////////////////////////////
 /* Searches the MRO of the super's object type after its starting type, as
-   super_getattro does. A key comparison of a class dictionary may reassign
-   __bases__, re-initialise the super or replace the __dict__ of a classic
-   class, so the walk owns the fields it read, the MRO and each dictionary
-   until the attribute found in it is owned. Returns whether the name was
-   found. */
+   super_getattro does. A key comparison of a class dictionary may
+   re-initialise the super, so the lookup owns the fields it binds with.
+   Returns whether the name was found. */
 static tinypy_bool_t __tinypy_super_lookup(tinypy_super_object_t *super_value, tinypy_value_t *name, tinypy_value_t **out_result, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&super_value->base);
-    tinypy_value_t *start = &super_value->type->base.base;
     tinypy_value_t *object = super_value->object;
     tinypy_type_t *object_type = super_value->object_type;
-    tinypy_value_t *mro = object_type->mro;
-    size_t mro_size = mro != NULL ? TINYPY_TUPLE_SIZE(mro) : tinypy_type_mro_size(object_type);
-    tinypy_bool_t after_start = TINYPY_FALSE;
-    tinypy_bool_t found = TINYPY_FALSE;
 
-    TINYPY_INCREF(start);
     TINYPY_INCREF(object);
     TINYPY_INCREF(&object_type->base.base);
-    if (mro != NULL) {
-        TINYPY_INCREF(mro);
-    }
-    for (size_t index = 0U; index < mro_size && found == 0; ++index) {
-        tinypy_value_t *entry = mro != NULL ? TINYPY_TUPLE_GET(mro, index) : tinypy_internal_type_mro_value_at(object_type, index);
+    tinypy_value_t *attribute = tinypy_internal_type_lookup_after(vm, object_type, &super_value->type->base.base, name);
+    tinypy_bool_t found = attribute != NULL ? TINYPY_TRUE : TINYPY_FALSE;
 
-        if (after_start == 0) {
-            after_start = entry == start ? TINYPY_TRUE : TINYPY_FALSE;
-            continue;
-        }
-        tinypy_value_t *dict = TINYPY_RET(tinypy_internal_type_mro_entry_dict(entry));
-        tinypy_value_t *attribute = tinypy_dict_get_optional(dict, name);
+    if (attribute != NULL) {
+        tinypy_value_t *instance = object == &object_type->base.base ? NULL : object;
 
-        if (attribute != NULL) {
-            TINYPY_INCREF(attribute);
-        }
-        TINYPY_DECREF(dict);
-        if (attribute != NULL) {
-            tinypy_value_t *instance = object == &object_type->base.base ? NULL : object;
-
-            *out_result = tinypy_internal_descriptor_get_value(vm, attribute, instance, object_type, out_error);
-            TINYPY_DECREF(attribute);
-            found = TINYPY_TRUE;
-        }
-    }
-    if (mro != NULL) {
-        TINYPY_DECREF(mro);
+        *out_result = tinypy_internal_descriptor_get_value(vm, attribute, instance, object_type, out_error);
+        TINYPY_DECREF(attribute);
     }
     TINYPY_DECREF(&object_type->base.base);
     TINYPY_DECREF(object);
-    TINYPY_DECREF(start);
     return found;
 }
 //////////////////////////////////////////////////////////////////////////

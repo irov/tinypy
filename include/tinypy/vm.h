@@ -78,11 +78,13 @@ size_t tinypy_vm_report_cycles(tinypy_vm_t *vm, tinypy_diagnostic_callback_t cal
 
 /* The runtime has no allocation registry or cyclic collector. The embedder
  * must release every owned dynamic value and explicitly break owning cycles
- * before destroying the VM. Native function and native instance finalizers
- * of values still reachable from the VM run first, while every value is
- * intact, including the native values that finalizers make reachable; the
- * memory sweep follows and runs no finalizer. Any value pointer is invalid
- * after this call. */
+ * before destroying the VM. The finalizers of native values still reachable
+ * from the VM run first, while every value is intact: those of instances
+ * before those of functions, which instance finalizers may still call. A
+ * pass that creates native values with finalizers repeats for them, up to 8
+ * passes; the values the last pass creates are freed without their
+ * finalizers. The memory sweep follows and runs no finalizer. Any value
+ * pointer is invalid after this call. */
 void tinypy_vm_destroy(tinypy_vm_t *vm);
 
 #endif

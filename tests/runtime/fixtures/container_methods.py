@@ -2020,3 +2020,30 @@ sort_keywords["reverse"] = ClearingReverse()
 sorted_values = [1, 3, 2]
 apply(sorted_values.sort, (), sort_keywords)
 assert sorted_values == [3, 2, 1]
+
+
+# A keyword value is held as soon as it is taken: a str subclass key colliding
+# with "key" clears the keywords during that lookup, after "cmp" was taken.
+class ClearingName(str):
+    armed = False
+
+    def __hash__(self):
+        return hash("key")
+
+    def __eq__(self, other):
+        if ClearingName.armed:
+            ClearingName.armed = False
+            sort_keywords.clear()
+        return str.__eq__(self, other)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+
+sort_keywords = {ClearingName("unrelated"): 0}
+sort_keywords["cmp"] = lambda left, right: cmp(right, left)
+ClearingName.armed = True
+sorted_values = [1, 3, 2]
+apply(sorted_values.sort, (), sort_keywords)
+assert sorted_values == [3, 2, 1]
+assert sort_keywords == {}

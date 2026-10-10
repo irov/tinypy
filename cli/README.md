@@ -48,6 +48,12 @@ The CLI runs a program the way `python2.7` does:
   argument of `sys.exit`, unnormalized unless an `except` clause caught it,
   or the `code` of an exception instance is the status when it is an int or
   a long; any other code is written to `sys.stderr` and the status is 1;
+  a SystemExit of `sys.exitfunc` sets the status even after an uncaught
+  exception, as `Py_Exit` does;
+- like CPython with its interpreter state, the CLI reads `sys` attributes
+  from the sys module the VM created and knows BaseException and SystemExit
+  as the classes of the VM, whatever the program puts in `sys.modules` or
+  removes from `__builtin__`;
 - at exit the CLI runs `sys.exitfunc`, then releases the module namespaces in
   the order of PyImport_Cleanup (`__main__` first, `sys` last, values set to
   None) so finalizers and generator `finally` blocks run and `Exception ...

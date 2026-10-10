@@ -173,3 +173,44 @@ class NumericSemantics(unittest.TestCase):
                                ('1' + '0' * 30 + '.5e-30', '0x1.0000000000000p+0'), ('0.' + '0' * 330 + '1e330', '0x1.999999999999ap-4')):
             self.assertEqual((float(text).hex(), float(unicode(text)).hex()), (expected, expected))
             self.assertEqual(complex(text).real.hex(), expected)
+
+    def test_float_text_rounds_long_and_boundary_significands(self):
+        largest_half = str(2 ** 1024 - 2 ** 970)
+        smallest_half_digits = str(5 ** 1075)
+        smallest_half = '0.' + '0' * (1075 - len(smallest_half_digits)) + smallest_half_digits
+        one_half_ulp = '1.00000000000000011102230246251565404236316680908203125'
+        for text, expected in (('9007199254740993.0000000000000000001', '0x1.0000000000001p+53'),
+                               ('9007199254740992.9999999999999999999', '0x1.0000000000000p+53'),
+                               ('10000000000000000001e-5', '0x1.6bcc41e900000p+46'), ('18446744073709551615', '0x1.0000000000000p+64'),
+                               ('18446744073709551616e-20', '0x1.79ca10c924223p-3'), ('9999999999999999999e-308', '0x1.f2f5c7a1a488ep-961'),
+                               (largest_half, 'inf'), (largest_half[:-1] + '1', '0x1.fffffffffffffp+1023'),
+                               (largest_half + '.000000000000000000000001', 'inf'), (smallest_half, '0x0.0p+0'),
+                               (smallest_half + '00000000000001', '0x0.0000000000001p-1022'), ('1' + '0' * 900 + 'e-900', '0x1.0000000000000p+0'),
+                               ('0.' + '9' * 1000, '0x1.0000000000000p+0'), ('4.9406564584124654417656879286822137236505980e-324', '0x0.0000000000001p-1022'),
+                               ('7.2057594037927933e16', '0x1.0000000000000p+56'), (one_half_ulp, '0x1.0000000000000p+0'),
+                               (one_half_ulp + '1', '0x1.0000000000001p+0'), ('-' + one_half_ulp[:-1] + '4', '-0x1.0000000000000p+0')):
+            self.assertEqual((float(text).hex(), float(unicode(text)).hex()), (expected, expected))
+
+    def test_float_literals_round_like_float_text(self):
+        for text in ('0.30000000000000004', '1e300', '1.7976931348623157e+308', '1.7976931348623159e308', '5e-324',
+                     '2.4703282292062327e-324', '2.2250738585072011e-308', '9007199254740993.0', '123456789012345678901234567890.5',
+                     '3.1415926535897932384626433832795028841971', '.5e-10', '1E+05', '0.' + '0' * 330 + '1e330',
+                     '18446744073709551616e-20', str(2 ** 1024 - 2 ** 970) + '.0'):
+            self.assertEqual((eval(text).hex(), eval(text + 'j').imag.hex()), (float(text).hex(), float(text).hex()))
+
+    def test_reflected_float_subtraction_keeps_the_nan_operand(self):
+        def bits(value):
+            return _struct.pack('>d', value).encode('hex')
+        class Subclass(float):
+            pass
+        nan = float('nan')
+        for value in (nan, -nan):
+            expected = bits(value)
+            augmented = 3L
+            augmented -= value
+            self.assertEqual([bits(3L - value), bits(True - value), bits(value.__rsub__(3)), bits(value.__rsub__(3L)),
+                              bits(value.__rsub__(3.0)), bits(float.__sub__(3.0, value)), bits(augmented),
+                              bits(Subclass(3) - value), bits(3L - Subclass(value)), bits(3 - value), bits(3.0 - value)],
+                             [expected] * 11)
+            for difference in (3L - complex(value, value), complex(value, value).__rsub__(3), complex(3, 3) - complex(value, value)):
+                self.assertEqual((bits(difference.real), bits(difference.imag)), (expected, expected))

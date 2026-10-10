@@ -1080,7 +1080,7 @@ _Static_assert(sizeof(tinypy_dict_entry_t) == 24U, "dict entry must stay compact
 #define TINYPY_DICT_MIN_SIZE 8U
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_type_lookup_cache_entry_t {
-    uint64_t epoch;
+    uint64_t version;
     tinypy_hash_t hash;
     tinypy_type_t *type;
     tinypy_value_t *key;
@@ -1089,12 +1089,14 @@ typedef struct tinypy_type_lookup_cache_entry_t {
 //////////////////////////////////////////////////////////////////////////
 /* The descriptor flags depend on the attribute's own type as well, so the
    entry also remembers that type and its version. An entry for a class's or
-   a module's own attribute names it as the owner; instance entries have none.
+   a module's own attribute names it as the owner, with the class's type
+   version or the module dictionary's version; instance entries have none.
    The index is the instance dict probe hint, or the slot of a __slots__
-   member; a module value lasts while its dictionary has the same version. */
+   member. */
 typedef struct tinypy_attribute_lookup_cache_entry_t {
-    uint64_t epoch;
-    uint64_t dict_version;
+    uint64_t type_version;
+    uint64_t owner_version;
+    uint64_t attribute_type_version;
     size_t name_index;
     size_t index;
     tinypy_type_t *type;
@@ -1108,7 +1110,8 @@ typedef struct tinypy_attribute_lookup_cache_entry_t {
 } tinypy_attribute_lookup_cache_entry_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_attribute_store_cache_entry_t {
-    uint64_t epoch;
+    uint64_t type_version;
+    uint64_t descriptor_type_version;
     size_t name_index;
     size_t slot_index;
     tinypy_type_t *type;
@@ -1266,19 +1269,23 @@ struct tinypy_type_t {
     tinypy_bool_t has_classic_mro;
     tinypy_bool_t has_custom_mro;
     tinypy_bool_t bases_updating;
-    uint64_t finalizer_epoch;
+    /* tp_version_tag: the caches of lookups through the MRO keep this
+       version, and tinypy_internal_type_modified withdraws it. Zero is no
+       version. */
+    uint64_t version;
+    uint64_t finalizer_version;
     /* Dispatch specials known, defined anywhere in the MRO and overridden by
-       Python code while type_lookup_cache_epoch equals dispatch_epoch, one
+       Python code while version equals dispatch_version, one
        TINYPY_INTERNAL_DISPATCH_BIT each. */
-    uint64_t dispatch_epoch;
+    uint64_t dispatch_version;
     uint64_t dispatch_known;
     uint64_t dispatch_defines;
     uint64_t dispatch_overrides;
-    /* __new__ of a class call, and whether it is object's, while
-       type_lookup_cache_epoch equals constructor_new_epoch; __init__ while it
-       equals constructor_init_epoch. */
-    uint64_t constructor_new_epoch;
-    uint64_t constructor_init_epoch;
+    /* __new__ of a class call, and whether it is object's, while version
+       equals constructor_new_version; __init__ while it equals
+       constructor_init_version. */
+    uint64_t constructor_new_version;
+    uint64_t constructor_init_version;
     tinypy_value_t *constructor_new;
     tinypy_value_t *constructor_init;
     tinypy_bool_t constructor_object_new;
@@ -1371,6 +1378,9 @@ typedef struct tinypy_string_object_t {
     const tinypy_internal_string_metadata_t *internal_metadata;
     tinypy_bool_t interned;
     tinypy_bool_t hash_computed;
+    /* In-place concatenation rounds the allocation up to a size class of
+       the bytes, which the size alone gives back. */
+    tinypy_bool_t over_allocated;
     uint8_t bytes[1];
 } tinypy_string_object_t;
 //////////////////////////////////////////////////////////////////////////
@@ -1723,6 +1733,8 @@ typedef struct tinypy_native_function_object_t {
     size_t minimum;
     size_t maximum;
     tinypy_arity_style_e arity_style;
+    /* Set once the finalizer has run: user_data is gone, and calls raise. */
+    tinypy_bool_t finalized;
     void *user_data;
     tinypy_native_function_finalize_t finalize;
     /* The weak reference to a heap owner, which holds the descriptor. */
@@ -1945,9 +1957,13 @@ struct tinypy_vm_t {
     size_t native_method_free_count;
     /* Argument tuples of native calls that no callback kept, by item count. */
     tinypy_value_t *native_argument_tuples[TINYPY_NATIVE_ARGUMENT_CACHE_SIZE];
+    /* Counts the native functions and instances created with a finalizer, so
+       tinypy_vm_destroy repeats its finalizer pass only for new ones. */
+    size_t native_finalizable_created;
     uint64_t dict_cache_epoch;
     tinypy_bool_t dict_cache_exhausted;
-    uint64_t type_lookup_cache_epoch;
+    /* The next type version, zero once they are exhausted. */
+    uint64_t type_version_next;
     tinypy_type_lookup_cache_entry_t type_lookup_cache[TINYPY_TYPE_LOOKUP_CACHE_SIZE];
 
     tinypy_type_t types[TINYPY_BUILTIN_TYPE_COUNT];
@@ -2318,6 +2334,7 @@ tinypy_bool_t tinypy_internal_dict_delete_optional_checked(tinypy_vm_t *vm, tiny
 tinypy_value_t *tinypy_internal_compare_builtin_value(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error);
 int32_t tinypy_internal_comparison_fallback_order(tinypy_value_t *left, tinypy_value_t *right);
 tinypy_bool_t tinypy_internal_compare_three_way(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_compare_equal_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_comparison_is_exact_builtin(const tinypy_value_t *value);
 int32_t tinypy_internal_truth_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
 int32_t tinypy_internal_contains_builtin(tinypy_value_t *container, tinypy_value_t *item, tinypy_error_t **out_error);
@@ -2340,7 +2357,6 @@ tinypy_bool_t tinypy_internal_dict_delete_index(tinypy_vm_t *vm, tinypy_value_t 
 tinypy_value_t *tinypy_internal_dict_get_optional_index(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, size_t *out_index, tinypy_value_t **out_stored_key);
 tinypy_value_t *tinypy_internal_dict_get_index_hint(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, size_t index);
 tinypy_bool_t tinypy_internal_dict_delete_optional(tinypy_vm_t *vm, tinypy_value_t *dict, const tinypy_value_t *key);
-tinypy_bool_t tinypy_internal_dict_equal(const tinypy_value_t *left, const tinypy_value_t *right);
 tinypy_bool_t tinypy_internal_dict_equal_checked(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
 void tinypy_internal_set_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_set_initialize_empty(tinypy_value_t *value);
@@ -2412,6 +2428,7 @@ tinypy_value_t *tinypy_internal_weakref_create(tinypy_type_t *type, tinypy_value
 tinypy_value_t *tinypy_internal_weakref_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_hash_t tinypy_internal_weakref_hash(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_weakref_compare(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_weakref_proxy_slot_wrapper(const tinypy_value_t *value, tinypy_value_t *attribute);
 void tinypy_internal_initialize_weakref_type(tinypy_vm_t *vm);
 void tinypy_internal_initialize_weakref_module(tinypy_vm_t *vm);
 void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm);
@@ -2466,13 +2483,16 @@ tinypy_value_t *tinypy_internal_long_create(tinypy_type_t *type, tinypy_value_t 
 tinypy_value_t *tinypy_internal_float_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_complex_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_unicode_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+/* Fills the maximum outputs with owned values or NULL, which the caller
+   releases with tinypy_internal_constructor_release_arguments; a failure
+   leaves none. */
 tinypy_bool_t tinypy_internal_constructor_optional_arguments(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t *const *names, size_t maximum, uint32_t text_arguments, tinypy_value_t **outputs, tinypy_error_t **out_error);
+void tinypy_internal_constructor_release_arguments(tinypy_value_t **values, size_t count);
 tinypy_value_t *tinypy_internal_constructor_keyword_optional(tinypy_value_t *kwargs, tinypy_value_t *name);
 int32_t tinypy_internal_d2s_buffered_n(double value, char *result);
 tinypy_value_t *tinypy_internal_tuple_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_list_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_dict_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
-tinypy_bool_t tinypy_internal_set_equal(const tinypy_value_t *left, const tinypy_value_t *right);
 tinypy_bool_t tinypy_internal_set_equal_checked(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_set_is_subset_checked(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t *out_subset, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_set_like_compare_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_bool_t *out_result, tinypy_error_t **out_error);
@@ -2488,11 +2508,20 @@ tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target, tinypy_b
 tinypy_bool_t tinypy_internal_output_flush_line(tinypy_vm_t *vm, tinypy_error_t **out_error);
 void tinypy_internal_type_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_type_destroy(tinypy_value_t *value);
-void tinypy_internal_type_lookup_cache_invalidate(tinypy_vm_t *vm);
 void tinypy_internal_type_detach(tinypy_type_t *type);
+/* Gives a type without a version one, and to the types of its MRO; zero
+   when the type cannot have one. */
+uint64_t tinypy_internal_type_assign_version(tinypy_type_t *type);
+static inline uint64_t __tinypy_internal_type_version(tinypy_type_t *type) {
+    uint64_t version = type->version != 0U ? type->version : tinypy_internal_type_assign_version(type);
+    return version;
+}
 void tinypy_internal_type_modified(tinypy_type_t *type);
 void tinypy_internal_type_lookup_cache_finalize(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_type_lookup_key(tinypy_vm_t *vm, const tinypy_type_t *type, tinypy_value_t *key);
+/* Owned value of the name in the MRO entries after start, or from the type
+   itself when start is NULL. */
+tinypy_value_t *tinypy_internal_type_lookup_after(tinypy_vm_t *vm, const tinypy_type_t *type, const tinypy_value_t *start, tinypy_value_t *key);
 void tinypy_internal_type_message_name(const tinypy_type_t *type, tinypy_message_part_t out_parts[3]);
 void tinypy_internal_type_uncreatable_error(tinypy_type_t *type, tinypy_error_t **out_error);
 void tinypy_internal_type_set_attr_key(tinypy_type_t *type, tinypy_value_t *key, tinypy_value_t *value);
@@ -2540,11 +2569,11 @@ tinypy_value_t *tinypy_internal_dispatch_key(tinypy_vm_t *vm, tinypy_internal_di
    type for the readers below. */
 tinypy_bool_t tinypy_internal_object_memoize_dispatch(tinypy_value_t *value, uint64_t specials, tinypy_bool_t overrides);
 //////////////////////////////////////////////////////////////////////////
-/* Only a memoizing type records an epoch, never the disabled zero with
-   anything known. */
+/* Only a type with a version memoizes, so a type without one has nothing
+   known. */
 static inline tinypy_bool_t __tinypy_internal_object_known_dispatch(tinypy_value_t *value, uint64_t specials) {
     const tinypy_type_t *type = value->type;
-    tinypy_bool_t known = type->dispatch_epoch == type->vm->type_lookup_cache_epoch && (specials & ~type->dispatch_known) == 0U ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t known = type->dispatch_version == type->version && (specials & ~type->dispatch_known) == 0U ? TINYPY_TRUE : TINYPY_FALSE;
 
     return known;
 }
@@ -2715,6 +2744,7 @@ tinypy_bool_t tinypy_internal_descriptor_delete_value(tinypy_vm_t *vm, tinypy_va
 void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_exception_check_normalized(tinypy_value_t *exception_class, tinypy_value_t *value, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_exception_normalize_raised(tinypy_vm_t *vm, tinypy_error_t **out_error);
 void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e kind, const char *message);
 void tinypy_internal_exception_clear_raised(tinypy_vm_t *vm);
 void tinypy_internal_exception_clear_handled(tinypy_vm_t *vm);
@@ -2734,7 +2764,6 @@ void tinypy_internal_exception_set_raised_type(tinypy_vm_t *vm, tinypy_value_t *
 void tinypy_internal_sys_publish_handled_exception(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback);
 void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm);
 void tinypy_internal_exception_restore_handled(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback);
-void tinypy_internal_exception_restore_raised_from_handled(tinypy_vm_t *vm);
 void tinypy_internal_exception_make_diagnostic(tinypy_vm_t *vm, tinypy_error_t **out_error);
 void tinypy_internal_exception_raise_key_error(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error);
 void tinypy_internal_exception_raise_stop_iteration(tinypy_vm_t *vm, tinypy_error_t **out_error);

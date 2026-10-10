@@ -415,7 +415,9 @@ class RebasedDerived(RebasedMiddle):
     pass
 
 
-# A type lookup restarts on the MRO a nested __bases__ assignment installs.
+# A type lookup finishes on the MRO it started with, which it holds as the
+# _PyType_Lookup of CPython 3 does; a nested __bases__ assignment changes the
+# lookups that follow.
 nested_lookups = []
 
 
@@ -425,9 +427,10 @@ def rebase_during_lookup():
 
 
 key_actions.append(rebase_during_lookup)
-assert RebasedDerived().attr == "other"
+assert RebasedDerived().attr == "base"
 assert nested_lookups == ["base"]
 assert RebasedDerived.__mro__ == (RebasedDerived, RebasedOther, object)
+assert RebasedDerived().attr == "other"
 
 
 class ReplacedBase(object):
@@ -472,3 +475,153 @@ except AttributeError, message_error:
     assert str(message_error) == "message attribute was deleted"
 else:
     raise AssertionError("deleted message did not raise")
+
+
+# A lookup never restarts: a comparison that rebases the class or replaces a
+# classic __dict__ on every probe still lets it finish on what it holds.
+renewing_calls = []
+
+
+class Renewing(object):
+    def __init__(self, renew):
+        self.renew = renew
+
+    def __hash__(self):
+        return hash("attr")
+
+    def __eq__(self, other):
+        renewing_calls.append(other)
+        if len(renewing_calls) < 1000:
+            self.renew()
+        return False
+
+
+class RenewedFirst(object):
+    attr = "first"
+
+
+class RenewedSecond(object):
+    attr = "second"
+
+
+class RenewedMiddle(RenewedFirst):
+    pass
+
+
+def renew_bases():
+    RenewedMiddle.__bases__ = (RenewedSecond,) if RenewedMiddle.__bases__[0] is RenewedFirst else (RenewedFirst,)
+
+
+RenewedDerived = type("RenewedDerived", (RenewedMiddle,), {Renewing(renew_bases): 1})
+assert RenewedDerived().attr == "first"
+assert len(renewing_calls) == 2
+del renewing_calls[:]
+assert getattr(RenewedDerived, "missing", "missing") == "missing"
+assert len(renewing_calls) == 0
+
+
+class RenewedClassic:
+    pass
+
+
+def renew_classic_dict():
+    RenewedClassic.__dict__ = {Renewing(renew_classic_dict): 1}
+
+
+class RenewedBase(object):
+    attr = "base"
+
+
+class RenewedMixed(RenewedClassic, RenewedBase):
+    pass
+
+
+renew_classic_dict()
+del renewing_calls[:]
+assert RenewedMixed().attr == "base"
+assert len(renewing_calls) == 1
+del renewing_calls[:]
+assert getattr(RenewedMixed(), "attr", "missing") == "base"
+assert len(renewing_calls) == 1
+
+
+# The class of the last instance is freed by a comparison of the __getattr__
+# probe; the lookup holds it, and its MRO, until the probe is done.
+freed_holder = []
+
+
+class FreedOther(object):
+    pass
+
+
+class FreedBase(object):
+    pass
+
+
+class FreedRebase(object):
+    pass
+
+
+def free_class():
+    freed_holder[0].__class__ = FreedOther
+
+
+def rebase_and_free_class():
+    type(freed_holder[0]).__bases__ = (FreedRebase,)
+    freed_holder[0].__class__ = FreedOther
+
+
+for free_action in (free_class, rebase_and_free_class):
+    freed_holder.append(type("Freed", (FreedBase,), {ActingKey("__getattr__"): 1})())
+    key_actions.append(free_action)
+    try:
+        freed_holder[0].missing
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("missing attribute of a freed class did not raise")
+    assert type(freed_holder.pop()) is FreedOther
+
+
+# The keyword values of a constructor are owned as soon as they are read: the
+# dictionary apply() passes on may be cleared by the comparison of a later
+# keyword or of a special method looked up on a value.
+cleared_keywords = {}
+
+
+class ClearingKeyword(object):
+    def __init__(self, name):
+        self.name = name
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        cleared_keywords.clear()
+        return False
+
+
+def apply_cleared(function, args, make_keywords):
+    cleared_keywords.update(make_keywords())
+    try:
+        return apply(function, args, cleared_keywords)
+    finally:
+        cleared_keywords.clear()
+
+
+def clearing_value(base, special, value):
+    return type("Clearing", (base,), {ClearingKeyword(special): 1})(value)
+
+
+assert apply_cleared(int, (), lambda: {"x": "".join(["1", "2", "3"]), ClearingKeyword("base"): 1}) == 123
+assert apply_cleared(long, (), lambda: {"x": "".join(["1", "2", "3"]), ClearingKeyword("base"): 1}) == 123L
+assert apply_cleared(complex, (), lambda: {"real": float("1.5") + 0.25, ClearingKeyword("imag"): 1}) == 1.75
+assert apply_cleared(unicode, (), lambda: {"string": "".join(["a", "b"]), "encoding": "".join(["as", "cii"]), ClearingKeyword("errors"): 1}) == u"ab"
+assert apply_cleared(bytearray, (u"abc",), lambda: {"encoding": "".join(["as", "cii"]), ClearingKeyword("errors"): 1}) == bytearray("abc")
+assert apply_cleared(sys.getsizeof, (), lambda: {"object": [1], ClearingKeyword("default"): 1}) > 0
+assert apply_cleared("abc".encode, (), lambda: {"encoding": "".join(["as", "cii"]), ClearingKeyword("errors"): 1}) == "abc"
+assert apply_cleared(float, (), lambda: {"x": clearing_value(str, "__float__", "1.5")}) == 1.5
+assert apply_cleared(int, (), lambda: {"x": clearing_value(str, "__int__", "15")}) == 15
+assert apply_cleared(str, (), lambda: {"object": clearing_value(list, "__str__", [1])}) == "[1]"
+assert apply_cleared(list, (), lambda: {"sequence": clearing_value(tuple, "__iter__", (1, 2))}) == [1, 2]
+assert apply_cleared(tuple, (), lambda: {"sequence": clearing_value(list, "__iter__", [1, 2])}) == (1, 2)

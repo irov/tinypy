@@ -227,8 +227,8 @@ static tinypy_bool_t __tinypy_eval_check_container(tinypy_vm_t *vm, const tinypy
 }
 //////////////////////////////////////////////////////////////////////////
 static inline tinypy_bool_t __tinypy_eval_attribute_cache_valid(const tinypy_attribute_lookup_cache_entry_t *cache, tinypy_value_t *object, size_t name_index) {
-    tinypy_bool_t valid = TINYPY_VALUE_VM(object)->type_lookup_cache_epoch != 0U && cache->epoch == TINYPY_VALUE_VM(object)->type_lookup_cache_epoch && cache->name_index == name_index && cache->type == object->type
-        && (cache->attribute == NULL || (cache->attribute->type == cache->attribute_type));
+    tinypy_bool_t valid = cache->type == object->type && cache->type_version == object->type->version && cache->name_index == name_index
+        && (cache->attribute == NULL || (cache->attribute->type == cache->attribute_type && cache->attribute_type_version == cache->attribute_type->version));
 
     return valid;
 }
@@ -240,29 +240,34 @@ static inline tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attribute_cac
 }
 //////////////////////////////////////////////////////////////////////////
 /* The new entry takes the first way of its set and the previous one moves to
-   the second. Its epoch is the one read before the lookups that filled it, so
-   a type changed while they ran leaves the entry stale. */
-static tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attribute_cache_insert(tinypy_value_t *code, uint64_t epoch, tinypy_type_t *type, tinypy_value_t *owner, size_t name_index, tinypy_value_t *attribute) {
+   the second. Its versions are the ones read before the lookups that filled
+   it, so a type changed while they ran leaves the entry stale, and an entry
+   that a type without a version decides never matches. A module entry does
+   not depend on the type of its value. */
+static tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attribute_cache_insert(tinypy_value_t *code, tinypy_type_t *type, uint64_t type_version, tinypy_value_t *owner, uint64_t owner_version, size_t name_index, tinypy_value_t *attribute, uint64_t attribute_type_version) {
     tinypy_attribute_lookup_cache_entry_t *set = __tinypy_eval_attribute_cache_set(code, name_index);
 
     set[1] = set[0];
     (void)memset(set, 0, sizeof(*set));
-    set->epoch = epoch;
+    set->type_version = type_version;
+    set->owner_version = owner_version;
+    set->attribute_type_version = attribute_type_version;
     set->name_index = name_index;
-    set->type = type;
+    set->type = type_version != 0U ? type : NULL;
     set->owner = owner;
     set->attribute = attribute;
-    set->attribute_type = attribute != NULL ? attribute->type : NULL;
+    set->attribute_type = attribute != NULL && attribute_type_version != 0U ? attribute->type : NULL;
     return set;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Caches an attribute that a class or a type holds itself, once the lookup
    that found it is done. Looking for __get__ on the attribute's type may run
    a key's __eq__, which can drop the attribute from its class. */
-static void __tinypy_eval_attribute_cache_fill(tinypy_vm_t *vm, tinypy_value_t *code, uint64_t epoch, tinypy_type_t *type, tinypy_value_t *owner, size_t name_index, tinypy_value_t *attribute) {
+static void __tinypy_eval_attribute_cache_fill(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_type_t *type, uint64_t type_version, tinypy_value_t *owner, uint64_t owner_version, size_t name_index, tinypy_value_t *attribute) {
     TINYPY_INCREF(attribute);
+    uint64_t attribute_type_version = __tinypy_internal_type_version(attribute->type);
     tinypy_bool_t has_get = tinypy_internal_descriptor_has_get(vm, attribute);
-    tinypy_attribute_lookup_cache_entry_t *cache = __tinypy_eval_attribute_cache_insert(code, epoch, type, owner, name_index, attribute);
+    tinypy_attribute_lookup_cache_entry_t *cache = __tinypy_eval_attribute_cache_insert(code, type, type_version, owner, owner_version, name_index, attribute, attribute_type_version);
 
     cache->has_descriptor_get = has_get;
     TINYPY_DECREF(attribute);
@@ -270,8 +275,8 @@ static void __tinypy_eval_attribute_cache_fill(tinypy_vm_t *vm, tinypy_value_t *
 //////////////////////////////////////////////////////////////////////////
 /* type_getattro for a class whose metaclass is type itself. Once a generic
    lookup has seen that type offers no data descriptor for the name, the
-   class's own attribute decides until a type changes. The entries are keyed
-   by the metaclass, which is never the type of an instance. */
+   class's own attribute decides until type or the class changes. The entries
+   are keyed by the metaclass, which is never the type of an instance. */
 static tinypy_value_t *__tinypy_eval_load_class_attr(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_value_t *object, tinypy_value_t *name, size_t name_index, tinypy_error_t **out_error) {
     tinypy_type_t *type = (tinypy_type_t *)object;
     tinypy_attribute_lookup_cache_entry_t *set = __tinypy_eval_attribute_cache_set(code, name_index);
@@ -279,7 +284,7 @@ static tinypy_value_t *__tinypy_eval_load_class_attr(tinypy_vm_t *vm, tinypy_val
     for (size_t way = 0U; way < TINYPY_ATTRIBUTE_LOOKUP_CACHE_WAYS; ++way) {
         tinypy_attribute_lookup_cache_entry_t *cache = &set[way];
 
-        if (cache->owner != object || __tinypy_eval_attribute_cache_valid(cache, object, name_index) == 0) {
+        if (cache->owner != object || cache->owner_version != type->version || __tinypy_eval_attribute_cache_valid(cache, object, name_index) == 0) {
             continue;
         }
         TINYPY_CLEAR_ERROR(out_error);
@@ -289,15 +294,16 @@ static tinypy_value_t *__tinypy_eval_load_class_attr(tinypy_vm_t *vm, tinypy_val
         tinypy_value_t *result = tinypy_internal_descriptor_get_value(vm, cache->attribute, NULL, type, out_error);
         return result;
     }
-    uint64_t epoch = vm->type_lookup_cache_epoch;
+    uint64_t type_version = __tinypy_internal_type_version(object->type);
+    uint64_t owner_version = __tinypy_internal_type_version(type);
     tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
-    if (result != NULL && vm->type_lookup_cache_epoch == epoch && type->has_classic_mro == 0 && type->has_custom_mro == 0) {
+    if (result != NULL && owner_version != 0U) {
         tinypy_value_t *metaclass_attribute = tinypy_internal_type_lookup_key(vm, object->type, name);
         tinypy_bool_t metaclass_data = metaclass_attribute != NULL && tinypy_internal_descriptor_has_get(vm, metaclass_attribute) != 0 && tinypy_internal_descriptor_is_data(vm, metaclass_attribute) != 0;
         tinypy_value_t *attribute = metaclass_data == 0 ? tinypy_internal_type_lookup_key(vm, type, name) : NULL;
 
         if (attribute != NULL) {
-            __tinypy_eval_attribute_cache_fill(vm, code, epoch, object->type, object, name_index, attribute);
+            __tinypy_eval_attribute_cache_fill(vm, code, object->type, type_version, object, owner_version, name_index, attribute);
         }
     }
     return result;
@@ -313,20 +319,18 @@ static tinypy_value_t *__tinypy_eval_load_module_attr(tinypy_vm_t *vm, tinypy_va
         for (size_t way = 0U; way < TINYPY_ATTRIBUTE_LOOKUP_CACHE_WAYS; ++way) {
             tinypy_attribute_lookup_cache_entry_t *cache = &set[way];
 
-            if (cache->owner == object && cache->dict_version == TINYPY_DICT_OBJECT(dict)->cache_version && __tinypy_eval_attribute_cache_valid(cache, object, name_index) != 0) {
+            if (cache->owner == object && cache->owner_version == TINYPY_DICT_OBJECT(dict)->cache_version && cache->type == object->type && cache->type_version == object->type->version && cache->name_index == name_index) {
                 TINYPY_CLEAR_ERROR(out_error);
                 return TINYPY_RET(cache->attribute);
             }
         }
     }
-    uint64_t epoch = vm->type_lookup_cache_epoch;
+    uint64_t type_version = __tinypy_internal_type_version(object->type);
     uint64_t dict_version = dict != NULL ? TINYPY_DICT_OBJECT(dict)->cache_version : UINT64_C(0);
     tinypy_value_t *type_attribute = tinypy_internal_type_lookup_key(vm, object->type, name);
     tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
-    if (result != NULL && type_attribute == NULL && dict != NULL && TINYPY_MODULE_OBJECT(object)->dict == dict && TINYPY_DICT_OBJECT(dict)->cache_version == dict_version && vm->type_lookup_cache_epoch == epoch && vm->dict_cache_exhausted == 0) {
-        tinypy_attribute_lookup_cache_entry_t *cache = __tinypy_eval_attribute_cache_insert(code, epoch, object->type, object, name_index, result);
-
-        cache->dict_version = dict_version;
+    if (result != NULL && type_attribute == NULL && dict != NULL && TINYPY_MODULE_OBJECT(object)->dict == dict && TINYPY_DICT_OBJECT(dict)->cache_version == dict_version && vm->dict_cache_exhausted == 0) {
+        (void)__tinypy_eval_attribute_cache_insert(code, object->type, type_version, object, dict_version, name_index, result, UINT64_C(0));
     }
     return result;
 }
@@ -353,13 +357,13 @@ static tinypy_value_t *__tinypy_eval_load_type_attr(tinypy_vm_t *vm, tinypy_valu
         tinypy_value_t *result = tinypy_internal_descriptor_get_value(vm, cache->attribute, object, object->type, out_error);
         return result;
     }
-    uint64_t epoch = vm->type_lookup_cache_epoch;
+    uint64_t type_version = __tinypy_internal_type_version(object->type);
     tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
-    if (result != NULL && vm->type_lookup_cache_epoch == epoch) {
+    if (result != NULL && type_version != 0U) {
         tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, object->type, name);
 
         if (attribute != NULL) {
-            __tinypy_eval_attribute_cache_fill(vm, code, epoch, object->type, NULL, name_index, attribute);
+            __tinypy_eval_attribute_cache_fill(vm, code, object->type, type_version, NULL, UINT64_C(0), name_index, attribute);
         }
     }
     return result;
@@ -415,8 +419,11 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
     tinypy_bool_t data_descriptor;
     tinypy_bool_t has_get;
     if (cache == NULL) {
-        uint64_t epoch = vm->type_lookup_cache_epoch;
+        uint64_t type_version = __tinypy_internal_type_version(type);
+        /* A key comparison of the dispatch lookups may reassign __class__. */
+        TINYPY_INCREF(&type->base.base);
         if (__tinypy_internal_object_overrides_dispatch(object, TINYPY_INTERNAL_DISPATCH_BIT(GETATTRIBUTE) | TINYPY_INTERNAL_DISPATCH_BIT(GETATTR)) != 0) {
+            TINYPY_DECREF(&type->base.base);
             tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
             return result;
         }
@@ -424,12 +431,12 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         if (attribute != NULL) {
             TINYPY_INCREF(attribute);
         }
-        TINYPY_INCREF(&type->base.base);
+        uint64_t attribute_type_version = attribute != NULL ? __tinypy_internal_type_version(attribute->type) : UINT64_C(0);
         has_get = attribute != NULL ? tinypy_internal_descriptor_has_get(vm, attribute) : TINYPY_FALSE;
         data_descriptor = attribute != NULL && has_get != 0 ? tinypy_internal_descriptor_is_data(vm, attribute) : TINYPY_FALSE;
         size_t slot_index = 0U;
         tinypy_bool_t member_slot = data_descriptor != 0 ? tinypy_internal_member_descriptor_slot(attribute, type, &slot_index) : TINYPY_FALSE;
-        cache = __tinypy_eval_attribute_cache_insert(code, epoch, type, NULL, name_index, attribute);
+        cache = __tinypy_eval_attribute_cache_insert(code, type, type_version, NULL, UINT64_C(0), name_index, attribute, attribute_type_version);
         cache->index = slot_index;
         cache->data_descriptor = data_descriptor;
         cache->has_descriptor_get = has_get;
@@ -473,9 +480,14 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         size_t dict_index = cache->index;
 
         /* A hit with a valid hint has already tried it. A key's __eq__ may
-           replace the dictionary during the lookup. */
+           replace the dictionary during the lookup, and its error counts as a
+           miss, as PyDict_GetItem has it; no other error is pending in the
+           evaluator. */
         TINYPY_INCREF(dict);
         result = tinypy_internal_dict_get_optional_index(vm, dict, name, &dict_index, NULL);
+        if (result == NULL && vm->raised_type != NULL) {
+            tinypy_internal_exception_clear_raised(vm);
+        }
         /* No borrowed key survives a callback or a cache eviction. The
            callback may also run this code and move another entry here, whose
            index is only a hint that the readers check unless it is the slot
@@ -507,7 +519,9 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         }
     }
     else {
-        result = tinypy_internal_object_get_attr_key(object, name, out_error);
+        /* PyObject_GenericGetAttr has nothing left to try: the type defines
+           neither __getattr__ nor __getattribute__ of its own. */
+        tinypy_internal_object_make_attribute_error_key(object, name, out_error);
     }
 done:
     if (attribute != NULL) {
@@ -523,9 +537,9 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
         return result;
     }
     tinypy_attribute_store_cache_entry_t *cache = &TINYPY_CODE_OBJECT(code)->attribute_store_cache[name_index & (TINYPY_CODE_OBJECT(code)->cache_slot_count - 1U)];
-    if (TINYPY_VALUE_VM(object)->type_lookup_cache_epoch != 0U && cache->epoch == TINYPY_VALUE_VM(object)->type_lookup_cache_epoch && cache->name_index == name_index && cache->type == object->type
+    if (cache->type == object->type && cache->type_version == object->type->version && cache->name_index == name_index
         && (cache->direct_instance_dict != 0 || cache->data_descriptor != 0)
-        && (cache->descriptor == NULL || (cache->descriptor->type == cache->descriptor_type))) {
+        && (cache->descriptor == NULL || (cache->descriptor->type == cache->descriptor_type && cache->descriptor_type_version == cache->descriptor_type->version))) {
         if (cache->member_slot != 0) {
             tinypy_value_t **slot = __tinypy_internal_instance_member_slot(object, cache->slot_index);
             tinypy_value_t *previous = *slot;
@@ -554,7 +568,7 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
         return stored;
     }
     (void)memset(cache, 0, sizeof(*cache));
-    uint64_t epoch = vm->type_lookup_cache_epoch;
+    uint64_t type_version = __tinypy_internal_type_version(object->type);
     if (__tinypy_internal_object_overrides_dispatch(object, TINYPY_INTERNAL_DISPATCH_BIT(SETATTR)) == 0) {
         tinypy_type_t *type = object->type;
         tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, type, name);
@@ -562,14 +576,16 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
             TINYPY_INCREF(descriptor);
         }
         TINYPY_INCREF(&type->base.base);
+        uint64_t descriptor_type_version = descriptor != NULL ? __tinypy_internal_type_version(descriptor->type) : UINT64_C(0);
         tinypy_bool_t data = descriptor != NULL ? tinypy_internal_descriptor_is_data(vm, descriptor) : TINYPY_FALSE;
         size_t slot_index = 0U;
         tinypy_bool_t member_slot = data != 0 ? tinypy_internal_member_descriptor_slot(descriptor, type, &slot_index) : TINYPY_FALSE;
-        cache->epoch = epoch;
+        cache->type_version = type_version;
+        cache->descriptor_type_version = descriptor_type_version;
         cache->name_index = name_index;
-        cache->type = type;
+        cache->type = type_version != 0U ? type : NULL;
         cache->descriptor = descriptor;
-        cache->descriptor_type = descriptor != NULL ? descriptor->type : NULL;
+        cache->descriptor_type = descriptor != NULL && descriptor_type_version != 0U ? descriptor->type : NULL;
         cache->data_descriptor = data;
         cache->direct_instance_dict = data == 0 && type->has_instance_dict != 0;
         cache->member_slot = member_slot;
@@ -959,17 +975,6 @@ static tinypy_bool_t __tinypy_eval_exception_instance(tinypy_vm_t *vm, tinypy_va
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_eval_exception_instance_of(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *candidate) {
-    if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_CLASS) {
-        tinypy_bool_t return_value_1 = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE && tinypy_class_is_subclass(TINYPY_OLD_INSTANCE_OBJECT(value)->class_object, candidate) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-        return return_value_1;
-    }
-    tinypy_bool_t return_value_2 = TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype(value->type, (tinypy_type_t *)candidate) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-
-    (void)vm;
-    return return_value_2;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_code_frame(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 /* Follows exec_statement in CPython 2.7, including the tuple form and the
@@ -1074,18 +1079,11 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
         goto cleanup;
     }
     if (argument == 0U) {
-        /* do_raise re-raises the handled type even when a frame dropped its
-           value, which the class then normalizes. */
-        if (vm->handled_type == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exceptions must be old-style classes or derived from BaseException, not NoneType", out_error);
-            goto cleanup;
-        }
-        if (vm->handled_value != NULL && __tinypy_eval_exception_instance_of(vm, vm->handled_value, vm->handled_type) != 0) {
-            tinypy_internal_exception_restore_raised_from_handled(vm);
-            reason = vm->raised_traceback != NULL ? TINYPY_EVAL_REASON_RERAISE : TINYPY_EVAL_REASON_EXCEPTION;
-            goto cleanup;
-        }
-        raise_type = vm->handled_type;
+        /* do_raise checks the handled exception like an explicit one, None
+           standing for a missing type: f_exc_* assignments can make it
+           anything, and a frame may have dropped the value, which the class
+           then normalizes. */
+        raise_type = vm->handled_type != NULL ? vm->handled_type : &vm->none_object.base;
         raise_value = vm->handled_value;
         traceback = vm->handled_traceback;
         TINYPY_INCREF(raise_type);
@@ -1112,32 +1110,17 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
         raise_type = first;
     }
     if (__tinypy_eval_exception_class(vm, raise_type) != 0) {
-        if (raise_value != NULL && __tinypy_eval_exception_instance_of(vm, raise_value, raise_type) != 0) {
-            exception = TINYPY_RET(raise_value);
-        }
-        else {
-            tinypy_value_t *args;
+        tinypy_value_t *value = raise_value != NULL ? raise_value : &vm->none_object.base;
 
-            if (raise_value == NULL || TINYPY_VALUE_KIND(raise_value) == TINYPY_VALUE_NONE) {
-                args = TINYPY_RET_EMPTY_TUPLE(vm);
-            }
-            else if (TINYPY_VALUE_KIND(raise_value) == TINYPY_VALUE_TUPLE) {
-                args = TINYPY_RET(raise_value);
-            }
-            else {
-                args = tinypy_tuple_from_items(vm, &raise_value, 1U);
-            }
-            /* Normalization calls the class, so a metaclass __call__ and a
-               user __new__ take part the way PyErr_NormalizeException does. */
-            exception = tinypy_call(raise_type, args, NULL, out_error);
-            TINYPY_DECREF(args);
-            if (exception == NULL) {
-                goto cleanup;
-            }
-            if (tinypy_internal_exception_check_normalized(raise_type, exception, out_error) == 0) {
-                goto cleanup;
-            }
+        tinypy_internal_exception_set_raised_type(vm, raise_type, value, traceback);
+        if (tinypy_internal_exception_normalize_raised(vm, out_error) != 0) {
+            (void)tinypy_internal_exception_check_normalized(raise_type, vm->raised_value, out_error);
         }
+        /* A traceback given, or kept by the error that a failed
+           normalization raised instead, is re-raised without an entry for
+           this frame. */
+        reason = vm->raised_traceback != NULL ? TINYPY_EVAL_REASON_RERAISE : TINYPY_EVAL_REASON_EXCEPTION;
+        goto cleanup;
     }
     else if (__tinypy_eval_exception_instance(vm, raise_type) != 0) {
         if (raise_value != NULL && TINYPY_VALUE_KIND(raise_value) != TINYPY_VALUE_NONE) {
@@ -1155,12 +1138,7 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         goto cleanup;
     }
-    if (__tinypy_eval_exception_class(vm, raise_type) != 0 && __tinypy_eval_exception_instance_of(vm, exception, raise_type) == 0) {
-        tinypy_internal_exception_set_raised_type(vm, raise_type, exception, traceback);
-    }
-    else {
-        tinypy_internal_exception_set_raised(vm, exception, traceback);
-    }
+    tinypy_internal_exception_set_raised(vm, exception, traceback);
     if (traceback != NULL) {
         reason = TINYPY_EVAL_REASON_RERAISE;
     }
@@ -1773,43 +1751,11 @@ static void __tinypy_eval_raise_lost_exception(tinypy_vm_t *vm, tinypy_error_t *
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_eval_normalize_raised(tinypy_vm_t *vm, tinypy_error_t **out_error) {
-    tinypy_internal_exception_state_t state;
-    tinypy_value_t *args;
-
-    if (__tinypy_eval_exception_instance_of(vm, vm->raised_value, vm->raised_type) != 0) {
+    if (tinypy_internal_exception_normalize_raised(vm, out_error) != 0) {
         return;
     }
-    tinypy_internal_exception_preserve_begin(vm, &state);
-    __tinypy_eval_clear_diagnostic(out_error);
-    if (TINYPY_VALUE_KIND(state.value) == TINYPY_VALUE_NONE) {
-        args = TINYPY_RET_EMPTY_TUPLE(vm);
-    }
-    else if (TINYPY_VALUE_KIND(state.value) == TINYPY_VALUE_TUPLE) {
-        args = TINYPY_RET(state.value);
-    }
-    else {
-        args = tinypy_tuple_from_items(vm, &state.value, 1U);
-    }
-    tinypy_value_t *value = tinypy_call(state.type, args, NULL, out_error);
-
-    TINYPY_DECREF(args);
-    if (value != NULL) {
-        tinypy_internal_exception_set_raised_type(vm, state.type, value, state.traceback);
-        TINYPY_DECREF(value);
-    }
-    else {
-        if (vm->raised_value == NULL) {
-            __tinypy_eval_raise_lost_exception(vm, out_error);
-        }
-        if (vm->raised_traceback == NULL && state.traceback != NULL) {
-            vm->raised_traceback = state.traceback;
-            TINYPY_INCREF(state.traceback);
-        }
-    }
-    TINYPY_DECREF(state.type);
-    TINYPY_DECREF(state.value);
-    if (state.traceback != NULL) {
-        TINYPY_DECREF(state.traceback);
+    if (vm->raised_value == NULL) {
+        __tinypy_eval_raise_lost_exception(vm, out_error);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2299,7 +2245,7 @@ static tinypy_value_t *__tinypy_eval_build_class(tinypy_vm_t *vm, tinypy_frame_o
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "BUILD_CLASS received invalid operands", out_error);
         return NULL;
     }
-    metaclass = tinypy_dict_get_optional(namespace_dict, vm->internal_metaclass_key);
+    metaclass = tinypy_internal_dict_get_optional_suppressed(vm, namespace_dict, vm->internal_metaclass_key);
     if (metaclass != NULL) {
         TINYPY_INCREF(metaclass);
     }
@@ -2307,17 +2253,20 @@ static tinypy_value_t *__tinypy_eval_build_class(tinypy_vm_t *vm, tinypy_frame_o
         tinypy_value_t *base = TINYPY_TUPLE_GET(bases, 0U);
         tinypy_error_t *lookup_error = NULL;
 
-        metaclass = tinypy_internal_object_get_attr_key(base, vm->internal_special_class_key, &lookup_error);
-        if (metaclass == NULL) {
+        /* Any failure falls back to the type of the base; a classic class,
+           which has no __class__, raises nothing to discard. */
+        if (tinypy_internal_object_get_optional_attr_key(base, vm->internal_special_class_key, &metaclass, &lookup_error) < 0) {
             if (lookup_error != NULL) {
                 tinypy_error_release(lookup_error);
             }
             tinypy_vm_clear_error(vm);
+        }
+        if (metaclass == NULL) {
             metaclass = TINYPY_RET(&base->type->base.base);
         }
     }
     else {
-        metaclass = tinypy_dict_get_optional(frame->globals, vm->internal_metaclass_key);
+        metaclass = tinypy_internal_dict_get_optional_suppressed(vm, frame->globals, vm->internal_metaclass_key);
         if (metaclass == NULL) {
             metaclass = classic_metaclass;
         }
@@ -3958,16 +3907,9 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
         }
         tinypy_internal_exception_restore_handled(vm, restored[0], restored[1], restored[2]);
     }
-    tinypy_value_t *const unsaved[] = {frame->previous_handled_type, frame->previous_handled_value, frame->previous_handled_traceback};
-
-    frame->previous_handled_type = NULL;
-    frame->previous_handled_value = NULL;
-    frame->previous_handled_traceback = NULL;
-    for (size_t index = 0U; index < sizeof(unsaved) / sizeof(unsaved[0]); ++index) {
-        if (unsaved[index] != NULL) {
-            TINYPY_DECREF(unsaved[index]);
-        }
-    }
+    /* As in CPython, f_exc_value and f_exc_traceback assigned without
+       f_exc_type stay with the frame, across a yield too, until it dies or
+       saves the handled exception. */
     if (generator_execution != 0) {
         if (frame->back != NULL) {
             TINYPY_DECREF(frame->back);

@@ -343,6 +343,23 @@ void tinypy_internal_compiler_error_text(tinypy_compile_ctx_t *ctx, tinypy_error
     __tinypy_compiler_report(ctx, error_kind, message, line_number, column_offset, text, text_size, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_compiler_operation_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, tinypy_error_t *error, const char *message, int32_t line_number, int32_t column_offset) {
+    tinypy_error_kind_e reported_kind = error_kind;
+    const char *reported_message = message;
+
+    if (error != NULL) {
+        reported_message = tinypy_error_message(error, NULL);
+        if (tinypy_error_kind(error) == TINYPY_ERROR_MEMORY) {
+            reported_kind = TINYPY_ERROR_MEMORY;
+        }
+    }
+    tinypy_internal_exception_clear_raised(ctx->vm);
+    tinypy_internal_compiler_error(ctx, reported_kind, reported_message, line_number, column_offset, ctx->out_error);
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, int32_t column_offset) {
     char *message = __tinypy_compiler_join_parts(ctx, parts, part_sizes, part_count);
 

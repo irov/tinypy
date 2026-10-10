@@ -181,10 +181,11 @@ static int32_t __tinypy_truth(tinypy_value_t *value, tinypy_bool_t dispatch_spec
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     TINYPY_CLEAR_ERROR(out_error);
     kind = TINYPY_VALUE_KIND(value);
-    /* Every classic instance shares the builtin instance type, so its
-       __nonzero__ and __len__ live in the class and must still be consulted. */
+    /* Every classic instance shares the builtin instance type, which has no
+       slots: like instance_nonzero, the attribute lookups after them try
+       __nonzero__ and then __len__, reaching __getattr__ for each. */
     exact_builtin = kind != TINYPY_VALUE_OLD_INSTANCE && (size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && value->type == &vm->types[kind] ? TINYPY_TRUE : TINYPY_FALSE;
-    if (exact_builtin != 0) {
+    if (exact_builtin != 0 || kind == TINYPY_VALUE_OLD_INSTANCE) {
         goto builtin_truth;
     }
     if (dispatch_special != 0 && __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(NONZERO)) != 0) {
@@ -250,10 +251,12 @@ builtin_truth:
                                            : (value->type->sequence_slots != NULL ? value->type->sequence_slots->length : NULL);
 
     if (length_slot != NULL) {
+        /* A native slot may report its failure through the VM error. */
+        tinypy_value_t *previous_raised = vm->raised_value;
         ptrdiff_t length = length_slot(value, out_error);
 
         if (length < 0) {
-            if (out_error == NULL || *out_error == NULL) {
+            if ((out_error == NULL || *out_error == NULL) && vm->raised_value == previous_raised) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "length slot returned a negative value", out_error);
             }
             return INT32_C(-1);
@@ -535,6 +538,13 @@ static tinypy_bool_t __tinypy_comparison_equal_checked(tinypy_value_t *left, tin
     }
     *out_equal = tinypy_internal_equal_value(left, right, identity_implies_equal);
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The default equality of ==, without the identity shortcut. */
+tinypy_bool_t tinypy_internal_compare_equal_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
+    tinypy_bool_t compared = __tinypy_comparison_equal_checked(left, right, TINYPY_FALSE, out_equal, out_error);
+
+    return compared;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_comparison_dict_characterize(tinypy_value_t *left, tinypy_value_t *right, tinypy_value_t **out_key, tinypy_value_t **out_value, tinypy_error_t **out_error) {

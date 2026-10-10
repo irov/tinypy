@@ -1209,9 +1209,10 @@ static tinypy_bool_t __tinypy_list_sort_items(tinypy_vm_t *vm, tinypy_list_sort_
     return sorted;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyArg_ParseTupleAndKeywords with "|OOi:sort". The comparison and key
-   functions come back owned: the keywords may be the caller's dict, which the
-   reverse flag and the callbacks can clear. */
+/* PyArg_ParseTupleAndKeywords with "|OOi:sort". Each value is held as soon
+   as it is taken and the comparison and key functions come back owned: the
+   keywords may be the caller's dict, which a colliding key's comparison in a
+   later lookup, the reverse flag and the callbacks can clear. */
 static tinypy_bool_t __tinypy_list_sort_arguments(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_value_t **out_callbacks, tinypy_bool_t *out_reverse, tinypy_error_t **out_error) {
     tinypy_value_t *const names[3] = {vm->internal_cmp_key, vm->internal_key_key, vm->internal_reverse_key};
     tinypy_value_t *values[3] = {NULL, NULL, NULL};
@@ -1242,14 +1243,12 @@ static tinypy_bool_t __tinypy_list_sort_arguments(tinypy_vm_t *vm, tinypy_value_
                 };
 
                 tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                return TINYPY_FALSE;
+                goto failed;
             }
             value = keyword_value;
         }
-        values[parameter] = value;
+        values[parameter] = value != NULL ? TINYPY_RET(value) : NULL;
     }
-    out_callbacks[0] = values[0] != NULL ? TINYPY_RET(values[0]) : NULL;
-    out_callbacks[1] = values[1] != NULL ? TINYPY_RET(values[1]) : NULL;
     *out_reverse = TINYPY_FALSE;
     if (values[2] != NULL) {
         int64_t integer;
@@ -1302,12 +1301,17 @@ static tinypy_bool_t __tinypy_list_sort_arguments(tinypy_vm_t *vm, tinypy_value_
             }
         }
     }
+    if (values[2] != NULL) {
+        TINYPY_DECREF(values[2]);
+    }
+    out_callbacks[0] = values[0];
+    out_callbacks[1] = values[1];
     return TINYPY_TRUE;
 
 failed:
-    for (size_t index = 0U; index < 2U; ++index) {
-        if (out_callbacks[index] != NULL) {
-            TINYPY_DECREF(out_callbacks[index]);
+    for (size_t index = 0U; index < 3U; ++index) {
+        if (values[index] != NULL) {
+            TINYPY_DECREF(values[index]);
         }
     }
     return TINYPY_FALSE;

@@ -1218,10 +1218,11 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         }
         tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(instance);
         if (dict_slot != NULL && *dict_slot != NULL) {
-            /* A key comparison may replace the dictionary during the lookup. */
+            /* A key comparison may replace the dictionary during the lookup,
+               whose error PyDict_GetItemString drops. */
             tinypy_value_t *key = vm->internal_message_key;
             tinypy_value_t *dict = TINYPY_RET(*dict_slot);
-            tinypy_value_t *message = tinypy_dict_get_optional(dict, key);
+            tinypy_value_t *message = tinypy_internal_dict_get_optional_suppressed(vm, dict, key);
 
             if (message != NULL) {
                 TINYPY_INCREF(message);
@@ -1624,13 +1625,23 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         tinypy_value_t *key = vm->internal_message_key;
 
         /* A key comparison may replace the dictionary while the message is
-           deleted or stored in it. */
+           deleted or stored in it. BaseException_set_message deletes a
+           message its PyDict_GetItemString finds, which drops the error of
+           a comparison, and keeps the builtin message when the deletion
+           fails. */
         if (value == NULL) {
             if (dict_slot != NULL && *dict_slot != NULL) {
                 tinypy_value_t *dict = TINYPY_RET(*dict_slot);
+                tinypy_bool_t deleted = TINYPY_TRUE;
 
-                (void)tinypy_internal_dict_delete_optional(vm, dict, key);
+                if (tinypy_internal_dict_get_optional_suppressed(vm, dict, key) != NULL) {
+                    tinypy_bool_t found;
+                    deleted = tinypy_internal_dict_delete_optional_checked(vm, dict, key, &found, out_error);
+                }
                 TINYPY_DECREF(dict);
+                if (deleted == 0) {
+                    return TINYPY_FALSE;
+                }
             }
             __tinypy_internal_c_descriptor_replace(&payload->message, NULL);
             return TINYPY_TRUE;

@@ -221,23 +221,6 @@ static tinypy_value_t *__tinypy_set_normalize(tinypy_value_t *iterable, tinypy_e
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_set_is_subset(const tinypy_value_t *left, const tinypy_value_t *right) {
-    tinypy_value_t *left_dict = TINYPY_SET_OBJECT((tinypy_value_t *)left)->dict;
-    tinypy_value_t *right_dict = TINYPY_SET_OBJECT((tinypy_value_t *)right)->dict;
-
-    if (TINYPY_DICT_SIZE(left_dict) > TINYPY_DICT_SIZE(right_dict)) {
-        return TINYPY_FALSE;
-    }
-    tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(left_dict);
-    tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(left_dict);
-    for (; iterator != iterator_end; ++iterator) {
-        if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator) && tinypy_dict_contains(right_dict, iterator->key) == 0) {
-            return TINYPY_FALSE;
-        }
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 /* set_issubset */
 tinypy_bool_t tinypy_internal_set_is_subset_checked(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t *out_subset, tinypy_error_t **out_error) {
     tinypy_value_t *left_dict = TINYPY_SET_OBJECT((tinypy_value_t *)left)->dict;
@@ -660,17 +643,6 @@ tinypy_bool_t tinypy_set_discard(tinypy_value_t *set, tinypy_value_t *item, tiny
 void tinypy_set_clear(tinypy_value_t *set) {
     tinypy_dict_clear(TINYPY_SET_OBJECT(set)->dict);
     TINYPY_SET_OBJECT(set)->hash_computed = 0;
-}
-//////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_set_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
-    tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
-    tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
-
-    if ((left_kind != TINYPY_VALUE_SET && left_kind != TINYPY_VALUE_FROZENSET) || (right_kind != TINYPY_VALUE_SET && right_kind != TINYPY_VALUE_FROZENSET)) {
-        return TINYPY_FALSE;
-    }
-    tinypy_bool_t return_value_1 = tinypy_set_size(left) == tinypy_set_size(right) && __tinypy_set_is_subset(left, right) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-    return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
 /* set_richcompare: frozensets whose hashes are known and differ are unequal

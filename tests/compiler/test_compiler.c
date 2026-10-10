@@ -16,10 +16,13 @@ typedef struct test_allocator_state_t {
     size_t bytes;
 } test_allocator_state_t;
 
-/* The first request of at least fail_size bytes fails; zero fails none. */
+/* The request numbered fail_index among those of fail_size to fail_maximum
+   bytes fails; a zero fail_size fails none. */
 typedef struct test_failing_allocator_state_t {
     test_allocator_state_t accounting;
     size_t fail_size;
+    size_t fail_maximum;
+    size_t fail_index;
 } test_failing_allocator_state_t;
 
 typedef struct test_source_host_t {
@@ -761,9 +764,12 @@ static int32_t __test_marshal_constant_round_trip(void) {
 static void *__test_failing_allocate(void *user_data, size_t size, size_t alignment) {
     test_failing_allocator_state_t *state = (test_failing_allocator_state_t *)user_data;
 
-    if (state->fail_size != 0U && size >= state->fail_size) {
-        state->fail_size = 0U;
-        return NULL;
+    if (state->fail_size != 0U && size >= state->fail_size && size <= state->fail_maximum) {
+        if (state->fail_index == 0U) {
+            state->fail_size = 0U;
+            return NULL;
+        }
+        state->fail_index -= 1U;
     }
     void *memory = __test_allocate(&state->accounting, size, alignment);
     return memory;
@@ -782,24 +788,14 @@ static void __test_failing_deallocate(void *user_data, void *memory, size_t size
     __test_deallocate(&state->accounting, memory, size, alignment);
 }
 //////////////////////////////////////////////////////////////////////////
-/* A host allocator that cannot provide the working memory of the compiler
-   fails the compilation with MemoryError and leaves the VM usable. */
-static int32_t __test_compiler_memory_failure(void) {
-    static const size_t source_size = 65536U;
-    test_failing_allocator_state_t state = {{0U, 0U}, 0U};
+static tinypy_vm_t *__test_failing_vm_create(test_failing_allocator_state_t *state, size_t max_heap_bytes) {
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
-    tinypy_compile_options_t options;
-    tinypy_error_t *error = NULL;
-    char *source = (char *)malloc(source_size);
 
-    assert(source != NULL);
-    (void)memset(source, '#', source_size - 1U);
-    source[source_size - 1U] = '\n';
     (void)memset(&allocator, 0, sizeof(allocator));
     allocator.abi_version = TINYPY_ABI_VERSION;
     allocator.struct_size = (uint32_t)sizeof(allocator);
-    allocator.user_data = &state;
+    allocator.user_data = state;
     allocator.allocate = &__test_failing_allocate;
     allocator.reallocate = &__test_failing_reallocate;
     allocator.deallocate = &__test_failing_deallocate;
@@ -807,7 +803,24 @@ static int32_t __test_compiler_memory_failure(void) {
     config.abi_version = TINYPY_ABI_VERSION;
     config.struct_size = (uint32_t)sizeof(config);
     config.allocator = &allocator;
+    config.max_heap_bytes = max_heap_bytes;
     tinypy_vm_t *vm = tinypy_vm_create(&config);
+    return vm;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A host allocator that cannot provide the working memory of the compiler
+   fails the compilation with MemoryError and leaves the VM usable. */
+static int32_t __test_compiler_memory_failure(void) {
+    static const size_t source_size = 65536U;
+    test_failing_allocator_state_t state = {{0U, 0U}, 0U, SIZE_MAX, 0U};
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    char *source = (char *)malloc(source_size);
+
+    assert(source != NULL);
+    (void)memset(source, '#', source_size - 1U);
+    source[source_size - 1U] = '\n';
+    tinypy_vm_t *vm = __test_failing_vm_create(&state, 0U);
     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
     state.fail_size = source_size;
     tinypy_value_t *code = tinypy_compile_source(vm, source, source_size, "large.py", 8U, &options, &error);
@@ -821,6 +834,54 @@ static int32_t __test_compiler_memory_failure(void) {
     free(source);
     tinypy_vm_destroy(vm);
     assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A compiler arena block that the host cannot provide fails the compilation
+   with MemoryError wherever its request falls, among them the statements of
+   an elif chain and of a try statement with a finally clause and the tuple
+   of a parameter list, and leaves the VM usable. An arena block holds 4096
+   bytes after a header of three words, a size no other request of this
+   source has. */
+static int32_t __test_compiler_arena_block_failure(void) {
+    static const size_t block_size = 4096U + 2U * sizeof(size_t) + sizeof(void *);
+    static const size_t source_capacity = 4096U;
+    char *source = (char *)malloc(source_capacity);
+    size_t size;
+    size_t index;
+    uint32_t branch;
+
+    assert(source != NULL);
+    size = (size_t)snprintf(source, source_capacity, "def f(x, (a, (b, c))):\n    try:\n        pass\n    except E:\n        pass\n    finally:\n        pass\n    if x == 0:\n        return 0\n");
+    for (branch = 1U; branch < 60U; ++branch) {
+        size += (size_t)snprintf(source + size, source_capacity - size, "    elif x == %u:\n        return %u\n", (unsigned int)branch, (unsigned int)branch);
+    }
+    size += (size_t)snprintf(source + size, source_capacity - size, "    else:\n        return -1\n");
+    /* A heap budget keeps the VM from caching arena blocks between
+       compilations, so every block is requested from the host. */
+    test_failing_allocator_state_t state = {{0U, 0U}, 0U, block_size, 0U};
+    tinypy_vm_t *vm = __test_failing_vm_create(&state, (size_t)1U << 30U);
+    tinypy_compile_options_t options;
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    for (index = 0U;; ++index) {
+        tinypy_error_t *error = NULL;
+
+        state.fail_size = block_size;
+        state.fail_index = index;
+        tinypy_value_t *code = tinypy_compile_source(vm, source, size, "blocks.py", 9U, &options, &error);
+        if (state.fail_size != 0U) {
+            assert(code != NULL && error == NULL);
+            tinypy_release(code);
+            break;
+        }
+        assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+    }
+    tinypy_vm_destroy(vm);
+    assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
+    assert(index > 1U);
+    free(source);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2429,6 +2490,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_compiler_memory_failure() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_compiler_arena_block_failure() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_tab_size_comment() != 0) {

@@ -158,6 +158,22 @@ keywords["start"] = ClearingStart()
 assert list(apply(enumerate, (), keywords)) == [(5, "a"), (6, "b")]
 
 
+# The key comparison of the start lookup clears the keywords, whose sequence
+# enumerate holds from its own lookup.
+class CollidingStart(object):
+    def __hash__(self):
+        return hash("start")
+
+    def __eq__(self, other):
+        keywords.clear()
+        return False
+
+
+keywords["sequence"] = [10, 20]
+keywords[CollidingStart()] = 0
+assert list(apply(enumerate, (), keywords)) == [(0, 10), (1, 20)]
+
+
 class ClearingFlags(object):
     def __int__(self):
         keywords.clear()

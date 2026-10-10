@@ -311,13 +311,7 @@ static tinypy_bool_t __tinypy_meta_eval_integer(tinypy_meta_context_t *meta, tin
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_meta_eval_error(tinypy_meta_context_t *meta, tinypy_error_t *error, tinypy_ast_expression_t expression) {
-    const char *message = error != NULL ? tinypy_error_message(error, NULL) : "meta expression evaluation failed";
-
-    tinypy_internal_exception_clear_raised(meta->compile->vm);
-    (void)__tinypy_meta_fail(meta, message, expression->lineno, expression->col_offset);
-    if (error != NULL) {
-        tinypy_error_release(error);
-    }
+    tinypy_internal_compiler_operation_error(meta->compile, TINYPY_ERROR_META, error, "meta expression evaluation failed", expression->lineno, expression->col_offset + 1);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////

@@ -43,29 +43,29 @@ void tinypy_cell_set(tinypy_value_t *cell_value, tinypy_value_t *content) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* The contents are held across both comparisons, which can run code that
+   rebinds either cell. */
 static tinypy_bool_t __tinypy_cell_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
     tinypy_value_t *left_content = TINYPY_CELL_OBJECT(left)->content;
     tinypy_value_t *right_content = TINYPY_CELL_OBJECT(right)->content;
-    int32_t equal;
-    int32_t less;
+    int32_t less = INT32_C(0);
 
     if (left_content == NULL || right_content == NULL) {
         *out_order = left_content == right_content ? INT32_C(0) : (left_content == NULL ? -INT32_C(1) : INT32_C(1));
         return TINYPY_TRUE;
     }
-    equal = tinypy_compare_bool(left_content, right_content, TINYPY_COMPARE_EQUAL, out_error);
-    if (equal < 0) {
+    TINYPY_INCREF(left_content);
+    TINYPY_INCREF(right_content);
+    int32_t equal = tinypy_compare_bool(left_content, right_content, TINYPY_COMPARE_EQUAL, out_error);
+    if (equal == 0) {
+        less = tinypy_compare_bool(left_content, right_content, TINYPY_COMPARE_LESS, out_error);
+    }
+    TINYPY_DECREF(right_content);
+    TINYPY_DECREF(left_content);
+    if (equal < 0 || less < 0) {
         return TINYPY_FALSE;
     }
-    if (equal != 0) {
-        *out_order = INT32_C(0);
-        return TINYPY_TRUE;
-    }
-    less = tinypy_compare_bool(left_content, right_content, TINYPY_COMPARE_LESS, out_error);
-    if (less < 0) {
-        return TINYPY_FALSE;
-    }
-    *out_order = less != 0 ? -INT32_C(1) : INT32_C(1);
+    *out_order = equal != 0 ? INT32_C(0) : (less != 0 ? -INT32_C(1) : INT32_C(1));
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////

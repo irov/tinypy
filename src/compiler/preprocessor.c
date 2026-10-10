@@ -768,13 +768,7 @@ static tinypy_bool_t __tinypy_preprocessor_expression_pure(tinypy_ast_expression
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_preprocessor_operation_error(tinypy_compile_ctx_t *ctx, tinypy_error_t *error, int32_t line, int32_t column) {
-    const char *message = error != NULL ? tinypy_error_message(error, NULL) : "pure expression evaluation failed";
-
-    tinypy_internal_exception_clear_raised(ctx->vm);
-    tinypy_internal_compiler_error(ctx, TINYPY_ERROR_PREPROCESSOR, message, line, column + 1, ctx->out_error);
-    if (error != NULL) {
-        tinypy_error_release(error);
-    }
+    tinypy_internal_compiler_operation_error(ctx, TINYPY_ERROR_PREPROCESSOR, error, "pure expression evaluation failed", line, column + 1);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////

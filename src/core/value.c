@@ -54,12 +54,37 @@ tinypy_value_t *tinypy_internal_object_allocate_checked(tinypy_vm_t *vm, tinypy_
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The room an in-place concatenation reserves for byte_count bytes: eight
+   classes per power of two, so that a string grown by repeated concatenation
+   is copied a total proportional to its final size, whatever the host
+   reallocate does. */
+static size_t __tinypy_internal_string_capacity(size_t byte_count) {
+    size_t mask = byte_count - 1U;
+
+    mask |= mask >> 1U;
+    mask |= mask >> 2U;
+    mask |= mask >> 4U;
+    mask |= mask >> 8U;
+    mask |= mask >> 16U;
+    mask |= mask >> 16U >> 16U;
+    size_t granule = (mask >> 4U) + 1U;
+    if (byte_count > SIZE_MAX - (granule - 1U)) {
+        return byte_count;
+    }
+    size_t capacity = (byte_count + granule - 1U) & ~(granule - 1U);
+    return capacity;
+}
+//////////////////////////////////////////////////////////////////////////
 size_t tinypy_internal_variable_builtin_payload_size(const tinypy_value_t *value) {
     size_t result;
 
     switch (TINYPY_VALUE_KIND(value)) {
     case TINYPY_VALUE_STRING:
-        result = offsetof(tinypy_string_object_t, bytes) + TINYPY_SIZED_SIZE(value) + 1U;
+        result = TINYPY_SIZED_SIZE(value) + 1U;
+        if (TINYPY_STRING_OBJECT(value)->over_allocated != 0) {
+            result = __tinypy_internal_string_capacity(result);
+        }
+        result += offsetof(tinypy_string_object_t, bytes);
         break;
     case TINYPY_VALUE_UNICODE:
         result = offsetof(tinypy_unicode_object_t, utf8) + TINYPY_UNICODE_OBJECT(value)->byte_size + 1U;
@@ -243,21 +268,21 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     tinypy_value_t *result;
     tinypy_error_t *error = NULL;
 
-    if (vm->type_lookup_cache_epoch != 0U && value->type->finalizer_epoch == vm->type_lookup_cache_epoch && value->type->has_finalizer == 0 && value->type->has_classic_mro == 0 && value->type->has_custom_mro == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_old_instance_has_special_key(value, vm->internal_special_del_key) == 0)) {
+    if (value->type->version != 0U && value->type->finalizer_version == value->type->version && value->type->has_finalizer == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_old_instance_has_special_key(value, vm->internal_special_del_key) == 0)) {
         return TINYPY_FALSE;
     }
     value->ref = 1;
     tinypy_internal_exception_preserve_begin(vm, &exception_state);
     tinypy_type_t *type = value->type;
-    uint64_t epoch = vm->type_lookup_cache_epoch;
+    uint64_t version = __tinypy_internal_type_version(type);
     /* The lookup may run key comparisons that release other instances of the
        type or reassign the class, so the type is held and the memo published
-       only after the lookup, and only when it left every type unchanged. */
+       only after the lookup, and only when it left the type unchanged. */
     TINYPY_INCREF(&type->base.base);
     tinypy_bool_t has_finalizer = tinypy_internal_type_lookup_key(vm, type, vm->internal_special_del_key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     type->has_finalizer = has_finalizer;
-    if (vm->type_lookup_cache_epoch == epoch) {
-        type->finalizer_epoch = epoch;
+    if (type->version == version) {
+        type->finalizer_version = version;
     }
     TINYPY_DECREF(&type->base.base);
     if (has_finalizer == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE
@@ -320,7 +345,6 @@ static void __tinypy_internal_value_release_contents(tinypy_value_t *value) {
         && TINYPY_NATIVE_FUNCTION_OBJECT(value)->finalize == NULL;
     vm->release_depth += 1U;
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE) {
-        tinypy_internal_type_lookup_cache_invalidate(vm);
         tinypy_internal_type_detach((tinypy_type_t *)value);
     }
     if (type != NULL && type->release_references != NULL) {
@@ -357,7 +381,7 @@ static tinypy_bool_t __tinypy_internal_value_run_finalizers(tinypy_value_t *valu
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GENERATOR && __tinypy_internal_value_finalize_generator(value) != 0) {
         return TINYPY_TRUE;
     }
-    if (vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_epoch != vm->type_lookup_cache_epoch || vm->type_lookup_cache_epoch == 0U || type->has_finalizer != 0 || type->has_classic_mro != 0 || type->has_custom_mro != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE)) {
+    if (vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_version != type->version || type->version == 0U || type->has_finalizer != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE)) {
         if (__tinypy_internal_value_finalize(value) != 0) {
             return TINYPY_TRUE;
         }
@@ -494,39 +518,43 @@ static tinypy_value_t *__tinypy_internal_text_allocate_uninitialized(tinypy_vm_t
 //////////////////////////////////////////////////////////////////////////
 /* Grows a byte string in place, as string_concatenate does when the left
    operand is about to be rebound: the caller holds the only reference, so
-   the object may move. NULL leaves the string untouched. */
+   the object may move. The string keeps the room its size class leaves for
+   the next concatenation. NULL leaves the string untouched. */
 tinypy_value_t *tinypy_internal_string_concat_in_place(tinypy_vm_t *vm, tinypy_value_t *left, const uint8_t *bytes, size_t size) {
     size_t old_size = TINYPY_SIZED_SIZE(left);
-    size_t old_allocation = __tinypy_internal_text_allocation_size(TINYPY_VALUE_STRING, old_size);
-    size_t new_allocation;
-    tinypy_value_t *grown;
+    size_t old_allocation = tinypy_internal_variable_builtin_payload_size(left);
+    tinypy_value_t *grown = left;
 
-    if (size > SIZE_MAX - old_size) {
+    if (size > SIZE_MAX - old_size - 1U) {
         return NULL;
     }
-    new_allocation = __tinypy_internal_text_allocation_size(TINYPY_VALUE_STRING, old_size + size);
-    if (new_allocation == 0U) {
+    size_t capacity = __tinypy_internal_string_capacity(old_size + size + 1U);
+    if (capacity > SIZE_MAX - offsetof(tinypy_string_object_t, bytes)) {
         return NULL;
     }
+    size_t new_allocation = offsetof(tinypy_string_object_t, bytes) + capacity;
+    if (new_allocation != old_allocation) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    __tinypy_internal_cycle_diagnostics_value_unregister(vm, left);
+        __tinypy_internal_cycle_diagnostics_value_unregister(vm, left);
 #endif
-    grown = (tinypy_value_t *)tinypy_internal_vm_reallocate_checked(vm, left, old_allocation, new_allocation, NULL);
-    if (grown == NULL) {
+        grown = (tinypy_value_t *)tinypy_internal_vm_reallocate_checked(vm, left, old_allocation, new_allocation, NULL);
+        if (grown == NULL) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
-        __tinypy_internal_cycle_diagnostics_value_register(vm, left);
+            __tinypy_internal_cycle_diagnostics_value_register(vm, left);
 #endif
-        tinypy_internal_exception_clear_raised(vm);
-        return NULL;
+            tinypy_internal_exception_clear_raised(vm);
+            return NULL;
+        }
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_value_register(vm, grown);
+#endif
     }
-#if defined(TINYPY_CYCLE_DIAGNOSTICS)
-    __tinypy_internal_cycle_diagnostics_value_register(vm, grown);
-#endif
     (void)memcpy(TINYPY_STRING_OBJECT(grown)->bytes + old_size, bytes, size);
     TINYPY_STRING_OBJECT(grown)->bytes[old_size + size] = 0U;
     TINYPY_SIZED_SIZE(grown) = old_size + size;
     TINYPY_STRING_OBJECT(grown)->hash_computed = INT32_C(0);
     TINYPY_STRING_OBJECT(grown)->interned = INT32_C(0);
+    TINYPY_STRING_OBJECT(grown)->over_allocated = TINYPY_TRUE;
     TINYPY_STRING_OBJECT(grown)->internal_metadata = NULL;
     return grown;
 }

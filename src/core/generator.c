@@ -263,7 +263,8 @@ static tinypy_value_t *__tinypy_generator_send_method(tinypy_value_t *function, 
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_generator_throw_constructor_error(tinypy_value_t *generator, tinypy_error_t **out_error) {
+/* Throws the pending exception into the generator. */
+static tinypy_value_t *__tinypy_generator_throw_raised(tinypy_value_t *generator, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(generator);
     tinypy_internal_exception_state_t state;
     tinypy_value_t *result;
@@ -314,70 +315,16 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
             return NULL;
         }
     }
-    if (TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)exception_argument, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0) {
-        tinypy_bool_t condition_2 = count >= 3U;
-        if (condition_2 != 0) {
-            tinypy_value_t *item = TINYPY_TUPLE_GET(args, 2U);
-            condition_2 = tinypy_type_is_subtype(item->type, (tinypy_type_t *)exception_argument) != 0;
-        }
-        if (condition_2) {
-            exception = TINYPY_RET(TINYPY_TUPLE_GET(args, 2U));
-        }
-        else {
-            tinypy_value_t *exception_args;
-
-            if (count >= 3U) {
-                tinypy_value_t *argument = TINYPY_TUPLE_GET(args, 2U);
-                if (TINYPY_VALUE_KIND(argument) == TINYPY_VALUE_TUPLE) {
-                    exception_args = TINYPY_RET(argument);
-                }
-                else if (TINYPY_VALUE_KIND(argument) == TINYPY_VALUE_NONE) {
-                    exception_args = TINYPY_RET_EMPTY_TUPLE(vm);
-                }
-                else {
-                    exception_args = tinypy_tuple_from_items(vm, &argument, 1U);
-                }
-            }
-            else {
-                exception_args = TINYPY_RET_EMPTY_TUPLE(vm);
-            }
-            exception = tinypy_call(exception_argument, exception_args, NULL, out_error);
-            TINYPY_DECREF(exception_args);
-            if (exception == NULL) {
-                tinypy_value_t *failure_result = __tinypy_generator_throw_constructor_error(generator, out_error);
-
-                return failure_result;
-            }
-        }
-    }
-    else if (TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_CLASS) {
+    if (TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_CLASS || (TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)exception_argument, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0)) {
         /* Classic classes are legal exceptions in Python 2, and contextlib
-           relies on throwing them into a generator. */
-        tinypy_value_t *item = count >= 3U ? TINYPY_TUPLE_GET(args, 2U) : NULL;
+           relies on throwing them into a generator. A failed normalization
+           throws the error raised instead. */
+        tinypy_value_t *value = count >= 3U ? TINYPY_TUPLE_GET(args, 2U) : &vm->none_object.base;
 
-        if (item != NULL && TINYPY_VALUE_KIND(item) == TINYPY_VALUE_OLD_INSTANCE && tinypy_class_is_subclass(tinypy_old_instance_class(item), exception_argument) != 0) {
-            exception = TINYPY_RET(item);
-        }
-        else {
-            tinypy_value_t *exception_args;
-
-            if (item != NULL && TINYPY_VALUE_KIND(item) == TINYPY_VALUE_TUPLE) {
-                exception_args = TINYPY_RET(item);
-            }
-            else {
-                exception_args = item != NULL && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_NONE
-                                     ? tinypy_tuple_from_items(vm, &item, 1U)
-                                     : TINYPY_RET_EMPTY_TUPLE(vm);
-            }
-
-            exception = tinypy_call(exception_argument, exception_args, NULL, out_error);
-            TINYPY_DECREF(exception_args);
-            if (exception == NULL) {
-                tinypy_value_t *failure_result = __tinypy_generator_throw_constructor_error(generator, out_error);
-
-                return failure_result;
-            }
-        }
+        tinypy_internal_exception_set_raised_type(vm, exception_argument, value, traceback);
+        (void)tinypy_internal_exception_normalize_raised(vm, out_error);
+        tinypy_value_t *raised_result = __tinypy_generator_throw_raised(generator, out_error);
+        return raised_result;
     }
     else if (tinypy_type_is_subtype(exception_argument->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) != 0 || TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_OLD_INSTANCE) {
         if (count >= 3U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 2U)) != TINYPY_VALUE_NONE) {
@@ -394,11 +341,7 @@ static tinypy_value_t *__tinypy_generator_throw_method(tinypy_value_t *function,
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
         return NULL;
     }
-    tinypy_value_t *exception_type = NULL;
-    if (TINYPY_VALUE_KIND(exception_argument) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype(exception->type, (tinypy_type_t *)exception_argument) == 0) {
-        exception_type = exception_argument;
-    }
-    result = __tinypy_generator_throw(generator, exception_type, exception, traceback, out_error);
+    result = __tinypy_generator_throw(generator, NULL, exception, traceback, out_error);
     TINYPY_DECREF(exception);
     if (result != NULL || vm->raised_value != NULL) {
         return result;

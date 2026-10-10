@@ -1799,5 +1799,235 @@ class ReviewRegressions(unittest.TestCase):
         self.assertIs(instance.__class__, Other)
 
 
+    def test_exception_foreign_slot_wrappers_rejected(self):
+        cases = ((UnicodeDecodeError, ("utf-8", "abc", 0, 1, "bad")), (SystemExit, (5,)), (EnvironmentError, (2, "missing", "name")), (SyntaxError, ("message", ("name", 1, 2, "text"))))
+        for owner, arguments in cases:
+            class Foreign(Exception):
+                __init__ = owner.__init__
+            try:
+                Foreign(*arguments)
+            except TypeError as error:
+                self.assertEqual(str(error), "descriptor '__init__' for 'exceptions.%s' objects doesn't apply to 'Foreign' object" % owner.__name__)
+            else:
+                self.fail("a foreign __init__ initialised %s fields" % owner.__name__)
+            class Own(owner):
+                __init__ = owner.__init__
+            self.assertEqual(Own(*arguments).args[0], arguments[0])
+        class ForeignNew(Exception):
+            __new__ = staticmethod(UnicodeDecodeError.__new__)
+        self.assertRaises(TypeError, ForeignNew, "value")
+        class BaseNew(UnicodeDecodeError):
+            __new__ = staticmethod(Exception.__new__)
+        self.assertEqual(BaseNew("utf-8", "abc", 0, 1, "bad").end, 1)
+
+    def test_exception_message_probe_drops_comparison_errors(self):
+        armed = [False]
+        class Collide(object):
+            def __hash__(self):
+                return hash("message")
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    raise ValueError("compared")
+                return False
+        error = Exception("text")
+        error.__dict__[Collide()] = 1
+        armed[0] = True
+        self.assertEqual(error.message, "text")
+        self.assertRaises(AttributeError, getattr, None, "missing")
+        armed[0] = True
+        self.assertRaises(ValueError, setattr, error, "message", "stored")
+        armed[0] = True
+        del error.message
+        self.assertRaises(AttributeError, getattr, None, "missing")
+        self.assertRaises(AttributeError, getattr, error, "message")
+
+    def test_exception_normalization_asks_subclass_check(self):
+        calls = []
+        class Meta(type):
+            def __subclasscheck__(cls, other):
+                calls.append(other.__name__)
+                if other.__name__ == "Failing":
+                    raise RuntimeError("check failed")
+                return True
+        class Match(Exception):
+            __metaclass__ = Meta
+        class Failing(Exception):
+            pass
+        try:
+            raise Match, ValueError(1)
+        except Exception:
+            kind, value = sys.exc_info()[:2]
+        self.assertIs(kind, ValueError)
+        self.assertEqual(value.args, (1,))
+        self.assertEqual(calls, ["ValueError"])
+        try:
+            raise Match, Failing(2)
+        except Exception:
+            kind, value = sys.exc_info()[:2]
+        self.assertIs(kind, Failing)
+        self.assertEqual(value.args, (2,))
+        def produce():
+            try:
+                yield 1
+            except BaseException:
+                yield sys.exc_info()[:2]
+        generator = produce()
+        next(generator)
+        kind, value = generator.throw(Match, KeyError(3))
+        self.assertIs(kind, KeyError)
+        self.assertEqual(value.args, (3,))
+        class Classic:
+            pass
+        try:
+            raise Classic
+        except Match:
+            caught = "Match"
+        except Classic:
+            caught = "Classic"
+        self.assertEqual(caught, "Match")
+        class ClassicBase:
+            pass
+        class Mixed(ClassicBase, Exception):
+            pass
+        try:
+            raise Mixed()
+        except ClassicBase:
+            caught = "ClassicBase"
+        except Mixed:
+            caught = "Mixed"
+        self.assertEqual(caught, "ClassicBase")
+
+    def test_exception_normalization_failure_traceback(self):
+        class Failing(Exception):
+            def __init__(self, *arguments):
+                raise KeyError("constructor")
+        def raise_class():
+            raise Failing, "value"
+        def names():
+            frame_names = []
+            traceback = sys.exc_info()[2]
+            while traceback is not None:
+                frame_names.append(traceback.tb_frame.f_code.co_name)
+                traceback = traceback.tb_next
+            return frame_names
+        try:
+            raise_class()
+        except KeyError:
+            self.assertEqual(names(), ["test_exception_normalization_failure_traceback", "__init__"])
+        class Unexpected(Exception):
+            def __init__(self):
+                pass
+        def raise_arguments():
+            raise Unexpected, "value"
+        try:
+            raise_arguments()
+        except TypeError:
+            self.assertEqual(names(), ["test_exception_normalization_failure_traceback", "raise_arguments"])
+
+    def test_classic_lookups_drop_comparison_errors(self):
+        class Collide(str):
+            def __hash__(self):
+                return hash(self.name)
+            def __eq__(self, other):
+                raise ValueError("compared")
+        def colliding(name):
+            key = Collide(name + "-key")
+            key.name = name
+            return key
+        class Base:
+            value = "base"
+        class Derived(Base):
+            pass
+        Derived.__dict__[colliding("value")] = 1
+        instance = Derived()
+        instance.__dict__[colliding("value")] = 1
+        self.assertEqual(instance.value, "base")
+        self.assertRaises(AttributeError, getattr, None, "missing")
+        self.assertEqual(Derived.value, "base")
+        self.assertRaises(AttributeError, getattr, None, "missing")
+        self.assertTrue(hasattr(instance, "value"))
+        self.assertEqual(getattr(instance, "other", "default"), "default")
+        class Bare:
+            pass
+        Bare.__dict__ = {colliding("__module__"): 1}
+        self.assertEqual(str(Bare), "Bare")
+        self.assertEqual(str(Bare), "Bare")
+        self.assertTrue(repr(Bare()).startswith("<?.Bare instance at "))
+        self.assertRaises(AttributeError, getattr, None, "missing")
+
+    def test_classic_lookup_after_replaced_dict(self):
+        calls = []
+        class Replace(object):
+            def __hash__(self):
+                return hash("attribute")
+            def __eq__(self, other):
+                calls.append(other)
+                if len(calls) < 50:
+                    Replaced.__dict__ = {Replace(): 1}
+                return False
+        class Replaced:
+            pass
+        Replaced.__dict__ = {Replace(): 1}
+        self.assertEqual(getattr(Replaced(), "attribute", "missing"), "missing")
+        self.assertEqual(getattr(Replaced, "attribute", "missing"), "missing")
+        self.assertEqual(calls, ["attribute", "attribute"])
+
+    def test_handled_exception_publication_drops_errors(self):
+        armed = [False]
+        class Collide(object):
+            def __hash__(self):
+                return hash("exc_type")
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    raise RuntimeError("compared")
+                return False
+        saved = dict((name, sys.__dict__.pop(name)) for name in ("exc_type", "exc_value", "exc_traceback") if name in sys.__dict__)
+        key = Collide()
+        sys.__dict__[key] = 1
+        try:
+            armed[0] = True
+            def handle():
+                try:
+                    raise ValueError("handled")
+                except ValueError:
+                    return sys.exc_info()[0]
+            self.assertIs(handle(), ValueError)
+            self.assertEqual(armed, [False])
+            self.assertRaises(AttributeError, getattr, None, "missing")
+        finally:
+            del sys.__dict__[key]
+            sys.__dict__.update(saved)
+
+
+    def test_classic_binding_uses_descriptor_subclass_get(self):
+        calls = []
+        class Static(staticmethod):
+            def __get__(self, instance, owner):
+                calls.append(("static", instance is not None, owner.__name__))
+                return "static"
+        class Class(classmethod):
+            def __get__(self, instance, owner):
+                calls.append(("class", instance is not None, owner.__name__))
+                return "class"
+        class PlainStatic(staticmethod):
+            pass
+        class PlainClass(classmethod):
+            pass
+        def function(*arguments):
+            return len(arguments)
+        class Classic:
+            static = Static(function)
+            klass = Class(function)
+            plain_static = PlainStatic(function)
+            plain_class = PlainClass(function)
+        instance = Classic()
+        self.assertEqual((instance.static, Classic.static, instance.klass, Classic.klass), ("static", "static", "class", "class"))
+        self.assertEqual(calls, [("static", True, "Classic"), ("static", False, "Classic"), ("class", True, "Classic"), ("class", False, "Classic")])
+        self.assertEqual((instance.plain_static(), Classic.plain_static(), instance.plain_class(), Classic.plain_class()), (0, 0, 1, 1))
+        self.assertIs(Classic.plain_class.im_self, Classic)
+
+
 if __name__ == "__main__":
     unittest.main()

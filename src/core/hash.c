@@ -1005,6 +1005,9 @@ static tinypy_bool_t __tinypy_internal_sequence_equal(const tinypy_value_t *left
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Structural equality that runs no code: values whose comparison can call
+   Python, such as dicts and sets, which look their keys up, are equal only
+   to themselves. */
 tinypy_bool_t tinypy_internal_equal_value(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t identity_implies_equal) {
     if (left == right && identity_implies_equal) {
         return TINYPY_TRUE;
@@ -1024,14 +1027,6 @@ tinypy_bool_t tinypy_internal_equal_value(const tinypy_value_t *left, const tiny
     if ((TINYPY_VALUE_KIND(left) == TINYPY_VALUE_TUPLE || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_LIST) && (TINYPY_VALUE_KIND(right) == TINYPY_VALUE_TUPLE || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_LIST)) {
         tinypy_bool_t return_value_4 = __tinypy_internal_sequence_equal(left, right);
         return return_value_4;
-    }
-    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_DICT && TINYPY_VALUE_KIND(right) == TINYPY_VALUE_DICT) {
-        tinypy_bool_t return_value_5 = tinypy_internal_dict_equal(left, right);
-        return return_value_5;
-    }
-    if ((TINYPY_VALUE_KIND(left) == TINYPY_VALUE_SET || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_FROZENSET) && (TINYPY_VALUE_KIND(right) == TINYPY_VALUE_SET || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_FROZENSET)) {
-        tinypy_bool_t return_value_6 = tinypy_internal_set_equal(left, right);
-        return return_value_6;
     }
     if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_WEAKREF && TINYPY_VALUE_KIND(right) == TINYPY_VALUE_WEAKREF) {
         tinypy_value_t *left_object = TINYPY_WEAKREF_OBJECT((tinypy_value_t *)left)->object;
@@ -1058,8 +1053,13 @@ tinypy_hash_t tinypy_hash(const tinypy_value_t *value) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The checked comparison holds the items and entries it compares while
+   their comparisons run code that can change the containers. */
 tinypy_bool_t tinypy_equal(const tinypy_value_t *left, const tinypy_value_t *right) {
+    tinypy_bool_t equal;
 
-    tinypy_bool_t return_value_1 = tinypy_internal_equal_value(left, right, 0);
-    return return_value_1;
+    if (tinypy_internal_compare_equal_checked((tinypy_value_t *)left, (tinypy_value_t *)right, &equal, NULL) == 0) {
+        return TINYPY_FALSE;
+    }
+    return equal;
 }

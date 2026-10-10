@@ -150,11 +150,16 @@ Unicode ключи сохраняются. Traversal для диагностик
 исправляется в месте утечки ссылки; для поиска таких мест предназначены opt-in
 cycle diagnostics.
 
-`tinypy_vm_destroy` сначала вызывает финализаторы native functions и native
-instances, достижимых из VM, пока все значения живы; проход повторяется, пока
-финализаторы делают достижимыми новые native values, и только затем
+`tinypy_vm_destroy` сначала вызывает финализаторы native values, достижимых из
+VM, пока все значения живы: сначала native instances, затем native functions,
+ведь финализатор instance ещё может вызвать method, чей финализатор
+освобождает user data вызова. Если финализаторы создают новые native values с
+финализаторами, проход повторяется для них, всего не более 8 раз; значения,
+созданные последним проходом, освобождаются без финализаторов. Только затем
 освобождается память достижимых объектов, без вызова финализаторов.
-Финализатор вызывается ровно один раз.
+Финализатор вызывается ровно один раз; native function, чей финализатор уже
+выполнен, при вызове даёт RuntimeError, а bound method читает user data своего
+descriptor.
 
 Модуль `sys` принадлежит VM через собственную ссылку: `sys.stdout`,
 `sys.displayhook` и `sys.exc_*` читаются и пишутся напрямую в его словарь, а
@@ -232,12 +237,16 @@ precondition и имеет undefined behavior. Python exceptions использ�
 Внутренний MRO типа заимствует ссылку на сам тип и владеет остальными
 записями, включая классы, добавленные custom `mro()` вне `__bases__`.
 Без cyclic GC владеющая ссылка на сам тип образовала бы неосвобождаемый цикл.
-Поиск атрибута по MRO и `super` удерживают внутренний кортеж на время обхода:
-если сравнение ключей во время обхода присваивает `__bases__`, заменённый
-кортеж становится обычным и до конца обхода владеет и самим типом; поиск
-атрибута затем начинается заново по новому MRO, а `super` дочитывает прежний.
-Поиск начинается заново и тогда, когда сравнение заменяет `__dict__`
-классического класса из MRO.
+Поиск атрибута по MRO и `super` удерживают тип и его внутренний кортеж на
+время обхода: если сравнение ключей во время обхода присваивает `__bases__`,
+заменённый кортеж становится обычным и до конца обхода владеет и самим типом,
+а тип, у последнего экземпляра которого сравнение сменило `__class__`,
+освобождается только после обхода. Как и `_PyType_Lookup`, обход не начинается
+заново: он дочитывает прежний MRO и словарь, который проверял, даже когда
+сравнение заменяет `__dict__` классического класса или экземпляра. Значение,
+которым после этого владеет только сам обход, считается ненайденным. Пока
+custom `mro()` вычисляет MRO нового класса, поиск в этом классе ничего не
+находит, как в CPython.
 `__mro__` при каждом обращении возвращает новый кортеж с владеющими ссылками,
 и `C.__mro__ is C.__mro__` ложно, в отличие от CPython. Hook вызывается при
 создании типа и пересчёте MRO потомков после изменения баз; результат должен
@@ -514,11 +523,17 @@ incompatible instance layout». Присваивание `__class__` и `__bases
 spec и даёт «object layout differs». Callback `construct` служит собственным
 `tp_new` типа: он получает аргументы вызова, и `object.__new__` и
 `object.__init__` их не отвергают. Тип с `sequence_get` без `iter`
-итерируется по индексам до `IndexError`, как тип CPython с `sq_item`, и `in`
-без `contains` использует эту итерацию. Результат `hash`, равный -1,
-читается как -2, как у `__hash__`; ошибку callback сообщает через `out_error`
-или ошибку VM. Payload принимает выравнивание до `alignof(max_align_t)` на
-любой цели: внутреннее выравнивание VM не меньше его и на i386 System V, где
+итерируется по индексам до `IndexError` через `sequence_get`, даже при наличии
+`mapping_get`, как тип CPython с `sq_item`; `in` без `contains` использует эту
+итерацию, а `reversed()` принимает тип с `sequence_get` и `sequence_length`.
+Результат `hash`, равный -1, читается как -2, как у `__hash__`; ошибку
+callback сообщает через `out_error` или только через ошибку VM, и slot тогда
+передаёт её через `out_error`, так что итерация не принимает её за конец.
+Вызов, уже направленный в callback, который Python-код удалил через
+`tinypy_native_type_update_spec`, даёт TypeError, а number и comparison slots —
+`NotImplemented`. Базы `tinypy_native_type_new` принадлежат той же VM.
+Payload принимает выравнивание до `alignof(max_align_t)` на любой цели:
+внутреннее выравнивание VM не меньше его и на i386 System V, где
 64-битные поля структур выровнены по 4 байтам. Method descriptors, которые
 `tinypy_type_set_attr` создаёт в heap type, ссылаются на тип слабо, как
 member descriptors его slots: тип освобождается с последней внешней ссылкой,
@@ -537,7 +552,12 @@ traceback удаляют имена, `sys.exc_info()` возвращает вм�
 `sys.exc_clear()` записывает во все три `None`. Публикация удерживает свои
 ссылки, поэтому `__del__`, который во время неё вызывает `sys.exc_clear()`
 или пишет поля `f_exc_*` покидаемого frame, не освобождает публикуемое
-состояние.
+состояние. `f_exc_value` и `f_exc_traceback`, записанные без `f_exc_type`,
+сохранённым состоянием не являются: как в CPython, они остаются у frame, в том
+числе через `yield`, пока frame не освобождается или не сохраняет обработанное
+исключение. `raise` без аргументов проверяет обработанное исключение, как
+`do_raise`: тип `None` при его отсутствии, а traceback, отличный от traceback
+и `None`, даёт `TypeError: raise: arg 3 must be a traceback or None`.
 `f_locals`, `f_restricted` и имя generator являются readonly getsets и
 возвращают `AttributeError` при попытке записи или удаления.
 
@@ -814,8 +834,14 @@ exception, сначала вызывает `tinypy_output_flush_line`: как `P
 Как `PyErr_SetObject`, `sys.exit` оставляет SystemExit ненормализованным:
 raised value — его аргумент (`None` без аргумента), а не экземпляр, пока
 `except` или `with` не нормализуют его, поэтому host сопоставляет raised type
-и читает code как `handle_system_exit`. Экземпляр SystemExit в аргументе
-поднимается как есть.
+и читает code как `handle_system_exit`. Экземпляр SystemExit или его
+подкласса в аргументе тоже остаётся value при raised type SystemExit, пока
+нормализация, как `PyErr_NormalizeException`, не возьмёт класс экземпляра.
+Как `PyErr_GivenExceptionMatches`,
+`tinypy_exception_matches` сопоставляет класс экземпляра exception, а
+значение, которое не является exception class, — по identity, и не поднимает
+exception: ошибку `__subclasscheck__` metaclass она сообщает как unraisable.
+Поэтому ненормализованное raised value SystemExit не совпадает с SystemExit.
 Host, завершающий программу как `Py_Finalize`, до `tinypy_vm_destroy` вызывает
 `sys.exitfunc`, а затем заменяет значения module namespaces на `None` в
 порядке `PyImport_Cleanup`, чтобы finalizers ещё живых объектов выполнились;
@@ -829,7 +855,9 @@ CLI (`cli/README.md`) реализует оба контракта.
 logical filename, source line, line number и column offset.
 
 Message error для raised Python exception — это `str()` этого exception до
-первого NUL byte. Как traceback printer CPython, tinypy вычисляет его при первом
+первого NUL byte; ненормализованное value, например code `sys.exit`, читается
+как `str()` экземпляра, который из него создаёт нормализация (`""` для
+`sys.exit()`). Как traceback printer CPython, tinypy вычисляет его при первом
 чтении `tinypy_error_message`, а не при raise: до этого error держит ссылку на
 exception, и исключение, которое обработал Python-код, не форматируется.
 `tinypy_vm_destroy` сначала вычисляет message всех ещё не прочитанных errors,
@@ -845,6 +873,16 @@ Recoverable categories включают:
 - host module resolution failure.
 
 Error одновременно устанавливает корректное Python exception state в VM.
+
+Pending exception при входе в C API сбрасывают только точки входа верхнего
+уровня: `tinypy_compile_source`, `tinypy_eval_source`, `tinypy_exec_source`,
+`tinypy_eval_code` и `tinypy_exec_code`. Остальные функции, как C API
+CPython, ожидают, что exception не pending: успешный вызов оставляет его
+pending, а неудачный заменяет своим. `tinypy_object_get_attr`,
+`tinypy_object_get_attr_value` и `tinypy_object_has_attr*` ищут атрибут, отложив
+его в сторону, поэтому `__getattr__` вызывается, отсутствующий атрибут даёт
+`AttributeError`, а `has_attr` его не сбрасывает; `tinypy_equal` и
+`tinypy_hash` его не читают.
 
 При связывании дополнительных `**kwargs` ошибка `__hash__` или сравнения
 ключа немедленно передаётся вызывающему коду; тело функции не выполняется.

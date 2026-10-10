@@ -739,10 +739,11 @@ static tinypy_bool_t __tinypy_representation_append_text(tinypy_representation_b
 //////////////////////////////////////////////////////////////////////////
 /* Returns an owned reference to the __module__ string of a class dictionary.
    The probe may run the __eq__ of a colliding key that replaces the
-   dictionary, so the dictionary is held while it is probed. */
+   dictionary, so the dictionary is held while it is probed; like
+   PyDict_GetItemString, the probe drops the error of that comparison. */
 static tinypy_value_t *__tinypy_representation_dict_module(tinypy_vm_t *vm, tinypy_value_t *dict) {
     TINYPY_INCREF(dict);
-    tinypy_value_t *module = tinypy_internal_dict_get_optional(vm, dict, vm->internal_special_module_key);
+    tinypy_value_t *module = tinypy_internal_dict_get_optional_suppressed(vm, dict, vm->internal_special_module_key);
 
     if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING) {
         TINYPY_INCREF(module);
@@ -843,7 +844,6 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_value_t *special_name = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
     uint64_t special = raw != 0 ? TINYPY_INTERNAL_DISPATCH_BIT(STR) : TINYPY_INTERNAL_DISPATCH_BIT(REPR);
-    tinypy_unary_slot_t representation_slot = raw != 0 ? value->type->string : value->type->repr;
 
     if ((builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && __tinypy_internal_object_overrides_dispatch(value, special) != 0) {
         tinypy_value_t *custom = __tinypy_representation_custom(value, special_name, out_error);
@@ -867,6 +867,8 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         TINYPY_DECREF(custom);
         return appended;
     }
+    /* The override lookups above may run Python code that resets the slot. */
+    tinypy_unary_slot_t representation_slot = raw != 0 ? value->type->string : value->type->repr;
     if (representation_slot != NULL) {
         tinypy_value_t *representation = representation_slot(value, out_error);
 
@@ -1492,10 +1494,12 @@ tinypy_value_t *tinypy_internal_string_create(tinypy_type_t *type, tinypy_value_
     tinypy_value_t *item = values[0];
     if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_BYTEARRAY && tinypy_internal_object_has_special_override_key(item, vm->internal_special_str_key) == 0) {
         tinypy_value_t *value = tinypy_internal_bytearray_string(item, out_error);
+        tinypy_internal_constructor_release_arguments(values, 1U);
         tinypy_value_t *return_value_2 = tinypy_internal_immutable_subclass_copy(type, value, out_error);
         return return_value_2;
     }
     tinypy_value_t *value = tinypy_object_str(item, out_error);
+    tinypy_internal_constructor_release_arguments(values, 1U);
     if (type == &vm->types[TINYPY_VALUE_STRING]) {
         return value;
     }

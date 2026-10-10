@@ -855,6 +855,7 @@ static tinypy_value_t *__tinypy_float_setformat_method(tinypy_value_t *function,
     if (valid == TINYPY_FALSE) {
         return NULL;
     }
+    tinypy_internal_constructor_release_arguments(parsed, 2U);
     if (TINYPY_NAME_EQ(kind, vm->internal_float_key) == TINYPY_FALSE && TINYPY_NAME_EQ(kind, vm->internal_double_key) == TINYPY_FALSE) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__setformat__() argument 1 must be 'double' or 'float'", out_error);
         return NULL;

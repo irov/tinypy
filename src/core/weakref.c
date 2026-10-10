@@ -1015,6 +1015,20 @@ static tinypy_value_t *__tinypy_weakref_proxy_call_method(tinypy_value_t *functi
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The sequence, mapping, iteration and call wrappers that the proxy types
+   list for introspection describe the slots a proxy runs itself, which
+   they therefore do not override. */
+tinypy_bool_t tinypy_internal_weakref_proxy_slot_wrapper(const tinypy_value_t *value, tinypy_value_t *attribute) {
+    const tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+    if (__tinypy_weakref_is_proxy(vm, value) == TINYPY_FALSE || TINYPY_VALUE_KIND(attribute) != TINYPY_VALUE_NATIVE_FUNCTION) {
+        return TINYPY_FALSE;
+    }
+    tinypy_native_function_callback_t callback = TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->callback;
+    tinypy_bool_t slot_wrapper = callback == __tinypy_weakref_proxy_sequence_method || callback == __tinypy_weakref_proxy_call_method ? TINYPY_TRUE : TINYPY_FALSE;
+    return slot_wrapper;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_new_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *callback = NULL;

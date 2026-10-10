@@ -105,7 +105,11 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
             return NULL;
         }
     }
-    tinypy_value_t *result = tinypy_call(partial->callable, combined_args, combined_kwargs, out_error);
+    /* Resolving the call can run code that replaces the partial's state. */
+    tinypy_value_t *target = TINYPY_RET(partial->callable);
+    tinypy_value_t *result = tinypy_call(target, combined_args, combined_kwargs, out_error);
+
+    TINYPY_DECREF(target);
     if (combined_kwargs != NULL) {
         TINYPY_DECREF(combined_kwargs);
     }

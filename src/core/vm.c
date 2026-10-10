@@ -604,15 +604,19 @@ static tinypy_value_t *__tinypy_internal_sys_exc_info(tinypy_value_t *function, 
 //////////////////////////////////////////////////////////////////////////
 /* Python 2.7 mirrors the exception being handled into sys.exc_type,
    sys.exc_value and sys.exc_traceback for backwards compatibility. Like
-   PySys_SetObject, a missing value removes the name. */
+   PySys_SetObject, a missing value removes the name; set_exc_info ignores
+   a failed store, such as one whose key comparison raises, so no error of
+   the publication outlives it. */
 void tinypy_internal_sys_publish_handled_exception(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback) {
     tinypy_value_t *const keys[] = {vm->internal_exc_type_key, vm->internal_exc_value_key, vm->internal_exc_traceback_key};
     tinypy_value_t *const values[] = {type, value, traceback};
+    tinypy_internal_exception_state_t state;
 
     if (vm->state != TINYPY_VM_STATE_LIVE || vm->sys_module == NULL) {
         return;
     }
     tinypy_value_t *sys_dict = TINYPY_MODULE_OBJECT(vm->sys_module)->dict;
+    tinypy_internal_exception_preserve_begin(vm, &state);
     for (size_t index = 0U; index < sizeof(keys) / sizeof(keys[0]); ++index) {
         if (values[index] != NULL) {
             tinypy_dict_set(sys_dict, keys[index], values[index]);
@@ -621,6 +625,7 @@ void tinypy_internal_sys_publish_handled_exception(tinypy_vm_t *vm, tinypy_value
             (void)tinypy_internal_dict_delete_optional(vm, sys_dict, keys[index]);
         }
     }
+    tinypy_internal_exception_preserve_end(vm, &state);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_sys_exc_clear(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -715,14 +720,12 @@ static tinypy_value_t *__tinypy_internal_sys_exit(tinypy_value_t *function, tiny
     if (__tinypy_internal_sys_arguments(function, args, kwargs, 0U, 1U, TINYPY_ARITY_STYLE_UNPACK, out_error) == 0) {
         return NULL;
     }
-    /* PyErr_SetObject: the code is the unnormalized value of the raised
-       SystemExit, which an except clause normalizes and handle_system_exit
-       reads as it is; a SystemExit instance is its own normalized value. */
+    /* PyErr_SetObject(PyExc_SystemExit, code): the code is the unnormalized
+       value of the raised SystemExit, which an except clause normalizes and
+       handle_system_exit reads as it is. An instance of a SystemExit
+       subclass is raised with SystemExit too, until normalization believes
+       its class. */
     tinypy_value_t *code = TINYPY_TUPLE_SIZE(args) != 0U ? TINYPY_TUPLE_GET(args, 0U) : &vm->none_object.base;
-    if (tinypy_type_is_subtype(code->type, system_exit) != 0) {
-        (void)tinypy_exception_raise(code, NULL, out_error);
-        return NULL;
-    }
     tinypy_internal_exception_set_raised_type(vm, &system_exit->base.base, code, NULL);
     tinypy_internal_exception_make_diagnostic(vm, out_error);
     return NULL;
@@ -1343,23 +1346,7 @@ static tinypy_value_t *__tinypy_internal_sys_float_info(tinypy_vm_t *vm) {
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_sys_getsizeof(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *const names[] = {vm->internal_object_key, vm->internal_default_key};
-    tinypy_value_t *values[2] = {NULL, NULL};
-
-    (void)user_data;
-    tinypy_bool_t parsed = tinypy_internal_constructor_optional_arguments(vm, "getsizeof", 9U, args, kwargs, names, 2U, 0U, values, out_error);
-    size_t count = TINYPY_TUPLE_SIZE(args) + (kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U);
-    if (values[0] == NULL && count <= 2U) {
-        (void)tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Required argument 'object' (pos 1) not found", out_error);
-        return NULL;
-    }
-    if (parsed == TINYPY_FALSE) {
-        return NULL;
-    }
-    tinypy_value_t *object = values[0];
+static tinypy_value_t *__tinypy_internal_sys_sizeof(tinypy_vm_t *vm, tinypy_value_t *object, tinypy_value_t *default_value, tinypy_error_t **out_error) {
     if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_OLD_INSTANCE) {
         tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)tinypy_internal_value_allocation_size(object));
 
@@ -1400,9 +1387,38 @@ fallback:
     if (reported != NULL) {
         TINYPY_DECREF(reported);
     }
-    if (result == NULL && values[1] != NULL && tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error) != TINYPY_FALSE) {
-        result = TINYPY_RET(values[1]);
+    if (result == NULL && default_value != NULL && tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error) != TINYPY_FALSE) {
+        result = TINYPY_RET(default_value);
     }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_internal_sys_getsizeof(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *const names[] = {vm->internal_object_key, vm->internal_default_key};
+    tinypy_value_t *values[2];
+
+    (void)user_data;
+    tinypy_bool_t parsed = tinypy_internal_constructor_optional_arguments(vm, "getsizeof", 9U, args, kwargs, names, 2U, 0U, values, out_error);
+    size_t count = TINYPY_TUPLE_SIZE(args) + (kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U);
+    /* A missing object is reported before the other argument errors, which
+       leave no value to tell whether it was given. */
+    tinypy_bool_t object_given = values[0] != NULL || TINYPY_TUPLE_SIZE(args) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+    if (object_given == 0 && kwargs != NULL) {
+        object_given = tinypy_internal_constructor_keyword_optional(kwargs, names[0]) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    if (object_given == 0 && count <= 2U) {
+        tinypy_internal_constructor_release_arguments(values, 2U);
+        (void)tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Required argument 'object' (pos 1) not found", out_error);
+        return NULL;
+    }
+    if (parsed == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *result = __tinypy_internal_sys_sizeof(vm, values[0], values[1], out_error);
+
+    tinypy_internal_constructor_release_arguments(values, 2U);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1748,7 +1764,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     vm->state = TINYPY_VM_STATE_LIVE;
     vm->allocator = *allocator;
     vm->allocated_bytes = sizeof(*vm);
-    vm->type_lookup_cache_epoch = UINT64_C(1);
+    vm->type_version_next = UINT64_C(1);
     vm->recursion_limit = 1000U;
     vm->max_stack_bytes =
         config->struct_size >= (uint32_t)(offsetof(tinypy_vm_config_t, max_stack_bytes) + sizeof(config->max_stack_bytes))
@@ -2156,14 +2172,20 @@ void tinypy_internal_vm_visit_reachable_values(tinypy_vm_t *vm, tinypy_release_c
 }
 //////////////////////////////////////////////////////////////////////////
 #endif
+/* A finalizer that keeps making native values with finalizers reachable
+   would make tinypy_vm_destroy repeat its finalizer pass forever. */
+#define TINYPY_SHUTDOWN_FINALIZE_PASSES 8U
+//////////////////////////////////////////////////////////////////////////
 /* Native finalizers may touch other values, so they run while the VM is still
-   live and every reachable object is intact. A finalizer may make further
-   native values reachable, so the pass reports whether it finalized one and
-   repeats until it finalizes none; the sweep then frees memory without
-   calling them. */
-static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm) {
+   live and every reachable object is intact. Instances finalize before
+   functions: their finalizers may still call methods, whose finalizers
+   release the user data of the calls. A finalizer may make native values
+   with finalizers reachable; the pass then reports them and leaves the
+   functions to a later pass, unless it is the last one. Returns whether the
+   pass created no such value. */
+static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm, tinypy_bool_t last_pass) {
     tinypy_shutdown_graph_t graph;
-    tinypy_bool_t finalized = TINYPY_FALSE;
+    size_t created = vm->native_finalizable_created;
     size_t index;
 
     (void)memset(&graph, 0, sizeof(graph));
@@ -2179,14 +2201,20 @@ static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm) {
     for (index = 0U; index < graph.entry_count; ++index) {
         tinypy_shutdown_entry_t *entry = &graph.entries[index];
 
-        if (entry->kind == TINYPY_VALUE_NATIVE_FUNCTION && TINYPY_NATIVE_FUNCTION_OBJECT(entry->value)->finalize != NULL) {
-            finalized = TINYPY_TRUE;
-            tinypy_internal_native_function_finalize(entry->value);
-        }
-        else if (entry->kind == TINYPY_VALUE_NATIVE_INSTANCE && TINYPY_NATIVE_INSTANCE_OBJECT(entry->value)->finalized == 0) {
-            finalized = TINYPY_TRUE;
+        if (entry->kind == TINYPY_VALUE_NATIVE_INSTANCE) {
             tinypy_internal_native_instance_finalize(entry->value);
         }
+    }
+    tinypy_bool_t settled = vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
+    if (settled != 0 || last_pass != 0) {
+        for (index = 0U; index < graph.entry_count; ++index) {
+            tinypy_shutdown_entry_t *entry = &graph.entries[index];
+
+            if (entry->kind == TINYPY_VALUE_NATIVE_FUNCTION) {
+                tinypy_internal_native_function_finalize(entry->value);
+            }
+        }
+        settled = vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
     }
     for (index = 0U; index < graph.entry_count; ++index) {
         tinypy_shutdown_entry_t *entry = &graph.entries[index];
@@ -2196,7 +2224,7 @@ static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm) {
         }
     }
     __tinypy_shutdown_graph_destroy(&graph);
-    return finalized;
+    return settled;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_vm_destroy(tinypy_vm_t *vm) {
@@ -2205,10 +2233,16 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     size_t type_index;
 
     /* Diagnostics the host still holds render while native payloads are
-       intact; ones raised by native finalizers render before teardown. */
+       intact; ones raised by native finalizers render before teardown. The
+       native values that the last pass creates are swept unfinalized. */
     tinypy_internal_error_render_pending(vm);
-    while (__tinypy_shutdown_finalize_natives(vm) != 0) {
+    for (size_t pass = 1U; pass <= TINYPY_SHUTDOWN_FINALIZE_PASSES; ++pass) {
+        tinypy_bool_t settled = __tinypy_shutdown_finalize_natives(vm, pass == TINYPY_SHUTDOWN_FINALIZE_PASSES ? TINYPY_TRUE : TINYPY_FALSE);
+
         tinypy_internal_error_render_pending(vm);
+        if (settled != 0) {
+            break;
+        }
     }
     vm->state = TINYPY_VM_STATE_DESTROYING;
     tinypy_internal_intern_finalize(vm);

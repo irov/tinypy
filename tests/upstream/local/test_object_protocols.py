@@ -1211,6 +1211,266 @@ class ObjectProtocols(unittest.TestCase):
         slot_key.armed = True
         self.assertEqual(copy_reg._slotnames(Slotted), ['a', 'b'])
 
+    def test_lookup_probes_suppress_comparison_errors(self):
+        armed = [False]
+
+        class Key(object):
+            def __init__(self, name):
+                self.name = name
+
+            def __hash__(self):
+                return hash(self.name)
+
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    raise ValueError('from __eq__')
+                return False
+
+        class Base(object):
+            def method(self):
+                return 'base'
+
+        Colliding = type('Colliding', (Base,), {Key('method'): 1})
+
+        class Derived(Colliding):
+            pass
+
+        armed[0] = True
+        self.assertEqual(super(Derived, Derived()).method(), 'base')
+        self.assertFalse(armed[0])
+        self.assertEqual(type('After', (object,), {}).__name__, 'After')
+        for name in ('__slots__', '__new__', '__doc__', '__module__'):
+            armed[0] = True
+            created = type('Created', (object,), {Key(name): 1})
+            self.assertFalse(armed[0])
+            self.assertEqual((created.__doc__, created.__module__), (None, __name__))
+            self.assertEqual(type('After', (object,), {}).__name__, 'After')
+        Documented = type('Documented', (object,), {Key('__doc__'): 1})
+        armed[0] = True
+        self.assertIs(Documented.__doc__, None)
+        self.assertFalse(armed[0])
+        self.assertEqual(type('After', (object,), {}).__name__, 'After')
+
+    def test_lookup_while_metaclass_computes_mro(self):
+        armed = [False]
+        found = []
+
+        class Key(object):
+            def __hash__(self):
+                return hash('attr')
+
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    Middle.__bases__ = (Other,)
+                return False
+
+        class Root(object):
+            attr = 'root'
+
+        class Other(object):
+            pass
+
+        Middle = type('Middle', (Root,), {Key(): 1})
+
+        class Meta(type):
+            def mro(cls):
+                armed[0] = True
+                for lookup in (lambda: cls.attr, lambda: super(cls, cls).attr):
+                    try:
+                        found.append(lookup())
+                    except AttributeError:
+                        found.append(AttributeError)
+                armed[0] = False
+                return type.mro(cls)
+
+        Created = Meta('Created', (Middle,), {Key(): 1})
+        self.assertEqual(found, [AttributeError, AttributeError])
+        self.assertEqual(Created.__mro__, (Created, Middle, Root, object))
+        self.assertEqual(Created.attr, 'root')
+
+    def test_getattr_hook_is_looked_up_once(self):
+        calls = [0]
+
+        class Key(object):
+            def __hash__(self):
+                return hash('__getattr__')
+
+            def __eq__(self, other):
+                calls[0] += 1
+                if calls[0] == 1:
+                    Hooked.__getattr__ = Hooked.__dict__['__getattr__']
+                elif calls[0] == 2:
+                    Derived.__bases__ = (Other,)
+                return False
+
+        class Root(object):
+            pass
+
+        class Other(object):
+            pass
+
+        class Hooked(Root):
+            def __getattr__(self, name):
+                return 'hook(%s)' % name
+
+        Derived = type('Derived', (Hooked,), {Key(): 1})
+        instance = Derived()
+        calls[0] = 0
+        self.assertEqual(getattr(instance, 'missing'), 'hook(missing)')
+
+    def test_descriptor_subclasses_override_native_slots(self):
+        log = []
+
+        class Property(property):
+            def __get__(self, instance, owner=None):
+                return ('get', instance is None)
+
+            def __set__(self, instance, value):
+                log.append(('set', value))
+
+            def __delete__(self, instance):
+                log.append('delete')
+
+        class Static(staticmethod):
+            def __get__(self, instance, owner=None):
+                return 'static'
+
+        class Class(classmethod):
+            def __get__(self, instance, owner=None):
+                return 'class'
+
+        class Super(super):
+            def __get__(self, instance, owner=None):
+                return 'super'
+
+        class Plain(property):
+            pass
+
+        class Base(object):
+            pass
+
+        class Holder(Base):
+            managed = Property(lambda self: 'getter')
+            plain = Plain(lambda self: 'plain', lambda self, value: log.append(('plain', value)))
+            static = Static(lambda: 'function')
+            bound = Class(lambda cls: 'function')
+            proxy = Super(Base)
+
+        holder = Holder()
+        self.assertEqual((holder.managed, Holder.managed), (('get', False), ('get', True)))
+        holder.managed = 5
+        del holder.managed
+        self.assertEqual(log, [('set', 5), 'delete'])
+        self.assertEqual((holder.static, Holder.static, holder.bound, Holder.bound, holder.proxy), ('static', 'static', 'class', 'class', 'super'))
+        self.assertEqual(holder.plain, 'plain')
+        holder.plain = 6
+        self.assertEqual(log[-1], ('plain', 6))
+        self.assert_message(AttributeError, "can't delete attribute", delattr, holder, 'plain')
+        Plain.__get__ = lambda self, instance, owner=None: 'patched'
+        self.assertEqual(holder.plain, 'patched')
+        del Plain.__get__
+        self.assertEqual(holder.plain, 'plain')
+
+    def test_slotnames_walks_the_metaclass_mro(self):
+        import copy_reg
+
+        def slotted(entries):
+            class Meta(type):
+                @property
+                def __mro__(cls):
+                    return entries(cls)
+            return Meta('Slotted', (object,), {'__slots__': ('a', '__b')})
+
+        class Holder(object):
+            pass
+
+        holder = Holder()
+        holder.__dict__['__slots__'] = ('x', '__y')
+        holder.__name__ = '_Owner'
+        nameless = Holder()
+        nameless.__dict__['__slots__'] = ('__z',)
+
+        class Classic:
+            __slots__ = ('p',)
+
+        self.assert_message(AttributeError, "'int' object has no attribute '__dict__'", copy_reg._slotnames, slotted(lambda cls: (1, 2)))
+        self.assert_message(TypeError, "'int' object is not iterable", copy_reg._slotnames, slotted(lambda cls: 5))
+        self.assertEqual(copy_reg._slotnames(slotted(lambda cls: [cls, object])), ['a', '_Slotted__b'])
+        self.assertEqual(copy_reg._slotnames(slotted(lambda cls: (entry for entry in (cls, holder)))), ['a', '_Slotted__b', 'x', '_Owner__y'])
+        self.assertEqual(copy_reg._slotnames(slotted(lambda cls: (cls, Classic))), ['a', '_Slotted__b', 'p'])
+        self.assert_message(AttributeError, "'Holder' object has no attribute '__name__'", copy_reg._slotnames, slotted(lambda cls: (nameless,)))
+        instance = slotted(lambda cls: (1, 2))()
+        instance.a = 1
+        self.assert_message(AttributeError, "'int' object has no attribute '__dict__'", instance.__reduce_ex__, 2)
+
+    def test_copy_reg_tables_are_module_globals(self):
+        import copy_reg
+
+        saved = (copy_reg._extension_registry, copy_reg._inverted_registry, copy_reg._extension_cache, copy_reg.dispatch_table)
+
+        def restore():
+            copy_reg._extension_registry, copy_reg._inverted_registry, copy_reg._extension_cache, copy_reg.dispatch_table = saved
+
+        reducer = lambda value: (complex, (1.0, 2.0))
+        try:
+            copy_reg._extension_registry = [1, 2, 3]
+            self.assert_message(AttributeError, "'list' object has no attribute 'get'", copy_reg.add_extension, 'module', 'name', 5)
+            self.assert_message(AttributeError, "'list' object has no attribute 'get'", copy_reg.remove_extension, 'module', 'name', 5)
+            del copy_reg._extension_registry
+            self.assert_message(NameError, "global name '_extension_registry' is not defined", copy_reg.add_extension, 'module', 'name', 5)
+            restore()
+            copy_reg.dispatch_table = (1, 2)
+            self.assert_message(TypeError, "'tuple' object does not support item assignment", copy_reg.pickle, complex, reducer)
+            del copy_reg.dispatch_table
+            self.assert_message(NameError, "global name 'dispatch_table' is not defined", copy_reg.pickle, complex, reducer)
+
+            class Table(dict):
+                pass
+
+            copy_reg.dispatch_table = Table()
+            copy_reg.pickle(complex, reducer)
+            self.assertIs(copy_reg.dispatch_table[complex], reducer)
+            restore()
+            copy_reg._extension_cache = set([7])
+            copy_reg.clear_extension_cache()
+            self.assertEqual(copy_reg._extension_cache, set())
+            copy_reg._extension_cache = [7]
+            self.assert_message(AttributeError, "'list' object has no attribute 'clear'", copy_reg.clear_extension_cache)
+            del copy_reg._extension_cache
+            self.assert_message(NameError, "global name '_extension_cache' is not defined", copy_reg.clear_extension_cache)
+            restore()
+            copy_reg.add_extension('module', 'name', 7)
+            copy_reg._extension_cache[7] = 'cached'
+            copy_reg.remove_extension('module', 'name', 7)
+            self.assertFalse(7 in copy_reg._extension_cache)
+        finally:
+            restore()
+
+    def test_object_init_accepts_arguments_without_tp_new(self):
+        dictproxy = type(int.__dict__)
+        self.assertIs(dictproxy.__init__(int.__dict__, 1), None)
+        self.assertIs(dictproxy.__init__(int.__dict__, key=1), None)
+        for value in (iter([]), (item for item in ()), xrange(3), reversed([])):
+            self.assertIs(type(value).__init__(value, 1), None)
+
+        class Plain(object):
+            pass
+
+        self.assert_message(TypeError, 'object.__init__() takes no parameters', Plain.__init__, Plain(), 1)
+        self.assert_message(TypeError, 'object.__init__() takes no parameters', object.__init__, object(), 1)
+
+    def test_float_literal_messages_are_capped(self):
+        for text, prefix in (('1' * 300 + 'x', 'invalid literal for float(): '), ('x' * 300, 'could not convert string to float: '), (bytearray('2' * 250 + 'z'), 'invalid literal for float(): ')):
+            try:
+                float(text)
+            except ValueError as error:
+                self.assertEqual(str(error), prefix + str(text)[:200])
+            else:
+                self.fail('float() accepted %r' % text)
+        self.assert_message(ValueError, 'could not convert string to float: ' + 'x' * 5, float, '   ' + 'x' * 5 + '\x00' + 'y' * 300)
+
 def truth_check(value, expected):
     def check(self):
         self.assertIs(bool(value), expected)

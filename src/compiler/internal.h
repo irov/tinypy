@@ -110,6 +110,10 @@ int32_t tinypy_internal_compiler_arena_add_value(tinypy_compile_ctx_t *ctx, tiny
 tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const void *source, size_t source_size, tinypy_error_t **out_error);
 void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, tinypy_error_t **out_error);
 void tinypy_internal_compiler_error_text(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, const char *text, size_t text_size, tinypy_error_t **out_error);
+/* Reports the failure of a runtime operation with the message of its error,
+   which it releases; running out of memory stays a MemoryError instead of
+   error_kind. */
+void tinypy_internal_compiler_operation_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, tinypy_error_t *error, const char *message, int32_t line_number, int32_t column_offset);
 void tinypy_internal_compiler_error_parts(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, int32_t column_offset);
 void tinypy_internal_compiler_plain_error(tinypy_compile_ctx_t *ctx, const char *message);
 void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number, tinypy_bool_t include_location);

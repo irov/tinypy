@@ -5,36 +5,48 @@
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
+/* PyDict_GetItem of the classic lookups: the error of a key comparison is
+   dropped, and an exception pending before is set aside only when there is
+   one. */
+static tinypy_value_t *__tinypy_class_dict_probe(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key) {
+    if (vm->raised_type != NULL) {
+        tinypy_value_t *kept = tinypy_internal_dict_get_optional_suppressed(vm, dict, key);
+        return kept;
+    }
+    tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, dict, key);
+    if (value == NULL && vm->raised_type != NULL) {
+        tinypy_internal_exception_clear_raised(vm);
+    }
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+/* class_lookup, which only the recursion limit fails. A key comparison that
+   replaced the dictionary or the bases holding the attribute found may have
+   freed it, so that attribute is looked up again. */
 static tinypy_value_t *__tinypy_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
     for (;;) {
         tinypy_value_t *dict = TINYPY_RET(class_object->dict);
-        tinypy_value_t *attribute = tinypy_internal_dict_get_optional(vm, dict, key);
-        if (class_object->dict != dict) {
-            TINYPY_DECREF(dict);
-            if (tinypy_vm_has_error(vm) != 0) {
-                return NULL;
-            }
-            continue;
-        }
+        tinypy_value_t *attribute = __tinypy_class_dict_probe(vm, dict, key);
+        tinypy_bool_t replaced = class_object->dict != dict ? TINYPY_TRUE : TINYPY_FALSE;
+
         TINYPY_DECREF(dict);
-        if (attribute != NULL || tinypy_vm_has_error(vm) != 0) {
+        if (attribute != NULL) {
+            if (replaced != 0) {
+                continue;
+            }
             return attribute;
         }
         tinypy_value_t *bases = TINYPY_RET(class_object->bases);
-        tinypy_bool_t changed = TINYPY_FALSE;
-        for (size_t index = 0U; index < TINYPY_TUPLE_SIZE(bases); ++index) {
+        for (size_t index = 0U; attribute == NULL && index < TINYPY_TUPLE_SIZE(bases); ++index) {
             attribute = tinypy_internal_class_lookup_key(vm, TINYPY_TUPLE_GET(bases, index), key);
-            if (class_object->bases != bases) {
-                changed = TINYPY_TRUE;
-                break;
-            }
-            if (attribute != NULL || tinypy_vm_has_error(vm) != 0) {
+            if (attribute == NULL && vm->raised_type != NULL) {
                 break;
             }
         }
+        replaced = class_object->bases != bases ? TINYPY_TRUE : TINYPY_FALSE;
         TINYPY_DECREF(bases);
-        if (changed == 0 || tinypy_vm_has_error(vm) != 0) {
+        if (attribute == NULL || replaced == 0) {
             return attribute;
         }
     }
@@ -102,12 +114,14 @@ static tinypy_value_t *__tinypy_class_bind_impl(tinypy_value_t *class_value, tin
         tinypy_value_t *method = tinypy_internal_method_bind(attribute, instance, class_value, out_error);
         return method;
     }
-    if (kind == TINYPY_VALUE_STATIC_METHOD) {
+    /* A Python subclass of staticmethod or classmethod binds through its
+       __get__, which may be its own. */
+    if (kind == TINYPY_VALUE_STATIC_METHOD && attribute->type == &vm->types[TINYPY_VALUE_STATIC_METHOD]) {
         tinypy_value_t *callable = tinypy_static_method_callable(attribute);
 
         return TINYPY_RET(callable);
     }
-    if (kind == TINYPY_VALUE_CLASS_METHOD) {
+    if (kind == TINYPY_VALUE_CLASS_METHOD && attribute->type == &vm->types[TINYPY_VALUE_CLASS_METHOD]) {
         tinypy_value_t *return_value_2 = tinypy_internal_class_method_bind(attribute, class_value, out_error);
         return return_value_2;
     }
@@ -188,48 +202,56 @@ static void __tinypy_class_set_hook(tinypy_value_t **slot, tinypy_value_t *hook)
     }
 }
 //////////////////////////////////////////////////////////////////////////
-/* class_lookup of set_attr_slots, whose PyDict_GetItem drops the error of a
-   lookup, which then goes on with the bases. The hook is returned owned. */
-static tinypy_value_t *__tinypy_class_lookup_hook(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
+/* class_lookup of set_attr_slots for each hook not found yet; the caller
+   sets aside the exception pending before. A hook found is stored owned,
+   and the result is the number still missing. */
+static size_t __tinypy_class_find_hooks(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *const *names, tinypy_value_t **hooks, size_t count, size_t missing) {
     if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
         tinypy_internal_exception_clear_raised(vm);
-        return NULL;
+        return missing;
     }
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
     tinypy_value_t *dict = TINYPY_RET(class_object->dict);
-    tinypy_value_t *hook = tinypy_internal_dict_get_optional_suppressed(vm, dict, key);
 
-    if (hook != NULL) {
-        TINYPY_INCREF(hook);
+    for (size_t index = 0U; index < count; ++index) {
+        if (hooks[index] != NULL) {
+            continue;
+        }
+        tinypy_value_t *hook = __tinypy_class_dict_probe(vm, dict, names[index]);
+        if (hook != NULL) {
+            hooks[index] = TINYPY_RET(hook);
+            missing -= 1U;
+        }
     }
     TINYPY_DECREF(dict);
     tinypy_value_t *bases = TINYPY_RET(class_object->bases);
 
     vm->evaluation_depth += 1U;
-    for (size_t index = 0U; hook == NULL && index < TINYPY_TUPLE_SIZE(bases); ++index) {
-        hook = __tinypy_class_lookup_hook(vm, TINYPY_TUPLE_GET(bases, index), key);
+    for (size_t index = 0U; missing != 0U && index < TINYPY_TUPLE_SIZE(bases); ++index) {
+        missing = __tinypy_class_find_hooks(vm, TINYPY_TUPLE_GET(bases, index), names, hooks, count, missing);
     }
     vm->evaluation_depth -= 1U;
     TINYPY_DECREF(bases);
-    return hook;
+    return missing;
 }
 //////////////////////////////////////////////////////////////////////////
-/* set_attr_slots: the hooks a class resolves through its bases. No error
-   of their lookups outlives it. */
+/* set_attr_slots: the hooks a class resolves through its bases, found in
+   one walk. No error of their lookups outlives it. */
 static void __tinypy_class_refresh_hooks(tinypy_value_t *class_value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
     tinypy_value_t *const names[] = {vm->internal_special_getattr_key, vm->internal_special_setattr_key, vm->internal_special_delattr_key};
     tinypy_value_t **const slots[] = {&class_object->getattr_hook, &class_object->setattr_hook, &class_object->delattr_hook};
+    tinypy_value_t *hooks[] = {NULL, NULL, NULL};
+    size_t count = sizeof(names) / sizeof(names[0]);
     tinypy_internal_exception_state_t state;
 
     tinypy_internal_exception_preserve_begin(vm, &state);
-    for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
-        tinypy_value_t *hook = __tinypy_class_lookup_hook(vm, class_value, names[index]);
-
-        __tinypy_class_set_hook(slots[index], hook);
-        if (hook != NULL) {
-            TINYPY_DECREF(hook);
+    (void)__tinypy_class_find_hooks(vm, class_value, names, hooks, count, count);
+    for (size_t index = 0U; index < count; ++index) {
+        __tinypy_class_set_hook(slots[index], hooks[index]);
+        if (hooks[index] != NULL) {
+            TINYPY_DECREF(hooks[index]);
         }
     }
     tinypy_internal_exception_preserve_end(vm, &state);
@@ -503,9 +525,9 @@ tinypy_value_t *tinypy_internal_class_get_attribute(tinypy_value_t *class_value,
 //////////////////////////////////////////////////////////////////////////
 /* The owned value of key in the dictionary of a class or an instance, which
    stays referenced while a key comparison may replace it. */
-static tinypy_value_t *__tinypy_class_dict_value(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key) {
+static inline tinypy_value_t *__tinypy_class_dict_value(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key) {
     TINYPY_INCREF(dict);
-    tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, dict, key);
+    tinypy_value_t *value = __tinypy_class_dict_probe(vm, dict, key);
 
     if (value != NULL) {
         TINYPY_INCREF(value);
