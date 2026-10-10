@@ -1884,7 +1884,12 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
         if (*dict_slot == NULL) {
             *dict_slot = tinypy_dict_new(vm);
         }
-        tinypy_bool_t inserted = tinypy_internal_dict_set_checked(vm, *dict_slot, key, attribute_value, out_error);
+        tinypy_value_t *dict = *dict_slot;
+
+        /* A key's __eq__ may replace the dictionary during the store. */
+        TINYPY_INCREF(dict);
+        tinypy_bool_t inserted = tinypy_internal_dict_set_checked(vm, dict, key, attribute_value, out_error);
+        TINYPY_DECREF(dict);
         return inserted;
     }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE) {
@@ -1913,7 +1918,11 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
         if (TINYPY_FUNCTION_OBJECT(value)->dict == NULL) {
             TINYPY_FUNCTION_OBJECT(value)->dict = tinypy_dict_new(vm);
         }
-        tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, TINYPY_FUNCTION_OBJECT(value)->dict, key, attribute_value, out_error);
+        tinypy_value_t *dict = TINYPY_FUNCTION_OBJECT(value)->dict;
+
+        TINYPY_INCREF(dict);
+        tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, dict, key, attribute_value, out_error);
+        TINYPY_DECREF(dict);
         return stored;
     }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_MODULE) {
@@ -2140,7 +2149,11 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
         __tinypy_object_generic_setattr_error(value, key, has_attribute, out_error);
         return TINYPY_FALSE;
     }
-    if (tinypy_internal_dict_delete_optional(vm, dict, key) == 0) {
+    /* A key's __eq__ may replace the dictionary during the deletion. */
+    TINYPY_INCREF(dict);
+    tinypy_bool_t deleted = tinypy_internal_dict_delete_optional(vm, dict, key);
+    TINYPY_DECREF(dict);
+    if (deleted == 0) {
         tinypy_internal_make_attribute_name_error(vm, key, out_error);
         return TINYPY_FALSE;
     }

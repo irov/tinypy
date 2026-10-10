@@ -983,7 +983,7 @@ static tinypy_bool_t __tinypy_internal_dict_update_keys_method(tinypy_value_t *t
     if (keys_method == NULL) {
         return TINYPY_FALSE;
     }
-    if (keys_method->type->call == NULL) {
+    if (tinypy_is_callable(keys_method) == TINYPY_FALSE) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("attribute of type '"),
             TINYPY_MESSAGE_PART_TYPE_NAME(keys_method),

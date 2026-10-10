@@ -289,3 +289,82 @@ except ReferenceError:
     pass
 else:
     raise AssertionError("dead weak proxy access must raise ReferenceError")
+
+
+# An operation a proxy forwards keeps the referent alive while it runs, even
+# when the operation drops every other reference to it. CPython 2.7 reads a
+# borrowed referent there and crashes on several of these.
+referents = []
+released = []
+
+
+def release_referent():
+    del referents[:]
+    for index in range(32):
+        released.append(("released" * 4, index, [index]))
+
+
+class ReleasingList(list):
+    pass
+
+
+class ReleaseOnEqual(object):
+    def __eq__(self, other):
+        release_referent()
+        return False
+
+    def __hash__(self):
+        return 1
+
+
+class ReleaseOnIndex(object):
+    def __index__(self):
+        release_referent()
+        return 1
+
+
+def releasing_proxy(referent):
+    referents[:] = [referent]
+    return proxy(referent)
+
+
+def releasing_list():
+    return releasing_proxy(ReleasingList([object() for index in range(5)]))
+
+
+assert ReleaseOnEqual() not in releasing_list()
+assert not type(releasing_list()).__contains__(releasing_list(), ReleaseOnEqual())
+releasing_items = releasing_list()
+releasing_items[ReleaseOnIndex()] = 5
+releasing_items = releasing_list()
+type(releasing_items).__setitem__(releasing_items, ReleaseOnIndex(), 5)
+releasing_items = releasing_list()
+del releasing_items[ReleaseOnIndex()]
+releasing_items = releasing_list()
+type(releasing_items).__delitem__(releasing_items, ReleaseOnIndex())
+del releasing_items
+
+
+class ReleasingDict(dict):
+    pass
+
+
+releasing_mapping = releasing_proxy(ReleasingDict({ReleaseOnEqual(): 1, ReleaseOnEqual(): 2}))
+try:
+    releasing_mapping[ReleaseOnEqual()]
+except KeyError:
+    pass
+else:
+    raise AssertionError("a missing key must raise KeyError")
+del releasing_mapping
+
+
+def releasing_generator():
+    release_referent()
+    yield 1
+
+
+assert next(releasing_proxy(releasing_generator())) == 1
+releasing_iterator = releasing_proxy(releasing_generator())
+assert type(releasing_iterator).next(releasing_iterator) == 1
+del releasing_iterator

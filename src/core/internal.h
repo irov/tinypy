@@ -61,7 +61,14 @@
 
 #include <string.h>
 //////////////////////////////////////////////////////////////////////////
+/* The alignment of every VM allocation and native payload. i386 System V
+   aligns 64-bit members to 4 bytes inside structures, while max_align_t, and
+   with it a payload declared alignas(max_align_t), needs 8 or 16 there;
+   MSVC aligns them to 8, which is its max_align_t. */
 typedef union tinypy_internal_max_align_t {
+#if !defined(_MSC_VER)
+    max_align_t max_value;
+#endif
     void *pointer_value;
     void (*function_value)(void);
     int64_t integer_value;
@@ -1267,9 +1274,11 @@ struct tinypy_type_t {
     uint64_t dispatch_known;
     uint64_t dispatch_defines;
     uint64_t dispatch_overrides;
-    /* __new__ and __init__ of a class call, and whether that __new__ is
-       object's, while type_lookup_cache_epoch equals constructor_epoch. */
-    uint64_t constructor_epoch;
+    /* __new__ of a class call, and whether it is object's, while
+       type_lookup_cache_epoch equals constructor_new_epoch; __init__ while it
+       equals constructor_init_epoch. */
+    uint64_t constructor_new_epoch;
+    uint64_t constructor_init_epoch;
     tinypy_value_t *constructor_new;
     tinypy_value_t *constructor_init;
     tinypy_bool_t constructor_object_new;
@@ -1596,7 +1605,6 @@ typedef struct tinypy_frame_object_t {
     tinypy_value_t *globals;
     tinypy_value_t *locals;
     tinypy_value_t *trace;
-    tinypy_bool_t handled_state_saved;
     tinypy_value_t *previous_handled_type;
     tinypy_value_t *previous_handled_value;
     tinypy_value_t *previous_handled_traceback;
@@ -1717,6 +1725,8 @@ typedef struct tinypy_native_function_object_t {
     tinypy_arity_style_e arity_style;
     void *user_data;
     tinypy_native_function_finalize_t finalize;
+    /* The weak reference to a heap owner, which holds the descriptor. */
+    tinypy_value_t *owner_reference;
     tinypy_bool_t owner_retained;
     tinypy_native_descriptor_kind_e descriptor_kind;
 } tinypy_native_function_object_t;
@@ -2438,6 +2448,8 @@ tinypy_value_t *tinypy_internal_dictproxy_dict(const tinypy_value_t *value);
 tinypy_value_t *tinypy_internal_type_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_type_subclasses(tinypy_type_t *type, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_type_layout_compatible(const tinypy_type_t *old_type, const tinypy_type_t *new_type, const char *attribute, size_t attribute_size, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_type_is_host_native(const tinypy_type_t *type);
+tinypy_bool_t tinypy_internal_type_is_native_base(const tinypy_type_t *type);
 tinypy_type_t *tinypy_internal_type_new_from_values(tinypy_value_t *name, tinypy_value_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error);
 tinypy_type_t *tinypy_internal_type_new_from_tuple(tinypy_value_t *name, tinypy_value_t *bases, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_type_mro_value_at(const tinypy_type_t *type, size_t index);
@@ -2647,6 +2659,7 @@ tinypy_bool_t tinypy_internal_import_star(tinypy_value_t *module, tinypy_value_t
 void tinypy_internal_native_function_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_native_function_destroy(tinypy_value_t *value);
 void tinypy_internal_native_function_finalize(tinypy_value_t *value);
+tinypy_type_t *tinypy_internal_native_function_owner(const tinypy_value_t *function);
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_native_method_calls_unbound(tinypy_value_t *descriptor, tinypy_value_t *instance);
@@ -2669,11 +2682,11 @@ void tinypy_internal_property_release_references(tinypy_value_t *value, tinypy_r
 void tinypy_internal_c_descriptor_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *value, tinypy_error_t **out_error);
-tinypy_value_t *tinypy_internal_member_descriptor_new(tinypy_type_t *owner, tinypy_value_t *name, size_t index);
+tinypy_value_t *tinypy_internal_member_descriptor_new(tinypy_type_t *owner, tinypy_value_t *name, size_t index, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_struct_sequence_member_new(tinypy_type_t *owner, tinypy_value_t *name, size_t index);
 tinypy_bool_t tinypy_internal_member_descriptor_slot(tinypy_value_t *descriptor, const tinypy_type_t *type, size_t *out_index);
-tinypy_value_t *tinypy_internal_instance_dict_descriptor_new(tinypy_type_t *owner);
-tinypy_value_t *tinypy_internal_instance_weakref_descriptor_new(tinypy_type_t *owner);
+tinypy_value_t *tinypy_internal_instance_dict_descriptor_new(tinypy_type_t *owner, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_instance_weakref_descriptor_new(tinypy_type_t *owner, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_property_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_property_set(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_property_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);

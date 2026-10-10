@@ -29,6 +29,15 @@ typedef int32_t (*tinypy_native_contains_t)(tinypy_value_t *instance, void *payl
 typedef tinypy_hash_t (*tinypy_native_hash_t)(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error);
 typedef tinypy_value_t *(*tinypy_native_compare_t)(tinypy_value_t *instance, void *payload, tinypy_value_t *other, tinypy_compare_operation_e operation, void *user_data, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
+/* A host native type dispatches the callbacks of its own spec only: a slot its
+ * spec leaves NULL keeps the behaviour of the nearest base that is no host
+ * native type, object's by default, even when a native base defines it.
+ * construct is the type's tp_new: it receives the call arguments, which
+ * object.__init__ then accepts. hash never reports -1, which reads as -2;
+ * callbacks report failures through out_error or the VM error. Without iter,
+ * sequence_get makes instances iterable by index until IndexError, as sq_item
+ * does in CPython. payload_alignment accepts any power of two up to
+ * alignof(max_align_t). */
 struct tinypy_native_type_spec_t {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -93,9 +102,14 @@ tinypy_value_t *tinypy_native_function_name(const tinypy_value_t *function);
 void *tinypy_native_function_user_data(const tinypy_value_t *function);
 
 void tinypy_native_type_spec_init(tinypy_native_type_spec_t *spec);
+/* The bases keep the layout of object or of a host native type; a base with
+ * a built-in layout such as list is rejected with TypeError. */
 tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t name_size, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);
 /* Borrows and retains an existing byte-string name from the type VM. */
 tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);
+/* Replaces the dispatch callbacks; a callback the new spec leaves NULL resets
+ * its slot. The Python subclasses created earlier keep the callbacks they
+ * copied from the type, and host native subtypes keep their own spec. */
 tinypy_bool_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_native_instance_new(tinypy_type_t *type);
 tinypy_bool_t tinypy_native_instance_construct(tinypy_value_t *instance, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);

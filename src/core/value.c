@@ -250,9 +250,17 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     tinypy_internal_exception_preserve_begin(vm, &exception_state);
     tinypy_type_t *type = value->type;
     uint64_t epoch = vm->type_lookup_cache_epoch;
-    type->finalizer_epoch = epoch;
-    type->has_finalizer = tinypy_internal_type_lookup_key(vm, type, vm->internal_special_del_key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-    if (type->has_finalizer == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE
+    /* The lookup may run key comparisons that release other instances of the
+       type or reassign the class, so the type is held and the memo published
+       only after the lookup, and only when it left every type unchanged. */
+    TINYPY_INCREF(&type->base.base);
+    tinypy_bool_t has_finalizer = tinypy_internal_type_lookup_key(vm, type, vm->internal_special_del_key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    type->has_finalizer = has_finalizer;
+    if (vm->type_lookup_cache_epoch == epoch) {
+        type->finalizer_epoch = epoch;
+    }
+    TINYPY_DECREF(&type->base.base);
+    if (has_finalizer == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE
         || tinypy_internal_old_instance_has_special_key(value, vm->internal_special_del_key) == 0)) {
         tinypy_internal_exception_preserve_end(vm, &exception_state);
         value->ref -= 1U;

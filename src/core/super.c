@@ -5,27 +5,29 @@
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
+/* supercheck: the type of a super whose __init__ never ran is NULL, and no
+   object is an instance or subtype of it. */
 static tinypy_value_t *__tinypy_super_new(tinypy_type_t *instance_type, tinypy_type_t *type, tinypy_value_t *object, tinypy_error_t **out_error) {
     tinypy_type_t *object_type = NULL;
     tinypy_value_t *reported_type = NULL;
 
-    tinypy_vm_t *vm = type->vm;
+    tinypy_vm_t *vm = instance_type->vm;
     TINYPY_CLEAR_ERROR(out_error);
     if (object != NULL && TINYPY_VALUE_KIND(object) == TINYPY_VALUE_NONE) {
         object = NULL;
     }
     if (object != NULL) {
-        if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)object, type) != 0) {
+        if (type != NULL && TINYPY_VALUE_KIND(object) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)object, type) != 0) {
             object_type = (tinypy_type_t *)object;
         }
-        else if (tinypy_type_is_subtype(object->type, type) != 0) {
+        else if (type != NULL && tinypy_type_is_subtype(object->type, type) != 0) {
             object_type = object->type;
         }
         else {
             tinypy_error_t *lookup_error = NULL;
 
             reported_type = tinypy_object_get_attr_value(object, vm->internal_special_class_key, &lookup_error);
-            if (reported_type != NULL && TINYPY_VALUE_KIND(reported_type) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)reported_type, type) != 0) {
+            if (type != NULL && reported_type != NULL && TINYPY_VALUE_KIND(reported_type) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)reported_type, type) != 0) {
                 object_type = (tinypy_type_t *)reported_type;
             }
             else {
@@ -78,6 +80,59 @@ void tinypy_internal_super_release_references(tinypy_value_t *value, tinypy_rele
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* Searches the MRO of the super's object type after its starting type, as
+   super_getattro does. A key comparison of a class dictionary may reassign
+   __bases__, re-initialise the super or replace the __dict__ of a classic
+   class, so the walk owns the fields it read, the MRO and each dictionary
+   until the attribute found in it is owned. Returns whether the name was
+   found. */
+static tinypy_bool_t __tinypy_super_lookup(tinypy_super_object_t *super_value, tinypy_value_t *name, tinypy_value_t **out_result, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(&super_value->base);
+    tinypy_value_t *start = &super_value->type->base.base;
+    tinypy_value_t *object = super_value->object;
+    tinypy_type_t *object_type = super_value->object_type;
+    tinypy_value_t *mro = object_type->mro;
+    size_t mro_size = mro != NULL ? TINYPY_TUPLE_SIZE(mro) : tinypy_type_mro_size(object_type);
+    tinypy_bool_t after_start = TINYPY_FALSE;
+    tinypy_bool_t found = TINYPY_FALSE;
+
+    TINYPY_INCREF(start);
+    TINYPY_INCREF(object);
+    TINYPY_INCREF(&object_type->base.base);
+    if (mro != NULL) {
+        TINYPY_INCREF(mro);
+    }
+    for (size_t index = 0U; index < mro_size && found == 0; ++index) {
+        tinypy_value_t *entry = mro != NULL ? TINYPY_TUPLE_GET(mro, index) : tinypy_internal_type_mro_value_at(object_type, index);
+
+        if (after_start == 0) {
+            after_start = entry == start ? TINYPY_TRUE : TINYPY_FALSE;
+            continue;
+        }
+        tinypy_value_t *dict = TINYPY_RET(tinypy_internal_type_mro_entry_dict(entry));
+        tinypy_value_t *attribute = tinypy_dict_get_optional(dict, name);
+
+        if (attribute != NULL) {
+            TINYPY_INCREF(attribute);
+        }
+        TINYPY_DECREF(dict);
+        if (attribute != NULL) {
+            tinypy_value_t *instance = object == &object_type->base.base ? NULL : object;
+
+            *out_result = tinypy_internal_descriptor_get_value(vm, attribute, instance, object_type, out_error);
+            TINYPY_DECREF(attribute);
+            found = TINYPY_TRUE;
+        }
+    }
+    if (mro != NULL) {
+        TINYPY_DECREF(mro);
+    }
+    TINYPY_DECREF(&object_type->base.base);
+    TINYPY_DECREF(object);
+    TINYPY_DECREF(start);
+    return found;
+}
+//////////////////////////////////////////////////////////////////////////
 /* super_getattro: search the MRO after the starting type, except for
    __class__ and unbound super, then fall back to the super object itself. */
 tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
@@ -85,25 +140,9 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
     if (super_value->object_type != NULL && TINYPY_NAME_EQ(name, vm->internal_special_class_key) == TINYPY_FALSE) {
-        size_t mro_size = tinypy_type_mro_size(super_value->object_type);
-        tinypy_bool_t found_type = TINYPY_FALSE;
-
-        for (size_t index = 0U; index < mro_size; ++index) {
-            tinypy_value_t *entry = tinypy_internal_type_mro_value_at(super_value->object_type, index);
-
-            if (found_type == 0) {
-                if (entry == &super_value->type->base.base) {
-                    found_type = 1;
-                }
-                continue;
-            }
-            tinypy_value_t *attribute = tinypy_dict_get_optional(tinypy_internal_type_mro_entry_dict(entry), name);
-
-            if (attribute != NULL) {
-                tinypy_value_t *instance = super_value->object == &super_value->object_type->base.base ? NULL : super_value->object;
-                tinypy_value_t *return_value_1 = tinypy_internal_descriptor_get_value(vm, attribute, instance, super_value->object_type, out_error);
-                return return_value_1;
-            }
+        tinypy_value_t *result = NULL;
+        if (__tinypy_super_lookup(super_value, name, &result, out_error) != 0) {
+            return result;
         }
     }
     tinypy_value_t *super_attribute = tinypy_internal_type_lookup_key(vm, value->type, name);
@@ -164,15 +203,12 @@ tinypy_value_t *tinypy_internal_super_descriptor_get(tinypy_value_t *descriptor,
         return TINYPY_RET(descriptor);
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
-    /* super_descr_get calls the type with su->type, which ends the argument
-       list when it is NULL. */
-    if (super_value->type == NULL) {
-        (void)__tinypy_super_arguments(vm, NULL, 0U, NULL, out_error);
-        return NULL;
-    }
     if (descriptor->type != &vm->types[TINYPY_VALUE_SUPER]) {
-        tinypy_value_t *items[2] = {&super_value->type->base.base, instance};
-        tinypy_value_t *args = tinypy_tuple_from_items(vm, items, 2U);
+        /* super_descr_get calls the type with su->type and the object, and an
+           uninitialised su->type ends that argument list. */
+        tinypy_value_t *items[2] = {(tinypy_value_t *)super_value->type, instance};
+        size_t count = super_value->type != NULL ? 2U : 0U;
+        tinypy_value_t *args = tinypy_tuple_from_items(vm, items, count);
         tinypy_value_t *result = tinypy_call(&descriptor->type->base.base, args, NULL, out_error);
 
         TINYPY_DECREF(args);

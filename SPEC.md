@@ -151,8 +151,10 @@ Unicode ключи сохраняются. Traversal для диагностик
 cycle diagnostics.
 
 `tinypy_vm_destroy` сначала вызывает финализаторы native functions и native
-instances, достижимых из VM, пока все значения живы, и только затем
-освобождает память достижимых объектов. Финализатор вызывается ровно один раз.
+instances, достижимых из VM, пока все значения живы; проход повторяется, пока
+финализаторы делают достижимыми новые native values, и только затем
+освобождается память достижимых объектов, без вызова финализаторов.
+Финализатор вызывается ровно один раз.
 
 Модуль `sys` принадлежит VM через собственную ссылку: `sys.stdout`,
 `sys.displayhook` и `sys.exc_*` читаются и пишутся напрямую в его словарь, а
@@ -219,7 +221,9 @@ Legacy `buffer` хранит запрошенные offset и size, а дост�
 теряют исходные bounds; nested views удерживают общий root owner. Первый hash
 кешируется. Raw Unicode buffer содержит native code units; character-buffer
 conversion использует default encoding и отдельно применяет bounds к этим
-байтам, удерживая owner во время codec callbacks.
+байтам, удерживая owner во время codec callbacks. Offset и size больше
+`PTRDIFF_MAX` (возможны только на 32-битных hosts) хранятся как `PTRDIFF_MAX`:
+owner не бывает длиннее, поэтому выбранные bytes не меняются.
 
 Type slots возвращают прямой semantic result. Неверный slot input нарушает C
 precondition и имеет undefined behavior. Python exceptions используются только
@@ -228,6 +232,12 @@ precondition и имеет undefined behavior. Python exceptions использ�
 Внутренний MRO типа заимствует ссылку на сам тип и владеет остальными
 записями, включая классы, добавленные custom `mro()` вне `__bases__`.
 Без cyclic GC владеющая ссылка на сам тип образовала бы неосвобождаемый цикл.
+Поиск атрибута по MRO и `super` удерживают внутренний кортеж на время обхода:
+если сравнение ключей во время обхода присваивает `__bases__`, заменённый
+кортеж становится обычным и до конца обхода владеет и самим типом; поиск
+атрибута затем начинается заново по новому MRO, а `super` дочитывает прежний.
+Поиск начинается заново и тогда, когда сравнение заменяет `__dict__`
+классического класса из MRO.
 `__mro__` при каждом обращении возвращает новый кортеж с владеющими ссылками,
 и `C.__mro__ is C.__mro__` ложно, в отличие от CPython. Hook вызывается при
 создании типа и пересчёте MRO потомков после изменения баз; результат должен
@@ -427,7 +437,9 @@ Python-visible bundled surface намеренно ограничен memory-only
   instance dictionary. Unicode format преобразуется в ASCII, embedded NUL
   завершает parsed format. Module calls используют bounded format cache на
   100 entries; instance methods используют собственный compiled snapshot;
-- `_sre` исполняет Python 2.7 regex programs; разбор replacement templates и
+- `_sre` исполняет Python 2.7 regex programs; `_sre.compile` проверяет program
+  как `_validate` Python 2.7 и отклоняет любую другую с
+  `RuntimeError("invalid SRE code")`; разбор replacement templates и
   `Match.expand` используют `re._subx` и `re._expand`, предоставленные host;
 - filesystem-backed standard library, source-encoding discovery, process
   metadata, environment-dependent `sys` paths и standard I/O input не
@@ -487,6 +499,31 @@ have incompatible native instance layouts». Built-in типы с native layout,
 семейства исключений, подчиняются правилу solid base CPython и дают «multiple
 bases have instance lay-out conflict».
 
+Host native type вызывает только callbacks собственной spec: slot, для
+которого spec не задаёт callback, сохраняет поведение ближайшей базы, не
+являющейся host native type (по умолчанию `object`), даже если callback есть
+у native базы, ведь тот ожидает user data своей spec.
+`tinypy_native_type_update_spec` пересчитывает slots по тому же правилу и
+возвращает generic поведение удалённому callback; Python-подклассы, созданные
+раньше, сохраняют скопированные при создании callbacks, а host native подтипы
+сохраняют свою spec. Базы `tinypy_native_type_new` сохраняют раскладку
+`object` или host native type; база со встроенной раскладкой, например `list`
+или исключение, отвергается с TypeError «native type base '…' has an
+incompatible instance layout». Присваивание `__class__` и `__bases__` не
+переносит payload между типами с разными `construct`, `finalize` или user data
+spec и даёт «object layout differs». Callback `construct` служит собственным
+`tp_new` типа: он получает аргументы вызова, и `object.__new__` и
+`object.__init__` их не отвергают. Тип с `sequence_get` без `iter`
+итерируется по индексам до `IndexError`, как тип CPython с `sq_item`, и `in`
+без `contains` использует эту итерацию. Результат `hash`, равный -1,
+читается как -2, как у `__hash__`; ошибку callback сообщает через `out_error`
+или ошибку VM. Payload принимает выравнивание до `alignof(max_align_t)` на
+любой цели: внутреннее выравнивание VM не меньше его и на i386 System V, где
+64-битные поля структур выровнены по 4 байтам. Method descriptors, которые
+`tinypy_type_set_attr` создаёт в heap type, ссылаются на тип слабо, как
+member descriptors его slots: тип освобождается с последней внешней ссылкой,
+а переживший его descriptor не принимает ни одного receiver.
+
 `f_exc_type`, `f_exc_value` и `f_exc_traceback` показывают сохранённое
 состояние вызывающего frame; текущий обработчик читается через `sys.exc_info()`.
 Эти getset descriptors допускают запись и удаление. `None` очищает поле;
@@ -496,7 +533,11 @@ Frame сохраняет состояние вызывающего при пер
 `reset_exc_info` в CPython 2.7, в том числе после `sys.exc_clear()` в
 вызванной функции. `sys.exc_type`, `sys.exc_value` и `sys.exc_traceback`
 повторяют это состояние; как `PySys_SetObject`, отсутствующие value и
-traceback удаляют имена, а `sys.exc_clear()` записывает во все три `None`.
+traceback удаляют имена, `sys.exc_info()` возвращает вместо них `None`, а
+`sys.exc_clear()` записывает во все три `None`. Публикация удерживает свои
+ссылки, поэтому `__del__`, который во время неё вызывает `sys.exc_clear()`
+или пишет поля `f_exc_*` покидаемого frame, не освобождает публикуемое
+состояние.
 `f_locals`, `f_restricted` и имя generator являются readonly getsets и
 возвращают `AttributeError` при попытке записи или удаления.
 
@@ -583,7 +624,9 @@ nested code objects Python 2.7.
 
 Односимвольные и пустые byte strings являются разделяемыми interned
 singletons VM, как `characters[]` в CPython. Escape-decoded односимвольный
-литерал и односимвольный результат `%`-форматирования при свёртке констант
+литерал, односимвольный литерал источника, чей cookie без нормального имени
+выбирает ASCII или Latin-1 codec (`parsestr` кодирует его обратно этим
+codec), и односимвольный результат `%`-форматирования при свёртке констант
 создаются отдельными non-interned объектами, поэтому marshal output совпадает
 с CPython 2.7.18 побайтово, а разделяемые строки никогда не меняют свои флаги.
 
@@ -768,6 +811,11 @@ exception, сначала вызывает `tinypy_output_flush_line`: как `P
 
 Отчёт об uncaught exception — обязанность host: он читает raised exception,
 её type и traceback через public API и пишет отчёт в объект `sys.stderr`.
+Как `PyErr_SetObject`, `sys.exit` оставляет SystemExit ненормализованным:
+raised value — его аргумент (`None` без аргумента), а не экземпляр, пока
+`except` или `with` не нормализуют его, поэтому host сопоставляет raised type
+и читает code как `handle_system_exit`. Экземпляр SystemExit в аргументе
+поднимается как есть.
 Host, завершающий программу как `Py_Finalize`, до `tinypy_vm_destroy` вызывает
 `sys.exitfunc`, а затем заменяет значения module namespaces на `None` в
 порядке `PyImport_Cleanup`, чтобы finalizers ещё живых объектов выполнились;

@@ -69,8 +69,10 @@
   "core_hash_and_equality",
   "core_independent_vms",
   "core_long_canonical",
+  "core_native_destroy_finalizers",
   "core_native_embedding",
   "core_native_items",
+  "core_native_type_contracts",
   "core_pool_allocator",
   "core_string_release_contract",
   "core_tuple_deep_release",
@@ -91,5 +93,6 @@
   "runtime_module_finder",
   "runtime_operator_numeric",
   "runtime_stack_budget",
-  "runtime_subtype_factory_limits"
+  "runtime_subtype_factory_limits",
+  "runtime_text_heap_budget"
 ]

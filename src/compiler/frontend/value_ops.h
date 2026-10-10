@@ -139,14 +139,31 @@ static inline tinypy_bool_t __tinypy_frontend_is_hex_digit(int32_t character) {
     return byte - (uint32_t)'0' < 10U || (byte | 0x20U) - (uint32_t)'a' < 6U;
 }
 
+/* atoi of the C library on an LP64 host: white space, an optional sign and
+   decimal digits, converted like strtol, which saturates at the limits of
+   long, and truncated to int. */
 static inline int32_t __tinypy_frontend_ascii_to_integer(const char *text) {
-    int32_t value = 0;
+    uint64_t magnitude = 0U;
+    tinypy_bool_t negative = TINYPY_FALSE;
 
-    while (*text >= '0' && *text <= '9') {
-        value = value <= (INT32_MAX - 9) / 10 ? value * 10 + (*text - '0') : INT32_MAX;
+    while (*text == ' ' || (*text >= '\t' && *text <= '\r')) {
         text += 1;
     }
-    return value;
+    if (*text == '+' || *text == '-') {
+        negative = *text == '-' ? TINYPY_TRUE : TINYPY_FALSE;
+        text += 1;
+    }
+    while (*text >= '0' && *text <= '9') {
+        uint64_t digit = (uint64_t)(*text - '0');
+
+        magnitude = magnitude <= (UINT64_C(0x8000000000000000) - digit) / 10U ? magnitude * 10U + digit : UINT64_C(0x8000000000000000);
+        text += 1;
+    }
+    if (negative == 0 && magnitude > (uint64_t)INT64_MAX) {
+        magnitude = (uint64_t)INT64_MAX;
+    }
+    uint64_t bits = negative != 0 ? 0U - magnitude : magnitude;
+    return (int32_t)(uint32_t)bits;
 }
 
 #define isdigit(character) __tinypy_frontend_is_digit(character)

@@ -367,7 +367,9 @@ static void __tinypy_representation_double(tinypy_representation_builder_t *buil
        keeps sixteen with or without it (complex components). */
     scientific = exponent < -4 || exponent >= (raw != 0 ? (add_dot_zero != 0 ? 11 : 12) : 16);
     if (scientific != 0) {
-        while (digit_count > 1U && digits[digit_count - 1U] == 0U) {
+        /* A %.12g exponent form already has the digits dtoa keeps, which
+           include the trailing zeros of a tie that an integer rounds down. */
+        while ((raw == 0 || exponent_position == SIZE_MAX) && digit_count > 1U && digits[digit_count - 1U] == 0U) {
             digit_count -= 1U;
         }
         __tinypy_representation_append_character(builder, (uint8_t)('0' + (char)digits[0]));
@@ -671,9 +673,8 @@ static void __tinypy_representation_pointer(tinypy_representation_builder_t *bui
     }
 }
 //////////////////////////////////////////////////////////////////////////
-/* reported names the method in the non-string error: object.__str__ calls
-   __repr__ but PyObject_Str reports the result as __str__'s. */
-static tinypy_value_t *__tinypy_representation_custom_reported(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t *reported, tinypy_error_t **out_error) {
+/* The result of the special method name of value, of whatever type. */
+static tinypy_value_t *__tinypy_representation_call_special(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_value_t *args;
     tinypy_value_t *result;
 
@@ -686,26 +687,27 @@ static tinypy_value_t *__tinypy_representation_custom_reported(tinypy_value_t *v
     result = tinypy_call(method, args, NULL, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(method);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_representation_call_special(value, name, out_error);
+
     if (result == NULL) {
         return NULL;
     }
     if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_UNICODE) {
         tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_TEXT(reported),
+            TINYPY_MESSAGE_PART_TEXT(name),
             TINYPY_MESSAGE_PART_LITERAL(" returned non-string (type "),
             TINYPY_MESSAGE_PART_TYPE_NAME(result),
             TINYPY_MESSAGE_PART_LITERAL(")")
         };
 
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         TINYPY_DECREF(result);
         return NULL;
     }
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_value_t *result = __tinypy_representation_custom_reported(value, name, name, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -735,30 +737,42 @@ static tinypy_bool_t __tinypy_representation_append_text(tinypy_representation_b
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Returns an owned reference to the __module__ string of a class dictionary.
+   The probe may run the __eq__ of a colliding key that replaces the
+   dictionary, so the dictionary is held while it is probed. */
 static tinypy_value_t *__tinypy_representation_dict_module(tinypy_vm_t *vm, tinypy_value_t *dict) {
-    tinypy_value_t *key = vm->internal_special_module_key;
-    tinypy_value_t *module = tinypy_internal_dict_get_optional(vm, dict, key);
+    TINYPY_INCREF(dict);
+    tinypy_value_t *module = tinypy_internal_dict_get_optional(vm, dict, vm->internal_special_module_key);
 
-    if (module == NULL || TINYPY_VALUE_KIND(module) != TINYPY_VALUE_STRING) {
-        return NULL;
+    if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING) {
+        TINYPY_INCREF(module);
     }
+    else {
+        module = NULL;
+    }
+    TINYPY_DECREF(dict);
     return module;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Old-style classes and their instances always show the defining module,
-   falling back to "?" the way Python 2.7 does when it is missing. */
-static void __tinypy_representation_class_qualified_name(tinypy_representation_builder_t *builder, tinypy_value_t *class_value) {
+/* Old-style classes and their instances show the defining module, falling
+   back to "?" the way Python 2.7 does when it is missing; class_str shows the
+   bare name then. The class is held, as the probe may replace the class of
+   an instance. */
+static void __tinypy_representation_class_qualified_name(tinypy_representation_builder_t *builder, tinypy_value_t *class_value, tinypy_bool_t bare_without_module) {
+    TINYPY_INCREF(class_value);
     tinypy_value_t *module = __tinypy_representation_dict_module(builder->vm, tinypy_class_dict(class_value));
     tinypy_value_t *name = tinypy_class_name(class_value);
 
     if (module != NULL) {
         __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
+        __tinypy_representation_append_character(builder, (uint8_t)'.');
+        TINYPY_DECREF(module);
     }
-    else {
-        __tinypy_representation_append_character(builder, (uint8_t)'?');
+    else if (bare_without_module == 0) {
+        __tinypy_representation_append(builder, "?.", 2U);
     }
-    __tinypy_representation_append_character(builder, (uint8_t)'.');
     __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name));
+    TINYPY_DECREF(class_value);
 }
 //////////////////////////////////////////////////////////////////////////
 /* Instances of types defined in Python show the defining module, the way
@@ -950,18 +964,12 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         return TINYPY_TRUE;
     }
     case TINYPY_VALUE_CLASS:
-        if (raw != 0 && __tinypy_representation_dict_module(builder->vm, tinypy_class_dict(value)) == NULL) {
-            tinypy_value_t *class_name = tinypy_class_name(value);
-
-            __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(class_name), TINYPY_TEXT_BYTE_SIZE(class_name));
-            return TINYPY_TRUE;
-        }
         if (raw != 0) {
-            __tinypy_representation_class_qualified_name(builder, value);
+            __tinypy_representation_class_qualified_name(builder, value, TINYPY_TRUE);
             return TINYPY_TRUE;
         }
         __tinypy_representation_append(builder, "<class ", 7U);
-        __tinypy_representation_class_qualified_name(builder, value);
+        __tinypy_representation_class_qualified_name(builder, value, TINYPY_FALSE);
         __tinypy_representation_append(builder, " at ", 4U);
         __tinypy_representation_pointer(builder, value);
         __tinypy_representation_append_character(builder, (uint8_t)'>');
@@ -1147,7 +1155,7 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         }
         __tinypy_representation_append_character(builder, (uint8_t)'<');
         if (kind == TINYPY_VALUE_OLD_INSTANCE) {
-            __tinypy_representation_class_qualified_name(builder, tinypy_old_instance_class(value));
+            __tinypy_representation_class_qualified_name(builder, tinypy_old_instance_class(value), TINYPY_FALSE);
             __tinypy_representation_append(builder, " instance at ", 13U);
         }
         else {
@@ -1261,11 +1269,11 @@ static tinypy_value_t *__tinypy_object_representation_method(tinypy_value_t *fun
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    /* object_str returns what tp_repr returns, so an overriding __repr__
-       keeps a unicode result. */
+    /* object_str returns whatever tp_repr returns, so an overriding
+       __repr__ keeps a unicode or any other result. */
     if (user_data != NULL && __tinypy_internal_object_overrides_dispatch(self, TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
-        tinypy_value_t *custom = __tinypy_representation_custom_reported(self, vm->internal_special_repr_key, vm->internal_special_str_key, out_error);
+        tinypy_value_t *custom = __tinypy_representation_call_special(self, vm->internal_special_repr_key, out_error);
         return custom;
     }
     if (user_data != NULL) {

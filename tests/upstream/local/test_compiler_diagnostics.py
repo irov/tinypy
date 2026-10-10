@@ -105,6 +105,16 @@ class CompilerDiagnostics(unittest.TestCase):
         self.assertEqual(type(error).__name__, 'IndentationError')
         self.assertEqual((error.msg, error.lineno, error.offset, error.text), ('unexpected indent', 3, 1, '\ty = 2\n'))
 
+    def test_tab_size_comment_reads_the_size_like_atoi(self):
+        body = 'if 1:\n        a = 1\n\t    b = 2\n'
+        for comment in ['# tab-width: 4', '# tab-width:\t4', '# set tabsize= 4', '# vim: :ts= 4', '# tab-width: +4', '# tab-width: 04x']:
+            namespace = {}
+            exec compile(comment + '\n' + body, '<diagnostic>', 'exec') in namespace
+            self.assertEqual((namespace['a'], namespace['b']), (1, 2))
+        for comment in ['# tab-width: -4', '# tab-width: 41', '# tab-width: x4']:
+            error = self.syntax_error(comment + '\n' + body, 'exec')
+            self.assertEqual((type(error).__name__, error.msg, error.lineno), ('IndentationError', 'unexpected indent', 4))
+
     def test_expected_indented_block_precedes_unexpected_unindent(self):
         for source, lineno, offset, text in [('if 1:\n    if 2:\nx = 1\n', 3, 0, 'x = 1\n'),
                                              ('if 1:\n    if 2:\n', 2, 10, '    if 2:\n')]:

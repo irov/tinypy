@@ -1460,6 +1460,344 @@ class ReviewRegressions(unittest.TestCase):
         finally:
             del sys.modules[name]
 
+    def test_handled_exception_cleared_while_published(self):
+        junk = []
+        class Cleared(Exception):
+            def __del__(self):
+                sys.exc_clear()
+                junk.extend([("x" * 40, index) for index in range(32)])
+        def enter_handler():
+            try:
+                raise Cleared()
+            except Cleared:
+                pass
+            try:
+                raise ValueError("entered")
+            except ValueError:
+                return sys.exc_info()[0], sys.exc_traceback is None
+        self.assertEqual(enter_handler(), (None, False))
+        def leave_frame():
+            try:
+                raise Cleared()
+            except Cleared:
+                pass
+        def produce():
+            try:
+                raise Cleared()
+            except Cleared:
+                yield 1
+        try:
+            raise KeyError("outer")
+        except KeyError:
+            leave_frame()
+            self.assertEqual(sys.exc_info(), (None, None, None))
+        try:
+            raise KeyError("outer")
+        except KeyError:
+            self.assertEqual(next(produce()), 1)
+            self.assertIs(sys.exc_info()[0], None)
+        class Clearing(object):
+            def __del__(self):
+                sys.exc_clear()
+                junk.extend([("y" * 40, index) for index in range(32)])
+        sys.exc_type = Clearing()
+        sys.exc_value = Clearing()
+        sys.exc_traceback = Clearing()
+        try:
+            raise IndexError("assigned")
+        except IndexError:
+            self.assertEqual((sys.exc_info()[0], sys.exc_type), (None, None))
+
+    def test_exc_info_reports_dropped_fields_as_none(self):
+        def drop(field):
+            frame = sys._getframe()
+            try:
+                raise KeyError("inner")
+            except KeyError:
+                setattr(frame, field, None)
+        try:
+            raise ValueError("outer")
+        except ValueError:
+            drop("f_exc_value")
+            self.assertIs(sys.exc_info()[0], ValueError)
+            self.assertIs(sys.exc_info()[1], None)
+            self.assertFalse(hasattr(sys, "exc_value"))
+        try:
+            raise ValueError("outer")
+        except ValueError:
+            drop("f_exc_traceback")
+            self.assertIs(sys.exc_info()[2], None)
+            self.assertFalse(hasattr(sys, "exc_traceback"))
+
+    def test_exception_setstate_survives_state_rebuild(self):
+        state = dict(("k%d" % index, index) for index in range(40))
+        junk = []
+        class Record(Exception):
+            def __setattr__(self, name, value):
+                state.clear()
+                junk.extend(["A" * (3000 + index) for index in range(64)])
+                Exception.__setattr__(self, name, value)
+        record = Record()
+        record.__setstate__(state)
+        self.assertEqual(len(vars(record)), 1)
+
+    def test_exception_getslice_converts_bounds_first(self):
+        error = Exception("a", "b", "c")
+        class Bound(object):
+            def __int__(self):
+                error.__init__("converted")
+                return 0
+            def __index__(self):
+                error.__init__("indexed")
+                return 1
+        self.assertEqual(error.__getslice__(Bound(), 2), ("converted",))
+        self.assertRaises(TypeError, Exception("a").__getslice__, 1.0, 2)
+        self.assertEqual(Exception("a", "b", "c").__getslice__(-1, 3), ("c",))
+        self.assertEqual(Exception("a", "b", "c").__getslice__(0, -1), ("a", "b"))
+
+    def test_exception_text_holds_arguments(self):
+        holder = []
+        junk = []
+        class Element(object):
+            def __repr__(self):
+                holder[0].__init__("repr")
+                junk.extend([("A" * 8, index, index) for index in range(16)])
+                return "R"
+            def __str__(self):
+                holder[0].__init__("str")
+                junk.extend([("B" * 8, index, index) for index in range(16)])
+                return "S"
+        def convert(error, conversion):
+            holder[:] = [error]
+            return conversion(error)
+        self.assertEqual(convert(Exception(Element(), Element(), Element()), repr), "Exception(R, R, R)")
+        self.assertEqual(convert(Exception(Element(), Element()), str), "(R, R)")
+        self.assertEqual(convert(Exception(Element()), str), "S")
+        self.assertEqual(convert(Exception(Element()), unicode), u"S")
+        self.assertEqual(convert(Exception(Element(), Element()), unicode), u"(R, R)")
+        self.assertEqual(convert(KeyError(Element()), str), "R")
+        self.assertEqual(convert(EnvironmentError(Element(), Element()), str), "[Errno S] S")
+
+    def test_exception_slots_belong_to_their_type(self):
+        self.assertRaises(TypeError, SyntaxError.__str__, OSError(1, 2, 3))
+        self.assertRaises(TypeError, KeyError.__str__, ValueError("v"))
+        self.assertRaises(TypeError, ValueError.__init__, KeyError(), "x")
+        self.assertRaises(TypeError, EnvironmentError.__init__, Exception(), 1, 2, 3)
+        self.assertIsNot(ValueError.__dict__["__init__"], Exception.__dict__["__init__"])
+        self.assertEqual(sorted(vars(ValueError)), ["__doc__", "__init__", "__new__"])
+        self.assertEqual(sorted(vars(KeyError)), ["__doc__", "__init__", "__new__", "__str__"])
+        class Decode(UnicodeDecodeError):
+            def __init__(self, message):
+                Exception.__init__(self, message)
+        self.assertEqual(Decode("boom").args, ("boom",))
+        class Syntax(SyntaxError):
+            def __init__(self, message, location):
+                BaseException.__init__(self, message, location)
+        error = Syntax("m", ("f", 1, 2, "t"))
+        self.assertEqual((error.msg, error.filename, error.lineno), (None, None, None))
+        class Environment(EnvironmentError):
+            def __init__(self, number, text):
+                StandardError.__init__(self, number, text)
+        error = Environment(2, "nope")
+        self.assertEqual((error.args, error.errno, error.strerror), ((2, "nope"), None, None))
+        class Exit(SystemExit):
+            def __init__(self, code):
+                Exception.__init__(self, code)
+        self.assertRaises(TypeError, Exit, 7)
+        class KeyFirst(KeyError, IOError):
+            pass
+        class EnvironmentFirst(IOError, KeyError):
+            pass
+        self.assertEqual(str(KeyFirst(1, "a")), "(1, 'a')")
+        self.assertEqual(str(EnvironmentFirst(1, "a")), "[Errno 1] a")
+        self.assertEqual(unicode(EnvironmentFirst(1, "a")), u"[Errno 1] a")
+
+    def test_object_str_returns_repr_result(self):
+        class Number(object):
+            def __repr__(self):
+                return 5
+        self.assertEqual(object.__str__(Number()), 5)
+        self.assertRaises(TypeError, str, Number())
+
+    def test_weak_proxy_item_lookup_holds_referent(self):
+        import _weakref
+        holder = []
+        class Key(object):
+            def __hash__(self):
+                return 1
+            def __eq__(self, other):
+                del holder[:]
+                return False
+        class Mapping(dict):
+            pass
+        holder.append(Mapping({Key(): 1, Key(): 2, Key(): 3}))
+        mapping = _weakref.proxy(holder[0])
+        self.assertRaises(KeyError, lambda: mapping[Key()])
+
+    def test_weak_proxy_length_requires_len(self):
+        import _weakref
+        class Plain(object):
+            pass
+        target = Plain()
+        reference = _weakref.proxy(target)
+        for measure in (len, type(reference).__len__):
+            with self.assertRaises(TypeError) as caught:
+                measure(reference)
+            self.assertEqual(str(caught.exception), "object of type 'Plain' has no len()")
+
+    def test_classic_getattr_hook_outlives_error_release(self):
+        class Release(object):
+            def __del__(self):
+                Classic.__getattr__ = None
+        class Failing(object):
+            def __get__(self, instance, owner):
+                raise AttributeError(Release())
+        class Classic:
+            failing = Failing()
+            def __getattr__(self, name):
+                return "hook " + name
+        self.assertEqual(Classic().failing, "hook failing")
+
+    def test_classic_hook_lookup_errors_are_dropped(self):
+        class Key(object):
+            def __init__(self, name):
+                self.name = name
+            def __hash__(self):
+                return hash(self.name)
+            def __eq__(self, other):
+                raise ValueError("comparison failed")
+        class Broken:
+            pass
+        Broken.__dict__[Key("__getattr__")] = 1
+        class Hooked:
+            def __getattr__(self, name):
+                return "hooked " + name
+        class Derived(Broken, Hooked):
+            pass
+        self.assertEqual(Derived().anything, "hooked anything")
+        class Rebased:
+            pass
+        Rebased.__bases__ = (Broken, Hooked)
+        self.assertEqual(Rebased().other, "hooked other")
+        total = 0
+        for value in iter([1, 2, 3]):
+            total += value
+        self.assertEqual(total, 6)
+
+    def test_classic_dict_assignment_refreshes_hooks(self):
+        class Classic:
+            pass
+        def hook(self, name):
+            return "hooked " + name
+        Classic.__dict__ = {"__getattr__": hook}
+        self.assertEqual(Classic().anything, "hooked anything")
+        class Stale:
+            def __getattr__(self, name):
+                return "stale"
+            def __setattr__(self, name, value):
+                raise AssertionError("stale setattr hook")
+        Stale.__dict__ = {}
+        record = Stale()
+        self.assertRaises(AttributeError, getattr, record, "anything")
+        record.value = 1
+        self.assertEqual(record.__dict__, {"value": 1})
+
+    def test_bare_raise_after_frame_dropped_value(self):
+        def drop():
+            try:
+                raise KeyError("k")
+            except KeyError:
+                pass
+            del sys._getframe().f_exc_value
+        try:
+            raise ValueError("x")
+        except ValueError:
+            drop()
+            self.assertEqual(sys.exc_info()[:2], (ValueError, None))
+            try:
+                raise
+            except ValueError as error:
+                self.assertEqual(error.args, ())
+
+    def test_assigned_frame_exception_stays_saved(self):
+        seen = []
+        def assign():
+            frame = sys._getframe()
+            frame.f_exc_type = KeyError
+            frame.f_exc_value = KeyError("assigned")
+            try:
+                raise IndexError("i")
+            except IndexError:
+                seen.append(sys.exc_info()[0])
+        def partial():
+            sys._getframe().f_exc_value = KeyError("value only")
+            try:
+                raise IndexError("i")
+            except IndexError:
+                pass
+        try:
+            raise ValueError("outer")
+        except ValueError:
+            assign()
+            self.assertEqual((seen, sys.exc_info()[0], str(sys.exc_info()[1])), ([IndexError], KeyError, "'assigned'"))
+        try:
+            raise ValueError("outer")
+        except ValueError:
+            partial()
+            self.assertEqual(sys.exc_info()[0], ValueError)
+
+    def test_suspended_generator_frame_keeps_assigned_exception(self):
+        def generator():
+            yield 1
+            yield sys.exc_info()[0]
+        running = generator()
+        next(running)
+        running.gi_frame.f_exc_type = KeyError
+        running.gi_frame.f_exc_value = KeyError("generator")
+        try:
+            raise ValueError("outer")
+        except ValueError:
+            inside = next(running)
+            self.assertEqual((inside, sys.exc_info()[0]), (ValueError, KeyError))
+
+    def test_classic_repr_holds_class_while_probing_module(self):
+        class Other:
+            pass
+        class Collide(object):
+            def __init__(self, action):
+                self.action = action
+                self.armed = False
+            def __hash__(self):
+                return hash("__module__")
+            def __eq__(self, other):
+                if self.armed:
+                    self.armed = False
+                    self.action()
+                return False
+        class Replaced:
+            pass
+        del Replaced.__module__
+        def replace_dict():
+            Replaced.__dict__ = {"__module__": "replaced"}
+        key = Collide(replace_dict)
+        Replaced.__dict__[key] = 1
+        key.armed = True
+        self.assertTrue(repr(Replaced).startswith("<class ?.Replaced at "))
+        self.assertEqual(str(Replaced), "replaced.Replaced")
+        class Kept:
+            pass
+        del Kept.__module__
+        instance = Kept()
+        def replace_class():
+            instance.__class__ = Other
+        Kept.__dict__[Collide(replace_class)] = 1
+        for name in Kept.__dict__.keys():
+            if isinstance(name, Collide):
+                name.armed = True
+        del Kept
+        self.assertTrue(repr(instance).startswith("<?.Kept instance at "))
+        self.assertIs(instance.__class__, Other)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -152,3 +152,149 @@ class StatementSemantics(unittest.TestCase):
         self.assertEqual(self.failure(code_type, *replaced(9, None)), 'TypeError: code() argument 10 must be string, not None')
         self.assertEqual(self.failure(code_type, *(valid + ((), []))), 'TypeError: code() argument 14 must be tuple, not list')
         self.assertEqual(self.failure(code_type, *replaced(6, (1,))), "TypeError: name tuples must contain only strings, not 'int'")
+
+    def test_attribute_cache_entry_moved_by_nested_lookup(self):
+        class Slotted(object):
+            __slots__ = ('x',)
+
+        class Plain(object):
+            pass
+
+        def first(value):
+            return value.x
+
+        def second(value):
+            return value.x
+
+        armed = []
+        slotted = Slotted()
+        slotted.x = 'slot'
+
+        class Key(object):
+            def __hash__(self):
+                return hash('x')
+
+            def __eq__(self, other):
+                if armed:
+                    armed.pop()(slotted)
+                return False
+
+        plain = Plain()
+        for index in range(6):
+            plain.__dict__['f%d' % index] = index
+        plain.__dict__[Key()] = 0
+        plain.__dict__['x'] = 'dict'
+        other = Plain()
+        other.x = 'other'
+        self.assertEqual(second(other), 'other')
+        for get in (first, second):
+            armed.append(get)
+            self.assertEqual(get(plain), 'dict')
+            self.assertEqual(armed, [])
+            self.assertEqual(get(slotted), 'slot')
+            self.assertEqual(get(slotted), 'slot')
+
+    def test_attribute_lookup_keeps_replaced_instance_dict(self):
+        armed = [False]
+        others = []
+
+        class Key(object):
+            def __hash__(self):
+                return hash('x')
+
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    holder.__dict__ = {}
+                    others.extend({'x': index} for index in range(4))
+                return False
+
+        class Holder(object):
+            pass
+
+        def get(value):
+            return value.x
+
+        holder = Holder()
+        holder.__dict__[Key()] = 0
+        armed[0] = True
+        self.assertEqual(self.failure(get, holder), "AttributeError: 'Holder' object has no attribute 'x'")
+
+    def test_attribute_store_keeps_replaced_dict(self):
+        armed = []
+
+        class Key(object):
+            def __hash__(self):
+                return hash('x')
+
+            def __eq__(self, other):
+                if armed:
+                    armed.pop().__dict__ = {}
+                return False
+
+        class Holder(object):
+            pass
+
+        def put(value, item):
+            value.x = item
+
+        def put_generic(value, item):
+            setattr(value, 'x', item)
+
+        def delete(value):
+            del value.x
+
+        def function():
+            pass
+
+        put(Holder(), 0)
+        for target, store in ((Holder(), put), (Holder(), put_generic), (function, put)):
+            target.__dict__[Key()] = 0
+            armed.append(target)
+            store(target, 1)
+            self.assertEqual(target.__dict__, {})
+        for target in (Holder(), function):
+            target.__dict__[Key()] = 0
+            target.__dict__['x'] = 1
+            armed.append(target)
+            delete(target)
+            self.assertEqual(target.__dict__, {})
+
+    def test_class_attribute_cache_keeps_found_attribute(self):
+        armed = [False]
+
+        class Key(object):
+            def __hash__(self):
+                return hash('__get__')
+
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    del Owner.x
+                return False
+
+        Value = type('Value', (object,), {Key(): 1})
+
+        class Owner(object):
+            pass
+
+        def get():
+            return Owner.x
+
+        Owner.x = Value()
+        armed[0] = True
+        self.assertEqual(type(get()).__name__, 'Value')
+
+    def test_container_opcodes_reject_other_kinds(self):
+        code_type = type(returns_locals.func_code)
+
+        def run(bytecode):
+            code = code_type(0, 0, 4, 0x40, bytecode, (0, 'value', 'key', None), (), (), '<crafted>', '<module>', 1, '')
+            return eval(code)
+
+        pushes = 'd\x00\x00d\x01\x00'
+        rest = '\x01d\x03\x00S'
+        for operation in ('^\x01\x00', '\x92\x01\x00', 'd\x02\x00\x93\x01\x00', 'd\x02\x006'):
+            message = self.failure(run, pushes + operation + rest)
+            self.assertTrue(message.startswith('SystemError: '), message)
+            self.assertTrue(message.endswith('bad argument to internal function'), message)

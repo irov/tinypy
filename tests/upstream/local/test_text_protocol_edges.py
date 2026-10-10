@@ -597,6 +597,15 @@ class TextProtocolEdges(unittest.TestCase):
                 call()
             self.assertEqual(str(caught.exception), message)
 
+    def test_percent_width_and_precision_limits_count_the_last_digit(self):
+        for text, error, message in (('%.2147483647d', OverflowError, 'formatted integer is too long (precision too large?)'),
+                                     (u'%.2147483647x', OverflowError, 'formatted integer is too long (precision too large?)'),
+                                     ('%.2147483648d', ValueError, 'prec too big'),
+                                     ('%9223372036854775808d', ValueError, 'width too big')):
+            with self.assertRaises(error) as caught:
+                text % 1
+            self.assertEqual(str(caught.exception), message)
+
     def test_bytearray_padding_checks_fill_before_size(self):
         for name in ('ljust', 'rjust', 'center'):
             method = getattr(bytearray('ab'), name)

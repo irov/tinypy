@@ -4,6 +4,7 @@ Expectations are checked on CPython 2.7.18.
 """
 
 import unittest
+import _struct
 
 
 def _error(operation, *args):
@@ -108,3 +109,67 @@ class NumericSemantics(unittest.TestCase):
         self.assertEqual(cmp(Compared(5), nan), 1)
         self.assertEqual(cmp(nan, Compared(5)), -1)
         self.assertEqual(cmp(Compared(5), big), 1)
+
+    def test_float_str_keeps_the_zeros_of_a_tie_rounded_down(self):
+        for value, text in ((1000000000005.0, '1.00000000000e+12'), (1039816169405.0, '1.03981616940e+12'),
+                            (10000000000050.0, '1.00000000000e+13'), (100000000000500.0, '1.00000000000e+14'),
+                            (1000000000015.0, '1.00000000002e+12'), (1000000000001.0, '1e+12'),
+                            (1000000000000500.0, '1e+15'), (100000000000.5, '1e+11')):
+            self.assertEqual((str(value), '%s' % value, format(value, ''), str(-value)), (text, text, text, '-' + text))
+        self.assertEqual(repr(1000000000005.0), '1000000000005.0')
+        self.assertEqual(str(complex(1, 1000000000005.0)), '(1+1.00000000000e+12j)')
+        self.assertEqual(format(1000000000005.0, '.12'), '1.00000000000e+12')
+        self.assertEqual(['%.2g' % 205.0, '%.3g' % 2005.0, '%.1g' % 25.0, '%.2G' % 12500.0, '%#.2g' % 215.0,
+                          '%.2g' % 215.0, '%#.3g' % 1000000.0, '%#.0g' % 1000000.0],
+                         ['2.0e+02', '2.00e+03', '2e+01', '1.2E+04', '2.2e+02', '2.2e+02', '1.00e+06', '1.e+06'])
+
+    def test_integer_literal_errors_repeat_at_most_two_hundred_bytes(self):
+        for convert, literal, base, reported, shown in ((int, '   ' + 'x' * 300, 10, 10, 'x' * 200),
+                                                        (long, '   ' + 'x' * 300, 10, 10, '   ' + 'x' * 197),
+                                                        (int, u'z' * 250, 35, 35, 'z' * 200), (long, '9' * 250 + '_', 0, 10, '9' * 200),
+                                                        (int, '0x' + 'g' * 300, 0, 0, '0x' + 'g' * 198)):
+            self.assertEqual(_error(convert, literal, base),
+                             ('ValueError', 'invalid literal for %s() with base %d: %r' % (convert.__name__, reported, shown)))
+        for convert, literal, base in ((int, 'x' * 300 + '\x00', 16), (long, ' ' * 3 + 'y' * 250 + '\x00', 10)):
+            self.assertEqual(_error(convert, literal, base),
+                             ('ValueError', 'invalid literal for %s() with base %d: %r' % (convert.__name__, base, literal)))
+
+    def test_complex_power_and_division_follow_c_pow_and_c_quot(self):
+        def bits(value):
+            return _struct.pack('<dd', value.real, value.imag).encode('hex')
+        nan = float('nan')
+        infinity = float('inf')
+        base = 1e309j
+        exponent = -2
+        self.assertEqual(bits(base ** exponent), '000000000000f87f000000000000f87f')
+        self.assertEqual(bits(1e309j ** -2), '000000000000f87f000000000000f87f')
+        self.assertEqual(bits(-(1e309j ** -1)), '000000000000f8ff000000000000f8ff')
+        self.assertEqual(bits(complex(1, 2) / complex(nan, 1)), '000000000000f87f000000000000f87f')
+        overflow = ('OverflowError', 'complex exponentiation')
+        zero_division = ('ZeroDivisionError', '0.0 to a negative or complex power')
+        for operation, outcome in ((lambda: complex(infinity, 0) ** 1, overflow), (lambda: complex(1e200, 0) ** 2, overflow),
+                                   (lambda: complex(2, 0) ** 1025, overflow), (lambda: complex(1e300, 1e300) ** 1.5, overflow),
+                                   (lambda: 0j ** -1, zero_division), (lambda: 0j ** 1j, zero_division),
+                                   (lambda: 0j ** -2.5, zero_division)):
+            self.assertEqual(_error(operation), outcome)
+        self.assertEqual([0j ** 2.5, 0j ** 0, complex(nan, nan) ** 0], [0j, 1 + 0j, 1 + 0j])
+        result = complex(infinity, infinity) ** 1
+        self.assertTrue(result.real != result.real and result.imag != result.imag)
+
+    def test_float_text_converts_with_correct_rounding(self):
+        for text, expected in (('1.5', '0x1.8000000000000p+0'), ('0.1', '0x1.999999999999ap-4'),
+                               ('3.14159265358979', '0x1.921fb54442d11p+1'), ('1e22', '0x1.0f0cf064dd592p+73'),
+                               ('9e22', '0x1.30ee8e7179044p+76'), ('1e23', '0x1.52d02c7e14af6p+76'),
+                               ('9007199254740993', '0x1.0000000000000p+53'), ('9007199254740995', '0x1.0000000000002p+53'),
+                               ('2.2250738585072011e-308', '0x0.fffffffffffffp-1022'),
+                               ('2.2250738585072014e-308', '0x1.0000000000000p-1022'),
+                               ('4.9406564584124654e-324', '0x0.0000000000001p-1022'),
+                               ('2.4703282292062328e-324', '0x0.0000000000001p-1022'), ('2.4703282292062327e-324', '0x0.0p+0'),
+                               ('1.7976931348623157e308', '0x1.fffffffffffffp+1023'), ('1.7976931348623159e308', 'inf'),
+                               ('1e400', 'inf'), ('-1e-400', '-0x0.0p+0'), ('0.30000000000000004', '0x1.3333333333334p-2'),
+                               ('123456789012345678901234567890', '0x1.8ee90ff6c373ep+96'),
+                               ('  -2.5e-3\n', '-0x1.47ae147ae147bp-9'), ('+.5', '0x1.0000000000000p-1'), ('5.', '0x1.4000000000000p+2'),
+                               ('1E+05', '0x1.86a0000000000p+16'), ('000001.5000', '0x1.8000000000000p+0'),
+                               ('1' + '0' * 30 + '.5e-30', '0x1.0000000000000p+0'), ('0.' + '0' * 330 + '1e330', '0x1.999999999999ap-4')):
+            self.assertEqual((float(text).hex(), float(unicode(text)).hex()), (expected, expected))
+            self.assertEqual(complex(text).real.hex(), expected)

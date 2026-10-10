@@ -308,10 +308,12 @@ static tinypy_value_t *__tinypy_codegen_dict_by_type(tinypy_value_t *src, int32_
     */
     tinypy_value_t *sorted_keys = TINYPY_COMPILER_DICT_KEYS(src);
     if (sorted_keys == NULL) {
+        TINYPY_COMPILER_DECREF(dest);
         return NULL;
     }
     if (TINYPY_COMPILER_LIST_SORT(sorted_keys) != 0) {
         TINYPY_COMPILER_DECREF(sorted_keys);
+        TINYPY_COMPILER_DECREF(dest);
         return NULL;
     }
     num_keys = TINYPY_COMPILER_LIST_GET_SIZE(sorted_keys);

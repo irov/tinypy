@@ -82,6 +82,10 @@ typedef struct tinypy_compile_ctx_t {
     /* The tokenizer text is the UTF-8 transcoding of Latin-1 host bytes;
        byte literals transcode back. */
     tinypy_bool_t source_is_latin1;
+    /* parsestr encodes the byte literals of a source whose cookie has no
+       normal name back through its codec; the ASCII and Latin-1 encoders
+       create every string anew. */
+    tinypy_bool_t source_literals_encoded;
     /* Diagnostics restore their text and offset to the declared encoding
        like PyTokenizer_RestoreEncoding; a transcoded diagnostic quotes the
        tokenizer text itself, as Python decoded such a source before

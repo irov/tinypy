@@ -80,3 +80,9 @@ tinypy_expect_script(tabs_error tabs.py CODES 1 ARGS -tt STDOUT_EQUAL ""
 file(WRITE "${TINYPY_WORK_DIR}/helper_mod.py" "NAME_AT_IMPORT = __name__\n")
 file(WRITE "${TINYPY_WORK_DIR}/finalize.py" "import helper_mod\nclass C(object):\n    def __del__(self):\n        print 'del sees module', helper_mod.NAME_AT_IMPORT\nc = C()\n")
 tinypy_expect_script(finalize finalize.py CODES 0 STDOUT_EQUAL "del sees module helper_mod\n" STDERR_EQUAL "")
+
+# A finalizer run by clearing a module namespace may remove the module from
+# sys.modules, its only holder.
+file(WRITE "${TINYPY_WORK_DIR}/victim.py" "a = 1\nb = 2\n")
+file(WRITE "${TINYPY_WORK_DIR}/remove_module.py" "import sys\nimport victim\nclass D(object):\n    def __init__(self, modules):\n        self.modules = modules\n    def __del__(self):\n        del self.modules['victim']\n        print 'victim removed'\nvictim.obj = D(sys.modules)\ndel victim\n")
+tinypy_expect_script(remove_module remove_module.py CODES 0 STDOUT_EQUAL "victim removed\n" STDERR_EQUAL "")

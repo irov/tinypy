@@ -112,3 +112,82 @@ assert drained == 2000
 assert (range(3), range(1, 10, 4), range(5, 0, -2), range(0)) == ([0, 1, 2], [1, 5, 9], [5, 3, 1], [])
 assert error_text(range) == "TypeError: range expected at least 1 arguments, got 0"
 assert sorted([1, 2, 3], reverse=True) == [3, 2, 1]
+
+# apply passes the caller's own keyword dict, which the callbacks of a builtin
+# may clear; the builtin keeps the arguments it read alive. CPython 2.7 itself
+# crashes or reads freed memory on several of these.
+keywords = {}
+
+
+def clearing_key(item):
+    keywords.clear()
+    return -item
+
+
+keywords["key"] = clearing_key
+del clearing_key
+assert apply(sorted, ([3, 1, 2],), keywords) == [3, 2, 1]
+
+
+class ClearingIterable(object):
+    def __iter__(self):
+        keywords.clear()
+        return iter([3, 1, 2])
+
+    def __len__(self):
+        return 3
+
+
+keywords["iterable"] = ClearingIterable()
+assert apply(sorted, (), keywords) == [1, 2, 3]
+
+
+class Sequence(object):
+    def __iter__(self):
+        return iter("ab")
+
+
+class ClearingStart(object):
+    def __index__(self):
+        keywords.clear()
+        return 5
+
+
+keywords["sequence"] = Sequence()
+keywords["start"] = ClearingStart()
+assert list(apply(enumerate, (), keywords)) == [(5, "a"), (6, "b")]
+
+
+class ClearingFlags(object):
+    def __int__(self):
+        keywords.clear()
+        return 0
+
+
+keywords["source"] = "".join(["compiled_value", " = 1"])
+keywords["filename"] = "".join(["fix", "ture"])
+keywords["mode"] = "".join(["ex", "ec"])
+keywords["flags"] = ClearingFlags()
+keywords["dont_inherit"] = int("1")
+exec apply(compile, (), keywords)
+assert compiled_value == 1
+
+
+# A callable iterator that its own callable exhausts keeps the callable and
+# the sentinel for the comparison in progress.
+def counting():
+    state = [0]
+
+    def produce():
+        state[0] += 1
+        if state[0] == 1:
+            for produced in reentered:
+                pass
+        return state[0] * 10
+
+    return produce
+
+
+reentered = iter(counting(), 20)
+assert list(reentered) == []
+assert list(reentered) == []

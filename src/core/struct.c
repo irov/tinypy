@@ -804,11 +804,12 @@ static tinypy_value_t *__tinypy_struct_unpack_from(tinypy_value_t *function, tin
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unpack_from requires a buffer argument", out_error);
         goto cleanup;
     }
-    if (TINYPY_VALUE_KIND(buffer) == TINYPY_VALUE_BUFFER) {
+    if (TINYPY_VALUE_KIND(buffer) == TINYPY_VALUE_BUFFER || tinypy_internal_memoryview_check(buffer) != 0) {
         size_t current_size;
 
-        /* Legacy buffers do not export their bytearray owner. Refresh its
-         * address after callbacks while retaining the acquired view bound. */
+        /* Legacy buffers, and memoryviews over them, do not export their
+         * bytearray owner. Refresh its address after callbacks while
+         * retaining the acquired view bound. */
         (void)tinypy_internal_bytes_view(buffer, &buffer_view.bytes, &current_size);
         if (current_size < buffer_view.size) {
             buffer_view.size = current_size;

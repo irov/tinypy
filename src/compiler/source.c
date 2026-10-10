@@ -724,6 +724,7 @@ static tinypy_bool_t __tinypy_compiler_apply_cookie(tinypy_compile_ctx_t *ctx, c
     }
     else {
         *out_codec = __tinypy_compiler_cookie_codec(ctx, cookie, cookie_size);
+        ctx->source_literals_encoded = *out_codec == TINYPY_INTERNAL_BUILTIN_CODEC_ASCII || *out_codec == TINYPY_INTERNAL_BUILTIN_CODEC_LATIN1 ? TINYPY_TRUE : TINYPY_FALSE;
     }
     if (*out_codec == TINYPY_INTERNAL_BUILTIN_CODEC_LATIN1) {
         ctx->source_diagnostic_latin1 = TINYPY_TRUE;
@@ -799,7 +800,14 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         ctx->source_ascii_lines = INT32_MAX;
     }
     ctx->source_is_latin1 = latin1 != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-    output_capacity = latin1 != 0 ? (source_size - input_offset) * 2U + 3U : source_size - input_offset + 3U;
+    /* Latin-1 bytes transcode to two UTF-8 bytes; a newline and the
+       terminator may follow. */
+    size_t expansion = latin1 != 0 ? 2U : 1U;
+    if (source_size - input_offset > (SIZE_MAX - 3U) / expansion) {
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_MEMORY, "source is too large", 0, 0, out_error);
+        return TINYPY_FALSE;
+    }
+    output_capacity = (source_size - input_offset) * expansion + 3U;
     output = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, output_capacity);
     if (output == NULL) {
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "source normalization exceeds compiler arena limit", 0, 0, out_error);

@@ -215,6 +215,17 @@ static tinypy_bool_t __tinypy_eval_set_item(tinypy_vm_t *vm, tinypy_value_t *con
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* LIST_APPEND, SET_ADD, MAP_ADD and STORE_MAP add to a stack slot that holds
+   the container kind they expect unless the bytecode was crafted; another
+   value is rejected like PyList_Append, PySet_Add and PyDict_SetItem do. */
+static tinypy_bool_t __tinypy_eval_check_container(tinypy_vm_t *vm, const tinypy_value_t *container, tinypy_value_type_e kind, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(container) != kind) {
+        tinypy_internal_exception_raise_system_error(vm, "bad argument to internal function", out_error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static inline tinypy_bool_t __tinypy_eval_attribute_cache_valid(const tinypy_attribute_lookup_cache_entry_t *cache, tinypy_value_t *object, size_t name_index) {
     tinypy_bool_t valid = TINYPY_VALUE_VM(object)->type_lookup_cache_epoch != 0U && cache->epoch == TINYPY_VALUE_VM(object)->type_lookup_cache_epoch && cache->name_index == name_index && cache->type == object->type
         && (cache->attribute == NULL || (cache->attribute->type == cache->attribute_type));
@@ -245,6 +256,18 @@ static tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attribute_cache_inse
     return set;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Caches an attribute that a class or a type holds itself, once the lookup
+   that found it is done. Looking for __get__ on the attribute's type may run
+   a key's __eq__, which can drop the attribute from its class. */
+static void __tinypy_eval_attribute_cache_fill(tinypy_vm_t *vm, tinypy_value_t *code, uint64_t epoch, tinypy_type_t *type, tinypy_value_t *owner, size_t name_index, tinypy_value_t *attribute) {
+    TINYPY_INCREF(attribute);
+    tinypy_bool_t has_get = tinypy_internal_descriptor_has_get(vm, attribute);
+    tinypy_attribute_lookup_cache_entry_t *cache = __tinypy_eval_attribute_cache_insert(code, epoch, type, owner, name_index, attribute);
+
+    cache->has_descriptor_get = has_get;
+    TINYPY_DECREF(attribute);
+}
+//////////////////////////////////////////////////////////////////////////
 /* type_getattro for a class whose metaclass is type itself. Once a generic
    lookup has seen that type offers no data descriptor for the name, the
    class's own attribute decides until a type changes. The entries are keyed
@@ -266,20 +289,17 @@ static tinypy_value_t *__tinypy_eval_load_class_attr(tinypy_vm_t *vm, tinypy_val
         tinypy_value_t *result = tinypy_internal_descriptor_get_value(vm, cache->attribute, NULL, type, out_error);
         return result;
     }
-    if (type->has_classic_mro == 0 && type->has_custom_mro == 0) {
-        uint64_t epoch = vm->type_lookup_cache_epoch;
+    uint64_t epoch = vm->type_lookup_cache_epoch;
+    tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
+    if (result != NULL && vm->type_lookup_cache_epoch == epoch && type->has_classic_mro == 0 && type->has_custom_mro == 0) {
         tinypy_value_t *metaclass_attribute = tinypy_internal_type_lookup_key(vm, object->type, name);
         tinypy_bool_t metaclass_data = metaclass_attribute != NULL && tinypy_internal_descriptor_has_get(vm, metaclass_attribute) != 0 && tinypy_internal_descriptor_is_data(vm, metaclass_attribute) != 0;
         tinypy_value_t *attribute = metaclass_data == 0 ? tinypy_internal_type_lookup_key(vm, type, name) : NULL;
 
         if (attribute != NULL) {
-            tinypy_bool_t has_get = tinypy_internal_descriptor_has_get(vm, attribute);
-            tinypy_attribute_lookup_cache_entry_t *cache = __tinypy_eval_attribute_cache_insert(code, epoch, object->type, object, name_index, attribute);
-
-            cache->has_descriptor_get = has_get;
+            __tinypy_eval_attribute_cache_fill(vm, code, epoch, object->type, object, name_index, attribute);
         }
     }
-    tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -334,14 +354,14 @@ static tinypy_value_t *__tinypy_eval_load_type_attr(tinypy_vm_t *vm, tinypy_valu
         return result;
     }
     uint64_t epoch = vm->type_lookup_cache_epoch;
-    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, object->type, name);
-    if (attribute != NULL) {
-        tinypy_bool_t has_get = tinypy_internal_descriptor_has_get(vm, attribute);
-        tinypy_attribute_lookup_cache_entry_t *cache = __tinypy_eval_attribute_cache_insert(code, epoch, object->type, NULL, name_index, attribute);
-
-        cache->has_descriptor_get = has_get;
-    }
     tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
+    if (result != NULL && vm->type_lookup_cache_epoch == epoch) {
+        tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, object->type, name);
+
+        if (attribute != NULL) {
+            __tinypy_eval_attribute_cache_fill(vm, code, epoch, object->type, NULL, name_index, attribute);
+        }
+    }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -449,18 +469,27 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
     }
     tinypy_value_t **dict_slot = __tinypy_internal_instance_dict_slot(object);
     if (dict_slot != NULL && *dict_slot != NULL) {
+        tinypy_value_t *dict = *dict_slot;
         size_t dict_index = cache->index;
-        result = cache->dict_index_valid != 0 ? tinypy_internal_dict_get_index_hint(vm, *dict_slot, name, dict_index) : NULL;
-        if (result == NULL) {
-            result = tinypy_internal_dict_get_optional_index(vm, *dict_slot, name, &dict_index, NULL);
-            /* No borrowed key survives a callback or a cache eviction. */
+
+        /* A hit with a valid hint has already tried it. A key's __eq__ may
+           replace the dictionary during the lookup. */
+        TINYPY_INCREF(dict);
+        result = tinypy_internal_dict_get_optional_index(vm, dict, name, &dict_index, NULL);
+        /* No borrowed key survives a callback or a cache eviction. The
+           callback may also run this code and move another entry here, whose
+           index is only a hint that the readers check unless it is the slot
+           of a __slots__ member. */
+        if (cache->member_slot == 0) {
             cache->index = dict_index;
             cache->dict_index_valid = result != NULL;
         }
         if (result != NULL) {
             TINYPY_INCREF(result);
+            TINYPY_DECREF(dict);
             goto done;
         }
+        TINYPY_DECREF(dict);
     }
     if (attribute != NULL) {
         if (has_get == 0) {
@@ -516,7 +545,12 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
         if (*dict_slot == NULL) {
             *dict_slot = tinypy_dict_new(vm);
         }
-        tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, *dict_slot, name, value, out_error);
+        tinypy_value_t *dict = *dict_slot;
+
+        /* A key's __eq__ may replace the dictionary during the store. */
+        TINYPY_INCREF(dict);
+        tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, dict, name, value, out_error);
+        TINYPY_DECREF(dict);
         return stored;
     }
     (void)memset(cache, 0, sizeof(*cache));
@@ -1040,11 +1074,13 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
         goto cleanup;
     }
     if (argument == 0U) {
-        if (vm->handled_value == NULL) {
+        /* do_raise re-raises the handled type even when a frame dropped its
+           value, which the class then normalizes. */
+        if (vm->handled_type == NULL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exceptions must be old-style classes or derived from BaseException, not NoneType", out_error);
             goto cleanup;
         }
-        if (__tinypy_eval_exception_instance_of(vm, vm->handled_value, vm->handled_type) != 0) {
+        if (vm->handled_value != NULL && __tinypy_eval_exception_instance_of(vm, vm->handled_value, vm->handled_type) != 0) {
             tinypy_internal_exception_restore_raised_from_handled(vm);
             reason = vm->raised_traceback != NULL ? TINYPY_EVAL_REASON_RERAISE : TINYPY_EVAL_REASON_EXCEPTION;
             goto cleanup;
@@ -1053,7 +1089,9 @@ static tinypy_eval_reason_e __tinypy_eval_raise(tinypy_vm_t *vm, tinypy_frame_ob
         raise_value = vm->handled_value;
         traceback = vm->handled_traceback;
         TINYPY_INCREF(raise_type);
-        TINYPY_INCREF(raise_value);
+        if (raise_value != NULL) {
+            TINYPY_INCREF(raise_value);
+        }
         if (traceback != NULL) {
             TINYPY_INCREF(traceback);
         }
@@ -1808,8 +1846,10 @@ static tinypy_bool_t __tinypy_eval_unwind_reason(tinypy_vm_t *vm, tinypy_frame_o
             if (*reason == TINYPY_EVAL_REASON_EXCEPTION) {
                 if (block.type == TINYPY_OP_SETUP_EXCEPT || block.type == TINYPY_OP_SETUP_WITH) {
                     __tinypy_eval_normalize_raised(vm, out_error);
+                    /* The stack owns the triple, as in CPython, before its
+                       publication runs code that may clear it. */
+                    __tinypy_eval_push_exception_triple(vm, frame, vm->raised_type, vm->raised_value, vm->raised_traceback);
                     tinypy_internal_exception_set_handled_from_raised(vm);
-                    __tinypy_eval_push_exception_triple(vm, frame, vm->handled_type, vm->handled_value, vm->handled_traceback);
                 }
                 else {
                     __tinypy_eval_push_exception_triple(vm, frame, vm->raised_type, vm->raised_value, vm->raised_traceback);
@@ -3457,7 +3497,10 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *dict = __tinypy_eval_peek(frame, 1U);
 
-            if (tinypy_internal_dict_set_checked(vm, dict, key, value, out_error) == 0) {
+            if (__tinypy_eval_check_container(vm, dict, TINYPY_VALUE_DICT, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            else if (tinypy_internal_dict_set_checked(vm, dict, key, value, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             TINYPY_DECREF(value);
@@ -3468,7 +3511,10 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *item = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *list = __tinypy_eval_peek(frame, argument);
 
-            if (tinypy_internal_list_append_checked(list, item, out_error) == 0) {
+            if (__tinypy_eval_check_container(vm, list, TINYPY_VALUE_LIST, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            else if (tinypy_internal_list_append_checked(list, item, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             TINYPY_DECREF(item);
@@ -3477,12 +3523,14 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
         case TINYPY_OP_SET_ADD: {
             tinypy_value_t *item = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *set = __tinypy_eval_peek(frame, argument);
-            tinypy_bool_t added = tinypy_set_add(set, item, out_error);
 
-            TINYPY_DECREF(item);
-            if (added == 0) {
+            if (__tinypy_eval_check_container(vm, set, TINYPY_VALUE_SET, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
+            else if (tinypy_set_add(set, item, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            TINYPY_DECREF(item);
         }
         break;
         case TINYPY_OP_MAP_ADD: {
@@ -3490,7 +3538,10 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *dict = __tinypy_eval_peek(frame, argument);
 
-            if (tinypy_internal_dict_set_checked(vm, dict, key, value, out_error) == 0) {
+            if (__tinypy_eval_check_container(vm, dict, TINYPY_VALUE_DICT, out_error) == 0) {
+                reason = TINYPY_EVAL_REASON_EXCEPTION;
+            }
+            else if (tinypy_internal_dict_set_checked(vm, dict, key, value, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             TINYPY_DECREF(value);
@@ -3658,7 +3709,9 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *function_code = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *defaults = argument != 0U ? __tinypy_eval_build_sequence(vm, frame, argument, 0) : NULL;
 
-            tinypy_bool_t valid_function = TINYPY_VALUE_KIND(function_code) == TINYPY_VALUE_CODE;
+            /* The function gets no closure, so its code may have no free
+               variables. */
+            tinypy_bool_t valid_function = TINYPY_VALUE_KIND(function_code) == TINYPY_VALUE_CODE && TINYPY_TUPLE_SIZE(TINYPY_CODE_FREEVARS(function_code)) == 0U;
             tinypy_value_t *created_function = NULL;
             if (valid_function != 0) {
                 created_function = tinypy_function_new(function_code, frame->globals, defaults, NULL);
@@ -3890,32 +3943,31 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
     }
     vm->evaluation_depth -= 1U;
     vm->current_frame = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
-    if (frame->handled_state_saved != 0 && frame->previous_handled_type != NULL) {
+    if (frame->previous_handled_type != NULL) {
         tinypy_value_t **saved[] = {&frame->previous_handled_type, &frame->previous_handled_value, &frame->previous_handled_traceback};
+        tinypy_value_t *restored[] = {frame->previous_handled_type, frame->previous_handled_value, frame->previous_handled_traceback};
 
+        /* The frame gives the triple up before its publication runs code
+           that may assign f_exc_* again. */
         for (size_t index = 0U; index < sizeof(saved) / sizeof(saved[0]); ++index) {
-            if (*saved[index] != NULL && TINYPY_VALUE_KIND(*saved[index]) == TINYPY_VALUE_NONE) {
-                TINYPY_DECREF(*saved[index]);
-                *saved[index] = NULL;
+            *saved[index] = NULL;
+            if (restored[index] != NULL && TINYPY_VALUE_KIND(restored[index]) == TINYPY_VALUE_NONE) {
+                TINYPY_DECREF(restored[index]);
+                restored[index] = NULL;
             }
         }
-        tinypy_internal_exception_restore_handled(vm, frame->previous_handled_type, frame->previous_handled_value, frame->previous_handled_traceback);
+        tinypy_internal_exception_restore_handled(vm, restored[0], restored[1], restored[2]);
     }
-    else {
-        if (frame->previous_handled_type != NULL) {
-            TINYPY_DECREF(frame->previous_handled_type);
-        }
-        if (frame->previous_handled_value != NULL) {
-            TINYPY_DECREF(frame->previous_handled_value);
-        }
-        if (frame->previous_handled_traceback != NULL) {
-            TINYPY_DECREF(frame->previous_handled_traceback);
-        }
-    }
-    frame->handled_state_saved = TINYPY_FALSE;
+    tinypy_value_t *const unsaved[] = {frame->previous_handled_type, frame->previous_handled_value, frame->previous_handled_traceback};
+
     frame->previous_handled_type = NULL;
     frame->previous_handled_value = NULL;
     frame->previous_handled_traceback = NULL;
+    for (size_t index = 0U; index < sizeof(unsaved) / sizeof(unsaved[0]); ++index) {
+        if (unsaved[index] != NULL) {
+            TINYPY_DECREF(unsaved[index]);
+        }
+    }
     if (generator_execution != 0) {
         if (frame->back != NULL) {
             TINYPY_DECREF(frame->back);
@@ -4088,10 +4140,8 @@ tinypy_value_t *tinypy_internal_eval_generator_resume(tinypy_generator_object_t 
     if (frame->back != NULL) {
         TINYPY_INCREF(frame->back);
     }
-    frame->handled_state_saved = TINYPY_FALSE;
-    frame->previous_handled_type = NULL;
-    frame->previous_handled_value = NULL;
-    frame->previous_handled_traceback = NULL;
+    /* Like the f_exc_* of a CPython generator frame, what an assignment
+       left there while the generator was suspended stays saved. */
     if (generator->started != 0 && throw_value == NULL) {
         TINYPY_INCREF(send_value);
         __tinypy_eval_push_owned(frame, send_value);

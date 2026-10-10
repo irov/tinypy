@@ -2,7 +2,6 @@
 
 #include <float.h>
 #include <math.h>
-#include <stdlib.h>
 #include <string.h>
 
 typedef struct tinypy_constructor_text_view_t {
@@ -567,37 +566,44 @@ static tinypy_value_t *__tinypy_constructor_integer_from_digits(tinypy_vm_t *vm,
     return return_value_3;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_constructor_integer_literal_error(tinypy_vm_t *vm, const uint8_t *bytes, size_t size, int32_t base, int32_t force_long, tinypy_bool_t trim_space, tinypy_error_t **out_error) {
+/* PyInt_FromString and PyLong_FromString repeat at most 200 bytes of the
+   literal, int() after its leading spaces; int() and long() of a string
+   holding a NUL byte repeat it whole. */
+static void __tinypy_constructor_integer_literal_error(tinypy_vm_t *vm, const uint8_t *bytes, size_t size, int32_t base, int32_t force_long, tinypy_bool_t whole, tinypy_error_t **out_error) {
+    size_t literal_limit = 200U;
     size_t begin = 0U;
 
-    if (trim_space != 0) {
+    if (whole == 0 && force_long == 0) {
         while (begin < size && __tinypy_constructor_ascii_space(bytes[begin]) != 0) {
             begin += 1U;
         }
     }
-    tinypy_value_t *literal = tinypy_string_from_bytes(vm, bytes + begin, size - begin);
+    size_t literal_size = whole == 0 && size - begin > literal_limit ? literal_limit : size - begin;
+    tinypy_value_t *literal = tinypy_string_from_bytes(vm, bytes + begin, literal_size);
     tinypy_value_t *representation = tinypy_object_repr(literal, out_error);
+
+    TINYPY_DECREF(literal);
+    if (representation == NULL) {
+        return;
+    }
     tinypy_value_t *base_value = tinypy_integer_from_i64(vm, (int64_t)base);
     tinypy_value_t *base_text = tinypy_object_str(base_value, out_error);
 
-    if (representation != NULL && base_text != NULL) {
-        tinypy_message_part_t parts[4] = {
-            {force_long != 0 ? "invalid literal for long() with base " : "invalid literal for int() with base ", force_long != 0 ? 37U : 36U},
-            {(const char *)TINYPY_TEXT_BYTES(base_text), TINYPY_TEXT_BYTE_SIZE(base_text)},
-            {": ", 2U},
-            {(const char *)TINYPY_TEXT_BYTES(representation), TINYPY_TEXT_BYTE_SIZE(representation)}
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, 4U, out_error);
-    }
-    if (base_text != NULL) {
-        TINYPY_DECREF(base_text);
-    }
     TINYPY_DECREF(base_value);
-    if (representation != NULL) {
+    if (base_text == NULL) {
         TINYPY_DECREF(representation);
+        return;
     }
-    TINYPY_DECREF(literal);
+    tinypy_message_part_t parts[4] = {
+        {force_long != 0 ? "invalid literal for long() with base " : "invalid literal for int() with base ", force_long != 0 ? 37U : 36U},
+        {(const char *)TINYPY_TEXT_BYTES(base_text), TINYPY_TEXT_BYTE_SIZE(base_text)},
+        {": ", 2U},
+        {(const char *)TINYPY_TEXT_BYTES(representation), TINYPY_TEXT_BYTE_SIZE(representation)}
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, 4U, out_error);
+    TINYPY_DECREF(base_text);
+    TINYPY_DECREF(representation);
 }
 //////////////////////////////////////////////////////////////////////////
 /* Whether the digits PyOS_strtoul reads from the front exceed a C long. */
@@ -697,13 +703,13 @@ static tinypy_value_t *__tinypy_constructor_integer_bytes(tinypy_vm_t *vm, const
         int32_t digit = __tinypy_constructor_digit(bytes[index]);
 
         if (digit < 0 || digit >= actual_base) {
-            __tinypy_constructor_integer_literal_error(vm, bytes, size, force_long != 0 ? actual_base : base, force_long, force_long == 0, out_error);
+            __tinypy_constructor_integer_literal_error(vm, bytes, size, force_long != 0 ? actual_base : base, force_long, TINYPY_FALSE, out_error);
             return NULL;
         }
         digit_count += 1U;
     }
     if (digit_count == 0U) {
-        __tinypy_constructor_integer_literal_error(vm, bytes, size, force_long != 0 ? actual_base : base, force_long, force_long == 0, out_error);
+        __tinypy_constructor_integer_literal_error(vm, bytes, size, force_long != 0 ? actual_base : base, force_long, TINYPY_FALSE, out_error);
         return NULL;
     }
     capacity = digit_count / 2U + 2U;
@@ -822,20 +828,77 @@ static tinypy_bool_t __tinypy_constructor_text_equal_ascii(const uint8_t *bytes,
     return ascii[size] == '\0' ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_constructor_decimal_double(tinypy_vm_t *vm, const uint8_t *bytes, size_t size, double *out_value) {
-    char local[128];
+static const double TINYPY_CONSTRUCTOR_EXACT_POWERS_OF_TEN[23] = {
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+    1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
+//////////////////////////////////////////////////////////////////////////
+/* Clinger's fast path: a significand and a power of ten that a double holds
+   exactly give the correctly rounded value in one multiplication or
+   division. FALSE leaves the text to the exact conversion. */
+static tinypy_bool_t __tinypy_constructor_exact_decimal_double(const uint8_t *bytes, size_t size, double *out_value) {
+    uint64_t exact_limit = UINT64_C(1) << 53U;
+    int64_t exact_power_limit = 22;
+    int64_t exponent_limit = 1000;
+    uint64_t significand = 0U;
+    int64_t exponent = 0;
+    tinypy_bool_t fraction = TINYPY_FALSE;
+    size_t index = 0U;
 
-    if (size < sizeof(local)) {
-        char *end;
-        double value;
-
-        (void)memcpy(local, bytes, size);
-        local[size] = '\0';
-        value = strtod(local, &end);
-        if (end == local + size) {
-            *out_value = value;
-            return TINYPY_TRUE;
+    for (; index < size && bytes[index] != (uint8_t)'e' && bytes[index] != (uint8_t)'E'; ++index) {
+        if (bytes[index] == (uint8_t)'.') {
+            fraction = TINYPY_TRUE;
+            continue;
         }
+        if (significand >= exact_limit) {
+            return TINYPY_FALSE;
+        }
+        significand = significand * 10U + (uint64_t)(bytes[index] - (uint8_t)'0');
+        exponent -= fraction != 0 ? 1 : 0;
+    }
+    if (index < size) {
+        int64_t exponent_sign = 1;
+        int64_t exponent_value = 0;
+
+        index += 1U;
+        if (index < size && (bytes[index] == (uint8_t)'+' || bytes[index] == (uint8_t)'-')) {
+            exponent_sign = bytes[index] == (uint8_t)'-' ? -1 : 1;
+            index += 1U;
+        }
+        for (; index < size; ++index) {
+            if (exponent_value >= exponent_limit) {
+                return TINYPY_FALSE;
+            }
+            exponent_value = exponent_value * 10 + (int64_t)(bytes[index] - (uint8_t)'0');
+        }
+        exponent += exponent_sign * exponent_value;
+    }
+    if (significand > exact_limit) {
+        return TINYPY_FALSE;
+    }
+#if FLT_EVAL_METHOD != 0 && FLT_EVAL_METHOD != 1
+    /* Doubles evaluated with excess precision would round twice. */
+    return TINYPY_FALSE;
+#endif
+    /* Past the largest exact power of ten, the excess of the exponent may
+       still scale the significand exactly. */
+    while (exponent > exact_power_limit && significand <= exact_limit / 10U) {
+        significand *= 10U;
+        exponent -= 1;
+    }
+    if (exponent < -exact_power_limit || exponent > exact_power_limit) {
+        return TINYPY_FALSE;
+    }
+    double value = (double)significand;
+
+    *out_value = exponent >= 0 ? value * TINYPY_CONSTRUCTOR_EXACT_POWERS_OF_TEN[exponent] : value / TINYPY_CONSTRUCTOR_EXACT_POWERS_OF_TEN[-exponent];
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The literal parser of the compiler rounds every other text correctly,
+   and unlike strtod, either does so whatever the C locale. */
+static tinypy_bool_t __tinypy_constructor_decimal_double(tinypy_vm_t *vm, const uint8_t *bytes, size_t size, double *out_value) {
+    if (__tinypy_constructor_exact_decimal_double(bytes, size, out_value) != 0) {
+        return TINYPY_TRUE;
     }
     tinypy_bool_t return_value_1 = tinypy_internal_decimal_double(vm, (const char *)bytes, size, out_value);
     return return_value_1;
@@ -1460,7 +1523,7 @@ static tinypy_value_t *__tinypy_constructor_integer_common(tinypy_type_t *type, 
             return NULL;
         }
         if (kind == TINYPY_VALUE_STRING && memchr(TINYPY_TEXT_BYTES(value), 0, TINYPY_TEXT_BYTE_SIZE(value)) != NULL) {
-            __tinypy_constructor_integer_literal_error(vm, TINYPY_TEXT_BYTES(value), TINYPY_TEXT_BYTE_SIZE(value), base, force_long, TINYPY_FALSE, out_error);
+            __tinypy_constructor_integer_literal_error(vm, TINYPY_TEXT_BYTES(value), TINYPY_TEXT_BYTE_SIZE(value), base, force_long, TINYPY_TRUE, out_error);
             return NULL;
         }
         tinypy_value_t *return_value_2 = __tinypy_constructor_integer_text(vm, value, base, force_long, out_error);
@@ -2192,13 +2255,13 @@ tinypy_value_t *tinypy_internal_object_new_items(tinypy_type_t *class_type, tiny
 
     TINYPY_CLEAR_ERROR(out_error);
     /* tp_new_wrapper: the nearest base not created by Python code must
-       still use object.__new__, which only object itself and a native type
-       without a __new__ of its own do; the other built-in types have their
-       own constructor or none at all. */
+       still use object.__new__, which only object itself and a host native
+       type without a __new__ of its own do; the other built-in types have
+       their own constructor or none at all. */
     const tinypy_type_t *static_base = __tinypy_constructor_static_base(class_type);
     tinypy_bool_t object_base = static_base == &vm->types[TINYPY_VALUE_INSTANCE] ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *object_new = object_base == 0 ? tinypy_type_get_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_new_key) : NULL;
-    if (object_base == 0 && (static_base->layout_kind != TINYPY_VALUE_NATIVE_INSTANCE || tinypy_type_get_attr_key(static_base, vm->internal_special_new_key) != object_new)) {
+    if (object_base == 0 && (tinypy_internal_type_is_host_native(static_base) == 0 || tinypy_type_get_attr_key(static_base, vm->internal_special_new_key) != object_new)) {
         tinypy_internal_constructor_unsafe_new_error(&vm->types[TINYPY_VALUE_INSTANCE], class_type, out_error);
         return NULL;
     }
@@ -2215,7 +2278,10 @@ tinypy_value_t *tinypy_internal_object_new_items(tinypy_type_t *class_type, tiny
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__new__ cannot create set instances", out_error);
         return NULL;
     }
-    if (__tinypy_constructor_has_mutable_builtin_layout(layout_kind) == 0 && (count != 0U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U))) {
+    /* The construct callback of a native type is a tp_new of its own, which
+       takes the arguments. */
+    tinypy_bool_t native_construct = class_type->native_spec.construct != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    if (__tinypy_constructor_has_mutable_builtin_layout(layout_kind) == 0 && native_construct == 0 && (count != 0U || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U))) {
         tinypy_value_t *type_init = tinypy_internal_type_lookup_key(vm, class_type, vm->internal_special_init_key);
         tinypy_value_t *object_init = tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_init_key);
 
@@ -2409,8 +2475,9 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
         tinypy_value_t *object_new = tinypy_type_get_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_new_key);
 
         /* Symmetrically, CPython 2.7 accepts these arguments when __new__ is
-         * overridden, with the same unexposed warning when both are custom. */
-        if (type_new == object_new) {
+         * overridden, with the same unexposed warning when both are custom;
+         * the construct callback of a native type overrides it. */
+        if (type_new == object_new && type->native_spec.construct == NULL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__init__() takes no parameters", out_error);
             return NULL;
         }
@@ -3754,14 +3821,20 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument must be a class", out_error);
         return NULL;
     }
+    /* The class dictionary is held while it is probed: a colliding key may
+       replace it, and the cache then goes to the current one, as the
+       cls.__slotnames__ assignment of copy_reg does. */
     tinypy_value_t *namespace_dict = kind == TINYPY_VALUE_TYPE ? ((tinypy_type_t *)type_value)->dict : TINYPY_CLASS_OBJECT(type_value)->dict;
     cache_key = TINYPY_RET(vm->internal_special_slotnames_key);
+    TINYPY_INCREF(namespace_dict);
     tinypy_value_t *cached = tinypy_internal_dict_get_optional(vm, namespace_dict, cache_key);
     if (cached != NULL && TINYPY_VALUE_KIND(cached) != TINYPY_VALUE_NONE) {
         TINYPY_INCREF(cached);
+        TINYPY_DECREF(namespace_dict);
         TINYPY_DECREF(cache_key);
         return cached;
     }
+    TINYPY_DECREF(namespace_dict);
     result = tinypy_list_from_items(vm, NULL, 0U);
     slots_key = TINYPY_RET(vm->internal_special_slots_key);
     tinypy_value_t *declared_slots = kind == TINYPY_VALUE_CLASS
@@ -3777,8 +3850,14 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
     }
     for (mro_index = 0U; mro != NULL && mro_index != TINYPY_TUPLE_SIZE(mro); ++mro_index) {
         tinypy_value_t *candidate = TINYPY_TUPLE_GET(mro, mro_index);
-        tinypy_value_t *slots = tinypy_internal_dict_get_optional(vm, tinypy_internal_type_mro_entry_dict(candidate), slots_key);
+        tinypy_value_t *entry_dict = tinypy_internal_type_mro_entry_dict(candidate);
 
+        TINYPY_INCREF(entry_dict);
+        tinypy_value_t *slots = tinypy_internal_dict_get_optional(vm, entry_dict, slots_key);
+        if (slots != NULL) {
+            TINYPY_INCREF(slots);
+        }
+        TINYPY_DECREF(entry_dict);
         if (slots == NULL) {
             continue;
         }
@@ -3791,6 +3870,7 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
         else {
             iterator = tinypy_iter(slots, out_error);
         }
+        TINYPY_DECREF(slots);
         if (iterator == NULL) {
             goto error;
         }
@@ -3835,7 +3915,7 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
     }
     TINYPY_DECREF(slots_key);
     if (kind == TINYPY_VALUE_CLASS) {
-        tinypy_dict_set(namespace_dict, cache_key, result);
+        tinypy_dict_set(TINYPY_CLASS_OBJECT(type_value)->dict, cache_key, result);
     }
     else if ((((tinypy_type_t *)type_value)->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
         tinypy_type_set_attr_key((tinypy_type_t *)type_value, ((tinypy_type_t *)type_value)->vm->internal_special_slotnames_key, result);

@@ -55,10 +55,8 @@ static void __tinypy_exception_type_set_payload_size(tinypy_type_t *type, size_t
     type->slots_offset = type->basic_size;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Every exception type lists its own tp_init, tp_new and, in the families
-   with their own tp_str, tp_str. The entries are the very objects of the
-   type they come from, so a subclass overrides nothing by inheriting
-   them and the constructor fast paths still recognise them. */
+/* Lists the very entry source has under name, as the slot a static type
+   inherits from source. */
 static void __tinypy_exception_type_share_attribute(tinypy_type_t *type, const tinypy_type_t *source, tinypy_value_t *name) {
     tinypy_value_t *attribute = tinypy_internal_type_lookup_key(type->vm, source, name);
 
@@ -179,10 +177,8 @@ static tinypy_value_t *__tinypy_exception_member(tinypy_value_t *value, size_t i
     return TINYPY_RET(member);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_exception_is_subtype(tinypy_value_t *value, tinypy_exception_type_index_e index) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-
-    tinypy_bool_t return_value_1 = tinypy_type_is_subtype(value->type, vm->exception_types[index]) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+static tinypy_bool_t __tinypy_exception_type_is(const tinypy_type_t *type, tinypy_exception_type_index_e index) {
+    tinypy_bool_t return_value_1 = tinypy_type_is_subtype(type, type->vm->exception_types[index]) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -220,14 +216,36 @@ static void __tinypy_exception_unicode_clear(tinypy_internal_unicode_error_paylo
     __tinypy_exception_slot_replace(&payload->reason, NULL);
 }
 //////////////////////////////////////////////////////////////////////////
+/* BaseException_str: the text of the only argument or of the arguments,
+   which stay referenced while the text may initialise the exception again. */
+static tinypy_value_t *__tinypy_exception_base_string(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *args = __tinypy_exception_payload(value)->args;
+
+    if (args == NULL || TINYPY_TUPLE_SIZE(args) == 0U) {
+        tinypy_value_t *empty = TINYPY_RET_EMPTY_STRING(TINYPY_VALUE_VM(value));
+        return empty;
+    }
+    TINYPY_INCREF(args);
+    tinypy_value_t *display = TINYPY_TUPLE_SIZE(args) == 1U ? TINYPY_TUPLE_GET(args, 0U) : args;
+    tinypy_value_t *result = tinypy_object_str(display, out_error);
+
+    TINYPY_DECREF(args);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* KeyError_str: the repr of the only argument. */
 static tinypy_value_t *__tinypy_exception_key_string(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_t *args = __tinypy_exception_payload(value)->args;
 
-    if (args != NULL && TINYPY_TUPLE_SIZE(args) == 1U) {
-        tinypy_value_t *return_value_1 = tinypy_object_repr(TINYPY_TUPLE_GET(args, 0U), out_error);
-        return return_value_1;
+    if (args == NULL || TINYPY_TUPLE_SIZE(args) != 1U) {
+        tinypy_value_t *text = __tinypy_exception_base_string(value, out_error);
+        return text;
     }
-    return NULL;
+    TINYPY_INCREF(args);
+    tinypy_value_t *result = tinypy_object_repr(TINYPY_TUPLE_GET(args, 0U), out_error);
+
+    TINYPY_DECREF(args);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* EnvironmentError_str: a filename selects the three-field form; otherwise
@@ -246,6 +264,7 @@ static tinypy_value_t *__tinypy_exception_environment_string(tinypy_value_t *val
     }
     size_t field_count = fields[TINYPY_EXCEPTION_ENVIRONMENT_FILENAME] != NULL ? 3U : 2U;
     if (field_count == 2U && (fields[TINYPY_EXCEPTION_ENVIRONMENT_ERRNO] == NULL || fields[TINYPY_EXCEPTION_ENVIRONMENT_STRERROR] == NULL)) {
+        result = __tinypy_exception_base_string(value, out_error);
         goto cleanup;
     }
     for (index = 0U; index < 2U; ++index) {
@@ -361,11 +380,11 @@ static size_t __tinypy_exception_unicode_field_size(tinypy_value_t *value) {
     return index;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_exception_unicode_string(tinypy_value_t *value, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_exception_unicode_string(tinypy_value_t *value, const tinypy_type_t *owner, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_internal_unicode_error_payload_t *payload = (tinypy_internal_unicode_error_payload_t *)tinypy_native_instance_payload(value);
-    tinypy_bool_t decode = __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_UNICODE_DECODE_ERROR);
-    tinypy_bool_t translate = __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR);
+    tinypy_bool_t decode = __tinypy_exception_type_is(owner, TINYPY_EXCEPTION_UNICODE_DECODE_ERROR);
+    tinypy_bool_t translate = __tinypy_exception_type_is(owner, TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR);
     tinypy_value_t *encoding = NULL;
     tinypy_value_t *object = NULL;
     tinypy_value_t *reason;
@@ -401,6 +420,7 @@ static tinypy_value_t *__tinypy_exception_unicode_string(tinypy_value_t *value, 
     object = payload->object;
     if (object == NULL || TINYPY_VALUE_KIND(object) != (decode != 0 ? TINYPY_VALUE_STRING : TINYPY_VALUE_UNICODE)) {
         object = NULL;
+        result = __tinypy_exception_base_string(value, out_error);
         goto cleanup;
     }
     TINYPY_INCREF(object);
@@ -493,51 +513,40 @@ static tinypy_value_t *__tinypy_exception_allocate_blank(tinypy_type_t *type) {
     return instance;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The families whose tp_str is not BaseException_str in Python 2.7. */
-static tinypy_bool_t __tinypy_exception_has_own_string(tinypy_value_t *value) {
-    tinypy_bool_t result = __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_KEY_ERROR) != 0
-        || __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_ENVIRONMENT_ERROR) != 0
-        || __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_SYNTAX_ERROR) != 0
-        || __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR) != 0
-        || __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_UNICODE_DECODE_ERROR) != 0
-        || __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR) != 0;
-
-    return result;
+/* The exception type whose __init__ or __str__ slot wrapper attribute is;
+   NULL for any other attribute, a bound wrapper included. */
+static const tinypy_type_t *__tinypy_exception_entry_owner(tinypy_value_t *attribute, tinypy_native_function_callback_t callback) {
+    if (attribute == NULL || TINYPY_VALUE_KIND(attribute) != TINYPY_VALUE_NATIVE_FUNCTION) {
+        return NULL;
+    }
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(attribute);
+    if (function->callback != callback || function->self != NULL) {
+        return NULL;
+    }
+    const tinypy_type_t *owner = (const tinypy_type_t *)function->user_data;
+    return owner;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_exception_string(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *args = __tinypy_exception_payload(value)->args;
+/* The tp_str of owner, the exception type that lists the __str__ in use. */
+static tinypy_value_t *__tinypy_exception_owner_string(tinypy_value_t *value, const tinypy_type_t *owner, tinypy_error_t **out_error) {
+    tinypy_value_t *result;
 
-    if (__tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_KEY_ERROR) != 0 && args != NULL && TINYPY_TUPLE_SIZE(args) == 1U) {
-        tinypy_value_t *return_value_1 = __tinypy_exception_key_string(value, out_error);
-        return return_value_1;
+    if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_KEY_ERROR) != 0) {
+        result = __tinypy_exception_key_string(value, out_error);
     }
-    if (__tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_ENVIRONMENT_ERROR) != 0) {
-        tinypy_value_t *result = __tinypy_exception_environment_string(value, out_error);
-
-        if (result != NULL || (out_error != NULL && *out_error != NULL)) {
-            return result;
-        }
+    else if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_ENVIRONMENT_ERROR) != 0) {
+        result = __tinypy_exception_environment_string(value, out_error);
     }
-    if (__tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_SYNTAX_ERROR) != 0) {
-        tinypy_value_t *return_value_2 = __tinypy_exception_syntax_string(value, out_error);
-        return return_value_2;
+    else if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_SYNTAX_ERROR) != 0) {
+        result = __tinypy_exception_syntax_string(value, out_error);
     }
-    if (__tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR) != 0 || __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_UNICODE_DECODE_ERROR) != 0 || __tinypy_exception_is_subtype(value, TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR) != 0) {
-        tinypy_value_t *result = __tinypy_exception_unicode_string(value, out_error);
-
-        if (result != NULL || (out_error != NULL && *out_error != NULL)) {
-            return result;
-        }
+    else if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR) != 0 || __tinypy_exception_type_is(owner, TINYPY_EXCEPTION_UNICODE_DECODE_ERROR) != 0 || __tinypy_exception_type_is(owner, TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR) != 0) {
+        result = __tinypy_exception_unicode_string(value, owner, out_error);
     }
-
-    if (args == NULL || TINYPY_TUPLE_SIZE(args) == 0U) {
-        tinypy_value_t *return_value_1 = TINYPY_RET_EMPTY_STRING(TINYPY_VALUE_VM(value));
-        return return_value_1;
+    else {
+        result = __tinypy_exception_base_string(value, out_error);
     }
-    tinypy_value_t *display = TINYPY_TUPLE_SIZE(args) == 1U ? TINYPY_TUPLE_GET(args, 0U) : args;
-    tinypy_value_t *return_value_2 = tinypy_object_str(display, out_error);
-    return return_value_2;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_exception_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
@@ -569,30 +578,61 @@ static tinypy_value_t *__tinypy_exception_getitem_method(tinypy_value_t *functio
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* wrap_ssizessizeargfunc converts both bounds like PyInt_AsLong before
+   BaseException_getslice reads the arguments, whose PySequence_GetSlice
+   counts a negative bound from the end as a slice does. */
 static tinypy_value_t *__tinypy_exception_getslice_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    int64_t bounds[2];
 
     (void)user_data;
     if (__tinypy_exception_method_arguments(vm, args, kwargs, 3U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *exception_args = __tinypy_exception_payload(TINYPY_TUPLE_GET(args, 0U))->args;
-    tinypy_value_t *slice = tinypy_slice_new(vm, TINYPY_TUPLE_GET(args, 1U), TINYPY_TUPLE_GET(args, 2U), NULL);
+    for (size_t index = 0U; index < 2U; ++index) {
+        tinypy_value_t *bound = TINYPY_TUPLE_GET(args, index + 1U);
+
+        if (TINYPY_VALUE_KIND(bound) == TINYPY_VALUE_FLOAT) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument expected, got float", out_error);
+            return NULL;
+        }
+        if (tinypy_internal_number_as_i64(bound, &bounds[index], out_error) == 0) {
+            return NULL;
+        }
+    }
+    tinypy_value_t *start = tinypy_integer_from_i64(vm, bounds[0]);
+    tinypy_value_t *stop = tinypy_integer_from_i64(vm, bounds[1]);
+    tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
+    tinypy_value_t *exception_args = TINYPY_RET(__tinypy_exception_payload(TINYPY_TUPLE_GET(args, 0U))->args);
     tinypy_value_t *result = tinypy_internal_get_item_builtin(exception_args, slice, out_error);
 
+    TINYPY_DECREF(exception_args);
     TINYPY_DECREF(slice);
+    TINYPY_DECREF(stop);
+    TINYPY_DECREF(start);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The __str__ slot wrapper of an exception type with a tp_str of its own,
+   user_data. */
 static tinypy_value_t *__tinypy_exception_str_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    (void)user_data;
     if (__tinypy_exception_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *result = __tinypy_exception_string(TINYPY_TUPLE_GET(args, 0U), out_error);
+    tinypy_value_t *result = __tinypy_exception_owner_string(TINYPY_TUPLE_GET(args, 0U), (const tinypy_type_t *)user_data, out_error);
 
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The tp_str an exception type inherits through its MRO. */
+static tinypy_value_t *__tinypy_exception_string(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *method = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_str_key);
+    const tinypy_type_t *owner = __tinypy_exception_entry_owner(method, __tinypy_exception_str_method);
+
+    tinypy_value_t *result = __tinypy_exception_owner_string(value, owner != NULL ? owner : vm->exception_types[TINYPY_EXCEPTION_BASE], out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -608,13 +648,11 @@ static tinypy_value_t *__tinypy_exception_unicode_method(tinypy_value_t *functio
     tinypy_value_t *string_method = tinypy_type_get_attr_key(self->type, vm->internal_special_str_key);
     tinypy_value_t *base_string_method = tinypy_type_get_attr_key(vm->exception_types[TINYPY_EXCEPTION_BASE], vm->internal_special_str_key);
 
-    /* BaseException_unicode converts what an overridden __str__ returns,
-       which may be unicode, and the text of the families with their own str. */
-    if (string_method != base_string_method || __tinypy_exception_has_own_string(self) != 0) {
+    /* BaseException_unicode converts what a tp_str other than
+       BaseException_str returns, which may be unicode. */
+    if (string_method != base_string_method) {
         tinypy_bool_t handled;
-        tinypy_value_t *text = string_method != base_string_method
-                                   ? tinypy_internal_call_conversion(self, vm->internal_special_str_key, &handled, out_error)
-                                   : __tinypy_exception_string(self, out_error);
+        tinypy_value_t *text = tinypy_internal_call_conversion(self, vm->internal_special_str_key, &handled, out_error);
 
         if (text == NULL) {
             return NULL;
@@ -628,9 +666,13 @@ static tinypy_value_t *__tinypy_exception_unicode_method(tinypy_value_t *functio
         tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(vm, NULL, 0U);
         return return_value_1;
     }
+    /* The text of an argument may initialise the exception again. */
+    TINYPY_INCREF(exception_args);
     tinypy_value_t *display = TINYPY_TUPLE_SIZE(exception_args) == 1U ? TINYPY_TUPLE_GET(exception_args, 0U) : exception_args;
-    tinypy_value_t *return_value_2 = tinypy_internal_object_unicode(display, out_error);
-    return return_value_2;
+    tinypy_value_t *result = tinypy_internal_object_unicode(display, out_error);
+
+    TINYPY_DECREF(exception_args);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_exception_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -647,8 +689,10 @@ static tinypy_value_t *__tinypy_exception_repr_method(tinypy_value_t *function, 
         return NULL;
     }
     self = TINYPY_TUPLE_GET(args, 0U);
-    exception_args = __tinypy_exception_payload(self)->args;
+    /* The representation of an argument may initialise the exception again. */
+    exception_args = TINYPY_RET(__tinypy_exception_payload(self)->args);
     args_repr = tinypy_object_repr(exception_args, out_error);
+    TINYPY_DECREF(exception_args);
     if (args_repr == NULL) {
         return NULL;
     }
@@ -725,12 +769,13 @@ static tinypy_value_t *__tinypy_exception_environment_reduce_method(tinypy_value
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* BaseException_setstate walks the state with PyDict_Next, which reads the
+   table again after every setattr since that may change the dictionary. */
 static tinypy_value_t *__tinypy_exception_setstate_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *self;
     tinypy_value_t *state;
-    tinypy_dict_entry_t *iterator;
-    tinypy_dict_entry_t *iterator_end;
+    size_t position = 0U;
 
     (void)user_data;
     if (__tinypy_exception_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
@@ -747,19 +792,27 @@ static tinypy_value_t *__tinypy_exception_setstate_method(tinypy_value_t *functi
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "state is not a dictionary", out_error);
         return NULL;
     }
-    iterator = TINYPY_DICT_ITERATOR_BEGIN(state);
-    iterator_end = TINYPY_DICT_ITERATOR_END(state);
-    for (; iterator != iterator_end; ++iterator) {
-        if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-            tinypy_value_type_e key_kind = TINYPY_VALUE_KIND(iterator->key);
+    for (;;) {
+        const tinypy_dict_entry_t *entry = tinypy_internal_dict_next_entry(state, &position);
 
-            if (key_kind != TINYPY_VALUE_STRING && key_kind != TINYPY_VALUE_UNICODE) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "attribute name must be string", out_error);
-                return NULL;
-            }
-            if (tinypy_internal_object_set_attr_protocol_key(self, iterator->key, iterator->value, out_error) == 0) {
-                return NULL;
-            }
+        if (entry == NULL) {
+            break;
+        }
+        tinypy_value_t *key = entry->key;
+        tinypy_value_t *value = entry->value;
+        tinypy_value_type_e key_kind = TINYPY_VALUE_KIND(key);
+
+        if (key_kind != TINYPY_VALUE_STRING && key_kind != TINYPY_VALUE_UNICODE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "attribute name must be string", out_error);
+            return NULL;
+        }
+        TINYPY_INCREF(key);
+        TINYPY_INCREF(value);
+        tinypy_bool_t stored = tinypy_internal_object_set_attr_protocol_key(self, key, value, out_error);
+        TINYPY_DECREF(value);
+        TINYPY_DECREF(key);
+        if (stored == 0) {
+            return NULL;
         }
     }
     tinypy_value_t *result = TINYPY_RET_NONE(vm);
@@ -901,9 +954,10 @@ failure:
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* BaseException.__init__ of an instance: the arguments become its args and
-   fill the extra fields of the built-in exception families. */
-static tinypy_bool_t __tinypy_exception_initialize(tinypy_value_t *self, tinypy_value_t *arguments, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+/* The tp_init of owner on an instance of it: BaseException_init makes the
+   arguments its args, and the initialiser of the family of owner fills the
+   fields of that family. */
+static tinypy_bool_t __tinypy_exception_initialize(tinypy_value_t *self, const tinypy_type_t *owner, tinypy_value_t *arguments, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
 
     if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
@@ -927,47 +981,43 @@ static tinypy_bool_t __tinypy_exception_initialize(tinypy_value_t *self, tinypy_
     TINYPY_INCREF(arguments);
     __tinypy_exception_replace_args(payload, arguments);
     if (argument_count == 1U) {
-        TINYPY_INCREF(items[0]);
-        if (payload->message != NULL) {
-            TINYPY_DECREF(payload->message);
-        }
-        payload->message = items[0];
+        __tinypy_exception_slot_replace(&payload->message, items[0]);
     }
     tinypy_bool_t initialized = TINYPY_TRUE;
 
-    if (__tinypy_exception_is_subtype(self, TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR) != 0) {
+    if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR) != 0) {
         initialized = __tinypy_exception_init_unicode(self, items, argument_count, TINYPY_FALSE, TINYPY_FALSE, out_error);
     }
-    else if (__tinypy_exception_is_subtype(self, TINYPY_EXCEPTION_UNICODE_DECODE_ERROR) != 0) {
+    else if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_UNICODE_DECODE_ERROR) != 0) {
         initialized = __tinypy_exception_init_unicode(self, items, argument_count, TINYPY_TRUE, TINYPY_FALSE, out_error);
     }
-    else if (__tinypy_exception_is_subtype(self, TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR) != 0) {
+    else if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR) != 0) {
         initialized = __tinypy_exception_init_unicode(self, items, argument_count, TINYPY_FALSE, TINYPY_TRUE, out_error);
     }
-    else if (__tinypy_exception_is_subtype(self, TINYPY_EXCEPTION_SYNTAX_ERROR) != 0) {
+    else if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_SYNTAX_ERROR) != 0) {
         initialized = __tinypy_exception_init_syntax(self, items, argument_count, out_error);
     }
-    else if (__tinypy_exception_is_subtype(self, TINYPY_EXCEPTION_ENVIRONMENT_ERROR) != 0) {
+    else if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_ENVIRONMENT_ERROR) != 0) {
         initialized = __tinypy_exception_init_environment(self, items, argument_count, payload);
     }
-    else if (__tinypy_exception_is_subtype(self, TINYPY_EXCEPTION_SYSTEM_EXIT) != 0) {
+    else if (__tinypy_exception_type_is(owner, TINYPY_EXCEPTION_SYSTEM_EXIT) != 0) {
         initialized = __tinypy_exception_init_system_exit(self, items, argument_count, payload);
     }
     return initialized;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The __init__ slot wrapper of each built-in exception type, user_data. */
 static tinypy_value_t *__tinypy_exception_init(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t count = TINYPY_TUPLE_SIZE(args);
 
-    (void)user_data;
     if (count == 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exception constructor does not accept keyword arguments", out_error);
         return NULL;
     }
     tinypy_value_t *const *items = tinypy_internal_tuple_items(args);
     tinypy_value_t *arguments = tinypy_tuple_from_items(vm, items + 1U, count - 1U);
-    tinypy_bool_t initialized = __tinypy_exception_initialize(items[0], arguments, kwargs, out_error);
+    tinypy_bool_t initialized = __tinypy_exception_initialize(items[0], (const tinypy_type_t *)user_data, arguments, kwargs, out_error);
 
     TINYPY_DECREF(arguments);
     if (initialized == 0) {
@@ -992,8 +1042,16 @@ static tinypy_value_t *__tinypy_exception_new_method(tinypy_value_t *function, t
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_exception_type_add_init(tinypy_type_t *type) {
+    tinypy_internal_type_add_method(type, type->vm->internal_special_init_key, __tinypy_exception_init, type, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_exception_type_add_new(tinypy_type_t *type) {
     tinypy_internal_type_add_static_method(type, type->vm->internal_special_new_key, __tinypy_exception_new_method, type, NULL);
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_exception_type_add_str(tinypy_type_t *type) {
+    tinypy_internal_type_add_method(type, type->vm->internal_special_str_key, __tinypy_exception_str_method, type, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_exception_type_index_e __tinypy_exception_index_from_error(tinypy_error_kind_e kind) {
@@ -1128,13 +1186,12 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
         }
         else {
             const tinypy_type_t *base = vm->exception_types[(size_t)definition->parent];
-            const tinypy_type_t *base_exception = vm->exception_types[TINYPY_EXCEPTION_BASE];
 
             type = tinypy_internal_type_new_configured(type_name, &base, 1U, NULL, NULL, TINYPY_TRUE, TINYPY_FALSE, NULL);
-            __tinypy_exception_type_share_attribute(type, base_exception, vm->internal_special_init_key);
+            __tinypy_exception_type_add_init(type);
             __tinypy_exception_type_add_new(type);
             if (index == (size_t)TINYPY_EXCEPTION_KEY_ERROR || index == (size_t)TINYPY_EXCEPTION_ENVIRONMENT_ERROR || index == (size_t)TINYPY_EXCEPTION_SYNTAX_ERROR || index == (size_t)TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR || index == (size_t)TINYPY_EXCEPTION_UNICODE_DECODE_ERROR || index == (size_t)TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR) {
-                __tinypy_exception_type_share_attribute(type, base_exception, vm->internal_special_str_key);
+                __tinypy_exception_type_add_str(type);
             }
         }
         if (index == (size_t)TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR || index == (size_t)TINYPY_EXCEPTION_UNICODE_DECODE_ERROR || index == (size_t)TINYPY_EXCEPTION_UNICODE_TRANSLATE_ERROR) {
@@ -1152,7 +1209,7 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
         }
 
         if (index == (size_t)TINYPY_EXCEPTION_BASE) {
-            tinypy_internal_type_add_method(type, vm->internal_special_init_key, __tinypy_exception_init, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+            __tinypy_exception_type_add_init(type);
             __tinypy_exception_type_add_new(type);
             tinypy_internal_initialize_exception_descriptors(type);
             /* BaseException sets tp_getattro and tp_setattro to the generic
@@ -1162,7 +1219,7 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
             __tinypy_exception_type_share_attribute(type, &vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_delattr_key);
             tinypy_internal_type_add_method(type, vm->internal_special_getitem_key, __tinypy_exception_getitem_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
             tinypy_internal_type_add_method(type, vm->internal_special_getslice_key, __tinypy_exception_getslice_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-            tinypy_internal_type_add_method(type, vm->internal_special_str_key, __tinypy_exception_str_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+            __tinypy_exception_type_add_str(type);
             tinypy_internal_type_add_method(type, vm->internal_special_unicode_key, __tinypy_exception_unicode_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
             tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_exception_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
             tinypy_internal_type_add_method(type, vm->internal_special_reduce_key, __tinypy_exception_reduce_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
@@ -1250,17 +1307,18 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
     }
 
     initializer_attribute = tinypy_internal_type_constructor_init(instance->type);
-    tinypy_value_t *base_init = tinypy_internal_type_constructor_init(vm->exception_types[TINYPY_EXCEPTION_BASE]);
-    if (initializer_attribute != NULL && initializer_attribute == base_init) {
-        /* The built-in __init__ runs under the call guard of tinypy_call but
-           without a bound method, and keeps an exact args tuple as it is. */
+    const tinypy_type_t *initializer_owner = __tinypy_exception_entry_owner(initializer_attribute, __tinypy_exception_init);
+    if (initializer_owner != NULL) {
+        /* The built-in __init__ of a type runs under the call guard of
+           tinypy_call but without a bound method, and keeps an exact args
+           tuple as it is. */
         if (__tinypy_internal_call_enter(vm, out_error) == 0) {
             TINYPY_DECREF(instance);
             return NULL;
         }
         tinypy_value_t *const *items = tinypy_internal_tuple_items(args);
         tinypy_value_t *arguments = args->type == &vm->types[TINYPY_VALUE_TUPLE] ? TINYPY_RET(args) : tinypy_tuple_from_items(vm, items, TINYPY_TUPLE_SIZE(args));
-        tinypy_bool_t initialized = __tinypy_exception_initialize(instance, arguments, kwargs, out_error);
+        tinypy_bool_t initialized = __tinypy_exception_initialize(instance, initializer_owner, arguments, kwargs, out_error);
 
         __tinypy_internal_call_leave(vm);
         TINYPY_DECREF(arguments);
@@ -1423,8 +1481,35 @@ void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm) {
     tinypy_internal_exception_restore_handled(vm, type, value, traceback);
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_exception_retain_triple(tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback) {
+    if (type != NULL) {
+        TINYPY_INCREF(type);
+    }
+    if (value != NULL) {
+        TINYPY_INCREF(value);
+    }
+    if (traceback != NULL) {
+        TINYPY_INCREF(traceback);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_exception_release_triple(tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback) {
+    if (type != NULL) {
+        TINYPY_DECREF(type);
+    }
+    if (value != NULL) {
+        TINYPY_DECREF(value);
+    }
+    if (traceback != NULL) {
+        TINYPY_DECREF(traceback);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 /* Takes over the three references and publishes sys.exc_* the way
-   set_exc_info and reset_exc_info do in CPython 2.7. */
+   set_exc_info and reset_exc_info do in CPython 2.7, whose caller keeps the
+   triple it publishes. Releasing the previous triple or a value sys.exc_*
+   drops may run a __del__ that clears or replaces the handled exception, so
+   the publication holds references of its own. */
 void tinypy_internal_exception_restore_handled(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback) {
     tinypy_value_t *previous_type = vm->handled_type;
     tinypy_value_t *previous_value = vm->handled_value;
@@ -1433,16 +1518,10 @@ void tinypy_internal_exception_restore_handled(tinypy_vm_t *vm, tinypy_value_t *
     vm->handled_type = type;
     vm->handled_value = value;
     vm->handled_traceback = traceback;
-    if (previous_type != NULL) {
-        TINYPY_DECREF(previous_type);
-    }
-    if (previous_value != NULL) {
-        TINYPY_DECREF(previous_value);
-    }
-    if (previous_traceback != NULL) {
-        TINYPY_DECREF(previous_traceback);
-    }
+    __tinypy_exception_retain_triple(type, value, traceback);
+    __tinypy_exception_release_triple(previous_type, previous_value, previous_traceback);
     tinypy_internal_sys_publish_handled_exception(vm, type != NULL ? type : &vm->none_object.base, value, traceback);
+    __tinypy_exception_release_triple(type, value, traceback);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_restore_raised_from_handled(tinypy_vm_t *vm) {
@@ -1593,10 +1672,8 @@ tinypy_bool_t tinypy_internal_exception_prefix_raised(tinypy_vm_t *vm, tinypy_ex
     tinypy_internal_vm_deallocate(vm, buffer, prefix_size + text_size);
     args = tinypy_tuple_from_items(vm, &joined, 1U);
     __tinypy_exception_replace_args(payload, args);
-    if (payload->message != NULL) {
-        TINYPY_DECREF(payload->message);
-    }
-    payload->message = joined;
+    __tinypy_exception_slot_replace(&payload->message, joined);
+    TINYPY_DECREF(joined);
     if (out_error != NULL && *out_error != NULL) {
         tinypy_error_release(*out_error);
         *out_error = NULL;

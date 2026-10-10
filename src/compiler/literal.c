@@ -580,13 +580,14 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
     }
     tinypy_value_t *result;
 
-    if (decoded_escape == 0 || output_size == 0U) {
+    if ((decoded_escape == 0 && ctx->source_literals_encoded == 0) || output_size == 0U) {
         result = tinypy_internal_string_from_bytes_uninterned(ctx->vm, output, output_size);
         return result;
     }
     if (output_size == 1U) {
         /* One-byte strings of the VM are shared interned singletons, while an
-           escape-decoded literal is a distinct non-interned object in CPython. */
+           escape-decoded or encoded literal is a distinct non-interned object
+           in CPython. */
         uint8_t *bytes;
 
         result = tinypy_internal_text_allocate_uninitialized(ctx->vm, TINYPY_VALUE_STRING, 1U, 0U, &bytes);

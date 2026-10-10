@@ -29,6 +29,7 @@ typedef struct test_allocator_state_t {
     size_t outstanding_bytes;
     size_t last_allocation_size;
     size_t fail_allocation_above;
+    size_t fail_allocation_size;
 } test_allocator_state_t;
 
 #define TEST_CHECK(condition)                \
@@ -51,7 +52,7 @@ static void *__test_allocate(void *user_data, size_t size, size_t alignment) {
     state->allocation_calls += 1U;
     state->last_allocation_size = size;
 
-    if ((state->fail_allocation_above != 0U && size > state->fail_allocation_above) || size > SIZE_MAX - sizeof(*header)) {
+    if ((state->fail_allocation_above != 0U && size > state->fail_allocation_above) || (state->fail_allocation_size != 0U && size == state->fail_allocation_size) || size > SIZE_MAX - sizeof(*header)) {
         return NULL;
     }
 
@@ -80,7 +81,7 @@ static void *__test_reallocate(void *user_data, void *memory, size_t old_size, s
     state->allocation_calls += 1U;
     header = ((test_allocation_header_t *)memory) - 1;
     state->last_allocation_size = new_size;
-    if (header->fields.size != old_size || header->fields.alignment != alignment || (state->fail_allocation_above != 0U && new_size > state->fail_allocation_above) || new_size > SIZE_MAX - sizeof(*header)) {
+    if (header->fields.size != old_size || header->fields.alignment != alignment || (state->fail_allocation_above != 0U && new_size > state->fail_allocation_above) || (state->fail_allocation_size != 0U && new_size == state->fail_allocation_size) || new_size > SIZE_MAX - sizeof(*header)) {
         return NULL;
     }
 
@@ -1686,6 +1687,61 @@ static int32_t __test_code_object_runtime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A failure while the method calls of a function's verified code are searched
+   leaves the code without caches, and the next call verifies it again. The
+   copy of the bytecode made for that search is the one allocation of exactly
+   the bytecode's size. */
+static int32_t __test_code_cache_allocation_failure(void) {
+    static const char source[] =
+        "line = '    value = int(abs(value)) + len(str(value)) - len(repr(value))\\n'\n"
+        "exec 'def scan(value):\\n' + line * 16 + '    return value\\n'\n";
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    size_t bytecode_size;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "scan.py", 7U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_value_t *name = tinypy_string_from_bytes(vm, "scan", 4U);
+    tinypy_value_t *function = tinypy_dict_get(globals, name);
+    TEST_CHECK(function != NULL);
+    tinypy_value_t *code = tinypy_function_code(function);
+    tinypy_value_t *code_bytecode = tinypy_code_bytecode(code);
+    (void)tinypy_string_view(code_bytecode, &bytecode_size);
+    tinypy_value_t *argument = tinypy_integer_from_i64(vm, 5);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &argument, 1U);
+
+    state.fail_allocation_size = bytecode_size;
+    result = tinypy_call(function, args, NULL, &error);
+    state.fail_allocation_size = 0U;
+    TEST_CHECK(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    result = tinypy_call(function, args, NULL, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    TEST_CHECK(tinypy_integer_as_i64(result) == 5);
+    tinypy_release(result);
+
+    tinypy_release(args);
+    tinypy_release(argument);
+    tinypy_release(name);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_eval_frame_runtime(void) {
     //////////////////////////////////////////////////////////////////////////
     static const uint8_t instructions[] = {
@@ -3241,10 +3297,17 @@ static int32_t __test_intern_lifetime(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Float text converts and renders the same whatever the C locale. */
 static int32_t __test_float_hex_locale(void) {
+    static const char source[] =
+        "assert float('1.5') == 1.5 and float(u' -2.5e-3 ') == -2.5e-3\n"
+        "assert float('0.30000000000000004') == 0.30000000000000004 and float('1e300') == 1e300\n"
+        "assert complex('2.5-0.5j') == 2.5 - 0.5j\n"
+        "assert (str(2.5), '%.3f' % 2.5, '%g' % 1.5e20, format(1234.5, ',.1f')) == ('2.5', '2.500', '1.5e+20', '1,234.5')\n";
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
+    tinypy_compile_options_t options;
     tinypy_error_t *error = NULL;
     char saved_locale[128];
     const char *current_locale = setlocale(LC_NUMERIC, NULL);
@@ -3273,6 +3336,13 @@ static int32_t __test_float_hex_locale(void) {
     tinypy_release(text);
     tinypy_release(method);
     tinypy_release(sample);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *checked = tinypy_exec_source(vm, source, sizeof(source) - 1U, "float_locale.py", 15U, globals, NULL, &options, &error);
+    TEST_CHECK(checked != NULL && error == NULL);
+    tinypy_release(checked);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
     tinypy_vm_destroy(vm);
     TEST_CHECK(setlocale(LC_NUMERIC, saved_locale) != NULL);
     TEST_CHECK(state.outstanding_bytes == 0U && state.outstanding_allocations == 0U);
@@ -3652,6 +3722,48 @@ static int32_t __test_heap_budget_sweep(void) {
     }
     TEST_CHECK(outcome_counts[TEST_HEAP_BUDGET_REJECTED] != 0U);
     TEST_CHECK(outcome_counts[TEST_HEAP_BUDGET_MEMORY_ERROR] != 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Text that runs out of heap while it is formatted fails with MemoryError,
+   never as too large, and a regular expression state that cannot decode its
+   subject hands the matcher stacks back to the pattern. */
+static int32_t __test_text_heap_budget(void) {
+    static const char source[] =
+        "import _sre\n"
+        "for bits in (4000, 16000, 64000, 128000):\n"
+        "    try:\n"
+        "        big = 1 << bits\n"
+        "        text = 'y' * (bits // 4)\n"
+        "    except MemoryError:\n"
+        "        break\n"
+        "    for render in (lambda: '%x' % big, lambda: format(big, 'x'), lambda: '{0:x}'.format(big), lambda: hex(big), lambda: '%s%s' % (text, text)):\n"
+        "        try:\n"
+        "            render()\n"
+        "        except MemoryError:\n"
+        "            pass\n"
+        "pattern = _sre.compile('(a|b)*c', 0, [17, 4, 0, 1, 0, 28, 13, 0, 4294967295, 21, 0, 15, 5, 27, 97, 98, 0, 21, 1, 22, 19, 99, 1], 1)\n"
+        "assert pattern.match(u'ababc').span() == (0, 5)\n"
+        "for size in (1000, 10000, 40000):\n"
+        "    try:\n"
+        "        assert pattern.search(u'\\xe9' * size) is None\n"
+        "    except MemoryError:\n"
+        "        pass\n";
+    tinypy_module_artifact_t artifacts[2];
+    size_t outcome_counts[3] = {0U, 0U, 0U};
+    size_t budget;
+
+    /* No host module is imported; the resolver finds nothing. */
+    (void)memset(artifacts, 0, sizeof(artifacts));
+    for (budget = 64U * 1024U; budget <= 4U * 1024U * 1024U; budget += budget / 24U) {
+        test_heap_budget_outcome_e outcome;
+        if (__test_heap_budget_run(artifacts, source, budget, &outcome) != 0) {
+            return 1;
+        }
+        outcome_counts[outcome] += 1U;
+    }
+    TEST_CHECK(outcome_counts[TEST_HEAP_BUDGET_MEMORY_ERROR] != 0U);
+    TEST_CHECK(outcome_counts[TEST_HEAP_BUDGET_SUCCEEDED] != 0U);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -4792,6 +4904,446 @@ static int32_t __test_native_items(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct test_native_contract_state_t {
+    tinypy_vm_t *vm;
+    size_t calls;
+    size_t constructions;
+    size_t argument_count;
+} test_native_contract_state_t;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_contract_repr(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    test_native_contract_state_t *state = (test_native_contract_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    state->calls += 1U;
+    tinypy_value_t *result = tinypy_string_from_bytes(state->vm, "<contract>", 10U);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_contract_call(tinypy_value_t *instance, void *payload, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    test_native_contract_state_t *state = (test_native_contract_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    (void)args;
+    (void)kwargs;
+    (void)out_error;
+    state->calls += 1U;
+    tinypy_value_t *result = tinypy_integer_from_i64(state->vm, 7);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* -1 is a hash result the VM must not report: it reads as -2. */
+static tinypy_hash_t __test_native_contract_hash(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    test_native_contract_state_t *state = (test_native_contract_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    state->calls += 1U;
+    return (tinypy_hash_t)-1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_contract_get_attribute(tinypy_value_t *instance, void *payload, tinypy_value_t *name, void *user_data, tinypy_error_t **out_error) {
+    test_native_contract_state_t *state = (test_native_contract_state_t *)user_data;
+    size_t size;
+    const void *bytes = tinypy_string_view(name, &size);
+
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    state->calls += 1U;
+    if (size != 6U || memcmp(bytes, "answer", 6U) != 0) {
+        tinypy_vm_raise_error(state->vm, TINYPY_ERROR_ATTRIBUTE, "no such contract attribute");
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_integer_from_i64(state->vm, 42);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_contract_sequence_get(tinypy_value_t *instance, void *payload, tinypy_value_t *key, void *user_data, tinypy_error_t **out_error) {
+    test_native_contract_state_t *state = (test_native_contract_state_t *)user_data;
+    int64_t index = tinypy_integer_as_i64(key);
+
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    if (index < 0 || index >= 3) {
+        tinypy_vm_raise_error(state->vm, TINYPY_ERROR_INDEX, "contract index out of range");
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_integer_from_i64(state->vm, index * 10);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static ptrdiff_t __test_native_contract_sequence_length(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    (void)instance;
+    (void)payload;
+    (void)user_data;
+    (void)out_error;
+    return 3;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __test_native_contract_construct(tinypy_value_t *instance, void *payload, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    test_native_contract_state_t *state = (test_native_contract_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    (void)kwargs;
+    (void)out_error;
+    state->constructions += 1U;
+    state->argument_count = tinypy_tuple_size(args);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_contract_method(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    (void)self;
+    (void)items;
+    (void)count;
+    (void)kwargs;
+    (void)out_error;
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+    tinypy_value_t *result = tinypy_none_get(vm);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_native_contract_run(tinypy_vm_t *vm, tinypy_value_t *globals, const char *source) {
+    static const char prelude[] =
+        "def check(actual, expected):\n"
+        "    if actual != expected:\n"
+        "        raise AssertionError('%r != %r' % (actual, expected))\n"
+        "def expect_error(kind, call, message):\n"
+        "    try:\n"
+        "        call()\n"
+        "    except kind as error:\n"
+        "        check(str(error), message)\n"
+        "    else:\n"
+        "        raise AssertionError(message)\n";
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *checks = tinypy_exec_source(vm, prelude, sizeof(prelude) - 1U, "contract.py", 11U, globals, NULL, &options, &error);
+    TEST_CHECK(checks != NULL && error == NULL);
+    tinypy_release(checks);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, strlen(source), "contract.py", 11U, globals, NULL, &options, &error);
+    if (result == NULL) {
+        size_t size = 0U;
+        const char *message = error != NULL ? tinypy_error_message(error, &size) : "";
+
+        (void)fprintf(stderr, "contract source failed: %.*s\n", (int)size, message);
+        return 1;
+    }
+    tinypy_release(result);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __test_native_contract_add_type(tinypy_value_t *globals, const char *name, tinypy_type_t *type) {
+    tinypy_vm_t *vm = tinypy_value_vm(globals);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, strlen(name));
+    tinypy_value_t *value = tinypy_type_as_value(type);
+
+    tinypy_dict_set(globals, key, value);
+    tinypy_release(key);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The contracts of host native types: each type dispatches only the callbacks
+   of its own spec, a spec update resets what it removes, the bases and the
+   __class__ assignments keep payloads with their spec, a construct callback
+   takes the call arguments, sequence callbacks iterate, -1 is no hash, methods
+   do not keep their type alive, payloads take the alignment of max_align_t
+   and the instance attribute functions hold the instance dictionary. */
+static int32_t __test_native_type_contracts(void) {
+    static const char dispatch_source[] =
+        "base = Base()\n"
+        "derived = Derived()\n"
+        "check(repr(base), '<contract>')\n"
+        "check(repr(derived)[:18], '<Derived object at')\n"
+        "check(base(), 7)\n"
+        "expect_error(TypeError, derived, \"'Derived' object is not callable\")\n"
+        "check(base.answer, 42)\n"
+        "expect_error(AttributeError, lambda: derived.answer, \"'Derived' object has no attribute 'answer'\")\n"
+        "check((list(base), 10 in base, 5 in base, sorted(base, reverse=True)), ([0, 10, 20], True, False, [20, 10, 0]))\n"
+        "expect_error(TypeError, lambda: iter(derived), \"'Derived' object is not iterable\")\n"
+        "check((hash(base), {base: 1}[base], base in set([base])), (-2, 1, True))\n"
+        "check(repr(Own()), '<contract>')\n"
+        "class Early(Base):\n"
+        "    pass\n"
+        "early = Early()\n";
+    static const char update_source[] =
+        "check(repr(base)[:15], '<Base object at')\n"
+        "check(repr(early), '<contract>')\n"
+        "expect_error(TypeError, base, \"'Base' object is not callable\")\n"
+        "check(base.answer, 42)\n";
+    static const char construct_source[] =
+        "class First(Plain):\n"
+        "    pass\n"
+        "class OtherFirst(Plain):\n"
+        "    pass\n"
+        "class Second(Twin):\n"
+        "    pass\n"
+        "item = First()\n"
+        "expect_error(TypeError, lambda: setattr(item, '__class__', Second), \"__class__ assignment: 'First' object layout differs from 'Second'\")\n"
+        "item.__class__ = OtherFirst\n"
+        "check(type(item), OtherFirst)\n"
+        "check(type(Plain(7, key=1)), Plain)\n"
+        "class Initialized(Plain):\n"
+        "    def __init__(self, value):\n"
+        "        Plain.__init__(self, value)\n"
+        "        self.value = value\n"
+        "check(Initialized(5).value, 5)\n";
+    static const char method_source[] =
+        "import _weakref\n"
+        "reference = _weakref.ref(Methods)\n"
+        "kept = Methods.__dict__['method']\n"
+        "check(Methods().method(), None)\n"
+        "del Methods\n"
+        "check(reference(), None)\n"
+        "check(repr(kept), \"<method 'method' of '<deleted type>' objects>\")\n"
+        "check(kept.__objclass__, None)\n"
+        "expect_error(TypeError, lambda: kept(object()), \"descriptor 'method' requires a '<deleted type>' object but received a 'object'\")\n";
+    static const char replace_source[] =
+        "class Collider(object):\n"
+        "    armed = False\n"
+        "    def __hash__(self):\n"
+        "        return hash('attr')\n"
+        "    def __eq__(self, other):\n"
+        "        if Collider.armed:\n"
+        "            Collider.armed = False\n"
+        "            holder.__dict__ = {}\n"
+        "        return False\n"
+        "class Holder(object):\n"
+        "    attr = 'class'\n"
+        "holder = Holder()\n"
+        "def arm():\n"
+        "    holder.__dict__[Collider()] = 'collider'\n"
+        "    Collider.armed = True\n"
+        "arm()\n";
+    test_allocator_state_t allocator_state;
+    test_native_contract_state_t base_state;
+    test_native_contract_state_t derived_state;
+    tinypy_native_type_spec_t spec;
+    tinypy_error_t *error = NULL;
+    size_t size;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    (void)memset(&base_state, 0, sizeof(base_state));
+    (void)memset(&derived_state, 0, sizeof(derived_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    base_state.vm = vm;
+    derived_state.vm = vm;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *name_key = tinypy_string_from_bytes(vm, "__name__", 8U);
+    tinypy_value_t *module_name = tinypy_string_from_bytes(vm, "contract", 8U);
+    tinypy_dict_set(globals, name_key, module_name);
+    tinypy_release(module_name);
+    tinypy_release(name_key);
+
+    tinypy_native_type_spec_init(&spec);
+    spec.payload_size = sizeof(void *);
+    spec.user_data = &base_state;
+    spec.repr = __test_native_contract_repr;
+    spec.call = __test_native_contract_call;
+    spec.hash = __test_native_contract_hash;
+    spec.get_attribute = __test_native_contract_get_attribute;
+    spec.sequence_get = __test_native_contract_sequence_get;
+    spec.sequence_length = __test_native_contract_sequence_length;
+    tinypy_type_t *base = tinypy_native_type_new(vm, "Base", 4U, NULL, 0U, NULL, &spec, &error);
+    TEST_CHECK(base != NULL && error == NULL);
+    tinypy_native_type_spec_t derived_spec;
+    tinypy_native_type_spec_init(&derived_spec);
+    derived_spec.payload_size = sizeof(void *);
+    derived_spec.user_data = &derived_state;
+    const tinypy_type_t *derived_bases[1] = {base};
+    tinypy_type_t *derived = tinypy_native_type_new(vm, "Derived", 7U, derived_bases, 1U, NULL, &derived_spec, &error);
+    TEST_CHECK(derived != NULL && error == NULL);
+    derived_spec.repr = __test_native_contract_repr;
+    tinypy_type_t *own = tinypy_native_type_new(vm, "Own", 3U, derived_bases, 1U, NULL, &derived_spec, &error);
+    TEST_CHECK(own != NULL && error == NULL);
+    __test_native_contract_add_type(globals, "Base", base);
+    __test_native_contract_add_type(globals, "Derived", derived);
+    __test_native_contract_add_type(globals, "Own", own);
+    TEST_CHECK(__test_native_contract_run(vm, globals, dispatch_source) == 0);
+    TEST_CHECK(derived_state.calls == 1U);
+
+    /* An update resets what the spec no longer provides; the Python
+       subclasses created before keep the callbacks they copied. */
+    spec.repr = NULL;
+    spec.call = NULL;
+    TEST_CHECK(tinypy_native_type_update_spec(base, &spec, &error) != 0 && error == NULL);
+    TEST_CHECK(__test_native_contract_run(vm, globals, update_source) == 0);
+
+    /* Bases must keep object's layout or a host native one. */
+    tinypy_value_t *list = tinypy_list_from_items(vm, NULL, 0U);
+    const tinypy_type_t *list_type = tinypy_object_type(list);
+    const tinypy_type_t *list_bases[1] = {list_type};
+    tinypy_release(list);
+    tinypy_native_type_spec_init(&spec);
+    spec.payload_size = sizeof(void *);
+    TEST_CHECK(tinypy_native_type_new(vm, "Listed", 6U, list_bases, 1U, NULL, &spec, &error) == NULL);
+    TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+    static const char layout_message[] = "native type base 'list' has an incompatible instance layout";
+    const char *message = tinypy_error_message(error, &size);
+    TEST_CHECK(size == sizeof(layout_message) - 1U && memcmp(message, layout_message, size) == 0);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    tinypy_type_t *python_base = tinypy_type_new(vm, "PythonBase", 10U, NULL, 0U, NULL, NULL, &error);
+    const tinypy_type_t *python_bases[1] = {python_base};
+    tinypy_type_t *mixed = tinypy_native_type_new(vm, "Mixed", 5U, python_bases, 1U, NULL, &spec, &error);
+    TEST_CHECK(mixed != NULL && error == NULL);
+
+    /* A construct callback takes the call arguments as a tp_new of its own,
+       and the payload stays with the spec that built it. */
+    spec.user_data = &base_state;
+    spec.construct = __test_native_contract_construct;
+    tinypy_type_t *plain = tinypy_native_type_new(vm, "Plain", 5U, NULL, 0U, NULL, &spec, &error);
+    spec.user_data = &derived_state;
+    tinypy_type_t *twin = tinypy_native_type_new(vm, "Twin", 4U, NULL, 0U, NULL, &spec, &error);
+    TEST_CHECK(plain != NULL && twin != NULL && error == NULL);
+    __test_native_contract_add_type(globals, "Plain", plain);
+    __test_native_contract_add_type(globals, "Twin", twin);
+    base_state.constructions = 0U;
+    TEST_CHECK(__test_native_contract_run(vm, globals, construct_source) == 0);
+    TEST_CHECK(base_state.constructions == 3U && base_state.argument_count == 1U);
+
+    /* A heap type references its C methods weakly, so it is freed with its
+       last reference while a method outlives it. */
+    tinypy_native_type_spec_init(&spec);
+    tinypy_type_t *methods = tinypy_native_type_new(vm, "Methods", 7U, NULL, 0U, NULL, &spec, &error);
+    tinypy_value_t *method = tinypy_native_function_new_items(vm, "method", 6U, __test_native_contract_method, 0U, 0U, NULL, NULL);
+    tinypy_type_set_attr(methods, "method", 6U, method);
+    tinypy_release(method);
+    __test_native_contract_add_type(globals, "Methods", methods);
+    tinypy_value_t *methods_value = tinypy_type_as_value(methods);
+    tinypy_release(methods_value);
+    TEST_CHECK(__test_native_contract_run(vm, globals, method_source) == 0);
+
+    /* Payloads take any alignment up to that of max_align_t. */
+    tinypy_native_type_spec_init(&spec);
+    spec.payload_size = 2U * TINYPY_INTERNAL_ALIGNMENT;
+    spec.payload_alignment = TINYPY_INTERNAL_ALIGNMENT;
+#if !defined(_MSC_VER)
+    TEST_CHECK(_Alignof(max_align_t) <= TINYPY_INTERNAL_ALIGNMENT);
+    spec.payload_alignment = _Alignof(max_align_t);
+#endif
+    tinypy_type_t *aligned = tinypy_native_type_new(vm, "Aligned", 7U, NULL, 0U, NULL, &spec, &error);
+    TEST_CHECK(aligned != NULL && error == NULL);
+    tinypy_value_t *aligned_instance = tinypy_native_instance_new(aligned);
+    TEST_CHECK((uintptr_t)tinypy_native_instance_payload(aligned_instance) % spec.payload_alignment == 0U);
+    tinypy_release(aligned_instance);
+    spec.payload_alignment = 2U * TINYPY_INTERNAL_ALIGNMENT;
+    TEST_CHECK(tinypy_native_type_new(vm, "Overaligned", 11U, NULL, 0U, NULL, &spec, &error) == NULL);
+    TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+
+    /* A key comparison of the instance attribute functions replaces the
+       instance dictionary: get reads the new one, set stores in the old one. */
+    TEST_CHECK(__test_native_contract_run(vm, globals, replace_source) == 0);
+    tinypy_value_t *holder_key = tinypy_string_from_bytes(vm, "holder", 6U);
+    tinypy_value_t *holder = tinypy_dict_get_optional(globals, holder_key);
+    tinypy_release(holder_key);
+    TEST_CHECK(holder != NULL);
+    tinypy_value_t *class_attribute = tinypy_type_get_attr(tinypy_object_type(holder), "attr", 4U);
+    TEST_CHECK(class_attribute != NULL);
+    TEST_CHECK(tinypy_instance_get_attr(holder, "attr", 4U) == class_attribute);
+    TEST_CHECK(__test_native_contract_run(vm, globals, "arm()\n") == 0);
+    tinypy_value_t *stored = tinypy_integer_from_i64(vm, 1);
+    tinypy_instance_set_attr(holder, "attr", 4U, stored);
+    tinypy_release(stored);
+    TEST_CHECK(__test_native_contract_run(vm, globals, "check((holder.__dict__, holder.attr), ({}, 'class'))\n") == 0);
+
+    tinypy_type_t *const releases[] = {base, derived, own, python_base, mixed, plain, twin, aligned};
+    for (size_t index = 0U; index < sizeof(releases) / sizeof(releases[0]); ++index) {
+        tinypy_value_t *type_value = tinypy_type_as_value(releases[index]);
+
+        tinypy_release(type_value);
+    }
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    TEST_CHECK(tinypy_vm_has_error(vm) == 0);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+typedef struct test_native_destroy_state_t {
+    tinypy_type_t *type;
+    tinypy_value_t *module;
+    size_t finalized;
+    tinypy_bool_t data_intact;
+} test_native_destroy_state_t;
+//////////////////////////////////////////////////////////////////////////
+/* The first finalizer makes a new native instance reachable; the second,
+   which tinypy_vm_destroy must run before it frees any value, reads a
+   module global. */
+static void __test_native_destroy_finalize(tinypy_value_t *instance, void *payload, void *user_data) {
+    test_native_destroy_state_t *state = (test_native_destroy_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    state->finalized += 1U;
+    if (state->finalized == 1U) {
+        tinypy_value_t *late = tinypy_native_instance_new(state->type);
+
+        tinypy_module_add_value(state->module, "late", 4U, late);
+        tinypy_release(late);
+        return;
+    }
+    tinypy_value_t *data = tinypy_module_get_value(state->module, "data", 4U);
+    state->data_intact = data != NULL && tinypy_typeof(data) == TINYPY_VALUE_LIST && tinypy_list_size(data) == 1U ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_native_destroy_finalizers(void) {
+    test_allocator_state_t allocator_state;
+    test_native_destroy_state_t state;
+    tinypy_native_type_spec_t spec;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    state.module = tinypy_module_new(vm, "app", 3U);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, "app", 3U);
+    tinypy_value_t *modules = tinypy_vm_modules(vm);
+    tinypy_dict_set(modules, key, state.module);
+    tinypy_release(key);
+    tinypy_native_type_spec_init(&spec);
+    spec.payload_size = sizeof(void *);
+    spec.user_data = &state;
+    spec.finalize = __test_native_destroy_finalize;
+    state.type = tinypy_native_type_new(vm, "Node", 4U, NULL, 0U, NULL, &spec, &error);
+    TEST_CHECK(state.type != NULL && error == NULL);
+    tinypy_value_t *first = tinypy_native_instance_new(state.type);
+    tinypy_value_t *item = tinypy_integer_from_i64(vm, 5);
+    tinypy_value_t *data = tinypy_list_from_items(vm, &item, 1U);
+    tinypy_module_add_value(state.module, "first", 5U, first);
+    tinypy_module_add_value(state.module, "data", 4U, data);
+    tinypy_release(data);
+    tinypy_release(item);
+    tinypy_release(first);
+    tinypy_value_t *type_value = tinypy_type_as_value(state.type);
+    tinypy_release(type_value);
+    tinypy_release(state.module);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.finalized == 2U);
+    TEST_CHECK(state.data_intact != 0);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
     if (argc != 2) {
         (void)fprintf(stderr, "usage: %s TEST_NAME\n", argv[0]);
@@ -4864,7 +5416,11 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "code") == 0) {
         int return_value_16 = __test_code_object_runtime();
-        return return_value_16;
+        if (return_value_16 != 0) {
+            return return_value_16;
+        }
+        int cache_failure = __test_code_cache_allocation_failure();
+        return cache_failure;
     }
     if (strcmp(argv[1], "eval_frame") == 0) {
         int return_value_17 = __test_eval_frame_runtime();
@@ -4914,12 +5470,24 @@ int main(int argc, char **argv) {
         int heap_budget = __test_heap_budget_sweep();
         return heap_budget;
     }
+    if (strcmp(argv[1], "text_heap_budget") == 0) {
+        int text_heap_budget = __test_text_heap_budget();
+        return text_heap_budget;
+    }
     if (strcmp(argv[1], "native_embedding") == 0) {
         int return_value_21 = __test_native_embedding();
         return return_value_21;
     }
     if (strcmp(argv[1], "native_items") == 0) {
         int result = __test_native_items();
+        return result;
+    }
+    if (strcmp(argv[1], "native_type_contracts") == 0) {
+        int result = __test_native_type_contracts();
+        return result;
+    }
+    if (strcmp(argv[1], "native_destroy_finalizers") == 0) {
+        int result = __test_native_destroy_finalizers();
         return result;
     }
     if (strcmp(argv[1], "module_finder") == 0) {

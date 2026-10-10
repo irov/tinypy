@@ -147,13 +147,18 @@ void tinypy_internal_frame_free_list_finalize(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* set_exc_info in CPython 2.7: a frame whose f_exc_type is set, by an
+   earlier handler or by an assignment, keeps what it holds; otherwise it
+   saves the handled exception of its caller, None standing for none. */
 void tinypy_internal_frame_save_handled(tinypy_vm_t *vm) {
     tinypy_frame_object_t *frame = vm->current_frame;
 
-    if (frame == NULL || frame->handled_state_saved != 0) {
+    if (frame == NULL || frame->previous_handled_type != NULL) {
         return;
     }
-    frame->handled_state_saved = TINYPY_TRUE;
+    tinypy_value_t *stale_value = frame->previous_handled_value;
+    tinypy_value_t *stale_traceback = frame->previous_handled_traceback;
+
     frame->previous_handled_type = vm->handled_type;
     frame->previous_handled_value = vm->handled_value;
     frame->previous_handled_traceback = vm->handled_traceback;
@@ -168,6 +173,13 @@ void tinypy_internal_frame_save_handled(tinypy_vm_t *vm) {
     }
     if (frame->previous_handled_traceback != NULL) {
         TINYPY_INCREF(frame->previous_handled_traceback);
+    }
+    /* f_exc_value and f_exc_traceback assigned without f_exc_type. */
+    if (stale_value != NULL) {
+        TINYPY_DECREF(stale_value);
+    }
+    if (stale_traceback != NULL) {
+        TINYPY_DECREF(stale_traceback);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -440,7 +452,6 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
         frame->locals = locals != NULL ? locals : globals;
     }
     frame->trace = NULL;
-    frame->handled_state_saved = TINYPY_FALSE;
     frame->previous_handled_type = NULL;
     frame->previous_handled_value = NULL;
     frame->previous_handled_traceback = NULL;

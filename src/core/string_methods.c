@@ -454,6 +454,7 @@ static void __tinypy_string_format_padding(tinypy_string_builder_t *output, cons
 
     if (field->failed != 0) {
         output->failed = TINYPY_TRUE;
+        output->memory_failed = field->memory_failed;
         return;
     }
 
@@ -1481,6 +1482,11 @@ static tinypy_value_t *__tinypy_string_align_method(tinypy_value_t *function, ti
         }
         padding = 1U;
         left = 1U;
+    }
+    else if ((uint64_t)width > (uint64_t)PTRDIFF_MAX) {
+        /* A width past the address space of a 32-bit host. */
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "resulting string is too large", out_error);
+        return NULL;
     }
     else {
         padding = (size_t)width - size;
@@ -3179,10 +3185,15 @@ static tinypy_value_t *__tinypy_string_zfill_method(tinypy_value_t *function, ti
         tinypy_value_t *return_value_1 = __tinypy_string_from_span(vm, text, 0U, byte_size);
         return return_value_1;
     }
-    padding = (size_t)width - size;
     if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_STRING && tinypy_internal_string_size_check(vm, (uint64_t)width, out_error) == 0) {
         return NULL;
     }
+    if ((uint64_t)width > (uint64_t)PTRDIFF_MAX) {
+        /* A unicode width past the address space of a 32-bit host. */
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "resulting string is too large", out_error);
+        return NULL;
+    }
+    padding = (size_t)width - size;
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
     if (byte_size != 0U && (TINYPY_TEXT_BYTES(text)[0] == (uint8_t)'+' || TINYPY_TEXT_BYTES(text)[0] == (uint8_t)'-')) {
@@ -4302,9 +4313,58 @@ static size_t __tinypy_decimal_fixed_text(uint64_t integer, size_t precision, ti
     return size;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The printf "%.*f" and fixed-notation "%.*g" text of a non-negative double
-   whose digits fit 64 bits, written without the C library into at least 32
-   bytes. 0 leaves other values and the exponent notation to snprintf. */
+/* The "%.*g" exponent form of an integer below 10^15 with more digits than
+   the precision, as _Py_dg_dtoa's mode 2 renders it: rounded half to even,
+   where its small integer path keeps the trailing zeros of a tie it rounds
+   down. */
+static size_t __tinypy_double_integer_exponent_text(uint64_t integer, uint8_t conversion, tinypy_bool_t alternate, size_t significant, uint8_t *output) {
+    size_t digit_count = significant + 1U;
+
+    while (integer >= TINYPY_DECIMAL_POWERS[digit_count]) {
+        digit_count += 1U;
+    }
+    uint64_t divisor = TINYPY_DECIMAL_POWERS[digit_count - significant];
+    uint64_t kept = integer / divisor;
+    uint64_t dropped = integer % divisor;
+    tinypy_bool_t keep_zeros = alternate != 0 || dropped == divisor / 2U ? TINYPY_TRUE : TINYPY_FALSE;
+    size_t exponent = digit_count - 1U;
+
+    if (dropped > divisor / 2U || (dropped == divisor / 2U && (kept & 1U) != 0U)) {
+        keep_zeros = alternate;
+        kept += 1U;
+        if (kept == TINYPY_DECIMAL_POWERS[significant]) {
+            kept = TINYPY_DECIMAL_POWERS[significant - 1U];
+            exponent += 1U;
+        }
+    }
+    uint8_t digits[20];
+    size_t count = significant;
+    size_t size = 0U;
+
+    for (size_t index = significant; index != 0U; --index) {
+        digits[index - 1U] = (uint8_t)('0' + kept % 10U);
+        kept /= 10U;
+    }
+    while (keep_zeros == 0 && count > 1U && digits[count - 1U] == (uint8_t)'0') {
+        count -= 1U;
+    }
+    output[size++] = digits[0];
+    if (count > 1U || alternate != 0) {
+        output[size++] = (uint8_t)'.';
+        (void)memcpy(output + size, digits + 1U, count - 1U);
+        size += count - 1U;
+    }
+    output[size++] = conversion == (uint8_t)'G' ? (uint8_t)'E' : (uint8_t)'e';
+    output[size++] = (uint8_t)'+';
+    output[size++] = (uint8_t)('0' + exponent / 10U);
+    output[size++] = (uint8_t)('0' + exponent % 10U);
+    return size;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The printf "%.*f" and "%.*g" text of a non-negative double whose digits
+   fit 64 bits, written without the C library into at least 32 bytes, and
+   the exponent form of the integers dtoa renders apart. 0 leaves other
+   values and the exponent notation to snprintf. */
 size_t tinypy_internal_double_format_text(double magnitude, uint8_t conversion, tinypy_bool_t alternate, size_t precision, uint8_t *output) {
     if (conversion == (uint8_t)'f' || conversion == (uint8_t)'F') {
         uint64_t truncated;
@@ -4318,10 +4378,16 @@ size_t tinypy_internal_double_format_text(double magnitude, uint8_t conversion, 
     if ((conversion != (uint8_t)'g' && conversion != (uint8_t)'G') || magnitude <= 0.0 || isfinite(magnitude) == 0 || precision > 15U) {
         return 0U;
     }
+    size_t significant = precision != 0U ? precision : 1U;
+    double small_integer_limit = (double)TINYPY_DECIMAL_POWERS[15];
+
+    if (magnitude < small_integer_limit && magnitude >= (double)TINYPY_DECIMAL_POWERS[significant] && magnitude == floor(magnitude)) {
+        size_t integer_size = __tinypy_double_integer_exponent_text((uint64_t)magnitude, conversion, alternate, significant, output);
+        return integer_size;
+    }
     /* The decimal exponent of the value is the one whose truncated digits
        fill the precision; %g uses it, or the next one when the rounding
        carries, and keeps the fixed notation from -4 below the precision. */
-    size_t significant = precision != 0U ? precision : 1U;
     double logarithm = log10(magnitude);
     int32_t exponent = (int32_t)floor(logarithm);
 
@@ -4600,6 +4666,17 @@ static void __tinypy_percent_append_padded(tinypy_string_builder_t *output, tiny
     size_t field_width = field->size;
     size_t padding;
 
+    if (field->failed != 0) {
+        output->failed = TINYPY_TRUE;
+        output->memory_failed = field->memory_failed;
+        return;
+    }
+    /* A width past the address space of a 32-bit host leaves a result too
+       large to hold. */
+    if (width > 0 && (uint64_t)width > (uint64_t)PTRDIFF_MAX) {
+        output->failed = TINYPY_TRUE;
+        return;
+    }
     if (unicode != 0) {
         size_t offset = 0U;
 
@@ -4610,12 +4687,6 @@ static void __tinypy_percent_append_padded(tinypy_string_builder_t *output, tiny
         }
     }
     padding = width > 0 && (uint64_t)width > field_width ? (size_t)width - field_width : 0U;
-
-    if (field->failed != 0) {
-        output->failed = TINYPY_TRUE;
-        return;
-    }
-
     if (left == 0 && zero == 0) {
         __tinypy_string_builder_repeat(output, (const uint8_t *)" ", 1U, padding);
     }
@@ -4993,11 +5064,13 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
         }
         else {
             while (offset < size && bytes[offset] >= (uint8_t)'0' && bytes[offset] <= (uint8_t)'9') {
-                if (width > (INT64_MAX - 9) / 10) {
+                int64_t digit = (int64_t)(bytes[offset++] - (uint8_t)'0');
+
+                if (width > ((int64_t)PTRDIFF_MAX - digit) / 10) {
                     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "width too big", out_error);
                     goto failure;
                 }
-                width = width * 10 + (int64_t)(bytes[offset++] - (uint8_t)'0');
+                width = width * 10 + digit;
             }
         }
         if (offset < size && bytes[offset] == (uint8_t)'.') {
@@ -5018,11 +5091,13 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
             }
             else {
                 while (offset < size && bytes[offset] >= (uint8_t)'0' && bytes[offset] <= (uint8_t)'9') {
-                    if (precision > (INT_MAX - 9) / 10) {
+                    int64_t digit = (int64_t)(bytes[offset++] - (uint8_t)'0');
+
+                    if (precision > (INT_MAX - digit) / 10) {
                         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "prec too big", out_error);
                         goto failure;
                     }
-                    precision = precision * 10 + (int64_t)(bytes[offset++] - (uint8_t)'0');
+                    precision = precision * 10 + digit;
                 }
             }
         }

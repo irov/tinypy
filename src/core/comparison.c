@@ -951,11 +951,10 @@ static int32_t __tinypy_contains(tinypy_value_t *container, tinypy_value_t *item
         const uint8_t *needle;
         size_t needle_size;
         int64_t integer;
-        size_t size = tinypy_bytearray_size(container);
         size_t index;
 
         if (tinypy_internal_bytes_view(item, &needle, &needle_size) != 0) {
-            ptrdiff_t found = tinypy_internal_find_bytes(TINYPY_BYTEARRAY_OBJECT(container)->bytes, size, needle, needle_size, TINYPY_FALSE);
+            ptrdiff_t found = tinypy_internal_find_bytes(TINYPY_BYTEARRAY_OBJECT(container)->bytes, tinypy_bytearray_size(container), needle, needle_size, TINYPY_FALSE);
             return found >= 0 ? 1 : 0;
         }
         /* bytearray_contains reads a byte through PyNumber_AsSsize_t and
@@ -979,6 +978,8 @@ static int32_t __tinypy_contains(tinypy_value_t *container, tinypy_value_t *item
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "byte must be in range(0, 256)", out_error);
             return -1;
         }
+        /* __index__ may have resized the array. */
+        size_t size = tinypy_bytearray_size(container);
         for (index = 0U; index < size; ++index) {
             if (TINYPY_BYTEARRAY_OBJECT(container)->bytes[index] == (uint8_t)integer) {
                 return 1;

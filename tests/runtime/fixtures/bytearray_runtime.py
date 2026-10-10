@@ -135,3 +135,49 @@ except TypeError:
     pass
 else:
     raise AssertionError("str accepted a buffer operand")
+
+
+# append and insert take the size before converting their arguments, and the
+# bytes a resize exposes are zeroed rather than left over from a shrink.
+def reinitialized(target, result, *arguments):
+    class Converted(object):
+        def __index__(self):
+            target.__init__(*arguments)
+            return result
+        __int__ = __index__
+    return Converted()
+
+
+regrown = bytearray("abc")
+regrown.append(reinitialized(regrown, 65))
+assert regrown == bytearray("\x00\x00\x00A"), "append after emptying"
+regrown = bytearray("abc")
+regrown.append(reinitialized(regrown, 65, 5))
+assert regrown == bytearray("\x00\x00\x00A"), "append after zeroing"
+regrown = bytearray("abcdef")
+regrown.insert(1, reinitialized(regrown, 66))
+assert regrown == bytearray("\x00B\x00\x00\x00\x00\x00"), "insert after emptying"
+regrown = bytearray("abcdef")
+regrown.insert(reinitialized(regrown, 1, "xy"), 67)
+assert regrown == bytearray("xCy\x00\x00\x00\x00"), "insert after shrinking"
+
+# The constructor keeps the arguments it read from the caller's own keyword
+# dict, which the __index__ of the source may clear before it fails.
+constructor_keywords = {}
+
+
+class ClearingSource(object):
+    def __index__(self):
+        constructor_keywords.clear()
+        raise TypeError("not a count")
+
+    def __iter__(self):
+        return iter([65, 66])
+
+
+constructor_keywords["source"] = ClearingSource()
+assert apply(bytearray, (), constructor_keywords) == bytearray("AB")
+reinitialized_target = bytearray("xyz")
+constructor_keywords["source"] = ClearingSource()
+apply(reinitialized_target.__init__, (), constructor_keywords)
+assert reinitialized_target == bytearray("AB")

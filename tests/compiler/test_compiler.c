@@ -1,6 +1,7 @@
 #include "tinypy/tinypy.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,6 +15,12 @@ typedef struct test_allocator_state_t {
     size_t allocations;
     size_t bytes;
 } test_allocator_state_t;
+
+/* The first request of at least fail_size bytes fails; zero fails none. */
+typedef struct test_failing_allocator_state_t {
+    test_allocator_state_t accounting;
+    size_t fail_size;
+} test_failing_allocator_state_t;
 
 typedef struct test_source_host_t {
     tinypy_module_artifact_t artifact;
@@ -639,6 +646,212 @@ static int32_t __test_compile_marshal_parity(void) {
     assert(tinypy_marshal_dump_code_v2(code, output, sizeof(output), &size, NULL, NULL) == TINYPY_MARSHAL_OK);
     assert(memcmp(output, expected, sizeof(expected)) == 0);
     tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* parsestr encodes the byte literals of a cookie without a normal name back
+   through its codec: the ASCII and Latin-1 encoders create a one-byte string
+   anew, the UTF-8 encoder returns the interned singleton. */
+static int32_t __test_cookie_literal_marshal_parity(void) {
+    static const uint8_t expected[] = {
+        0x63, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00,
+        0x00, 0x73, 0x10, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x5a, 0x00, 0x00, 0x64, 0x01, 0x00, 0x5a,
+        0x01, 0x00, 0x64, 0x02, 0x00, 0x53, 0x28, 0x03, 0x00, 0x00, 0x00, 0x73, 0x01, 0x00, 0x00, 0x00,
+        0x2b, 0x74, 0x01, 0x00, 0x00, 0x00, 0x78, 0x4e, 0x28, 0x02, 0x00, 0x00, 0x00, 0x74, 0x01, 0x00,
+        0x00, 0x00, 0x61, 0x74, 0x01, 0x00, 0x00, 0x00, 0x62, 0x28, 0x00, 0x00, 0x00, 0x00, 0x28, 0x00,
+        0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x73, 0x09, 0x00, 0x00, 0x00, 0x63, 0x6f, 0x6f,
+        0x6b, 0x69, 0x65, 0x2e, 0x70, 0x79, 0x74, 0x08, 0x00, 0x00, 0x00, 0x3c, 0x6d, 0x6f, 0x64, 0x75,
+        0x6c, 0x65, 0x3e, 0x02, 0x00, 0x00, 0x00, 0x73, 0x02, 0x00, 0x00, 0x00, 0x06, 0x01};
+    static const char *const sources[] = {
+        "# coding: ascii\na = '+'\nb = 'x'\n",
+        "# coding: latin1\na = '+'\nb = 'x'\n",
+        "# coding: utf8\na = '+'\nb = 'x'\n"};
+    static const uint8_t plus_markers[] = {0x73, 0x73, 0x74};
+    static const size_t plus_marker_offset = 43U;
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    size_t index;
+
+    for (index = 0U; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+        tinypy_compile_options_t options;
+        uint8_t output[sizeof(expected)];
+        size_t size;
+
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        size_t source_size = strlen(sources[index]);
+        tinypy_value_t *code = tinypy_compile_source(vm, sources[index], source_size, "cookie.py", 9U, &options, NULL);
+        assert(code != NULL);
+        assert(tinypy_marshal_dump_code_v2(code, output, sizeof(output), &size, NULL, NULL) == TINYPY_MARSHAL_OK);
+        assert(size == sizeof(expected));
+        assert(output[plus_marker_offset] == plus_markers[index]);
+        output[plus_marker_offset] = expected[plus_marker_offset];
+        assert(memcmp(output, expected, sizeof(expected)) == 0);
+        tinypy_release(code);
+    }
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Every kind of constant the compiler produces, Ellipsis included, loads
+   back from the marshal dump of its code into the same dump. */
+static int32_t __test_marshal_constant_round_trip(void) {
+    static const char source[] =
+        "'''doc'''\n"
+        "none = None\n"
+        "small = 7\n"
+        "wide = 3000000000\n"
+        "huge = 123456789012345678901234567890\n"
+        "real = 2.5\n"
+        "infinite = 1e309\n"
+        "imaginary = 3j\n"
+        "name = 'identifier'\n"
+        "text = 'not an identifier!'\n"
+        "one = '+'\n"
+        "empty = ''\n"
+        "uni = u'\\u20ac\\U0001f600'\n"
+        "pair = (1, ('nested', 2.0), u'x')\n"
+        "class Item(object):\n"
+        "    name = 'identifier'\n"
+        "    def __getitem__(self, key=('default', 1)):\n"
+        "        return key\n"
+        "whole = Item()[...]\n"
+        "extended = Item()[1:2, ...]\n"
+        "call = (lambda: name)()\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_marshal_error_t marshal_error;
+    tinypy_value_t *loaded = NULL;
+    tinypy_error_t *error = NULL;
+    size_t size;
+    size_t reloaded_size;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "constants.py", 12U, &options, NULL);
+    assert(code != NULL);
+    assert(tinypy_marshal_dump_code_v2(code, NULL, 0U, &size, NULL, NULL) == TINYPY_MARSHAL_OK);
+    uint8_t *dumped = (uint8_t *)malloc(size);
+    uint8_t *reloaded = (uint8_t *)malloc(size);
+    assert(dumped != NULL && reloaded != NULL);
+    assert(tinypy_marshal_dump_code_v2(code, dumped, size, &size, NULL, NULL) == TINYPY_MARSHAL_OK);
+    assert(tinypy_marshal_load_code_v2(vm, dumped, size, NULL, &loaded, &marshal_error) == TINYPY_MARSHAL_OK);
+    assert(tinypy_marshal_dump_code_v2(loaded, reloaded, size, &reloaded_size, NULL, NULL) == TINYPY_MARSHAL_OK);
+    assert(reloaded_size == size && memcmp(reloaded, dumped, size) == 0);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *result = tinypy_exec_code(loaded, globals, NULL, &error);
+    assert(result != NULL && error == NULL);
+    assert(tinypy_typeof(__test_dict_get(vm, globals, "whole", 5U)) == TINYPY_VALUE_ELLIPSIS);
+    tinypy_value_t *extended = __test_dict_get(vm, globals, "extended", 8U);
+    assert(tinypy_typeof(extended) == TINYPY_VALUE_TUPLE && tinypy_typeof(tinypy_tuple_get(extended, 1U)) == TINYPY_VALUE_ELLIPSIS);
+    tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    free(reloaded);
+    free(dumped);
+    tinypy_release(loaded);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static void *__test_failing_allocate(void *user_data, size_t size, size_t alignment) {
+    test_failing_allocator_state_t *state = (test_failing_allocator_state_t *)user_data;
+
+    if (state->fail_size != 0U && size >= state->fail_size) {
+        state->fail_size = 0U;
+        return NULL;
+    }
+    void *memory = __test_allocate(&state->accounting, size, alignment);
+    return memory;
+}
+//////////////////////////////////////////////////////////////////////////
+static void *__test_failing_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
+    test_failing_allocator_state_t *state = (test_failing_allocator_state_t *)user_data;
+    void *resized = __test_reallocate(&state->accounting, memory, old_size, new_size, alignment);
+
+    return resized;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __test_failing_deallocate(void *user_data, void *memory, size_t size, size_t alignment) {
+    test_failing_allocator_state_t *state = (test_failing_allocator_state_t *)user_data;
+
+    __test_deallocate(&state->accounting, memory, size, alignment);
+}
+//////////////////////////////////////////////////////////////////////////
+/* A host allocator that cannot provide the working memory of the compiler
+   fails the compilation with MemoryError and leaves the VM usable. */
+static int32_t __test_compiler_memory_failure(void) {
+    static const size_t source_size = 65536U;
+    test_failing_allocator_state_t state = {{0U, 0U}, 0U};
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    char *source = (char *)malloc(source_size);
+
+    assert(source != NULL);
+    (void)memset(source, '#', source_size - 1U);
+    source[source_size - 1U] = '\n';
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = &state;
+    allocator.allocate = &__test_failing_allocate;
+    allocator.reallocate = &__test_failing_reallocate;
+    allocator.deallocate = &__test_failing_deallocate;
+    (void)memset(&config, 0, sizeof(config));
+    config.abi_version = TINYPY_ABI_VERSION;
+    config.struct_size = (uint32_t)sizeof(config);
+    config.allocator = &allocator;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    state.fail_size = source_size;
+    tinypy_value_t *code = tinypy_compile_source(vm, source, source_size, "large.py", 8U, &options, &error);
+    assert(code == NULL && state.fail_size == 0U);
+    assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+    tinypy_error_release(error);
+    tinypy_vm_clear_error(vm);
+    code = tinypy_compile_source(vm, source, source_size, "large.py", 8U, &options, NULL);
+    assert(code != NULL);
+    tinypy_release(code);
+    free(source);
+    tinypy_vm_destroy(vm);
+    assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The tab size of an editor comment is read like atoi on an LP64 host,
+   where a value past int truncates to its low 32 bits. */
+static int32_t __test_tab_size_comment(void) {
+    static const char body[] = "if 1:\n        a = 1\n\t    b = 2\n";
+    static const char *const comments[] = {"# tab-width: 4\n", "# tab-width:\v+4\n", "# tab-width: 4294967300\n", "# tab-width: 99999999999999999999\n", "# tab-width: -4\n"};
+    static const tinypy_bool_t honoured[] = {TINYPY_TRUE, TINYPY_TRUE, TINYPY_TRUE, TINYPY_FALSE, TINYPY_FALSE};
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    char source[128];
+    size_t index;
+
+    for (index = 0U; index < sizeof(comments) / sizeof(comments[0]); ++index) {
+        tinypy_compile_options_t options;
+        tinypy_error_t *error = NULL;
+
+        (void)snprintf(source, sizeof(source), "%s%s", comments[index], body);
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        size_t size = strlen(source);
+        tinypy_value_t *code = tinypy_compile_source(vm, source, size, "tabs.py", 7U, &options, &error);
+        if (honoured[index] != 0) {
+            assert(code != NULL && error == NULL);
+            tinypy_release(code);
+            continue;
+        }
+        assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDENTATION);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+    }
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
@@ -2207,6 +2420,18 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_compile_marshal_parity() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_cookie_literal_marshal_parity() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_marshal_constant_round_trip() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_compiler_memory_failure() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_tab_size_comment() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_exec_eval_and_dynamic_compile() != 0) {

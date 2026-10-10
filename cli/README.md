@@ -44,8 +44,10 @@ The CLI runs a program the way `python2.7` does:
   is None), honours `sys.tracebacklimit`, prints the location of a
   SyntaxError from its attributes after the traceback, and reports a failed
   `str()` as `<exception str() failed>`;
-- an uncaught SystemExit ends the program with its int or long code, or
-  writes any other code to `sys.stderr` and exits with 1;
+- an uncaught SystemExit ends the program like `handle_system_exit`: the
+  argument of `sys.exit`, unnormalized unless an `except` clause caught it,
+  or the `code` of an exception instance is the status when it is an int or
+  a long; any other code is written to `sys.stderr` and the status is 1;
 - at exit the CLI runs `sys.exitfunc`, then releases the module namespaces in
   the order of PyImport_Cleanup (`__main__` first, `sys` last, values set to
   None) so finalizers and generator `finally` blocks run and `Exception ...

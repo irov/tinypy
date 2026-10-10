@@ -89,6 +89,14 @@ void tinypy_internal_buffer_release_references(tinypy_value_t *value, tinypy_rel
     visit(TINYPY_BUFFER_OBJECT(value)->owner, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
+/* An offset or size past the address space selects no more than the largest
+   object holds, rather than narrowing into a 32-bit size_t. */
+static size_t __tinypy_buffer_extent(int64_t value) {
+    size_t result = (uint64_t)value > (uint64_t)PTRDIFF_MAX ? (size_t)PTRDIFF_MAX : (size_t)value;
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t argument_count = TINYPY_TUPLE_SIZE(args);
@@ -136,7 +144,7 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "size must be zero or positive", out_error);
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_buffer_from_object(owner, (size_t)offset, requested_size < 0 ? TINYPY_BUFFER_TO_END : (size_t)requested_size);
+    tinypy_value_t *return_value_1 = tinypy_buffer_from_object(owner, __tinypy_buffer_extent(offset), requested_size < 0 ? TINYPY_BUFFER_TO_END : __tinypy_buffer_extent(requested_size));
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

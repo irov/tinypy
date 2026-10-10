@@ -116,6 +116,12 @@ static tinypy_bool_t __tinypy_internal_code_find_method_calls(tinypy_code_object
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&code->base);
     const uint8_t *bytecode = TINYPY_STRING_OBJECT(code->bytecode)->bytes;
     size_t bytecode_size = TINYPY_SIZED_SIZE(code->bytecode);
+
+    /* Fewer loads wait than there are bytes, so the scratch fits this bound. */
+    if (bytecode_size > SIZE_MAX / (sizeof(tinypy_bytecode_method_load_t) + sizeof(tinypy_bytecode_method_target_t))) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "memory allocation failed", out_error);
+        return TINYPY_FALSE;
+    }
     size_t load_limit = bytecode_size / 3U;
     size_t pending_capacity = (size_t)code->stack_size < load_limit ? (size_t)code->stack_size : load_limit;
     size_t scratch_size = pending_capacity * sizeof(tinypy_bytecode_method_load_t) + bytecode_size * sizeof(tinypy_bytecode_method_target_t);
@@ -144,7 +150,8 @@ static tinypy_bool_t __tinypy_internal_code_find_method_calls(tinypy_code_object
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The caches share one zeroed allocation. */
+/* The caches share one zeroed allocation, which the code takes only once its
+   method calls are found, as a failed attempt is verified again. */
 tinypy_bool_t tinypy_internal_code_allocate_caches(tinypy_code_object_t *code, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&code->base);
     size_t name_count = TINYPY_TUPLE_SIZE(code->names);
@@ -158,13 +165,16 @@ tinypy_bool_t tinypy_internal_code_allocate_caches(tinypy_code_object_t *code, t
     if (caches == NULL) {
         return TINYPY_FALSE;
     }
+    if (__tinypy_internal_code_find_method_calls(code, out_error) == 0) {
+        tinypy_internal_vm_deallocate(vm, caches, size);
+        return TINYPY_FALSE;
+    }
     (void)memset(caches, 0, size);
     code->cache_slot_count = slot_count;
     code->global_cache = (tinypy_global_cache_entry_t *)caches;
     code->attribute_cache = (tinypy_attribute_lookup_cache_entry_t *)(code->global_cache + slot_count);
     code->attribute_store_cache = (tinypy_attribute_store_cache_entry_t *)(code->attribute_cache + slot_count * TINYPY_ATTRIBUTE_LOOKUP_CACHE_WAYS);
-    tinypy_bool_t found = __tinypy_internal_code_find_method_calls(code, out_error);
-    return found;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_code_destroy(tinypy_value_t *value) {

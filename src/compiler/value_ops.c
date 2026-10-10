@@ -24,8 +24,13 @@ const void *__tinypy_frontend_string_data(const tinypy_value_t *value) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyDict_SetItem: a failed store leaves the VM MemoryError and returns -1. */
 int32_t __tinypy_frontend_dict_set(tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value) {
-    tinypy_dict_set(dict, key, value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
+
+    if (tinypy_internal_dict_set_checked(vm, dict, key, value, NULL) == 0) {
+        return -1;
+    }
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -48,7 +53,9 @@ int32_t __tinypy_frontend_dict_update(tinypy_value_t *dict, tinypy_value_t *sour
     tinypy_value_t *value;
 
     while (__tinypy_frontend_dict_next(source, &position, &key, &value) != 0) {
-        tinypy_dict_set(dict, key, value);
+        if (__tinypy_frontend_dict_set(dict, key, value) < 0) {
+            return -1;
+        }
     }
     return 0;
 }
@@ -75,8 +82,11 @@ tinypy_bool_t __tinypy_frontend_dict_next(tinypy_value_t *dict, tinypy_compiler_
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyList_Append: a failed growth leaves the VM MemoryError and returns -1. */
 int32_t __tinypy_frontend_list_append(tinypy_value_t *list, tinypy_value_t *value) {
-    tinypy_list_append(list, value);
+    if (tinypy_internal_list_append_checked(list, value, NULL) == 0) {
+        return -1;
+    }
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -106,9 +116,10 @@ tinypy_value_t *__tinypy_frontend_string_from_owner(tinypy_value_t *owner, const
 int32_t __tinypy_frontend_dict_set_none(tinypy_value_t *dict, tinypy_value_t *key) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
     tinypy_value_t *none = TINYPY_RET_NONE(vm);
-    tinypy_dict_set(dict, key, none);
+    int32_t result = __tinypy_frontend_dict_set(dict, key, none);
+
     TINYPY_DECREF(none);
-    return 0;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *__tinypy_frontend_format_identifier(tinypy_value_t *owner, const char *prefix, int32_t value, const char *suffix) {
@@ -247,7 +258,10 @@ int32_t __tinypy_frontend_list_sort(tinypy_value_t *list) {
     }
     /* Bottom-up merge sort: symbol names arrive in hash order, which is a
        worst case for insertion sort on large scopes. */
-    buffer = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, size * sizeof(*buffer));
+    buffer = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, size * sizeof(*buffer), NULL);
+    if (buffer == NULL) {
+        return -1;
+    }
     target = buffer;
     for (width = 1U; width < size; width *= 2U) {
         size_t start;

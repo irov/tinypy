@@ -1251,6 +1251,8 @@ class ContainerSemantics(unittest.TestCase):
         class Classic:
             def __getitem__(self, index):
                 return index
+        class Plain:
+            pass
         def message(error, value):
             try:
                 reversed(value)
@@ -1261,6 +1263,7 @@ class ContainerSemantics(unittest.TestCase):
         self.assertEqual(message(TypeError, memoryview('ab')), "object of type 'memoryview' has no len()")
         self.assertEqual(message(TypeError, {}), 'argument to reversed() must be a sequence')
         self.assertEqual(message(AttributeError, Classic()), "Classic instance has no attribute '__len__'")
+        self.assertEqual(message(TypeError, Plain()), 'argument to reversed() must be a sequence')
 
     def test_simple_slices_use_the_sequence_slot(self):
         calls = []
@@ -1318,3 +1321,161 @@ class ContainerSemantics(unittest.TestCase):
         def remove_slice():
             del Setter()[0:1]
         self.assertEqual((message(store), message(remove), message(remove_slice)), ('__setitem__', '__delitem__', '__delitem__'))
+
+    def test_reversed_steps_past_an_item_only_once_it_has_it(self):
+        exhausted = []
+        class Exhausting(object):
+            def __len__(self):
+                return 3
+            def __getitem__(self, index):
+                if not exhausted:
+                    exhausted.append(index)
+                    for item in iterator:
+                        pass
+                    raise IndexError(index)
+                return index
+        iterator = reversed(Exhausting())
+        self.assertEqual(list(iterator), [])
+        self.assertEqual(exhausted, [2])
+        self.assertRaises(StopIteration, next, iterator)
+        inner = []
+        class Advancing(object):
+            def __len__(self):
+                return 3
+            def __getitem__(self, index):
+                if index == 2 and not inner:
+                    inner.append(None)
+                    inner[0] = next(advancing)
+                return index
+        advancing = reversed(Advancing())
+        self.assertEqual(list(advancing), [2, 0])
+        self.assertEqual(inner, [2])
+
+    def test_reversed_length_hint_keeps_its_sequence(self):
+        armed = []
+        class Exhausting(object):
+            def __len__(self):
+                if armed:
+                    for item in iterator:
+                        pass
+                return 3
+            def __getitem__(self, index):
+                raise IndexError(index)
+        iterator = reversed(Exhausting())
+        armed.append(True)
+        self.assertEqual(iterator.__length_hint__(), 0)
+        self.assertEqual(list(iterator), [])
+
+    def test_bytearray_append_and_insert_take_the_size_before_converting(self):
+        def converting(target, value, *arguments):
+            class Converted(object):
+                def __index__(self):
+                    target.__init__(*arguments)
+                    return value
+                __int__ = __index__
+            return Converted()
+        target = bytearray('abc')
+        target.append(converting(target, 65, 'xy'))
+        self.assertEqual(target, bytearray('xy\x00A'))
+        target = bytearray('abc')
+        target.append(converting(target, 65, '0123456789'))
+        self.assertEqual(target, bytearray('012A'))
+        for where, expected in ((1, 'xBy\x00'), (-1, 'xyB\x00'), (5, 'xy\x00B'), (0, 'Bxy\x00')):
+            target = bytearray('abc')
+            target.insert(where, converting(target, 66, 'xy'))
+            self.assertEqual(target, bytearray(expected))
+        target = bytearray('abc')
+        target.insert(converting(target, 1, 'xy'), 67)
+        self.assertEqual(target, bytearray('xCy\x00'))
+        target = bytearray('abcdef')
+        target.insert(1, converting(target, 66, '0123456789'))
+        self.assertEqual(target, bytearray('0B12345'))
+
+    def test_bytearray_contains_reads_the_size_after_index(self):
+        target = bytearray('x' * 4096)
+        class Shrinking(object):
+            def __index__(self):
+                target[:] = 'a'
+                return ord('x')
+        self.assertFalse(Shrinking() in target)
+        self.assertEqual(target, bytearray('a'))
+
+    def test_dict_update_calls_a_callable_instance_keys(self):
+        class NewKeys(object):
+            def __call__(self):
+                return ['a']
+        class OldKeys:
+            def __call__(self):
+                return ['a']
+        class Mapping(object):
+            def __init__(self, keys):
+                self.keys = keys
+            def __getitem__(self, key):
+                return 1
+        for keys in (NewKeys(), OldKeys()):
+            self.assertEqual(dict(Mapping(keys)), {'a': 1})
+            target = {'b': 2}
+            target.update(Mapping(keys))
+            self.assertEqual(target, {'a': 1, 'b': 2})
+        class NotCallable(object):
+            pass
+        with self.assertRaises(TypeError) as failure:
+            dict(Mapping(NotCallable()))
+        self.assertEqual(str(failure.exception), "attribute of type 'NotCallable' is not callable")
+
+    def test_builtins_keep_keyword_arguments_their_callbacks_release(self):
+        keywords = {}
+        def key(value):
+            keywords.clear()
+            return -value
+        keywords['key'] = key
+        del key
+        self.assertEqual(apply(max, ([3, 1, 2],), keywords), 1)
+        def key(value):
+            keywords.clear()
+            return value
+        keywords['key'] = key
+        del key
+        self.assertEqual(apply(min, (3, 1, 2), keywords), 1)
+        class Number(object):
+            def __float__(self):
+                keywords['ndigits'] = 1
+                return 2.567
+        class Digits(object):
+            def __index__(self):
+                return 1
+        keywords['number'] = Number()
+        keywords['ndigits'] = Digits()
+        self.assertEqual(apply(round, (), keywords), 2.6)
+
+    def test_map_sequence_iterator_end_replaces_pending_length_error(self):
+        class NegativeLength(object):
+            def __len__(self):
+                return -1
+            def __getitem__(self, index):
+                if index >= 2:
+                    raise IndexError(index)
+                return index
+        class BrokenLength(object):
+            def __init__(self, iterator):
+                self.iterator = iterator
+            def __iter__(self):
+                return self.iterator
+            def __len__(self):
+                raise RuntimeError('length')
+        self.assertEqual(map(None, iter([1, 2, 3]), NegativeLength()), [(1, 0), (2, 1), (3, None)])
+        self.assertEqual(map(None, NegativeLength(), xrange(3)), [(0, 0), (1, 1), (None, 2)])
+        self.assertEqual(map(None, NegativeLength(), [7, 8, 9]), [(0, 7), (1, 8), (None, 9)])
+        for sequence in ('ab', u'ab', buffer('ab')):
+            self.assertEqual(map(None, BrokenLength(iter([1, 2, 3])), sequence), [(1, sequence[0]), (2, sequence[1]), (3, None)])
+        self.assertRaises(RuntimeError, map, None, BrokenLength(iter([1, 2, 3])), [5, 6])
+
+    def test_sizes_past_the_address_space(self):
+        self.assertRaises(MemoryError, lambda: bytearray('abcd') * 2 ** 62)
+        def repeat():
+            target = bytearray('abcd')
+            target *= 2 ** 62
+        self.assertRaises(MemoryError, repeat)
+        self.assertEqual(buffer('abc', 2 ** 32 + 1)[:], '')
+        self.assertEqual(buffer('abc', 1, 2 ** 32 + 1)[:], 'bc')
+        self.assertEqual(buffer(buffer('abcdef', 1, 2 ** 32 + 1), 2 ** 32)[:], '')

@@ -188,14 +188,51 @@ static void __tinypy_class_set_hook(tinypy_value_t **slot, tinypy_value_t *hook)
     }
 }
 //////////////////////////////////////////////////////////////////////////
-/* set_attr_slots: the hooks a class resolves through its bases. */
+/* class_lookup of set_attr_slots, whose PyDict_GetItem drops the error of a
+   lookup, which then goes on with the bases. The hook is returned owned. */
+static tinypy_value_t *__tinypy_class_lookup_hook(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
+    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
+        tinypy_internal_exception_clear_raised(vm);
+        return NULL;
+    }
+    tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
+    tinypy_value_t *dict = TINYPY_RET(class_object->dict);
+    tinypy_value_t *hook = tinypy_internal_dict_get_optional_suppressed(vm, dict, key);
+
+    if (hook != NULL) {
+        TINYPY_INCREF(hook);
+    }
+    TINYPY_DECREF(dict);
+    tinypy_value_t *bases = TINYPY_RET(class_object->bases);
+
+    vm->evaluation_depth += 1U;
+    for (size_t index = 0U; hook == NULL && index < TINYPY_TUPLE_SIZE(bases); ++index) {
+        hook = __tinypy_class_lookup_hook(vm, TINYPY_TUPLE_GET(bases, index), key);
+    }
+    vm->evaluation_depth -= 1U;
+    TINYPY_DECREF(bases);
+    return hook;
+}
+//////////////////////////////////////////////////////////////////////////
+/* set_attr_slots: the hooks a class resolves through its bases. No error
+   of their lookups outlives it. */
 static void __tinypy_class_refresh_hooks(tinypy_value_t *class_value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
+    tinypy_value_t *const names[] = {vm->internal_special_getattr_key, vm->internal_special_setattr_key, vm->internal_special_delattr_key};
+    tinypy_value_t **const slots[] = {&class_object->getattr_hook, &class_object->setattr_hook, &class_object->delattr_hook};
+    tinypy_internal_exception_state_t state;
 
-    __tinypy_class_set_hook(&class_object->getattr_hook, __tinypy_class_lookup_key(vm, class_value, vm->internal_special_getattr_key));
-    __tinypy_class_set_hook(&class_object->setattr_hook, __tinypy_class_lookup_key(vm, class_value, vm->internal_special_setattr_key));
-    __tinypy_class_set_hook(&class_object->delattr_hook, __tinypy_class_lookup_key(vm, class_value, vm->internal_special_delattr_key));
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        tinypy_value_t *hook = __tinypy_class_lookup_hook(vm, class_value, names[index]);
+
+        __tinypy_class_set_hook(slots[index], hook);
+        if (hook != NULL) {
+            TINYPY_DECREF(hook);
+        }
+    }
+    tinypy_internal_exception_preserve_end(vm, &state);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_class_hook(tinypy_value_t *class_value, tinypy_value_t *name) {
@@ -464,6 +501,36 @@ tinypy_value_t *tinypy_internal_class_get_attribute(tinypy_value_t *class_value,
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The owned value of key in the dictionary of a class or an instance, which
+   stays referenced while a key comparison may replace it. */
+static tinypy_value_t *__tinypy_class_dict_value(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key) {
+    TINYPY_INCREF(dict);
+    tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, dict, key);
+
+    if (value != NULL) {
+        TINYPY_INCREF(value);
+    }
+    TINYPY_DECREF(dict);
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The attribute the class of an instance provides. The caller keeps
+   class_value referenced, since a key comparison of the lookup may replace
+   the class of the instance. */
+static tinypy_value_t *__tinypy_old_instance_class_attribute(tinypy_vm_t *vm, tinypy_value_t *instance_value, tinypy_value_t *class_value, tinypy_value_t *name, tinypy_bool_t *out_unbound, tinypy_error_t **out_error) {
+    tinypy_value_t *attribute = __tinypy_class_lookup_key_checked(vm, class_value, name, out_error);
+
+    if (attribute == NULL) {
+        return NULL;
+    }
+    if (out_unbound != NULL && attribute->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
+        *out_unbound = TINYPY_TRUE;
+        return TINYPY_RET(attribute);
+    }
+    tinypy_value_t *result = __tinypy_class_bind(TINYPY_OLD_INSTANCE_OBJECT(instance_value)->class_object, attribute, instance_value, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 /* With out_unbound, a function found on the class is returned as it is, for
    a method call to pass the instance as its first argument. */
 static tinypy_value_t *__tinypy_old_instance_get_direct(tinypy_vm_t *vm, tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_bool_t *out_unbound, tinypy_error_t **out_error) {
@@ -475,19 +542,14 @@ static tinypy_value_t *__tinypy_old_instance_get_direct(tinypy_vm_t *vm, tinypy_
     if (TINYPY_NAME_EQ(name, vm->internal_special_dict_key) != 0) {
         return TINYPY_RET(instance->dict);
     }
-    tinypy_value_t *attribute = tinypy_internal_dict_get_optional(vm, instance->dict, name);
+    tinypy_value_t *attribute = __tinypy_class_dict_value(vm, instance->dict, name);
     if (attribute != NULL) {
-        return TINYPY_RET(attribute);
+        return attribute;
     }
-    attribute = __tinypy_class_lookup_key_checked(vm, instance->class_object, name, out_error);
-    if (attribute == NULL) {
-        return NULL;
-    }
-    if (out_unbound != NULL && attribute->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
-        *out_unbound = TINYPY_TRUE;
-        return TINYPY_RET(attribute);
-    }
-    tinypy_value_t *result = __tinypy_class_bind(instance->class_object, attribute, instance_value, out_error);
+    tinypy_value_t *class_value = TINYPY_RET(instance->class_object);
+    tinypy_value_t *result = __tinypy_old_instance_class_attribute(vm, instance_value, class_value, name, out_unbound, out_error);
+
+    TINYPY_DECREF(class_value);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -504,10 +566,14 @@ static tinypy_value_t *__tinypy_old_instance_get_attribute(tinypy_value_t *insta
     if (hook == NULL) {
         return NULL;
     }
+    /* Releasing the AttributeError may run a __del__ that replaces the hook. */
+    TINYPY_INCREF(hook);
     if (vm->raised_value != NULL && tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_ATTRIBUTE_ERROR, out_error) == 0) {
+        TINYPY_DECREF(hook);
         return NULL;
     }
     result = tinypy_internal_old_instance_call_hook(instance_value, hook, name, NULL, out_error);
+    TINYPY_DECREF(hook);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -543,10 +609,26 @@ tinypy_value_t *tinypy_internal_old_instance_call_hook(tinypy_value_t *instance_
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The dictionary of the owner stays referenced while a key comparison of the
+   store may replace it. */
+static tinypy_bool_t __tinypy_class_store_in_dict(tinypy_value_t *owner, tinypy_value_t *dict, tinypy_value_t *name, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(owner);
+
+    TINYPY_INCREF(dict);
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, dict, name, value, out_error);
+    TINYPY_DECREF(dict);
+    return stored;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The dictionary of the owner stays referenced while a key comparison of the
+   deletion may replace it. */
 static tinypy_bool_t __tinypy_class_delete_from_dict(tinypy_value_t *owner, tinypy_value_t *dict, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(owner);
 
-    if (tinypy_internal_dict_delete_optional(vm, dict, name) == 0) {
+    TINYPY_INCREF(dict);
+    tinypy_bool_t deleted = tinypy_internal_dict_delete_optional(vm, dict, name);
+    TINYPY_DECREF(dict);
+    if (deleted == 0) {
         tinypy_internal_object_make_attribute_error_key(owner, name, out_error);
         return TINYPY_FALSE;
     }
@@ -602,7 +684,8 @@ tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, t
         TINYPY_INCREF(attribute_value);
         *field = attribute_value;
         TINYPY_DECREF(previous);
-        if (field == &class_object->bases) {
+        /* set_dict and set_bases resolve the hooks again. */
+        if (field != &class_object->name) {
             __tinypy_class_refresh_hooks(class_value);
         }
         return TINYPY_TRUE;
@@ -622,14 +705,14 @@ tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, t
         tinypy_bool_t deleted = __tinypy_class_delete_from_dict(class_value, class_object->dict, name, out_error);
         return deleted;
     }
-    tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, class_object->dict, name, attribute_value, out_error);
+    tinypy_bool_t stored = __tinypy_class_store_in_dict(class_value, class_object->dict, name, attribute_value, out_error);
     return stored;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_old_instance_set_attribute(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
     tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(instance_value);
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_bool_t stored = tinypy_internal_dict_set_checked(TINYPY_VALUE_VM(instance_value), instance->dict, name, attribute_value, out_error);
+    tinypy_bool_t stored = __tinypy_class_store_in_dict(instance_value, instance->dict, name, attribute_value, out_error);
     return stored;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -721,9 +804,18 @@ tinypy_bool_t tinypy_internal_old_instance_has_special_key(tinypy_value_t *value
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_old_instance_object_t *instance = TINYPY_OLD_INSTANCE_OBJECT(value);
-    tinypy_bool_t result = tinypy_internal_dict_get_optional(vm, instance->dict, key) != NULL
-        || tinypy_internal_class_lookup_key(vm, instance->class_object, key) != NULL;
-    return result;
+    tinypy_value_t *attribute = __tinypy_class_dict_value(vm, instance->dict, key);
+
+    if (attribute != NULL) {
+        TINYPY_DECREF(attribute);
+        return TINYPY_TRUE;
+    }
+    /* A key comparison of the lookup may replace the class of the instance. */
+    tinypy_value_t *class_value = TINYPY_RET(instance->class_object);
+    tinypy_bool_t found = tinypy_internal_class_lookup_key(vm, class_value, key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+
+    TINYPY_DECREF(class_value);
+    return found;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_class_representation_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

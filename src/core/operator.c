@@ -893,11 +893,16 @@ static tinypy_bool_t __tinypy_operator_as_complex(const tinypy_value_t *value, d
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_operator_complex_quotient(double ar, double ai, double br, double bi, double *out_real, double *out_imaginary);
 //////////////////////////////////////////////////////////////////////////
+/* The complex arithmetic follows c_prod, c_quot, c_powu, c_powi and c_pow of
+   Python 2.7's complexobject.c operation for operation, so overflows and
+   NaNs come out as they do there. */
 static void __tinypy_operator_complex_product(double left_real, double left_imaginary, double right_real, double right_imaginary, double *result_real, double *result_imaginary) {
     *result_real = left_real * right_real - left_imaginary * right_imaginary;
     *result_imaginary = left_real * right_imaginary + left_imaginary * right_real;
 }
 //////////////////////////////////////////////////////////////////////////
+/* c_powi of an exponent up to 100 in magnitude; a negative power divides
+   one by the positive one, which fails for a zero power. */
 static tinypy_bool_t __tinypy_operator_complex_integer_power(double left_real, double left_imaginary, int32_t exponent, double *result_real, double *result_imaginary) {
     uint32_t magnitude = exponent < 0 ? (uint32_t)(-exponent) : (uint32_t)exponent;
     double power_real = left_real;
@@ -937,29 +942,36 @@ static tinypy_bool_t __tinypy_operator_complex_integer_power(double left_real, d
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* complex_pow: c_powi for an integral exponent up to 100 in magnitude and
+   c_pow otherwise, where a zero base to a negative or complex power is a
+   zero division. Any infinite component of the result is an overflow. */
 static tinypy_operator_complex_power_result_e __tinypy_operator_complex_power(double left_real, double left_imaginary, double right_real, double right_imaginary, double *result_real, double *result_imaginary) {
     if (right_imaginary == 0.0 && right_real >= -100.0 && right_real <= 100.0 && right_real == trunc(right_real)) {
         if (__tinypy_operator_complex_integer_power(left_real, left_imaginary, (int32_t)right_real, result_real, result_imaginary) == 0) {
             return TINYPY_OPERATOR_COMPLEX_POWER_ZERO_DIVISION;
         }
-        if (isfinite(left_real) != 0 && isfinite(left_imaginary) != 0 && (isinf(*result_real) != 0 || isinf(*result_imaginary) != 0)) {
-            return TINYPY_OPERATOR_COMPLEX_POWER_OVERFLOW;
+    }
+    else if (left_real == 0.0 && left_imaginary == 0.0) {
+        if (right_imaginary != 0.0 || right_real < 0.0) {
+            return TINYPY_OPERATOR_COMPLEX_POWER_ZERO_DIVISION;
         }
-        return TINYPY_OPERATOR_COMPLEX_POWER_OK;
+        *result_real = 0.0;
+        *result_imaginary = 0.0;
     }
-    errno = 0;
-    double radius = hypot(left_real, left_imaginary);
-    double magnitude = pow(radius, right_real);
-    double argument = atan2(left_imaginary, left_real);
-    double phase = argument * right_real;
+    else {
+        double radius = hypot(left_real, left_imaginary);
+        double magnitude = pow(radius, right_real);
+        double argument = atan2(left_imaginary, left_real);
+        double phase = argument * right_real;
 
-    if (right_imaginary != 0.0) {
-        magnitude /= exp(argument * right_imaginary);
-        phase += right_imaginary * log(radius);
+        if (right_imaginary != 0.0) {
+            magnitude /= exp(argument * right_imaginary);
+            phase += right_imaginary * log(radius);
+        }
+        *result_real = magnitude * cos(phase);
+        *result_imaginary = magnitude * sin(phase);
     }
-    *result_real = magnitude * cos(phase);
-    *result_imaginary = magnitude * sin(phase);
-    if ((isfinite(left_real) != 0 && isfinite(left_imaginary) != 0 && isfinite(right_real) != 0 && isfinite(right_imaginary) != 0 && (isinf(*result_real) != 0 || isinf(*result_imaginary) != 0)) || (right_imaginary == 0.0 && right_real > 0.0 && isinf(radius) != 0 && isnan(left_real) == 0 && isnan(left_imaginary) == 0)) {
+    if (isinf(*result_real) != 0 || isinf(*result_imaginary) != 0) {
         return TINYPY_OPERATOR_COMPLEX_POWER_OVERFLOW;
     }
     return TINYPY_OPERATOR_COMPLEX_POWER_OK;
@@ -978,7 +990,13 @@ static tinypy_value_t *__tinypy_operator_numeric_add(tinypy_vm_t *vm, tinypy_val
         if (__tinypy_operator_as_complex(left, &left_real, &left_imaginary, out_error) == 0 || __tinypy_operator_as_complex(right, &right_real, &right_imaginary, out_error) == 0) {
             return NULL;
         }
-        tinypy_value_t *return_value_1 = tinypy_complex_from_doubles(vm, left_real + (subtract != 0 ? -right_real : right_real), left_imaginary + (subtract != 0 ? -right_imaginary : right_imaginary));
+        /* Like c_diff, a difference subtracts rather than adds the negated
+           operand. */
+        if (subtract != 0) {
+            tinypy_value_t *difference = tinypy_complex_from_doubles(vm, left_real - right_real, left_imaginary - right_imaginary);
+            return difference;
+        }
+        tinypy_value_t *return_value_1 = tinypy_complex_from_doubles(vm, left_real + right_real, left_imaginary + right_imaginary);
         return return_value_1;
     }
     if (left_kind == TINYPY_VALUE_FLOAT || right_kind == TINYPY_VALUE_FLOAT) {
@@ -2475,7 +2493,10 @@ static tinypy_value_t *__tinypy_operator_sequence_repeat(tinypy_value_t *sequenc
         TINYPY_DECREF(integer);
         return native;
     }
-    tinypy_value_t *repeated = __tinypy_operator_repeat(vm, sequence, count <= 0 ? 0U : (size_t)count, out_error);
+    /* A count past the address space of a 32-bit host repeats as the
+       largest size does, which fails unless the sequence is empty. */
+    size_t repeat_count = count <= 0 ? 0U : ((uint64_t)count > (uint64_t)PTRDIFF_MAX ? (size_t)PTRDIFF_MAX : (size_t)count);
+    tinypy_value_t *repeated = __tinypy_operator_repeat(vm, sequence, repeat_count, out_error);
     return repeated;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2829,20 +2850,30 @@ tinypy_value_t *tinypy_inplace_bit_or(tinypy_value_t *left, tinypy_value_t *righ
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* c_quot: Smith's division by the larger component of a divisor its callers
+   know is not zero. A NaN component fails both comparisons and gives
+   Py_NAN. */
 static void __tinypy_operator_complex_quotient(double ar, double ai, double br, double bi, double *out_real, double *out_imaginary) {
-    if (fabs(br) >= fabs(bi)) {
+    double absolute_real = fabs(br);
+    double absolute_imaginary = fabs(bi);
+
+    if (absolute_real >= absolute_imaginary) {
         double ratio = bi / br;
         double denominator = br + bi * ratio;
 
         *out_real = (ar + ai * ratio) / denominator;
         *out_imaginary = (ai - ar * ratio) / denominator;
     }
-    else {
+    else if (absolute_imaginary >= absolute_real) {
         double ratio = br / bi;
         double denominator = br * ratio + bi;
 
         *out_real = (ar * ratio + ai) / denominator;
         *out_imaginary = (ai * ratio - ar) / denominator;
+    }
+    else {
+        *out_real = NAN;
+        *out_imaginary = NAN;
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3132,30 +3163,6 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
 
         if (__tinypy_operator_as_complex(left, &left_real, &left_imaginary, out_error) == 0 || __tinypy_operator_as_complex(right, &right_real, &right_imaginary, out_error) == 0) {
             return NULL;
-        }
-        if (right_real == 1.0 && right_imaginary == 0.0) {
-            double real;
-            double imaginary;
-
-            __tinypy_operator_complex_product(1.0, 0.0, left_real, left_imaginary, &real, &imaginary);
-            if (isnan(left_real) == 0 && isnan(left_imaginary) == 0 && ((isinf(left_real) != 0) != (isinf(left_imaginary) != 0))) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "complex exponentiation", out_error);
-                return NULL;
-            }
-            tinypy_value_t *return_value_1 = tinypy_complex_from_doubles(vm, real, imaginary);
-            return return_value_1;
-        }
-        if (left_real == 0.0 && left_imaginary == 0.0) {
-            if (right_real < 0.0 || right_imaginary != 0.0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "0.0 to a negative or complex power", out_error);
-                return NULL;
-            }
-            if (right_real == 0.0) {
-                tinypy_value_t *return_value_2 = tinypy_complex_from_doubles(vm, 1.0, 0.0);
-                return return_value_2;
-            }
-            tinypy_value_t *return_value_3 = tinypy_complex_from_doubles(vm, 0.0, 0.0);
-            return return_value_3;
         }
         double real;
         double imaginary;

@@ -39,3 +39,18 @@ assert compiled_struct.unpack(packed) == (1.0, 2.0)
 compiled_destination = bytearray(16)
 assert compiled_struct.pack_into(compiled_destination, 0, 3.0, 4.0) is None
 assert compiled_struct.unpack_from(compiled_destination) == (3.0, 4.0)
+
+# unpack_from reads a memoryview over a legacy buffer through the address its
+# bytearray has once the offset converted, not a released one.
+grown = bytearray(b"\x00" * 64)
+grown_view = memoryview(buffer(grown))
+
+
+class GrowingOffset(object):
+    def __int__(self):
+        grown.extend(b"\x01" * 200000)
+        grown[:8] = struct.pack("d", 1.5)
+        return 0
+
+
+assert struct.unpack_from("d", grown_view, GrowingOffset()) == (1.5,)

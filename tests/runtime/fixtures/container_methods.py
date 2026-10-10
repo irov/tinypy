@@ -1991,3 +1991,32 @@ for churn_index in range(2000):
 assert len(churned) == 0
 churned[1] = 1
 assert churned.keys() == [1]
+
+# list.sort keeps the comparison and key functions it read from the caller's
+# own keyword dict, which the callbacks may clear.
+sort_keywords = {}
+
+
+def clearing_sort_key(item):
+    sort_keywords.clear()
+    return -item
+
+
+sort_keywords["key"] = clearing_sort_key
+del clearing_sort_key
+sorted_values = [3, 1, 2]
+apply(sorted_values.sort, (), sort_keywords)
+assert sorted_values == [3, 2, 1]
+
+
+class ClearingReverse(object):
+    def __int__(self):
+        sort_keywords.clear()
+        return 1
+
+
+sort_keywords["cmp"] = lambda left, right: cmp(left, right)
+sort_keywords["reverse"] = ClearingReverse()
+sorted_values = [1, 3, 2]
+apply(sorted_values.sort, (), sort_keywords)
+assert sorted_values == [3, 2, 1]

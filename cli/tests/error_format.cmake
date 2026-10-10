@@ -112,6 +112,23 @@ tinypy_expect(system_exit_message CODES 1 ARGS -c "import sys\nsys.exit('msg')" 
 tinypy_expect(system_exit_code_property CODES 1 ARGS -c "class E(SystemExit):\n    @property\n    def code(self):\n        raise RuntimeError('no code')\nraise E(1)" STDERR_EQUAL "1\n")
 tinypy_expect(system_exit_replaced_stderr CODES 1 ARGS -c "import sys\nclass W(object):\n    def write(self, s):\n        sys.stdout.write('captured:' + s)\nsys.stderr = W()\nsys.exit('msg')"
     STDOUT_EQUAL "captured:msgcaptured:\n" STDERR_EQUAL "")
+tinypy_expect(system_exit_lost_stderr CODES 1 ARGS -c "import sys\nsys.stderr = None\nsys.exit('msg')" STDERR_EQUAL "msg\n")
+
+# sys.exit raises SystemExit with its argument as the value, which an except
+# clause normalizes and handle_system_exit reads as it is: a tuple is a
+# message, the code attribute of an exception instance is the status.
+tinypy_expect(system_exit_single_tuple CODES 1 ARGS -c "import sys\nsys.exit((3,))" STDERR_EQUAL "(3,)\n")
+tinypy_expect(system_exit_empty_tuple CODES 1 ARGS -c "import sys\nsys.exit(())" STDERR_EQUAL "()\n")
+tinypy_expect(system_exit_none_tuple CODES 1 ARGS -c "import sys\nsys.exit((None,))" STDERR_EQUAL "(None,)\n")
+tinypy_expect(system_exit_instance CODES 5 ARGS -c "import sys\nsys.exit(SystemExit(5))" STDERR_EQUAL "")
+tinypy_expect(system_exit_classic_code CODES 9 ARGS -c "import sys\nclass C:\n    code = 9\nsys.exit(C())" STDERR_EQUAL "")
+tinypy_expect(system_exit_exception_code CODES 7 ARGS -c "import sys\ne = ValueError()\ne.code = 7\nsys.exit(e)" STDERR_EQUAL "")
+tinypy_expect(system_exit_through_finally CODES 1 ARGS -c "import sys\ntry:\n    sys.exit((3,))\nfinally:\n    pass" STDERR_EQUAL "(3,)\n")
+tinypy_expect(system_exit_reraised CODES 3 ARGS -c "import sys\ntry:\n    sys.exit((3,))\nexcept SystemExit:\n    raise" STDERR_EQUAL "")
+tinypy_expect(system_exit_caught CODES 0 ARGS -c "import sys\ntry:\n    sys.exit((3,))\nexcept SystemExit as e:\n    print repr(e.code), repr(e.args)"
+    STDOUT_EQUAL "3 (3,)\n" STDERR_EQUAL "")
+tinypy_expect(system_exit_subclass_caught CODES 0 ARGS -c "import sys\nclass MyExit(SystemExit):\n    pass\ntry:\n    sys.exit(MyExit(5))\nexcept MyExit as e:\n    print type(e).__name__, sys.exc_info()[0].__name__, e.code"
+    STDOUT_EQUAL "MyExit MyExit 5\n" STDERR_EQUAL "")
 
 # PyErr_PrintEx: sys.excepthook reports uncaught exceptions, with its own
 # failure and absence reported around the original exception.
@@ -123,6 +140,17 @@ tinypy_expect(excepthook_missing CODES 1 ARGS -c "import sys\ndel sys.excepthook
     STDERR_EQUAL "sys.excepthook is missing\nTraceback (most recent call last):\n  File \"<string>\", line 3, in <module>\nValueError: hook del\n")
 tinypy_expect(excepthook_exits CODES 7 ARGS -c "import sys\ndef hook(t, v, tb):\n    sys.exit(7)\nsys.excepthook = hook\nraise ValueError('hooked')" STDERR_EQUAL "" STDOUT_EQUAL "")
 tinypy_expect(default_excepthook CODES 0 ARGS -c "import sys\nprint sys.excepthook is sys.__excepthook__, type(sys.excepthook).__name__" STDOUT_EQUAL "True builtin_function_or_method\n")
+
+# The default excepthook takes any objects: a type that is not an exception
+# class is written with str(), anything but a traceback ends the report with
+# its newline, which a failed write does not prevent.
+tinypy_expect(excepthook_any_type CODES 0 ARGS -c "import sys\nsys.excepthook(1.5, 2, None)" STDERR_EQUAL "1.5: 2\n")
+tinypy_expect(excepthook_plain_type CODES 0 ARGS -c "import sys\nsys.__excepthook__(int, 2, None)" STDERR_EQUAL "<type 'int'>: 2\n")
+tinypy_expect(excepthook_not_traceback CODES 0 ARGS -c "import sys\nsys.excepthook(ValueError, ValueError('v'), 'not a traceback')" STDERR_EQUAL "\n")
+tinypy_expect(excepthook_classic_dotted_name CODES 0 ARGS -c "import sys\nclass Old:\n    pass\nOld.__name__ = 'pkg.Dotted'\nsys.excepthook(Old, 'v', None)" STDERR_EQUAL "__main__.Dotted: v\n")
+tinypy_expect(excepthook_failed_write CODES 0 ARGS -c "import sys\nclass W(object):\n    def write(self, s):\n        sys.stdout.write(repr(s) + '\\n')\n        raise IOError('no')\nsys.stderr = W()\nsys.excepthook(ValueError, ValueError('v'), None)"
+    STDOUT_EQUAL "'ValueError'\n'\\n'\n" STDERR_EQUAL "")
+tinypy_expect(excepthook_arity CODES 0 ARGS -c "import sys\ntry:\n    sys.excepthook(1, 2)\nexcept TypeError as e:\n    print e" STDOUT_EQUAL "excepthook expected 3 arguments, got 2\n")
 
 # PyTraceBack_Print honours sys.tracebacklimit.
 tinypy_expect(tracebacklimit CODES 1 ARGS -c "import sys\nsys.tracebacklimit = 1\ndef a():\n    b()\ndef b():\n    raise ValueError('limited')\na()"
@@ -146,6 +174,13 @@ tinypy_expect(exitfunc CODES 0 ARGS -c "import sys\ndef ef():\n    sys.stdout.wr
 tinypy_expect(exitfunc_raises CODES 0 ARGS -c "import sys\ndef ef():\n    raise ValueError('exitfunc failed')\nsys.exitfunc = ef\nprint 'body'"
     STDOUT_EQUAL "body\n" STDERR_EQUAL "Error in sys.exitfunc:\nTraceback (most recent call last):\n  File \"<string>\", line 3, in ef\nValueError: exitfunc failed\n")
 tinypy_expect(exitfunc_exits CODES 5 ARGS -c "import sys\ndef ef():\n    sys.exit(5)\nsys.exitfunc = ef" STDERR_EQUAL "")
+tinypy_expect(exitfunc_exits_with_tuple CODES 1 ARGS -c "import sys\nsys.exitfunc = lambda: sys.exit((4,))" STDERR_EQUAL "(4,)\n")
+tinypy_expect(exitfunc_lost_stderr CODES 0 ARGS -c "import sys\nsys.exitfunc = lambda: 1 / 0\nsys.stderr = None" STDERR_EQUAL "Error in sys.exitfunc:\nlost sys.stderr\n")
+
+# A finalizer run by clearing a module namespace may remove the module from
+# sys.modules.
+tinypy_expect(finalize_module_removed CODES 0 ARGS -c "import sys\nm = type(sys)('ghost')\nclass K(object):\n    def __init__(self, modules):\n        self.modules = modules\n    def __del__(self):\n        del self.modules['ghost']\n        print 'ghost removed'\nm.k = K(sys.modules)\nsys.modules['ghost'] = m\ndel m"
+    STDOUT_EQUAL "ghost removed\n" STDERR_EQUAL "")
 
 # __main__ and sys.path of a command.
 tinypy_expect(command_namespace CODES 0 ARGS -c "import sys\nprint repr(__package__), type(__builtins__).__name__, '__file__' in globals(), repr(sys.path[0]), repr(sys.argv)" x

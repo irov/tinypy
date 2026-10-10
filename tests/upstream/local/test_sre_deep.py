@@ -236,3 +236,81 @@ class SREDeep(unittest.TestCase):
             return 'X'
         self.assertEqual(pattern.sub(replacement, 'aaba'), 'XXbX')
         self.assertEqual(events, [(0, 4, (0, 1)), (0, 4, (1, 2)), (0, 4, (3, 4))])
+
+    def test_unset_group_spans_are_undefined_as_a_whole(self):
+        for pattern, subject, code, regs in (
+                ('(?!(a))b', 'b', [17, 4, 0, 1, 1, 5, 9, 0, 21, 0, 19, 97, 21, 1, 1, 19, 98, 1], ((0, 1), (-1, -1))),
+                ('(?!x(a))', 'xb', [17, 4, 0, 0, 0, 5, 11, 0, 19, 120, 21, 0, 19, 97, 21, 1, 1, 1], ((0, 0), (-1, -1)))):
+            found = _sre.compile(pattern, 0, code, 1, {}, [None, None]).match(subject)
+            self.assertEqual(found.regs, regs)
+            self.assertEqual((found.span(1), found.start(1), found.end(1)), ((-1, -1), -1, -1))
+            self.assertIs(found.group(1), None)
+            self.assertEqual(found.groups('-'), ('-',))
+
+    def test_scanner_match_starts_past_endpos(self):
+        empty = _sre.compile('', 0, [17, 4, 0, 0, 0, 1], 0, {}, [None])
+        scanner = empty.scanner('abcdef', 4, 2)
+        self.assertEqual([(found.span(), found.pos, found.endpos) for found in (scanner.match(), scanner.match())],
+                         [((4, 4), 4, 2), ((5, 5), 4, 2)])
+        self.assertIs(empty.scanner('abcdef', 4, 2).search(), None)
+        scanner = empty.scanner('abc', 1, 3)
+        self.assertEqual([found and found.span() for found in [scanner.match() for unused in range(4)]],
+                         [(1, 1), (2, 2), (3, 3), None])
+        scanner = _letter().scanner('xab')
+        self.assertEqual([scanner.match(), scanner.match()], [None, None])
+
+    def test_multiline_end_from_a_start_past_endpos(self):
+        end_line = _sre.compile('$', 8, [17, 4, 0, 0, 0, 6, 6, 1], 0, {}, [None])
+        for subject in (u'\xe9' * 3, 'abc', u'abc', bytearray('abc'), buffer('abc')):
+            self.assertIs(end_line.match(subject, 3, 0), None)
+            self.assertIs(end_line.match(subject, 3, 1), None)
+            self.assertIs(end_line.search(subject, 3, 1), None)
+        self.assertEqual(end_line.match(u'\xe9\n', 1, 0).span(), (1, 1))
+        self.assertEqual(end_line.match('a\n', 1, 0).span(), (1, 1))
+        self.assertEqual(end_line.search(u'\xe9\xe9\n').span(), (2, 2))
+
+    def test_compile_rejects_programs_sre_compile_cannot_emit(self):
+        unbounded = 4294967295
+        letter = [17, 8, 3, 1, 1, 1, 1, 97, 0, 19, 97, 1]
+        branch = [17, 9, 4, 2, 2, 19, 97, 19, 99, 0, 7, 7, 19, 97, 19, 98, 18, 9, 7, 19, 99, 19, 100, 18, 2, 0, 1]
+        exists = [17, 8, 1, 1, 1, 1, 0, 97, 0, 21, 0, 19, 97, 21, 1, 13, 0, 6, 19, 98, 18, 3, 19, 99, 1]
+        backtracking = [17, 4, 0, 1, 1, 21, 0, 21, 1, 28, 59, 0, unbounded, 13, 0, 43, 28, 37, unbounded - 1, 0, 21, 2, 7, 3,
+                        18, 27, 3, 18, 24, 22, 15, 7, 26, 19, 95, 19, 97, 0, 29, 6, 1, unbounded, 19, 95, 1, 6, 0, 6, 5,
+                        18, 2, 0, 21, 3, 22, 18, 13, 12, 0, 15, 7, 19, 32, 27, 48, 122, 0, 19, 65, 23, 19, 66, 1]
+        for code, groups in ((letter, 1), (letter, 100), (branch, 0), (exists, 1), ([21, 3, 1], 1), ([12, 0, 1], 1),
+                             ([6, 11, 1], 0), ([15, 4, 9, 17, 0, 1], 0), ([29, 6, 1, 2, 19, 97, 1, 1], 0),
+                             ([28, 5, 0, 1, 19, 98, 22, 1], 0), ([4, 7, 2, 19, 97, 19, 98, 1, 1], 0)):
+            _sre.compile('x', 0, code, groups)
+        mismatched = list(branch)
+        mismatched[17] = 8
+        missing_group = list(exists)
+        missing_group[16] = 1
+        for code, groups in (([], 0), ([19, 97], 0), (letter, 101), (letter, -1), ([21, 4, 1], 1), ([12, 1, 1], 1),
+                             ([6, 12, 1], 0), ([15, 4, 9, 18, 0, 1], 0), ([15, 3, 27, 97, 0, 1], 0),
+                             ([29, 6, 2, 1, 19, 97, 1, 1], 0), ([29, 6, 1, 2, 19, 97, 0, 1], 0),
+                             ([28, 5, 0, 1, 19, 98, 18, 1], 0), ([17, 4, 8, 0, 0, 1], 0), ([17, 4, 2, 0, 0, 1], 0),
+                             ([4, 5, 2147483648, 19, 97, 1, 1], 0), ([8, 2, 1, 1], 0), ([18, 1, 1], 0),
+                             ([31, 6, 0, 1, 9, 4, 1, 1], 0), (mismatched, 0), (missing_group, 1), (backtracking, 2)):
+            with self.assertRaisesRegexp(RuntimeError, 'invalid SRE code'):
+                _sre.compile('x', 0, code, groups)
+        self.assertEqual(_sre.compile('x', 0, branch).search('xcd').span(), (1, 3))
+
+    def test_groupdict_keeps_names_alive_while_hashing_changes_groupindex(self):
+        index = {}
+        class Name(str):
+            armed = False
+            def __hash__(self):
+                if Name.armed:
+                    Name.armed = False
+                    index.clear()
+                return str.__hash__(self)
+        index[Name('w')] = 1
+        found = _sre.compile('(?P<w>a)', 0, [17, 8, 1, 1, 1, 1, 0, 97, 0, 21, 0, 19, 97, 21, 1, 1], 1, index,
+                             [None, 'w']).match('a')
+        Name.armed = True
+        with self.assertRaisesRegexp(IndexError, 'no such group'):
+            found.groupdict()
+        self.assertEqual(index, {})
+        index[Name('v')] = 1
+        index['w'] = 1
+        self.assertEqual(sorted(found.groupdict().items()), [('v', 'a'), ('w', 'a')])

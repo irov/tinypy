@@ -977,6 +977,240 @@ class ObjectProtocols(unittest.TestCase):
         self.assert_message(OverflowError, 'long int too large to convert to int', lambda: Huge(1, 2)[-5:-5])
         self.assertEqual((Huge(1, 2)[1], Huge(1, 2)[0:1]), (2, (1,)))
 
+    def test_super_lookup_survives_bases_assignment(self):
+        armed = [False]
+
+        class Key(object):
+            def __hash__(self):
+                return hash('method')
+
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    Derived.__bases__ = (Other,)
+                return False
+
+        class Base(object):
+            def method(self):
+                return 'base'
+
+        class Other(object):
+            pass
+
+        def make():
+            Colliding = type('Colliding', (Base,), {Key(): 1})
+
+            class Middle(Colliding):
+                pass
+
+            class Derived(Middle):
+                pass
+
+            return Derived
+
+        Derived = make()
+        proxy = super(Derived, Derived())
+        armed[0] = True
+        self.assertEqual(proxy.method(), 'base')
+        self.assertEqual(Derived.__mro__, (Derived, Other, object))
+
+    def test_super_lookup_survives_reinitialisation(self):
+        armed = [False]
+
+        class Key(object):
+            def __hash__(self):
+                return hash('method')
+
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    super.__init__(proxy, Other, Other())
+                return False
+
+        class Base(object):
+            def method(self):
+                return 'base'
+
+        class Other(object):
+            pass
+
+        Colliding = type('Colliding', (Base,), {Key(): 1})
+
+        class Middle(Colliding):
+            pass
+
+        class Derived(Middle):
+            pass
+
+        proxy = super(Derived, Derived())
+        armed[0] = True
+        self.assertEqual(proxy.method(), 'base')
+        self.assertIs(proxy.__thisclass__, Other)
+
+    def test_uninitialised_super_get(self):
+        class Base(object):
+            pass
+
+        class Partial(super):
+            def __init__(self, *args):
+                pass
+
+        blank = super.__new__(super)
+        self.assert_message(TypeError, 'super(type, obj): obj must be an instance or subtype of type', blank.__get__, Base())
+        bound = Partial(Base, Base()).__get__(Base())
+        self.assertIs(type(bound), Partial)
+        self.assertEqual(repr(bound), "<super: <class 'NULL'>, NULL>")
+
+    def test_class_call_survives_constructor_lookup_changes(self):
+        armed = [False]
+        calls = []
+        kept = []
+
+        class Key(object):
+            def __hash__(self):
+                return hash('__init__')
+
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    del Created.__new__
+                    kept.extend(staticmethod(replacement) for index in range(8))
+                return False
+
+        def new(cls, *args):
+            calls.append(cls.__name__)
+            return cls.__base__.__new__(cls, *args)
+
+        def replacement(cls, *args):
+            calls.append('replacement')
+            return 42
+
+        for base in (object, Exception):
+            Created = type('Created', (base,), {'__new__': staticmethod(new), Key(): 1})
+            type('Bump', (object,), {})
+            armed[0] = True
+            self.assertIs(type(Created()), Created)
+        self.assertEqual(calls, ['Created', 'Created'])
+
+    def test_class_call_holds_init_while_binding(self):
+        armed = [False]
+
+        class Name(str):
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    del Created.__init__
+                return str.__eq__(self, other)
+
+            def __hash__(self):
+                return str.__hash__(self)
+
+        def make():
+            offset = 40
+
+            def __init__(self, value=1, **extra):
+                self.value = offset + value
+            return __init__
+
+        class Created(object):
+            __init__ = make()
+
+        armed[0] = True
+        self.assertEqual(Created(**{Name('value'): 2}).value, 42)
+        self.assertFalse('__init__' in Created.__dict__)
+
+    def test_nested_release_during_finalizer_lookup(self):
+        log = []
+        armed = [False]
+        holder = []
+
+        class Key(object):
+            def __hash__(self):
+                return hash('__del__')
+
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    del holder[:]
+                return False
+
+        Finalized = type('Finalized', (object,), {Key(): 1})
+
+        def finalize(self):
+            log.append(self.name)
+        Finalized.__del__ = finalize
+        first = Finalized()
+        first.name = 'first'
+        second = Finalized()
+        second.name = 'second'
+        holder.append(second)
+        del second
+        Finalized.marker = None
+        armed[0] = True
+        del first
+        self.assertEqual(sorted(log), ['first', 'second'])
+
+    def test_weakref_subclass_is_weakly_referenceable(self):
+        class Ref(_weakref.ref):
+            pass
+
+        class Referent(object):
+            pass
+
+        referent = Referent()
+        reference = Ref(referent)
+        self.assertTrue('__weakref__' in dir(Ref))
+        self.assertIs(reference.__weakref__, None)
+        meta = _weakref.ref(reference)
+        self.assertIs(meta(), reference)
+        self.assertIs(reference.__weakref__, meta)
+        del reference
+        self.assertIs(meta(), None)
+
+    def test_dictproxy_inherits_object_new(self):
+        dictproxy = type(type.__dict__)
+        self.assertIs(dictproxy.__new__, object.__new__)
+        self.assertFalse('__new__' in dictproxy.__dict__)
+        self.assert_message(TypeError, 'object.__new__(dictproxy) is not safe, use dictproxy.__new__()', dictproxy.__new__, dictproxy)
+
+    def test_slotnames_probes_survive_replaced_class_dicts(self):
+        import copy_reg
+
+        class Collide(object):
+            def __init__(self, name, owner):
+                self.name = name
+                self.owner = owner
+                self.armed = False
+            def __hash__(self):
+                return hash(self.name)
+            def __eq__(self, other):
+                if self.armed:
+                    self.armed = False
+                    self.owner[0].__dict__ = {}
+                return False
+
+        owner = []
+        class Classic:
+            pass
+        owner.append(Classic)
+        key = Collide('__slotnames__', owner)
+        Classic.__dict__[key] = 'key'
+        key.armed = True
+        self.assertEqual(copy_reg._slotnames(Classic), [])
+        self.assertEqual(Classic.__dict__, {'__slotnames__': []})
+
+        mixin_owner = []
+        class Mixin:
+            pass
+        mixin_owner.append(Mixin)
+        slot_key = Collide('__slots__', mixin_owner)
+        Mixin.__dict__[slot_key] = 1
+        class Slotted(Mixin, object):
+            __slots__ = ('a', 'b')
+        del Mixin
+        slot_key.armed = True
+        self.assertEqual(copy_reg._slotnames(Slotted), ['a', 'b'])
+
 def truth_check(value, expected):
     def check(self):
         self.assertIs(bool(value), expected)

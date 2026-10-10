@@ -1217,7 +1217,11 @@ tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_c
     allocation_size += source_builder.size + 1U;
     allocation_size += map_builder.size + 1U;
     allocation_size += symbol_bytes;
-    tinypy_preprocess_result_t *result = (tinypy_preprocess_result_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size);
+    tinypy_preprocess_result_t *result = (tinypy_preprocess_result_t *)tinypy_internal_pool_allocate_checked(ctx->vm, allocation_size);
+    if (result == NULL) {
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_MEMORY, "memory allocation failed", 0, 0, ctx->out_error);
+        return NULL;
+    }
     (void)memset(result, 0, sizeof(*result));
     result->state = TINYPY_PREPROCESS_RESULT_STATE;
     result->vm = ctx->vm;

@@ -373,3 +373,102 @@ except AttributeError, missing_error:
     assert str(missing_error) == "type object 'RepresentedInstance' has no attribute 'missing'"
 else:
     raise AssertionError("missing type attribute did not raise")
+
+
+# A key comparison that changes what a lookup reads: the bases of a class, the
+# __dict__ of a classic class in a new-style MRO or that of an exception.
+# CPython 2.7 goes on reading the MRO or dictionary it freed, so these checks
+# are tinypy-only.
+key_actions = []
+
+
+class ActingKey(object):
+    def __init__(self, name):
+        self.name = name
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        if key_actions:
+            key_actions.pop()()
+        return False
+
+
+def arm_acting_key(namespace, name, action):
+    namespace[ActingKey(name)] = "key"
+    key_actions.append(action)
+
+
+class RebasedBase(object):
+    attr = "base"
+
+
+class RebasedOther(object):
+    attr = "other"
+
+
+RebasedMiddle = type("RebasedMiddle", (RebasedBase,), {ActingKey("attr"): "key"})
+
+
+class RebasedDerived(RebasedMiddle):
+    pass
+
+
+# A type lookup restarts on the MRO a nested __bases__ assignment installs.
+nested_lookups = []
+
+
+def rebase_during_lookup():
+    nested_lookups.append(RebasedDerived().attr)
+    RebasedDerived.__bases__ = (RebasedOther,)
+
+
+key_actions.append(rebase_during_lookup)
+assert RebasedDerived().attr == "other"
+assert nested_lookups == ["base"]
+assert RebasedDerived.__mro__ == (RebasedDerived, RebasedOther, object)
+
+
+class ReplacedBase(object):
+    attr = "base"
+
+
+class ReplacedClassic:
+    pass
+
+
+class ReplacedDerived(ReplacedClassic, ReplacedBase):
+    pass
+
+
+def replace_classic_dict():
+    ReplacedClassic.__dict__ = {}
+
+
+for replaced_lookup in (lambda: ReplacedDerived().attr, lambda: ReplacedDerived.attr, lambda: super(ReplacedDerived, ReplacedDerived()).attr):
+    arm_acting_key(ReplacedClassic.__dict__, "attr", replace_classic_dict)
+    assert replaced_lookup() == "base"
+    assert ReplacedClassic.__dict__ == {}
+
+replaced_error = Exception("first")
+
+
+def replace_error_dict():
+    replaced_error.__dict__ = {}
+
+
+arm_acting_key(replaced_error.__dict__, "message", replace_error_dict)
+assert replaced_error.message == "first"
+arm_acting_key(replaced_error.__dict__, "message", replace_error_dict)
+replaced_error.message = "second"
+assert (replaced_error.__dict__, replaced_error.message) == ({}, "first")
+arm_acting_key(replaced_error.__dict__, "message", replace_error_dict)
+del replaced_error.message
+assert replaced_error.__dict__ == {}
+try:
+    replaced_error.message
+except AttributeError, message_error:
+    assert str(message_error) == "message attribute was deleted"
+else:
+    raise AssertionError("deleted message did not raise")

@@ -37,7 +37,11 @@ void *tinypy_internal_compiler_arena_allocate_uninitialized(tinypy_compile_ctx_t
                 ? (tinypy_compiler_arena_block_t *)tinypy_internal_pool_transient_take(ctx->vm, allocation_size)
                 : NULL;
     if (block == NULL) {
-        block = (tinypy_compiler_arena_block_t *)tinypy_internal_vm_allocate(ctx->vm, allocation_size);
+        block = (tinypy_compiler_arena_block_t *)tinypy_internal_pool_allocate_checked(ctx->vm, allocation_size);
+    }
+    if (block == NULL) {
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_MEMORY, "memory allocation failed", 0, 0, ctx->out_error);
+        return NULL;
     }
     block->next = ctx->arena_blocks;
     block->allocation_size = allocation_size;

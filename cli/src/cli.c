@@ -550,6 +550,57 @@ static tinypy_value_t *__tinypy_cli_stderr_object(tinypy_vm_t *vm) {
     return stream;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A borrowed __builtin__ value or NULL. */
+static tinypy_value_t *__tinypy_cli_builtin_value(tinypy_vm_t *vm, const char *name, size_t name_size) {
+    tinypy_value_t *builtins = tinypy_vm_builtins(vm);
+
+    if (builtins == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, name_size);
+    tinypy_value_t *value = tinypy_dict_get_optional(builtins, key);
+
+    tinypy_release(key);
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_cli_exception_subtype(tinypy_vm_t *vm, const tinypy_type_t *type) {
+    tinypy_value_t *base = __tinypy_cli_builtin_value(vm, "BaseException", 13U);
+
+    if (base == NULL || tinypy_typeof(base) != TINYPY_VALUE_TYPE) {
+        return TINYPY_FALSE;
+    }
+    const tinypy_type_t *base_type = tinypy_value_as_const_type(base);
+    tinypy_bool_t subtype = tinypy_type_is_subtype(type, base_type);
+    return subtype;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyExceptionClass_Check: a classic class or a subtype of BaseException. */
+static tinypy_bool_t __tinypy_cli_exception_class(tinypy_vm_t *vm, const tinypy_value_t *value) {
+    tinypy_value_type_e kind = tinypy_typeof(value);
+
+    if (kind == TINYPY_VALUE_CLASS) {
+        return TINYPY_TRUE;
+    }
+    if (kind != TINYPY_VALUE_TYPE) {
+        return TINYPY_FALSE;
+    }
+    const tinypy_type_t *type = tinypy_value_as_const_type(value);
+    tinypy_bool_t exception_class = __tinypy_cli_exception_subtype(vm, type);
+    return exception_class;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyExceptionInstance_Check: a classic instance or an instance of a
+   subtype of BaseException. */
+static tinypy_bool_t __tinypy_cli_exception_instance(tinypy_vm_t *vm, const tinypy_value_t *value) {
+    if (tinypy_typeof(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        return TINYPY_TRUE;
+    }
+    const tinypy_type_t *type = tinypy_object_type(value);
+    tinypy_bool_t exception_instance = __tinypy_cli_exception_subtype(vm, type);
+    return exception_instance;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_cli_discard_error(tinypy_vm_t *vm, tinypy_error_t *error) {
     if (error != NULL) {
         tinypy_error_release(error);
@@ -557,15 +608,31 @@ static void __tinypy_cli_discard_error(tinypy_vm_t *vm, tinypy_error_t *error) {
     tinypy_vm_clear_error(vm);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_cli_stream_write(tinypy_vm_t *vm, tinypy_value_t *stream, const void *bytes, size_t size) {
+/* PyFile_WriteObject with Py_PRINT_RAW: the write method of the stream,
+   looked up first, receives str() of the value; an object other than an
+   output stream of the VM, which prints like a file, gets a unicode value
+   as is. */
+static tinypy_bool_t __tinypy_cli_stream_write_object(tinypy_vm_t *vm, tinypy_value_t *stream, tinypy_value_t *value) {
     tinypy_error_t *error = NULL;
     tinypy_value_t *method = tinypy_object_get_attr(stream, "write", 5U, &error);
+    tinypy_value_t *text;
 
     if (method == NULL) {
         __tinypy_cli_discard_error(vm, error);
         return TINYPY_FALSE;
     }
-    tinypy_value_t *text = tinypy_string_from_bytes(vm, bytes, size);
+    if (tinypy_typeof(value) == TINYPY_VALUE_UNICODE && tinypy_typeof(stream) != TINYPY_VALUE_OUTPUT_STREAM) {
+        tinypy_retain(value);
+        text = value;
+    }
+    else {
+        text = tinypy_object_str(value, &error);
+    }
+    if (text == NULL) {
+        tinypy_release(method);
+        __tinypy_cli_discard_error(vm, error);
+        return TINYPY_FALSE;
+    }
     tinypy_value_t *args = tinypy_tuple_from_items(vm, &text, 1U);
     tinypy_value_t *result = tinypy_call(method, args, NULL, &error);
 
@@ -578,6 +645,15 @@ static tinypy_bool_t __tinypy_cli_stream_write(tinypy_vm_t *vm, tinypy_value_t *
     }
     tinypy_release(result);
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyFile_WriteString */
+static tinypy_bool_t __tinypy_cli_stream_write(tinypy_vm_t *vm, tinypy_value_t *stream, const void *bytes, size_t size) {
+    tinypy_value_t *text = tinypy_string_from_bytes(vm, bytes, size);
+    tinypy_bool_t written = __tinypy_cli_stream_write_object(vm, stream, text);
+
+    tinypy_release(text);
+    return written;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_cli_write(tinypy_cli_writer_t *writer, const void *bytes, size_t size) {
@@ -595,24 +671,31 @@ static void __tinypy_cli_write_text(tinypy_cli_writer_t *writer, const char *tex
     __tinypy_cli_write(writer, text, size);
 }
 //////////////////////////////////////////////////////////////////////////
-/* PySys_WriteStderr: through the sys.stderr object when the program set
-   one, to the process stderr when sys.stderr is missing, nowhere when it is
-   None; a failed write is ignored. */
+static void __tinypy_cli_write_object(tinypy_cli_writer_t *writer, tinypy_value_t *value) {
+    if (writer->failed != 0) {
+        return;
+    }
+    if (__tinypy_cli_stream_write_object(writer->vm, writer->stream, value) == 0) {
+        writer->failed = TINYPY_TRUE;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* PySys_WriteStderr: through the sys.stderr object, and to the process
+   stderr when sys.stderr is missing or its write fails, as for None. */
 static void __tinypy_cli_write_stderr(tinypy_vm_t *vm, const char *text) {
     tinypy_value_t *stream = __tinypy_cli_sys_value(vm, "stderr", 6U);
-
-    if (stream == NULL) {
-        (void)fputs(text, stderr);
-        (void)fflush(stderr);
-        return;
-    }
-    if (tinypy_typeof(stream) == TINYPY_VALUE_NONE) {
-        return;
-    }
-    tinypy_retain(stream);
     size_t size = strlen(text);
-    (void)__tinypy_cli_stream_write(vm, stream, text, size);
-    tinypy_release(stream);
+
+    if (stream != NULL) {
+        tinypy_retain(stream);
+        tinypy_bool_t written = __tinypy_cli_stream_write(vm, stream, text, size);
+        tinypy_release(stream);
+        if (written != 0) {
+            return;
+        }
+    }
+    (void)fputs(text, stderr);
+    (void)fflush(stderr);
 }
 //////////////////////////////////////////////////////////////////////////
 /* Opens a source file by name, then by its tail under each sys.path entry,
@@ -719,14 +802,19 @@ static void __tinypy_cli_write_source_line(tinypy_cli_writer_t *writer, const ch
     free(data);
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyTraceBack_Print: the innermost sys.tracebacklimit frames. */
+/* PyTraceBack_Print: the innermost sys.tracebacklimit frames; anything but
+   a traceback fails the report. */
 static void __tinypy_cli_write_traceback(tinypy_cli_writer_t *writer, tinypy_value_t *traceback) {
     tinypy_vm_t *vm = writer->vm;
     int64_t limit = TINYPY_CLI_TRACEBACK_LIMIT;
     int64_t depth = 0;
-    tinypy_value_t *limit_value = __tinypy_cli_sys_value(vm, "tracebacklimit", 14U);
     tinypy_value_t *cursor;
 
+    if (tinypy_typeof(traceback) != TINYPY_VALUE_TRACEBACK) {
+        writer->failed = TINYPY_TRUE;
+        return;
+    }
+    tinypy_value_t *limit_value = __tinypy_cli_sys_value(vm, "tracebacklimit", 14U);
     if (limit_value != NULL && (tinypy_typeof(limit_value) == TINYPY_VALUE_INTEGER || tinypy_typeof(limit_value) == TINYPY_VALUE_BOOL)) {
         limit = tinypy_integer_as_i64(limit_value);
         if (limit <= 0) {
@@ -889,14 +977,18 @@ static void __tinypy_cli_write_error_text(tinypy_cli_writer_t *writer, int32_t o
     __tinypy_cli_write_text(writer, "^\n");
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyExceptionClass_Name: the part of a type name after its last dot. */
+/* PyExceptionClass_Name: the part of a class name after its last dot. */
 static const char *__tinypy_cli_exception_type_name(tinypy_value_t *type, size_t *out_size) {
+    const char *type_name;
+
     if (tinypy_typeof(type) == TINYPY_VALUE_CLASS) {
         tinypy_value_t *name = tinypy_class_name(type);
-        const char *return_value_1 = (const char *)tinypy_string_view(name, out_size);
-        return return_value_1;
+        type_name = (const char *)tinypy_string_view(name, out_size);
     }
-    const char *type_name = tinypy_type_name(tinypy_value_as_const_type(type), out_size);
+    else {
+        const tinypy_type_t *class_type = tinypy_value_as_const_type(type);
+        type_name = tinypy_type_name(class_type, out_size);
+    }
     size_t offset = 0U;
 
     for (size_t index = 0U; index < *out_size; ++index) {
@@ -908,15 +1000,20 @@ static const char *__tinypy_cli_exception_type_name(tinypy_value_t *type, size_t
     return type_name + offset;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyErr_Display writes the __module__ of the type before its name unless
-   the type belongs to the exceptions module. */
+/* PyErr_Display writes the __module__ of an exception class before its name
+   unless the class belongs to the exceptions module, and str() of any other
+   type object. */
 static void __tinypy_cli_write_exception_type(tinypy_cli_writer_t *writer, tinypy_value_t *type) {
     tinypy_vm_t *vm = writer->vm;
     tinypy_error_t *error = NULL;
-    tinypy_value_t *module = tinypy_object_get_attr(type, "__module__", 10U, &error);
     size_t module_size;
     size_t name_size;
 
+    if (__tinypy_cli_exception_class(vm, type) == 0) {
+        __tinypy_cli_write_object(writer, type);
+        return;
+    }
+    tinypy_value_t *module = tinypy_object_get_attr(type, "__module__", 10U, &error);
     if (module == NULL) {
         __tinypy_cli_discard_error(vm, error);
         __tinypy_cli_write_text(writer, "<unknown>");
@@ -1009,6 +1106,8 @@ static void __tinypy_cli_display(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_v
             tinypy_release(rendered);
         }
     }
+    /* The newline is written even after a failed write. */
+    writer.failed = TINYPY_FALSE;
     __tinypy_cli_write_text(&writer, "\n");
     tinypy_release(value);
     tinypy_release(stream);
@@ -1024,8 +1123,12 @@ static tinypy_value_t *__tinypy_cli_excepthook(tinypy_value_t *function, tinypy_
         tinypy_vm_raise_error(vm, TINYPY_ERROR_TYPE, "excepthook() takes no keyword arguments");
         return NULL;
     }
-    if (tinypy_tuple_size(args) != 3U) {
-        tinypy_vm_raise_error(vm, TINYPY_ERROR_TYPE, "excepthook expected 3 arguments");
+    size_t count = tinypy_tuple_size(args);
+    if (count != 3U) {
+        char message[64];
+
+        (void)snprintf(message, sizeof(message), "excepthook expected 3 arguments, got %zu", count);
+        tinypy_vm_raise_error(vm, TINYPY_ERROR_TYPE, message);
         return NULL;
     }
     __tinypy_cli_display(vm, tinypy_tuple_get(args, 0U), tinypy_tuple_get(args, 1U), tinypy_tuple_get(args, 2U));
@@ -1063,25 +1166,25 @@ static void __tinypy_cli_release_exception(tinypy_cli_exception_t *exception) {
     (void)memset(exception, 0, sizeof(*exception));
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyErr_ExceptionMatches(PyExc_SystemExit) reads the raised type, which an
+   exception sys.exit leaves unnormalized holds apart from its value. */
 static tinypy_bool_t __tinypy_cli_raised_system_exit(tinypy_vm_t *vm) {
-    tinypy_value_t *exception = tinypy_vm_raised_exception(vm);
-    tinypy_value_t *builtins = tinypy_vm_builtins(vm);
+    tinypy_value_t *type = tinypy_vm_raised_exception_type(vm);
 
-    if (exception == NULL || builtins == NULL) {
+    if (type == NULL) {
         return TINYPY_FALSE;
     }
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, "SystemExit", 10U);
-    tinypy_value_t *system_exit = tinypy_dict_get_optional(builtins, key);
-    tinypy_release(key);
+    tinypy_value_t *system_exit = __tinypy_cli_builtin_value(vm, "SystemExit", 10U);
     if (system_exit == NULL) {
         return TINYPY_FALSE;
     }
-    tinypy_bool_t matches = tinypy_exception_matches(exception, system_exit, NULL) > 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t matches = tinypy_exception_matches(type, system_exit, NULL) > 0 ? TINYPY_TRUE : TINYPY_FALSE;
     return matches;
 }
 //////////////////////////////////////////////////////////////////////////
-/* handle_system_exit: the status of the code attribute, an int or a long,
-   or 1 after writing any other code to sys.stderr. */
+/* handle_system_exit: the code attribute of an exception instance, or the
+   value itself, is the status when it is an int or a long; any other code
+   is written to sys.stderr and the status is 1. */
 static int32_t __tinypy_cli_system_exit_status(tinypy_vm_t *vm) {
     tinypy_cli_exception_t exception;
     int32_t status = 0;
@@ -1095,15 +1198,18 @@ static int32_t __tinypy_cli_system_exit_status(tinypy_vm_t *vm) {
         return 0;
     }
     tinypy_retain(value);
-    tinypy_error_t *error = NULL;
-    tinypy_value_t *code = tinypy_object_get_attr(value, "code", 4U, &error);
-    if (code != NULL) {
-        tinypy_release(value);
-        value = code;
-    }
-    else {
-        /* The exception itself reads as the code when it has none. */
-        __tinypy_cli_discard_error(vm, error);
+    if (__tinypy_cli_exception_instance(vm, value) != 0) {
+        tinypy_error_t *error = NULL;
+        tinypy_value_t *code = tinypy_object_get_attr(value, "code", 4U, &error);
+
+        if (code != NULL) {
+            tinypy_release(value);
+            value = code;
+        }
+        else {
+            /* The exception itself reads as the code when it has none. */
+            __tinypy_cli_discard_error(vm, error);
+        }
     }
     int64_t number;
     if (tinypy_typeof(value) == TINYPY_VALUE_NONE) {
@@ -1115,26 +1221,29 @@ static int32_t __tinypy_cli_system_exit_status(tinypy_vm_t *vm) {
     }
     else {
         tinypy_value_t *stream = __tinypy_cli_sys_value(vm, "stderr", 6U);
-        tinypy_value_t *rendered = tinypy_object_str(value, &error);
-        size_t rendered_size;
-        const char *rendered_text = rendered != NULL ? __tinypy_cli_text_view(rendered, &rendered_size) : NULL;
 
-        if (rendered == NULL) {
-            __tinypy_cli_discard_error(vm, error);
-        }
         if (stream != NULL && tinypy_typeof(stream) != TINYPY_VALUE_NONE) {
-            if (rendered_text != NULL) {
-                tinypy_retain(stream);
-                (void)__tinypy_cli_stream_write(vm, stream, rendered_text, rendered_size);
-                tinypy_release(stream);
+            tinypy_retain(stream);
+            (void)__tinypy_cli_stream_write_object(vm, stream, value);
+            tinypy_release(stream);
+        }
+        else {
+            /* PyObject_Print(value, stderr, Py_PRINT_RAW) */
+            tinypy_error_t *error = NULL;
+            tinypy_value_t *rendered = tinypy_object_str(value, &error);
+            size_t rendered_size;
+            const char *rendered_text = __tinypy_cli_text_view(rendered, &rendered_size);
+
+            if (rendered == NULL) {
+                __tinypy_cli_discard_error(vm, error);
             }
-        }
-        else if (rendered_text != NULL) {
-            (void)fwrite(rendered_text, 1U, rendered_size, stderr);
-            (void)fflush(stderr);
-        }
-        if (rendered != NULL) {
-            tinypy_release(rendered);
+            if (rendered_text != NULL) {
+                (void)fwrite(rendered_text, 1U, rendered_size, stderr);
+                (void)fflush(stderr);
+            }
+            if (rendered != NULL) {
+                tinypy_release(rendered);
+            }
         }
         __tinypy_cli_write_stderr(vm, "\n");
         status = 1;
@@ -1146,8 +1255,10 @@ static int32_t __tinypy_cli_system_exit_status(tinypy_vm_t *vm) {
 //////////////////////////////////////////////////////////////////////////
 /* PyErr_PrintEx: an uncaught SystemExit ends the program with its status;
    any other exception goes to sys.excepthook, whose own failure or absence
-   PyErr_Display reports. Returns whether the program must exit. */
-static tinypy_bool_t __tinypy_cli_report_exception(tinypy_vm_t *vm, int32_t *out_status) {
+   PyErr_Display reports. The heading of a caller such as call_sys_exitfunc
+   precedes the report and, as PySys_WriteStderr keeps the exception, is
+   written once it is fetched. Returns whether the program must exit. */
+static tinypy_bool_t __tinypy_cli_report_exception(tinypy_vm_t *vm, const char *heading, int32_t *out_status) {
     tinypy_cli_exception_t exception;
 
     if (__tinypy_cli_raised_system_exit(vm) != 0) {
@@ -1155,6 +1266,9 @@ static tinypy_bool_t __tinypy_cli_report_exception(tinypy_vm_t *vm, int32_t *out
         return TINYPY_TRUE;
     }
     __tinypy_cli_fetch_exception(vm, &exception);
+    if (heading != NULL) {
+        __tinypy_cli_write_stderr(vm, heading);
+    }
     if (exception.type == NULL || exception.value == NULL) {
         __tinypy_cli_release_exception(&exception);
         return TINYPY_FALSE;
@@ -1222,15 +1336,18 @@ static void __tinypy_cli_print_host_error(const tinypy_error_t *error) {
     (void)fputc('\n', stderr);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_cli_execute_result_e __tinypy_cli_report_failure(tinypy_vm_t *vm, tinypy_error_t *error, int32_t *out_status) {
+static tinypy_cli_execute_result_e __tinypy_cli_report_failure(tinypy_vm_t *vm, tinypy_error_t *error, const char *heading, int32_t *out_status) {
     tinypy_cli_execute_result_e result = TINYPY_CLI_EXECUTE_ERROR;
 
     if (tinypy_vm_has_error(vm) != 0) {
-        if (__tinypy_cli_report_exception(vm, out_status) != 0) {
+        if (__tinypy_cli_report_exception(vm, heading, out_status) != 0) {
             result = TINYPY_CLI_EXECUTE_EXIT;
         }
     }
     else if (error != NULL) {
+        if (heading != NULL) {
+            __tinypy_cli_write_stderr(vm, heading);
+        }
         __tinypy_cli_print_host_error(error);
     }
     if (error != NULL) {
@@ -1261,7 +1378,7 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute(tinypy_vm_t *vm, tinypy_
         tinypy_vm_clear_error(vm);
         return TINYPY_CLI_EXECUTE_INCOMPLETE;
     }
-    tinypy_cli_execute_result_e return_value_1 = __tinypy_cli_report_failure(vm, error, out_status);
+    tinypy_cli_execute_result_e return_value_1 = __tinypy_cli_report_failure(vm, error, NULL, out_status);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1283,7 +1400,7 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *
 
             if (representation == NULL) {
                 tinypy_release(result);
-                tinypy_cli_execute_result_e return_value_1 = __tinypy_cli_report_failure(vm, error, out_status);
+                tinypy_cli_execute_result_e return_value_1 = __tinypy_cli_report_failure(vm, error, NULL, out_status);
                 return return_value_1;
             }
             size_t size;
@@ -1305,7 +1422,7 @@ static tinypy_cli_execute_result_e __tinypy_cli_execute_expression(tinypy_vm_t *
         tinypy_vm_clear_error(vm);
         return TINYPY_CLI_EXECUTE_NOT_EXPRESSION;
     }
-    tinypy_cli_execute_result_e return_value_2 = __tinypy_cli_report_failure(vm, error, out_status);
+    tinypy_cli_execute_result_e return_value_2 = __tinypy_cli_report_failure(vm, error, NULL, out_status);
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1348,7 +1465,7 @@ static tinypy_bool_t __tinypy_cli_set_sys_values(tinypy_vm_t *vm, int32_t argc, 
     size_t index;
 
     if (sys_module == NULL) {
-        (void)__tinypy_cli_report_failure(vm, error, out_status);
+        (void)__tinypy_cli_report_failure(vm, error, NULL, out_status);
         return TINYPY_FALSE;
     }
     items = (tinypy_value_t **)malloc((size_t)(argc > 0 ? argc : 1) * sizeof(*items));
@@ -1408,10 +1525,7 @@ static void __tinypy_cli_call_exitfunc(tinypy_vm_t *vm, int32_t *out_status, tin
         tinypy_release(args);
         tinypy_release(exitfunc);
         if (result == NULL) {
-            if (__tinypy_cli_raised_system_exit(vm) == 0) {
-                __tinypy_cli_write_stderr(vm, "Error in sys.exitfunc:\n");
-            }
-            if (__tinypy_cli_report_failure(vm, error, out_status) == TINYPY_CLI_EXECUTE_EXIT) {
+            if (__tinypy_cli_report_failure(vm, error, "Error in sys.exitfunc:\n", out_status) == TINYPY_CLI_EXECUTE_EXIT) {
                 *out_exit = TINYPY_TRUE;
             }
         }
@@ -1541,16 +1655,22 @@ static void __tinypy_cli_clear_namespace(tinypy_vm_t *vm, tinypy_value_t *dict, 
     tinypy_release(none);
 }
 //////////////////////////////////////////////////////////////////////////
+/* A finalizer the clearing runs may remove the module from sys.modules, the
+   holder of the key, the module and through it its namespace. */
 static void __tinypy_cli_clear_module(tinypy_vm_t *vm, tinypy_value_t *modules, tinypy_value_t *key, tinypy_value_t *module, tinypy_value_t *survivors) {
     tinypy_value_t *none = tinypy_none_get(vm);
     tinypy_value_t *dict = tinypy_module_dict(module);
 
-    if (dict != NULL) {
-        __tinypy_cli_clear_namespace(vm, dict, survivors);
-    }
+    tinypy_retain(key);
     tinypy_retain(module);
+    if (dict != NULL) {
+        tinypy_retain(dict);
+        __tinypy_cli_clear_namespace(vm, dict, survivors);
+        tinypy_release(dict);
+    }
     tinypy_dict_set(modules, key, none);
     __tinypy_cli_release_cleared(vm, survivors, module);
+    tinypy_release(key);
     tinypy_release(none);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1586,6 +1706,8 @@ static void __tinypy_cli_cleanup_modules(tinypy_vm_t *vm) {
         tinypy_module_add_value(builtins_module, "_", 1U, none);
     }
     if (sys_module != NULL) {
+        /* The finalizers of the values replaced here may change sys.modules. */
+        tinypy_retain(sys_module);
         for (index = 0U; index < sizeof(sys_deletes) / sizeof(sys_deletes[0]); ++index) {
             size_t name_size = strlen(sys_deletes[index]);
 
@@ -1598,6 +1720,7 @@ static void __tinypy_cli_cleanup_modules(tinypy_vm_t *vm) {
 
             tinypy_module_add_value(sys_module, sys_files[index], name_size, original != NULL ? original : none);
         }
+        tinypy_release(sys_module);
     }
     __tinypy_cli_clear_named_module(vm, modules, "__main__", 8U, survivors);
     size_t cleared;

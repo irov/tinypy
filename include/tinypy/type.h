@@ -35,7 +35,11 @@ const tinypy_type_t *tinypy_type_base_at(const tinypy_type_t *type, size_t index
 size_t tinypy_type_mro_size(const tinypy_type_t *type);
 const tinypy_type_t *tinypy_type_mro_at(const tinypy_type_t *type, size_t index);
 
-/* Attribute lookup returns a borrowed value or NULL when the name is absent. */
+/* Attribute lookup returns a borrowed value or NULL when the name is absent.
+ * Setting a fresh native function turns it into a method descriptor of the
+ * type; the descriptor of a heap type refers to it weakly, so the type is
+ * freed with its last reference, and a descriptor that outlives it accepts no
+ * receiver. */
 tinypy_value_t *tinypy_type_get_attr(const tinypy_type_t *type, const char *name, size_t name_size);
 void tinypy_type_set_attr(tinypy_type_t *type, const char *name, size_t name_size, tinypy_value_t *value);
 /* Key variants borrow an existing str/unicode name from the same VM. They

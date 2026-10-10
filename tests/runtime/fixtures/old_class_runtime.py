@@ -362,3 +362,79 @@ assert "%s" % ClassicReprOnly() == "classic repr"
 assert repr(ClassicReprOnly()) == "classic repr"
 assert str(ClassicBothText()) == "classic str"
 assert repr(ClassicBothText()) == "classic repr"
+
+
+# A key comparison during an attribute operation may replace the dictionary
+# or the class it works on, which stays alive until the operation ends.
+# CPython 2.7 keeps borrowed pointers there and crashes on some sequences.
+replaced_owner = []
+replaced_garbage = []
+
+
+class ReplacingKey(object):
+    def __init__(self, replace):
+        self.replace = replace
+
+    def __hash__(self):
+        return hash("attr")
+
+    def __eq__(self, other):
+        self.replace(replaced_owner[0])
+        replaced_garbage.extend([("k" * 40, index, [index]) for index in range(64)])
+        return False
+
+
+class ReplacementClass:
+    pass
+
+
+def replace_dict(owner):
+    owner.__dict__ = {}
+
+
+def replace_class(owner):
+    owner.__class__ = ReplacementClass
+
+
+def keyed_instance(key_in_class, replace):
+    class Keyed:
+        pass
+    created = Keyed()
+    (Keyed if key_in_class else created).__dict__ = {ReplacingKey(replace): 1}
+    replaced_owner[:] = [created]
+    return created
+
+
+def keyed_class():
+    class Keyed:
+        pass
+    Keyed.__dict__ = {ReplacingKey(replace_dict): 1}
+    replaced_owner[:] = [Keyed]
+    return Keyed
+
+
+assert getattr(keyed_instance(False, replace_dict), "attr", "missing") == "missing"
+keyed = keyed_instance(False, replace_dict)
+keyed.attr = 5
+assert keyed.__dict__ == {}
+try:
+    del keyed_instance(False, replace_dict).attr
+except AttributeError:
+    pass
+else:
+    raise AssertionError("a missing instance attribute must not be deleted")
+keyed = keyed_instance(True, replace_class)
+assert getattr(keyed, "attr", "missing") == "missing"
+assert keyed.__class__ is ReplacementClass
+keyed = keyed_instance(True, replace_class)
+assert not hasattr(keyed, "attr")
+keyed = keyed_class()
+keyed.attr = 5
+assert [name for name in keyed.__dict__ if isinstance(name, str)] == []
+try:
+    del keyed_class().attr
+except AttributeError:
+    pass
+else:
+    raise AssertionError("a missing class attribute must not be deleted")
+del keyed, replaced_owner[:]

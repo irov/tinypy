@@ -259,7 +259,7 @@ void tinypy_internal_initialize_partial_type(tinypy_vm_t *vm) {
     tinypy_internal_type_add_method(type, vm->internal_special_reduce_key, __tinypy_partial_reduce_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(type, vm->internal_special_setstate_key, __tinypy_partial_setstate_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_value_t *module = TINYPY_RET(vm->internal_functools_module_name);
-    tinypy_value_t *dict_descriptor = tinypy_internal_instance_dict_descriptor_new(type);
+    tinypy_value_t *dict_descriptor = tinypy_internal_instance_dict_descriptor_new(type, NULL);
 
     tinypy_internal_constructor_add_builtin_new(type);
     tinypy_type_set_attr_key(type, type->vm->internal_special_module_key, module);

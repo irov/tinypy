@@ -28,6 +28,7 @@ tinypy_value_t *tinypy_native_function_new_key(tinypy_value_t *name, tinypy_nati
     function->arity_style = TINYPY_ARITY_STYLE_UNCHECKED;
     function->user_data = user_data;
     function->finalize = finalize;
+    function->owner_reference = NULL;
     function->owner_retained = TINYPY_FALSE;
     function->descriptor_kind = TINYPY_NATIVE_DESCRIPTOR_AUTO;
     return &function->base;
@@ -123,6 +124,9 @@ void tinypy_internal_native_function_release_references(tinypy_value_t *value, t
     if (function->self != NULL) {
         visit(function->self, user_data);
     }
+    if (function->owner_reference != NULL) {
+        visit(function->owner_reference, user_data);
+    }
     if (function->owner_retained != 0) {
         visit(&function->owner->base.base, user_data);
     }
@@ -152,15 +156,43 @@ void tinypy_internal_native_function_finalize(tinypy_value_t *value) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* The type a method descriptor belongs to, NULL for a plain function. A heap
+   type owns its descriptors through its dictionary and is only referenced
+   weakly by them, so it reads as NULL once it no longer exists. */
+tinypy_type_t *tinypy_internal_native_function_owner(const tinypy_value_t *function) {
+    const tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT((tinypy_value_t *)function);
+
+    if (native->owner_reference != NULL) {
+        tinypy_type_t *owner = (tinypy_type_t *)tinypy_weakref_get(native->owner_reference);
+        return owner;
+    }
+    return native->owner;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Names the owner type of a method descriptor in a message, or the type that
+   no longer exists, of which no object can be an instance. */
+static void __tinypy_native_function_owner_name(tinypy_value_t *callable, tinypy_message_part_t out_parts[3]) {
+    tinypy_type_t *owner = tinypy_internal_native_function_owner(callable);
+
+    if (owner != NULL) {
+        tinypy_internal_type_message_name(owner, out_parts);
+        return;
+    }
+    out_parts[0] = (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("");
+    out_parts[1] = (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("");
+    out_parts[2] = (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("<deleted type>");
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_native_function_check_receiver(tinypy_value_t *callable, tinypy_value_t *receiver, tinypy_bool_t binding, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
-    if (function->owner == NULL || (receiver != NULL && tinypy_type_is_subtype(receiver->type, function->owner) != TINYPY_FALSE)) {
+    tinypy_type_t *owner_type = tinypy_internal_native_function_owner(callable);
+    if (function->owner == NULL || (owner_type != NULL && receiver != NULL && tinypy_type_is_subtype(receiver->type, owner_type) != TINYPY_FALSE)) {
         return TINYPY_TRUE;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
     tinypy_message_part_t owner[3];
 
-    tinypy_internal_type_message_name(function->owner, owner);
+    __tinypy_native_function_owner_name(callable, owner);
     if (receiver == NULL) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
@@ -303,7 +335,12 @@ tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, t
             items += 1;
             count -= 1U;
         }
+        /* The argument tuple keeps the items, but the caller may hold the
+           callable borrowed, as a property holds its getter, and a bound
+           receiver lives only as long as the callable. */
+        TINYPY_INCREF(callable);
         tinypy_value_t *result = __tinypy_native_function_invoke_items(callable, self, items, count, kwargs, out_error);
+        TINYPY_DECREF(callable);
         return result;
     }
     if (function->self != NULL) {
@@ -460,8 +497,12 @@ tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *calla
 tinypy_bool_t tinypy_internal_native_method_calls_unbound(tinypy_value_t *descriptor, tinypy_value_t *instance) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(descriptor);
-    tinypy_bool_t result = descriptor->type == vm->native_method_descriptor_type && function->items_callback != NULL && function->self == NULL
-        && (function->owner == NULL || tinypy_type_is_subtype(instance->type, function->owner) != TINYPY_FALSE);
+
+    if (descriptor->type != vm->native_method_descriptor_type || function->items_callback == NULL || function->self != NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_type_t *owner = tinypy_internal_native_function_owner(descriptor);
+    tinypy_bool_t result = function->owner == NULL || (owner != NULL && tinypy_type_is_subtype(instance->type, owner) != TINYPY_FALSE) ? TINYPY_TRUE : TINYPY_FALSE;
 
     return result;
 }
@@ -537,6 +578,7 @@ static tinypy_value_t *__tinypy_native_function_bind(tinypy_value_t *descriptor,
     method->arity_style = function->arity_style;
     method->user_data = function->user_data;
     method->finalize = NULL;
+    method->owner_reference = NULL;
     method->owner_retained = TINYPY_FALSE;
     method->descriptor_kind = TINYPY_NATIVE_DESCRIPTOR_AUTO;
     TINYPY_INCREF(method->name);
@@ -572,12 +614,13 @@ tinypy_value_t *tinypy_internal_native_function_bind_class(tinypy_value_t *descr
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE || tinypy_type_is_subtype((tinypy_type_t *)class_value, function->owner) == 0) {
+    tinypy_type_t *owner = tinypy_internal_native_function_owner(descriptor);
+    if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE || owner == NULL || tinypy_type_is_subtype((tinypy_type_t *)class_value, owner) == 0) {
         tinypy_bool_t is_type = TINYPY_VALUE_KIND(class_value) == TINYPY_VALUE_TYPE ? TINYPY_TRUE : TINYPY_FALSE;
         tinypy_message_part_t owner_name[3];
         tinypy_message_part_t class_name[3];
 
-        tinypy_internal_type_message_name(function->owner, owner_name);
+        __tinypy_native_function_owner_name(descriptor, owner_name);
         tinypy_internal_type_message_name(is_type != 0 ? (tinypy_type_t *)class_value : class_value->type, class_name);
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
@@ -632,10 +675,11 @@ static tinypy_value_t *__tinypy_native_class_method_descriptor_call(tinypy_value
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
     }
-    if (tinypy_type_is_subtype((tinypy_type_t *)class_value, function->owner) == 0) {
+    tinypy_type_t *owner = tinypy_internal_native_function_owner(callable);
+    if (owner == NULL || tinypy_type_is_subtype((tinypy_type_t *)class_value, owner) == 0) {
         tinypy_message_part_t owner_name[3];
 
-        tinypy_internal_type_message_name(function->owner, owner_name);
+        __tinypy_native_function_owner_name(callable, owner_name);
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
             TINYPY_MESSAGE_PART_LITERAL("' requires a subtype of '"), owner_name[0], owner_name[1], owner_name[2],
@@ -646,7 +690,10 @@ static tinypy_value_t *__tinypy_native_class_method_descriptor_call(tinypy_value
         return NULL;
     }
     if (function->items_callback != NULL) {
+        /* The caller may hold the descriptor borrowed. */
+        TINYPY_INCREF(callable);
         tinypy_value_t *items_result = __tinypy_native_function_invoke_items(callable, class_value, tinypy_internal_tuple_items(args) + 1, TINYPY_TUPLE_SIZE(args) - 1U, kwargs, out_error);
+        TINYPY_DECREF(callable);
         return items_result;
     }
     tinypy_value_t *result = __tinypy_native_function_invoke(callable, args, kwargs, out_error);
@@ -704,11 +751,17 @@ static tinypy_value_t *__tinypy_native_function_repr_method(tinypy_value_t *func
         static const char wrapper_descriptor_prefix[] = "<slot wrapper '";
         static const char descriptor_middle[] = "' of '";
         static const char descriptor_suffix[] = "' objects>";
+        static const char deleted_owner[] = "<deleted type>";
         tinypy_bool_t wrapper = native->base.type == vm->native_wrapper_descriptor_type;
         const char *descriptor_prefix = wrapper != 0 ? wrapper_descriptor_prefix : method_descriptor_prefix;
         size_t descriptor_prefix_size = wrapper != 0 ? sizeof(wrapper_descriptor_prefix) - 1U : sizeof(method_descriptor_prefix) - 1U;
-        size_t owner_name_size;
-        const char *owner_name = tinypy_type_name(native->owner, &owner_name_size);
+        tinypy_type_t *owner = tinypy_internal_native_function_owner(&native->base);
+        size_t owner_name_size = sizeof(deleted_owner) - 1U;
+        const char *owner_name = deleted_owner;
+
+        if (owner != NULL) {
+            owner_name = tinypy_type_name(owner, &owner_name_size);
+        }
         size_t fixed_size = descriptor_prefix_size + sizeof(descriptor_middle) - 1U + sizeof(descriptor_suffix) - 1U;
 
         if (name_size > SIZE_MAX - fixed_size || owner_name_size > SIZE_MAX - fixed_size - name_size) {
@@ -1065,12 +1118,14 @@ static tinypy_value_t *__tinypy_internal_native_repr(tinypy_value_t *instance, t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* -1 is never a hash value: as for a __hash__ method, a callback result of -1
+   reads as -2, and failures are reported through the error. */
 static tinypy_hash_t __tinypy_internal_native_hash(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_native_type_spec_t *spec = &instance->type->native_spec;
 
     void *native_payload = __tinypy_internal_native_payload(instance);
-    tinypy_hash_t return_value_1 = spec->hash(instance, native_payload, spec->user_data, out_error);
-    return return_value_1;
+    tinypy_hash_t hash = spec->hash(instance, native_payload, spec->user_data, out_error);
+    return hash == (tinypy_hash_t)-1 ? (tinypy_hash_t)-2 : hash;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_native_compare(tinypy_value_t *instance, tinypy_value_t *other, int32_t operation, tinypy_error_t **out_error) {
@@ -1221,36 +1276,31 @@ static tinypy_bool_t __tinypy_internal_native_spec_bool(const tinypy_native_type
     return value != 0 ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A host native type dispatches the callbacks of its own spec only: a slot
+   its spec leaves without a callback keeps the behaviour of the nearest base
+   that is no host native type, since the callback of a native base would run
+   on the user data of the subtype's spec. */
 static void __tinypy_internal_native_configure_slots(tinypy_type_t *type) {
     tinypy_native_type_spec_t *spec = &type->native_spec;
+    const tinypy_type_t *generic = type->base_type;
 
+    while (tinypy_internal_type_is_host_native(generic) != 0) {
+        generic = generic->base_type;
+    }
     (void)memset(&type->native_number_slots, 0, sizeof(type->native_number_slots));
     (void)memset(&type->native_sequence_slots, 0, sizeof(type->native_sequence_slots));
     (void)memset(&type->native_mapping_slots, 0, sizeof(type->native_mapping_slots));
-    if (spec->call != NULL) {
-        type->call = __tinypy_internal_native_call;
-    }
-    if (spec->repr != NULL) {
-        type->repr = __tinypy_internal_native_repr;
-    }
-    if (spec->hash != NULL) {
-        type->hash = __tinypy_internal_native_hash;
-    }
-    if (spec->compare != NULL) {
-        type->rich_compare = __tinypy_internal_native_compare;
-    }
-    if (spec->get_attribute != NULL) {
-        type->get_attribute = __tinypy_internal_native_get_attribute;
-    }
-    if (spec->set_attribute != NULL) {
-        type->set_attribute = __tinypy_internal_native_set_attribute;
-    }
-    if (spec->iter != NULL) {
-        type->iter = __tinypy_internal_native_iter;
-    }
-    if (spec->next != NULL) {
-        type->next = __tinypy_internal_native_next;
-    }
+    type->call = spec->call != NULL ? __tinypy_internal_native_call : generic->call;
+    type->repr = spec->repr != NULL ? __tinypy_internal_native_repr : generic->repr;
+    type->hash = spec->hash != NULL ? __tinypy_internal_native_hash : generic->hash;
+    type->rich_compare = spec->compare != NULL ? __tinypy_internal_native_compare : generic->rich_compare;
+    type->get_attribute = spec->get_attribute != NULL ? __tinypy_internal_native_get_attribute : generic->get_attribute;
+    type->set_attribute = spec->set_attribute != NULL ? __tinypy_internal_native_set_attribute : generic->set_attribute;
+    type->iter = spec->iter != NULL ? __tinypy_internal_native_iter : generic->iter;
+    type->next = spec->next != NULL ? __tinypy_internal_native_next : generic->next;
+    type->mapping_slots = generic->mapping_slots;
+    type->sequence_slots = generic->sequence_slots;
+    type->number_slots = generic->number_slots;
     if (spec->mapping_get != NULL || spec->mapping_set != NULL || spec->mapping_length != NULL) {
         type->native_mapping_slots.get_item = spec->mapping_get != NULL ? __tinypy_internal_native_mapping_get : NULL;
         type->native_mapping_slots.set_item = spec->mapping_set != NULL ? __tinypy_internal_native_mapping_set : NULL;
@@ -1313,6 +1363,18 @@ tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_typ
     TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_internal_native_validate_spec(vm, spec, out_error) == 0) {
         return NULL;
+    }
+    for (size_t index = 0U; index < base_count; ++index) {
+        if (tinypy_internal_type_is_native_base(bases[index]) == 0) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("native type base '"),
+                {bases[index]->name, bases[index]->name_size},
+                TINYPY_MESSAGE_PART_LITERAL("' has an incompatible instance layout"),
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            return NULL;
+        }
     }
     has_instance_dict = __tinypy_internal_native_spec_bool(spec, offsetof(tinypy_native_type_spec_t, has_instance_dict), spec->has_instance_dict);
     has_weakrefs = __tinypy_internal_native_spec_bool(spec, offsetof(tinypy_native_type_spec_t, has_weakrefs), spec->has_weakrefs);
@@ -1380,6 +1442,7 @@ tinypy_bool_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_n
     type->native_spec.abi_version = TINYPY_NATIVE_TYPE_ABI_VERSION;
     type->native_spec.struct_size = (uint32_t)sizeof(type->native_spec);
     __tinypy_internal_native_configure_slots(type);
+    tinypy_internal_type_modified(type);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////

@@ -60,6 +60,7 @@ static tinypy_bool_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size
     /* Append folded constant onto consts */
     if (TINYPY_COMPILER_LIST_APPEND(consts, newconst)) {
         TINYPY_COMPILER_DECREF(newconst);
+        __tinypy_frontend_clear_raised(consts);
         return TINYPY_FALSE;
     }
     TINYPY_COMPILER_DECREF(newconst);
@@ -194,6 +195,7 @@ static tinypy_bool_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t
     len_consts = TINYPY_COMPILER_LIST_GET_SIZE(consts);
     if (TINYPY_COMPILER_LIST_APPEND(consts, newconst)) {
         TINYPY_COMPILER_DECREF(newconst);
+        __tinypy_frontend_clear_raised(consts);
         return TINYPY_FALSE;
     }
     TINYPY_COMPILER_DECREF(newconst);
@@ -244,6 +246,7 @@ static tinypy_bool_t __fold_unaryops_on_constants(uint8_t *codestr, tinypy_value
     len_consts = TINYPY_COMPILER_LIST_GET_SIZE(consts);
     if (TINYPY_COMPILER_LIST_APPEND(consts, newconst)) {
         TINYPY_COMPILER_DECREF(newconst);
+        __tinypy_frontend_clear_raised(consts);
         return TINYPY_FALSE;
     }
     TINYPY_COMPILER_DECREF(newconst);

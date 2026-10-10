@@ -1209,34 +1209,18 @@ static tinypy_bool_t __tinypy_list_sort_items(tinypy_vm_t *vm, tinypy_list_sort_
     return sorted;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+/* PyArg_ParseTupleAndKeywords with "|OOi:sort". The comparison and key
+   functions come back owned: the keywords may be the caller's dict, which the
+   reverse flag and the callbacks can clear. */
+static tinypy_bool_t __tinypy_list_sort_arguments(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_value_t **out_callbacks, tinypy_bool_t *out_reverse, tinypy_error_t **out_error) {
     tinypy_value_t *const names[3] = {vm->internal_cmp_key, vm->internal_key_key, vm->internal_reverse_key};
-    tinypy_value_t *compare = NULL;
-    tinypy_value_t *key_function = NULL;
-    tinypy_bool_t reverse = TINYPY_FALSE;
-    size_t size;
-    tinypy_value_t **saved_items;
-    size_t saved_allocated;
-    uint64_t saved_version;
-    tinypy_list_sort_item_t *sort_items = NULL;
-    void *sort_storage = NULL;
-    size_t sort_storage_size = 0U;
-    tinypy_bool_t has_keys;
-    tinypy_bool_t sorted = TINYPY_TRUE;
-    tinypy_bool_t modified;
-    tinypy_bool_t keys_ready;
-    size_t key_count = 0U;
-    size_t index;
-
-    tinypy_value_t *list = self;
+    tinypy_value_t *values[3] = {NULL, NULL, NULL};
     size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
     size_t matched_keywords = 0U;
 
-    /* PyArg_ParseTupleAndKeywords with "|OOi:sort". */
     if (count + keyword_count > 3U) {
         tinypy_internal_make_arity_error(vm, "sort", 4U, count + keyword_count, 0U, 3U, TINYPY_ARITY_STYLE_PARSED, out_error);
-        return NULL;
+        return TINYPY_FALSE;
     }
     for (size_t parameter = 0U; parameter < 3U; ++parameter) {
         tinypy_value_t *value = parameter < count ? items[parameter] : NULL;
@@ -1258,28 +1242,26 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
                 };
 
                 tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                return NULL;
+                return TINYPY_FALSE;
             }
             value = keyword_value;
         }
-        if (parameter == 0U) {
-            compare = value;
-        }
-        else if (parameter == 1U) {
-            key_function = value;
-        }
-        else if (value != NULL) {
-            int64_t integer;
+        values[parameter] = value;
+    }
+    out_callbacks[0] = values[0] != NULL ? TINYPY_RET(values[0]) : NULL;
+    out_callbacks[1] = values[1] != NULL ? TINYPY_RET(values[1]) : NULL;
+    *out_reverse = TINYPY_FALSE;
+    if (values[2] != NULL) {
+        int64_t integer;
 
-            if (tinypy_internal_integer_as_ssize(value, &integer, out_error) == 0) {
-                return NULL;
-            }
-            if (integer < INT32_MIN || integer > INT32_MAX) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, integer < INT32_MIN ? "signed integer is less than minimum" : "signed integer is greater than maximum", out_error);
-                return NULL;
-            }
-            reverse = integer != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        if (tinypy_internal_integer_as_ssize(values[2], &integer, out_error) == 0) {
+            goto failed;
         }
+        if (integer < INT32_MIN || integer > INT32_MAX) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, integer < INT32_MIN ? "signed integer is less than minimum" : "signed integer is greater than maximum", out_error);
+            goto failed;
+        }
+        *out_reverse = integer != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     }
     if (matched_keywords != keyword_count) {
         for (size_t slot = 0U; slot <= TINYPY_DICT_OBJECT(kwargs)->mask; ++slot) {
@@ -1292,7 +1274,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
             tinypy_value_type_e kind = TINYPY_VALUE_KIND(entry->key);
             if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
-                return NULL;
+                goto failed;
             }
             /* The keyword is read as a C string, up to an embedded NUL. */
             const char *name = (const char *)TINYPY_TEXT_BYTES(entry->key);
@@ -1316,10 +1298,45 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
                 };
 
                 tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                return NULL;
+                goto failed;
             }
         }
     }
+    return TINYPY_TRUE;
+
+failed:
+    for (size_t index = 0U; index < 2U; ++index) {
+        if (out_callbacks[index] != NULL) {
+            TINYPY_DECREF(out_callbacks[index]);
+        }
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    size_t size;
+    tinypy_value_t **saved_items;
+    size_t saved_allocated;
+    uint64_t saved_version;
+    tinypy_list_sort_item_t *sort_items = NULL;
+    void *sort_storage = NULL;
+    size_t sort_storage_size = 0U;
+    tinypy_bool_t has_keys;
+    tinypy_bool_t sorted = TINYPY_TRUE;
+    tinypy_bool_t modified;
+    tinypy_bool_t keys_ready;
+    size_t key_count = 0U;
+    size_t index;
+
+    tinypy_value_t *list = self;
+    tinypy_value_t *callbacks[2];
+    tinypy_bool_t reverse;
+    if (__tinypy_list_sort_arguments(vm, items, count, kwargs, callbacks, &reverse, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *compare = callbacks[0];
+    tinypy_value_t *key_function = callbacks[1];
     size = TINYPY_LIST_SIZE(list);
     saved_items = TINYPY_LIST_OBJECT(list)->items;
     saved_allocated = TINYPY_LIST_OBJECT(list)->allocated;
@@ -1412,6 +1429,11 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     }
     if (added_items != NULL) {
         tinypy_internal_vm_deallocate(vm, added_items, added_allocated * sizeof(*added_items));
+    }
+    for (index = 0U; index < 2U; ++index) {
+        if (callbacks[index] != NULL) {
+            TINYPY_DECREF(callbacks[index]);
+        }
     }
     if (sorted == 0) {
         return NULL;

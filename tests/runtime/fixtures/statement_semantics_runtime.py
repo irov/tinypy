@@ -1,6 +1,7 @@
 # Raise forms, the with-statement protocol, exception matching, name and
 # unpacking diagnostics, exec/eval argument handling and print softspace follow
-# CPython 2.7.
+# CPython 2.7. Crafted function code and a getter released while it runs, both
+# unsafe in CPython 2.7, are handled safely.
 import sys
 
 
@@ -244,6 +245,14 @@ def eval_free_variables():
     eval(make_closure().func_code)
 
 
+# MAKE_FUNCTION gives a function no closure, so crafted code that applies it
+# to code with free variables is rejected; CPython 2.7 crashes on the call.
+def make_function_free_variables():
+    code = make_closure().func_code
+    crafted = type(code)(0, 0, 2, 0x40, "d\x00\x00\x84\x00\x00\x83\x00\x00S", (code,), (), (), "<crafted>", "<module>", 1, "")
+    return eval(crafted)
+
+
 def eval_mapping_locals():
     mapping = Mapping()
     mapping.storage["q"] = 10
@@ -276,6 +285,7 @@ assert error_text(exec_bad_globals) == "TypeError: exec: arg 2 must be a diction
 assert error_text(exec_bad_locals) == "TypeError: exec: arg 3 must be a mapping or None"
 assert error_text(exec_free_variables) == "TypeError: code object passed to exec may not contain free variables"
 assert error_text(eval_free_variables) == "TypeError: code object passed to eval() may not contain free variables"
+assert error_text(make_function_free_variables) == "TypeError: invalid function operands"
 assert eval("q + 1", {}, {"q": 1}) == 2
 assert eval_mapping_locals() == 11
 assert error_text(eval, "1", {}, 1) == "TypeError: locals must be a mapping"
@@ -321,3 +331,27 @@ try:
 finally:
     sys.stdout = saved_stdout
 assert "".join(capture.chunks) == "a \nb\na  b\nx\n 1\nS! S!\ntab\tafter\n empty\n"
+
+
+# A property may hold the only reference to a bound built-in method that it
+# calls as its getter; re-initialising the property while the method runs
+# must not release the receiver the method works on. CPython 2.7 reads the
+# freed list here.
+class ReinitializesGetter(object):
+    def __eq__(self, other):
+        GetterOwner.__dict__["count"].__init__(None)
+        return False
+
+
+class GetterOwner(object):
+    pass
+
+
+def count_with_released_getter():
+    items = [ReinitializesGetter(), ReinitializesGetter(), ReinitializesGetter()]
+    GetterOwner.count = property(items.count)
+    del items
+    return GetterOwner().count
+
+
+assert count_with_released_getter() == 0

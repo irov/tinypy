@@ -225,3 +225,36 @@ assert sys.exc_type is None
 assert sys.exc_value is None
 assert sys.exc_traceback is None
 assert sys.exc_info() == (None, None, None)
+
+
+# A __del__ run while a frame restores the exception it saved may assign the
+# f_exc_* fields of that frame; CPython 2.7 crashes when one becomes None.
+saved_frames = []
+
+
+class FrameFieldsWriter(Exception):
+    def __del__(self):
+        frame = saved_frames.pop()
+        frame.f_exc_type = None
+        frame.f_exc_value = KeyError("written")
+        frame.f_exc_traceback = None
+
+
+def leave_with_written_fields():
+    saved_frames.append(sys._getframe())
+    try:
+        raise FrameFieldsWriter()
+    except FrameFieldsWriter:
+        pass
+
+
+try:
+    raise KeyError("restored")
+except KeyError:
+    leave_with_written_fields()
+    assert saved_frames == []
+    assert sys.exc_info()[0] is KeyError
+    assert sys.exc_info()[1].args == ("restored",)
+    assert sys.exc_value.args == ("restored",)
+sys.exc_clear()
+assert sys.exc_info() == (None, None, None)

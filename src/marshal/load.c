@@ -294,6 +294,9 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         *out_value = tinypy_bool_from_i32(materializer->vm, bool_value);
         return TINYPY_MARSHAL_OK;
     }
+    case TINYPY_MARSHAL_TYPE_ELLIPSIS:
+        *out_value = TINYPY_RET_ELLIPSIS(materializer->vm);
+        return TINYPY_MARSHAL_OK;
     case TINYPY_MARSHAL_TYPE_INTEGER: {
         int64_t integer = tinypy_marshal_integer_value(source);
         *out_value = tinypy_integer_from_i64(materializer->vm, integer);
@@ -385,7 +388,6 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         function_result = __tinypy_marshal_materialize_code(materializer, source, out_value);
         return function_result;
     case TINYPY_MARSHAL_TYPE_STOP_ITERATION:
-    case TINYPY_MARSHAL_TYPE_ELLIPSIS:
     case TINYPY_MARSHAL_TYPE_SET:
     case TINYPY_MARSHAL_TYPE_FROZENSET: {
         uint8_t wire_type = tinypy_marshal_object_wire_type(source);
