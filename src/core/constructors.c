@@ -390,7 +390,7 @@ tinypy_value_t *tinypy_internal_object_unicode(tinypy_value_t *value, tinypy_err
     }
     text = tinypy_internal_call_conversion(value, vm->internal_special_unicode_key, &handled, out_error);
     if (handled == 0) {
-        text = tinypy_internal_call_conversion(value, vm->internal_special_str_key, &handled, out_error);
+        text = tinypy_internal_object_call_representation(value, vm->internal_special_str_key, &handled, out_error);
         if (handled == 0) {
             /* Only a classic instance lacks __str__; instance_str then
                falls back to its repr. */
@@ -2548,6 +2548,9 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
         tinypy_type_t *type = self->type;
         const tinypy_type_t *static_base = __tinypy_constructor_static_base(type);
         tinypy_bool_t object_tp_new = static_base == &vm->types[TINYPY_VALUE_INSTANCE] || tinypy_internal_type_is_host_native(static_base) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        /* The lookup may reassign the __class__ of the last instance of the
+           type, so the type is read first. */
+        tinypy_bool_t native_construct = type->native_spec.construct != NULL ? TINYPY_TRUE : TINYPY_FALSE;
         tinypy_value_t *type_new = tinypy_type_get_attr_key(type, type->vm->internal_special_new_key);
         tinypy_value_t *object_new = tinypy_type_get_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_new_key);
 
@@ -2556,7 +2559,7 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
          * the construct callback of a native type overrides it. The tp_new
          * of a built-in type without a constructor of its own is NULL, not
          * object_new, so object_init lets them through too. */
-        if (type_new == object_new && object_tp_new != 0 && type->native_spec.construct == NULL) {
+        if (type_new == object_new && object_tp_new != 0 && native_construct == 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__init__() takes no parameters", out_error);
             return NULL;
         }

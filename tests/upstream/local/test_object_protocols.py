@@ -226,6 +226,62 @@ class ObjectProtocols(unittest.TestCase):
         else:
             self.fail("a classic class must be rejected")
 
+    def test_class_assignment_follows_slots_and_collection(self):
+        def assign(source, target):
+            instance = source()
+            try:
+                instance.__class__ = target
+            except TypeError as error:
+                return str(error)
+            return type(instance).__name__
+
+        def twins(slots):
+            return [type(name, (object,), {'__slots__': slots}) for name in ('First', 'Second')]
+
+        class Collected(object):
+            pass
+
+        class Empty(object):
+            __slots__ = ()
+
+        class AlsoEmpty(object):
+            __slots__ = ()
+
+        self.assertEqual(assign(*twins(('a',))), 'Second')
+        self.assertEqual(assign(*twins(('__dict__', '__weakref__'))), 'Second')
+        self.assertEqual(assign(*twins(('a', '__dict__'))), "__class__ assignment: 'First' object layout differs from 'Second'")
+        self.assertEqual(assign(*twins(('a', '__weakref__'))), "__class__ assignment: 'First' object layout differs from 'Second'")
+        self.assertEqual(assign(Collected, Empty), "__class__ assignment: 'Collected' deallocator differs from 'Empty'")
+        self.assertEqual(assign(Empty, Collected), "__class__ assignment: 'Empty' deallocator differs from 'Collected'")
+        self.assertEqual(assign(Empty, AlsoEmpty), 'AlsoEmpty')
+        Child = type('Child', (Collected,), {})
+        try:
+            Child.__bases__ = (Empty,)
+        except TypeError as error:
+            self.assertEqual(str(error), "__bases__ assignment: 'Empty' deallocator differs from 'Collected'")
+        else:
+            self.fail("a base without instance variables must be rejected")
+
+    def test_bases_assignment_keeps_the_metaclass(self):
+        class Meta(type):
+            pass
+
+        class Root(object):
+            pass
+
+        class Child(Root):
+            pass
+
+        Tagged = Meta('Tagged', (Root,), {'tag': 'tagged'})
+        Child.__bases__ = (Tagged, Root)
+        self.assertIs(type(Child), type)
+        self.assertEqual(Child.__mro__, (Child, Tagged, Root, object))
+        self.assertEqual((Child.tag, Child().tag), ('tagged', 'tagged'))
+        Tagged.tag = 'changed'
+        self.assertEqual((Child.tag, Child().tag), ('changed', 'changed'))
+        Child.__bases__ = (Root,)
+        self.assertFalse(hasattr(Child(), 'tag'))
+
     def test_dict_assignment_uses_builtin_base(self):
         class Error(Exception):
             pass
@@ -505,6 +561,43 @@ class ObjectProtocols(unittest.TestCase):
         self.assertEqual(unicode(EnvironmentError(1, 'a', accent)), u"[Errno 1] a: u'\\xe9'")
         self.assert_message(UnicodeEncodeError, "'ascii' codec can't encode character u'\\xe9' in position 7: ordinal not in range(128)", str, EnvironmentError(accent, accent, accent))
 
+    def test_metaclass_inheriting_type_checks(self):
+        class Meta(type):
+            pass
+        class Known(object):
+            __metaclass__ = Meta
+        class Proxy(object):
+            __class__ = property(lambda self: Known)
+        class Derived(object):
+            __bases__ = (Known,)
+        class Classic:
+            pass
+        self.assertTrue(isinstance(Proxy(), Known))
+        self.assertTrue(issubclass(Derived(), Known))
+        self.assertFalse(issubclass(Classic, Known))
+        self.assertFalse(isinstance(Classic(), Known))
+        calls = []
+        class Hooked(type):
+            def __instancecheck__(cls, instance):
+                return 'yes'
+            def __subclasscheck__(cls, subclass):
+                calls.append(subclass.__name__)
+                return 0
+        class Inherited(Hooked):
+            pass
+        class Error(Exception):
+            __metaclass__ = Inherited
+        self.assertIs(isinstance(1, Error), True)
+        self.assertIs(issubclass(Error, Error), False)
+        del calls[:]
+        try:
+            raise Error('parcel')
+        except Exception:
+            kind, value = sys.exc_info()[:2]
+        self.assertIs(kind, Error)
+        self.assertEqual([type(item) for item in value.args], [Error])
+        self.assertEqual(calls, ['Error'])
+
     def test_metaclass_bases_prefix(self):
         prefix = 'Error when calling the metaclass bases\n    '
 
@@ -727,6 +820,59 @@ class ObjectProtocols(unittest.TestCase):
         kind.__delattr__(function, 'parcel')
         self.assertFalse(hasattr(function, 'parcel'))
         self.assert_message(TypeError, "descriptor '__setattr__' requires a 'function' object but received a 'int'", kind.__setattr__, 1, 'parcel', 1)
+
+    def test_unbindable_str_and_repr_fall_back(self):
+        class Sink(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                self.parts.append(text)
+        class Plain(object):
+            __str__ = int.__str__
+        class Raw(object):
+            __repr__ = int.__repr__
+        class Both(object):
+            __str__ = int.__str__
+            __repr__ = int.__repr__
+        class Failing(object):
+            @property
+            def __str__(self):
+                raise KeyError('binding')
+        class Calling(object):
+            def __str__(self):
+                raise KeyError('call')
+        class Error(ValueError):
+            __str__ = KeyError.__str__
+        class Numeric(object):
+            __str__ = int.__str__
+            def __repr__(self):
+                return 5
+        class Classic:
+            __str__ = int.__str__
+        plain, raw, both, failing = Plain(), Raw(), Both(), Failing()
+        for value in (plain, failing):
+            text = object.__repr__(value)
+            self.assertEqual(str(value), text)
+            self.assertEqual('%s' % (value,), text)
+            self.assertEqual(u'%s' % (value,), text)
+            self.assertEqual(unicode(value), text)
+            self.assertEqual('{0}'.format(value), text)
+            sink = Sink()
+            print >>sink, value
+            self.assertEqual(''.join(sink.parts), text + '\n')
+        for value in (raw, both):
+            text = '<%s object at 0x%x>' % (type(value).__name__, id(value))
+            self.assertEqual(repr(value), text)
+            self.assertEqual(str(value), text)
+            self.assertEqual('%r' % (value,), text)
+            self.assertEqual(object.__str__(value), text)
+            self.assertEqual(repr([value]), '[%s]' % text)
+        error = Error('parcel')
+        self.assertEqual(str(error), "Error('parcel',)")
+        self.assertEqual(unicode(error), u"Error('parcel',)")
+        self.assertRaises(KeyError, str, Calling())
+        self.assert_message(TypeError, '__str__ returned non-string (type int)', str, Numeric())
+        self.assert_message(TypeError, "descriptor '__str__' for 'int' objects doesn't apply to 'instance' object", str, Classic())
 
     def test_unbound_hash_wrapper_falls_back(self):
         Plain = type('Plain', (object,), {'__hash__': int.__hash__})

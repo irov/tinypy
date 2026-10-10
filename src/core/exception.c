@@ -671,7 +671,7 @@ static tinypy_value_t *__tinypy_exception_unicode_method(tinypy_value_t *functio
        BaseException_str returns, which may be unicode. */
     if (string_method != base_string_method) {
         tinypy_bool_t handled;
-        tinypy_value_t *text = tinypy_internal_call_conversion(self, vm->internal_special_str_key, &handled, out_error);
+        tinypy_value_t *text = tinypy_internal_object_call_representation(self, vm->internal_special_str_key, &handled, out_error);
 
         if (text == NULL) {
             return NULL;
@@ -1136,7 +1136,7 @@ static tinypy_exception_type_index_e __tinypy_exception_index_from_error(tinypy_
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_error_kind_e __tinypy_exception_error_from_type(tinypy_vm_t *vm, tinypy_type_t *type) {
+tinypy_error_kind_e tinypy_internal_exception_error_kind(tinypy_vm_t *vm, const tinypy_type_t *type) {
     if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_TYPE_ERROR]) != 0) {
         return TINYPY_ERROR_TYPE;
     }
@@ -1163,6 +1163,9 @@ static tinypy_error_kind_e __tinypy_exception_error_from_type(tinypy_vm_t *vm, t
     }
     if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_IMPORT_ERROR]) != 0) {
         return TINYPY_ERROR_IMPORT;
+    }
+    if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_ATTRIBUTE_ERROR]) != 0) {
+        return TINYPY_ERROR_ATTRIBUTE;
     }
     if (tinypy_type_is_subtype(type, vm->exception_types[TINYPY_EXCEPTION_LOOKUP_ERROR]) != 0) {
         return TINYPY_ERROR_LOOKUP;
@@ -1593,23 +1596,24 @@ void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e k
     TINYPY_DECREF(value);
 }
 //////////////////////////////////////////////////////////////////////////
-/* The diagnostic reads as str() of the exception. A value that its built-in
-   exception class has not normalized yet, such as the code of sys.exit,
-   reads as BaseException_str of the arguments normalization passes it. */
+/* The diagnostic reads as str() of the exception, and its kind maps the
+   raised class. A value that its built-in exception class has not normalized
+   yet, such as the code of sys.exit, reads as BaseException_str of the
+   arguments normalization passes it. */
 void tinypy_internal_exception_make_diagnostic(tinypy_vm_t *vm, tinypy_error_t **out_error) {
-    tinypy_error_kind_e kind = TINYPY_ERROR_RUNTIME;
+    tinypy_type_t *exception_type = NULL;
 
     if (out_error == NULL || vm->raised_value == NULL) {
         return;
     }
     tinypy_value_t *value = vm->raised_value;
     if (vm->raised_type != NULL && TINYPY_VALUE_KIND(vm->raised_type) == TINYPY_VALUE_TYPE) {
-        kind = __tinypy_exception_error_from_type(vm, (tinypy_type_t *)vm->raised_type);
+        exception_type = (tinypy_type_t *)vm->raised_type;
         if (__tinypy_exception_is_instance(vm, value) == 0) {
             value = __tinypy_exception_base_display(vm, value);
         }
     }
-    tinypy_internal_make_exception_error(vm, kind, value, out_error);
+    tinypy_internal_make_exception_error(vm, exception_type, value, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_raise_key_error(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error) {
@@ -1805,9 +1809,10 @@ tinypy_bool_t tinypy_internal_exception_normalize_raised(tinypy_vm_t *vm, tinypy
     tinypy_value_t *value = vm->raised_value;
     tinypy_value_t *value_type = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_OLD_INSTANCE_OBJECT(value)->class_object : &value->type->base.base;
 
-    /* An instance of exactly the class is normalized, unless a metaclass
-       __subclasscheck__ may disagree. */
-    if (value_type == type && (TINYPY_VALUE_KIND(type) == TINYPY_VALUE_CLASS || type->type == &vm->types[TINYPY_VALUE_TYPE])) {
+    /* An instance of exactly the class is normalized, unless the
+       __subclasscheck__ of a metaclass, which PyObject_IsSubclass asks even
+       about the class itself, may disagree; that of type would not. */
+    if (value_type == type && (TINYPY_VALUE_KIND(type) == TINYPY_VALUE_CLASS || type->type == &vm->types[TINYPY_VALUE_TYPE] || tinypy_internal_object_has_special_override_key(type, vm->internal_special_subclasscheck_key) == 0)) {
         return TINYPY_TRUE;
     }
     if (__tinypy_exception_is_class(vm, type) == 0) {
@@ -1927,6 +1932,15 @@ tinypy_value_t *tinypy_vm_raised_traceback(const tinypy_vm_t *vm) {
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_vm_handled_exception(const tinypy_vm_t *vm) {
     return vm->handled_value;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_vm_normalize_error(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    TINYPY_CLEAR_ERROR(out_error);
+    if (vm->raised_value == NULL) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t normalized = tinypy_internal_exception_normalize_raised(vm, out_error);
+    return normalized;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_vm_has_error(const tinypy_vm_t *vm) {

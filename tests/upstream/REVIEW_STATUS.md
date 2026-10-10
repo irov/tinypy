@@ -266,7 +266,7 @@ that evidence.
 | 4: unbound builtin receiver validation | Already fixed by the earlier corpus changes | Native dispatch validates the receiver before a callback accesses its storage. The binding corpus remains active. |
 | 5: recursive `type.__call__` dispatch | Fixed | Calls the internal type constructor directly. Normal metaclass delegation is covered. |
 | 6: finalizer cache updated before the dictionary | Fixed | Publish dictionary changes and invalidate caches before releasing displaced objects. Finalizer assignment and removal are covered. |
-| 7: classic classes in new-style MRO | Fixed | Types containing classic MRO entries bypass caches that cannot observe classic dictionary changes. |
+| 7: classic classes in new-style MRO | Fixed | Types containing classic MRO entries keep their cache versions only until a classic class dictionary changes or is replaced, which withdraws the versions of all of them. |
 | 8: recursive release and representation | Hardened | Allocation-free deferred release limits recursive container teardown; representation uses the logical/native stack guard. Existing deep-release tests and ordinary representations pass. |
 | 9: base representations using custom `__format__` | Fixed | `oct`, `hex` and `bin` use builtin numeric formatting; normal subtype override cases agree with CPython. |
 
@@ -275,7 +275,7 @@ that evidence.
 | Finding group | Current status and correction |
 | --- | --- |
 | Attribute/descriptors across callbacks; eval attribute caches | Hardened: own attributes, owners and descriptors through calls; borrowed cache entries require current versions. Lookup hints never invoke arbitrary equality. |
-| MRO changes during lookup | Hardened: hold the type and its MRO snapshot and finish the walk on them, as `_PyType_Lookup` never restarts; a value only the walk still owns is not found. Internal MRO storage borrows its own type and owns every other entry, including classes inserted by custom `mro()`. Its wrapper cannot be retained with a plain incref. Rebase transactions guard overlapping recursive assignments and invalidate caches on publication/rollback. |
+| MRO changes during lookup | Hardened: hold the type and its MRO snapshot and finish the walk on them, as `_PyType_Lookup` never restarts; a value only the walk still owns is not found. A type a key comparison released is freed after the lookup, so callers that keep using it hold it, and calls hold their callable. Internal MRO storage borrows its own type and owns every other entry, including classes inserted by custom `mro()`. Its wrapper cannot be retained with a plain incref. Rebase transactions guard overlapping recursive assignments and invalidate caches on publication/rollback. |
 | Weakrefs created by finalization; `__class__` changes in finalizers | Hardened: refresh the actual type after finalization and clear newly created weakrefs before teardown. |
 | Subclass weakref userdata | Hardened: retain the base for the lifetime of its weakref callback. |
 | Member/getset descriptors outliving a type | Hardened: weak owner references are refreshed before use. This retains tinypy's detached-descriptor behavior; CPython's strong owner lifetime is not emulated. |
@@ -325,7 +325,7 @@ that evidence.
 | Slot name colliding with a class variable | The report's ValueError expectation is incorrect for Python 2.7.18. It preserves the class variable and skips that slot descriptor; tinypy now does the same. |
 | Custom metaclass `mro()` | Fixed: creation and descendant rebasing call the metaclass hook, accept iterable results, validate class entries and solid layouts, retain extra MRO classes and roll back failed rebases. `type.mro(cls)` independently computes the default C3 result. Ordinary creation/introspection/rebase/error cases match CPython. |
 | Classic class string, EnvironmentError string | Fixed and checked against CPython. |
-| Printing ignored finalizer/weakref exceptions | Fixed: ignored errors are written to owned `sys.stderr` as Exception/type/value/object/ignored diagnostics. Failures in repr/write are consumed and the previous pending exception is restored. Finalizer and weakref diagnostics match the tested CPython behavior. |
+| Printing ignored finalizer/weakref exceptions | Fixed: ignored errors are written to owned `sys.stderr` as Exception/type/value/object/ignored diagnostics. Failures in repr/write are consumed and the previous pending exception is restored. A failed `__module__` lookup or repr is cleared before its replacement text is written, so a Python `write` method never runs with it pending; on a stream object, unlike a file, Python 2.7 drops `<unknown>`, the class name and `: ` while that error is pending, which the output runtime fixture records. Finalizer and weakref diagnostics match the tested CPython behavior. |
 | `sys.exc_clear()` across function return | Fixed through a clear epoch; ordinary nested calls are covered. |
 | Defaults longer than argument count | Fixed: use the applicable tail of defaults. |
 | Evaluating generator code | Fixed: construct a generator instead of immediately running its body. An oracle case also verifies that generator name lookup uses globals rather than the supplied custom locals. |
@@ -333,7 +333,7 @@ that evidence.
 | Import hook dispatch | Fixed; use frame builtins and Python 2's four-argument implicit import convention. |
 | Generator throw tuple normalization | Fixed for new-style and classic exceptions. |
 | `print >>None`, Unicode whitespace and softspace type | Fixed; output state is integer 0/1 and recognizes Unicode whitespace. |
-| Exception matching and metaclass subclass checks | Fixed for successful custom checks, preserving the pending exception. Failed checks report an unraisable error and continue matching with the original pending exception; both paths are covered. |
+| Exception matching and metaclass subclass checks | Fixed for successful custom checks, preserving the pending exception. Failed checks report an unraisable error and continue matching with the original pending exception; both paths are covered. A metaclass that inherits the `__instancecheck__` or `__subclasscheck__` of `type` gets the default rules without a call, as those hooks are the default rules in CPython. |
 | Uncaught diagnostic text | Fixed: render the exception's string, including KeyError quoting and custom string methods. |
 | `hasattr` and BaseException | Fixed: propagate interrupts/SystemExit while swallowing ordinary Exception. |
 | Module replaces/removes its registration while loading | Fixed; return the published object or raise ImportError. Two normal import fixtures cover it. |
@@ -377,6 +377,7 @@ that evidence.
 | Frame cached on a code object | Implemented: each code object can retain one cleared frame of at most 1,024 pointer slots, with no owned code/globals/locals references. Only unescaped evaluator frames enter this cache; escaping frame identity/code and teardown are tested. The existing bounded VM freelist remains a fallback. |
 | FOR_ITER | Implemented for the actual exact list/tuple/range iterator types, preserving exhaustion behavior. |
 | Float sum | Implemented double accumulator, materialized before returning to user-defined addition. |
+| String building | Implemented as CPython's `string_concatenate`: `s + t` and `s += t` on exact byte strings grow `s` in place when the stack holds its only reference, as a temporary or once the variable that the following `STORE_FAST`, `STORE_DEREF` or `STORE_NAME` rebinds is unbound. Namespace probe errors are discarded and the reference count and interning are checked after the probes; a failed growth rebinds the variable. |
 | Long multiplication | Implemented: shorter outer operand, single-digit carry path and direct result-digit storage for schoolbook multiplication. Separate capacity tracks trimmed logical digits for correct teardown. Karatsuba retains the scratch space needed by its recursion. |
 | Timsort minrun/galloping | Implemented: computed minrun, stable binary insertion and exponential/binary galloping in both merge directions. Mutation/version checks, stable ties and cleanup after comparison/key errors remain active. |
 | Keyed-sort scratch storage | Implemented: generated key references live only in the sort-item array; the redundant ownership array is gone. This removes one pointer (8 bytes on the measured arm64 build) per input item while retaining partial-result and key-error cleanup. |

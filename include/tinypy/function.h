@@ -13,7 +13,8 @@ tinypy_value_t *tinypy_function_closure(const tinypy_value_t *function);
 tinypy_value_t *tinypy_function_name(const tinypy_value_t *function);
 tinypy_value_t *tinypy_function_doc(const tinypy_value_t *function);
 
-/* args must be a tuple; kwargs may be NULL or a dict. */
+/* args must be a tuple; kwargs may be NULL or a dict. The call holds the
+   callable, so it may be a borrowed field that the call itself releases. */
 tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 
 #endif

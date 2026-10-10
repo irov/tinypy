@@ -837,18 +837,45 @@ static int32_t __test_compiler_memory_failure(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Fails each compiler arena block that compiling the source requests, one
+   compilation at a time, and returns how many blocks it requests. A heap
+   budget of the VM keeps it from caching arena blocks between compilations,
+   so every block is requested from the host. An arena block holds 4096
+   bytes after a header of three words, a size no other request of the
+   sources here has. */
+static size_t __test_compiler_fail_each_arena_block(tinypy_vm_t *vm, test_failing_allocator_state_t *state, const char *source, size_t size) {
+    static const size_t block_size = 4096U + 2U * sizeof(size_t) + sizeof(void *);
+    tinypy_compile_options_t options;
+    size_t index;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    state->fail_maximum = block_size;
+    for (index = 0U;; ++index) {
+        tinypy_error_t *error = NULL;
+
+        state->fail_size = block_size;
+        state->fail_index = index;
+        tinypy_value_t *code = tinypy_compile_source(vm, source, size, "blocks.py", 9U, &options, &error);
+        if (state->fail_size != 0U) {
+            assert(code != NULL && error == NULL);
+            tinypy_release(code);
+            state->fail_size = 0U;
+            return index;
+        }
+        assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 /* A compiler arena block that the host cannot provide fails the compilation
    with MemoryError wherever its request falls, among them the statements of
    an elif chain and of a try statement with a finally clause and the tuple
-   of a parameter list, and leaves the VM usable. An arena block holds 4096
-   bytes after a header of three words, a size no other request of this
-   source has. */
+   of a parameter list, and leaves the VM usable. */
 static int32_t __test_compiler_arena_block_failure(void) {
-    static const size_t block_size = 4096U + 2U * sizeof(size_t) + sizeof(void *);
     static const size_t source_capacity = 4096U;
     char *source = (char *)malloc(source_capacity);
     size_t size;
-    size_t index;
     uint32_t branch;
 
     assert(source != NULL);
@@ -857,30 +884,37 @@ static int32_t __test_compiler_arena_block_failure(void) {
         size += (size_t)snprintf(source + size, source_capacity - size, "    elif x == %u:\n        return %u\n", (unsigned int)branch, (unsigned int)branch);
     }
     size += (size_t)snprintf(source + size, source_capacity - size, "    else:\n        return -1\n");
-    /* A heap budget keeps the VM from caching arena blocks between
-       compilations, so every block is requested from the host. */
-    test_failing_allocator_state_t state = {{0U, 0U}, 0U, block_size, 0U};
+    test_failing_allocator_state_t state = {{0U, 0U}, 0U, 0U, 0U};
     tinypy_vm_t *vm = __test_failing_vm_create(&state, (size_t)1U << 30U);
-    tinypy_compile_options_t options;
-    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
-    for (index = 0U;; ++index) {
-        tinypy_error_t *error = NULL;
+    size_t block_count = __test_compiler_fail_each_arena_block(vm, &state, source, size);
+    tinypy_vm_destroy(vm);
+    assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
+    assert(block_count > 1U);
+    free(source);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* An arena block that the host cannot provide while the symbol table
+   registers its own values fails the compilation without leaking them. The
+   length of a string literal moves the arena offset at which the symbol
+   table starts through a whole block, eight bytes at a time. */
+static int32_t __test_compiler_symbol_table_arena_failure(void) {
+    static const size_t source_capacity = 4200U;
+    char *source = (char *)malloc(source_capacity);
+    size_t length;
 
-        state.fail_size = block_size;
-        state.fail_index = index;
-        tinypy_value_t *code = tinypy_compile_source(vm, source, size, "blocks.py", 9U, &options, &error);
-        if (state.fail_size != 0U) {
-            assert(code != NULL && error == NULL);
-            tinypy_release(code);
-            break;
-        }
-        assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
-        tinypy_error_release(error);
-        tinypy_vm_clear_error(vm);
+    assert(source != NULL);
+    test_failing_allocator_state_t state = {{0U, 0U}, 0U, 0U, 0U};
+    tinypy_vm_t *vm = __test_failing_vm_create(&state, (size_t)1U << 30U);
+    for (length = 0U; length < 4096U; length += 8U) {
+        source[0] = '\'';
+        (void)memset(source + 1U, 'a', length);
+        source[length + 1U] = '\'';
+        source[length + 2U] = '\n';
+        (void)__test_compiler_fail_each_arena_block(vm, &state, source, length + 3U);
     }
     tinypy_vm_destroy(vm);
     assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
-    assert(index > 1U);
     free(source);
     return 0;
 }
@@ -2277,6 +2311,9 @@ static int32_t __test_meta_template(void) {
     static const char invalid_source[] = "value = meta.unknown()\n";
     static const char keyword_source[] = "@meta.template\ndef Template():\n    @meta.emit(name='class')\n    def generated():\n        pass\n\nmeta.expand(Template)\n";
     static const char import_source[] = "import meta.submodule\n";
+    static const char *const first_value_sources[] = {
+        "@meta.template\ndef Template():\n    @meta.emit(name=meta.concat('Name'))\n    def generated():\n        pass\n\nmeta.expand(Template)\n",
+        "@meta.template\ndef Template():\n    for index in meta.range(3):\n        pass\n\n    @meta.emit\n    def generated():\n        pass\n\nmeta.expand(Template)\n"};
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm;
     tinypy_compile_options_t options;
@@ -2291,6 +2328,7 @@ static int32_t __test_meta_template(void) {
     size_t expanded_size;
     size_t source_map_size;
     size_t source_map_count;
+    size_t source_index;
     const char *name;
     const char *expanded_source;
     const char *source_map;
@@ -2308,6 +2346,16 @@ static int32_t __test_meta_template(void) {
     assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
     tinypy_error_release(error);
     error = NULL;
+    /* The limits refuse the first value of meta.concat and meta.range too. */
+    tinypy_compile_limits_init(&limits);
+    limits.max_preprocessor_bytes = 1U;
+    for (source_index = 0U; source_index < sizeof(first_value_sources) / sizeof(first_value_sources[0]); ++source_index) {
+        size_t first_value_size = strlen(first_value_sources[source_index]);
+        execution_result = tinypy_compile_source(vm, first_value_sources[source_index], first_value_size, "meta_limit.py", 13U, &options, &error);
+        assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
+        tinypy_error_release(error);
+        error = NULL;
+    }
     options.limits = NULL;
     preprocessed = tinypy_preprocess_source(vm, source, sizeof(source) - 1U, "meta.py", 7U, &options, &error);
     assert(preprocessed != NULL && error == NULL);
@@ -2493,6 +2541,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_compiler_arena_block_failure() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_compiler_symbol_table_arena_failure() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_tab_size_comment() != 0) {

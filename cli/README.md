@@ -38,8 +38,9 @@ The CLI runs a program the way `python2.7` does:
   and `-tt` makes them a TabError, as in CPython; the default checks nothing;
   the flags apply to the main program;
 - `sys.excepthook` and `sys.__excepthook__` are the host's PyErr_Display:
-  an uncaught exception goes to `sys.excepthook` with the fallbacks of
-  PyErr_PrintEx (`Error in sys.excepthook:`, `sys.excepthook is missing`),
+  an uncaught exception, normalized as by PyErr_PrintEx, goes to
+  `sys.excepthook` with the fallbacks of PyErr_PrintEx
+  (`Error in sys.excepthook:`, `sys.excepthook is missing`),
   the report is written to the `sys.stderr` object (`lost sys.stderr` when it
   is None), honours `sys.tracebacklimit`, prints the location of a
   SyntaxError from its attributes after the traceback, and reports a failed

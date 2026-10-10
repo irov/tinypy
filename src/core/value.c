@@ -372,6 +372,15 @@ static void __tinypy_internal_value_release_contents(tinypy_value_t *value) {
     vm->release_depth -= 1U;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A native instance whose finalizer ran, as tinypy_vm_destroy runs it on a
+   reachable instance, has no host object left for its __del__, which runs
+   before the finalizer and never after it. */
+static tinypy_bool_t __tinypy_internal_value_native_finalized(const tinypy_value_t *value) {
+    tinypy_bool_t finalized = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && TINYPY_NATIVE_INSTANCE_OBJECT(value)->finalized != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return finalized;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Runs the generator close, __del__ and native finalizers of a dying object;
    returns TRUE when one of them resurrected it. */
 static tinypy_bool_t __tinypy_internal_value_run_finalizers(tinypy_value_t *value) {
@@ -381,7 +390,7 @@ static tinypy_bool_t __tinypy_internal_value_run_finalizers(tinypy_value_t *valu
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GENERATOR && __tinypy_internal_value_finalize_generator(value) != 0) {
         return TINYPY_TRUE;
     }
-    if (vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_version != type->version || type->version == 0U || type->has_finalizer != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE)) {
+    if (vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_version != type->version || type->version == 0U || type->has_finalizer != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) && __tinypy_internal_value_native_finalized(value) == 0) {
         if (__tinypy_internal_value_finalize(value) != 0) {
             return TINYPY_TRUE;
         }

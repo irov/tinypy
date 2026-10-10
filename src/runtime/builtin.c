@@ -368,9 +368,7 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
         size = TINYPY_XRANGE_OBJECT(value)->length;
         break;
     default: {
-        tinypy_length_slot_t length_slot = value->type->mapping_slots != NULL && value->type->mapping_slots->length != NULL
-                                               ? value->type->mapping_slots->length
-                                               : (value->type->sequence_slots != NULL ? value->type->sequence_slots->length : NULL);
+        tinypy_length_slot_t length_slot = __tinypy_internal_type_size_slot(value->type);
         if (length_slot != NULL) {
             /* A native slot may report its failure through the VM error. */
             tinypy_value_t *previous_raised = vm->raised_value;
@@ -469,17 +467,23 @@ static tinypy_bool_t __tinypy_builtin_instance_check_enter(tinypy_vm_t *vm, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 /* A metaclass other than type may define __instancecheck__ or
-   __subclasscheck__; plain type uses the default rules directly. */
+   __subclasscheck__, called as found; plain type, and a metaclass that
+   inherits the hooks of type (_PyObject_RealIsInstance,
+   _PyObject_RealIsSubclass), use the default rules directly. */
 static int32_t __tinypy_builtin_metaclass_check(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_bool_t *out_result, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
     tinypy_value_t *key = subclass != 0 ? vm->internal_special_subclasscheck_key : vm->internal_special_instancecheck_key;
     tinypy_value_t *value;
     int32_t truth;
 
-    if (classinfo->type == &vm->types[TINYPY_VALUE_TYPE] || TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_CLASS || TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_type_lookup_key(vm, classinfo->type, key) == NULL) {
+    if (classinfo->type == &vm->types[TINYPY_VALUE_TYPE] || TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_CLASS || TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_OLD_INSTANCE) {
         return 0;
     }
-    tinypy_value_t *method = tinypy_internal_object_get_special_key(classinfo, key, out_error);
+    tinypy_value_t *hook = tinypy_internal_type_lookup_key(vm, classinfo->type, key);
+    if (hook == NULL || hook == tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_TYPE], key)) {
+        return 0;
+    }
+    tinypy_value_t *method = tinypy_internal_descriptor_get_value(vm, hook, classinfo, classinfo->type, out_error);
     if (method == NULL) {
         return -1;
     }

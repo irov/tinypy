@@ -80,11 +80,13 @@ size_t tinypy_vm_report_cycles(tinypy_vm_t *vm, tinypy_diagnostic_callback_t cal
  * must release every owned dynamic value and explicitly break owning cycles
  * before destroying the VM. The finalizers of native values still reachable
  * from the VM run first, while every value is intact: those of instances
- * before those of functions, which instance finalizers may still call. A
- * pass that creates native values with finalizers repeats for them, up to 8
- * passes; the values the last pass creates are freed without their
- * finalizers. The memory sweep follows and runs no finalizer. Any value
- * pointer is invalid after this call. */
+ * before those of functions, which instance finalizers may still call. An
+ * instance whose last reference a finalizer drops is released as usual,
+ * running its __del__ before its finalizer; an instance released after its
+ * finalizer ran skips its __del__. A pass that creates native values with
+ * finalizers repeats for them, up to 8 passes; the values the last pass
+ * creates are freed without their finalizers. The memory sweep follows and
+ * runs no finalizer. Any value pointer is invalid after this call. */
 void tinypy_vm_destroy(tinypy_vm_t *vm);
 
 #endif

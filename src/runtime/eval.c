@@ -228,7 +228,7 @@ static tinypy_bool_t __tinypy_eval_check_container(tinypy_vm_t *vm, const tinypy
 //////////////////////////////////////////////////////////////////////////
 static inline tinypy_bool_t __tinypy_eval_attribute_cache_valid(const tinypy_attribute_lookup_cache_entry_t *cache, tinypy_value_t *object, size_t name_index) {
     tinypy_bool_t valid = cache->type == object->type && cache->type_version == object->type->version && cache->name_index == name_index
-        && (cache->attribute == NULL || (cache->attribute->type == cache->attribute_type && cache->attribute_type_version == cache->attribute_type->version));
+        && (cache->attribute == NULL || (cache->attribute_type_version != 0U && cache->attribute_type_version == cache->attribute->type->version));
 
     return valid;
 }
@@ -242,8 +242,9 @@ static inline tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attribute_cac
 /* The new entry takes the first way of its set and the previous one moves to
    the second. Its versions are the ones read before the lookups that filled
    it, so a type changed while they ran leaves the entry stale, and an entry
-   that a type without a version decides never matches. A module entry does
-   not depend on the type of its value. */
+   that a type without a version decides never matches. A version names one
+   type for good, so the attribute's type is known by its version alone. A
+   module entry does not depend on the type of its value. */
 static tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attribute_cache_insert(tinypy_value_t *code, tinypy_type_t *type, uint64_t type_version, tinypy_value_t *owner, uint64_t owner_version, size_t name_index, tinypy_value_t *attribute, uint64_t attribute_type_version) {
     tinypy_attribute_lookup_cache_entry_t *set = __tinypy_eval_attribute_cache_set(code, name_index);
 
@@ -256,7 +257,6 @@ static tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attribute_cache_inse
     set->type = type_version != 0U ? type : NULL;
     set->owner = owner;
     set->attribute = attribute;
-    set->attribute_type = attribute != NULL && attribute_type_version != 0U ? attribute->type : NULL;
     return set;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -377,7 +377,7 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
     const uint8_t *name_bytes = TINYPY_TEXT_BYTES(name);
     size_t name_size = TINYPY_TEXT_BYTE_SIZE(name);
     tinypy_bool_t special_name = name_size >= 2U && name_bytes[0] == (uint8_t)'_' && name_bytes[1] == (uint8_t)'_';
-    if ((TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE && TINYPY_VALUE_KIND(object) != TINYPY_VALUE_NATIVE_INSTANCE) || object->type->get_attribute != NULL || (object->type->has_classic_mro != 0 || object->type->has_custom_mro != 0) || special_name != 0) {
+    if ((TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE && TINYPY_VALUE_KIND(object) != TINYPY_VALUE_NATIVE_INSTANCE) || object->type->get_attribute != NULL || object->type->has_custom_mro != 0 || special_name != 0) {
         if (object->type == &vm->types[TINYPY_VALUE_TYPE] && special_name == 0) {
             tinypy_value_t *result = __tinypy_eval_load_class_attr(vm, code, object, name, name_index, out_error);
             return result;
@@ -394,7 +394,7 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
             return result;
         }
         if (special_name == 0 && (object->type->flags & (TINYPY_TYPE_FLAG_HEAP | TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY)) == 0U && object->type->get_attribute == NULL && object->type->dict_offset == 0U
-            && object->type->has_classic_mro == 0 && object->type->has_custom_mro == 0 && tinypy_internal_object_kind_has_builtin_attributes(TINYPY_VALUE_KIND(object)) == 0) {
+            && object->type->has_custom_mro == 0 && tinypy_internal_object_kind_has_builtin_attributes(TINYPY_VALUE_KIND(object)) == 0) {
             tinypy_value_t *result = __tinypy_eval_load_type_attr(vm, code, object, name, name_index, out_unbound, out_error);
             return result;
         }
@@ -532,14 +532,14 @@ done:
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_value_t *object, tinypy_value_t *name, size_t name_index, tinypy_value_t *value, tinypy_error_t **out_error) {
-    if (TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE || object->type->set_attribute != NULL || (object->type->has_classic_mro != 0 || object->type->has_custom_mro != 0)) {
+    if (TINYPY_VALUE_KIND(object) != TINYPY_VALUE_INSTANCE || object->type->set_attribute != NULL || object->type->has_custom_mro != 0) {
         tinypy_bool_t result = tinypy_internal_object_set_attr_protocol_key(object, name, value, out_error);
         return result;
     }
     tinypy_attribute_store_cache_entry_t *cache = &TINYPY_CODE_OBJECT(code)->attribute_store_cache[name_index & (TINYPY_CODE_OBJECT(code)->cache_slot_count - 1U)];
     if (cache->type == object->type && cache->type_version == object->type->version && cache->name_index == name_index
         && (cache->direct_instance_dict != 0 || cache->data_descriptor != 0)
-        && (cache->descriptor == NULL || (cache->descriptor->type == cache->descriptor_type && cache->descriptor_type_version == cache->descriptor_type->version))) {
+        && (cache->descriptor == NULL || (cache->descriptor_type_version != 0U && cache->descriptor_type_version == cache->descriptor->type->version))) {
         if (cache->member_slot != 0) {
             tinypy_value_t **slot = __tinypy_internal_instance_member_slot(object, cache->slot_index);
             tinypy_value_t *previous = *slot;
@@ -568,14 +568,15 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
         return stored;
     }
     (void)memset(cache, 0, sizeof(*cache));
-    uint64_t type_version = __tinypy_internal_type_version(object->type);
+    tinypy_type_t *type = object->type;
+    uint64_t type_version = __tinypy_internal_type_version(type);
+    /* A key comparison of the lookups may reassign __class__. */
+    TINYPY_INCREF(&type->base.base);
     if (__tinypy_internal_object_overrides_dispatch(object, TINYPY_INTERNAL_DISPATCH_BIT(SETATTR)) == 0) {
-        tinypy_type_t *type = object->type;
         tinypy_value_t *descriptor = tinypy_internal_type_lookup_key(vm, type, name);
         if (descriptor != NULL) {
             TINYPY_INCREF(descriptor);
         }
-        TINYPY_INCREF(&type->base.base);
         uint64_t descriptor_type_version = descriptor != NULL ? __tinypy_internal_type_version(descriptor->type) : UINT64_C(0);
         tinypy_bool_t data = descriptor != NULL ? tinypy_internal_descriptor_is_data(vm, descriptor) : TINYPY_FALSE;
         size_t slot_index = 0U;
@@ -585,7 +586,6 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
         cache->name_index = name_index;
         cache->type = type_version != 0U ? type : NULL;
         cache->descriptor = descriptor;
-        cache->descriptor_type = descriptor != NULL && descriptor_type_version != 0U ? descriptor->type : NULL;
         cache->data_descriptor = data;
         cache->direct_instance_dict = data == 0 && type->has_instance_dict != 0;
         cache->member_slot = member_slot;
@@ -603,6 +603,7 @@ static tinypy_bool_t __tinypy_eval_store_attr(tinypy_vm_t *vm, tinypy_value_t *c
         TINYPY_DECREF(&type->base.base);
         return stored;
     }
+    TINYPY_DECREF(&type->base.base);
     tinypy_bool_t stored = tinypy_internal_object_set_attr_protocol_key(object, name, value, out_error);
     return stored;
 }
@@ -1567,6 +1568,138 @@ static inline tinypy_value_t *__tinypy_eval_exact_integer_binary(tinypy_vm_t *vm
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The bytecode a frame of the code object runs. */
+static inline const uint8_t *__tinypy_eval_code_bytecode(const tinypy_value_t *code) {
+    const uint8_t *bytecode = TINYPY_CODE_OBJECT(code)->method_bytecode != NULL ? TINYPY_CODE_OBJECT(code)->method_bytecode : TINYPY_STRING_OBJECT(TINYPY_CODE_BYTECODE(code))->bytes;
+    return bytecode;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_eval_decode_trusted(const uint8_t *bytecode, size_t instruction_offset, tinypy_decoded_instruction_t *instruction);
+//////////////////////////////////////////////////////////////////////////
+/* string_concatenate in ceval drops the reference of the variable that the
+   next instruction rebinds before it grows the left operand in place. A
+   namespace probe can run a colliding key's __eq__, so its errors are
+   discarded, as PyDict_GetItem and the PyErr_Clear after PyDict_DelItem do.
+   Reports whether the variable held left and is now unbound. */
+static tinypy_bool_t __tinypy_eval_concat_unbind(tinypy_vm_t *vm, tinypy_frame_object_t *frame, const tinypy_decoded_instruction_t *store, tinypy_value_t *left) {
+    tinypy_value_t **locals = frame->locals_plus;
+
+    if (store->opcode == TINYPY_OP_STORE_FAST) {
+        if (locals[store->argument] != left) {
+            return TINYPY_FALSE;
+        }
+        locals[store->argument] = NULL;
+        TINYPY_DECREF(left);
+        return TINYPY_TRUE;
+    }
+    if (store->opcode == TINYPY_OP_STORE_DEREF) {
+        tinypy_value_t *cell = locals[(size_t)TINYPY_CODE_LOCAL_COUNT(frame->code) + store->argument];
+        if (tinypy_cell_get(cell) != left) {
+            return TINYPY_FALSE;
+        }
+        tinypy_cell_set(cell, NULL);
+        return TINYPY_TRUE;
+    }
+    tinypy_value_t *mapping = frame->locals;
+    if (store->opcode != TINYPY_OP_STORE_NAME || mapping == NULL || mapping->type != &vm->types[TINYPY_VALUE_DICT]) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *name = TINYPY_TUPLE_GET(TINYPY_CODE_NAMES(frame->code), store->argument);
+    tinypy_bool_t deleted = TINYPY_FALSE;
+    tinypy_internal_exception_state_t state;
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, mapping, name);
+    if (value == left) {
+        deleted = tinypy_internal_dict_delete_optional(vm, mapping, name);
+    }
+    tinypy_internal_exception_preserve_end(vm, &state);
+    return deleted;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Restores the binding that __tinypy_eval_concat_unbind dropped when the
+   string cannot grow, so that a failing concatenation leaves the variable
+   as it was. */
+static void __tinypy_eval_concat_rebind(tinypy_vm_t *vm, tinypy_frame_object_t *frame, const tinypy_decoded_instruction_t *store, tinypy_value_t *left) {
+    tinypy_value_t **locals = frame->locals_plus;
+
+    if (store->opcode == TINYPY_OP_STORE_FAST) {
+        TINYPY_INCREF(left);
+        locals[store->argument] = left;
+        return;
+    }
+    if (store->opcode == TINYPY_OP_STORE_DEREF) {
+        tinypy_value_t *cell = locals[(size_t)TINYPY_CODE_LOCAL_COUNT(frame->code) + store->argument];
+        tinypy_cell_set(cell, left);
+        return;
+    }
+    tinypy_value_t *name = TINYPY_TUPLE_GET(TINYPY_CODE_NAMES(frame->code), store->argument);
+    tinypy_internal_exception_state_t state;
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    tinypy_dict_set(frame->locals, name, left);
+    tinypy_internal_exception_preserve_end(vm, &state);
+}
+//////////////////////////////////////////////////////////////////////////
+/* string_concatenate in ceval: `s + t` and `s += t` on exact byte strings
+   grow s in place instead of copying it when only the evaluator holds s,
+   either as a temporary or once the variable that the next instruction
+   rebinds has been unbound. Anything that runs during the unbind can take a
+   reference or intern s, so both are checked after it. Returns the grown
+   string, which takes over the evaluator's reference to left, or NULL to
+   leave the addition to the operator. The work stays out of the evaluator so
+   that its frame, which every Python call level adds to the native stack,
+   does not grow. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_eval_concat_grow(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *left, tinypy_value_t *right) {
+    tinypy_value_t *code = frame->code;
+    /* Additions take no argument and EXTENDED_ARG prefixes only opcodes that
+       do, so the store starts right after the addition. */
+    size_t next_offset = (size_t)frame->last_instruction + 1U;
+    tinypy_decoded_instruction_t store;
+    tinypy_bool_t unbound = TINYPY_FALSE;
+
+    if (TINYPY_SIZED_SIZE(right) == 0U) {
+        return NULL;
+    }
+    if (TINYPY_REFCNT(left) == 2U && next_offset < TINYPY_SIZED_SIZE(TINYPY_CODE_BYTECODE(code))) {
+        const uint8_t *bytecode = __tinypy_eval_code_bytecode(code);
+        __tinypy_eval_decode_trusted(bytecode, next_offset, &store);
+        unbound = __tinypy_eval_concat_unbind(vm, frame, &store, left);
+    }
+    if (TINYPY_REFCNT(left) != 1U || TINYPY_STRING_OBJECT(left)->interned != 0) {
+        return NULL;
+    }
+    tinypy_value_t *grown = tinypy_internal_string_concat_in_place(vm, left, TINYPY_TEXT_BYTES(right), TINYPY_SIZED_SIZE(right));
+    if (grown == NULL && unbound != 0) {
+        __tinypy_eval_concat_rebind(vm, frame, &store, left);
+    }
+    return grown;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Only additions of exact byte strings whose left operand at most one
+   variable holds besides the evaluator may grow it in place. */
+static inline tinypy_bool_t __tinypy_eval_concat_candidate(const tinypy_vm_t *vm, const tinypy_value_t *left, const tinypy_value_t *right) {
+    tinypy_bool_t candidate = left->type == &vm->types[TINYPY_VALUE_STRING] && right->type == &vm->types[TINYPY_VALUE_STRING] && TINYPY_REFCNT(left) <= 2U;
+    return candidate;
+}
+//////////////////////////////////////////////////////////////////////////
+/* INPLACE_ADD, the usual way to build a string, tries the growth before it
+   takes its operands off the stack. */
+static inline tinypy_bool_t __tinypy_eval_concat_in_place(tinypy_vm_t *vm, tinypy_frame_object_t *frame) {
+    tinypy_value_t *left = frame->stack_top[-2];
+    tinypy_value_t *right = frame->stack_top[-1];
+
+    if (__tinypy_eval_concat_candidate(vm, left, right) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *grown = __tinypy_eval_concat_grow(vm, frame, left, right);
+    if (grown == NULL) {
+        return TINYPY_FALSE;
+    }
+    frame->stack_top[-2] = grown;
+    frame->stack_top -= 1;
+    TINYPY_DECREF(right);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static inline tinypy_bool_t __tinypy_eval_binary(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_binary_slot_t operation, tinypy_eval_integer_binary_e integer_operation, tinypy_error_t **out_error) {
     tinypy_value_t *right = __tinypy_eval_pop_owned(frame);
     tinypy_value_t *left = __tinypy_eval_pop_owned(frame);
@@ -1576,6 +1709,17 @@ static inline tinypy_bool_t __tinypy_eval_binary(tinypy_vm_t *vm, tinypy_frame_o
 
     if (integer_operation != TINYPY_EVAL_INTEGER_BINARY_NONE) {
         result = __tinypy_eval_exact_integer_binary(vm, left, right, integer_operation, &handled, &reused);
+    }
+    /* BINARY_ADD tries the growth only past the numeric paths, so that
+       numbers do not pay for it; INPLACE_ADD has tried it already. */
+    if (handled == 0 && operation == tinypy_add && __tinypy_eval_concat_candidate(vm, left, right) != 0) {
+        tinypy_value_t *grown = __tinypy_eval_concat_grow(vm, frame, left, right);
+        if (grown != NULL) {
+            left = grown;
+            result = grown;
+            handled = TINYPY_TRUE;
+            reused = TINYPY_TRUE;
+        }
     }
     if (handled == 0) {
         result = operation(left, right, out_error);
@@ -1591,75 +1735,6 @@ static inline tinypy_bool_t __tinypy_eval_binary(tinypy_vm_t *vm, tinypy_frame_o
         return TINYPY_FALSE;
     }
     __tinypy_eval_push_owned(frame, result);
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_eval_decode_trusted(const uint8_t *bytecode, size_t instruction_offset, tinypy_decoded_instruction_t *instruction);
-//////////////////////////////////////////////////////////////////////////
-/* string_concatenate in ceval: when `s += t` is immediately followed by a
-   store back into the variable that holds s, and nothing else references s,
-   the byte string is grown in place instead of being copied. */
-static tinypy_bool_t __tinypy_eval_inplace_concat(tinypy_vm_t *vm, tinypy_frame_object_t *frame, const uint8_t *bytecode, size_t bytecode_size, size_t next_offset) {
-    tinypy_value_t *left;
-    tinypy_value_t *right;
-    tinypy_decoded_instruction_t next;
-    tinypy_value_t **slot = NULL;
-    tinypy_value_t *mapping = NULL;
-    tinypy_value_t *name = NULL;
-    tinypy_value_t *grown;
-
-    if (__tinypy_eval_stack_depth(frame) < 2U || next_offset >= bytecode_size) {
-        return TINYPY_FALSE;
-    }
-    left = frame->stack_top[-2];
-    right = frame->stack_top[-1];
-    if (left->type != &vm->types[TINYPY_VALUE_STRING] || right->type != &vm->types[TINYPY_VALUE_STRING] || TINYPY_REFCNT(left) != 2U || TINYPY_STRING_OBJECT(left)->interned != 0 || TINYPY_SIZED_SIZE(right) == 0U) {
-        return TINYPY_FALSE;
-    }
-    __tinypy_eval_decode_trusted(bytecode, next_offset, &next);
-    if (next.opcode == TINYPY_OP_STORE_FAST) {
-        if (next.argument >= (size_t)TINYPY_CODE_LOCAL_COUNT(frame->code) || frame->locals_plus[next.argument] != left) {
-            return TINYPY_FALSE;
-        }
-        slot = &frame->locals_plus[next.argument];
-    }
-    else if (next.opcode == TINYPY_OP_STORE_NAME) {
-        mapping = frame->locals;
-        if (mapping == NULL || mapping->type != &vm->types[TINYPY_VALUE_DICT] || next.argument >= TINYPY_TUPLE_SIZE(TINYPY_CODE_NAMES(frame->code))) {
-            return TINYPY_FALSE;
-        }
-        name = TINYPY_TUPLE_GET(TINYPY_CODE_NAMES(frame->code), next.argument);
-        if (tinypy_internal_dict_get_optional(vm, mapping, name) != left) {
-            return TINYPY_FALSE;
-        }
-    }
-    else {
-        return TINYPY_FALSE;
-    }
-    /* Drop the variable's reference so that the stack holds the only one. */
-    if (slot != NULL) {
-        *slot = NULL;
-        TINYPY_DECREF(left);
-    }
-    else {
-        TINYPY_INCREF(left);
-        tinypy_dict_delete(mapping, name);
-        TINYPY_DECREF(left);
-    }
-    grown = tinypy_internal_string_concat_in_place(vm, left, TINYPY_TEXT_BYTES(right), TINYPY_SIZED_SIZE(right));
-    if (grown == NULL) {
-        if (slot != NULL) {
-            *slot = left;
-        }
-        else {
-            tinypy_dict_set(mapping, name, left);
-        }
-        TINYPY_INCREF(left);
-        return TINYPY_FALSE;
-    }
-    frame->stack_top[-2] = grown;
-    frame->stack_top -= 1;
-    TINYPY_DECREF(right);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2638,7 +2713,7 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
 
     TINYPY_CLEAR_ERROR(out_error);
 
-    bytecode = TINYPY_CODE_OBJECT(code)->method_bytecode != NULL ? TINYPY_CODE_OBJECT(code)->method_bytecode : TINYPY_STRING_OBJECT(TINYPY_CODE_BYTECODE(code))->bytes;
+    bytecode = __tinypy_eval_code_bytecode(code);
     bytecode_size = TINYPY_SIZED_SIZE(TINYPY_CODE_BYTECODE(code));
     vm->current_frame = frame;
     vm->evaluation_depth += 1U;
@@ -2856,7 +2931,7 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             }
             break;
         case TINYPY_OP_INPLACE_ADD:
-            if (__tinypy_eval_inplace_concat(vm, frame, bytecode, bytecode_size, instruction.next_offset) != 0) {
+            if (__tinypy_eval_concat_in_place(vm, frame) != 0) {
                 break;
             }
             if (__tinypy_eval_binary(vm, frame, tinypy_inplace_add, TINYPY_EVAL_INTEGER_BINARY_ADD, out_error) == 0) {

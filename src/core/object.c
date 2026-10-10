@@ -1237,7 +1237,8 @@ tinypy_value_t *tinypy_internal_dispatch_key(tinypy_vm_t *vm, tinypy_internal_di
    every change to the namespace, bases or MRO of a type of their MRO
    withdraws. Classic instances, whose methods live in their classes, and
    types without a version are asked every time; the first name found
-   answers. */
+   answers. The type is held, as a lookup comparing keys may reassign the
+   __class__ of its last instance. */
 tinypy_bool_t tinypy_internal_object_memoize_dispatch(tinypy_value_t *value, uint64_t specials, tinypy_bool_t overrides) {
     tinypy_type_t *type = value->type;
     tinypy_vm_t *vm = type->vm;
@@ -1247,29 +1248,24 @@ tinypy_bool_t tinypy_internal_object_memoize_dispatch(tinypy_value_t *value, uin
     uint64_t found = 0U;
 
     if (memoize != 0) {
-        if (type->dispatch_version != version) {
-            type->dispatch_version = version;
-            type->dispatch_known = 0U;
-            type->dispatch_defines = 0U;
-            type->dispatch_overrides = 0U;
-        }
+        __tinypy_internal_type_renew_dispatch(type, version);
         missing &= ~type->dispatch_known;
         found = (overrides != 0 ? type->dispatch_overrides : type->dispatch_defines) & specials;
     }
-    for (size_t special = 0U; missing != 0U && found == 0U; ++special) {
-        uint64_t bit = UINT64_C(1) << special;
+    TINYPY_INCREF(&type->base.base);
+    while (missing != 0U && found == 0U) {
+        size_t special = __tinypy_internal_lowest_bit_index(missing);
+        uint64_t bit = TINYPY_INTERNAL_DISPATCH_MASK(special);
 
-        if ((missing & bit) == 0U) {
-            continue;
-        }
         missing &= ~bit;
         tinypy_value_t *key = tinypy_internal_dispatch_key(vm, (tinypy_internal_dispatch_e)special);
         tinypy_bool_t defined = tinypy_internal_object_has_special_key(value, key);
         tinypy_bool_t overridden = defined != 0 ? tinypy_internal_object_has_special_override_key(value, key) : TINYPY_FALSE;
 
         /* A lookup comparing keys may have run Python code that changed the
-           type, leaving nothing more to memoize for this version. */
-        if (memoize != 0 && type->version == version) {
+           type or the class of the value, leaving nothing more to memoize
+           for this version. */
+        if (memoize != 0 && type->version == version && value->type == type) {
             type->dispatch_known |= bit;
             type->dispatch_defines |= defined != 0 ? bit : 0U;
             type->dispatch_overrides |= overridden != 0 ? bit : 0U;
@@ -1278,6 +1274,7 @@ tinypy_bool_t tinypy_internal_object_memoize_dispatch(tinypy_value_t *value, uin
             found = bit;
         }
     }
+    TINYPY_DECREF(&type->base.base);
     tinypy_bool_t result = found != 0U ? TINYPY_TRUE : TINYPY_FALSE;
     return result;
 }
@@ -1302,15 +1299,44 @@ tinypy_bool_t tinypy_internal_descriptor_is_data(tinypy_vm_t *vm, tinypy_value_t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+#define TINYPY_DESCRIPTOR_SLOT_GET UINT8_C(1)
+#define TINYPY_DESCRIPTOR_SLOT_SET UINT8_C(2)
+#define TINYPY_DESCRIPTOR_SLOT_DELETE UINT8_C(4)
+//////////////////////////////////////////////////////////////////////////
+/* Asks whether the Python subclass of a built-in descriptor type that is the
+   type of the attribute overrides a slot, and memoizes the answer in the
+   type while it keeps its version. The type is held while the lookups run
+   key comparisons that may change it or reassign the class of the
+   attribute, which leave nothing to memoize. */
+static tinypy_bool_t __tinypy_descriptor_memoize_slot_override(tinypy_value_t *attribute, tinypy_value_t *key, uint8_t slot) {
+    tinypy_type_t *type = attribute->type;
+    uint64_t version = __tinypy_internal_type_version(type);
+
+    TINYPY_INCREF(&type->base.base);
+    tinypy_bool_t overridden = tinypy_internal_object_has_special_override_key(attribute, key);
+    if (version != 0U && type->version == version && attribute->type == type) {
+        __tinypy_internal_type_renew_dispatch(type, version);
+        type->descriptor_known |= slot;
+        type->descriptor_overrides |= overridden != 0 ? slot : 0U;
+    }
+    TINYPY_DECREF(&type->base.base);
+    return overridden;
+}
+//////////////////////////////////////////////////////////////////////////
 /* A Python subclass of a built-in descriptor type that defines __get__,
    __set__ or __delete__ itself goes through that method, as the slot wrapper
    CPython installs for it replaces the inherited slot. */
-static tinypy_bool_t __tinypy_descriptor_slot_inherited(tinypy_value_t *attribute, tinypy_value_t *key) {
-    if ((attribute->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U) {
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_descriptor_slot_inherited(tinypy_value_t *attribute, tinypy_value_t *key, uint8_t slot) {
+    const tinypy_type_t *type = attribute->type;
+
+    if ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U) {
         return TINYPY_TRUE;
     }
-    tinypy_bool_t overridden = tinypy_internal_object_has_special_override_key(attribute, key);
-
+    if (type->dispatch_version == type->version && (type->descriptor_known & slot) != 0U) {
+        tinypy_bool_t inherited = (type->descriptor_overrides & slot) == 0U ? TINYPY_TRUE : TINYPY_FALSE;
+        return inherited;
+    }
+    tinypy_bool_t overridden = __tinypy_descriptor_memoize_slot_override(attribute, key, slot);
     return overridden == 0 ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1328,7 +1354,7 @@ static int32_t __tinypy_descriptor_python_method(tinypy_value_t *attribute, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_descriptor_get_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
-    if (attribute->type->descriptor_get != NULL && __tinypy_descriptor_slot_inherited(attribute, vm->internal_special_get_key) != 0) {
+    if (attribute->type->descriptor_get != NULL && __tinypy_descriptor_slot_inherited(attribute, vm->internal_special_get_key, TINYPY_DESCRIPTOR_SLOT_GET) != 0) {
         tinypy_value_t *return_value_1 = attribute->type->descriptor_get(attribute, instance, owner, out_error);
         return return_value_1;
     }
@@ -1491,7 +1517,7 @@ tinypy_bool_t tinypy_internal_object_is_mapping(tinypy_vm_t *vm, tinypy_value_t 
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_descriptor_set_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_value_t *value, tinypy_error_t **out_error) {
-    if (attribute->type->descriptor_set != NULL && __tinypy_descriptor_slot_inherited(attribute, vm->internal_special_set_key) != 0) {
+    if (attribute->type->descriptor_set != NULL && __tinypy_descriptor_slot_inherited(attribute, vm->internal_special_set_key, TINYPY_DESCRIPTOR_SLOT_SET) != 0) {
         tinypy_bool_t return_value_1 = attribute->type->descriptor_set(attribute, instance, value, out_error);
         return return_value_1;
     }
@@ -1525,7 +1551,7 @@ tinypy_bool_t tinypy_internal_descriptor_set_value(tinypy_vm_t *vm, tinypy_value
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_descriptor_delete_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_error_t **out_error) {
-    if (attribute->type->descriptor_set != NULL && __tinypy_descriptor_slot_inherited(attribute, vm->internal_special_delete_key) != 0) {
+    if (attribute->type->descriptor_set != NULL && __tinypy_descriptor_slot_inherited(attribute, vm->internal_special_delete_key, TINYPY_DESCRIPTOR_SLOT_DELETE) != 0) {
         tinypy_bool_t return_value_1 = attribute->type->descriptor_set(attribute, instance, NULL, out_error);
         return return_value_1;
     }

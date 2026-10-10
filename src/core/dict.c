@@ -24,6 +24,22 @@ static void __tinypy_internal_dict_modified(tinypy_value_t *dict) {
     TINYPY_DICT_OBJECT(dict)->cache_version = vm->dict_cache_epoch;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A change to the dictionary of a type withdraws the versions of the type,
+   and one to the dictionary of a classic class, which has no type owner,
+   those of the types whose MRO has classic classes. */
+static inline void __tinypy_internal_dict_owner_modified(tinypy_value_t *dict) {
+    tinypy_dict_object_t *object = TINYPY_DICT_OBJECT(dict);
+
+    if (object->type_dictionary == 0) {
+        return;
+    }
+    if (object->type_owner != NULL) {
+        tinypy_internal_type_modified(object->type_owner);
+        return;
+    }
+    __tinypy_internal_type_classic_modified(TINYPY_VALUE_VM(dict));
+}
+//////////////////////////////////////////////////////////////////////////
 static inline size_t __tinypy_internal_dict_table_size(size_t capacity) {
     return capacity * sizeof(tinypy_dict_entry_t);
 }
@@ -464,12 +480,8 @@ void tinypy_internal_dict_swap_contents(tinypy_value_t *left, tinypy_value_t *ri
     }
     __tinypy_internal_dict_modified(left);
     __tinypy_internal_dict_modified(right);
-    if (left_dict->type_dictionary != 0) {
-        tinypy_internal_type_modified(left_dict->type_owner);
-    }
-    if (right_dict->type_dictionary != 0) {
-        tinypy_internal_type_modified(right_dict->type_owner);
-    }
+    __tinypy_internal_dict_owner_modified(left);
+    __tinypy_internal_dict_owner_modified(right);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_dict_new(tinypy_vm_t *vm) {
@@ -688,9 +700,7 @@ static inline void __tinypy_internal_dict_replace_value(tinypy_vm_t *vm, tinypy_
 #else
     (void)vm;
 #endif
-    if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
-    }
+    __tinypy_internal_dict_owner_modified(dict);
     __tinypy_internal_dict_modified(dict);
     TINYPY_DECREF(previous);
 }
@@ -742,9 +752,7 @@ static tinypy_bool_t __tinypy_internal_dict_store(tinypy_vm_t *vm, tinypy_value_
     if (entries != NULL) {
         __tinypy_internal_dict_rebuild(vm, dict, entries, capacity);
     }
-    if (object->type_dictionary != 0) {
-        tinypy_internal_type_modified(object->type_owner);
-    }
+    __tinypy_internal_dict_owner_modified(dict);
     __tinypy_internal_dict_modified(dict);
     if (previous != NULL) {
         TINYPY_DECREF(previous);
@@ -1099,9 +1107,7 @@ tinypy_bool_t tinypy_internal_dict_delete_index(tinypy_vm_t *vm, tinypy_value_t 
     __tinypy_internal_cycle_diagnostics_dict_delete(vm, dict, entry->key);
 #endif
     TINYPY_DICT_ENTRY_MARK_DUMMY(entry, vm);
-    if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
-    }
+    __tinypy_internal_dict_owner_modified(dict);
     TINYPY_DICT_OBJECT(dict)->used -= 1U;
     __tinypy_internal_dict_modified(dict);
     if (out_key != NULL) {
@@ -1159,9 +1165,7 @@ void tinypy_dict_clear(tinypy_value_t *dict) {
     TINYPY_DICT_OBJECT(dict)->used = 0U;
     TINYPY_DICT_OBJECT(dict)->fill = 0U;
     __tinypy_internal_dict_modified(dict);
-    if (TINYPY_DICT_OBJECT(dict)->type_dictionary != 0) {
-        tinypy_internal_type_modified(TINYPY_DICT_OBJECT(dict)->type_owner);
-    }
+    __tinypy_internal_dict_owner_modified(dict);
     iterator = release_entries;
     iterator_end = release_entries + capacity;
     for (; iterator != iterator_end; ++iterator) {

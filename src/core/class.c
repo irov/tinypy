@@ -307,6 +307,7 @@ tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_valu
     class_object->name = tinypy_internal_name_from_bytes(vm, name, name_size);
     class_object->bases = bases;
     class_object->dict = namespace_dict;
+    TINYPY_DICT_OBJECT(namespace_dict)->type_dictionary = TINYPY_TRUE;
     TINYPY_INCREF(bases);
     TINYPY_INCREF(namespace_dict);
     __tinypy_class_refresh_hooks(&class_object->base);
@@ -705,6 +706,12 @@ tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, t
         tinypy_value_t *previous = *field;
         TINYPY_INCREF(attribute_value);
         *field = attribute_value;
+        /* A new-style class keeps the MRO it linearized from the class, so
+           of these fields only a new dictionary changes its lookups. */
+        if (field == &class_object->dict) {
+            TINYPY_DICT_OBJECT(attribute_value)->type_dictionary = TINYPY_TRUE;
+            __tinypy_internal_type_classic_modified(vm);
+        }
         TINYPY_DECREF(previous);
         /* set_dict and set_bases resolve the hooks again. */
         if (field != &class_object->name) {

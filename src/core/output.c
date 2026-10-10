@@ -9,31 +9,36 @@ void tinypy_output_emit(tinypy_vm_t *vm, tinypy_output_channel_e channel, const 
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* As PyErr_WriteUnraisable, clears the error of a write, and that of a
+   failed lookup or repr before the text replacing its result is written, so
+   a Python write method never runs with an error pending. Unlike Python 3,
+   Python 2.7 leaves a failed __module__ lookup pending, which keeps a stream
+   object from receiving the text up to the value. */
+static void __tinypy_output_unraisable_clear(tinypy_vm_t *vm, tinypy_error_t *error) {
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    tinypy_internal_exception_clear_raised(vm);
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_output_unraisable_text(tinypy_value_t *stream, const void *bytes, size_t size) {
     tinypy_error_t *error = NULL;
 
     (void)tinypy_internal_output_write(stream, bytes, size, &error);
-    if (error != NULL) {
-        tinypy_error_release(error);
-    }
-    tinypy_internal_exception_clear_raised(TINYPY_VALUE_VM(stream));
+    __tinypy_output_unraisable_clear(TINYPY_VALUE_VM(stream), error);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_output_unraisable_repr(tinypy_value_t *stream, tinypy_value_t *value, const char *fallback) {
     tinypy_error_t *error = NULL;
     tinypy_value_t *text = value != NULL ? tinypy_object_repr(value, &error) : NULL;
 
-    if (text != NULL) {
-        __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(text), TINYPY_TEXT_BYTE_SIZE(text));
-        TINYPY_DECREF(text);
-    }
-    else {
+    if (text == NULL) {
+        __tinypy_output_unraisable_clear(TINYPY_VALUE_VM(stream), error);
         __tinypy_output_unraisable_text(stream, fallback, strlen(fallback));
+        return;
     }
-    if (error != NULL) {
-        tinypy_error_release(error);
-    }
-    tinypy_internal_exception_clear_raised(TINYPY_VALUE_VM(stream));
+    __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(text), TINYPY_TEXT_BYTE_SIZE(text));
+    TINYPY_DECREF(text);
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyErr_WriteUnraisable writes the value as raised. An error the VM raised
@@ -70,24 +75,17 @@ void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object) 
         TINYPY_INCREF(stream);
         __tinypy_output_unraisable_text(stream, "Exception ", 10U);
         module = tinypy_object_get_attr_value(state.type, vm->internal_special_module_key, &error);
-        if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING) {
-            size_t size = TINYPY_TEXT_BYTE_SIZE(module);
-
-            if (TINYPY_NAME_EQ(module, vm->internal_exception_module_name) == TINYPY_FALSE) {
-                __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(module), size);
-                __tinypy_output_unraisable_text(stream, ".", 1U);
-            }
-        }
-        else if (module == NULL) {
+        if (module == NULL) {
+            __tinypy_output_unraisable_clear(vm, error);
             __tinypy_output_unraisable_text(stream, "<unknown>", 9U);
         }
-        if (module != NULL) {
+        else {
+            if (TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, vm->internal_exception_module_name) == TINYPY_FALSE) {
+                __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
+                __tinypy_output_unraisable_text(stream, ".", 1U);
+            }
             TINYPY_DECREF(module);
         }
-        if (error != NULL) {
-            tinypy_error_release(error);
-        }
-        tinypy_internal_exception_clear_raised(vm);
         if (TINYPY_VALUE_KIND(state.type) == TINYPY_VALUE_TYPE) {
             size_t name_size;
             const char *name = tinypy_internal_type_short_name((tinypy_type_t *)state.type, &name_size);

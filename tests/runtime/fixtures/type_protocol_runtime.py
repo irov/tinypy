@@ -625,3 +625,68 @@ assert apply_cleared(int, (), lambda: {"x": clearing_value(str, "__int__", "15")
 assert apply_cleared(str, (), lambda: {"object": clearing_value(list, "__str__", [1])}) == "[1]"
 assert apply_cleared(list, (), lambda: {"sequence": clearing_value(tuple, "__iter__", (1, 2))}) == [1, 2]
 assert apply_cleared(tuple, (), lambda: {"sequence": clearing_value(list, "__iter__", [1, 2])}) == (1, 2)
+
+
+# A class that a custom mro() adds outside the bases is no base, so its
+# changes do not reach the class through the subclass lists; tinypy gives
+# such a class no version and follows those changes, where the method cache
+# of CPython 2.7 may keep the old answer.
+class OutsideMroClass(object):
+    value = "outside"
+
+
+class OutsideMroMeta(type):
+    def mro(cls):
+        return [cls, OutsideMroClass, object]
+
+
+class OutsideMroUser(object):
+    __metaclass__ = OutsideMroMeta
+
+
+def read_outside_mro(target):
+    return getattr(target, "value", None)
+
+
+outside_user = OutsideMroUser()
+assert [(read_outside_mro(outside_user), read_outside_mro(OutsideMroUser)) for _ in range(2)] == [("outside", "outside")] * 2
+OutsideMroClass.value = "changed"
+assert (read_outside_mro(outside_user), read_outside_mro(OutsideMroUser)) == ("changed", "changed")
+del OutsideMroClass.value
+assert (read_outside_mro(outside_user), read_outside_mro(OutsideMroUser)) == (None, None)
+
+
+# Special methods a classic base gains after a new-style class derives from it
+# are found by the dynamic lookup of tinypy; CPython 2.7 keeps the slots the
+# new-style class filled when it was created (see SPEC.md).
+class LateClassic:
+    pass
+
+
+class LateMixed(LateClassic, object):
+    pass
+
+
+class LateOwner(object):
+    attribute = LateMixed()
+
+
+def late_length(target):
+    try:
+        return len(target)
+    except TypeError:
+        return None
+
+
+late_instance = LateMixed()
+assert [late_length(late_instance) for _ in range(2)] == [None] * 2
+assert [type(LateOwner().attribute) for _ in range(2)] == [LateMixed] * 2
+LateClassic.__len__ = lambda self: 5
+LateClassic.__get__ = lambda self, instance, owner: "late get"
+assert late_length(late_instance) == 5
+assert (LateOwner().attribute, LateOwner.attribute) == ("late get", "late get")
+LateClassic.__dict__["__len__"] = lambda self: 6
+assert late_length(late_instance) == 6
+LateClassic.__dict__ = {}
+assert late_length(late_instance) is None
+assert type(LateOwner().attribute) is LateMixed

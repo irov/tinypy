@@ -141,6 +141,103 @@ class ObjectCallbackAudit(unittest.TestCase):
         sample.__dict__.clear()
         sys.exc_clear()
 
+    def colliding_key(self, name, action):
+        class Collide(object):
+            armed = False
+            def __hash__(self):
+                return hash(name)
+            def __eq__(self, other):
+                if self.armed:
+                    self.armed = False
+                    action()
+                return False
+        return Collide()
+
+    # Runs operation on the only instance of a fresh class, whose key colliding
+    # with name reassigns the instance's __class__ when a lookup compares it.
+    def released_by_lookup(self, name, operation, namespace, owner, target):
+        key = self.colliding_key(name, lambda: setattr(owner[0], '__class__', target))
+        namespace[key] = 1
+        owner[:] = [type('Released', (object,), namespace)()]
+        # A class write withdraws the lookups cached while the instance was made.
+        type(owner[0]).marker = 1
+        key.armed = True
+        try:
+            return operation(owner[0])
+        finally:
+            key.armed = False
+
+    def test_dispatch_holds_a_type_a_key_comparison_releases(self):
+        class Other(object):
+            def __len__(self):
+                return 3
+        owner = []
+        def probe(name, operation, **namespace):
+            return self.released_by_lookup(name, operation, namespace, owner, Other)
+        self.assertEqual(probe('__len__', len, __len__=lambda self: 3), 3)
+        self.assertIs(probe('__len__', bool), True)
+        self.assertIs(probe('__eq__', lambda value: value == 5), False)
+        self.assertRaises(TypeError, probe, '__float__', float)
+        self.assertRaises(TypeError, probe, '__int__', int)
+        self.assertRaises(TypeError, probe, '__new__', lambda value: object.__init__(value, 1))
+
+    def test_attribute_access_holds_a_type_a_key_comparison_releases(self):
+        class Other(object):
+            pass
+        owner = []
+        def store(value):
+            value.attr = 5
+            return value.attr
+        def delete(value):
+            value.__dict__['attr'] = 1
+            delattr(value, 'attr')
+            return 'attr' in value.__dict__
+        self.assertEqual(self.released_by_lookup('attr', store, {}, owner, Other), 5)
+        self.assertIs(type(owner[0]), Other)
+        self.assertIs(self.released_by_lookup('attr', delete, {}, owner, Other), False)
+        self.assertIs(type(owner[0]), Other)
+        for name in ('__get__', '__set__', '__delete__'):
+            descriptor = []
+            def access(value):
+                class Holder(object):
+                    attr = value
+                instance = Holder()
+                found = instance.attr
+                instance.attr = 7
+                return found, instance.__dict__
+            found, namespace = self.released_by_lookup(name, access, {}, descriptor, Other)
+            self.assertIs(found, descriptor[0])
+            self.assertEqual(namespace, {'attr': 7})
+
+    def test_property_holds_the_accessor_it_calls(self):
+        events = []
+        def accessor(*arguments):
+            events.append(len(arguments))
+            return 'called'
+        for field in range(3):
+            holder = []
+            def reset():
+                holder[0].__init__()
+            key = self.colliding_key('__call__', reset)
+            Accessor = type('Accessor', (object,), {key: 1, '__call__': lambda self, *arguments: accessor(*arguments)})
+            arguments = [None, None, None]
+            arguments[field] = Accessor()
+            holder.append(property(*arguments))
+            Accessor.marker = 1
+            del Accessor, arguments
+            class Owner(object):
+                attr = holder[0]
+            instance = Owner()
+            key.armed = True
+            if field == 0:
+                self.assertEqual(instance.attr, 'called')
+            elif field == 1:
+                instance.attr = 3
+            else:
+                del instance.attr
+            self.assertFalse(key.armed)
+        self.assertEqual(events, [1, 2, 1])
+
     def test_custom_hooks_keep_original_string_subclass_names(self):
         events = []
         Name = self.names(events)

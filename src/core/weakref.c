@@ -572,9 +572,7 @@ static tinypy_value_t *__tinypy_weakref_proxy_next(tinypy_value_t *proxy, tinypy
 /* PyObject_Length of a referent. */
 static ptrdiff_t __tinypy_weakref_referent_length(tinypy_value_t *object, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
-    tinypy_length_slot_t length = object->type->mapping_slots != NULL && object->type->mapping_slots->length != NULL
-                                      ? object->type->mapping_slots->length
-                                      : (object->type->sequence_slots != NULL ? object->type->sequence_slots->length : NULL);
+    tinypy_length_slot_t length = __tinypy_internal_type_size_slot(object->type);
 
     if (length != NULL) {
         ptrdiff_t return_value_1 = length(object, out_error);

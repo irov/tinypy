@@ -660,13 +660,212 @@ class EvaluationSemantics(unittest.TestCase):
         for value in range(16):
             self.assertEqual(read(fresh(value)), (value, value, value))
 
-    def test_comparisons_reach_the_recursion_limit_like_ceval(self):
-        messages = []
-        for left, right in ((1, 2), (1.5, 2.5), (1, 2.5), (1 << 60, 2.5), ('a', 'b'), ((1,), (2,))):
+    def test_attribute_caches_follow_classic_classes_of_the_mro(self):
+        class Older:
+            value = 'older'
+        class Old(Older):
+            pass
+        class Mixed(Old, object):
+            pass
+        class Sub(Mixed):
+            pass
+        class Holder(object):
+            tag = Mixed()
+        mixed = Mixed()
+        sub = Sub()
+        holder = Holder()
+        def read(target):
             try:
-                compare_until_recursion_limit(left, right)
-            except RuntimeError as error:
-                messages.append(str(error))
+                return target.value
+            except AttributeError:
+                return None
+        def snapshot():
+            return [read(mixed), read(Mixed), read(sub), read(Sub)]
+        def write(target, value):
+            target.value = value
+        self.assertEqual([snapshot() for _ in range(2)], [['older'] * 4] * 2)
+        Old.value = 'old'
+        self.assertEqual(snapshot(), ['old'] * 4)
+        Old.__dict__['value'] = 'item'
+        self.assertEqual(snapshot(), ['item'] * 4)
+        del Old.__dict__['value']
+        self.assertEqual(snapshot(), ['older'] * 4)
+        Old.__dict__ = {'value': 'replaced'}
+        self.assertEqual(snapshot(), ['replaced'] * 4)
+        Old.__dict__.update(value='updated')
+        self.assertEqual(snapshot(), ['updated'] * 4)
+        Old.__bases__ = ()
+        Old.__dict__.clear()
+        self.assertEqual(snapshot(), ['older'] * 4)
+        del Older.value
+        self.assertEqual(snapshot(), [None] * 4)
+        Older.__dict__.setdefault('value', 'default')
+        self.assertEqual(snapshot(), ['default'] * 4)
+        for value in range(2):
+            write(mixed, value)
+        self.assertEqual((read(mixed), mixed.__dict__), (1, {'value': 1}))
+        self.assertEqual([holder.tag is Holder.tag for _ in range(3)], [True] * 3)
+        Older.other = 'other'
+        self.assertIs(holder.tag, Holder.tag)
+        self.assertEqual((holder.tag.other, Holder.tag.other), ('other', 'other'))
+
+    def test_attribute_caches_follow_new_style_bases_of_classic_descriptors(self):
+        events = []
+        class Classic:
+            pass
+        class Protocol(object):
+            pass
+        class Descriptor(Classic, Protocol):
+            pass
+        class Owner(object):
+            attribute = Descriptor()
+        owner = Owner()
+        def read(target):
+            return target.attribute
+        def write(target, value):
+            target.attribute = value
+        self.assertEqual([type(read(owner)) for _ in range(2)], [Descriptor] * 2)
+        Protocol.__get__ = lambda self, instance, owner: ('get', instance is not None)
+        self.assertEqual((read(owner), read(Owner)), (('get', True), ('get', False)))
+        Classic.unrelated = 1
+        Protocol.__set__ = lambda self, instance, value: events.append(value)
+        write(owner, 1)
+        self.assertEqual((read(owner), owner.__dict__, events), (('get', True), {}, [1]))
+        del Protocol.__get__, Protocol.__set__
+        write(owner, 2)
+        self.assertEqual((read(owner), events), (2, [1]))
+
+    def test_attribute_caches_follow_classes_with_a_metaclass(self):
+        class Meta(type):
+            pass
+        class Tagged(object):
+            __metaclass__ = Meta
+            value = 'tagged'
+        class Child(Tagged):
+            pass
+        class Holder(object):
+            tag = Tagged()
+        child = Child()
+        holder = Holder()
+        def read(target):
+            try:
+                return target.value
+            except AttributeError:
+                return None
+        def length(target):
+            try:
+                return len(target)
+            except TypeError:
+                return None
+        self.assertEqual([(read(child), read(Child)) for _ in range(2)], [('tagged', 'tagged')] * 2)
+        Tagged.value = 'changed'
+        self.assertEqual((read(child), read(Child)), ('changed', 'changed'))
+        Meta.value = 'meta'
+        del Tagged.value
+        self.assertEqual((read(child), read(Child)), (None, 'meta'))
+        self.assertEqual([type(holder.tag) for _ in range(2)], [Tagged] * 2)
+        Tagged.__get__ = lambda self, instance, owner: 'got'
+        self.assertEqual((holder.tag, Holder.tag), ('got', 'got'))
+        del Tagged.__get__
+        self.assertIs(type(holder.tag), Tagged)
+        self.assertEqual([length(child) for _ in range(2)], [None] * 2)
+        Tagged.__len__ = lambda self: 3
+        self.assertEqual(length(child), 3)
+        child.__class__ = Tagged
+        self.assertEqual((read(child), length(child)), (None, 3))
+
+    def test_attribute_caches_follow_changes_through_deep_hierarchies(self):
+        class Root(object):
+            flag = 0
+            def get(self):
+                return self.flag
+        leaf = Root
+        for depth in range(60):
+            leaf = type('Level%d' % depth, (leaf,), {})
+        instance = leaf()
+        def read(target):
+            return (target.get(), target.flag, type(target).flag)
+        for value in range(4):
+            Root.flag = value
+            self.assertEqual(read(instance), (value, value, value))
+        Middle = leaf.__mro__[30]
+        Middle.flag = 'middle'
+        self.assertEqual(read(instance), ('middle', 'middle', 'middle'))
+        del Middle.flag
+        self.assertEqual(read(instance), (3, 3, 3))
+
+    def test_descriptor_subclass_slots_follow_class_changes(self):
+        events = []
+        class Lazy(property):
+            pass
+        class Static(staticmethod):
+            pass
+        class Owner(object):
+            value = Lazy(lambda self: 'fget', lambda self, value: events.append(('fset', value)), lambda self: events.append('fdel'))
+            tool = Static(lambda: 'static')
+        owner = Owner()
+        def get(target):
+            return target.value
+        def put(target, value):
+            target.value = value
+        def drop(target):
+            del target.value
+        def tool(target):
+            return target.tool()
+        self.assertEqual([(get(owner), tool(owner)) for _ in range(2)], [('fget', 'static')] * 2)
+        put(owner, 1)
+        drop(owner)
+        Lazy.__get__ = lambda self, instance, owner: 'get'
+        Lazy.__set__ = lambda self, instance, value: events.append(('set', value))
+        Lazy.__delete__ = lambda self, instance: events.append('delete')
+        self.assertEqual((get(owner), get(Owner)), ('get', 'get'))
+        put(owner, 2)
+        drop(owner)
+        del Lazy.__get__, Lazy.__set__, Lazy.__delete__
+        self.assertEqual(get(owner), 'fget')
+        put(owner, 3)
+        drop(owner)
+        self.assertEqual(events, [('fset', 1), 'fdel', ('set', 2), 'delete', ('fset', 3), 'fdel'])
+        Static.__get__ = lambda self, instance, owner: lambda: 'replaced'
+        self.assertEqual(tool(owner), 'replaced')
+        del Static.__get__
+        self.assertEqual(tool(owner), 'static')
+
+    def test_classic_class_changes_after_mixed_classes_are_released(self):
+        class Old:
+            value = 'old'
+        def mixed(index):
+            return type('Mixed%d' % index, (Old, object), {'index': index})
+        for index in range(8):
+            cls = mixed(index)
+            self.assertEqual((cls().value, cls().index, cls.value), ('old', index, 'old'))
+            del cls
+        survivor = mixed(8)()
+        Old.value = 'changed'
+        self.assertEqual(survivor.value, 'changed')
+        Old.__dict__ = {'value': 'replaced'}
+        self.assertEqual(survivor.value, 'replaced')
+
+    def test_comparisons_reach_the_recursion_limit_like_ceval(self):
+        # A limit a few frames above the current depth is reached before the
+        # native stack guard, which a sanitized build trips within a few
+        # dozen frames.
+        depth = 0
+        frame = sys._getframe()
+        while frame is not None:
+            depth += 1
+            frame = frame.f_back
+        messages = []
+        limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(depth + 10)
+        try:
+            for left, right in ((1, 2), (1.5, 2.5), (1, 2.5), (1 << 60, 2.5), ('a', 'b'), ((1,), (2,))):
+                try:
+                    compare_until_recursion_limit(left, right)
+                except RuntimeError as error:
+                    messages.append(str(error))
+        finally:
+            sys.setrecursionlimit(limit)
         self.assertEqual(messages, ['maximum recursion depth exceeded'] + ['maximum recursion depth exceeded in cmp'] * 5)
 
     def test_special_method_overrides_follow_class_changes(self):

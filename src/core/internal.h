@@ -5,12 +5,15 @@
 #include <intrin.h>
 #define TINYPY_NATIVE_STACK_ADDRESS() ((uintptr_t)_AddressOfReturnAddress())
 #define TINYPY_ALWAYS_INLINE __forceinline
+#define TINYPY_NOINLINE __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
 #define TINYPY_NATIVE_STACK_ADDRESS() ((uintptr_t)__builtin_frame_address(0))
 #define TINYPY_ALWAYS_INLINE inline __attribute__((always_inline))
+#define TINYPY_NOINLINE __attribute__((noinline))
 #else
 #define TINYPY_NATIVE_STACK_ADDRESS() ((uintptr_t)0U)
 #define TINYPY_ALWAYS_INLINE inline
+#define TINYPY_NOINLINE
 #endif
 
 #if defined(TINYPY_CYCLE_DIAGNOSTICS) && defined(NDEBUG)
@@ -1088,11 +1091,11 @@ typedef struct tinypy_type_lookup_cache_entry_t {
 } tinypy_type_lookup_cache_entry_t;
 //////////////////////////////////////////////////////////////////////////
 /* The descriptor flags depend on the attribute's own type as well, so the
-   entry also remembers that type and its version. An entry for a class's or
-   a module's own attribute names it as the owner, with the class's type
-   version or the module dictionary's version; instance entries have none.
-   The index is the instance dict probe hint, or the slot of a __slots__
-   member. */
+   entry also remembers the version of that type, which no other type ever
+   holds. An entry for a class's or a module's own attribute names it as the
+   owner, with the class's type version or the module dictionary's version;
+   instance entries have none. The index is the instance dict probe hint, or
+   the slot of a __slots__ member. */
 typedef struct tinypy_attribute_lookup_cache_entry_t {
     uint64_t type_version;
     uint64_t owner_version;
@@ -1100,7 +1103,6 @@ typedef struct tinypy_attribute_lookup_cache_entry_t {
     size_t name_index;
     size_t index;
     tinypy_type_t *type;
-    tinypy_type_t *attribute_type;
     tinypy_value_t *attribute;
     tinypy_value_t *owner;
     tinypy_bool_t data_descriptor;
@@ -1115,7 +1117,6 @@ typedef struct tinypy_attribute_store_cache_entry_t {
     size_t name_index;
     size_t slot_index;
     tinypy_type_t *type;
-    tinypy_type_t *descriptor_type;
     tinypy_value_t *descriptor;
     tinypy_bool_t direct_instance_dict;
     tinypy_bool_t data_descriptor;
@@ -1221,6 +1222,25 @@ typedef enum tinypy_internal_dispatch_e {
 #define TINYPY_INTERNAL_DISPATCH_BIT(name) TINYPY_INTERNAL_DISPATCH_MASK(TINYPY_INTERNAL_DISPATCH_##name)
 typedef char tinypy_dispatch_overrides_must_fit_a_mask_t[TINYPY_INTERNAL_DISPATCH_COUNT <= 64 ? 1 : -1];
 //////////////////////////////////////////////////////////////////////////
+/* The index of the lowest set bit of a nonzero mask. */
+static inline size_t __tinypy_internal_lowest_bit_index(uint64_t mask) {
+#if defined(__GNUC__) || defined(__clang__)
+    size_t index = (size_t)__builtin_ctzll(mask);
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+    unsigned long bit_index;
+    (void)_BitScanForward64(&bit_index, mask);
+    size_t index = (size_t)bit_index;
+#else
+    size_t index = 0U;
+
+    while ((mask & UINT64_C(1)) == 0U) {
+        mask >>= 1U;
+        ++index;
+    }
+#endif
+    return index;
+}
+//////////////////////////////////////////////////////////////////////////
 /* tinypy type object. Builtin and heap types share this prefix; heap
  * types later append their protocol tables and slot/member storage. */
 struct tinypy_type_t {
@@ -1267,8 +1287,18 @@ struct tinypy_type_t {
     tinypy_bool_t has_instance_dict;
     tinypy_bool_t has_finalizer;
     tinypy_bool_t has_classic_mro;
+    /* The MRO was computed by an mro() override, or a type of the MRO has
+       such an MRO. */
     tinypy_bool_t has_custom_mro;
     tinypy_bool_t bases_updating;
+    /* A type of a classic MRO that got a version is listed in the VM until
+       a classic class changes. */
+    tinypy_bool_t classic_listed;
+    /* __get__, __set__ and __delete__ known and overridden by Python code in
+       a subclass of a built-in descriptor type while version equals
+       dispatch_version, one bit each. */
+    uint8_t descriptor_known;
+    uint8_t descriptor_overrides;
     /* tp_version_tag: the caches of lookups through the MRO keep this
        version, and tinypy_internal_type_modified withdraws it. Zero is no
        version. */
@@ -1442,6 +1472,8 @@ typedef struct tinypy_dict_object_t {
     tinypy_dict_entry_t *table;
     uint64_t mutation_version;
     uint64_t cache_version;
+    /* The dictionary of the type owner or, without one, of a classic class
+       now or before, whose changes withdraw type versions. */
     tinypy_bool_t type_dictionary;
     tinypy_type_t *type_owner;
     tinypy_dict_entry_t small_table[TINYPY_DICT_MIN_SIZE];
@@ -2055,6 +2087,10 @@ struct tinypy_vm_t {
     tinypy_value_t *empty_frozenset;
     tinypy_value_t *string_char_cache[256];
     tinypy_value_t *unicode_char_cache[256];
+    /* The types of a classic MRO listed since a classic class last changed. */
+    tinypy_type_t **classic_versioned_types;
+    size_t classic_versioned_count;
+    size_t classic_versioned_capacity;
 };
 //////////////////////////////////////////////////////////////////////////
 struct tinypy_error_t {
@@ -2067,9 +2103,11 @@ struct tinypy_error_t {
     int32_t line_number;
     int32_t column_offset;
     /* A diagnostic of a raised Python exception keeps the exception and its
-       VM until the message is first read; the VM links it for shutdown. */
+       VM until the message is first read, and the class it was raised with
+       until the kind is; the VM links it for shutdown. */
     tinypy_vm_t *vm;
     tinypy_value_t *exception;
+    tinypy_type_t *exception_type;
     tinypy_error_t *previous;
     tinypy_error_t *next;
     char *rendered_message;
@@ -2106,7 +2144,9 @@ tinypy_value_t *tinypy_internal_long_from_double(tinypy_vm_t *vm, double value);
 
 void tinypy_internal_make_error(const tinypy_allocator_t *allocator, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error);
 void tinypy_internal_make_vm_error(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error);
-void tinypy_internal_make_exception_error(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, tinypy_value_t *exception, tinypy_error_t **out_error);
+/* The class an exception was raised with, or NULL for a classic class, maps
+   to the kind of the error when the kind is first read. */
+void tinypy_internal_make_exception_error(tinypy_vm_t *vm, tinypy_type_t *exception_type, tinypy_value_t *exception, tinypy_error_t **out_error);
 void tinypy_internal_error_render_pending(tinypy_vm_t *vm);
 //////////////////////////////////////////////////////////////////////////
 /* Message fragments joined into one exception message without formatting. */
@@ -2341,6 +2381,7 @@ int32_t tinypy_internal_contains_builtin(tinypy_value_t *container, tinypy_value
 tinypy_value_t *tinypy_internal_iter_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_repr_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_str_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t *out_handled, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_operator_builtin(tinypy_value_t *left, tinypy_value_t *right, int32_t mode, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_unary_builtin(tinypy_value_t *value, int32_t mode, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_number_absolute(tinypy_value_t *value, tinypy_error_t **out_error);
@@ -2509,14 +2550,30 @@ tinypy_bool_t tinypy_internal_output_flush_line(tinypy_vm_t *vm, tinypy_error_t 
 void tinypy_internal_type_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_type_destroy(tinypy_value_t *value);
 void tinypy_internal_type_detach(tinypy_type_t *type);
-/* Gives a type without a version one, and to the types of its MRO; zero
-   when the type cannot have one. */
+/* Gives a type without a version one, and to its bases first; zero when the
+   type cannot have one. */
 uint64_t tinypy_internal_type_assign_version(tinypy_type_t *type);
 static inline uint64_t __tinypy_internal_type_version(tinypy_type_t *type) {
     uint64_t version = type->version != 0U ? type->version : tinypy_internal_type_assign_version(type);
     return version;
 }
+/* The length slot PyObject_Size calls: sq_length ahead of mp_length. */
+static inline tinypy_length_slot_t __tinypy_internal_type_size_slot(const tinypy_type_t *type) {
+    if (type->sequence_slots != NULL && type->sequence_slots->length != NULL) {
+        return type->sequence_slots->length;
+    }
+    tinypy_length_slot_t length = type->mapping_slots != NULL ? type->mapping_slots->length : NULL;
+    return length;
+}
 void tinypy_internal_type_modified(tinypy_type_t *type);
+void tinypy_internal_type_withdraw_classic_versions(tinypy_vm_t *vm);
+/* Withdraws the versions of the types of a classic MRO after a classic class
+   changed its dictionary or the contents of one. */
+static inline void __tinypy_internal_type_classic_modified(tinypy_vm_t *vm) {
+    if (vm->classic_versioned_count != 0U) {
+        tinypy_internal_type_withdraw_classic_versions(vm);
+    }
+}
 void tinypy_internal_type_lookup_cache_finalize(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_type_lookup_key(tinypy_vm_t *vm, const tinypy_type_t *type, tinypy_value_t *key);
 /* Owned value of the name in the MRO entries after start, or from the type
@@ -2568,6 +2625,20 @@ tinypy_value_t *tinypy_internal_dispatch_key(tinypy_vm_t *vm, tinypy_internal_di
    TINYPY_INTERNAL_DISPATCH_BIT names, memoizing both answers in the value's
    type for the readers below. */
 tinypy_bool_t tinypy_internal_object_memoize_dispatch(tinypy_value_t *value, uint64_t specials, tinypy_bool_t overrides);
+//////////////////////////////////////////////////////////////////////////
+/* Starts the memos of the dispatch specials and of the descriptor slots of a
+   type for a version. */
+static inline void __tinypy_internal_type_renew_dispatch(tinypy_type_t *type, uint64_t version) {
+    if (type->dispatch_version == version) {
+        return;
+    }
+    type->dispatch_version = version;
+    type->dispatch_known = 0U;
+    type->dispatch_defines = 0U;
+    type->dispatch_overrides = 0U;
+    type->descriptor_known = 0U;
+    type->descriptor_overrides = 0U;
+}
 //////////////////////////////////////////////////////////////////////////
 /* Only a type with a version memoizes, so a type without one has nothing
    known. */
@@ -2765,6 +2836,7 @@ void tinypy_internal_sys_publish_handled_exception(tinypy_vm_t *vm, tinypy_value
 void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm);
 void tinypy_internal_exception_restore_handled(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback);
 void tinypy_internal_exception_make_diagnostic(tinypy_vm_t *vm, tinypy_error_t **out_error);
+tinypy_error_kind_e tinypy_internal_exception_error_kind(tinypy_vm_t *vm, const tinypy_type_t *type);
 void tinypy_internal_exception_raise_key_error(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error);
 void tinypy_internal_exception_raise_stop_iteration(tinypy_vm_t *vm, tinypy_error_t **out_error);
 void tinypy_internal_exception_raise_system_error(tinypy_vm_t *vm, const char *message, tinypy_error_t **out_error);

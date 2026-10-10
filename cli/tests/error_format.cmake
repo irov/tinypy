@@ -179,6 +179,43 @@ tinypy_expect(excepthook_failed_write CODES 0 ARGS -c "import sys\nclass W(objec
     STDOUT_EQUAL "'ValueError'\n'\\n'\n" STDERR_EQUAL "")
 tinypy_expect(excepthook_arity CODES 0 ARGS -c "import sys\ntry:\n    sys.excepthook(1, 2)\nexcept TypeError as e:\n    print e" STDOUT_EQUAL "excepthook expected 3 arguments, got 2\n")
 
+# PyErr_PrintEx normalizes the uncaught exception first: the class of the
+# instance that a call of the raised class returned names it, for the hook,
+# for the report of a failed hook and without a hook, and an error of the
+# call is reported instead.
+set(normalized_source [=[import sys
+class A(Exception):
+    def __new__(cls, *args):
+        return Exception.__new__(B, *args)
+class B(A):
+    pass
+def hook(t, v, tb):
+    sys.stdout.write('hook %s %s\n' % (t.__name__, type(v).__name__))
+    if v.args == ('x',):
+        raise A, 'y'
+sys.excepthook = hook
+raise A, 'x']=])
+
+tinypy_expect(excepthook_normalized CODES 1 ARGS -c "${normalized_source}"
+    STDOUT_EQUAL "hook B B\n"
+    STDERR_EQUAL "Error in sys.excepthook:\nTraceback (most recent call last):\n  File \"<string>\", line 10, in hook\n__main__.B: y\n\nOriginal exception was:\nTraceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n__main__.B: x\n")
+tinypy_expect(excepthook_missing_normalized CODES 1 ARGS -c "import sys\nclass A(Exception):\n    def __new__(cls, *args):\n        return Exception.__new__(B, *args)\nclass B(A):\n    pass\ndel sys.excepthook\nraise A, 'x'"
+    STDERR_EQUAL "sys.excepthook is missing\nTraceback (most recent call last):\n  File \"<string>\", line 8, in <module>\n__main__.B: x\n")
+
+set(normalization_failure_source [=[class C(Exception):
+    pass
+calls = []
+class A(Exception):
+    def __new__(cls, *args):
+        calls.append(args)
+        if len(calls) > 1:
+            raise KeyError('second')
+        return C('c')
+raise A, 'x']=])
+
+tinypy_expect(uncaught_normalization_failure CODES 1 ARGS -c "${normalization_failure_source}"
+    STDERR_EQUAL "Traceback (most recent call last):\n  File \"<string>\", line 8, in __new__\nKeyError: 'second'\n")
+
 # PyTraceBack_Print honours sys.tracebacklimit.
 tinypy_expect(tracebacklimit CODES 1 ARGS -c "import sys\nsys.tracebacklimit = 1\ndef a():\n    b()\ndef b():\n    raise ValueError('limited')\na()"
     STDERR_EQUAL "Traceback (most recent call last):\n  File \"<string>\", line 6, in b\nValueError: limited\n")

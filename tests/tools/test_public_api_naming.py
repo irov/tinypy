@@ -296,6 +296,7 @@ class PublicApiNamingTests(unittest.TestCase):
                 "tinypy_set_item",
                 "tinypy_type_is_subtype",
                 "tinypy_vm_has_error",
+                "tinypy_vm_normalize_error",
             },
         )
         self.assertIn(
@@ -550,6 +551,7 @@ class PublicApiNamingTests(unittest.TestCase):
                 "tinypy_vm_handled_exception",
                 "tinypy_vm_has_error",
                 "tinypy_vm_clear_error",
+                "tinypy_vm_normalize_error",
                 "tinypy_vm_raise_error",
                 "tinypy_vm_modules",
                 "tinypy_vm_module_finder",

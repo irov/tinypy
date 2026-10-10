@@ -50,3 +50,41 @@ class CustomRepresentation(object):
 
 assert repr(CustomRepresentation()) == "custom-representation"
 assert `CustomRepresentation()` == "custom-representation"
+
+
+# An ignored exception whose class has no readable __module__ is reported
+# with "<unknown>" written after the failed lookup is cleared, as Python 2.7
+# does on a file and Python 3 on any stream; Python 2.7 drops the text, the
+# class name and ": " on a stream object while the lookup error is pending.
+class ModuleLess(type):
+    @property
+    def __module__(cls):
+        raise KeyError("module")
+
+
+class Unnamed(Exception):
+    __metaclass__ = ModuleLess
+
+
+class RaisesUnnamed(object):
+    def __del__(self):
+        raise Unnamed("unnamed")
+
+
+class CheckedSink(object):
+    def __init__(self):
+        self.parts = []
+
+    def write(self, text):
+        getattr(self, "encoding", None)
+        self.parts.append(text)
+
+
+checked_sink = CheckedSink()
+sys.stderr = checked_sink
+unnamed = RaisesUnnamed()
+del unnamed
+sys.stderr = sys.__stderr__
+report = "".join(checked_sink.parts)
+assert report.startswith("Exception <unknown>Unnamed: Unnamed('unnamed',) in <bound method RaisesUnnamed.__del__ of ")
+assert report.endswith(" ignored\n")

@@ -673,25 +673,54 @@ static void __tinypy_representation_pointer(tinypy_representation_builder_t *bui
     }
 }
 //////////////////////////////////////////////////////////////////////////
-/* The result of the special method name of value, of whatever type. */
-static tinypy_value_t *__tinypy_representation_call_special(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_value_t *args;
-    tinypy_value_t *result;
-
+static void __tinypy_representation_discard_error(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    if (out_error != NULL && *out_error != NULL) {
+        tinypy_error_release(*out_error);
+        *out_error = NULL;
+    }
+    tinypy_internal_exception_clear_raised(vm);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *value, tinypy_bool_t qualified, tinypy_error_t **out_error);
+//////////////////////////////////////////////////////////////////////////
+/* slot_tp_repr and slot_tp_str: the result, of whatever type, of the
+   __repr__ or __str__ of the type. One that is missing or does not bind,
+   such as a slot wrapper of an unrelated type, is ignored there: the repr
+   reads as "<name object at address>" and the str as the repr. A classic
+   instance, as instance_repr and instance_str, misses only an attribute
+   raising AttributeError, and *out_handled is false then. */
+tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t *out_handled, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *method;
-    if (tinypy_internal_object_lookup_special_key(value, name, &method, out_error) <= 0) {
+    int32_t found = tinypy_internal_object_lookup_special_key(value, name, &method, out_error);
+
+    if (found > 0) {
+        *out_handled = TINYPY_TRUE;
+        tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
+        tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
+        TINYPY_DECREF(args);
+        TINYPY_DECREF(method);
+        return result;
+    }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        *out_handled = found != 0 ? TINYPY_TRUE : TINYPY_FALSE;
         return NULL;
     }
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    args = TINYPY_RET_EMPTY_TUPLE(vm);
-    result = tinypy_call(method, args, NULL, out_error);
-    TINYPY_DECREF(args);
-    TINYPY_DECREF(method);
-    return result;
+    if (found < 0) {
+        __tinypy_representation_discard_error(vm, out_error);
+    }
+    if (name == vm->internal_special_str_key) {
+        tinypy_value_t *representation = tinypy_internal_object_call_representation(value, vm->internal_special_repr_key, out_handled, out_error);
+        return representation;
+    }
+    *out_handled = TINYPY_TRUE;
+    tinypy_value_t *fallback = __tinypy_representation_default_object(value, TINYPY_FALSE, out_error);
+    return fallback;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_value_t *result = __tinypy_representation_call_special(value, name, out_error);
+    tinypy_bool_t handled;
+    tinypy_value_t *result = tinypy_internal_object_call_representation(value, name, &handled, out_error);
 
     if (result == NULL) {
         return NULL;
@@ -1215,13 +1244,20 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tiny
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *value, tinypy_error_t **out_error) {
+/* object_repr qualifies the name of a type defined in Python with its
+   module; the fallback of slot_tp_repr shows tp_name alone. */
+static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *value, tinypy_bool_t qualified, tinypy_error_t **out_error) {
     tinypy_representation_builder_t builder;
 
     __tinypy_representation_initialize(&builder, TINYPY_VALUE_VM(value));
     TINYPY_CLEAR_ERROR(out_error);
     __tinypy_representation_append_character(&builder, (uint8_t)'<');
-    __tinypy_representation_type_qualified_name(&builder, value->type);
+    if (qualified != 0) {
+        __tinypy_representation_type_qualified_name(&builder, value->type);
+    }
+    else {
+        __tinypy_representation_append(&builder, value->type->name, value->type->name_size);
+    }
     __tinypy_representation_append(&builder, " object at ", 11U);
     __tinypy_representation_pointer(&builder, value);
     __tinypy_representation_append_character(&builder, (uint8_t)'>');
@@ -1275,14 +1311,15 @@ static tinypy_value_t *__tinypy_object_representation_method(tinypy_value_t *fun
        __repr__ keeps a unicode or any other result. */
     if (user_data != NULL && __tinypy_internal_object_overrides_dispatch(self, TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
-        tinypy_value_t *custom = __tinypy_representation_call_special(self, vm->internal_special_repr_key, out_error);
+        tinypy_bool_t handled;
+        tinypy_value_t *custom = tinypy_internal_object_call_representation(self, vm->internal_special_repr_key, &handled, out_error);
         return custom;
     }
     if (user_data != NULL) {
         tinypy_value_t *return_value_1 = tinypy_object_repr(self, out_error);
         return return_value_1;
     }
-    tinypy_value_t *return_value_2 = __tinypy_representation_default_object(self, out_error);
+    tinypy_value_t *return_value_2 = __tinypy_representation_default_object(self, TINYPY_TRUE, out_error);
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////

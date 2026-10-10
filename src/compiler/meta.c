@@ -326,7 +326,9 @@ static tinypy_value_t *__tinypy_meta_eval_call(tinypy_meta_context_t *meta, tiny
     if (__tinypy_meta_attribute_expression(expression->v.Call.func, meta->compile->vm->internal_meta_concat_key) != 0) {
         tinypy_value_t *string_from_bytes = TINYPY_RET_EMPTY_STRING(vm);
         tinypy_value_t *result = __tinypy_meta_track(meta, string_from_bytes, expression->lineno, expression->col_offset);
-
+        if (result == NULL) {
+            return NULL;
+        }
         for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.args); ++index) {
             tinypy_value_t *item = __tinypy_meta_eval(meta, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Call.args, index));
             tinypy_error_t *error = NULL;
@@ -382,6 +384,9 @@ static tinypy_value_t *__tinypy_meta_eval_call(tinypy_meta_context_t *meta, tiny
         }
         tinypy_value_t *list_from_items = tinypy_list_from_items(vm, NULL, 0U);
         list = __tinypy_meta_track(meta, list_from_items, expression->lineno, expression->col_offset);
+        if (list == NULL) {
+            return NULL;
+        }
         for (current = start; (step > 0 && current < stop) || (step < 0 && current > stop); current += step) {
             tinypy_value_t *item;
 

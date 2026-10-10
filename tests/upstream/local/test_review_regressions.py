@@ -1192,6 +1192,38 @@ class ReviewRegressions(unittest.TestCase):
         self.assertTrue('weak parcel' in diagnostic)
         self.assertTrue(diagnostic.endswith(' ignored\n'))
 
+    def test_unraisable_fallback_after_failed_repr(self):
+        class Sink(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                getattr(self, 'encoding', None)
+                self.parts.append(text)
+        class BrokenRepr(object):
+            def __repr__(self):
+                raise KeyError('object repr')
+            def __del__(self):
+                raise ValueError('object')
+        class BrokenValueRepr(Exception):
+            def __repr__(self):
+                raise KeyError('value repr')
+        class RaisesBrokenValue(object):
+            def __del__(self):
+                raise BrokenValueRepr('value')
+        def report(factory):
+            sink, previous = Sink(), sys.stderr
+            sys.stderr = sink
+            try:
+                value = factory()
+                del value
+            finally:
+                sys.stderr = previous
+            return ''.join(sink.parts)
+        self.assertEqual(report(BrokenRepr), "Exception ValueError: ValueError('object',) in <object repr() failed> ignored\n")
+        diagnostic = report(RaisesBrokenValue)
+        self.assertTrue(diagnostic.startswith('Exception %s.BrokenValueRepr: <exception repr() failed> in <bound method ' % __name__))
+        self.assertTrue(diagnostic.endswith(' ignored\n'))
+
     def test_tuple_subtype_factory(self):
         class Parcel(tuple):
             pass

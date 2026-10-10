@@ -2176,16 +2176,32 @@ void tinypy_internal_vm_visit_reachable_values(tinypy_vm_t *vm, tinypy_release_c
    would make tinypy_vm_destroy repeat its finalizer pass forever. */
 #define TINYPY_SHUTDOWN_FINALIZE_PASSES 8U
 //////////////////////////////////////////////////////////////////////////
+/* Releases the references a finalizer pass holds on the values of a kind. */
+static void __tinypy_shutdown_release_kind(tinypy_shutdown_graph_t *graph, tinypy_value_type_e kind) {
+    for (size_t index = 0U; index < graph->entry_count; ++index) {
+        tinypy_shutdown_entry_t *entry = &graph->entries[index];
+
+        if (entry->kind == kind) {
+            TINYPY_DECREF(entry->value);
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 /* Native finalizers may touch other values, so they run while the VM is still
    live and every reachable object is intact. Instances finalize before
    functions: their finalizers may still call methods, whose finalizers
-   release the user data of the calls. A finalizer may make native values
-   with finalizers reachable; the pass then reports them and leaves the
-   functions to a later pass, unless it is the last one. Returns whether the
-   pass created no such value. */
+   release the user data of the calls. An instance whose last reference an
+   earlier finalizer dropped is released as usual instead, which runs its
+   __del__ before its finalizer. The instances are released before the
+   functions finalize, so the __del__ methods and weakref callbacks of the
+   values this frees still call live methods. A pass that makes native values
+   with finalizers reachable, or releases an instance that its __del__ may
+   resurrect, leaves the functions to a later pass, unless it is the last
+   one. Returns whether the pass did neither. */
 static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm, tinypy_bool_t last_pass) {
     tinypy_shutdown_graph_t graph;
     size_t created = vm->native_finalizable_created;
+    tinypy_bool_t released = TINYPY_FALSE;
     size_t index;
 
     (void)memset(&graph, 0, sizeof(graph));
@@ -2201,11 +2217,17 @@ static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm, tinypy_
     for (index = 0U; index < graph.entry_count; ++index) {
         tinypy_shutdown_entry_t *entry = &graph.entries[index];
 
-        if (entry->kind == TINYPY_VALUE_NATIVE_INSTANCE) {
-            tinypy_internal_native_instance_finalize(entry->value);
+        if (entry->kind != TINYPY_VALUE_NATIVE_INSTANCE) {
+            continue;
         }
+        if (TINYPY_REFCNT(entry->value) == 1) {
+            released = TINYPY_TRUE;
+            continue;
+        }
+        tinypy_internal_native_instance_finalize(entry->value);
     }
-    tinypy_bool_t settled = vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
+    __tinypy_shutdown_release_kind(&graph, TINYPY_VALUE_NATIVE_INSTANCE);
+    tinypy_bool_t settled = released == 0 && vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
     if (settled != 0 || last_pass != 0) {
         for (index = 0U; index < graph.entry_count; ++index) {
             tinypy_shutdown_entry_t *entry = &graph.entries[index];
@@ -2214,16 +2236,10 @@ static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm, tinypy_
                 tinypy_internal_native_function_finalize(entry->value);
             }
         }
-        settled = vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
     }
-    for (index = 0U; index < graph.entry_count; ++index) {
-        tinypy_shutdown_entry_t *entry = &graph.entries[index];
-
-        if (entry->kind == TINYPY_VALUE_NATIVE_FUNCTION || entry->kind == TINYPY_VALUE_NATIVE_INSTANCE) {
-            TINYPY_DECREF(entry->value);
-        }
-    }
+    __tinypy_shutdown_release_kind(&graph, TINYPY_VALUE_NATIVE_FUNCTION);
     __tinypy_shutdown_graph_destroy(&graph);
+    settled = released == 0 && vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
     return settled;
 }
 //////////////////////////////////////////////////////////////////////////

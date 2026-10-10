@@ -1285,11 +1285,16 @@ void tinypy_native_type_spec_init(tinypy_native_type_spec_t *spec) {
     spec->has_weakrefs = TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_internal_native_spec_bool(const tinypy_native_type_spec_t *spec, size_t offset, tinypy_bool_t value) {
-    if ((size_t)spec->struct_size < offset + sizeof(value)) {
-        return TINYPY_TRUE;
-    }
-    return value != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+/* The fields that an older struct_size predates read as
+   tinypy_native_type_spec_init sets them; the caller's struct is read only
+   within its size. */
+static void __tinypy_internal_native_spec_copy(tinypy_native_type_spec_t *target, const tinypy_native_type_spec_t *spec) {
+    size_t copied_size = spec->struct_size < sizeof(*target) ? spec->struct_size : sizeof(*target);
+
+    tinypy_native_type_spec_init(target);
+    (void)memcpy(target, spec, copied_size);
+    target->abi_version = TINYPY_NATIVE_TYPE_ABI_VERSION;
+    target->struct_size = (uint32_t)sizeof(*target);
 }
 //////////////////////////////////////////////////////////////////////////
 /* A host native type dispatches the callbacks of its own spec only: a slot
@@ -1371,10 +1376,7 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
 //////////////////////////////////////////////////////////////////////////
 tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
-    size_t copied_size;
     size_t basic_size;
-    tinypy_bool_t has_instance_dict;
-    tinypy_bool_t has_weakrefs;
 
     TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_internal_native_validate_spec(vm, spec, out_error) == 0) {
@@ -1394,8 +1396,10 @@ tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_typ
             return NULL;
         }
     }
-    has_instance_dict = __tinypy_internal_native_spec_bool(spec, offsetof(tinypy_native_type_spec_t, has_instance_dict), spec->has_instance_dict);
-    has_weakrefs = __tinypy_internal_native_spec_bool(spec, offsetof(tinypy_native_type_spec_t, has_weakrefs), spec->has_weakrefs);
+    tinypy_native_type_spec_t native_spec;
+    __tinypy_internal_native_spec_copy(&native_spec, spec);
+    tinypy_bool_t has_instance_dict = native_spec.has_instance_dict != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t has_weakrefs = native_spec.has_weakrefs != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_type_t *type = tinypy_internal_type_new_configured(name, bases, base_count, NULL, namespace_dict, has_instance_dict, has_weakrefs, out_error);
     if (type == NULL) {
         return NULL;
@@ -1406,21 +1410,17 @@ tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_typ
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "native root types cannot declare Python slots", out_error);
         return NULL;
     }
-    if (type->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE && (type->native_payload_size != spec->payload_size || type->native_payload_alignment != spec->payload_alignment)) {
+    if (type->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE && (type->native_payload_size != native_spec.payload_size || type->native_payload_alignment != native_spec.payload_alignment)) {
         tinypy_value_t *type_value = tinypy_type_as_value(type);
         TINYPY_DECREF(type_value);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "native subtype payload layout differs from its base", out_error);
         return NULL;
     }
-    tinypy_native_type_spec_init(&type->native_spec);
-    copied_size = spec->struct_size < sizeof(type->native_spec) ? spec->struct_size : sizeof(type->native_spec);
-    (void)memcpy(&type->native_spec, spec, copied_size);
-    type->native_spec.abi_version = TINYPY_NATIVE_TYPE_ABI_VERSION;
-    type->native_spec.struct_size = (uint32_t)sizeof(type->native_spec);
+    type->native_spec = native_spec;
     type->layout_kind = TINYPY_VALUE_NATIVE_INSTANCE;
     type->native_payload_offset = offsetof(tinypy_native_instance_object_t, payload);
-    type->native_payload_size = spec->payload_size;
-    type->native_payload_alignment = spec->payload_alignment;
+    type->native_payload_size = native_spec.payload_size;
+    type->native_payload_alignment = native_spec.payload_alignment;
     basic_size = type->native_payload_offset + type->native_payload_size;
     basic_size = (basic_size + sizeof(void *) - 1U) & ~(sizeof(void *) - 1U);
     type->basic_size = basic_size;
@@ -1436,10 +1436,6 @@ tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_typ
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
-    size_t copied_size;
-    tinypy_bool_t has_instance_dict;
-    tinypy_bool_t has_weakrefs;
-
     TINYPY_CLEAR_ERROR(out_error);
     if (type->layout_kind != TINYPY_VALUE_NATIVE_INSTANCE) {
         tinypy_internal_make_vm_error(type->vm, TINYPY_ERROR_TYPE, "type does not have a native layout", out_error);
@@ -1448,17 +1444,15 @@ tinypy_bool_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_n
     if (__tinypy_internal_native_validate_spec(type->vm, spec, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    has_instance_dict = __tinypy_internal_native_spec_bool(spec, offsetof(tinypy_native_type_spec_t, has_instance_dict), spec->has_instance_dict);
-    has_weakrefs = __tinypy_internal_native_spec_bool(spec, offsetof(tinypy_native_type_spec_t, has_weakrefs), spec->has_weakrefs);
-    if (type->native_payload_size != spec->payload_size || type->native_payload_alignment != spec->payload_alignment || type->native_spec.construct != spec->construct || type->native_spec.finalize != spec->finalize || type->native_spec.user_data != spec->user_data || type->has_instance_dict != has_instance_dict || (type->weakref_offset != 0U) != (has_weakrefs != 0)) {
+    tinypy_native_type_spec_t native_spec;
+    __tinypy_internal_native_spec_copy(&native_spec, spec);
+    tinypy_bool_t has_instance_dict = native_spec.has_instance_dict != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t has_weakrefs = native_spec.has_weakrefs != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    if (type->native_payload_size != native_spec.payload_size || type->native_payload_alignment != native_spec.payload_alignment || type->native_spec.construct != native_spec.construct || type->native_spec.finalize != native_spec.finalize || type->native_spec.user_data != native_spec.user_data || type->has_instance_dict != has_instance_dict || (type->weakref_offset != 0U) != (has_weakrefs != 0)) {
         tinypy_internal_make_vm_error(type->vm, TINYPY_ERROR_TYPE, "native type layout and lifetime callbacks are immutable", out_error);
         return TINYPY_FALSE;
     }
-    copied_size = spec->struct_size < sizeof(type->native_spec) ? spec->struct_size : sizeof(type->native_spec);
-    tinypy_native_type_spec_init(&type->native_spec);
-    (void)memcpy(&type->native_spec, spec, copied_size);
-    type->native_spec.abi_version = TINYPY_NATIVE_TYPE_ABI_VERSION;
-    type->native_spec.struct_size = (uint32_t)sizeof(type->native_spec);
+    type->native_spec = native_spec;
     __tinypy_internal_native_configure_slots(type);
     tinypy_internal_type_modified(type);
     return TINYPY_TRUE;

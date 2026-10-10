@@ -127,11 +127,11 @@ static tinypy_symbol_table_t *__tinypy_symbol_table_new(tinypy_compile_ctx_t *ar
     st->filename = NULL;
     st->symbols = NULL;
     st->stack = tinypy_list_from_items(arena->vm, NULL, 0U);
-    if (TINYPY_COMPILER_ARENA_ADD_VALUE(arena, st->stack) != 0) {
+    if (__tinypy_symbol_arena_value(st, st->stack) == 0) {
         return NULL;
     }
     st->symbols = tinypy_dict_new(arena->vm);
-    if (TINYPY_COMPILER_ARENA_ADD_VALUE(arena, st->symbols) != 0) {
+    if (__tinypy_symbol_arena_value(st, st->symbols) == 0) {
         return NULL;
     }
     st->current = NULL;
@@ -148,10 +148,11 @@ static tinypy_symbol_table_t *__tinypy_symbol_table_new(tinypy_compile_ctx_t *ar
 static tinypy_value_t *__tinypy_symbol_identifier(tinypy_symbol_table_t *st, tinypy_value_t **slot, const char *name) {
     if (*slot == NULL) {
         unsigned long size = strlen(name);
-        *slot = tinypy_internal_name_from_bytes(st->arena->vm, name, size);
-        if (TINYPY_COMPILER_ARENA_ADD_VALUE(st->arena, *slot) != 0) {
+        tinypy_value_t *identifier = tinypy_internal_name_from_bytes(st->arena->vm, name, size);
+        if (__tinypy_symbol_arena_value(st, identifier) == 0) {
             return NULL;
         }
+        *slot = identifier;
     }
     return *slot;
 }

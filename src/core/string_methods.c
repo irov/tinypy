@@ -5142,7 +5142,7 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
             else if (conversion == (uint8_t)'s' && __tinypy_string_plain_value(vm, value) == 0 && tinypy_internal_object_has_special_key(value, vm->internal_special_str_key) != 0) {
                 tinypy_bool_t handled;
 
-                text = tinypy_internal_call_conversion(value, vm->internal_special_str_key, &handled, out_error);
+                text = tinypy_internal_object_call_representation(value, vm->internal_special_str_key, &handled, out_error);
                 if (text != NULL && __tinypy_string_is_text(text) == 0) {
                     const tinypy_message_part_t parts[] = {
                         TINYPY_MESSAGE_PART_LITERAL("__str__ returned non-string (type "),

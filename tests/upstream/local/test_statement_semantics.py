@@ -477,3 +477,86 @@ class StatementSemantics(unittest.TestCase):
         namespace = {}
         exec "text = ''\nfor index in range(300):\n    text += 'ab'" in namespace
         self.assertEqual(namespace['text'], 'ab' * 300)
+
+    def test_concatenation_keeps_other_references(self):
+        def build(count, piece):
+            text = ''
+            cell = ''
+            snapshots = []
+
+            def peek():
+                return cell
+            for index in xrange(count):
+                text = text + piece
+                cell += piece
+                if index % 97 == 0:
+                    snapshots.append((text, peek()))
+            return text, peek(), snapshots
+
+        for count in (1, 9, 1000, 20000):
+            text, cell, snapshots = build(count, 'ab')
+            self.assertEqual(text, 'ab' * count)
+            self.assertEqual(cell, 'ab' * count)
+            self.assertEqual(snapshots, [('ab' * (index + 1),) * 2 for index in range(0, count, 97)])
+        prefix = ''.join(['ab'] * 20)
+        alias = prefix
+        prefix = prefix + 'cd' + 'ef'
+        joined = alias + 'gh' + 'ij'
+        self.assertEqual((alias, prefix, joined), ('ab' * 20, 'ab' * 20 + 'cdef', 'ab' * 20 + 'ghij'))
+        namespace = {}
+        exec "text = ''\nfor index in range(300):\n    text = text + 'ab'\nclass Holder(object):\n    text = ''\n    for index in range(300):\n        text += 'cd'\n" in namespace
+        self.assertEqual(namespace['text'], 'ab' * 300)
+        self.assertEqual(namespace['Holder'].text, 'cd' * 300)
+
+    def test_name_store_concatenation_with_colliding_key(self):
+        # A key that collides with the name runs __eq__ while `s += t` or
+        # `s = s + t` unbinds s to grow it in place: a string that __eq__
+        # takes keeps its value, and the comparison's errors stay out of the
+        # statement.
+        state = {'calls': 0, 'fail_at': 0, 'take_at': 0, 'busy': False}
+        held = []
+        namespace = {}
+
+        class Key(str):
+            def __hash__(self):
+                return hash('s')
+
+            def __eq__(self, other):
+                if state['busy']:
+                    return False
+                state['calls'] += 1
+                if state['calls'] == state['fail_at']:
+                    raise ZeroDivisionError('probe')
+                if state['calls'] == state['take_at']:
+                    state['busy'] = True
+                    value = namespace.get('s')
+                    held.append((value, None if value is None else bytearray(value)))
+                    state['busy'] = False
+                return False
+
+        cases = [(call, 0) for call in range(1, 7)] + [(0, call) for call in range(1, 7)]
+        for statement in ('s += t', 's = s + t'):
+            for length in (20, 64, 500):
+                original = 'ab' * length + 'c'
+                for suffix in ('d', 'cd' * 300):
+                    for fail_at, take_at in cases:
+                        namespace.clear()
+                        namespace[Key('k')] = 0
+                        namespace['t'] = suffix
+                        exec "s = ''.join(['ab'] * %d)\ns += 'c'\n" % length in namespace
+                        del held[:]
+                        state.update(calls=0, fail_at=fail_at, take_at=take_at)
+                        try:
+                            exec statement + "\nsize = len(s)\n" in namespace
+                        except ZeroDivisionError:
+                            self.assertNotIn('size', namespace)
+                            self.assertEqual(namespace.get('s', original), original)
+                        else:
+                            self.assertEqual(namespace['s'], original + suffix)
+                            self.assertEqual(namespace['size'], len(original) + len(suffix))
+                        state.update(fail_at=0, take_at=0)
+                        for value, snapshot in held:
+                            if value is not None:
+                                self.assertEqual(value, str(snapshot))
+                                self.assertEqual(hash(value), hash(str(snapshot)))
+                                self.assertIn(str(snapshot), {value: 1})

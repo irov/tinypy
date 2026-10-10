@@ -151,13 +151,17 @@ static tinypy_value_t *__tinypy_call(tinypy_value_t *callable, tinypy_value_t *a
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The call holds the callable: callers pass fields they do not own, such as
+   the getter of a property, which the lookup of __call__ may release. */
 tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
 
     if (__tinypy_internal_call_enter(vm, out_error) == 0) {
         return NULL;
     }
+    TINYPY_INCREF(callable);
     tinypy_value_t *result = __tinypy_call(callable, args, kwargs, out_error);
+    TINYPY_DECREF(callable);
     __tinypy_internal_call_leave(vm);
     return result;
 }

@@ -1291,10 +1291,11 @@ static int32_t __tinypy_cli_system_exit_status(const tinypy_cli_runtime_t *runti
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyErr_PrintEx: an uncaught SystemExit ends the program with its status;
-   any other exception goes to sys.excepthook, whose own failure or absence
-   PyErr_Display reports. The heading of a caller such as call_sys_exitfunc
-   precedes the report and, as PySys_WriteStderr keeps the exception, is
-   written once it is fetched. Returns whether the program must exit. */
+   any other exception, normalized, goes to sys.excepthook, whose own failure
+   or absence PyErr_Display reports. The heading of a caller such as
+   call_sys_exitfunc precedes the report and, as PySys_WriteStderr keeps the
+   exception, is written once it is fetched. Returns whether the program must
+   exit. */
 static tinypy_bool_t __tinypy_cli_report_exception(const tinypy_cli_runtime_t *runtime, const char *heading, int32_t *out_status) {
     tinypy_vm_t *vm = runtime->vm;
     tinypy_cli_exception_t exception;
@@ -1303,6 +1304,8 @@ static tinypy_bool_t __tinypy_cli_report_exception(const tinypy_cli_runtime_t *r
         *out_status = __tinypy_cli_system_exit_status(runtime);
         return TINYPY_TRUE;
     }
+    /* A failed normalization reports the exception it raised instead. */
+    (void)tinypy_vm_normalize_error(vm, NULL);
     __tinypy_cli_fetch_exception(vm, &exception);
     if (heading != NULL) {
         __tinypy_cli_write_stderr(runtime, heading);
@@ -1345,6 +1348,7 @@ static tinypy_bool_t __tinypy_cli_report_exception(const tinypy_cli_runtime_t *r
         return TINYPY_TRUE;
     }
     tinypy_cli_exception_t hook_exception;
+    (void)tinypy_vm_normalize_error(vm, NULL);
     __tinypy_cli_fetch_exception(vm, &hook_exception);
     tinypy_output_flush_line(vm);
     (void)fflush(stdout);
