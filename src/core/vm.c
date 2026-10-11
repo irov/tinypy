@@ -1181,9 +1181,10 @@ static tinypy_value_t *__tinypy_internal_struct_sequence_method(tinypy_value_t *
         return return_value_7;
     }
     case TINYPY_INTERNAL_STRUCT_SEQUENCE_HASH: {
+        tinypy_value_t *previous_raised = vm->raised_value;
         tinypy_hash_t hash = tinypy_internal_hash_builtin_value(payload->items, out_error);
 
-        if (tinypy_vm_has_error(vm) != 0) {
+        if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
             return NULL;
         }
         tinypy_value_t *return_value_8 = tinypy_integer_from_i64(vm, hash);
@@ -2195,13 +2196,15 @@ static void __tinypy_shutdown_release_kind(tinypy_shutdown_graph_t *graph, tinyp
    __del__ before its finalizer. The instances are released before the
    functions finalize, so the __del__ methods and weakref callbacks of the
    values this frees still call live methods. A pass that makes native values
-   with finalizers reachable, or releases an instance that its __del__ may
-   resurrect, leaves the functions to a later pass, unless it is the last
-   one. Returns whether the pass did neither. */
+   with finalizers reachable, as a __del__ resurrecting its instance does, or
+   leaves an instance unfinalized that a finalizer took again, leaves the
+   functions to a later pass, unless it is the last one. The diagnostics its
+   finalizers raised render at its end. Returns whether the pass, rendering
+   included, did neither. */
 static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm, tinypy_bool_t last_pass) {
     tinypy_shutdown_graph_t graph;
     size_t created = vm->native_finalizable_created;
-    tinypy_bool_t released = TINYPY_FALSE;
+    tinypy_bool_t unfinalized = TINYPY_FALSE;
     size_t index;
 
     (void)memset(&graph, 0, sizeof(graph));
@@ -2217,17 +2220,23 @@ static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm, tinypy_
     for (index = 0U; index < graph.entry_count; ++index) {
         tinypy_shutdown_entry_t *entry = &graph.entries[index];
 
-        if (entry->kind != TINYPY_VALUE_NATIVE_INSTANCE) {
-            continue;
-        }
-        if (TINYPY_REFCNT(entry->value) == 1) {
-            released = TINYPY_TRUE;
+        if (entry->kind != TINYPY_VALUE_NATIVE_INSTANCE || TINYPY_REFCNT(entry->value) == 1) {
             continue;
         }
         tinypy_internal_native_instance_finalize(entry->value);
     }
-    __tinypy_shutdown_release_kind(&graph, TINYPY_VALUE_NATIVE_INSTANCE);
-    tinypy_bool_t settled = released == 0 && vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
+    for (index = 0U; index < graph.entry_count; ++index) {
+        tinypy_shutdown_entry_t *entry = &graph.entries[index];
+
+        if (entry->kind != TINYPY_VALUE_NATIVE_INSTANCE) {
+            continue;
+        }
+        if (TINYPY_NATIVE_INSTANCE_OBJECT(entry->value)->finalized == 0 && TINYPY_REFCNT(entry->value) != 1) {
+            unfinalized = TINYPY_TRUE;
+        }
+        TINYPY_DECREF(entry->value);
+    }
+    tinypy_bool_t settled = unfinalized == 0 && vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
     if (settled != 0 || last_pass != 0) {
         for (index = 0U; index < graph.entry_count; ++index) {
             tinypy_shutdown_entry_t *entry = &graph.entries[index];
@@ -2239,7 +2248,8 @@ static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm, tinypy_
     }
     __tinypy_shutdown_release_kind(&graph, TINYPY_VALUE_NATIVE_FUNCTION);
     __tinypy_shutdown_graph_destroy(&graph);
-    settled = released == 0 && vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_internal_error_render_pending(vm);
+    settled = unfinalized == 0 && vm->native_finalizable_created == created ? TINYPY_TRUE : TINYPY_FALSE;
     return settled;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2249,13 +2259,13 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     size_t type_index;
 
     /* Diagnostics the host still holds render while native payloads are
-       intact; ones raised by native finalizers render before teardown. The
-       native values that the last pass creates are swept unfinalized. */
+       intact; ones raised by native finalizers render at the end of their
+       pass. The native values that the last pass creates are swept
+       unfinalized. */
     tinypy_internal_error_render_pending(vm);
     for (size_t pass = 1U; pass <= TINYPY_SHUTDOWN_FINALIZE_PASSES; ++pass) {
         tinypy_bool_t settled = __tinypy_shutdown_finalize_natives(vm, pass == TINYPY_SHUTDOWN_FINALIZE_PASSES ? TINYPY_TRUE : TINYPY_FALSE);
 
-        tinypy_internal_error_render_pending(vm);
         if (settled != 0) {
             break;
         }

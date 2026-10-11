@@ -3,7 +3,7 @@
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_intern_resize(tinypy_vm_t *vm, size_t capacity, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_intern_resize(tinypy_vm_t *vm, size_t capacity, tinypy_bool_t checked, tinypy_error_t **out_error) {
     tinypy_intern_entry_t *entries;
     size_t index;
     size_t bytes;
@@ -13,7 +13,7 @@ static tinypy_bool_t __tinypy_intern_resize(tinypy_vm_t *vm, size_t capacity, ti
         return TINYPY_FALSE;
     }
     bytes = capacity * sizeof(*entries);
-    entries = out_error != NULL
+    entries = checked != 0
         ? (tinypy_intern_entry_t *)tinypy_internal_vm_allocate_checked(vm, bytes, out_error)
         : (tinypy_intern_entry_t *)tinypy_internal_vm_allocate(vm, bytes);
     if (entries == NULL) {
@@ -69,7 +69,7 @@ tinypy_value_t *tinypy_internal_string_find(const tinypy_vm_t *vm, const void *b
     }
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_string_intern(tinypy_value_t **owned_value, tinypy_error_t **out_error) {
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_internal_string_intern(tinypy_value_t **owned_value, tinypy_bool_t checked, tinypy_error_t **out_error) {
     tinypy_value_t *value = *owned_value;
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_hash_t hash;
@@ -116,7 +116,7 @@ tinypy_bool_t tinypy_internal_string_intern(tinypy_value_t **owned_value, tinypy
             }
             capacity *= 2U;
         }
-        if (__tinypy_intern_resize(vm, capacity, out_error) == 0) {
+        if (__tinypy_intern_resize(vm, capacity, checked, out_error) == 0) {
             return TINYPY_FALSE;
         }
         available = (size_t)hash & (capacity - 1U);
@@ -135,6 +135,19 @@ tinypy_bool_t tinypy_internal_string_intern(tinypy_value_t **owned_value, tinypy
     }
     tinypy_internal_string_set_interned(value, TINYPY_TRUE);
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A caller with an error result may fail when the table cannot grow. */
+tinypy_bool_t tinypy_internal_string_intern(tinypy_value_t **owned_value, tinypy_error_t **out_error) {
+    tinypy_bool_t interned = __tinypy_internal_string_intern(owned_value, out_error != NULL ? TINYPY_TRUE : TINYPY_FALSE, out_error);
+
+    return interned;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_string_intern_checked(tinypy_value_t **owned_value, tinypy_error_t **out_error) {
+    tinypy_bool_t interned = __tinypy_internal_string_intern(owned_value, TINYPY_TRUE, out_error);
+
+    return interned;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_string_unintern(tinypy_value_t *value) {

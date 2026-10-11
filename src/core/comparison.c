@@ -1082,13 +1082,7 @@ static int32_t __tinypy_contains(tinypy_value_t *container, tinypy_value_t *item
         TINYPY_DECREF(candidate);
     }
     TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         return -1;
     }
     return 0;

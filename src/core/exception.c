@@ -645,13 +645,18 @@ static tinypy_value_t *__tinypy_exception_str_method(tinypy_value_t *function, t
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The tp_str an exception type inherits through its MRO. */
+/* The tp_str an exception type inherits through its MRO, or object_str,
+   which calls tp_repr, under the __str__ of object. */
 static tinypy_value_t *__tinypy_exception_string(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *method = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_str_key);
     const tinypy_type_t *owner = __tinypy_exception_entry_owner(value->type, method, __tinypy_exception_str_method);
 
-    tinypy_value_t *result = __tinypy_exception_owner_string(value, owner != NULL ? owner : vm->exception_types[TINYPY_EXCEPTION_BASE], out_error);
+    if (owner == NULL) {
+        tinypy_value_t *representation = tinypy_object_repr(value, out_error);
+        return representation;
+    }
+    tinypy_value_t *result = __tinypy_exception_owner_string(value, owner, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -670,8 +675,7 @@ static tinypy_value_t *__tinypy_exception_unicode_method(tinypy_value_t *functio
     /* BaseException_unicode converts what a tp_str other than
        BaseException_str returns, which may be unicode. */
     if (string_method != base_string_method) {
-        tinypy_bool_t handled;
-        tinypy_value_t *text = tinypy_internal_object_call_representation(self, vm->internal_special_str_key, &handled, out_error);
+        tinypy_value_t *text = tinypy_internal_object_call_representation(self, vm->internal_special_str_key, out_error);
 
         if (text == NULL) {
             return NULL;
@@ -1798,13 +1802,13 @@ int32_t tinypy_exception_matches(tinypy_value_t *exception, tinypy_value_t *cand
     return subclass;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyErr_NormalizeException of the pending exception. A value of an exception
-   class that is not an instance of a subclass of it, by PyObject_IsSubclass,
-   becomes the arguments of a call to the class; an instance of a subclass
-   names its own class. When the call fails, the error raised instead is
-   pending with the traceback of the exception unless it has its own, and the
-   result is false. */
-tinypy_bool_t tinypy_internal_exception_normalize_raised(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+/* One step of PyErr_NormalizeException of the pending exception. A value of
+   an exception class that is not an instance of a subclass of it, by
+   PyObject_IsSubclass, becomes the arguments of a call to the class; an
+   instance of a subclass names its own class. When the call fails, the error
+   raised instead is pending with the traceback of the exception unless it
+   has its own, and the result is false. */
+static tinypy_bool_t __tinypy_exception_normalize_raised_step(tinypy_vm_t *vm, tinypy_error_t **out_error) {
     tinypy_value_t *type = vm->raised_type;
     tinypy_value_t *value = vm->raised_value;
     tinypy_value_t *value_type = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_OLD_INSTANCE_OBJECT(value)->class_object : &value->type->base.base;
@@ -1875,6 +1879,28 @@ tinypy_bool_t tinypy_internal_exception_normalize_raised(tinypy_vm_t *vm, tinypy
         TINYPY_DECREF(state.traceback);
     }
     return normalized;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyErr_NormalizeException of the pending exception: when the call fails,
+   the error raised instead is normalized in turn, each time a recursion
+   level deeper, and the result is false. */
+tinypy_bool_t tinypy_internal_exception_normalize_raised(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    if (__tinypy_exception_normalize_raised_step(vm, out_error) != 0) {
+        return TINYPY_TRUE;
+    }
+    size_t depth = vm->evaluation_depth;
+
+    while (vm->raised_value != NULL && vm->evaluation_depth < vm->recursion_limit) {
+        vm->evaluation_depth += 1U;
+        if (__tinypy_exception_normalize_raised_step(vm, out_error) != 0) {
+            break;
+        }
+    }
+    vm->evaluation_depth = depth;
+    if (out_error != NULL && *out_error == NULL) {
+        tinypy_internal_exception_make_diagnostic(vm, out_error);
+    }
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_exception_raise(tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {

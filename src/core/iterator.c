@@ -1731,3 +1731,19 @@ tinypy_value_t *tinypy_next(tinypy_value_t *iterator, tinypy_error_t **out_error
     }
     return result;
 }
+//////////////////////////////////////////////////////////////////////////
+/* Whether an iteration that yielded no item failed rather than ran out: the
+   raised exception tells, as PyErr_Occurred does, even when its diagnostic
+   could not be allocated. A failure hands the diagnostic to out_error. */
+tinypy_bool_t tinypy_internal_iteration_failed(const tinypy_vm_t *vm, tinypy_error_t *iteration_error, tinypy_error_t **out_error) {
+    if (iteration_error == NULL && vm->raised_value == NULL) {
+        return TINYPY_FALSE;
+    }
+    if (out_error != NULL) {
+        *out_error = iteration_error;
+    }
+    else if (iteration_error != NULL) {
+        tinypy_error_release(iteration_error);
+    }
+    return TINYPY_TRUE;
+}

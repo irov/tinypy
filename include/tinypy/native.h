@@ -14,7 +14,8 @@ typedef tinypy_value_t *(*tinypy_native_items_callback_t)(tinypy_value_t *functi
 /* Finalizers run exactly once: when the owning value is released, or during
  * tinypy_vm_destroy before any reachable value is freed; see vm.h for the
  * values finalizers create there. A native function raises RuntimeError
- * when called after its finalizer ran. */
+ * when called after its finalizer ran, as do the slots of a native instance
+ * and the methods registered on its type once the instance's finalizer ran. */
 typedef void (*tinypy_native_function_finalize_t)(void *user_data);
 
 typedef tinypy_bool_t (*tinypy_native_construct_t)(tinypy_value_t *instance, void *payload, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error);

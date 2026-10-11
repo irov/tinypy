@@ -560,3 +560,20 @@ class StatementSemantics(unittest.TestCase):
                                 self.assertEqual(value, str(snapshot))
                                 self.assertEqual(hash(value), hash(str(snapshot)))
                                 self.assertIn(str(snapshot), {value: 1})
+
+    def test_name_store_concatenation_probes_the_stored_name(self):
+        # At module and class scope `y = b + t` grows b in place only when the
+        # name the result is stored to holds b: storing another name leaves b
+        # as it was, and a key equal to the name that is another object still
+        # gives the binding up.
+        namespace = {}
+        exec "b = ''.join(['a', 'b'])\nfor index in range(3):\n    y = b + 'c'\nclass Holder(object):\n    first = ''.join(['c', 'd'])\n    second = first + 'e'\n" in namespace
+        self.assertEqual((namespace['b'], namespace['y']), ('ab', 'abc'))
+        self.assertEqual((namespace['Holder'].first, namespace['Holder'].second), ('cd', 'cde'))
+        name = ''.join(['te', 'xt'])
+        namespace = {name: ''.join(['a', 'b'])}
+        exec "alias = text\ntext = text + 'c'\ntext = text + 'd'\n" in namespace
+        self.assertEqual((namespace['alias'], namespace['text']), ('ab', 'abcd'))
+        namespace = {name: ''.join(['a', 'b'])}
+        exec "text = text + 'c'\ntext += 'd'\n" in namespace
+        self.assertEqual([(key, value) for key, value in namespace.items() if key != '__builtins__'], [('text', 'abcd')])

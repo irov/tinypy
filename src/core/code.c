@@ -24,24 +24,38 @@ static tinypy_bool_t __tinypy_internal_code_all_name_chars(const tinypy_value_t 
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_code_intern_constants(tinypy_value_t **owned_value) {
+/* Interning grows the table of the VM, which only a checked construction may
+   fail. */
+static tinypy_bool_t __tinypy_internal_code_intern(tinypy_value_t **owned_value, tinypy_bool_t checked, tinypy_error_t **out_error) {
+    if (checked == 0) {
+        (void)tinypy_internal_string_intern(owned_value, NULL);
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t interned = tinypy_internal_string_intern_checked(owned_value, out_error);
+    return interned;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_code_intern_constants(tinypy_value_t **owned_value, tinypy_bool_t checked, tinypy_error_t **out_error) {
     tinypy_value_t *value = *owned_value;
     tinypy_value_type_e type = TINYPY_VALUE_KIND(value);
 
     if (type == TINYPY_VALUE_STRING) {
-        if (__tinypy_internal_code_all_name_chars(value) != 0) {
-            (void)tinypy_internal_string_intern(owned_value, NULL);
+        if (__tinypy_internal_code_all_name_chars(value) == 0) {
+            return TINYPY_TRUE;
         }
-        return;
+        tinypy_bool_t interned = __tinypy_internal_code_intern(owned_value, checked, out_error);
+        return interned;
     }
     if (type == TINYPY_VALUE_TUPLE) {
         tinypy_value_t **iterator = TINYPY_TUPLE_ITERATOR_BEGIN(value);
         tinypy_value_t **iterator_end = TINYPY_TUPLE_ITERATOR_END(value);
 
         for (; iterator != iterator_end; ++iterator) {
-            __tinypy_internal_code_intern_constants(iterator);
+            if (__tinypy_internal_code_intern_constants(iterator, checked, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
         }
-        return;
+        return TINYPY_TRUE;
     }
     if (type == TINYPY_VALUE_FROZENSET) {
         tinypy_value_t *dict = TINYPY_SET_OBJECT(value)->dict;
@@ -49,32 +63,47 @@ static void __tinypy_internal_code_intern_constants(tinypy_value_t **owned_value
         tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(dict);
 
         for (; iterator != iterator_end; ++iterator) {
-            if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-                __tinypy_internal_code_intern_constants(&iterator->key);
+            if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator) == 0) {
+                continue;
+            }
+            if (__tinypy_internal_code_intern_constants(&iterator->key, checked, out_error) == 0) {
+                return TINYPY_FALSE;
             }
         }
     }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_code_intern_identifiers(tinypy_value_t *tuple) {
+static tinypy_bool_t __tinypy_internal_code_intern_identifiers(tinypy_value_t *tuple, tinypy_bool_t checked, tinypy_error_t **out_error) {
     tinypy_value_t **iterator = TINYPY_TUPLE_ITERATOR_BEGIN(tuple);
     tinypy_value_t **iterator_end = TINYPY_TUPLE_ITERATOR_END(tuple);
 
     for (; iterator != iterator_end; ++iterator) {
-        (void)tinypy_internal_string_intern(iterator, NULL);
+        if (__tinypy_internal_code_intern(iterator, checked, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
     }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *bytecode, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *varnames, tinypy_value_t *freevars, tinypy_value_t *cellvars, tinypy_value_t *filename, tinypy_value_t *name, int32_t first_line_number, tinypy_value_t *lnotab) {
+static tinypy_value_t *__tinypy_internal_code_new(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *bytecode, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *varnames, tinypy_value_t *freevars, tinypy_value_t *cellvars, tinypy_value_t *filename, tinypy_value_t *name, int32_t first_line_number, tinypy_value_t *lnotab, tinypy_bool_t checked, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(bytecode);
+    tinypy_value_t *const identifiers[4] = {names, varnames, freevars, cellvars};
 
-    __tinypy_internal_code_intern_identifiers(names);
-    __tinypy_internal_code_intern_identifiers(varnames);
-    __tinypy_internal_code_intern_identifiers(freevars);
-    __tinypy_internal_code_intern_identifiers(cellvars);
-    __tinypy_internal_code_intern_constants(&consts);
-
-    tinypy_code_object_t *code = (tinypy_code_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_CODE, sizeof(*code));
+    for (size_t index = 0U; index < 4U; ++index) {
+        if (__tinypy_internal_code_intern_identifiers(identifiers[index], checked, out_error) == 0) {
+            return NULL;
+        }
+    }
+    if (__tinypy_internal_code_intern_constants(&consts, checked, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_code_object_t *code = checked != 0
+        ? (tinypy_code_object_t *)tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_CODE], sizeof(*code), out_error)
+        : (tinypy_code_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_CODE, sizeof(*code));
+    if (code == NULL) {
+        return NULL;
+    }
     code->arg_count = arg_count;
     code->local_count = local_count;
     code->stack_size = stack_size;
@@ -104,6 +133,18 @@ tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t 
     TINYPY_INCREF(lnotab);
 
     return &code->base;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *bytecode, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *varnames, tinypy_value_t *freevars, tinypy_value_t *cellvars, tinypy_value_t *filename, tinypy_value_t *name, int32_t first_line_number, tinypy_value_t *lnotab) {
+    tinypy_value_t *code = __tinypy_internal_code_new(arg_count, local_count, stack_size, flags, bytecode, consts, names, varnames, freevars, cellvars, filename, name, first_line_number, lnotab, TINYPY_FALSE, NULL);
+
+    return code;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_code_new_checked(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *bytecode, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *varnames, tinypy_value_t *freevars, tinypy_value_t *cellvars, tinypy_value_t *filename, tinypy_value_t *name, int32_t first_line_number, tinypy_value_t *lnotab, tinypy_error_t **out_error) {
+    tinypy_value_t *code = __tinypy_internal_code_new(arg_count, local_count, stack_size, flags, bytecode, consts, names, varnames, freevars, cellvars, filename, name, first_line_number, lnotab, TINYPY_TRUE, out_error);
+
+    return code;
 }
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_internal_code_caches_size(size_t slot_count) {

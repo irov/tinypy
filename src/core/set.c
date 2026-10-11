@@ -69,19 +69,6 @@ void tinypy_internal_set_swap_contents(tinypy_value_t *left, tinypy_value_t *rig
     TINYPY_SET_OBJECT(right)->hash_computed = hash_computed;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_set_iteration_end(tinypy_error_t *iteration_error, tinypy_error_t **out_error) {
-    if (iteration_error == NULL) {
-        return TINYPY_TRUE;
-    }
-    if (out_error != NULL) {
-        *out_error = iteration_error;
-    }
-    else {
-        tinypy_error_release(iteration_error);
-    }
-    return TINYPY_FALSE;
-}
-//////////////////////////////////////////////////////////////////////////
 /* set_add_entry */
 static tinypy_bool_t __tinypy_set_add_entry(tinypy_value_t *set, tinypy_value_t *key, tinypy_hash_t hash, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
@@ -188,8 +175,10 @@ tinypy_bool_t tinypy_internal_set_update_iterable(tinypy_value_t *set, tinypy_va
         }
     }
     TINYPY_DECREF(iterator);
-    tinypy_bool_t finished = __tinypy_set_iteration_end(iteration_error, out_error);
-    return finished;
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* make_new_set */
@@ -307,8 +296,10 @@ static tinypy_bool_t __tinypy_set_intersect_iterable(tinypy_value_t *result, tin
         }
     }
     TINYPY_DECREF(iterator);
-    tinypy_bool_t finished = __tinypy_set_iteration_end(iteration_error, out_error);
-    return finished;
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* set_intersection walks the smaller of two sets, the other operand on a tie;
@@ -380,8 +371,10 @@ static tinypy_bool_t __tinypy_set_discard_iterable(tinypy_value_t *set, tinypy_v
         }
     }
     TINYPY_DECREF(iterator);
-    tinypy_bool_t finished = __tinypy_set_iteration_end(iteration_error, out_error);
-    return finished;
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* set_difference_update_internal rebuilds the table once more than a fifth of
@@ -1134,13 +1127,7 @@ static tinypy_value_t *__tinypy_set_isdisjoint_iterable(tinypy_value_t *self, ti
         }
     }
     TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         return NULL;
     }
     tinypy_value_t *result = TINYPY_RET_TRUE(vm);

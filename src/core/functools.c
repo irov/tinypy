@@ -344,17 +344,11 @@ tinypy_value_t *tinypy_internal_functools_reduce(tinypy_value_t *function, tinyp
         }
     }
     TINYPY_DECREF(call_args);
-    if (iteration_error != NULL) {
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         if (accumulator != NULL) {
             TINYPY_DECREF(accumulator);
         }
         TINYPY_DECREF(iterator);
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
         return NULL;
     }
     if (accumulator == NULL) {

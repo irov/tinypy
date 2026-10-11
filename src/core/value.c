@@ -392,6 +392,11 @@ static tinypy_bool_t __tinypy_internal_value_run_finalizers(tinypy_value_t *valu
     }
     if (vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_version != type->version || type->version == 0U || type->has_finalizer != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) && __tinypy_internal_value_native_finalized(value) == 0) {
         if (__tinypy_internal_value_finalize(value) != 0) {
+            /* A native instance resurrected before its finalizer still
+               needs one, as a new instance does. */
+            if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && value->type->native_spec.finalize != NULL) {
+                vm->native_finalizable_created += 1U;
+            }
             return TINYPY_TRUE;
         }
     }
@@ -668,6 +673,18 @@ tinypy_value_t *tinypy_integer_from_i64(tinypy_vm_t *vm, int64_t value) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_integer_from_i64_checked(tinypy_vm_t *vm, int64_t value, tinypy_error_t **out_error) {
+    if ((value >= TINYPY_INTEGER_CONSTANT_MIN && value <= TINYPY_INTEGER_CONSTANT_MAX) || vm->integer_free_list != NULL) {
+        tinypy_value_t *result = __tinypy_internal_integer_from_i64_fast(vm, value);
+        return result;
+    }
+    tinypy_value_t *result = tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_INTEGER], sizeof(tinypy_integer_object_t), out_error);
+    if (result != NULL) {
+        TINYPY_INTEGER_VALUE(result) = value;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_string_from_bytes(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_bool_t reuse_interned, tinypy_bool_t checked, tinypy_error_t **out_error) {
     if (size == 0U) {
         return TINYPY_RET_EMPTY_STRING(vm);
@@ -747,11 +764,14 @@ const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size) {
     return bytes;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size_t size) {
+static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_internal_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size_t size, tinypy_bool_t checked, tinypy_error_t **out_error) {
     size_t code_point_count;
     size_t cache_index = SIZE_MAX;
 
     if (__tinypy_internal_text_allocation_size(TINYPY_VALUE_UNICODE, size) == 0U) {
+        if (checked != 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "text object is too large", out_error);
+        }
         return NULL;
     }
     if (size == 1U && (uint8_t)utf8[0] < 0x80U) {
@@ -770,16 +790,32 @@ tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size
         (const uint8_t *)utf8,
         size);
 
-    tinypy_value_t *result = __tinypy_internal_text_from_bytes(
-        vm,
-        (const uint8_t *)utf8,
-        size,
-        code_point_count,
-        TINYPY_VALUE_UNICODE);
+    uint8_t *payload;
+    tinypy_value_t *result = checked != 0
+        ? tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_UNICODE, size, code_point_count, &payload, out_error)
+        : tinypy_internal_text_allocate_uninitialized(vm, TINYPY_VALUE_UNICODE, size, code_point_count, &payload);
+    if (result == NULL) {
+        return NULL;
+    }
+    if (size != 0U) {
+        (void)memcpy(payload, utf8, size);
+    }
     if (cache_index != SIZE_MAX) {
         vm->unicode_char_cache[cache_index] = result;
         TINYPY_INCREF(result);
     }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size_t size) {
+    tinypy_value_t *result = __tinypy_internal_unicode_from_utf8(vm, utf8, size, TINYPY_FALSE, NULL);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_unicode_from_utf8_checked(tinypy_vm_t *vm, const char *utf8, size_t size, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_internal_unicode_from_utf8(vm, utf8, size, TINYPY_TRUE, out_error);
+
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

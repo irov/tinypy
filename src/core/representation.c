@@ -9,6 +9,8 @@
 typedef struct tinypy_representation_builder_t {
     tinypy_vm_t *vm;
     tinypy_value_t *root;
+    /* What the method representing the root returned, owned. */
+    tinypy_value_t *root_text;
     uint8_t *bytes;
     size_t size;
     size_t capacity;
@@ -22,6 +24,7 @@ typedef struct tinypy_representation_builder_t {
 static void __tinypy_representation_initialize(tinypy_representation_builder_t *builder, tinypy_vm_t *vm) {
     builder->vm = vm;
     builder->root = NULL;
+    builder->root_text = NULL;
     builder->bytes = builder->inline_bytes;
     builder->size = 0U;
     builder->capacity = sizeof(builder->inline_bytes);
@@ -31,6 +34,9 @@ static void __tinypy_representation_initialize(tinypy_representation_builder_t *
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_destroy(tinypy_representation_builder_t *builder) {
+    if (builder->root_text != NULL) {
+        TINYPY_DECREF(builder->root_text);
+    }
     if (builder->bytes != builder->inline_bytes) {
         tinypy_internal_vm_deallocate(builder->vm, builder->bytes, builder->capacity);
     }
@@ -681,63 +687,39 @@ static void __tinypy_representation_discard_error(tinypy_vm_t *vm, tinypy_error_
     tinypy_internal_exception_clear_raised(vm);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *value, tinypy_bool_t qualified, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *value, tinypy_bool_t fallback, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 /* slot_tp_repr and slot_tp_str: the result, of whatever type, of the
    __repr__ or __str__ of the type. One that is missing or does not bind,
    such as a slot wrapper of an unrelated type, is ignored there: the repr
    reads as "<name object at address>" and the str as the repr. A classic
-   instance, as instance_repr and instance_str, misses only an attribute
-   raising AttributeError, and *out_handled is false then. */
-tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t *out_handled, tinypy_error_t **out_error) {
+   instance, as instance_repr and instance_str, looks the method up as an
+   attribute and misses only one raising AttributeError; its repr then reads
+   as "<module.name instance at address>". */
+tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *method;
     int32_t found = tinypy_internal_object_lookup_special_key(value, name, &method, out_error);
 
     if (found > 0) {
-        *out_handled = TINYPY_TRUE;
         tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
         tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
         TINYPY_DECREF(args);
         TINYPY_DECREF(method);
         return result;
     }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
-        *out_handled = found != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-        return NULL;
-    }
     if (found < 0) {
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+            return NULL;
+        }
         __tinypy_representation_discard_error(vm, out_error);
     }
     if (name == vm->internal_special_str_key) {
-        tinypy_value_t *representation = tinypy_internal_object_call_representation(value, vm->internal_special_repr_key, out_handled, out_error);
+        tinypy_value_t *representation = tinypy_internal_object_call_representation(value, vm->internal_special_repr_key, out_error);
         return representation;
     }
-    *out_handled = TINYPY_TRUE;
-    tinypy_value_t *fallback = __tinypy_representation_default_object(value, TINYPY_FALSE, out_error);
+    tinypy_value_t *fallback = __tinypy_representation_default_object(value, TINYPY_TRUE, out_error);
     return fallback;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_bool_t handled;
-    tinypy_value_t *result = tinypy_internal_object_call_representation(value, name, &handled, out_error);
-
-    if (result == NULL) {
-        return NULL;
-    }
-    if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_UNICODE) {
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_TEXT(name),
-            TINYPY_MESSAGE_PART_LITERAL(" returned non-string (type "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(result),
-            TINYPY_MESSAGE_PART_LITERAL(")")
-        };
-
-        tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        TINYPY_DECREF(result);
-        return NULL;
-    }
-    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_representation_append_text(tinypy_representation_builder_t *builder, tinypy_value_t *text, tinypy_bool_t raw, tinypy_error_t **out_error) {
@@ -764,6 +746,49 @@ static tinypy_bool_t __tinypy_representation_append_text(tinypy_representation_b
     }
     __tinypy_representation_append(builder, bytes, byte_size);
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyObject_Repr and _PyObject_Str take the str or unicode, a subtype
+   included, that the method representing a value returns, and name the
+   conversion asked for when it returns anything else. */
+static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t raw, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *result = tinypy_internal_object_call_representation(value, name, out_error);
+
+    if (result == NULL) {
+        return NULL;
+    }
+    if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *conversion = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_TEXT(conversion),
+            TINYPY_MESSAGE_PART_LITERAL(" returned non-string (type "),
+            TINYPY_MESSAGE_PART_TYPE_NAME(result),
+            TINYPY_MESSAGE_PART_LITERAL(")")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The root keeps what its method returns; a nested value, which follows
+   some text of its container, appends it. */
+static tinypy_bool_t __tinypy_representation_special(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t raw, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_representation_custom(value, name, raw, out_error);
+
+    if (result == NULL) {
+        return TINYPY_FALSE;
+    }
+    if (value == builder->root && builder->size == 0U) {
+        builder->root_text = result;
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t appended = __tinypy_representation_append_text(builder, result, raw, out_error);
+    TINYPY_DECREF(result);
+    return appended;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Returns an owned reference to the __module__ string of a class dictionary.
@@ -815,6 +840,46 @@ static void __tinypy_representation_type_qualified_name(tinypy_representation_bu
         __tinypy_representation_append_character(builder, (uint8_t)'.');
     }
     __tinypy_representation_append(builder, type->name, type->name_size);
+}
+//////////////////////////////////////////////////////////////////////////
+/* object_repr qualifies the name of a type defined in Python with its
+   module; the fallback of slot_tp_repr shows tp_name alone, and that of
+   instance_repr the class of a classic instance. */
+static void __tinypy_representation_default_text(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t fallback) {
+    __tinypy_representation_append_character(builder, (uint8_t)'<');
+    if (fallback == 0) {
+        __tinypy_representation_type_qualified_name(builder, value->type);
+        __tinypy_representation_append(builder, " object at ", 11U);
+    }
+    else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        __tinypy_representation_class_qualified_name(builder, tinypy_old_instance_class(value), TINYPY_FALSE);
+        __tinypy_representation_append(builder, " instance at ", 13U);
+    }
+    else {
+        __tinypy_representation_append(builder, value->type->name, value->type->name_size);
+        __tinypy_representation_append(builder, " object at ", 11U);
+    }
+    __tinypy_representation_pointer(builder, value);
+    __tinypy_representation_append_character(builder, (uint8_t)'>');
+}
+//////////////////////////////////////////////////////////////////////////
+/* object_str, which calls tp_repr, is the tp_str of a type without a string
+   slot whose __str__ is the one object defines. The type is held, as a
+   lookup comparing keys may reassign the __class__ of its last instance; the
+   check stays out of line, off the path of every represented value. */
+static TINYPY_NOINLINE tinypy_bool_t __tinypy_representation_object_string(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_type_t *type = value->type;
+    tinypy_value_t *key = vm->internal_special_str_key;
+
+    if (type->string != NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *object_string = tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_INSTANCE], key);
+    TINYPY_INCREF(&type->base.base);
+    tinypy_bool_t inherited = tinypy_internal_type_lookup_key(vm, type, key) == object_string ? TINYPY_TRUE : TINYPY_FALSE;
+    TINYPY_DECREF(&type->base.base);
+    return inherited;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_representation_qualifier(tinypy_representation_builder_t *builder, tinypy_value_t *value) {
@@ -874,27 +939,15 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     tinypy_value_t *special_name = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
     uint64_t special = raw != 0 ? TINYPY_INTERNAL_DISPATCH_BIT(STR) : TINYPY_INTERNAL_DISPATCH_BIT(REPR);
 
-    if ((builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && __tinypy_internal_object_overrides_dispatch(value, special) != 0) {
-        tinypy_value_t *custom = __tinypy_representation_custom(value, special_name, out_error);
-
-        if (custom == NULL) {
-            return TINYPY_FALSE;
+    if ((builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
+        if (__tinypy_internal_object_overrides_dispatch(value, special) != 0) {
+            function_result = __tinypy_representation_special(builder, value, special_name, raw, out_error);
+            return function_result;
         }
-        tinypy_bool_t appended = __tinypy_representation_append_text(builder, custom, raw, out_error);
-        TINYPY_DECREF(custom);
-        return appended;
-    }
-    if (raw != 0 && (builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U &&
-        (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_DICT || kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) &&
-        __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0) {
-        tinypy_value_t *custom = __tinypy_representation_custom(value, vm->internal_special_repr_key, out_error);
-
-        if (custom == NULL) {
-            return TINYPY_FALSE;
+        if (raw != 0 && __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0 && __tinypy_representation_object_string(value) != 0) {
+            function_result = __tinypy_representation_special(builder, value, vm->internal_special_repr_key, raw, out_error);
+            return function_result;
         }
-        tinypy_bool_t appended = __tinypy_representation_append_text(builder, custom, raw, out_error);
-        TINYPY_DECREF(custom);
-        return appended;
     }
     /* The override lookups above may run Python code that resets the slot. */
     tinypy_unary_slot_t representation_slot = raw != 0 ? value->type->string : value->type->repr;
@@ -1157,46 +1210,13 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         __tinypy_representation_append_character(builder, (uint8_t)')');
         return TINYPY_TRUE;
     }
-    default: {
-        tinypy_value_t *custom = builder->skip_root_special != 0 && value == builder->root
-                                     ? NULL
-                                     : __tinypy_representation_custom(value, special_name, out_error);
-
-        if (custom != NULL) {
-            tinypy_bool_t appended = __tinypy_representation_append_text(builder, custom, raw, out_error);
-            TINYPY_DECREF(custom);
-            return appended;
+    default:
+        if (builder->skip_root_special != 0 && value == builder->root) {
+            __tinypy_representation_default_text(builder, value, TINYPY_FALSE);
+            return TINYPY_TRUE;
         }
-        if (out_error != NULL && *out_error != NULL) {
-            return TINYPY_FALSE;
-        }
-        /* str() of a classic instance without __str__ falls back to __repr__,
-           the way instance_str does in Python 2.7. */
-        if (raw != 0 && kind == TINYPY_VALUE_OLD_INSTANCE) {
-            tinypy_value_t *fallback = __tinypy_representation_custom(value, vm->internal_special_repr_key, out_error);
-
-            if (fallback != NULL) {
-                tinypy_bool_t appended = __tinypy_representation_append_text(builder, fallback, raw, out_error);
-                TINYPY_DECREF(fallback);
-                return appended;
-            }
-            if (out_error != NULL && *out_error != NULL) {
-                return TINYPY_FALSE;
-            }
-        }
-        __tinypy_representation_append_character(builder, (uint8_t)'<');
-        if (kind == TINYPY_VALUE_OLD_INSTANCE) {
-            __tinypy_representation_class_qualified_name(builder, tinypy_old_instance_class(value), TINYPY_FALSE);
-            __tinypy_representation_append(builder, " instance at ", 13U);
-        }
-        else {
-            __tinypy_representation_type_qualified_name(builder, value->type);
-            __tinypy_representation_append(builder, " object at ", 11U);
-        }
-        __tinypy_representation_pointer(builder, value);
-        __tinypy_representation_append_character(builder, (uint8_t)'>');
-        return TINYPY_TRUE;
-    }
+        function_result = __tinypy_representation_special(builder, value, special_name, raw, out_error);
+        return function_result;
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1208,26 +1228,14 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tiny
     if (raw != 0 && value->type == &vm->types[TINYPY_VALUE_STRING]) {
         return TINYPY_RET(value);
     }
-    if (skip_root_special == 0 && __tinypy_internal_object_overrides_dispatch(value, raw != 0 ? TINYPY_INTERNAL_DISPATCH_BIT(STR) : TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0) {
-        tinypy_value_t *custom = __tinypy_representation_custom(value, raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key, out_error);
+    /* A method overriding the representation of the root gives it whole. */
+    uint64_t special = raw != 0 ? TINYPY_INTERNAL_DISPATCH_BIT(STR) : TINYPY_INTERNAL_DISPATCH_BIT(REPR);
+    if (skip_root_special == 0 && __tinypy_internal_object_overrides_dispatch(value, special) != 0) {
+        tinypy_value_t *name = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
+        tinypy_value_t *custom = __tinypy_representation_custom(value, name, raw, out_error);
 
-        if (custom == NULL) {
-            return NULL;
-        }
-        if (TINYPY_VALUE_KIND(custom) == TINYPY_VALUE_UNICODE) {
-            tinypy_value_t *encoded = tinypy_internal_text_codec(vm, custom, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
-
-            TINYPY_DECREF(custom);
-            return encoded;
-        }
         return custom;
     }
-    if (raw != 0 && TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE) {
-        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, value, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
-
-        return encoded;
-    }
-
     __tinypy_representation_initialize(&builder, vm);
     builder.root = value;
     builder.skip_root_special = skip_root_special;
@@ -1239,28 +1247,33 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tiny
         __tinypy_representation_destroy(&builder);
         return NULL;
     }
-    tinypy_value_t *result = tinypy_internal_string_from_bytes_uninterned_checked(builder.vm, builder.bytes, builder.size, out_error);
+    tinypy_value_t *result = builder.root_text;
+    builder.root_text = NULL;
+    if (result == NULL) {
+        result = tinypy_internal_string_from_bytes_uninterned_checked(builder.vm, builder.bytes, builder.size, out_error);
+    }
     __tinypy_representation_destroy(&builder);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* object_repr qualifies the name of a type defined in Python with its
-   module; the fallback of slot_tp_repr shows tp_name alone. */
-static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *value, tinypy_bool_t qualified, tinypy_error_t **out_error) {
+/* PyObject_Repr and PyObject_Str encode a unicode result with the default
+   encoding. */
+static tinypy_value_t *__tinypy_representation_encode(tinypy_value_t *text, tinypy_error_t **out_error) {
+    if (text == NULL || TINYPY_VALUE_KIND(text) != TINYPY_VALUE_UNICODE) {
+        return text;
+    }
+    tinypy_value_t *encoded = tinypy_internal_text_codec(TINYPY_VALUE_VM(text), text, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+
+    TINYPY_DECREF(text);
+    return encoded;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *value, tinypy_bool_t fallback, tinypy_error_t **out_error) {
     tinypy_representation_builder_t builder;
 
     __tinypy_representation_initialize(&builder, TINYPY_VALUE_VM(value));
     TINYPY_CLEAR_ERROR(out_error);
-    __tinypy_representation_append_character(&builder, (uint8_t)'<');
-    if (qualified != 0) {
-        __tinypy_representation_type_qualified_name(&builder, value->type);
-    }
-    else {
-        __tinypy_representation_append(&builder, value->type->name, value->type->name_size);
-    }
-    __tinypy_representation_append(&builder, " object at ", 11U);
-    __tinypy_representation_pointer(&builder, value);
-    __tinypy_representation_append_character(&builder, (uint8_t)'>');
+    __tinypy_representation_default_text(&builder, value, fallback);
     if (builder.failed != 0) {
         __tinypy_representation_destroy(&builder);
         tinypy_internal_make_vm_error(builder.vm, builder.memory_failed != 0 ? TINYPY_ERROR_MEMORY : TINYPY_ERROR_OVERFLOW, builder.memory_failed != 0 ? "memory allocation failed" : "representation is too large", out_error);
@@ -1272,13 +1285,23 @@ static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *va
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_object_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = __tinypy_representation_build(value, INT32_C(0), TINYPY_FALSE, out_error);
-    return return_value_1;
+    tinypy_value_t *representation = __tinypy_representation_build(value, TINYPY_FALSE, TINYPY_FALSE, out_error);
+    tinypy_value_t *result = __tinypy_representation_encode(representation, out_error);
+
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_object_str(tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = __tinypy_representation_build(value, INT32_C(1), TINYPY_FALSE, out_error);
-    return return_value_1;
+    tinypy_value_t *text = __tinypy_representation_build(value, TINYPY_TRUE, TINYPY_FALSE, out_error);
+    tinypy_value_t *result = __tinypy_representation_encode(text, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_object_str_text(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *text = __tinypy_representation_build(value, TINYPY_TRUE, TINYPY_FALSE, out_error);
+
+    return text;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_repr_builtin(tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -1308,18 +1331,18 @@ static tinypy_value_t *__tinypy_object_representation_method(tinypy_value_t *fun
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
     /* object_str returns whatever tp_repr returns, so an overriding
-       __repr__ keeps a unicode or any other result. */
-    if (user_data != NULL && __tinypy_internal_object_overrides_dispatch(self, TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0) {
+       __repr__, or that of a classic instance, keeps a unicode or any
+       other result. */
+    if (user_data != NULL && (TINYPY_VALUE_KIND(self) == TINYPY_VALUE_OLD_INSTANCE || __tinypy_internal_object_overrides_dispatch(self, TINYPY_INTERNAL_DISPATCH_BIT(REPR)) != 0)) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
-        tinypy_bool_t handled;
-        tinypy_value_t *custom = tinypy_internal_object_call_representation(self, vm->internal_special_repr_key, &handled, out_error);
+        tinypy_value_t *custom = tinypy_internal_object_call_representation(self, vm->internal_special_repr_key, out_error);
         return custom;
     }
     if (user_data != NULL) {
         tinypy_value_t *return_value_1 = tinypy_object_repr(self, out_error);
         return return_value_1;
     }
-    tinypy_value_t *return_value_2 = __tinypy_representation_default_object(self, TINYPY_TRUE, out_error);
+    tinypy_value_t *return_value_2 = __tinypy_representation_default_object(self, TINYPY_FALSE, out_error);
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////

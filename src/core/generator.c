@@ -233,13 +233,7 @@ static tinypy_value_t *__tinypy_generator_next_method(tinypy_value_t *function, 
     if (result != NULL) {
         return result;
     }
-    if (iteration_error != NULL) {
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         return NULL;
     }
     tinypy_internal_exception_raise_stop_iteration(vm, out_error);

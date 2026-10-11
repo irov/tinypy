@@ -121,7 +121,11 @@ tinypy_marshal_result_e tinypy_marshal_read_v2(const void *bytes, size_t size, c
 /* Read one raw CPython 2.7 marshal-v2 code object and materialize the complete
  * code/constant graph as VM-owned values. Temporary parser allocations use
  * the VM allocator and are released before this function returns. out_code
- * receives one owned reference on success. */
+ * receives one owned reference on success. Every allocation honours the heap
+ * budget of the VM: one that the host or the budget refuses fails the load
+ * with TINYPY_MARSHAL_BYTE_LIMIT and MemoryError pending, and a constant dict
+ * key that cannot be hashed fails it with TINYPY_MARSHAL_INVALID_GRAPH and
+ * that TypeError pending. Other failures raise nothing. */
 tinypy_marshal_result_e tinypy_marshal_load_code_v2(tinypy_vm_t *vm, const void *bytes, size_t size, const tinypy_marshal_limits_t *limits, tinypy_value_t **out_code, tinypy_marshal_error_t *out_error);
 
 /* Serialize exactly one immutable graph in CPython 2.7 marshal-v2 encoding.

@@ -342,6 +342,34 @@ tinypy_value_t *tinypy_internal_call_conversion(tinypy_value_t *value, tinypy_va
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyNumber_Int, _PyNumber_ConvertIntegralToInt and, for a classic instance,
+   PyObject_Unicode call what PyObject_GetAttr finds and clear any failure of
+   the lookup. Returns 1 with the call's result, 0 when the attribute is
+   unavailable and -1 when the call fails. */
+static int32_t __tinypy_constructor_call_found_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t **out_result, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_error_t *lookup_error = NULL;
+    tinypy_value_t *method;
+    int32_t found = tinypy_internal_object_get_optional_attr_key(value, name, &method, &lookup_error);
+
+    *out_result = NULL;
+    if (found < 0) {
+        if (lookup_error != NULL) {
+            tinypy_error_release(lookup_error);
+        }
+        tinypy_vm_clear_error(vm);
+        return INT32_C(0);
+    }
+    if (found == 0) {
+        return INT32_C(0);
+    }
+    tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
+    *out_result = tinypy_call(method, args, NULL, out_error);
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(method);
+    return *out_result != NULL ? INT32_C(1) : -INT32_C(1);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_unicode_from_default_encoding(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_error_t **out_error) {
     const uint8_t *bytes;
     size_t size;
@@ -388,14 +416,14 @@ tinypy_value_t *tinypy_internal_object_unicode(tinypy_value_t *value, tinypy_err
         tinypy_value_t *return_value = __tinypy_constructor_unicode_from_default_encoding(vm, value, out_error);
         return return_value;
     }
-    text = tinypy_internal_call_conversion(value, vm->internal_special_unicode_key, &handled, out_error);
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        handled = __tinypy_constructor_call_found_attribute(value, vm->internal_special_unicode_key, &text, out_error) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    else {
+        text = tinypy_internal_call_conversion(value, vm->internal_special_unicode_key, &handled, out_error);
+    }
     if (handled == 0) {
-        text = tinypy_internal_object_call_representation(value, vm->internal_special_str_key, &handled, out_error);
-        if (handled == 0) {
-            /* Only a classic instance lacks __str__; instance_str then
-               falls back to its repr. */
-            text = tinypy_object_repr(value, out_error);
-        }
+        text = tinypy_internal_object_call_representation(value, vm->internal_special_str_key, out_error);
     }
     if (text == NULL) {
         return NULL;
@@ -1160,14 +1188,8 @@ static tinypy_value_t *__tinypy_constructor_sequence_to_list(tinypy_vm_t *vm, ti
         TINYPY_DECREF(item);
     }
     TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         TINYPY_DECREF(result);
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
         return NULL;
     }
     return result;
@@ -1406,33 +1428,6 @@ static tinypy_value_t *__tinypy_constructor_classic_conversion(tinypy_value_t *v
     TINYPY_DECREF(args);
     TINYPY_DECREF(method);
     return result;
-}
-//////////////////////////////////////////////////////////////////////////
-/* PyNumber_Int and _PyNumber_ConvertIntegralToInt call what PyObject_GetAttr
-   finds and clear any failure of the lookup. Returns 1 with the call's
-   result, 0 when the attribute is unavailable and -1 when the call fails. */
-static int32_t __tinypy_constructor_call_found_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t **out_result, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_error_t *lookup_error = NULL;
-    tinypy_value_t *method;
-    int32_t found = tinypy_internal_object_get_optional_attr_key(value, name, &method, &lookup_error);
-
-    *out_result = NULL;
-    if (found < 0) {
-        if (lookup_error != NULL) {
-            tinypy_error_release(lookup_error);
-        }
-        tinypy_vm_clear_error(vm);
-        return INT32_C(0);
-    }
-    if (found == 0) {
-        return INT32_C(0);
-    }
-    tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
-    *out_result = tinypy_call(method, args, NULL, out_error);
-    TINYPY_DECREF(args);
-    TINYPY_DECREF(method);
-    return *out_result != NULL ? INT32_C(1) : -INT32_C(1);
 }
 //////////////////////////////////////////////////////////////////////////
 /* _PyNumber_ConvertIntegralToInt names a classic instance by its class. */
@@ -4102,7 +4097,7 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
 
         candidate = tinypy_next(mro_iterator, out_error);
         if (candidate == NULL) {
-            if (out_error != NULL && *out_error != NULL) {
+            if ((out_error != NULL && *out_error != NULL) || vm->raised_value != NULL) {
                 goto error;
             }
             break;
@@ -4133,7 +4128,7 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
             tinypy_value_t *slot_name;
 
             if (slot == NULL) {
-                if (out_error != NULL && *out_error != NULL) {
+                if ((out_error != NULL && *out_error != NULL) || vm->raised_value != NULL) {
                     goto error;
                 }
                 break;

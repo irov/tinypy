@@ -240,15 +240,9 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
         size += 1U;
     }
     TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         if (bytes != NULL) {
             tinypy_internal_vm_deallocate(vm, bytes, capacity);
-        }
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
         }
         return TINYPY_FALSE;
     }
@@ -382,13 +376,7 @@ static tinypy_bool_t __tinypy_bytearray_extend_iterable(tinypy_value_t *value, t
         TINYPY_SIZED_SIZE(value) = size + 1U;
     }
     TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;

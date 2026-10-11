@@ -398,7 +398,11 @@ static tinypy_value_t *__tinypy_meta_eval_call(tinypy_meta_context_t *meta, tiny
             if (item == NULL) {
                 return NULL;
             }
-            tinypy_list_append(list, item);
+            tinypy_error_t *error = NULL;
+            if (tinypy_internal_list_append_checked(list, item, &error) == 0) {
+                tinypy_value_t *return_value_1 = __tinypy_meta_eval_error(meta, error, expression);
+                return return_value_1;
+            }
             if ((step > 0 && current > INT64_MAX - step) || (step < 0 && current < INT64_MIN - step)) {
                 break;
             }

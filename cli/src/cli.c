@@ -1304,7 +1304,8 @@ static tinypy_bool_t __tinypy_cli_report_exception(const tinypy_cli_runtime_t *r
         *out_status = __tinypy_cli_system_exit_status(runtime);
         return TINYPY_TRUE;
     }
-    /* A failed normalization reports the exception it raised instead. */
+    /* A failed normalization reports the exception it raised instead,
+       normalized in turn. */
     (void)tinypy_vm_normalize_error(vm, NULL);
     __tinypy_cli_fetch_exception(vm, &exception);
     if (heading != NULL) {

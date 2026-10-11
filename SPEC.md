@@ -157,13 +157,16 @@ VM, пока все значения живы: сначала native instances, 
 финализатор, освобождается как обычно: его `__del__` выполняется до
 финализатора, пока native functions ещё не финализированы; у instance,
 освобождённого после своего финализатора, `__del__` не выполняется. Если
-финализаторы или освобождённые ими значения создают новые native values с
-финализаторами, проход повторяется для них, всего не более 8 раз; значения,
-созданные последним проходом, освобождаются без финализаторов. Только затем
-освобождается память достижимых объектов, без вызова финализаторов.
-Финализатор вызывается ровно один раз; native function, чей финализатор уже
-выполнен, при вызове даёт RuntimeError, а bound method читает user data своего
-descriptor.
+финализаторы, освобождённые ими значения или отрисовка диагностик в конце
+прохода создают новые native values с финализаторами либо `__del__` воскрешает
+instance до его финализатора, проход повторяется для них, всего не более 8
+раз; значения, созданные последним проходом, освобождаются без финализаторов.
+Только затем освобождается память достижимых объектов, без вызова
+финализаторов. Финализатор вызывается ровно один раз; native function, чей
+финализатор уже выполнен, при вызове даёт RuntimeError, а bound method читает
+user data своего descriptor. Так же slots native instance, чей финализатор уже
+выполнен, и methods, зарегистрированные на его типе, дают RuntimeError, а не
+вызывают callbacks с payload уничтоженного host object.
 
 Модуль `sys` принадлежит VM через собственную ссылку: `sys.stdout`,
 `sys.displayhook` и `sys.exc_*` читаются и пишутся напрямую в его словарь, а
@@ -250,7 +253,8 @@ precondition и имеет undefined behavior. Python exceptions использ�
 сравнение заменяет `__dict__` классического класса или экземпляра. Значение,
 которым после этого владеет только сам обход, считается ненайденным. Код,
 который после поиска ещё пользуется типом объекта (memo dispatch, запись
-атрибута), сам удерживает его, а `tinypy_call` удерживает вызываемый объект:
+атрибута, memo конструкторов), сам удерживает его, а `tinypy_call` удерживает
+вызываемый объект:
 вызывающий может передать заимствованное поле, например getter свойства,
 которое сравнение при поиске `__call__` освобождает. Пока
 custom `mro()` вычисляет MRO нового класса, поиск в этом классе ничего не
@@ -260,7 +264,12 @@ custom `mro()` вычисляет MRO нового класса, поиск в �
 создании типа и пересчёте MRO потомков после изменения баз; результат должен
 содержать классы с совместимым solid layout. Пересекающиеся реентерабельные
 присваивания `__bases__` во время hook отвергаются с RuntimeError; неудачный
-пересчёт откатывает MRO и базы. Member и getset descriptors, пережившие свой
+пересчёт откатывает MRO и базы. Классы, которые Python-код (hook или сравнение
+ключей) создаёт во время пересчёта из заменяемого MRO, получают MRO заново, как
+при обходе `tp_subclasses` в `mro_subclasses` CPython. После отката такой класс,
+как и в CPython 2.7, сохраняет свой MRO, но кеши поиска не запоминают ответы
+для MRO, классы которого уже не входят в MRO его баз.
+Member и getset descriptors, пережившие свой
 тип, остаются безопасными: repr показывает `<deleted type>`, а применение к
 объекту даёт TypeError.
 
@@ -849,6 +858,12 @@ exception, сначала вызывает `tinypy_output_flush_line`: как `P
 она дописывает в `sys.stdout` перевод строки, отложенный print statement с
 завершающей запятой, игнорирует ошибку записи и сохраняет raised exception.
 
+Evaluator вызывает `poll_interrupt` при входе в frame и перед каждым
+переходом назад: `JUMP_ABSOLUTE`, `CONTINUE_LOOP` и условными переходами.
+Любой цикл, в том числе в загруженном bytecode, проходит через такой переход,
+поэтому host может прервать его: true из `poll_interrupt` поднимает
+`KeyboardInterrupt` (`TINYPY_ERROR_INTERRUPT`).
+
 Отчёт об uncaught exception — обязанность host: он читает raised exception,
 её type и traceback через public API и пишет отчёт в объект `sys.stderr`.
 Как `PyErr_SetObject`, `sys.exit` оставляет SystemExit ненормализованным:
@@ -863,7 +878,8 @@ exception, как `PyErr_NormalizeException`: value, которое не явл�
 экземпляром raised class, становится аргументами его вызова, а экземпляр
 подкласса даёт raised type свой класс. Если вызов падает, функция возвращает
 false, а pending остаётся exception, которую он поднял, с traceback исходной,
-если у неё нет своего. Host, как `PyErr_PrintEx`, нормализует uncaught
+если у неё нет своего; как `PyErr_NormalizeException`, она в свою очередь
+нормализуется, каждый раз на уровень рекурсии глубже, до recursion limit. Host, как `PyErr_PrintEx`, нормализует uncaught
 exception после проверки SystemExit, до `sys.excepthook` и отчёта.
 Как `PyErr_GivenExceptionMatches`,
 `tinypy_exception_matches` сопоставляет класс экземпляра exception, а
@@ -891,7 +907,9 @@ exception, и исключение, которое обработал Python-к�
 Kind такого error так же вычисляется при первом чтении `tinypy_error_kind` по
 классу, с которым exception был поднят. `tinypy_vm_destroy` сначала вычисляет
 message и kind всех ещё не прочитанных errors, поэтому error остаётся пригодным
-и после уничтожения VM.
+и после уничтожения VM. Код, который выполняет чтение (`str()` или освобождение
+класса), может освободить сам error: тогда он освобождается после чтения, а
+`tinypy_error_message` возвращает пустой message.
 
 Recoverable categories включают:
 
@@ -930,6 +948,15 @@ code dump поддерживает size query и caller-owned output buffer. Wri
 Artifact header содержит ABI versions, optimize level, profile digest, source
 hash, future flags, payload size и checksum. Loader никогда не принимает
 неизвестную версию или incompatible payload молча.
+
+`tinypy_marshal_load_code_v2` полностью fallible: parser и materialized values
+выделяют память VM с учётом `max_heap_bytes`. Allocation, в которой отказал
+host или budget, завершает загрузку с `TINYPY_MARSHAL_BYTE_LIMIT` и pending
+`MemoryError`, освобождая всё построенное. Константный dict с unhashable
+ключом, как `r_object` CPython, завершает её с `TINYPY_MARSHAL_INVALID_GRAPH` и
+pending `TypeError`; остальные ошибки marshal exception не поднимают. Import
+marshal artifact сообщает такую pending exception, остальные ошибки — как
+`ImportError`.
 
 ## 14. Проверка
 

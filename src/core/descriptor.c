@@ -768,8 +768,9 @@ static tinypy_value_t *__tinypy_internal_method_hash_method(tinypy_value_t *func
     if (__tinypy_internal_method_slot_self(vm, args, kwargs, 1U, 1U, out_error) == 0) {
         return NULL;
     }
+    tinypy_value_t *previous_raised = vm->raised_value;
     tinypy_hash_t hash = tinypy_internal_hash_builtin_value(TINYPY_TUPLE_GET(args, 0U), out_error);
-    if (out_error != NULL && *out_error != NULL) {
+    if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
         return NULL;
     }
     tinypy_value_t *result = tinypy_integer_from_i64(vm, hash);

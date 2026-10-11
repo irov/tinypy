@@ -126,13 +126,8 @@ static tinypy_bool_t __tinypy_dict_view_subset_checked(tinypy_value_t *left, tin
         }
     }
     TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
-        if (out_error != NULL) {
-            *out_error = iteration_error;
-        }
-        else {
-            tinypy_error_release(iteration_error);
-        }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         return TINYPY_FALSE;
     }
     *out_subset = TINYPY_TRUE;

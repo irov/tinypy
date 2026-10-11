@@ -690,3 +690,202 @@ assert late_length(late_instance) == 6
 LateClassic.__dict__ = {}
 assert late_length(late_instance) is None
 assert type(LateOwner().attribute) is LateMixed
+
+
+# Python code that a failing __bases__ assignment runs may create a class from
+# the MRO the assignment then restores; the class keeps its MRO, as in CPython
+# 2.7, and its caches follow every class of it, where the method cache of
+# CPython 2.7 keeps an attribute of a class that no longer reaches it.
+class RollbackBase(object):
+    pass
+
+
+class RollbackFirst(RollbackBase):
+    pass
+
+
+class RollbackSecond(RollbackBase):
+    pass
+
+
+class RollbackPayload(object):
+    pass
+
+
+rollback_state = {"made": None, "armed": False}
+
+
+class RollbackMeta(type):
+    pass
+
+
+class RollbackFailingMeta(RollbackMeta):
+    def mro(cls):
+        if rollback_state["armed"] and cls.__name__ == "RollbackChild":
+            rollback_state["armed"] = False
+            class RollbackNew(RollbackRebased):
+                pass
+            rollback_state["made"] = RollbackNew
+            raise ValueError("fail the rebase")
+        return type.mro(cls)
+
+
+def payload_name(target, name):
+    try:
+        return type(getattr(target, name)).__name__
+    except AttributeError:
+        return None
+
+
+def mro_names(cls):
+    return [entry.__name__ for entry in cls.__mro__]
+
+
+RollbackRebased = RollbackMeta("RollbackRebased", (RollbackSecond,), {})
+RollbackChild = RollbackFailingMeta("RollbackChild", (RollbackRebased,), {})
+RollbackFirst.value = RollbackPayload()
+rollback_state["armed"] = True
+try:
+    RollbackRebased.__bases__ = (RollbackFirst,)
+except ValueError:
+    pass
+else:
+    raise AssertionError("the __bases__ assignment should fail")
+rollback_new = rollback_state["made"]()
+rollback_state["made"] = None
+assert mro_names(RollbackRebased) == ["RollbackRebased", "RollbackSecond", "RollbackBase", "object"]
+assert mro_names(type(rollback_new)) == ["RollbackNew", "RollbackRebased", "RollbackFirst", "RollbackBase", "object"]
+assert [payload_name(rollback_new, "value") for _ in range(2)] == ["RollbackPayload"] * 2
+del RollbackFirst.value
+assert [payload_name(rollback_new, "value") for _ in range(2)] == [None] * 2
+
+
+# A __bases__ assignment that Python code runs while another one computes the
+# MROs may change the MRO of a new base that does not list the type yet: the
+# type keeps an MRO through the classes that base had, as in CPython 2.7, and
+# its caches follow them.
+class NestedOld(object):
+    pass
+
+
+class NestedNew(object):
+    pass
+
+
+class NestedBase(NestedOld):
+    pass
+
+
+class NestedOriginal(object):
+    pass
+
+
+nested_state = {"armed": False}
+
+
+class NestedMeta(type):
+    pass
+
+
+class NestedTriggerMeta(NestedMeta):
+    def mro(cls):
+        if nested_state["armed"] and cls.__name__ == "NestedChild":
+            nested_state["armed"] = False
+            NestedBase.__bases__ = (NestedNew,)
+        return type.mro(cls)
+
+
+NestedRebased = NestedMeta("NestedRebased", (NestedOriginal,), {})
+NestedChild = NestedTriggerMeta("NestedChild", (NestedRebased,), {})
+NestedOld.value = RollbackPayload()
+nested_state["armed"] = True
+NestedRebased.__bases__ = (NestedBase,)
+nested_instance = NestedRebased()
+assert mro_names(NestedRebased) == ["NestedRebased", "NestedBase", "NestedOld", "object"]
+assert mro_names(NestedBase) == ["NestedBase", "NestedNew", "object"]
+assert [payload_name(nested_instance, "value") for _ in range(2)] == ["RollbackPayload"] * 2
+del NestedOld.value
+assert [payload_name(nested_instance, "value") for _ in range(2)] == [None] * 2
+
+
+# type_call asks the class of the instance that __new__ returned for
+# __init__. A key comparison of that lookup that reassigns the __class__ of
+# the instance releases the class, and an __init__ only that class held is
+# then not found; CPython 2.7 reaches __init__ through tp_init.
+constructor_state = {"instance": None, "armed": False, "calls": []}
+
+
+class ConstructorOther(object):
+    pass
+
+
+class ConstructorOtherError(Exception):
+    pass
+
+
+class ConstructorKey(object):
+    def __hash__(self):
+        return hash("__init__")
+
+    def __eq__(self, other):
+        if constructor_state["armed"]:
+            constructor_state["armed"] = False
+            instance = constructor_state["instance"]
+            constructor_state["instance"] = None
+            instance.__class__ = ConstructorOtherError if isinstance(instance, Exception) else ConstructorOther
+        return False
+
+
+def shared_initializer(self, *args):
+    constructor_state["calls"].append("shared")
+
+
+def constructor_owner(base, initializer):
+    class Owner(base):
+        def __new__(cls, *args):
+            made = type("Made", (Owner,), {ConstructorKey(): 1})
+            if initializer == "own":
+                made.__init__ = lambda self, *args: constructor_state["calls"].append("own")
+            elif initializer == "shared":
+                made.__init__ = shared_initializer
+            instance = base.__new__(made, *args)
+            constructor_state["instance"] = instance
+            constructor_state["armed"] = True
+            return instance
+    return Owner
+
+
+def construct(base, initializer, *args):
+    constructor_state["calls"] = []
+    instance = constructor_owner(base, initializer)(*args)
+    return type(instance).__name__, constructor_state["calls"], constructor_state["armed"]
+
+
+assert construct(object, None) == ("ConstructorOther", [], False)
+assert construct(object, "own") == ("ConstructorOther", [], False)
+assert construct(object, "shared") == ("ConstructorOther", ["shared"], False)
+assert construct(Exception, None, "x") == ("ConstructorOtherError", [], False)
+assert construct(Exception, "own", "x") == ("ConstructorOtherError", [], False)
+assert construct(Exception, "shared", "x") == ("ConstructorOtherError", ["shared"], False)
+
+
+# A base keeps the cleared references of its dead subclasses until they are
+# half of its list, and lists the others in their order.
+class Registry(object):
+    pass
+
+
+def registry_names():
+    return [cls.__name__ for cls in Registry.__subclasses__()]
+
+
+registered = [type("Registered%d" % index, (Registry,), {}) for index in range(8)]
+for index in (3, 0, 7):
+    registered[index] = None
+assert registry_names() == ["Registered1", "Registered2", "Registered4", "Registered5", "Registered6"]
+registered.append(type("Registered8", (Registry,), {}))
+for index in (1, 5, 2):
+    registered[index] = None
+assert registry_names() == ["Registered4", "Registered6", "Registered8"]
+del registered[:]
+assert registry_names() == []

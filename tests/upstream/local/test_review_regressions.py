@@ -1957,6 +1957,34 @@ class ReviewRegressions(unittest.TestCase):
         except TypeError:
             self.assertEqual(names(), ["test_exception_normalization_failure_traceback", "raise_arguments"])
 
+    def test_exception_normalization_failure_normalizes_again(self):
+        class Meta(type):
+            def __subclasscheck__(cls, other):
+                return False
+        class Exiting(Exception):
+            __metaclass__ = Meta
+            def __init__(self, *arguments):
+                if arguments != ("first",):
+                    sys.exit(42)
+        def raise_instance():
+            raise Exiting("first")
+        def raise_pair():
+            raise Exiting, Exiting("first")
+        def produce():
+            yield 1
+        generator = produce()
+        next(generator)
+        def throw_pair():
+            generator.throw(Exiting, Exiting("first"))
+        for raiser in (raise_instance, raise_pair, throw_pair):
+            try:
+                raiser()
+            except SystemExit as error:
+                self.assertIs(type(error), SystemExit)
+                self.assertEqual(error.code, 42)
+            else:
+                self.fail("the normalization must raise SystemExit")
+
     def test_classic_lookups_drop_comparison_errors(self):
         class Collide(str):
             def __hash__(self):

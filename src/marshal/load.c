@@ -47,7 +47,7 @@ static void *__tinypy_marshal_vm_allocate(void *user_data, size_t size, size_t a
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
 
     (void)alignment;
-    void *return_value_1 = tinypy_internal_vm_allocate(vm, size);
+    void *return_value_1 = tinypy_internal_vm_allocate_checked(vm, size, NULL);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -55,7 +55,7 @@ static void *__tinypy_marshal_vm_reallocate(void *user_data, void *memory, size_
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
 
     (void)alignment;
-    void *return_value_1 = tinypy_internal_vm_reallocate(vm, memory, old_size, new_size);
+    void *return_value_1 = tinypy_internal_vm_reallocate_checked(vm, memory, old_size, new_size, NULL);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -106,7 +106,10 @@ static tinypy_bool_t __tinypy_marshal_cache_append(tinypy_marshal_materializer_t
         }
         size_t new_capacity = materializer->cache_capacity == 0U ? 16U : materializer->cache_capacity * 2U;
         size_t new_size = new_capacity * sizeof(*materializer->cache);
-        tinypy_marshal_runtime_cache_entry_t *entries = (tinypy_marshal_runtime_cache_entry_t *)tinypy_internal_vm_allocate(materializer->vm, new_size);
+        tinypy_marshal_runtime_cache_entry_t *entries = (tinypy_marshal_runtime_cache_entry_t *)tinypy_internal_vm_allocate_checked(materializer->vm, new_size, NULL);
+        if (entries == NULL) {
+            return TINYPY_FALSE;
+        }
         (void)memset(entries, 0, new_size);
         for (size_t index = 0U; index < materializer->cache_capacity; ++index) {
             tinypy_marshal_runtime_cache_entry_t *entry = &materializer->cache[index];
@@ -151,6 +154,15 @@ static void __tinypy_marshal_cache_destroy(tinypy_marshal_materializer_t *materi
 static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t **out_value);
 
 //////////////////////////////////////////////////////////////////////////
+/* A runtime value the VM cannot allocate fails the load the way the parser
+   fails its own allocations; the MemoryError of the VM stays pending. */
+static tinypy_marshal_result_e __tinypy_marshal_materialize_memory_error(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source) {
+    uint8_t wire_type = tinypy_marshal_object_wire_type(source);
+
+    __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_BYTE_LIMIT, wire_type, "marshal runtime value allocation failed");
+    return TINYPY_MARSHAL_BYTE_LIMIT;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_result_e __tinypy_marshal_materialize_sequence(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, int32_t as_list, tinypy_value_t **out_value) {
     tinypy_value_t **items = NULL;
     size_t count = tinypy_marshal_sequence_size(source);
@@ -158,7 +170,11 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_sequence(tinypy_mars
     tinypy_marshal_result_e result = TINYPY_MARSHAL_OK;
 
     if (count != 0U) {
-        items = (tinypy_value_t **)tinypy_internal_vm_allocate(materializer->vm, count * sizeof(*items));
+        items = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(materializer->vm, count * sizeof(*items), NULL);
+        if (items == NULL) {
+            result = __tinypy_marshal_materialize_memory_error(materializer, source);
+            return result;
+        }
     }
     for (index = 0U; index < count; ++index) {
         const tinypy_marshal_object_t *marshal_sequence_item = tinypy_marshal_sequence_item(source, index);
@@ -168,7 +184,10 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_sequence(tinypy_mars
         }
     }
     if (result == TINYPY_MARSHAL_OK) {
-        *out_value = as_list != 0 ? tinypy_list_from_items(materializer->vm, items, count) : tinypy_tuple_from_items(materializer->vm, items, count);
+        *out_value = as_list != 0 ? tinypy_internal_list_from_items_checked(materializer->vm, items, count, NULL) : tinypy_internal_tuple_from_items_checked(materializer->vm, items, count, NULL);
+        if (*out_value == NULL) {
+            result = __tinypy_marshal_materialize_memory_error(materializer, source);
+        }
     }
     while (index != 0U) {
         index -= 1U;
@@ -180,32 +199,58 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_sequence(tinypy_mars
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* r_object stores each item with PyDict_SetItem, whose TypeError for an
+   unhashable key fails the load. */
+static tinypy_marshal_result_e __tinypy_marshal_materialize_dict_item(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, size_t index, tinypy_value_t *dict) {
+    tinypy_value_t *key;
+    tinypy_value_t *value;
+    tinypy_hash_t hash;
+
+    const tinypy_marshal_object_t *marshal_dict_key = tinypy_marshal_dict_key(source, index);
+    tinypy_marshal_result_e result = __tinypy_marshal_materialize_object(materializer, marshal_dict_key, &key);
+    if (result != TINYPY_MARSHAL_OK) {
+        return result;
+    }
+    const tinypy_marshal_object_t *marshal_dict_value = tinypy_marshal_dict_value(source, index);
+    result = __tinypy_marshal_materialize_object(materializer, marshal_dict_value, &value);
+    if (result != TINYPY_MARSHAL_OK) {
+        TINYPY_DECREF(key);
+        return result;
+    }
+    if (tinypy_internal_dict_hash_checked(materializer->vm, key, &hash, NULL) == 0) {
+        uint8_t wire_type = tinypy_marshal_object_wire_type(marshal_dict_key);
+
+        TINYPY_DECREF(value);
+        TINYPY_DECREF(key);
+        __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_GRAPH, wire_type, "marshal dict key is unhashable");
+        return TINYPY_MARSHAL_INVALID_GRAPH;
+    }
+    tinypy_bool_t stored = tinypy_internal_dict_set_hash_checked(materializer->vm, dict, key, value, hash, NULL);
+    TINYPY_DECREF(value);
+    TINYPY_DECREF(key);
+    if (stored == 0) {
+        result = __tinypy_marshal_materialize_memory_error(materializer, source);
+        return result;
+    }
+    return TINYPY_MARSHAL_OK;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_result_e __tinypy_marshal_materialize_dict(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t **out_value) {
-    tinypy_value_t *dict = tinypy_dict_new(materializer->vm);
     size_t count = tinypy_marshal_dict_size(source);
     size_t index;
 
+    tinypy_value_t *dict = tinypy_internal_dict_new_checked(materializer->vm, NULL);
+    if (dict == NULL) {
+        tinypy_marshal_result_e memory_result = __tinypy_marshal_materialize_memory_error(materializer, source);
+        return memory_result;
+    }
     for (index = 0U; index < count; ++index) {
-        tinypy_value_t *key = NULL;
-        tinypy_value_t *value = NULL;
-        tinypy_marshal_result_e result;
+        tinypy_marshal_result_e result = __tinypy_marshal_materialize_dict_item(materializer, source, index, dict);
 
-        const tinypy_marshal_object_t *marshal_dict_key = tinypy_marshal_dict_key(source, index);
-        result = __tinypy_marshal_materialize_object(materializer, marshal_dict_key, &key);
-        if (result == TINYPY_MARSHAL_OK) {
-            const tinypy_marshal_object_t *marshal_dict_value = tinypy_marshal_dict_value(source, index);
-            result = __tinypy_marshal_materialize_object(materializer, marshal_dict_value, &value);
-        }
         if (result != TINYPY_MARSHAL_OK) {
-            if (key != NULL) {
-                TINYPY_DECREF(key);
-            }
             TINYPY_DECREF(dict);
             return result;
         }
-        tinypy_dict_set(dict, key, value);
-        TINYPY_DECREF(value);
-        TINYPY_DECREF(key);
     }
     *out_value = dict;
     return TINYPY_MARSHAL_OK;
@@ -271,7 +316,10 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_code(tinypy_marshal_
         result = __tinypy_marshal_validate_code_fields(materializer, source, source_code, fields);
     }
     if (result == TINYPY_MARSHAL_OK) {
-        *out_value = tinypy_code_new(source_code->argcount, source_code->nlocals, source_code->stacksize, source_code->flags, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], source_code->firstlineno, fields[8]);
+        *out_value = tinypy_internal_code_new_checked(source_code->argcount, source_code->nlocals, source_code->stacksize, source_code->flags, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], source_code->firstlineno, fields[8], NULL);
+        if (*out_value == NULL) {
+            result = __tinypy_marshal_materialize_memory_error(materializer, source);
+        }
     }
     while (index != 0U) {
         index -= 1U;
@@ -299,27 +347,27 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
         return TINYPY_MARSHAL_OK;
     case TINYPY_MARSHAL_TYPE_INTEGER: {
         int64_t integer = tinypy_marshal_integer_value(source);
-        *out_value = tinypy_integer_from_i64(materializer->vm, integer);
-        return TINYPY_MARSHAL_OK;
+        *out_value = tinypy_internal_integer_from_i64_checked(materializer->vm, integer, NULL);
     }
+        break;
     case TINYPY_MARSHAL_TYPE_LONG: {
         const uint16_t *digits;
         size_t digit_count;
         int32_t sign;
 
         tinypy_marshal_long_view(source, &sign, &digits, &digit_count);
-        *out_value = tinypy_long_from_base15_digits(materializer->vm, sign, digits, digit_count);
+        *out_value = tinypy_internal_long_from_base15_digits_checked(materializer->vm, sign, digits, digit_count, NULL);
     }
-        return TINYPY_MARSHAL_OK;
+        break;
     case TINYPY_MARSHAL_TYPE_FLOAT: {
         double float_value = tinypy_marshal_float_value(source);
         if (materializer->vm->double_format_unknown != 0 && tinypy_marshal_object_wire_type(source) == (uint8_t)'g' && isfinite(float_value) == 0) {
             __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_FLOAT, (uint8_t)'g', "can't unpack IEEE 754 special value on non-IEEE platform");
             return TINYPY_MARSHAL_INVALID_FLOAT;
         }
-        *out_value = tinypy_float_from_double(materializer->vm, float_value);
-        return TINYPY_MARSHAL_OK;
+        *out_value = tinypy_internal_float_from_double_checked(materializer->vm, float_value, NULL);
     }
+        break;
     case TINYPY_MARSHAL_TYPE_COMPLEX: {
         double real;
         double imaginary;
@@ -329,9 +377,9 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
             __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_FLOAT, (uint8_t)'y', "can't unpack IEEE 754 special value on non-IEEE platform");
             return TINYPY_MARSHAL_INVALID_FLOAT;
         }
-        *out_value = tinypy_complex_from_doubles(materializer->vm, real, imaginary);
+        *out_value = tinypy_internal_complex_from_doubles_checked(materializer->vm, real, imaginary, NULL);
     }
-        return TINYPY_MARSHAL_OK;
+        break;
     case TINYPY_MARSHAL_TYPE_BYTES: {
         const void *bytes;
         size_t size;
@@ -346,25 +394,28 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
             }
         }
         *out_value = interned != 0
-            ? tinypy_string_from_bytes(materializer->vm, bytes, size)
-            : tinypy_internal_string_from_bytes_uninterned(materializer->vm, bytes, size);
+            ? tinypy_internal_string_from_bytes_checked(materializer->vm, bytes, size, NULL)
+            : tinypy_internal_string_from_bytes_uninterned_checked(materializer->vm, bytes, size, NULL);
+        if (*out_value == NULL) {
+            break;
+        }
         if (interned != 0) {
-            if (tinypy_internal_string_intern(out_value, NULL) == 0) {
+            if (tinypy_internal_string_intern_checked(out_value, NULL) == 0) {
                 TINYPY_DECREF(*out_value);
                 *out_value = NULL;
-                return TINYPY_MARSHAL_BYTE_LIMIT;
+                break;
             }
             if (__tinypy_marshal_cache_append(materializer, source, *out_value) == 0) {
                 TINYPY_DECREF(*out_value);
                 *out_value = NULL;
-                return TINYPY_MARSHAL_BYTE_LIMIT;
+                break;
             }
         }
         else if (size > 1U) {
             tinypy_internal_string_set_interned(*out_value, 0);
         }
     }
-        return TINYPY_MARSHAL_OK;
+        break;
     case TINYPY_MARSHAL_TYPE_UNICODE: {
         const char *utf8;
         size_t size;
@@ -372,9 +423,9 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
 
         tinypy_marshal_unicode_view(source, &utf8, &size, &code_point_count);
         (void)code_point_count;
-        *out_value = tinypy_unicode_from_utf8(materializer->vm, utf8, size);
+        *out_value = tinypy_internal_unicode_from_utf8_checked(materializer->vm, utf8, size, NULL);
     }
-        return TINYPY_MARSHAL_OK;
+        break;
     case TINYPY_MARSHAL_TYPE_TUPLE:
         function_result = __tinypy_marshal_materialize_sequence(materializer, source, 0, out_value);
         return function_result;
@@ -397,6 +448,11 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
     default:
         return TINYPY_MARSHAL_INVALID_GRAPH;
     }
+    if (*out_value == NULL) {
+        function_result = __tinypy_marshal_materialize_memory_error(materializer, source);
+        return function_result;
+    }
+    return TINYPY_MARSHAL_OK;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_marshal_result_e tinypy_marshal_load_code_v2(tinypy_vm_t *vm, const void *bytes, size_t size, const tinypy_marshal_limits_t *limits, tinypy_value_t **out_code, tinypy_marshal_error_t *out_error) {

@@ -656,6 +656,40 @@ tinypy_value_t *tinypy_internal_dict_get_index_hint(const tinypy_vm_t *vm, const
     return entry->value;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Looks an exact string key up by identity, as the evaluator stores its
+   interned names, so that no key comparison calls back into Python. Reports
+   whether that decides the lookup, with the bound value, or NULL for a
+   missing key, in out_value; a stored key with the same hash that is another
+   object leaves the lookup to the caller. */
+tinypy_bool_t tinypy_internal_dict_get_identity(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_value_t **out_value) {
+    const tinypy_dict_object_t *dict_object = TINYPY_DICT_OBJECT((tinypy_value_t *)dict);
+
+    if (key->type != &vm->types[TINYPY_VALUE_STRING] || TINYPY_STRING_OBJECT(key)->hash_computed == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_hash_t hash = TINYPY_STRING_OBJECT(key)->hash;
+    size_t mask = dict_object->mask;
+    size_t index = (size_t)((uint64_t)hash & (uint64_t)mask);
+    uint64_t perturb = (uint64_t)hash;
+    for (;;) {
+        const tinypy_dict_entry_t *entry = &dict_object->table[index];
+
+        if (TINYPY_DICT_ENTRY_IS_EMPTY(entry)) {
+            *out_value = NULL;
+            return TINYPY_TRUE;
+        }
+        if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) && entry->hash == hash) {
+            if (entry->key != key) {
+                return TINYPY_FALSE;
+            }
+            *out_value = entry->value;
+            return TINYPY_TRUE;
+        }
+        index = __tinypy_internal_dict_probe_next(index, perturb, mask);
+        perturb >>= TINYPY_DICT_PERTURB_SHIFT;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_dict_contains(const tinypy_value_t *dict, const tinypy_value_t *key) {
     tinypy_bool_t contains;
 
@@ -948,8 +982,7 @@ tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy
         TINYPY_DECREF(key);
     }
     TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
-        __tinypy_internal_dict_iteration_error(iteration_error, out_error);
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;
@@ -1056,8 +1089,7 @@ tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_va
         index += 1U;
     }
     TINYPY_DECREF(iterator);
-    if (iteration_error != NULL) {
-        __tinypy_internal_dict_iteration_error(iteration_error, out_error);
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;

@@ -276,7 +276,10 @@ static void __tinypy_import_make_not_found_error(tinypy_vm_t *vm, const char *na
     char *message;
 
     message_size = (sizeof(prefix) - 1U) + name_size;
-    message = (char *)tinypy_internal_vm_allocate(vm, message_size + 1U);
+    message = (char *)tinypy_internal_vm_allocate_checked(vm, message_size + 1U, out_error);
+    if (message == NULL) {
+        return;
+    }
     (void)memcpy(message, prefix, sizeof(prefix) - 1U);
     if (name_size != 0U) {
         (void)memcpy(message + sizeof(prefix) - 1U, name, name_size);
@@ -487,6 +490,11 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
                 TINYPY_DECREF(eval_result);
                 loaded = 1;
             }
+        }
+        else if (vm->raised_value != NULL) {
+            /* The MemoryError of an exhausted heap, or the TypeError of an
+               unhashable constant key, is the error of the import. */
+            tinypy_internal_exception_make_diagnostic(vm, out_error);
         }
         else {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "module marshal artifact is invalid", out_error);
@@ -709,7 +717,12 @@ static tinypy_bool_t __tinypy_import_ensure_fromlist_impl(tinypy_vm_t *vm, tinyp
             item_size = (size_t)(nul - item_bytes);
         }
         size_t full_size = module_name_size + 1U + item_size;
-        char *full_name = (char *)tinypy_internal_vm_allocate(vm, full_size);
+        char *full_name = (char *)tinypy_internal_vm_allocate_checked(vm, full_size, out_error);
+        if (full_name == NULL) {
+            TINYPY_DECREF(item);
+            success = TINYPY_FALSE;
+            break;
+        }
         tinypy_bool_t fresh = TINYPY_FALSE;
         tinypy_bool_t not_found = TINYPY_FALSE;
         tinypy_value_t *submodule;
@@ -825,7 +838,10 @@ static tinypy_value_t *__tinypy_import_module(tinypy_vm_t *vm, const char *name,
     }
     if (level != 0 && package_size != 0U) {
         size_t canonical_size = package_size + (name_size != 0U ? 1U + name_size : 0U);
-        char *canonical = (char *)tinypy_internal_vm_allocate(vm, canonical_size);
+        char *canonical = (char *)tinypy_internal_vm_allocate_checked(vm, canonical_size, out_error);
+        if (canonical == NULL) {
+            return NULL;
+        }
         size_t return_name_size = package_size + (name_size != 0U ? 1U + head_size : 0U);
 
         (void)memcpy(canonical, package_bytes, package_size);

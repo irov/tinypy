@@ -5139,24 +5139,18 @@ tinypy_value_t *tinypy_internal_string_percent(tinypy_value_t *format, tinypy_va
                    through __unicode__. */
                 text = tinypy_internal_object_unicode(value, out_error);
             }
-            else if (conversion == (uint8_t)'s' && __tinypy_string_plain_value(vm, value) == 0 && tinypy_internal_object_has_special_key(value, vm->internal_special_str_key) != 0) {
-                tinypy_bool_t handled;
-
-                text = tinypy_internal_object_call_representation(value, vm->internal_special_str_key, &handled, out_error);
-                if (text != NULL && __tinypy_string_is_text(text) == 0) {
-                    const tinypy_message_part_t parts[] = {
-                        TINYPY_MESSAGE_PART_LITERAL("__str__ returned non-string (type "),
-                        TINYPY_MESSAGE_PART_TYPE_NAME(text),
-                        TINYPY_MESSAGE_PART_LITERAL(")")
-                    };
-
-                    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            else if (conversion == (uint8_t)'s') {
+                text = tinypy_internal_object_str_text(value, out_error);
+                /* Once an operand's str() is unicode, PyString_Format
+                   formats the rest as unicode, converting that operand
+                   again through __unicode__. */
+                if (text != NULL && TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
                     TINYPY_DECREF(text);
-                    text = NULL;
+                    text = tinypy_internal_object_unicode(value, out_error);
                 }
             }
             else {
-                text = conversion == (uint8_t)'r' ? tinypy_object_repr(value, out_error) : tinypy_object_str(value, out_error);
+                text = tinypy_object_repr(value, out_error);
             }
             if (text == NULL) {
                 goto failure;

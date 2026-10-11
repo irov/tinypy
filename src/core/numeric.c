@@ -22,6 +22,18 @@ tinypy_value_t *tinypy_float_from_double(tinypy_vm_t *vm, double value) {
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_float_from_double_checked(tinypy_vm_t *vm, double value, tinypy_error_t **out_error) {
+    if (value == 0.0 && signbit(value) == 0) {
+        tinypy_value_t *result = TINYPY_RET(&vm->float_zero_object.base);
+        return result;
+    }
+    tinypy_value_t *result = tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_FLOAT], sizeof(tinypy_float_object_t), out_error);
+    if (result != NULL) {
+        TINYPY_FLOAT_OBJECT(result)->value = value;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 double tinypy_float_as_double(const tinypy_value_t *value) {
 
     double return_value_1 = TINYPY_FLOAT_OBJECT(value)->value;
@@ -35,6 +47,16 @@ tinypy_value_t *tinypy_complex_from_doubles(tinypy_vm_t *vm, double real_value, 
         sizeof(tinypy_complex_object_t));
     TINYPY_COMPLEX_OBJECT(result)->real = real_value;
     TINYPY_COMPLEX_OBJECT(result)->imaginary = imaginary_value;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_complex_from_doubles_checked(tinypy_vm_t *vm, double real_value, double imaginary_value, tinypy_error_t **out_error) {
+    tinypy_value_t *result = tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_COMPLEX], sizeof(tinypy_complex_object_t), out_error);
+
+    if (result != NULL) {
+        TINYPY_COMPLEX_OBJECT(result)->real = real_value;
+        TINYPY_COMPLEX_OBJECT(result)->imaginary = imaginary_value;
+    }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

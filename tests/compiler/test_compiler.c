@@ -1244,8 +1244,20 @@ static int32_t __test_dictionary_iteration_semantics(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Every loop takes a backward jump, conditional or not, which polls the
+   host before it is taken: a frame polls once on entry, and its loop is
+   interrupted on the first backward jump. The crafted loops jump back
+   through the jumps that keep their operand, which compiled code takes only
+   forwards. */
 static int32_t __test_runtime_interrupt_polling(void) {
-    static const char source[] = "while True:\n    pass\n";
+    static const char *const sources[] = {
+        "while True:\n    pass\n",
+        "flag = 0\nwhile True:\n    if flag:\n        pass\n",
+        "items = [1]\nflag = 0\nwhile items or flag:\n    pass\n",
+        "index = 0\nwhile True:\n    if index < 0:\n        pass\n"
+    };
+    /* JUMP_IF_TRUE_OR_POP loops on True, JUMP_IF_FALSE_OR_POP on False. */
+    static const uint8_t jumps[] = {112U, 111U};
     test_allocator_state_t state = {0U, 0U};
     test_interrupt_host_t interrupt_host = {0U, 2U};
     tinypy_allocator_t allocator;
@@ -1277,11 +1289,45 @@ static int32_t __test_runtime_interrupt_polling(void) {
     vm = tinypy_vm_create(&config);
     globals = tinypy_dict_new(vm);
     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
-    result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "interrupt.py", 12U, globals, NULL, &options, &error);
-    assert(result == NULL);
-    assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
-    assert(interrupt_host.polls == 2U);
-    tinypy_error_release(error);
+    for (size_t index = 0U; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+        interrupt_host.polls = 0U;
+        result = tinypy_exec_source(vm, sources[index], strlen(sources[index]), "interrupt.py", 12U, globals, NULL, &options, &error);
+        assert(result == NULL);
+        assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+        assert(interrupt_host.polls == 2U);
+        tinypy_error_release(error);
+        error = NULL;
+    }
+    for (size_t index = 0U; index < sizeof(jumps) / sizeof(jumps[0]); ++index) {
+        const uint8_t bytes[] = {100U, 0U, 0U, jumps[index], 3U, 0U, 100U, 1U, 0U, 83U};
+        tinypy_value_t *constants[2];
+        constants[0] = tinypy_bool_from_i32(vm, index == 0U);
+        constants[1] = tinypy_none_get(vm);
+        tinypy_value_t *bytecode = tinypy_string_from_bytes(vm, bytes, sizeof(bytes));
+        tinypy_value_t *consts = tinypy_tuple_from_items(vm, constants, 2U);
+        tinypy_value_t *empty = tinypy_tuple_from_items(vm, NULL, 0U);
+        tinypy_value_t *filename = tinypy_string_from_bytes(vm, "interrupt.py", 12U);
+        tinypy_value_t *name = tinypy_string_from_bytes(vm, "<module>", 8U);
+        tinypy_value_t *lnotab = tinypy_string_from_bytes(vm, "", 0U);
+        tinypy_value_t *code = tinypy_code_new(0, 0, 1, TINYPY_CODE_NO_FREE, bytecode, consts, empty, empty, empty, empty, filename, name, 1, lnotab);
+
+        interrupt_host.polls = 0U;
+        result = tinypy_exec_code(code, globals, NULL, &error);
+        assert(result == NULL);
+        assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+        assert(interrupt_host.polls == 2U);
+        tinypy_error_release(error);
+        error = NULL;
+        tinypy_release(code);
+        tinypy_release(lnotab);
+        tinypy_release(name);
+        tinypy_release(filename);
+        tinypy_release(empty);
+        tinypy_release(consts);
+        tinypy_release(bytecode);
+        tinypy_release(constants[1]);
+        tinypy_release(constants[0]);
+    }
     tinypy_release(globals);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
@@ -2414,6 +2460,46 @@ static int32_t __test_meta_template(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* meta.range grows its list through the heap: a host that refuses any
+   allocation the size of its storage fails the compilation with MemoryError,
+   one allocation at a time, until the compilation needs none it refuses. */
+static int32_t __test_meta_range_allocation_failure(void) {
+    static const char source[] = "@meta.template\ndef Template():\n    for index in meta.range(200):\n        pass\n\n    @meta.emit\n    def generated():\n        return 7\n\nmeta.expand(Template)\nresult = generated()\n";
+    test_failing_allocator_state_t state = {{0U, 0U}, 0U, 0U, 0U};
+    tinypy_vm_t *vm = __test_failing_vm_create(&state, 0U);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_t options;
+    size_t index;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_META;
+    state.fail_maximum = 4096U;
+    for (index = 0U;; ++index) {
+        tinypy_error_t *error = NULL;
+
+        state.fail_size = 513U;
+        state.fail_index = index;
+        tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "meta_range.py", 13U, globals, NULL, &options, &error);
+        if (state.fail_size != 0U) {
+            state.fail_size = 0U;
+            assert(result != NULL && error == NULL);
+            tinypy_release(result);
+            break;
+        }
+        assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+    }
+    assert(index != 0U);
+    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "result", 6U)) == 7);
+    /* The emitted function and its globals form a cycle. */
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_compile_environment_imports(void) {
     static const char source[] = "value = __IMPORT_VALUE__\ndynamic = eval('__IMPORT_VALUE__ + 1')\n";
     test_allocator_state_t state = {0U, 0U};
@@ -2613,6 +2699,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_meta_template() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_meta_range_allocation_failure() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_compile_environment_imports() != 0) {

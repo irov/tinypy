@@ -58,6 +58,8 @@ static void __tinypy_internal_make_error_location(const tinypy_allocator_t *allo
     error->previous = NULL;
     error->next = NULL;
     error->rendered_message = NULL;
+    error->rendering = TINYPY_FALSE;
+    error->released = TINYPY_FALSE;
 
     cursor = error->data;
     if (message_size != 0U) {
@@ -157,29 +159,41 @@ static void __tinypy_internal_error_unlink(tinypy_error_t *error) {
 }
 //////////////////////////////////////////////////////////////////////////
 /* Most diagnostics belong to exceptions that Python code handles, so the
-   class they were raised with maps to their kind only when it is read. */
-static void __tinypy_internal_error_resolve_kind(tinypy_error_t *error) {
+   class they were raised with maps to their kind only when it is read. The
+   reference to the class passes to the caller: releasing it may run code
+   that releases the error. */
+static tinypy_type_t *__tinypy_internal_error_resolve_kind(tinypy_error_t *error) {
     tinypy_type_t *exception_type = error->exception_type;
 
-    if (exception_type == NULL) {
-        return;
+    if (exception_type != NULL) {
+        error->exception_type = NULL;
+        error->kind = tinypy_internal_exception_error_kind(error->vm, exception_type);
     }
-    error->exception_type = NULL;
-    error->kind = tinypy_internal_exception_error_kind(error->vm, exception_type);
-    TINYPY_DECREF(&exception_type->base.base);
+    return exception_type;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_error_free(tinypy_error_t *error) {
+    tinypy_allocator_t allocator = error->allocator;
+
+    if (error->rendered_message != NULL) {
+        allocator.deallocate(allocator.user_data, error->rendered_message, error->message_size + 1U, TINYPY_INTERNAL_ALIGNMENT);
+    }
+    allocator.deallocate(allocator.user_data, error, error->allocation_size, TINYPY_INTERNAL_ALIGNMENT);
 }
 //////////////////////////////////////////////////////////////////////////
 /* The message is str() of the exception up to its first NUL byte, rendered
    with the pending exception state of the VM set aside; a failed str() reads
-   as PyErr_Display reports it. */
-static void __tinypy_internal_error_render(tinypy_error_t *error) {
+   as PyErr_Display reports it. The error that the code it runs releases is
+   freed once rendering ends; returns whether the error is still held. */
+static tinypy_bool_t __tinypy_internal_error_render(tinypy_error_t *error) {
     static const char fallback_message[] = "<exception str() failed>";
     tinypy_vm_t *vm = error->vm;
     tinypy_value_t *exception = error->exception;
+    tinypy_type_t *exception_type = __tinypy_internal_error_resolve_kind(error);
 
-    __tinypy_internal_error_resolve_kind(error);
     __tinypy_internal_error_unlink(error);
     error->exception = NULL;
+    error->rendering = TINYPY_TRUE;
     tinypy_internal_exception_state_t state;
     tinypy_internal_exception_preserve_begin(vm, &state);
     tinypy_value_t *rendered = tinypy_object_str(exception, NULL);
@@ -194,8 +208,11 @@ static void __tinypy_internal_error_render(tinypy_error_t *error) {
         message = bytes;
         message_size = terminator != NULL ? (size_t)(terminator - bytes) : TINYPY_TEXT_BYTE_SIZE(rendered);
     }
-    char *buffer = (char *)error->allocator.allocate(error->allocator.user_data, message_size + 1U, TINYPY_INTERNAL_ALIGNMENT);
+    char *buffer = NULL;
 
+    if (error->released == 0) {
+        buffer = (char *)error->allocator.allocate(error->allocator.user_data, message_size + 1U, TINYPY_INTERNAL_ALIGNMENT);
+    }
     if (buffer != NULL) {
         if (message_size != 0U) {
             (void)memcpy(buffer, message, message_size);
@@ -208,6 +225,15 @@ static void __tinypy_internal_error_render(tinypy_error_t *error) {
         TINYPY_DECREF(rendered);
     }
     TINYPY_DECREF(exception);
+    if (exception_type != NULL) {
+        TINYPY_DECREF(&exception_type->base.base);
+    }
+    error->rendering = TINYPY_FALSE;
+    if (error->released != 0) {
+        __tinypy_internal_error_free(error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Diagnostics of exceptions that Python code handles are released unread, so
@@ -230,14 +256,17 @@ void tinypy_internal_make_exception_error(tinypy_vm_t *vm, tinypy_type_t *except
         vm->pending_diagnostics->previous = error;
     }
     vm->pending_diagnostics = error;
-    if (vm->state != TINYPY_VM_STATE_LIVE) {
-        __tinypy_internal_error_render(error);
+    if (vm->state == TINYPY_VM_STATE_LIVE) {
+        return;
+    }
+    if (__tinypy_internal_error_render(error) == 0) {
+        *out_error = NULL;
     }
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_error_render_pending(tinypy_vm_t *vm) {
     while (vm->pending_diagnostics != NULL) {
-        __tinypy_internal_error_render(vm->pending_diagnostics);
+        (void)__tinypy_internal_error_render(vm->pending_diagnostics);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -444,15 +473,27 @@ const char *tinypy_error_kind_name(tinypy_error_kind_e error_kind) {
 //////////////////////////////////////////////////////////////////////////
 tinypy_error_kind_e tinypy_error_kind(const tinypy_error_t *error) {
     /* Resolving completes the kind of a logically immutable error. */
-    __tinypy_internal_error_resolve_kind((tinypy_error_t *)error);
+    tinypy_type_t *exception_type = __tinypy_internal_error_resolve_kind((tinypy_error_t *)error);
+    tinypy_error_kind_e kind = error->kind;
 
-    return error->kind;
+    if (exception_type != NULL) {
+        TINYPY_DECREF(&exception_type->base.base);
+    }
+    return kind;
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_error_message(const tinypy_error_t *error, size_t *out_size) {
     if (error->vm != NULL) {
-        /* Rendering completes the message of a logically immutable error. */
-        __tinypy_internal_error_render((tinypy_error_t *)error);
+        /* Rendering completes the message of a logically immutable error,
+           unless the code it runs releases the error. */
+        tinypy_bool_t held = __tinypy_internal_error_render((tinypy_error_t *)error);
+
+        if (held == 0) {
+            if (out_size != NULL) {
+                *out_size = 0U;
+            }
+            return "";
+        }
     }
     if (out_size != NULL) {
         *out_size = error->message_size;
@@ -484,9 +525,10 @@ int32_t tinypy_error_column_offset(const tinypy_error_t *error) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_error_release(tinypy_error_t *error) {
-    tinypy_allocator_t allocator;
-    size_t allocation_size;
-
+    if (error->rendering != 0) {
+        error->released = TINYPY_TRUE;
+        return;
+    }
     if (error->vm != NULL) {
         __tinypy_internal_error_unlink(error);
         TINYPY_DECREF(error->exception);
@@ -494,14 +536,5 @@ void tinypy_error_release(tinypy_error_t *error) {
             TINYPY_DECREF(&error->exception_type->base.base);
         }
     }
-    if (error->rendered_message != NULL) {
-        error->allocator.deallocate(error->allocator.user_data, error->rendered_message, error->message_size + 1U, TINYPY_INTERNAL_ALIGNMENT);
-    }
-    allocator = error->allocator;
-    allocation_size = error->allocation_size;
-    allocator.deallocate(
-        allocator.user_data,
-        error,
-        allocation_size,
-        TINYPY_INTERNAL_ALIGNMENT);
+    __tinypy_internal_error_free(error);
 }

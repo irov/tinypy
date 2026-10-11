@@ -8,7 +8,9 @@ const char *tinypy_error_kind_name(tinypy_error_kind_e error_kind);
 
 tinypy_error_kind_e tinypy_error_kind(const tinypy_error_t *error);
 
-/* out_size is optional. */
+/* out_size is optional. The message of a raised Python exception is its str(),
+ * computed on the first read; when the code that runs releases the error, the
+ * release completes after the read and the message reads as empty. */
 const char *tinypy_error_message(const tinypy_error_t *error, size_t *out_size);
 const char *tinypy_error_logical_filename(const tinypy_error_t *error, size_t *out_size);
 const char *tinypy_error_source_line(const tinypy_error_t *error, size_t *out_size);

@@ -1256,6 +1256,10 @@ struct tinypy_type_t {
     uint64_t flags;
     tinypy_type_t *base_type;
     tinypy_value_type_e layout_kind;
+    /* One more than the index of a type of a classic MRO in the VM list of
+       those that got a version, which keeps them until a classic class
+       changes; zero while the type is not listed. */
+    uint32_t classic_position;
     tinypy_value_t *name_object;
     tinypy_value_t *dict;
     tinypy_value_t *bases;
@@ -1288,12 +1292,13 @@ struct tinypy_type_t {
     tinypy_bool_t has_finalizer;
     tinypy_bool_t has_classic_mro;
     /* The MRO was computed by an mro() override, or a type of the MRO has
-       such an MRO. */
+       such an MRO; also an MRO whose changes do not all reach the type
+       through the subclasses its bases list. */
     tinypy_bool_t has_custom_mro;
     tinypy_bool_t bases_updating;
-    /* A type of a classic MRO that got a version is listed in the VM until
-       a classic class changes. */
-    tinypy_bool_t classic_listed;
+    /* The MRO was computed while the bases of a type of it were being
+       replaced, and is checked before the type gets a version. */
+    tinypy_bool_t rebasing_mro;
     /* __get__, __set__ and __delete__ known and overridden by Python code in
        a subclass of a built-in descriptor type while version equals
        dispatch_version, one bit each. */
@@ -1319,6 +1324,9 @@ struct tinypy_type_t {
     tinypy_value_t *constructor_new;
     tinypy_value_t *constructor_init;
     tinypy_bool_t constructor_object_new;
+    /* The cleared references of dead subclasses that the subclasses list
+       still holds. */
+    uint32_t subclasses_cleared;
     tinypy_value_t *weakrefs;
     tinypy_value_t *subclasses;
     size_t native_payload_offset;
@@ -1742,6 +1750,15 @@ typedef enum tinypy_native_descriptor_kind_e {
     TINYPY_NATIVE_DESCRIPTOR_CLASS_METHOD = 3
 } tinypy_native_descriptor_kind_e;
 //////////////////////////////////////////////////////////////////////////
+/* The check a native function makes before its callback runs: RECEIVER for
+   a method of a host native type, whose receiver must still have its
+   payload, and FINALIZED once its finalizer ran, as its user data is gone. */
+typedef enum tinypy_native_call_check_e {
+    TINYPY_NATIVE_CALL_CHECK_NONE = 0,
+    TINYPY_NATIVE_CALL_CHECK_RECEIVER = 1,
+    TINYPY_NATIVE_CALL_CHECK_FINALIZED = 2
+} tinypy_native_call_check_e;
+//////////////////////////////////////////////////////////////////////////
 /* The three ways CPython 2.7 reports a C-level argument count mismatch:
    PyArg_ParseTuple, PyArg_UnpackTuple and METH_O. An unchecked builtin
    parses its arguments and keywords itself. */
@@ -1765,8 +1782,7 @@ typedef struct tinypy_native_function_object_t {
     size_t minimum;
     size_t maximum;
     tinypy_arity_style_e arity_style;
-    /* Set once the finalizer has run: user_data is gone, and calls raise. */
-    tinypy_bool_t finalized;
+    tinypy_native_call_check_e call_check;
     void *user_data;
     tinypy_native_function_finalize_t finalize;
     /* The weak reference to a heap owner, which holds the descriptor. */
@@ -1989,8 +2005,9 @@ struct tinypy_vm_t {
     size_t native_method_free_count;
     /* Argument tuples of native calls that no callback kept, by item count. */
     tinypy_value_t *native_argument_tuples[TINYPY_NATIVE_ARGUMENT_CACHE_SIZE];
-    /* Counts the native functions and instances created with a finalizer, so
-       tinypy_vm_destroy repeats its finalizer pass only for new ones. */
+    /* Counts the native functions and instances created with a finalizer, and
+       the instances resurrected before it ran, so tinypy_vm_destroy repeats
+       its finalizer pass only for them. */
     size_t native_finalizable_created;
     uint64_t dict_cache_epoch;
     tinypy_bool_t dict_cache_exhausted;
@@ -2111,6 +2128,10 @@ struct tinypy_error_t {
     tinypy_error_t *previous;
     tinypy_error_t *next;
     char *rendered_message;
+    /* Rendering runs code that may release the error, which is then freed
+       when rendering ends. */
+    tinypy_bool_t rendering;
+    tinypy_bool_t released;
     char data[];
 };
 //////////////////////////////////////////////////////////////////////////
@@ -2217,6 +2238,10 @@ tinypy_value_t *tinypy_internal_string_from_bytes_checked(tinypy_vm_t *vm, const
 /* Bypass the intern table for compiler/wire bytes; keep the empty/char caches. */
 tinypy_value_t *tinypy_internal_string_from_bytes_uninterned(tinypy_vm_t *vm, const void *bytes, size_t size);
 tinypy_value_t *tinypy_internal_string_from_bytes_uninterned_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_unicode_from_utf8_checked(tinypy_vm_t *vm, const char *utf8, size_t size, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_integer_from_i64_checked(tinypy_vm_t *vm, int64_t value, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_float_from_double_checked(tinypy_vm_t *vm, double value, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_complex_from_doubles_checked(tinypy_vm_t *vm, double real_value, double imaginary_value, tinypy_error_t **out_error);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
 void tinypy_internal_cycle_diagnostics_initialize(tinypy_vm_t *vm);
 void tinypy_internal_cycle_diagnostics_finalize(tinypy_vm_t *vm);
@@ -2315,6 +2340,7 @@ tinypy_value_t *tinypy_internal_string_concat_in_place(tinypy_vm_t *vm, tinypy_v
 tinypy_bool_t tinypy_internal_string_is_interned(const tinypy_value_t *value);
 void tinypy_internal_string_set_interned(tinypy_value_t *value, tinypy_bool_t interned);
 tinypy_bool_t tinypy_internal_string_intern(tinypy_value_t **owned_value, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_string_intern_checked(tinypy_value_t **owned_value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_string_find(const tinypy_vm_t *vm, const void *bytes, size_t size);
 void tinypy_internal_string_unintern(tinypy_value_t *value);
 void tinypy_internal_intern_finalize(tinypy_vm_t *vm);
@@ -2381,7 +2407,10 @@ int32_t tinypy_internal_contains_builtin(tinypy_value_t *container, tinypy_value
 tinypy_value_t *tinypy_internal_iter_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_repr_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_str_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
-tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t *out_handled, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
+/* _PyObject_Str: the str, a subtype included, or the unicode that represents
+   a value. */
+tinypy_value_t *tinypy_internal_object_str_text(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_operator_builtin(tinypy_value_t *left, tinypy_value_t *right, int32_t mode, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_unary_builtin(tinypy_value_t *value, int32_t mode, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_number_absolute(tinypy_value_t *value, tinypy_error_t **out_error);
@@ -2397,6 +2426,7 @@ tinypy_bool_t tinypy_internal_delete_item_builtin(tinypy_value_t *container, tin
 tinypy_bool_t tinypy_internal_dict_delete_index(tinypy_vm_t *vm, tinypy_value_t *dict, size_t index, tinypy_value_t **out_key, tinypy_value_t **out_value);
 tinypy_value_t *tinypy_internal_dict_get_optional_index(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, size_t *out_index, tinypy_value_t **out_stored_key);
 tinypy_value_t *tinypy_internal_dict_get_index_hint(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, size_t index);
+tinypy_bool_t tinypy_internal_dict_get_identity(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_value_t **out_value);
 tinypy_bool_t tinypy_internal_dict_delete_optional(tinypy_vm_t *vm, tinypy_value_t *dict, const tinypy_value_t *key);
 tinypy_bool_t tinypy_internal_dict_equal_checked(const tinypy_value_t *left, const tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
 void tinypy_internal_set_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
@@ -2695,6 +2725,7 @@ tinypy_value_t *tinypy_internal_type_function_key(tinypy_value_t *value, tinypy_
 /* Calls a Python function found on the receiver's type as its bound method,
    with at most two arguments after the receiver. */
 tinypy_value_t *tinypy_internal_call_type_function(tinypy_value_t *function, tinypy_value_t *receiver, tinypy_value_t *const *arguments, size_t argument_count, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_code_new_checked(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *bytecode, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *varnames, tinypy_value_t *freevars, tinypy_value_t *cellvars, tinypy_value_t *filename, tinypy_value_t *name, int32_t first_line_number, tinypy_value_t *lnotab, tinypy_error_t **out_error);
 void tinypy_internal_code_destroy(tinypy_value_t *value);
 tinypy_bool_t tinypy_internal_code_allocate_caches(tinypy_code_object_t *code, tinypy_error_t **out_error);
 void tinypy_internal_code_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
@@ -2724,6 +2755,7 @@ void tinypy_internal_iterator_release_references(tinypy_value_t *value, tinypy_r
 tinypy_value_t *tinypy_internal_iterator_iter(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_next_raw(tinypy_value_t *iterator, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_iteration_failed(const tinypy_vm_t *vm, tinypy_error_t *iteration_error, tinypy_error_t **out_error);
 void tinypy_internal_iterator_clear(tinypy_iterator_object_t *iterator);
 tinypy_value_t *tinypy_internal_dict_iterator_new(tinypy_value_t *dict, int32_t mode);
 tinypy_value_t *tinypy_internal_call_iterator_new(tinypy_value_t *callable, tinypy_value_t *sentinel, tinypy_error_t **out_error);

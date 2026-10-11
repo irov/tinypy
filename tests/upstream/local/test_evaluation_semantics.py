@@ -774,6 +774,57 @@ class EvaluationSemantics(unittest.TestCase):
         child.__class__ = Tagged
         self.assertEqual((read(child), length(child)), (None, 3))
 
+    def test_attribute_caches_follow_classes_created_while_bases_change(self):
+        # A __bases__ assignment computes the MROs again of the classes that
+        # its key comparisons create from the MRO it replaces, as
+        # mro_subclasses walks tp_subclasses as it goes.
+        class Base(object):
+            pass
+        class First(Base):
+            pass
+        class Second(Base):
+            pass
+        made = []
+        armed = [False]
+        class Key(object):
+            def __hash__(self):
+                return hash('mro')
+            def __eq__(self, other):
+                if armed[0]:
+                    armed[0] = False
+                    class New(Rebased):
+                        pass
+                    class Deeper(New):
+                        pass
+                    class Joined(New, Rebased):
+                        pass
+                    made.extend([New, Deeper, Joined])
+                return False
+        Meta = type('Meta', (type,), {Key(): 1})
+        Rebased = Meta('Rebased', (Second,), {})
+        class Payload(object):
+            pass
+        Second.second = Payload()
+        Meta.touch = 1
+        armed[0] = True
+        Rebased.__bases__ = (First,)
+        self.assertEqual([[cls.__name__ for cls in made_class.__mro__] for made_class in made], [
+            ['New', 'Rebased', 'First', 'Base', 'object'],
+            ['Deeper', 'New', 'Rebased', 'First', 'Base', 'object'],
+            ['Joined', 'New', 'Rebased', 'First', 'Base', 'object'],
+        ])
+        instances = [made_class() for made_class in made]
+        def read(target, name):
+            try:
+                return type(getattr(target, name)).__name__
+            except AttributeError:
+                return None
+        self.assertEqual([[read(target, 'second') for target in instances] for _ in range(2)], [[None] * 3] * 2)
+        First.first = Payload()
+        self.assertEqual([[read(target, 'first') for target in instances] for _ in range(2)], [['Payload'] * 3] * 2)
+        del First.first
+        self.assertEqual([read(target, 'first') for target in instances], [None] * 3)
+
     def test_attribute_caches_follow_changes_through_deep_hierarchies(self):
         class Root(object):
             flag = 0
@@ -846,6 +897,26 @@ class EvaluationSemantics(unittest.TestCase):
         Old.__dict__ = {'value': 'replaced'}
         self.assertEqual(survivor.value, 'replaced')
 
+    def test_classic_class_changes_reach_mixed_classes_after_others_die(self):
+        class Old:
+            value = 'old'
+        classes = [type('Mixed%d' % index, (Old, object), {'index': index}) for index in range(8)]
+        instances = [cls() for cls in classes]
+        del cls
+        self.assertEqual([(target.value, target.index) for target in instances], [('old', index) for index in range(8)])
+        for index in (3, 0, 7, 5):
+            classes[index] = instances[index] = None
+        Old.value = 'changed'
+        survivors = [target for target in instances if target is not None]
+        self.assertEqual([[target.value for target in survivors] for _ in range(2)], [['changed'] * 4] * 2)
+        late = type('Late', (Old, object), {})()
+        self.assertEqual(late.value, 'changed')
+        for index in (1, 6):
+            classes[index] = instances[index] = None
+        del survivors
+        Old.value = 'again'
+        self.assertEqual([target.value for target in instances if target is not None] + [late.value], ['again'] * 3)
+
     def test_comparisons_reach_the_recursion_limit_like_ceval(self):
         # A limit a few frames above the current depth is reached before the
         # native stack guard, which a sanitized build trips within a few
@@ -867,6 +938,43 @@ class EvaluationSemantics(unittest.TestCase):
         finally:
             sys.setrecursionlimit(limit)
         self.assertEqual(messages, ['maximum recursion depth exceeded'] + ['maximum recursion depth exceeded in cmp'] * 5)
+
+    def test_membership_tests_reach_the_recursion_limit_like_ceval(self):
+        # cmp_outcome tests membership outside the recursion level of a
+        # comparison, so a __contains__ that tests membership again reaches
+        # the limit as deep as in CPython.
+        depths = []
+
+        class Container(object):
+            def __contains__(self, item):
+                depths[-1] += 1
+                return item in self
+
+        class Classic:
+            def __contains__(self, item):
+                depths[-1] += 1
+                return item not in self
+
+        depth = 0
+        frame = sys._getframe()
+        while frame is not None:
+            depth += 1
+            frame = frame.f_back
+        failures = []
+        limit = sys.getrecursionlimit()
+        try:
+            for extra in (30, 60):
+                sys.setrecursionlimit(depth + extra)
+                for container in (Container(), Classic()):
+                    depths.append(0)
+                    try:
+                        1 in container
+                    except RuntimeError as error:
+                        failures.append(type(error))
+        finally:
+            sys.setrecursionlimit(limit)
+        self.assertEqual(failures, [RuntimeError] * 4)
+        self.assertEqual(depths, [10, 10, 20, 20])
 
     def test_special_method_overrides_follow_class_changes(self):
         class Value(object):

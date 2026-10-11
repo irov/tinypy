@@ -1617,6 +1617,132 @@ class ObjectProtocols(unittest.TestCase):
                 self.fail('float() accepted %r' % text)
         self.assert_message(ValueError, 'could not convert string to float: ' + 'x' * 5, float, '   ' + 'x' * 5 + '\x00' + 'y' * 300)
 
+    def test_classic_representation_lookup_errors(self):
+        class Missing:
+            @property
+            def __repr__(self):
+                raise AttributeError('repr')
+            @property
+            def __str__(self):
+                raise AttributeError('str')
+        class Failing:
+            def __getattr__(self, name):
+                if name in ('__str__', '__repr__'):
+                    raise KeyError(name)
+                raise AttributeError(name)
+        missing = Missing()
+        default = '<%s.Missing instance at %s>' % (__name__, hex(id(missing)).rstrip('L'))
+        for convert in (repr, str, format, lambda value: '%r' % (value,), lambda value: '%s' % (value,), object.__str__, lambda value: '{0}'.format(value)):
+            self.assertEqual(convert(missing), default)
+        self.assertEqual(unicode(missing), default)
+        self.assertEqual(str([missing]), '[%s]' % default)
+        for convert in (repr, str, unicode, lambda value: '%s' % (value,)):
+            self.assertRaises(KeyError, convert, Failing())
+
+    def test_classic_unicode_lookup_errors_fall_back_to_str(self):
+        class Raising(object):
+            def __get__(self, instance, owner):
+                raise KeyError('get')
+        class Descriptor:
+            __unicode__ = Raising()
+            def __str__(self):
+                return 'descriptor'
+        class Unbindable:
+            __unicode__ = int.__str__
+            def __str__(self):
+                return 'unbindable'
+        class Hooked:
+            def __getattr__(self, name):
+                if name == '__unicode__':
+                    raise ValueError(name)
+                raise AttributeError(name)
+            def __str__(self):
+                return 'hooked'
+        for value, text in ((Descriptor(), u'descriptor'), (Unbindable(), u'unbindable'), (Hooked(), u'hooked')):
+            self.assertEqual(unicode(value), text)
+            self.assertEqual(u'%s' % (value,), text)
+            self.assertEqual(u'{0}'.format(value), text)
+
+    def test_str_of_types_without_str_calls_repr(self):
+        class Meta(type):
+            def __repr__(cls):
+                return 'Meta:' + cls.__name__
+        class Plain(object):
+            __metaclass__ = Meta
+        for convert in (str, format, lambda value: '{0}'.format(value), lambda value: '%s' % (value,)):
+            self.assertEqual(convert(Plain), 'Meta:Plain')
+        class Super(super):
+            def __repr__(self):
+                return 'super-repr'
+        class Module(type(sys)):
+            def __repr__(self):
+                return 'module-repr'
+        self.assertEqual(str(Super(Plain, Plain())), 'super-repr')
+        self.assertEqual(str(Module('parcel')), 'module-repr')
+        class Error(Exception):
+            __str__ = object.__str__
+            def __repr__(self):
+                return 'error-repr'
+        class Missing(KeyError):
+            __str__ = object.__str__
+        class Plainest(ValueError):
+            __str__ = object.__str__
+            __repr__ = object.__repr__
+        error = Error('parcel')
+        for convert in (str, lambda value: '%s' % (value,), object.__str__, unicode):
+            self.assertEqual(convert(error), 'error-repr')
+        self.assertEqual(str(Missing('key')), "Missing('key',)")
+        plainest = Plainest('value')
+        self.assertEqual(str(plainest), object.__repr__(plainest))
+
+    def test_str_keeps_str_subclass_results(self):
+        class Text(str):
+            pass
+        class Represented(object):
+            def __repr__(self):
+                return Text('represented')
+        class Listed(list):
+            def __repr__(self):
+                return Text('listed')
+        class Classic:
+            def __repr__(self):
+                return Text('classic')
+        for value in (Represented(), Listed(), Classic()):
+            self.assertIs(type(str(value)), Text)
+            self.assertIs(type(repr(value)), Text)
+            self.assertIs(type('%s' % (value,)), str)
+        self.assertIs(type(str(Exception(Represented()))), Text)
+
+    def test_non_string_representation_messages(self):
+        class Listed(list):
+            def __repr__(self):
+                return 5
+        class Classic:
+            def __repr__(self):
+                return 5
+        self.assert_message(TypeError, '__str__ returned non-string (type int)', str, Listed())
+        self.assert_message(TypeError, '__str__ returned non-string (type int)', format, Listed())
+        self.assert_message(TypeError, '__repr__ returned non-string (type int)', repr, Listed())
+        self.assert_message(TypeError, '__str__ returned non-string (type int)', str, Classic())
+        self.assert_message(TypeError, '__repr__ returned non-string (type int)', str, [Classic()])
+        self.assert_message(TypeError, 'coercing to Unicode: need string or buffer, int found', unicode, Classic())
+        self.assertEqual(object.__str__(Listed()), 5)
+
+    def test_type_hooks_apply_only_to_types(self):
+        class NotMeta(object):
+            __instancecheck__ = type.__instancecheck__
+            __subclasscheck__ = type.__subclasscheck__
+            __bases__ = ()
+        info = NotMeta()
+        self.assert_message(TypeError, "descriptor '__instancecheck__' for 'type' objects doesn't apply to 'NotMeta' object", isinstance, 1, info)
+        self.assert_message(TypeError, "descriptor '__subclasscheck__' for 'type' objects doesn't apply to 'NotMeta' object", issubclass, int, info)
+        class Meta(type):
+            __instancecheck__ = type.__instancecheck__
+        class Known(object):
+            __metaclass__ = Meta
+        self.assertIs(isinstance(Known(), Known), True)
+        self.assertIs(isinstance(1, Known), False)
+
 def truth_check(value, expected):
     def check(self):
         self.assertIs(bool(value), expected)

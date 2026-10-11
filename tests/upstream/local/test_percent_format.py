@@ -42,6 +42,37 @@ class PercentFormat(unittest.TestCase):
 
         self.assertRaises(LookupError, lambda: "%s" % BrokenLabel())
 
+    def test_unicode_string_restarts_as_unicode(self):
+        class Both(object):
+            def __str__(self):
+                return u"from-str"
+            def __unicode__(self):
+                return u"from-unicode"
+        class Represented(tuple):
+            def __repr__(self):
+                return u"from-repr"
+            def __unicode__(self):
+                return u"from-unicode"
+        class Classic:
+            def __repr__(self):
+                return u"from-repr"
+            def __unicode__(self):
+                return u"from-unicode"
+        class ClassicRepr:
+            def __repr__(self):
+                return u"classic-repr"
+        class Hooked:
+            def __getattr__(self, name):
+                if name == "__str__":
+                    return lambda: u"\xe9"
+                raise AttributeError(name)
+        for value, expected in ((Both(), u"from-unicode"), (Represented(), u"from-unicode"), (Classic(), u"from-unicode"), (ClassicRepr(), u"classic-repr"), (Hooked(), u"\xe9")):
+            result = "%s" % (value,)
+            self.assertEqual(result, expected)
+            self.assertIs(type(result), unicode)
+        self.assertEqual("<%-14s|%d>" % (Both(), 7), u"<from-unicode  |7>")
+        self.assertRaises(UnicodeDecodeError, lambda: "\xe9%s" % (Both(),))
+
 
 def vector_check(pattern, operand, expected):
     def check(self):

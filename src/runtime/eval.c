@@ -955,6 +955,17 @@ static tinypy_value_t *__tinypy_eval_compare(tinypy_vm_t *vm, tinypy_value_t *le
         tinypy_value_t *return_value_3 = tinypy_bool_from_i32(vm, result);
         return return_value_3;
     }
+    /* cmp_outcome tests membership with PySequence_Contains, outside the
+       recursion level of a comparison. */
+    if (operation == (size_t)TINYPY_COMPARE_IN || operation == (size_t)TINYPY_COMPARE_NOT_IN) {
+        int32_t contained = tinypy_contains(right, left, out_error);
+
+        if (contained < 0) {
+            return NULL;
+        }
+        tinypy_value_t *membership = tinypy_bool_from_i32(vm, (contained != 0) == (operation == (size_t)TINYPY_COMPARE_IN));
+        return membership;
+    }
     tinypy_value_t *return_value_2 = tinypy_compare_value(left, right, (tinypy_compare_operation_e)operation, out_error);
     return return_value_2;
 }
@@ -1574,26 +1585,25 @@ static inline const uint8_t *__tinypy_eval_code_bytecode(const tinypy_value_t *c
     return bytecode;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_eval_decode_trusted(const uint8_t *bytecode, size_t instruction_offset, tinypy_decoded_instruction_t *instruction);
-//////////////////////////////////////////////////////////////////////////
 /* string_concatenate in ceval drops the reference of the variable that the
-   next instruction rebinds before it grows the left operand in place. A
-   namespace probe can run a colliding key's __eq__, so its errors are
+   store, the next instruction, rebinds before it grows the left operand in
+   place. The namespace is probed by identity first; only a probe that has to
+   compare keys can run a colliding key's __eq__, so its errors are
    discarded, as PyDict_GetItem and the PyErr_Clear after PyDict_DelItem do.
    Reports whether the variable held left and is now unbound. */
-static tinypy_bool_t __tinypy_eval_concat_unbind(tinypy_vm_t *vm, tinypy_frame_object_t *frame, const tinypy_decoded_instruction_t *store, tinypy_value_t *left) {
+static tinypy_bool_t __tinypy_eval_concat_unbind(tinypy_vm_t *vm, tinypy_frame_object_t *frame, uint8_t store, size_t argument, tinypy_value_t *left) {
     tinypy_value_t **locals = frame->locals_plus;
 
-    if (store->opcode == TINYPY_OP_STORE_FAST) {
-        if (locals[store->argument] != left) {
+    if (store == TINYPY_OP_STORE_FAST) {
+        if (locals[argument] != left) {
             return TINYPY_FALSE;
         }
-        locals[store->argument] = NULL;
+        locals[argument] = NULL;
         TINYPY_DECREF(left);
         return TINYPY_TRUE;
     }
-    if (store->opcode == TINYPY_OP_STORE_DEREF) {
-        tinypy_value_t *cell = locals[(size_t)TINYPY_CODE_LOCAL_COUNT(frame->code) + store->argument];
+    if (store == TINYPY_OP_STORE_DEREF) {
+        tinypy_value_t *cell = locals[(size_t)TINYPY_CODE_LOCAL_COUNT(frame->code) + argument];
         if (tinypy_cell_get(cell) != left) {
             return TINYPY_FALSE;
         }
@@ -1601,14 +1611,21 @@ static tinypy_bool_t __tinypy_eval_concat_unbind(tinypy_vm_t *vm, tinypy_frame_o
         return TINYPY_TRUE;
     }
     tinypy_value_t *mapping = frame->locals;
-    if (store->opcode != TINYPY_OP_STORE_NAME || mapping == NULL || mapping->type != &vm->types[TINYPY_VALUE_DICT]) {
+    if (store != TINYPY_OP_STORE_NAME || mapping == NULL || mapping->type != &vm->types[TINYPY_VALUE_DICT]) {
         return TINYPY_FALSE;
     }
-    tinypy_value_t *name = TINYPY_TUPLE_GET(TINYPY_CODE_NAMES(frame->code), store->argument);
+    tinypy_value_t *name = TINYPY_TUPLE_GET(TINYPY_CODE_NAMES(frame->code), argument);
+    tinypy_value_t *value = NULL;
+    tinypy_bool_t decided = tinypy_internal_dict_get_identity(vm, mapping, name, &value);
+    if (decided != 0 && value != left) {
+        return TINYPY_FALSE;
+    }
     tinypy_bool_t deleted = TINYPY_FALSE;
     tinypy_internal_exception_state_t state;
     tinypy_internal_exception_preserve_begin(vm, &state);
-    tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, mapping, name);
+    if (decided == 0) {
+        value = tinypy_internal_dict_get_optional(vm, mapping, name);
+    }
     if (value == left) {
         deleted = tinypy_internal_dict_delete_optional(vm, mapping, name);
     }
@@ -1619,66 +1636,89 @@ static tinypy_bool_t __tinypy_eval_concat_unbind(tinypy_vm_t *vm, tinypy_frame_o
 /* Restores the binding that __tinypy_eval_concat_unbind dropped when the
    string cannot grow, so that a failing concatenation leaves the variable
    as it was. */
-static void __tinypy_eval_concat_rebind(tinypy_vm_t *vm, tinypy_frame_object_t *frame, const tinypy_decoded_instruction_t *store, tinypy_value_t *left) {
+static void __tinypy_eval_concat_rebind(tinypy_vm_t *vm, tinypy_frame_object_t *frame, uint8_t store, size_t argument, tinypy_value_t *left) {
     tinypy_value_t **locals = frame->locals_plus;
 
-    if (store->opcode == TINYPY_OP_STORE_FAST) {
+    if (store == TINYPY_OP_STORE_FAST) {
         TINYPY_INCREF(left);
-        locals[store->argument] = left;
+        locals[argument] = left;
         return;
     }
-    if (store->opcode == TINYPY_OP_STORE_DEREF) {
-        tinypy_value_t *cell = locals[(size_t)TINYPY_CODE_LOCAL_COUNT(frame->code) + store->argument];
+    if (store == TINYPY_OP_STORE_DEREF) {
+        tinypy_value_t *cell = locals[(size_t)TINYPY_CODE_LOCAL_COUNT(frame->code) + argument];
         tinypy_cell_set(cell, left);
         return;
     }
-    tinypy_value_t *name = TINYPY_TUPLE_GET(TINYPY_CODE_NAMES(frame->code), store->argument);
+    tinypy_value_t *name = TINYPY_TUPLE_GET(TINYPY_CODE_NAMES(frame->code), argument);
     tinypy_internal_exception_state_t state;
     tinypy_internal_exception_preserve_begin(vm, &state);
     tinypy_dict_set(frame->locals, name, left);
     tinypy_internal_exception_preserve_end(vm, &state);
 }
 //////////////////////////////////////////////////////////////////////////
-/* string_concatenate in ceval: `s + t` and `s += t` on exact byte strings
-   grow s in place instead of copying it when only the evaluator holds s,
-   either as a temporary or once the variable that the next instruction
-   rebinds has been unbound. Anything that runs during the unbind can take a
-   reference or intern s, so both are checked after it. Returns the grown
-   string, which takes over the evaluator's reference to left, or NULL to
-   leave the addition to the operator. The work stays out of the evaluator so
-   that its frame, which every Python call level adds to the native stack,
-   does not grow. */
-static TINYPY_NOINLINE tinypy_value_t *__tinypy_eval_concat_grow(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *left, tinypy_value_t *right) {
-    tinypy_value_t *code = frame->code;
-    /* Additions take no argument and EXTENDED_ARG prefixes only opcodes that
-       do, so the store starts right after the addition. */
-    size_t next_offset = (size_t)frame->last_instruction + 1U;
-    tinypy_decoded_instruction_t store;
-    tinypy_bool_t unbound = TINYPY_FALSE;
-
-    if (TINYPY_SIZED_SIZE(right) == 0U) {
-        return NULL;
-    }
-    if (TINYPY_REFCNT(left) == 2U && next_offset < TINYPY_SIZED_SIZE(TINYPY_CODE_BYTECODE(code))) {
-        const uint8_t *bytecode = __tinypy_eval_code_bytecode(code);
-        __tinypy_eval_decode_trusted(bytecode, next_offset, &store);
-        unbound = __tinypy_eval_concat_unbind(vm, frame, &store, left);
-    }
-    if (TINYPY_REFCNT(left) != 1U || TINYPY_STRING_OBJECT(left)->interned != 0) {
+/* Grows left by right in place when only the evaluator holds left and it is
+   not interned, or returns NULL. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_eval_concat_resize(tinypy_vm_t *vm, tinypy_value_t *left, tinypy_value_t *right) {
+    if (TINYPY_SIZED_SIZE(right) == 0U || TINYPY_REFCNT(left) != 1 || TINYPY_STRING_OBJECT(left)->interned != 0) {
         return NULL;
     }
     tinypy_value_t *grown = tinypy_internal_string_concat_in_place(vm, left, TINYPY_TEXT_BYTES(right), TINYPY_SIZED_SIZE(right));
+    return grown;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Grows left once the variable that the store rebinds, if it held left, has
+   been unbound. Anything that runs during the unbind can take a reference or
+   intern left, which the growth checks after it. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_eval_concat_grow_store(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *left, tinypy_value_t *right, uint8_t store, size_t argument) {
+    if (TINYPY_SIZED_SIZE(right) == 0U) {
+        return NULL;
+    }
+    tinypy_bool_t unbound = __tinypy_eval_concat_unbind(vm, frame, store, argument, left);
+    tinypy_value_t *grown = __tinypy_eval_concat_resize(vm, left, right);
     if (grown == NULL && unbound != 0) {
-        __tinypy_eval_concat_rebind(vm, frame, &store, left);
+        __tinypy_eval_concat_rebind(vm, frame, store, argument, left);
     }
     return grown;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Only additions of exact byte strings whose left operand at most one
-   variable holds besides the evaluator may grow it in place. */
-static inline tinypy_bool_t __tinypy_eval_concat_candidate(const tinypy_vm_t *vm, const tinypy_value_t *left, const tinypy_value_t *right) {
-    tinypy_bool_t candidate = left->type == &vm->types[TINYPY_VALUE_STRING] && right->type == &vm->types[TINYPY_VALUE_STRING] && TINYPY_REFCNT(left) <= 2U;
-    return candidate;
+/* string_concatenate in ceval: `s + t` and `s += t` on exact byte strings
+   grow s in place instead of copying it when only the evaluator holds s,
+   either as a temporary or besides the variable that the store, the next
+   instruction, rebinds. Like string_concatenate, the evaluator peeks at the
+   store, so that an addition whose result goes elsewhere stays inline.
+   Additions take no argument and EXTENDED_ARG prefixes only opcodes that do,
+   so the store starts right after the addition, which the verifier lets no
+   code end with. Returns the grown string, which takes over the evaluator's
+   reference to left, or NULL to leave the addition to the operator. Only the
+   tests are inline: the work stays out of the evaluator so that its frame,
+   which every Python call level adds to the native stack, does not grow. */
+static inline tinypy_value_t *__tinypy_eval_concat_grow(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *left, tinypy_value_t *right) {
+    if (left->type != &vm->types[TINYPY_VALUE_STRING] || right->type != &vm->types[TINYPY_VALUE_STRING]) {
+        return NULL;
+    }
+    if (TINYPY_REFCNT(left) == 1) {
+        tinypy_value_t *grown = __tinypy_eval_concat_resize(vm, left, right);
+        return grown;
+    }
+    if (TINYPY_REFCNT(left) != 2) {
+        return NULL;
+    }
+    const uint8_t *store = __tinypy_eval_code_bytecode(frame->code) + (size_t)frame->last_instruction + 1U;
+    size_t argument = 0U;
+    if (store[0] == TINYPY_OP_STORE_FAST) {
+        argument = (size_t)store[1] | ((size_t)store[2] << 8U);
+        if (frame->locals_plus[argument] != left) {
+            return NULL;
+        }
+    }
+    else if (store[0] == TINYPY_OP_STORE_DEREF || store[0] == TINYPY_OP_STORE_NAME) {
+        argument = (size_t)store[1] | ((size_t)store[2] << 8U);
+    }
+    else {
+        return NULL;
+    }
+    tinypy_value_t *grown = __tinypy_eval_concat_grow_store(vm, frame, left, right, store[0], argument);
+    return grown;
 }
 //////////////////////////////////////////////////////////////////////////
 /* INPLACE_ADD, the usual way to build a string, tries the growth before it
@@ -1686,10 +1726,6 @@ static inline tinypy_bool_t __tinypy_eval_concat_candidate(const tinypy_vm_t *vm
 static inline tinypy_bool_t __tinypy_eval_concat_in_place(tinypy_vm_t *vm, tinypy_frame_object_t *frame) {
     tinypy_value_t *left = frame->stack_top[-2];
     tinypy_value_t *right = frame->stack_top[-1];
-
-    if (__tinypy_eval_concat_candidate(vm, left, right) == 0) {
-        return TINYPY_FALSE;
-    }
     tinypy_value_t *grown = __tinypy_eval_concat_grow(vm, frame, left, right);
     if (grown == NULL) {
         return TINYPY_FALSE;
@@ -1712,7 +1748,7 @@ static inline tinypy_bool_t __tinypy_eval_binary(tinypy_vm_t *vm, tinypy_frame_o
     }
     /* BINARY_ADD tries the growth only past the numeric paths, so that
        numbers do not pay for it; INPLACE_ADD has tried it already. */
-    if (handled == 0 && operation == tinypy_add && __tinypy_eval_concat_candidate(vm, left, right) != 0) {
+    if (handled == 0 && operation == tinypy_add) {
         tinypy_value_t *grown = __tinypy_eval_concat_grow(vm, frame, left, right);
         if (grown != NULL) {
             left = grown;
@@ -1770,12 +1806,27 @@ static void __tinypy_eval_clear_diagnostic(tinypy_error_t **out_error) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* A VM without a host keeps its host callbacks zeroed. */
 static tinypy_bool_t __tinypy_eval_poll_interrupt(tinypy_vm_t *vm, tinypy_error_t **out_error) {
-    if (vm->has_host != 0 && vm->host.poll_interrupt != NULL && vm->host.poll_interrupt(vm->host.user_data) != 0) {
+    if (vm->host.poll_interrupt != NULL && vm->host.poll_interrupt(vm->host.user_data) != 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INTERRUPT, "execution interrupted by host", out_error);
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Every loop takes a backward jump, so a backward jump polls the host for
+   an interrupt before the evaluator takes it. */
+static inline tinypy_eval_reason_e __tinypy_eval_jump(tinypy_vm_t *vm, size_t offset, size_t target, size_t *out_instruction_offset, tinypy_error_t **out_error) {
+    if (target <= offset) {
+        tinypy_bool_t running = __tinypy_eval_poll_interrupt(vm, out_error);
+
+        if (running == 0) {
+            return TINYPY_EVAL_REASON_EXCEPTION;
+        }
+    }
+    *out_instruction_offset = target;
+    return TINYPY_EVAL_REASON_NOT;
 }
 //////////////////////////////////////////////////////////////////////////
 #if defined(TINYPY_DEBUGGER)
@@ -3636,15 +3687,7 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
                     tinypy_internal_vm_deallocate(vm, unpacked_items, argument * sizeof(*unpacked_items));
                 }
                 TINYPY_DECREF(iterator);
-                if (iteration_error != NULL) {
-                    if (out_error != NULL) {
-                        *out_error = iteration_error;
-                    }
-                    else {
-                        tinypy_error_release(iteration_error);
-                    }
-                }
-                else {
+                if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) == 0) {
                     __tinypy_eval_make_unpack_error(vm, obtained, out_error);
                 }
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
@@ -3652,26 +3695,16 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             }
             tinypy_value_t *extra = tinypy_next(iterator, &iteration_error);
             TINYPY_DECREF(iterator);
-            if (extra != NULL || iteration_error != NULL) {
+            if (extra != NULL || tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
                 if (extra != NULL) {
                     TINYPY_DECREF(extra);
+                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "too many values to unpack", out_error);
                 }
                 while (index != 0U) {
                     TINYPY_DECREF(unpacked_items[--index]);
                 }
                 if (argument != 0U) {
                     tinypy_internal_vm_deallocate(vm, unpacked_items, argument * sizeof(*unpacked_items));
-                }
-                if (iteration_error != NULL) {
-                    if (out_error != NULL) {
-                        *out_error = iteration_error;
-                    }
-                    else {
-                        tinypy_error_release(iteration_error);
-                    }
-                }
-                else {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "too many values to unpack", out_error);
                 }
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
                 break;
@@ -3720,8 +3753,11 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
                     tinypy_bool_t jump = next.opcode == TINYPY_OP_POP_JUMP_IF_TRUE ? truth : truth == 0;
 
                     frame->last_instruction = (int32_t)next.offset;
-                    instruction_offset = jump != 0 ? (size_t)next.argument : next.next_offset;
+                    instruction_offset = next.next_offset;
                     TINYPY_DECREF(comparison);
+                    if (jump != 0) {
+                        reason = __tinypy_eval_jump(vm, next.offset, (size_t)next.argument, &instruction_offset, out_error);
+                    }
                     break;
                 }
             }
@@ -3827,13 +3863,7 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             if (item != NULL) {
                 __tinypy_eval_push_owned(frame, item);
             }
-            else if (iteration_error != NULL) {
-                if (out_error != NULL) {
-                    *out_error = iteration_error;
-                }
-                else {
-                    tinypy_error_release(iteration_error);
-                }
+            else if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             else {
@@ -3844,12 +3874,7 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
         }
         break;
         case TINYPY_OP_JUMP_ABSOLUTE:
-            if (argument <= instruction.offset && __tinypy_eval_poll_interrupt(vm, out_error) == 0) {
-                reason = TINYPY_EVAL_REASON_EXCEPTION;
-            }
-            else {
-                instruction_offset = argument;
-            }
+            reason = __tinypy_eval_jump(vm, instruction.offset, argument, &instruction_offset, out_error);
             break;
         case TINYPY_OP_POP_JUMP_IF_FALSE:
         case TINYPY_OP_POP_JUMP_IF_TRUE: {
@@ -3860,7 +3885,7 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             else if ((instruction.opcode == TINYPY_OP_POP_JUMP_IF_TRUE && truth != 0) || (instruction.opcode == TINYPY_OP_POP_JUMP_IF_FALSE && truth == 0)) {
-                instruction_offset = argument;
+                reason = __tinypy_eval_jump(vm, instruction.offset, argument, &instruction_offset, out_error);
             }
         }
         break;
@@ -3873,7 +3898,7 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             else if (jump != 0) {
-                instruction_offset = argument;
+                reason = __tinypy_eval_jump(vm, instruction.offset, argument, &instruction_offset, out_error);
             }
             else {
                 tinypy_value_t *eval_pop_owned = __tinypy_eval_pop_owned(frame);
@@ -3998,7 +4023,7 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
     else {
         __tinypy_eval_unwind_stack(frame, 0U);
         tinypy_internal_frame_clear_local_slots(frame);
-        if (TINYPY_REFCNT(frame_value) == 1U) {
+        if (TINYPY_REFCNT(frame_value) == 1) {
             tinypy_internal_frame_release_fast(frame);
         }
         else {
