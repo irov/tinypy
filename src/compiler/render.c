@@ -115,7 +115,7 @@ static tinypy_bool_t __tinypy_render_append(tinypy_render_builder_t *builder, co
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_render_text(tinypy_render_builder_t *builder, const char *text) {
-    unsigned long size = strlen(text);
+    size_t size = strlen(text);
     tinypy_bool_t return_value_1 = __tinypy_render_append(builder, text, size);
     return return_value_1;
 }

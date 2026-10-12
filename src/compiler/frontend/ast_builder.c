@@ -46,7 +46,7 @@ static tinypy_value_t *__parsestrplus(tinypy_ast_builder_t *, const tinypy_cst_n
 
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_identifier_t __new_identifier(const char *n, tinypy_compile_ctx_t *arena) {
-    unsigned long size = strlen(n);
+    size_t size = strlen(n);
     tinypy_value_t *id = tinypy_string_from_bytes(arena->vm, n, size);
     if (id != NULL) {
         (void)tinypy_internal_string_intern(&id, NULL);
@@ -1790,12 +1790,13 @@ static tinypy_ast_expression_t __ast_for_factor(tinypy_ast_builder_t *c, const t
     */
     if (TINYPY_CST_TYPE(TINYPY_CST_CHILD(n, 0)) == TINYPY_TOKEN_MINUS && TINYPY_CST_CHILD_COUNT(n) == 2 && TINYPY_CST_TYPE((pfactor = TINYPY_CST_CHILD(n, 1))) == TINYPY_GRAMMAR_FACTOR && TINYPY_CST_CHILD_COUNT(pfactor) == 1 && TINYPY_CST_TYPE((ppower = TINYPY_CST_CHILD(pfactor, 0))) == TINYPY_GRAMMAR_POWER && TINYPY_CST_CHILD_COUNT(ppower) == 1 && TINYPY_CST_TYPE((patom = TINYPY_CST_CHILD(ppower, 0))) == TINYPY_GRAMMAR_ATOM && TINYPY_CST_TYPE((pnum = TINYPY_CST_CHILD(patom, 0))) == TINYPY_TOKEN_NUMBER) {
         tinypy_value_t *pynum;
-        char *s = (char *)TINYPY_COMPILER_ARENA_MALLOC(c->c_arena, strlen(TINYPY_CST_TEXT(pnum)) + 2);
+        size_t number_size = strlen(TINYPY_CST_TEXT(pnum));
+        char *s = (char *)TINYPY_COMPILER_ARENA_MALLOC(c->c_arena, number_size + 2U);
         if (s == NULL) {
             return NULL;
         }
         s[0] = '-';
-        strcpy(s + 1, TINYPY_CST_TEXT(pnum));
+        (void)memcpy(s + 1, TINYPY_CST_TEXT(pnum), number_size + 1U);
         pynum = __parsenumber(c, s, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
         if (!pynum) {
             return NULL;

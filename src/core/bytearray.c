@@ -626,7 +626,7 @@ static tinypy_value_t *__tinypy_bytearray_encode(tinypy_vm_t *vm, tinypy_value_t
 static tinypy_value_t *__tinypy_bytearray_create(tinypy_vm_t *vm, tinypy_value_t *source, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_error_t **out_error) {
     uint8_t *bytes;
     size_t size;
-    int64_t requested_size;
+    int64_t requested_size = 0;
 
     if (source == NULL) {
         tinypy_value_t *return_value_1 = __tinypy_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
@@ -709,7 +709,7 @@ tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_val
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_bytearray_initialize(tinypy_value_t *value, tinypy_value_t *source, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    int64_t requested_size;
+    int64_t requested_size = 0;
 
     if (source == NULL) {
         return TINYPY_TRUE;

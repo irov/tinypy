@@ -147,7 +147,7 @@ static tinypy_symbol_table_t *__tinypy_symbol_table_new(tinypy_compile_ctx_t *ar
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_symbol_identifier(tinypy_symbol_table_t *st, tinypy_value_t **slot, const char *name) {
     if (*slot == NULL) {
-        unsigned long size = strlen(name);
+        size_t size = strlen(name);
         tinypy_value_t *identifier = tinypy_internal_name_from_bytes(st->arena->vm, name, size);
         if (__tinypy_symbol_arena_value(st, identifier) == 0) {
             return NULL;

@@ -912,7 +912,7 @@ static tinypy_bool_t __tinypy_memoryview_set(tinypy_value_t *instance, void *pay
     const uint8_t *replacement;
     size_t replacement_size;
     size_t index = 0U;
-    tinypy_internal_slice_indices_t slice;
+    tinypy_internal_slice_indices_t slice = {0};
     tinypy_bool_t is_slice = TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE;
     size_t owner_offset = 0U;
     tinypy_value_t *owner = __tinypy_memoryview_writable_owner(instance, &owner_offset);

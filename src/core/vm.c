@@ -1680,6 +1680,13 @@ static void __tinypy_internal_initialize_empty_tuple(tinypy_tuple_object_t *valu
     value->items[0] = NULL;
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_initialize_key(tinypy_vm_t *vm, tinypy_value_t **key, const char *name, size_t name_size, tinypy_bool_t intern_name) {
+    *key = tinypy_string_from_bytes(vm, name, name_size);
+    if (intern_name != 0) {
+        (void)tinypy_internal_string_intern(key, NULL);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_host_valid(const tinypy_host_t *host) {
     if (host == NULL) {
         return TINYPY_TRUE;
@@ -1829,10 +1836,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
         &vm->empty_tuple_object,
         &vm->types[TINYPY_VALUE_TUPLE]);
 #define TINYPY_INTERNAL_KEY_CREATE(field, name, intern_name) \
-    vm->field = tinypy_string_from_bytes(vm, name, sizeof(name) - 1U); \
-    if (intern_name != 0) { \
-        (void)tinypy_internal_string_intern(&vm->field, NULL); \
-    }
+    __tinypy_internal_initialize_key(vm, &vm->field, name, sizeof(name) - 1U, intern_name);
     TINYPY_INTERNAL_KEY_LIST(TINYPY_INTERNAL_KEY_CREATE)
 #undef TINYPY_INTERNAL_KEY_CREATE
 

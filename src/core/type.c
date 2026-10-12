@@ -683,7 +683,7 @@ static tinypy_value_t **__tinypy_internal_c3_merge(tinypy_vm_t *vm, tinypy_value
     tinypy_value_t *declared = NULL;
     size_t storage_size;
     size_t result_capacity;
-    size_t result_size;
+    size_t result_size = 0U;
     size_t result_count = 0U;
     size_t storage_offset = 0U;
     size_t index;

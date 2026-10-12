@@ -625,10 +625,12 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
     if (cursor != end) {
         goto invalid;
     }
+#if SIZE_MAX > INT64_MAX / 8
     if (digit_count > (size_t)(INT64_MAX / 8)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "hexadecimal string too long to convert", out_error);
         return TINYPY_FALSE;
     }
+#endif
     if (significant_digits == 0U) {
         *out_number = negative != 0 ? -0.0 : 0.0;
         return TINYPY_TRUE;

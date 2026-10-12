@@ -577,7 +577,7 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
                 opcode = TINYPY_OP_JUMP_ABSOLUTE;
             }
             if (!TINYPY_OPTIMIZER_IS_ABSOLUTE_JUMP(opcode)) {
-                tgttgt -= i + 3;
+                tgttgt -= (int32_t)i + 3;
             } /* Calc relative jump addr */
             if (tgttgt < 0) /* No backward relative jumps */ {
                 continue;

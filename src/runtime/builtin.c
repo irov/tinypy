@@ -1012,7 +1012,7 @@ static tinypy_value_t *__tinypy_builtin_range_long_argument(tinypy_vm_t *vm, tin
 static int64_t __tinypy_builtin_range_long_length(tinypy_vm_t *vm, tinypy_value_t *low, tinypy_value_t *high, tinypy_value_t *step) {
     tinypy_error_t *error = NULL;
     int32_t order;
-    int64_t length;
+    int64_t length = 0;
     tinypy_bool_t compared = tinypy_internal_compare_three_way(low, high, &order, &error);
 
     if (compared != 0 && order >= 0) {
@@ -3814,7 +3814,7 @@ static tinypy_bool_t __tinypy_builtin_compile_integer(tinypy_value_t *value, int
             return TINYPY_FALSE;
         }
     }
-    if (kind != TINYPY_VALUE_LONG) {
+    else {
         integer = tinypy_integer_as_i64(converted);
     }
     TINYPY_DECREF(converted);

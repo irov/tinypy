@@ -654,9 +654,11 @@ static tinypy_bool_t __tinypy_length_hint_builtin_length(tinypy_value_t *value, 
     default:
         return TINYPY_FALSE;
     }
+#if SIZE_MAX > INT64_MAX
     if (size > (size_t)INT64_MAX) {
         return TINYPY_FALSE;
     }
+#endif
     *out_length = (int64_t)size;
     return TINYPY_TRUE;
 }

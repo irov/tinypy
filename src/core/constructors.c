@@ -1617,8 +1617,8 @@ integer_conversion:
         return text_integer;
     }
     if (kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_BYTEARRAY) {
-        const uint8_t *bytes;
-        size_t size;
+        const uint8_t *bytes = NULL;
+        size_t size = 0U;
         tinypy_value_t *character_string = NULL;
         tinypy_bool_t has_buffer;
 
@@ -1786,8 +1786,8 @@ static tinypy_value_t *__tinypy_constructor_float_value(tinypy_type_t *type, tin
         TINYPY_DECREF(converted);
     }
     else {
-        const uint8_t *bytes;
-        size_t size;
+        const uint8_t *bytes = NULL;
+        size_t size = 0U;
         tinypy_value_t *character_string = NULL;
         tinypy_bool_t has_buffer = TINYPY_FALSE;
 
