@@ -1046,6 +1046,33 @@ static int32_t __test_long_canonical(void) {
         limit_digits[1024U / 15U] = (uint16_t)(UINT16_C(1) << (1024U % 15U));
     }
 
+    /* As PyNumber_AsSsize_t: an int is an index, a float is not one, and a
+     * long that int64_t cannot hold raises the overflow kind. */
+    {
+        int64_t index = 0;
+        tinypy_error_t *error = NULL;
+
+        value = tinypy_integer_from_i64(vm, INT64_C(-7));
+        TEST_CHECK(tinypy_number_as_index(value, TINYPY_ERROR_INDEX, &index, NULL) != 0);
+        TEST_CHECK(index == INT64_C(-7));
+        tinypy_release(value);
+
+        value = tinypy_float_from_double(vm, 1.5);
+        TEST_CHECK(tinypy_number_as_index(value, TINYPY_ERROR_INDEX, &index, &error) == 0);
+        TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+        tinypy_release(value);
+
+        error = NULL;
+        value = tinypy_long_from_base15_digits(vm, 1, limit_digits, 69U);
+        TEST_CHECK(tinypy_number_as_index(value, TINYPY_ERROR_INDEX, &index, &error) == 0);
+        TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDEX);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+        tinypy_release(value);
+    }
+
     tinypy_vm_destroy(vm);
     TEST_CHECK(state.outstanding_allocations == 0U);
     TEST_CHECK(state.outstanding_bytes == 0U);

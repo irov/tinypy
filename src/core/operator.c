@@ -2473,6 +2473,11 @@ tinypy_bool_t tinypy_internal_number_as_index(tinypy_value_t *value, tinypy_erro
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_number_as_index(tinypy_value_t *value, tinypy_error_kind_e overflow_kind, int64_t *out_index, tinypy_error_t **out_error) {
+    tinypy_bool_t result = tinypy_internal_number_as_index(value, overflow_kind, out_index, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 /* sequence_repeat of abstract.c: PyNumber_AsSsize_t with OverflowError for
    an index count, the sequence's own repeat for the result. */
 static tinypy_value_t *__tinypy_operator_sequence_repeat(tinypy_value_t *sequence, tinypy_value_t *count_value, tinypy_bool_t inplace, tinypy_error_t **out_error) {
