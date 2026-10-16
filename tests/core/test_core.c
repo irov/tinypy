@@ -654,14 +654,28 @@ static int32_t __test_unicode_utf8(void) {
         0xedU, 0x9fU, 0xbfU,
         0xeeU, 0x80U, 0x80U,
         0xf4U, 0x8fU, 0xbfU, 0xbfU};
+#if WCHAR_MAX <= 0xffff
+    static const wchar_t wide_units[] = {
+        0x41, 0xa2, 0x20ac, 0xd83d, 0xde00, 0x0, 0xd7ff, 0xe000, 0xdbff, 0xdfff};
+#else
+    static const wchar_t wide_units[] = {
+        0x41, 0xa2, 0x20ac, 0x1f600, 0x0, 0xd7ff, 0xe000, 0x10ffff};
+#endif
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
     tinypy_vm_t *vm = NULL;
     tinypy_value_t *value = NULL;
+    static const char *const invalid_utf8[] = {
+        "\xf4", "\xc0\x80", "\xe0\x80\x80", "\xf5\x80\x80\x80", "\xf4\x90\x80\x80", "a\xffz"};
     tinypy_value_t *empty = NULL;
+    tinypy_value_t *decoded = NULL;
+    tinypy_error_t *error = NULL;
     const char *view = NULL;
+    const wchar_t *wide = NULL;
+    size_t invalid_index;
     size_t view_size = 0U;
+    size_t wide_size = 0U;
     size_t code_point_count = 0U;
 
     (void)memset(&state, 0, sizeof(state));
@@ -686,6 +700,15 @@ static int32_t __test_unicode_utf8(void) {
         memcmp(view + 1, utf8 + 1, sizeof(utf8) - 1U) == 0);
     TEST_CHECK(((const uint8_t *)view)[view_size] == 0U);
 
+    wide = tinypy_unicode_wchar_view(value, &wide_size, &error);
+    TEST_CHECK(wide != NULL);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(wide_size == sizeof(wide_units) / sizeof(wide_units[0]));
+    TEST_CHECK(memcmp(wide, wide_units, sizeof(wide_units)) == 0);
+    TEST_CHECK(wide[wide_size] == L'\0');
+    TEST_CHECK(tinypy_unicode_wchar_view(value, &wide_size, NULL) == wide);
+    TEST_CHECK(wide_size == sizeof(wide_units) / sizeof(wide_units[0]));
+
     empty = tinypy_unicode_from_utf8(vm, NULL, 0U);
     view = tinypy_unicode_utf8_view(empty,
                                     &view_size,
@@ -694,6 +717,32 @@ static int32_t __test_unicode_utf8(void) {
     TEST_CHECK(view_size == 0U);
     TEST_CHECK(code_point_count == 0U);
     TEST_CHECK(view[0] == '\0');
+    wide = tinypy_unicode_wchar_view(empty, &wide_size, &error);
+    TEST_CHECK(wide != NULL);
+    TEST_CHECK(wide_size == 0U);
+    TEST_CHECK(wide[0] == L'\0');
+
+    decoded = tinypy_unicode_decode_utf8(vm, (const char *)utf8, sizeof(utf8), &error);
+    TEST_CHECK(decoded != NULL);
+    TEST_CHECK(error == NULL);
+    view = tinypy_unicode_utf8_view(decoded, &view_size, &code_point_count);
+    TEST_CHECK(view_size == sizeof(utf8));
+    TEST_CHECK(code_point_count == 8U);
+    TEST_CHECK(memcmp(view, utf8, sizeof(utf8)) == 0);
+    tinypy_release(decoded);
+    for (invalid_index = 0U; invalid_index < sizeof(invalid_utf8) / sizeof(invalid_utf8[0]); ++invalid_index) {
+        size_t raised_name_size = 0U;
+
+        decoded = tinypy_unicode_decode_utf8(vm, invalid_utf8[invalid_index], strlen(invalid_utf8[invalid_index]), &error);
+        TEST_CHECK(decoded == NULL);
+        TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+        TEST_CHECK(strcmp(tinypy_type_name(tinypy_value_as_const_type(tinypy_vm_raised_exception_type(vm)), &raised_name_size), "exceptions.UnicodeDecodeError") == 0);
+        if (error != NULL) {
+            tinypy_error_release(error);
+            error = NULL;
+        }
+        tinypy_vm_clear_error(vm);
+    }
 
     tinypy_release(value);
     tinypy_release(empty);

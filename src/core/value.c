@@ -150,6 +150,7 @@ tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tin
         else if (kind == TINYPY_VALUE_UNICODE) {
             TINYPY_UNICODE_OBJECT(result)->index_offsets = NULL;
             TINYPY_UNICODE_OBJECT(result)->native_buffer = NULL;
+            TINYPY_UNICODE_OBJECT(result)->wchar_buffer = NULL;
         }
         TINYPY_DECREF(value);
         return result;
@@ -173,6 +174,7 @@ tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tin
     else if (kind == TINYPY_VALUE_UNICODE) {
         TINYPY_UNICODE_OBJECT(result)->index_offsets = NULL;
         TINYPY_UNICODE_OBJECT(result)->native_buffer = NULL;
+        TINYPY_UNICODE_OBJECT(result)->wchar_buffer = NULL;
     }
     TINYPY_DECREF(value);
     return result;
@@ -523,6 +525,7 @@ static tinypy_value_t *__tinypy_internal_text_allocate_uninitialized(tinypy_vm_t
         TINYPY_UNICODE_OBJECT(value)->byte_size = byte_size;
         TINYPY_UNICODE_OBJECT(value)->index_offsets = NULL;
         TINYPY_UNICODE_OBJECT(value)->native_buffer = NULL;
+        TINYPY_UNICODE_OBJECT(value)->wchar_buffer = NULL;
         payload = TINYPY_UNICODE_OBJECT(value)->utf8;
     }
     payload[byte_size] = 0U;
@@ -817,6 +820,34 @@ tinypy_value_t *tinypy_internal_unicode_from_utf8_checked(tinypy_vm_t *vm, const
     tinypy_value_t *result = __tinypy_internal_unicode_from_utf8(vm, utf8, size, TINYPY_TRUE, out_error);
 
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_unicode_decode_utf8(tinypy_vm_t *vm, const char *utf8, size_t size, tinypy_error_t **out_error) {
+    const uint8_t *bytes = (const uint8_t *)utf8;
+    size_t offset = 0U;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    while (offset < size) {
+        uint32_t code_point;
+        size_t width = tinypy_internal_utf8_decode(bytes + offset, size - offset, &code_point);
+
+        if (width == 0U) {
+            break;
+        }
+        offset += width;
+    }
+    if (offset == size) {
+        tinypy_value_t *unicode = tinypy_internal_unicode_from_utf8_checked(vm, utf8, size, out_error);
+        return unicode;
+    }
+    /* The codec raises the UnicodeDecodeError that str.decode reports. */
+    tinypy_value_t *text = tinypy_internal_string_from_bytes_checked(vm, utf8, size, out_error);
+    if (text == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *decoded = tinypy_internal_text_codec(vm, text, vm->internal_codec_utf8_name, NULL, TINYPY_TRUE, TINYPY_TRUE, NULL, out_error);
+    TINYPY_DECREF(text);
+    return decoded;
 }
 //////////////////////////////////////////////////////////////////////////
 const char *tinypy_unicode_utf8_view(const tinypy_value_t *value, size_t *out_size, size_t *out_code_point_count) {

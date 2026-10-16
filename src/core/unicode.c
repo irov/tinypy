@@ -168,6 +168,24 @@ size_t tinypy_internal_unicode_character_index(tinypy_value_t *value, size_t byt
     return index;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The wchar_t code units of value without the terminator: where wchar_t has
+   16 bits a code point above the BMP, which canonical UTF-8 encodes from a
+   lead byte of 0xf0, takes a surrogate pair. */
+static size_t __tinypy_unicode_wchar_size(tinypy_value_t *value) {
+    size_t size = TINYPY_SIZED_SIZE(value);
+#if WCHAR_MAX <= 0xffff
+    tinypy_unicode_object_t *unicode = TINYPY_UNICODE_OBJECT(value);
+    size_t byte_offset;
+
+    for (byte_offset = 0U; byte_offset < unicode->byte_size; ++byte_offset) {
+        if (unicode->utf8[byte_offset] >= 0xf0U) {
+            size += 1U;
+        }
+    }
+#endif
+    return size;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_unicode_destroy(tinypy_value_t *value) {
     tinypy_unicode_object_t *unicode = TINYPY_UNICODE_OBJECT(value);
 
@@ -180,6 +198,12 @@ void tinypy_internal_unicode_destroy(tinypy_value_t *value) {
     if (unicode->native_buffer != NULL) {
         tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), unicode->native_buffer, TINYPY_SIZED_SIZE(value) * sizeof(*unicode->native_buffer));
         unicode->native_buffer = NULL;
+    }
+    if (unicode->wchar_buffer != NULL) {
+        size_t wchar_size = __tinypy_unicode_wchar_size(value);
+
+        tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), unicode->wchar_buffer, (wchar_size + 1U) * sizeof(*unicode->wchar_buffer));
+        unicode->wchar_buffer = NULL;
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -212,6 +236,52 @@ const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, tiny
         unicode->native_buffer = native;
     }
     return (const uint8_t *)unicode->native_buffer;
+}
+//////////////////////////////////////////////////////////////////////////
+const wchar_t *tinypy_unicode_wchar_view(tinypy_value_t *value, size_t *out_size, tinypy_error_t **out_error) {
+    static const wchar_t empty_view[1] = {L'\0'};
+    tinypy_unicode_object_t *unicode = TINYPY_UNICODE_OBJECT(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    size_t count = TINYPY_SIZED_SIZE(value);
+    size_t size = __tinypy_unicode_wchar_size(value);
+
+    TINYPY_CLEAR_ERROR(out_error);
+    *out_size = size;
+    if (count == 0U) {
+        return empty_view;
+    }
+    if (unicode->wchar_buffer != NULL) {
+        return unicode->wchar_buffer;
+    }
+    if (size > (size_t)PTRDIFF_MAX / sizeof(*unicode->wchar_buffer) - 1U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "Unicode buffer is too large", out_error);
+        return NULL;
+    }
+    wchar_t *buffer = (wchar_t *)tinypy_internal_vm_allocate_checked(vm, (size + 1U) * sizeof(*buffer), out_error);
+    if (buffer == NULL) {
+        return NULL;
+    }
+    size_t byte_offset = 0U;
+    size_t unit = 0U;
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        uint32_t code_point;
+
+        byte_offset += tinypy_internal_utf8_decode(unicode->utf8 + byte_offset, unicode->byte_size - byte_offset, &code_point);
+#if WCHAR_MAX <= 0xffff
+        if (code_point > 0xffffU) {
+            code_point -= 0x10000U;
+            buffer[unit++] = (wchar_t)(0xd800U + (code_point >> 10));
+            buffer[unit++] = (wchar_t)(0xdc00U + (code_point & 0x3ffU));
+            continue;
+        }
+#endif
+        buffer[unit++] = (wchar_t)code_point;
+    }
+    buffer[unit] = L'\0';
+    unicode->wchar_buffer = buffer;
+    return buffer;
 }
 
 //////////////////////////////////////////////////////////////////////////

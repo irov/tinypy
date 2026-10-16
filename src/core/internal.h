@@ -1429,6 +1429,7 @@ typedef struct tinypy_unicode_object_t {
     tinypy_bool_t hash_computed;
     size_t *index_offsets;
     uint32_t *native_buffer;
+    wchar_t *wchar_buffer;
     uint8_t utf8[];
 } tinypy_unicode_object_t;
 //////////////////////////////////////////////////////////////////////////

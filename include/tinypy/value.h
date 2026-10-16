@@ -34,9 +34,21 @@ const void *tinypy_string_view(const tinypy_value_t *value, size_t *out_size);
  * Returns NULL when size cannot be represented by the object allocation. */
 tinypy_value_t *tinypy_unicode_from_utf8(tinypy_vm_t *vm, const char *utf8, size_t size);
 
+/* PyUnicode_DecodeUTF8 in strict mode: the unicode value of size bytes that
+ * need not be valid UTF-8. Returns NULL with UnicodeDecodeError raised, as
+ * str.decode('utf-8') reports it, when they are not, or with MemoryError. */
+tinypy_value_t *tinypy_unicode_decode_utf8(tinypy_vm_t *vm, const char *utf8, size_t size, tinypy_error_t **out_error);
+
 /* Returns the canonical UTF-8 representation and both byte and Unicode scalar
  * counts. The borrowed view has the same lifetime rules as tinypy_string_view. */
 const char *tinypy_unicode_utf8_view(const tinypy_value_t *value, size_t *out_size, size_t *out_code_point_count);
+
+/* PyUnicode_AsUnicode for a wchar_t host: the UTF-16 code units of value where
+ * wchar_t has 16 bits and its UTF-32 ones otherwise, NUL-terminated after the
+ * *out_size units. The first call caches them on value, so the borrowed view
+ * stays valid until value is released. Returns NULL, with MemoryError raised,
+ * when they cannot be allocated. */
+const wchar_t *tinypy_unicode_wchar_view(tinypy_value_t *value, size_t *out_size, tinypy_error_t **out_error);
 
 tinypy_value_type_e tinypy_typeof(const tinypy_value_t *value);
 tinypy_vm_t *tinypy_value_vm(const tinypy_value_t *value);
