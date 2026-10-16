@@ -1448,6 +1448,7 @@ static int32_t __test_dictionary_runtime(void) {
     tinypy_dict_delete(dict, key_a_equal);
     TEST_CHECK(tinypy_dict_contains(dict, key_a) == 0);
     TEST_CHECK(tinypy_dict_get_optional(dict, key_a) == NULL);
+    TEST_CHECK(tinypy_dict_get(dict, key_a) == NULL);
 
     tinypy_dict_set(dict, key_a, dict);
     tinypy_dict_clear(dict);

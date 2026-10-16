@@ -528,7 +528,9 @@ tinypy_value_t *tinypy_dict_get(const tinypy_value_t *dict, const tinypy_value_t
     tinypy_hash_t hash;
 
     const tinypy_vm_t *vm = TINYPY_VALUE_VM(dict);
-    if (__tinypy_internal_dict_find_public(vm, dict, key, &lookup, &hash, NULL) == 0) {
+    /* A missing key leaves the index at the slot it would take, whose deleted
+       entry holds None. */
+    if (__tinypy_internal_dict_find_public(vm, dict, key, &lookup, &hash, NULL) == 0 || lookup.found == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = TINYPY_DICT_OBJECT(dict)->table[lookup.index].value;
