@@ -339,6 +339,11 @@ void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind
     __tinypy_compiler_report(ctx, error_kind, message, line_number, column_offset, line_bytes, line_size, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_compiler_memory_error(tinypy_compile_ctx_t *ctx) {
+    tinypy_internal_exception_clear_raised(ctx->vm);
+    tinypy_internal_compiler_error(ctx, TINYPY_ERROR_MEMORY, "memory allocation failed", 0, 0, ctx->out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_error_text(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, const char *text, size_t text_size, tinypy_error_t **out_error) {
     __tinypy_compiler_report(ctx, error_kind, message, line_number, column_offset, text, text_size, out_error);
 }

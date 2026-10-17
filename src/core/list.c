@@ -5,13 +5,14 @@
 #include <string.h>
 
 //////////////////////////////////////////////////////////////////////////
+/* list_dealloc releases the items from the last one, which orders their
+   __del__ calls. */
 void tinypy_internal_list_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_value_t **items = TINYPY_LIST_OBJECT(value)->items;
     size_t size = TINYPY_SIZED_SIZE(value);
-    size_t index;
 
-    for (index = 0U; index < size; ++index) {
-        visit(items[index], user_data);
+    for (size_t index = size; index != 0U; --index) {
+        visit(items[index - 1U], user_data);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -74,14 +75,14 @@ static tinypy_bool_t __tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_valu
 
     if (TINYPY_LIST_OBJECT(list)->items == NULL) {
         items = checked != 0
-                    ? (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, new_size, out_error)
+                    ? (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, new_size, out_error)
                     : (tinypy_value_t **)tinypy_internal_vm_allocate(vm, new_size);
     }
     else {
         old_size = __tinypy_internal_list_storage_size(
             TINYPY_LIST_OBJECT(list)->allocated);
         items = checked != 0
-                    ? (tinypy_value_t **)tinypy_internal_vm_reallocate_checked(vm, TINYPY_LIST_OBJECT(list)->items, old_size, new_size, out_error)
+                    ? (tinypy_value_t **)__tinypy_internal_vm_reallocate_checked(vm, TINYPY_LIST_OBJECT(list)->items, old_size, new_size, out_error)
                     : (tinypy_value_t **)tinypy_internal_vm_reallocate(vm, TINYPY_LIST_OBJECT(list)->items, old_size, new_size);
     }
     if (items == NULL) {
@@ -130,24 +131,30 @@ void tinypy_internal_list_shrink_to_fit(tinypy_vm_t *vm, tinypy_value_t *list) {
     list_object->allocated = size;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_list_from_items(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size) {
+/* PyList_New filled with the items: the storage holds exactly size items.
+   Only the storage has a computed size; the list object is a fixed one. */
+static tinypy_value_t *__tinypy_internal_list_from_items_exact(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size, tinypy_bool_t checked, tinypy_error_t **out_error) {
     size_t storage_size;
     size_t index;
 
     if (size > SIZE_MAX / sizeof(tinypy_value_t *)) {
+        if (checked != 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "list is too large", out_error);
+        }
         return NULL;
     }
     storage_size = __tinypy_internal_list_storage_size(size);
 
-    tinypy_value_t *result = tinypy_internal_value_allocate(
-        vm,
-        TINYPY_VALUE_LIST,
-        sizeof(tinypy_list_object_t));
+    tinypy_value_t *result = tinypy_internal_value_allocate(vm, TINYPY_VALUE_LIST, sizeof(tinypy_list_object_t));
     if (size != 0U) {
-        TINYPY_LIST_OBJECT(result)->items =
-            (tinypy_value_t **)tinypy_internal_vm_allocate(
-                vm,
-                storage_size);
+        tinypy_value_t **storage = checked != 0
+                                       ? (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, storage_size, out_error)
+                                       : (tinypy_value_t **)tinypy_internal_vm_allocate(vm, storage_size);
+        if (storage == NULL) {
+            TINYPY_DECREF(result);
+            return NULL;
+        }
+        TINYPY_LIST_OBJECT(result)->items = storage;
         TINYPY_LIST_OBJECT(result)->allocated = size;
     }
 
@@ -160,6 +167,18 @@ tinypy_value_t *tinypy_list_from_items(tinypy_vm_t *vm, tinypy_value_t *const *i
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_extend(vm, result, 0U, items, size);
 #endif
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_list_from_items(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size) {
+    tinypy_value_t *result = __tinypy_internal_list_from_items_exact(vm, items, size, TINYPY_FALSE, NULL);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_list_from_items_exact_checked(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_internal_list_from_items_exact(vm, items, size, TINYPY_TRUE, out_error);
+
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -375,7 +394,7 @@ static tinypy_value_t **__tinypy_list_detach_begin(tinypy_vm_t *vm, size_t count
     if (count == 0U) {
         return NULL;
     }
-    displaced = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, count * sizeof(*displaced), out_error);
+    displaced = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, count * sizeof(*displaced), out_error);
     return displaced;
 }
 //////////////////////////////////////////////////////////////////////////

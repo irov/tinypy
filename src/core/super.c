@@ -137,7 +137,7 @@ static tinypy_bool_t __tinypy_super_arguments(tinypy_vm_t *vm, tinypy_value_t *c
         return TINYPY_FALSE;
     }
     if (TINYPY_VALUE_KIND(items[0]) != TINYPY_VALUE_TYPE) {
-        tinypy_message_part_t type_name = TINYPY_MESSAGE_PART_TYPE_NAME(items[0]);
+        tinypy_message_part_t type_name = TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(items[0], 50U);
 
         /* The O! conversion names None rather than its type. */
         if (TINYPY_VALUE_KIND(items[0]) == TINYPY_VALUE_NONE) {

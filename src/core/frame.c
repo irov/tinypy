@@ -12,22 +12,25 @@ static int32_t __tinypy_internal_frame_line_number(const tinypy_frame_object_t *
     size_t size = TINYPY_SIZED_SIZE(code->lnotab);
     size_t address = 0U;
     size_t index;
-    int32_t line = code->first_line_number;
 
     /* PyCode_Addr2Line(code, -1): a frame that has not started is on the
        first line of its code. */
     if (frame->last_instruction < 0) {
-        return line;
+        return code->first_line_number;
     }
+    /* The line wraps past INT32_MAX as the int of PyCode_Addr2Line does,
+       so the sum is unsigned. */
+    uint32_t line = (uint32_t)code->first_line_number;
     size_t instruction_offset = (size_t)frame->last_instruction;
     for (index = 0U; index + 1U < size; index += 2U) {
         address += bytes[index];
         if (address > instruction_offset) {
             break;
         }
-        line += (int32_t)bytes[index + 1U];
+        line += bytes[index + 1U];
     }
-    return line;
+    int32_t result = (int32_t)line;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, tinypy_value_t *globals, int32_t function_frame) {
@@ -116,7 +119,7 @@ static tinypy_frame_object_t *__tinypy_internal_frame_allocate(tinypy_vm_t *vm, 
     if (frame != NULL) {
         __tinypy_internal_frame_free_list_drop(vm);
     }
-    frame = (tinypy_frame_object_t *)tinypy_internal_vm_allocate_checked(vm, allocation_size, NULL);
+    frame = (tinypy_frame_object_t *)__tinypy_internal_vm_allocate_checked(vm, allocation_size, NULL);
     if (frame == NULL) {
         return NULL;
     }

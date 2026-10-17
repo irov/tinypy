@@ -183,7 +183,7 @@ tinypy_internal_builtin_codec_e tinypy_internal_codecs_builtin(tinypy_vm_t *vm, 
     return TINYPY_INTERNAL_BUILTIN_CODEC_NONE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_codecs_normalize(tinypy_vm_t *vm, tinypy_value_t *name) {
+static tinypy_value_t *__tinypy_codecs_normalize(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error) {
     const uint8_t *source = TINYPY_TEXT_BYTES(name);
     size_t source_size = TINYPY_TEXT_BYTE_SIZE(name);
     uint8_t *normalized;
@@ -193,7 +193,10 @@ static tinypy_value_t *__tinypy_codecs_normalize(tinypy_vm_t *vm, tinypy_value_t
         tinypy_value_t *return_value_1 = TINYPY_RET_EMPTY_STRING(vm);
         return return_value_1;
     }
-    normalized = (uint8_t *)tinypy_internal_vm_allocate(vm, source_size);
+    normalized = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, source_size, out_error);
+    if (normalized == NULL) {
+        return NULL;
+    }
     for (source_index = 0U; source_index < source_size; ++source_index) {
         uint8_t character = source[source_index];
 
@@ -202,7 +205,7 @@ static tinypy_value_t *__tinypy_codecs_normalize(tinypy_vm_t *vm, tinypy_value_t
         }
         normalized[source_index] = character == (uint8_t)' ' ? (uint8_t)'-' : character;
     }
-    tinypy_value_t *result = tinypy_string_from_bytes(vm, normalized, source_size);
+    tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(vm, normalized, source_size, out_error);
     tinypy_internal_vm_deallocate(vm, normalized, source_size);
     return result;
 }
@@ -244,7 +247,10 @@ static tinypy_value_t *__tinypy_codecs_lookup(tinypy_value_t *function, tinypy_v
     tinypy_value_t *name = values[0];
     /* The arguments tuple keeps the positional values alive. */
     tinypy_internal_constructor_release_arguments(values, 1U);
-    tinypy_value_t *normalized = __tinypy_codecs_normalize(vm, name);
+    tinypy_value_t *normalized = __tinypy_codecs_normalize(vm, name, out_error);
+    if (normalized == NULL) {
+        return NULL;
+    }
     cache = vm->codec_cache;
     tinypy_value_t *cached = tinypy_dict_get_optional(cache, normalized);
 
@@ -419,7 +425,7 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
                     TINYPY_MESSAGE_PART_TEXT(tinypy_native_function_name(function)),
                     TINYPY_MESSAGE_PART_LITERAL("() argument 2 must be string"),
                     {contains_null != TINYPY_FALSE ? " without null bytes or None, not " : " or None, not ", contains_null != TINYPY_FALSE ? 33U : 14U},
-                    TINYPY_MESSAGE_PART_TYPE_NAME(errors),
+                    TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(errors, 50U),
                 };
                 tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
                 goto cleanup_input;
@@ -952,7 +958,7 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
                 goto cleanup;
             }
             size_t capacity = count * 12U;
-            uint8_t *bytes = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, capacity + 1U, out_error);
+            uint8_t *bytes = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, capacity + 1U, out_error);
             if (bytes != NULL) {
                 size_t input = 0U;
                 size_t output = 0U;
@@ -981,7 +987,7 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
                     input += consumed;
                 }
                 if (input == byte_size) {
-                    replacement = tinypy_unicode_from_utf8(vm, (const char *)bytes, output);
+                    replacement = tinypy_internal_unicode_from_utf8_checked(vm, (const char *)bytes, output, out_error);
                 }
                 tinypy_internal_vm_deallocate(vm, bytes, capacity + 1U);
             }

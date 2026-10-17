@@ -468,7 +468,7 @@ tinypy_value_t *tinypy_internal_old_instance_create(tinypy_type_t *type, tinypy_
     if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_CLASS) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("instance() argument 1 must be classobj, not "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(class_value),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(class_value, 50U),
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -565,7 +565,16 @@ static tinypy_value_t *__tinypy_old_instance_get_direct(tinypy_vm_t *vm, tinypy_
     if (TINYPY_NAME_EQ(name, vm->internal_special_dict_key) != 0) {
         return TINYPY_RET(instance->dict);
     }
-    tinypy_value_t *attribute = __tinypy_class_dict_value(vm, instance->dict, name);
+    /* An interned name decides the lookup in the instance dictionary by
+       identity, without a key comparison. */
+    tinypy_value_t *attribute = NULL;
+    tinypy_bool_t decided = tinypy_internal_dict_get_identity(vm, instance->dict, name, &attribute);
+    if (decided == 0) {
+        attribute = __tinypy_class_dict_value(vm, instance->dict, name);
+    }
+    else if (attribute != NULL) {
+        TINYPY_INCREF(attribute);
+    }
     if (attribute != NULL) {
         return attribute;
     }
@@ -605,9 +614,9 @@ tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *insta
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The attribute a method call finds on a classic instance, raising
-   AttributeError as getattr does when there is none; a function of the class
-   comes unbound, with out_unbound set. */
+/* The attribute an attribute load or a method call finds on a classic
+   instance, raising AttributeError as getattr does when there is none; with
+   out_unbound, a function of the class comes unbound and sets it. */
 tinypy_value_t *tinypy_internal_old_instance_get_method(tinypy_value_t *instance_value, tinypy_value_t *name, tinypy_bool_t *out_unbound, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(instance_value);
     tinypy_value_t *result = __tinypy_old_instance_get_attribute(instance_value, name, out_unbound, out_error);

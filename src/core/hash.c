@@ -322,8 +322,8 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, t
         if (depth == capacity) {
             size_t size = capacity * sizeof(*frames);
             tinypy_internal_hash_tuple_frame_t *grown = frames == inline_frames
-                                                            ? (tinypy_internal_hash_tuple_frame_t *)tinypy_internal_vm_allocate_checked(vm, size * 2U, out_error)
-                                                            : (tinypy_internal_hash_tuple_frame_t *)tinypy_internal_vm_reallocate_checked(vm, frames, size, size * 2U, out_error);
+                                                            ? (tinypy_internal_hash_tuple_frame_t *)__tinypy_internal_vm_allocate_checked(vm, size * 2U, out_error)
+                                                            : (tinypy_internal_hash_tuple_frame_t *)__tinypy_internal_vm_reallocate_checked(vm, frames, size, size * 2U, out_error);
 
             if (grown == NULL) {
                 hash = (tinypy_hash_t)0;
@@ -349,7 +349,7 @@ void tinypy_internal_hash_unhashable_error(const tinypy_value_t *value, tinypy_e
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
         TINYPY_MESSAGE_PART_LITERAL("'"),
     };
 

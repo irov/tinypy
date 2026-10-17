@@ -77,8 +77,9 @@ current frame; `dont_inherit` continues to control future flags only. The host
 can also request canonical expanded Python source plus a deterministic source
 map through `tinypy_preprocess_source`. The canonical source compiles back to
 the same program: negative literals and numeric operands are parenthesized,
-byte strings under `unicode_literals` carry a `b` prefix and non-finite complex
-literals are spelled as `complex(...)`.
+byte strings under `unicode_literals` carry a `b` prefix, a one-dimension
+extended slice keeps its comma and complex values are spelled with imaginary
+literals that keep signed zeros and non-finite parts without naming `complex`.
 
 The generated code objects and marshal-v2 payloads follow Python 2.7 semantics.
 The compiler never opens the logical filename supplied for diagnostics.

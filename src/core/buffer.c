@@ -254,7 +254,7 @@ tinypy_value_t *tinypy_internal_buffer_string(tinypy_value_t *value, tinypy_erro
     TINYPY_CLEAR_ERROR(out_error);
     bytes = tinypy_buffer_view(value, &size);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *return_value_1 = tinypy_string_from_bytes(vm, bytes, size);
+    tinypy_value_t *return_value_1 = tinypy_internal_string_from_bytes_checked(vm, bytes, size, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -354,7 +354,7 @@ static tinypy_value_t *__tinypy_buffer_repeat(tinypy_value_t *buffer, tinypy_val
     if (tinypy_internal_object_has_special_key(count_value, vm->internal_special_index_key) == 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("'"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(count_value),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(count_value, 200U),
             TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index")
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -833,7 +833,7 @@ static tinypy_bool_t __tinypy_memoryview_index(tinypy_value_t *instance, tinypy_
     if (tinypy_internal_object_has_special_key(key, vm->internal_special_index_key) == 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("cannot index memory using \""),
-            TINYPY_MESSAGE_PART_TYPE_NAME(key),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(key, 200U),
             TINYPY_MESSAGE_PART_LITERAL("\"")
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -1080,7 +1080,7 @@ static tinypy_value_t *__tinypy_memoryview_tobytes_method(tinypy_value_t *functi
     }
     size_t size;
     const uint8_t *bytes = tinypy_internal_memoryview_view(TINYPY_TUPLE_GET(args, 0U), &size);
-    tinypy_value_t *result = tinypy_string_from_bytes(vm, bytes, size);
+    tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(vm, bytes, size, out_error);
 
     return result;
 }

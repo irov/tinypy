@@ -1,5 +1,6 @@
 """Project-authored Python 2 statement semantics: exec, the name opcodes and code objects."""
 
+import _weakref
 import sys
 import unittest
 
@@ -455,6 +456,80 @@ class StatementSemantics(unittest.TestCase):
             run()
         self.assertEqual(sys.exc_info(), (None, None, None))
 
+    def test_del_unbinds_a_local_before_releasing_it(self):
+        # A finalizer or a weakref callback that the release runs and that
+        # reads the frame's locals finds the deleted variable gone.
+        seen = []
+
+        def read_locals(*args):
+            seen.append(sys._getframe(1).f_locals.get('x', 'unbound'))
+
+        class Dying(object):
+            __del__ = read_locals
+
+        class Plain(object):
+            pass
+
+        def drop_finalized():
+            x = [Dying()]
+            del x
+            return 'finalized'
+
+        def drop_referenced():
+            x = Plain()
+            reference = _weakref.ref(x, read_locals)
+            del x
+            return reference() is None
+
+        self.assertEqual((drop_finalized(), drop_referenced()), ('finalized', True))
+        self.assertEqual(seen, ['unbound', 'unbound'])
+
+    def test_line_numbers_wrap_as_a_c_int(self):
+        # PyCode_Addr2Line adds the increments of co_lnotab to
+        # co_firstlineno in a C int, which wraps past 2**31 - 1.
+        code_type = type(compile('', '', 'exec'))
+        code = code_type(0, 0, 2, 64, 'd\x00\x00\x01e\x00\x00S', (None,), ('undefined_name',), (), 'wrap.py', '<module>', 0x7fffffff, '\x00\xff' * 3)
+        try:
+            exec code in {}
+        except NameError:
+            traceback = sys.exc_info()[2]
+        while traceback.tb_next is not None:
+            traceback = traceback.tb_next
+        self.assertEqual((traceback.tb_lineno, traceback.tb_frame.f_lineno), (-2147482884, -2147482884))
+
+    def test_try_statements_nest_in_finally_clauses(self):
+        # A finally clause is entered normally, by an exception and by
+        # return or break, and the clauses nested in it once for each of
+        # these ways: deep nesting runs as in CPython.
+        class Guard(object):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exception):
+                return False
+
+        def nest(depth, body):
+            lines = ['def run(n, log):', '    for attempt in range(2):']
+            for level in range(depth):
+                indent = '    ' * (level + 2)
+                lines += [indent + 'try:', indent + '    ' + body % level, indent + 'finally:']
+            lines += ['    ' * (depth + 2) + 'log.append(n)', '    return -1']
+            return '\n'.join(lines) + '\n'
+
+        cases = [
+            (18, 'level = %d', [-1, -1, -1], [-1, -1, 0, 0, 17, 17]),
+            (12, 'if n == %d: return n', [-1, 0, 11], [-1, -1, 0, 11]),
+            (12, 'if n == %d: break', [-1, -1, -1], [-1, -1, 0, 11]),
+            (12, 'with guard: level = %d', [-1, -1, -1], [-1, -1, 0, 0, 11, 11]),
+        ]
+        for depth, body, results, log in cases:
+            namespace = {'guard': Guard()}
+            exec nest(depth, body) in namespace
+            calls = []
+            self.assertEqual([namespace['run'](n, calls) for n in (-1, 0, depth - 1)], results)
+            self.assertEqual(calls, log)
+            namespace.clear()
+
     def test_inplace_concatenation_keeps_other_references(self):
         def build(count, piece):
             text = ''
@@ -560,6 +635,36 @@ class StatementSemantics(unittest.TestCase):
                                 self.assertEqual(value, str(snapshot))
                                 self.assertEqual(hash(value), hash(str(snapshot)))
                                 self.assertIn(str(snapshot), {value: 1})
+
+    def test_name_store_concatenation_leaves_a_taken_string_unbound(self):
+        # A colliding key's __eq__ that takes the string while `x += t`
+        # unbinds x leaves the addition to the ordinary concatenation, and x
+        # stays unbound until the store binds the result.
+        seen = []
+        held = []
+
+        class Key(object):
+            namespace = None
+
+            def __hash__(self):
+                return hash('x')
+
+            def __eq__(self, other):
+                if Key.namespace is not None:
+                    bound = [value for name, value in Key.namespace.items() if type(name) is str and name == 'x']
+                    seen.append(len(bound[0]) if bound else None)
+                    if len(seen) == 3:
+                        held.extend(bound)
+                return False
+
+        namespace = {}
+        namespace[Key()] = 0
+        namespace['x'] = ''.join(['ab', 'cd'])
+        Key.namespace = namespace
+        exec "x += 'y'" in namespace
+        Key.namespace = None
+        self.assertEqual((namespace['x'], held), ('abcdy', ['abcd']))
+        self.assertEqual(seen, [4, 4, 4, None, None])
 
     def test_name_store_concatenation_probes_the_stored_name(self):
         # At module and class scope `y = b + t` grows b in place only when the

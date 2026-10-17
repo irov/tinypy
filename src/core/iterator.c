@@ -841,7 +841,7 @@ tinypy_value_t *tinypy_internal_iterator_length_hint_method(tinypy_value_t *func
             else {
                 tinypy_message_part_t parts[] = {
                     TINYPY_MESSAGE_PART_LITERAL("object of type '"),
-                    TINYPY_MESSAGE_PART_TYPE_NAME(source),
+                    TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(source, 200U),
                     TINYPY_MESSAGE_PART_LITERAL("' has no len()"),
                 };
 
@@ -1042,7 +1042,7 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
         && tinypy_internal_object_has_special_key(start, vm->internal_special_index_key) == TINYPY_FALSE) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("'"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(start),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(start, 200U),
             TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index"),
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -1127,6 +1127,7 @@ static tinypy_value_t *__tinypy_enumerate_new(tinypy_type_t *type, tinypy_value_
     enumerate->iterator = iterator;
     enumerate->index = start;
     TINYPY_INCREF(start);
+    enumerate->result = tinypy_tuple_new(vm, 2U);
     return &enumerate->base;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1138,6 +1139,7 @@ tinypy_value_t *tinypy_internal_enumerate_new(tinypy_value_t *iterable, tinypy_v
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_enumerate_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     visit(TINYPY_ENUMERATE_OBJECT(value)->iterator, user_data);
+    visit(TINYPY_ENUMERATE_OBJECT(value)->result, user_data);
     visit(TINYPY_ENUMERATE_OBJECT(value)->index, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1149,7 +1151,6 @@ tinypy_value_t *tinypy_internal_enumerate_iter(tinypy_value_t *value, tinypy_err
 tinypy_value_t *tinypy_internal_enumerate_next(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_enumerate_object_t *enumerate = TINYPY_ENUMERATE_OBJECT(value);
     tinypy_value_t *item = tinypy_next(enumerate->iterator, out_error);
-    tinypy_value_t *items[2];
 
     if (item == NULL) {
         return NULL;
@@ -1170,15 +1171,29 @@ tinypy_value_t *tinypy_internal_enumerate_next(tinypy_value_t *value, tinypy_err
         TINYPY_DECREF(item);
         return NULL;
     }
-    items[0] = enumerate->index;
-    items[1] = item;
-    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, 2U);
-    tinypy_value_t *previous_index = enumerate->index;
+    tinypy_value_t *index = enumerate->index;
+    tinypy_value_t *result = enumerate->result;
 
     enumerate->index = next_index;
+    /* enum_next: the pair the caller released takes the next items. */
+    if (TINYPY_REFCNT(result) == 1) {
+        tinypy_value_t **pair = TINYPY_TUPLE_OBJECT(result)->items;
+        tinypy_value_t *previous_index = pair[0];
+        tinypy_value_t *previous_item = pair[1];
+
+        pair[0] = index;
+        pair[1] = item;
+        TINYPY_INCREF(result);
+        TINYPY_DECREF(previous_index);
+        TINYPY_DECREF(previous_item);
+        return result;
+    }
+    tinypy_value_t *items[2] = {index, item};
+    tinypy_value_t *fresh = tinypy_tuple_from_items(vm, items, 2U);
+
     TINYPY_DECREF(item);
-    TINYPY_DECREF(previous_index);
-    return result;
+    TINYPY_DECREF(index);
+    return fresh;
 }
 //////////////////////////////////////////////////////////////////////////
 /* reversed_new checks PySequence_Check before PySequence_Size; reversed_len
@@ -1268,7 +1283,7 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, t
     /* PySequence_Size reads only the sequence length slot. */
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("object of type '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(sequence),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(sequence, 200U),
         TINYPY_MESSAGE_PART_LITERAL("' has no len()"),
     };
 
@@ -1545,7 +1560,7 @@ static tinypy_value_t *__tinypy_iter_result(tinypy_vm_t *vm, tinypy_value_t *val
     }
     tinypy_message_part_t parts[] = {
         TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE ? (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("__iter__ returned non-iterator of type '") : (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("iter() returned non-iterator of type '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(result),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(result, 100U),
         TINYPY_MESSAGE_PART_LITERAL("'"),
     };
 
@@ -1647,7 +1662,7 @@ static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispat
     }
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("'"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
         TINYPY_MESSAGE_PART_LITERAL("' object is not iterable"),
     };
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);

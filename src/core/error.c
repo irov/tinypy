@@ -295,6 +295,15 @@ static size_t __tinypy_internal_message_part_size(const tinypy_message_part_t *p
     return size;
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_message_parts_precision(tinypy_message_part_t *parts, size_t part_count, size_t precision) {
+    size_t remaining = precision;
+
+    for (size_t index = 0U; index < part_count; ++index) {
+        parts[index].size = __tinypy_internal_message_precision(parts[index].size, remaining);
+        remaining -= parts[index].size;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_make_vm_error_parts(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const tinypy_message_part_t *parts, size_t part_count, tinypy_error_t **out_error) {
     size_t message_size = 0U;
     size_t offset = 0U;

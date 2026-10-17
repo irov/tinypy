@@ -1263,6 +1263,7 @@
         "CompilerEdges.test_flags_use_int_protocol_before_mode_value",
         "CompilerEdges.test_legacy_source_buffers_observe_flag_callback",
         "CompilerEdges.test_normalization_respects_input_mode",
+        "CompilerEdges.test_one_byte_string_constants",
         "CompilerEdges.test_syntax_phases_preserve_args_shape",
         "CompilerEdges.test_unicode_cookie_depends_on_compile_mode",
         "CompilerEdges.test_unknown_encoding_has_decoder_diagnostic"
@@ -1386,10 +1387,13 @@
       "path": "local/test_type_deep.py",
       "origin": "project-authored",
       "cases": [
+        "TypeDeep.test_bases_assignment_updates_every_descendant",
         "TypeDeep.test_bases_iteration_error_is_preserved",
+        "TypeDeep.test_bases_iteration_merges_types_outside_the_bases",
         "TypeDeep.test_bases_tuple_identity_and_subtype_protocol",
         "TypeDeep.test_changing_slots_attribute_does_not_change_layout",
         "TypeDeep.test_default_weakrefs_match_variable_layout",
+        "TypeDeep.test_duplicate_bases_name_the_first_by_class_name",
         "TypeDeep.test_duplicate_ordinary_slots_and_private_mangling",
         "TypeDeep.test_metaclass_nonempty_slots_rejected_before_validation",
         "TypeDeep.test_mro_and_nul_errors_follow_slots_callbacks",
@@ -1419,6 +1423,7 @@
       "path": "local/test_sre_deep.py",
       "origin": "project-authored",
       "cases": [
+        "SREDeep.test_argument_errors_name_the_method",
         "SREDeep.test_buffer_subjects_return_sequence_slice_types",
         "SREDeep.test_compile_rejects_programs_sre_compile_cannot_emit",
         "SREDeep.test_finditer_and_scanner_reject_keywords",
@@ -1436,8 +1441,10 @@
         "SREDeep.test_reversed_bounds_match_and_search_preserve_python2_difference",
         "SREDeep.test_scanner_finditer_and_sub_callback_matches_preserve_initial_pos",
         "SREDeep.test_scanner_match_starts_past_endpos",
+        "SREDeep.test_short_str_subclass_length_bounds_empty_match_scans",
         "SREDeep.test_split_and_sub_accept_named_parameters",
         "SREDeep.test_sub_count_conversion_precedes_template_helper_and_subject_validation",
+        "SREDeep.test_unicode_subclass_subject_dies_with_its_last_reference",
         "SREDeep.test_unset_group_spans_are_undefined_as_a_whole"
       ]
     },
@@ -1496,6 +1503,7 @@
         "BuiltinEdges.test_codec_error_handlers_clamp_their_ranges",
         "BuiltinEdges.test_codec_names_resolve_like_the_encodings_search_function",
         "BuiltinEdges.test_dir_merge_survives_dict_replacement",
+        "BuiltinEdges.test_enumerate_pairs_release_previous_items",
         "BuiltinEdges.test_extend_accepts_float_length_result",
         "BuiltinEdges.test_float_length_overflow_is_reported",
         "BuiltinEdges.test_float_text_rounds_the_exact_binary_value",
@@ -1539,6 +1547,8 @@
         "BuiltinEdges.test_sorted_second_reverse_conversion_controls_result",
         "BuiltinEdges.test_sorted_unknown_keyword_prevents_iteration",
         "BuiltinEdges.test_struct_pack_into_argument_messages",
+        "BuiltinEdges.test_sum_does_not_resume_exhausted_source",
+        "BuiltinEdges.test_sum_fast_paths_match_generic_addition",
         "BuiltinEdges.test_sum_uses_binary_addition_for_custom_start",
         "BuiltinEdges.test_text_search_bounds_require_index",
         "BuiltinEdges.test_zero_length_long_subtype_does_not_convert",
@@ -1763,6 +1773,7 @@
         "AttributeEdges.test_classic_class_constructor_keywords_and_dictionary_identity",
         "AttributeEdges.test_classic_class_constructor_mutates_defaults_before_bases_error",
         "AttributeEdges.test_classic_class_constructor_name_identity_and_mixed_base",
+        "AttributeEdges.test_classic_instance_dictionary_matches_equal_keys",
         "AttributeEdges.test_dir_class_uses_metaclass_dictionary_and_bases",
         "AttributeEdges.test_dir_classic_bases_rejects_float_length_without_items",
         "AttributeEdges.test_dir_classic_dynamic_method_lookup_occurs_once",
@@ -1878,6 +1889,7 @@
         "ObjectCallbackAudit.test_call_attributes_bind_wrappers_and_allow_shadows",
         "ObjectCallbackAudit.test_custom_hooks_keep_original_string_subclass_names",
         "ObjectCallbackAudit.test_dispatch_holds_a_type_a_key_comparison_releases",
+        "ObjectCallbackAudit.test_error_messages_name_types_a_released_failure_frees",
         "ObjectCallbackAudit.test_function_data_descriptors_precede_dictionary_shadows",
         "ObjectCallbackAudit.test_function_fields_use_subclass_name_protocol",
         "ObjectCallbackAudit.test_function_nondata_descriptor_allows_dictionary_shadow",
@@ -1888,8 +1900,10 @@
         "ObjectCallbackAudit.test_module_dictionary_uses_subclass_name_protocol",
         "ObjectCallbackAudit.test_name_equality_controls_field_lookup",
         "ObjectCallbackAudit.test_property_holds_the_accessor_it_calls",
+        "ObjectCallbackAudit.test_representation_holds_a_type_a_key_comparison_releases",
         "ObjectCallbackAudit.test_translate_error_encoding_descriptor_is_present",
         "ObjectCallbackAudit.test_type_and_method_fields_use_subclass_name_protocol",
+        "ObjectCallbackAudit.test_type_call_holds_the_winner_its_new_lookup_releases",
         "ObjectCallbackAudit.test_type_metadata_mutation_errors_are_exact",
         "ObjectCallbackAudit.test_type_mutation_canonicalizes_after_metaclass_hook",
         "ObjectCallbackAudit.test_type_name_is_published_before_old_name_finalizer"
@@ -2629,6 +2643,7 @@
         "StatementSemantics.test_code_constructor_messages",
         "StatementSemantics.test_concatenation_keeps_other_references",
         "StatementSemantics.test_container_opcodes_reject_other_kinds",
+        "StatementSemantics.test_del_unbinds_a_local_before_releasing_it",
         "StatementSemantics.test_eval_argument_count_messages",
         "StatementSemantics.test_exec_binds_through_locals",
         "StatementSemantics.test_exec_locals_must_be_a_mapping",
@@ -2638,11 +2653,14 @@
         "StatementSemantics.test_function_code_runs_in_its_own_locals",
         "StatementSemantics.test_inplace_concatenation_keeps_other_references",
         "StatementSemantics.test_instance_dict_lookup_ignores_key_comparison_errors",
+        "StatementSemantics.test_line_numbers_wrap_as_a_c_int",
         "StatementSemantics.test_name_lookup_leaves_locals_snapshot_alone",
         "StatementSemantics.test_name_opcodes_without_locals",
+        "StatementSemantics.test_name_store_concatenation_leaves_a_taken_string_unbound",
         "StatementSemantics.test_name_store_concatenation_probes_the_stored_name",
         "StatementSemantics.test_name_store_concatenation_with_colliding_key",
-        "StatementSemantics.test_sys_exit_raises_system_exit_with_a_subclass_instance"
+        "StatementSemantics.test_sys_exit_raises_system_exit_with_a_subclass_instance",
+        "StatementSemantics.test_try_statements_nest_in_finally_clauses"
       ]
     },
     "local.test_import_semantics": {
@@ -2654,6 +2672,26 @@
         "ImportSemantics.test_reload_of_submodule_names_the_component",
         "ImportSemantics.test_reload_of_unresolvable_module",
         "ImportSemantics.test_system_exit_with_an_index_error_ends_no_name_walk"
+      ]
+    },
+    "local.test_parity_regressions": {
+      "path": "local/test_parity_regressions.py",
+      "origin": "project-authored",
+      "cases": [
+        "MessagePrecisionParity.test_attribute_messages",
+        "MessagePrecisionParity.test_call_messages",
+        "MessagePrecisionParity.test_name_and_import_messages",
+        "MessagePrecisionParity.test_type_name_messages",
+        "ReleaseOrderParity.test_list_and_tuple_release_items_from_the_end",
+        "ReleaseOrderParity.test_subclass_members_and_dict_precede_the_contents",
+        "TextConversionParity.test_byte_replace_decodes_self_before_its_arguments",
+        "TextConversionParity.test_classic_format_formats_str_whatever_the_lookup_raised",
+        "TextConversionParity.test_object_str_of_an_exception_returns_what_repr_returns",
+        "TextConversionParity.test_percent_restart_after_a_unicode_str_precedes_unicode",
+        "TextConversionParity.test_percent_restart_decodes_the_rest_of_the_format_first",
+        "TextConversionParity.test_print_function_writes_str_of_every_non_unicode_value",
+        "TextConversionParity.test_proxy_str_returns_what_the_referent_str_returns",
+        "TextConversionParity.test_stream_write_and_writelines_reset_the_softspace"
       ]
     }
   },

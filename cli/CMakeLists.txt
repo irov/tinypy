@@ -68,6 +68,7 @@ if(BUILD_TESTING)
         text_semantics_runtime
         tuple_subclass_runtime
         type_protocol_runtime
+        vm_destroy_runtime
         weakref_runtime
         with_statement
     )

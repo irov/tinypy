@@ -4,12 +4,14 @@
 
 #include <string.h>
 //////////////////////////////////////////////////////////////////////////
+/* tupledealloc releases the items from the last one, which orders their
+   __del__ calls. */
 void tinypy_internal_tuple_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_value_t **items = TINYPY_TUPLE_OBJECT(value)->items;
     size_t size = TINYPY_SIZED_SIZE(value);
 
-    for (size_t index = 0U; index < size; ++index) {
-        visit(items[index], user_data);
+    for (size_t index = size; index != 0U; --index) {
+        visit(items[index - 1U], user_data);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -20,15 +22,17 @@ tinypy_value_t *const *tinypy_internal_tuple_items(const tinypy_value_t *value) 
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* subtype_dealloc releases the instance dictionary before tupledealloc
+   releases the items from the last one. */
 void tinypy_internal_tuple_subclass_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_value_t *const *items = tinypy_internal_tuple_items(value);
     tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(value);
 
-    for (size_t index = 0U; index < TINYPY_SIZED_SIZE(value); ++index) {
-        visit(items[index], user_data);
-    }
     if (dict_slot != NULL && *dict_slot != NULL) {
         visit(*dict_slot, user_data);
+    }
+    for (size_t index = TINYPY_SIZED_SIZE(value); index != 0U; --index) {
+        visit(items[index - 1U], user_data);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -55,7 +59,7 @@ tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, t
         return NULL;
     }
     if (size != 0U) {
-        tuple->items = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, size * sizeof(*tuple->items), out_error);
+        tuple->items = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, size * sizeof(*tuple->items), out_error);
         if (tuple->items == NULL) {
             TINYPY_DECREF(&tuple->base.base);
             return NULL;

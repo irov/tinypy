@@ -66,7 +66,9 @@ typedef struct tinypy_vm_config_t {
 } tinypy_vm_config_t;
 
 /* Returns NULL, with everything it allocated released, when max_heap_bytes is
- * smaller than the memory the VM bootstrap holds. */
+ * smaller than the memory the VM bootstrap holds, or when the allocator
+ * returned NULL for the VM object or for a bootstrap request the bootstrap
+ * continues after; other bootstrap requests must not fail. */
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config);
 tinypy_value_t *tinypy_vm_builtins(const tinypy_vm_t *vm);
 
@@ -78,13 +80,16 @@ size_t tinypy_vm_report_cycles(tinypy_vm_t *vm, tinypy_diagnostic_callback_t cal
 
 /* The runtime has no allocation registry or cyclic collector. The embedder
  * must release every owned dynamic value and explicitly break owning cycles
- * before destroying the VM. The finalizers of native values still reachable
- * from the VM run first, while every value is intact: those of instances
- * before those of functions, which instance finalizers may still call. An
- * instance whose last reference a finalizer drops is released as usual,
- * running its __del__ before its finalizer; an instance released after its
- * finalizer ran skips its __del__, and its slots and the methods of its type
- * raise RuntimeError. A pass that creates native values with finalizers, its
+ * before destroying the VM. The finalizers of host native values still
+ * reachable from the VM run first, while every value is intact: those of
+ * instances of native types before those of native functions, which instance
+ * finalizers may still call. The runtime's own native values, such as
+ * memoryview and exception instances, hold no host object: the passes leave
+ * them usable until the sweep. An instance whose last reference a finalizer
+ * drops is released as usual, running its __del__ before its finalizer; an
+ * instance released after its finalizer ran skips its __del__, and its slots,
+ * the methods of its type and the native accessors of its properties raise
+ * RuntimeError. A pass that creates native values with finalizers, its
  * diagnostics rendered at its end included, or resurrects an instance before
  * its finalizer repeats for them, up to 8 passes; the values the last pass
  * creates are freed without their finalizers. The memory sweep follows and

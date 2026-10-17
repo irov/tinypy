@@ -89,7 +89,7 @@ static tinypy_value_t *__tinypy_slice_field_method(tinypy_value_t *function, tin
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"),
             TINYPY_MESSAGE_PART_TEXT(tinypy_native_function_name(function)),
             TINYPY_MESSAGE_PART_LITERAL("' for 'slice' objects doesn't apply to '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(self),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(self, 100U),
             TINYPY_MESSAGE_PART_LITERAL("' object")
         };
 

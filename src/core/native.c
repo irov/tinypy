@@ -257,7 +257,7 @@ static const tinypy_native_function_object_t *__tinypy_native_function_source(co
 }
 //////////////////////////////////////////////////////////////////////////
 /* Out of line, so that the slots it guards keep their small frames. */
-static TINYPY_NOINLINE void __tinypy_internal_native_instance_finalized_error(tinypy_value_t *instance, tinypy_error_t **out_error) {
+TINYPY_NOINLINE void tinypy_internal_native_instance_finalized_error(tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(instance);
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("'"),
@@ -272,10 +272,10 @@ static TINYPY_NOINLINE void __tinypy_internal_native_instance_finalized_error(ti
    reachable instance, has no host object left for the callbacks of its
    type, as a finalized function has no user data. */
 static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_internal_native_instance_check_live(tinypy_value_t *instance, tinypy_error_t **out_error) {
-    if (TINYPY_NATIVE_INSTANCE_OBJECT(instance)->finalized == 0) {
+    if (TINYPY_NATIVE_INSTANCE_OBJECT(instance)->finalization != TINYPY_NATIVE_FINALIZATION_DONE) {
         return TINYPY_TRUE;
     }
-    __tinypy_internal_native_instance_finalized_error(instance, out_error);
+    tinypy_internal_native_instance_finalized_error(instance, out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1500,9 +1500,10 @@ tinypy_bool_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_n
 }
 //////////////////////////////////////////////////////////////////////////
 /* Instances come from tinypy_native_instance_new or from object.__new__,
-   which constructs them; both count the ones with a finalizer. */
+   which constructs them; both count the ones tinypy_vm_destroy finalizes,
+   those of host types with a finalizer. */
 static void __tinypy_internal_native_instance_created(tinypy_type_t *type) {
-    if (type->native_spec.finalize != NULL) {
+    if (type->native_spec.finalize != NULL && tinypy_internal_type_is_host_native(type) != 0) {
         type->vm->native_finalizable_created += 1U;
     }
 }
@@ -1554,21 +1555,24 @@ void tinypy_internal_native_instance_finalize(tinypy_value_t *value) {
     tinypy_native_instance_object_t *instance = TINYPY_NATIVE_INSTANCE_OBJECT(value);
     tinypy_native_type_spec_t *spec = &value->type->native_spec;
 
-    if (instance->finalized != 0) {
+    if (instance->finalization != TINYPY_NATIVE_FINALIZATION_NONE) {
         return;
     }
-    instance->finalized = TINYPY_TRUE;
-    if (spec->finalize != NULL) {
-        void *native_payload = __tinypy_internal_native_payload(value);
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-        tinypy_internal_exception_state_t state;
-        tinypy_internal_exception_preserve_begin(vm, &state);
-        spec->finalize(value, native_payload, spec->user_data);
-        if (vm->state == TINYPY_VM_STATE_LIVE) {
-            tinypy_internal_output_unraisable(vm, value);
-        }
-        tinypy_internal_exception_preserve_end(vm, &state);
+    if (spec->finalize == NULL) {
+        instance->finalization = TINYPY_NATIVE_FINALIZATION_DONE;
+        return;
     }
+    void *native_payload = __tinypy_internal_native_payload(value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_internal_exception_state_t state;
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    instance->finalization = TINYPY_NATIVE_FINALIZATION_RUNNING;
+    spec->finalize(value, native_payload, spec->user_data);
+    instance->finalization = TINYPY_NATIVE_FINALIZATION_DONE;
+    if (vm->state == TINYPY_VM_STATE_LIVE) {
+        tinypy_internal_output_unraisable(vm, value);
+    }
+    tinypy_internal_exception_preserve_end(vm, &state);
 }
 //////////////////////////////////////////////////////////////////////////
 /* The memory sweep of tinypy_vm_destroy runs no finalizer. */

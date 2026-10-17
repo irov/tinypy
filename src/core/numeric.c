@@ -713,7 +713,7 @@ static tinypy_value_t *__tinypy_float_fromhex_method(tinypy_value_t *function, t
     if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE || (TINYPY_VALUE_KIND(source) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(source) != TINYPY_VALUE_UNICODE)) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("expected string or Unicode object, "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(source),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(source, 200U),
             TINYPY_MESSAGE_PART_LITERAL(" found")
         };
 
@@ -835,7 +835,7 @@ static tinypy_value_t *__tinypy_float_getformat_method(tinypy_value_t *function,
     if (TINYPY_VALUE_KIND(kind) != TINYPY_VALUE_STRING) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("__getformat__() argument must be string, not "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(kind)
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(kind, 500U)
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);

@@ -59,9 +59,9 @@ static tinypy_value_t *__tinypy_operator_unsupported(tinypy_vm_t *vm, tinypy_val
         TINYPY_MESSAGE_PART_LITERAL("unsupported operand type(s) for "),
         {symbol, strlen(symbol)},
         TINYPY_MESSAGE_PART_LITERAL(": '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(left),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(left, 100U),
         TINYPY_MESSAGE_PART_LITERAL("' and '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(right),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(right, 100U),
         TINYPY_MESSAGE_PART_LITERAL("'"),
     };
 
@@ -74,7 +74,7 @@ static tinypy_value_t *__tinypy_operator_bad_unary(tinypy_vm_t *vm, tinypy_value
         TINYPY_MESSAGE_PART_LITERAL("bad operand type for "),
         {operation, strlen(operation)},
         TINYPY_MESSAGE_PART_LITERAL(": '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
         TINYPY_MESSAGE_PART_LITERAL("'"),
     };
 
@@ -217,7 +217,7 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long int is too large", out_error);
         return NULL;
     }
-    digits = (uint16_t *)tinypy_internal_vm_allocate_checked(vm, capacity * sizeof(*digits), out_error);
+    digits = (uint16_t *)__tinypy_internal_vm_allocate_checked(vm, capacity * sizeof(*digits), out_error);
     if (digits == NULL) {
         return NULL;
     }
@@ -458,7 +458,7 @@ static tinypy_bool_t __tinypy_operator_long_multiply_digits(tinypy_vm_t *vm, uin
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long multiplication temporary storage is too large", out_error);
         return TINYPY_FALSE;
     }
-    scratch = (uint16_t *)tinypy_internal_vm_allocate_checked(vm, scratch_capacity * sizeof(*scratch), out_error);
+    scratch = (uint16_t *)__tinypy_internal_vm_allocate_checked(vm, scratch_capacity * sizeof(*scratch), out_error);
     if (scratch == NULL) {
         return TINYPY_FALSE;
     }
@@ -585,7 +585,7 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
         return NULL;
     }
     division_scratch_capacity = quotient_capacity + remainder_capacity;
-    division_scratch = (uint16_t *)tinypy_internal_vm_allocate_checked(vm, division_scratch_capacity * sizeof(*division_scratch), out_error);
+    division_scratch = (uint16_t *)__tinypy_internal_vm_allocate_checked(vm, division_scratch_capacity * sizeof(*division_scratch), out_error);
     if (division_scratch == NULL) {
         return NULL;
     }
@@ -644,7 +644,7 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
             return NULL;
         }
         normalized_capacity = divisor_count + normalized_dividend_capacity;
-        normalized_storage = (uint16_t *)tinypy_internal_vm_allocate_checked(vm, normalized_capacity * sizeof(*normalized_storage), out_error);
+        normalized_storage = (uint16_t *)__tinypy_internal_vm_allocate_checked(vm, normalized_capacity * sizeof(*normalized_storage), out_error);
         if (normalized_storage == NULL) {
             tinypy_internal_vm_deallocate(vm, division_scratch, division_scratch_capacity * sizeof(*division_scratch));
             return NULL;
@@ -1163,7 +1163,7 @@ static tinypy_value_t *__tinypy_operator_integer_bitwise(tinypy_vm_t *vm, tinypy
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "bitwise temporary storage is too large", out_error);
         return NULL;
     }
-    scratch = (uint16_t *)tinypy_internal_vm_allocate_checked(vm, width * 2U * sizeof(*scratch), out_error);
+    scratch = (uint16_t *)__tinypy_internal_vm_allocate_checked(vm, width * 2U * sizeof(*scratch), out_error);
     if (scratch == NULL) {
         return NULL;
     }
@@ -1298,7 +1298,7 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "right shift temporary storage is too large", out_error);
         return NULL;
     }
-    digits = (uint16_t *)tinypy_internal_vm_allocate_checked(vm, capacity * sizeof(*digits), out_error);
+    digits = (uint16_t *)__tinypy_internal_vm_allocate_checked(vm, capacity * sizeof(*digits), out_error);
     if (digits == NULL) {
         return NULL;
     }
@@ -2399,7 +2399,7 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
     if (kind == TINYPY_VALUE_STRING) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("cannot concatenate 'str' and '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(other),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(other, 200U),
             TINYPY_MESSAGE_PART_LITERAL("' objects"),
         };
 
@@ -2413,7 +2413,7 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
     if (kind == TINYPY_VALUE_UNICODE) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("coercing to Unicode: need string or buffer, "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(other),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(other, 80U),
             TINYPY_MESSAGE_PART_LITERAL(" found"),
         };
 
@@ -2425,7 +2425,7 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
         TINYPY_MESSAGE_PART_LITERAL("can only concatenate "),
         {sequence_type->name, sequence_type->name_size},
         TINYPY_MESSAGE_PART_LITERAL(" (not \""),
-        TINYPY_MESSAGE_PART_TYPE_NAME(other),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(other, 200U),
         TINYPY_MESSAGE_PART_LITERAL("\") to "),
         {sequence_type->name, sequence_type->name_size},
     };
@@ -2463,7 +2463,7 @@ tinypy_bool_t tinypy_internal_number_as_index(tinypy_value_t *value, tinypy_erro
     if (fits == 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("cannot fit '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(value),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
             TINYPY_MESSAGE_PART_LITERAL("' into an index-sized integer"),
         };
 
@@ -2488,7 +2488,7 @@ static tinypy_value_t *__tinypy_operator_sequence_repeat(tinypy_value_t *sequenc
     if (index_check == 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("can't multiply sequence by non-int of type '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(count_value),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(count_value, 200U),
             TINYPY_MESSAGE_PART_LITERAL("'"),
         };
 
@@ -3689,11 +3689,11 @@ static tinypy_value_t *__tinypy_operator_power_unsupported(tinypy_value_t *base,
     }
     const tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("unsupported operand type(s) for pow(): '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(base),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(base, 100U),
         TINYPY_MESSAGE_PART_LITERAL("', '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(exponent),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(exponent, 100U),
         TINYPY_MESSAGE_PART_LITERAL("', '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(modulus),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(modulus, 100U),
         TINYPY_MESSAGE_PART_LITERAL("'")
     };
 

@@ -2,11 +2,6 @@
 
 #include "internal.h"
 
-typedef struct tinypy_module_clear_entry_t {
-    tinypy_value_t *key;
-    tinypy_hash_t hash;
-} tinypy_module_clear_entry_t;
-
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_module_from_dict_key(tinypy_value_t *name, tinypy_value_t *dict) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
@@ -57,31 +52,14 @@ void tinypy_internal_module_release_references(tinypy_value_t *value, tinypy_rel
        of __main__ keep the __builtin__ module alive in CPython. */
     if (dict != NULL && dict != vm->builtins) {
         tinypy_internal_exception_state_t state;
-        tinypy_error_t *error = NULL;
 
         tinypy_internal_exception_preserve_begin(vm, &state);
-        /* Pin names before replacing values: finalizers may mutate the
-           namespace, so its hash table cannot remain borrowed across them. */
+        /* Like _PyModule_Clear, walk the table by index: the finalizers of
+           replaced values may mutate the namespace, so no entry stays
+           borrowed across a store, and clearing needs no allocation. */
         for (size_t pass = 0U; pass < 2U; ++pass) {
-            size_t capacity = TINYPY_DICT_SIZE(dict);
-            size_t count = 0U;
-            tinypy_module_clear_entry_t *keys;
-            tinypy_dict_entry_t *entry = TINYPY_DICT_ITERATOR_BEGIN(dict);
-            tinypy_dict_entry_t *end = TINYPY_DICT_ITERATOR_END(dict);
-
-            if (error != NULL) {
-                tinypy_error_release(error);
-                error = NULL;
-                tinypy_vm_clear_error(vm);
-            }
-            if (capacity == 0U || capacity > SIZE_MAX / sizeof(*keys)) {
-                continue;
-            }
-            keys = (tinypy_module_clear_entry_t *)tinypy_internal_vm_allocate_checked(vm, capacity * sizeof(*keys), &error);
-            if (keys == NULL) {
-                continue;
-            }
-            for (; entry != end; ++entry) {
+            for (size_t index = 0U; index <= TINYPY_DICT_OBJECT(dict)->mask; ++index) {
+                tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(dict)->table[index];
                 const char *bytes;
                 size_t size;
 
@@ -93,32 +71,16 @@ void tinypy_internal_module_release_references(tinypy_value_t *value, tinypy_rel
                 if ((pass == 0U && (size == 0U || bytes[0] != '_' || (size > 1U && bytes[1] == '_'))) || (pass == 1U && (entry->key == vm->internal_builtins_key || strcmp(bytes, (const char *)TINYPY_TEXT_BYTES(vm->internal_builtins_key)) == 0))) {
                     continue;
                 }
-                keys[count].key = entry->key;
-                keys[count].hash = entry->hash;
-                TINYPY_INCREF(entry->key);
-                count += 1U;
-            }
-            for (size_t index = 0U; index < count; ++index) {
-                tinypy_value_t *key = keys[index].key;
-                tinypy_hash_t hash = keys[index].hash;
-                size_t slot;
-                tinypy_bool_t found;
+                tinypy_value_t *key = TINYPY_RET(entry->key);
+                tinypy_error_t *error = NULL;
 
+                (void)tinypy_internal_dict_set_hash_checked(vm, dict, key, &vm->none_object.base, entry->hash, &error);
+                TINYPY_DECREF(key);
                 if (error != NULL) {
                     tinypy_error_release(error);
-                    error = NULL;
                     tinypy_vm_clear_error(vm);
                 }
-                if (tinypy_internal_dict_lookup_hash_checked(vm, dict, key, hash, &slot, &found, &error) != 0
-                    && found != 0 && TINYPY_DICT_OBJECT(dict)->table[slot].value != &vm->none_object.base) {
-                    (void)tinypy_internal_dict_set_checked(vm, dict, key, &vm->none_object.base, &error);
-                }
-                TINYPY_DECREF(key);
             }
-            tinypy_internal_vm_deallocate(vm, keys, capacity * sizeof(*keys));
-        }
-        if (error != NULL) {
-            tinypy_error_release(error);
         }
         tinypy_internal_exception_preserve_end(vm, &state);
     }

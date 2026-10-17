@@ -86,8 +86,53 @@ static tinypy_bool_t __tinypy_internal_code_intern_identifiers(tinypy_value_t *t
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+const char *tinypy_internal_code_fields_error(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *const *fields) {
+    static const tinypy_value_type_e expected_kinds[TINYPY_CODE_OBJECT_FIELD_COUNT] = {TINYPY_VALUE_STRING, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_STRING, TINYPY_VALUE_STRING, TINYPY_VALUE_STRING};
+
+    for (size_t index = 0U; index < TINYPY_CODE_OBJECT_FIELD_COUNT; ++index) {
+        if (TINYPY_VALUE_KIND(fields[index]) != expected_kinds[index]) {
+            return "code object field has an unexpected type";
+        }
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(fields[0]);
+    size_t names_field = 2U;
+    size_t varnames_field = 3U;
+    size_t cellvars_field = 5U;
+    for (size_t index = names_field; index <= cellvars_field; ++index) {
+        tinypy_value_t *const *iterator = TINYPY_TUPLE_ITERATOR_BEGIN(fields[index]);
+        tinypy_value_t *const *iterator_end = TINYPY_TUPLE_ITERATOR_END(fields[index]);
+
+        for (; iterator != iterator_end; ++iterator) {
+            if ((*iterator)->type != &vm->types[TINYPY_VALUE_STRING]) {
+                return "code object name is not a string";
+            }
+        }
+    }
+    if (arg_count < 0 || local_count < 0 || stack_size < 0 || (size_t)local_count != TINYPY_TUPLE_SIZE(fields[varnames_field])) {
+        return "code object nlocals does not match its variable names";
+    }
+    size_t required_locals = (size_t)arg_count;
+    if ((flags & TINYPY_CODE_VARARGS) != 0) {
+        required_locals += 1U;
+    }
+    if ((flags & TINYPY_CODE_VAR_KEYWORDS) != 0) {
+        required_locals += 1U;
+    }
+    if (required_locals > (size_t)local_count) {
+        return "code object argument count exceeds its local count";
+    }
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_code_new(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *bytecode, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *varnames, tinypy_value_t *freevars, tinypy_value_t *cellvars, tinypy_value_t *filename, tinypy_value_t *name, int32_t first_line_number, tinypy_value_t *lnotab, tinypy_bool_t checked, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(bytecode);
+    tinypy_value_t *const fields[TINYPY_CODE_OBJECT_FIELD_COUNT] = {bytecode, consts, names, varnames, freevars, cellvars, filename, name, lnotab};
+    const char *fields_error = tinypy_internal_code_fields_error(arg_count, local_count, stack_size, flags, fields);
+
+    if (fields_error != NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, fields_error, out_error);
+        return NULL;
+    }
     tinypy_value_t *const identifiers[4] = {names, varnames, freevars, cellvars};
 
     for (size_t index = 0U; index < 4U; ++index) {
@@ -166,12 +211,12 @@ static tinypy_bool_t __tinypy_internal_code_find_method_calls(tinypy_code_object
     size_t load_limit = bytecode_size / 3U;
     size_t pending_capacity = (size_t)code->stack_size < load_limit ? (size_t)code->stack_size : load_limit;
     size_t scratch_size = pending_capacity * sizeof(tinypy_bytecode_method_load_t) + bytecode_size * sizeof(tinypy_bytecode_method_target_t);
-    uint8_t *scratch = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
+    uint8_t *scratch = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
 
     if (scratch == NULL) {
         return TINYPY_FALSE;
     }
-    uint8_t *method_bytecode = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, bytecode_size, out_error);
+    uint8_t *method_bytecode = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, bytecode_size, out_error);
     if (method_bytecode == NULL) {
         tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
         return TINYPY_FALSE;
@@ -202,7 +247,7 @@ tinypy_bool_t tinypy_internal_code_allocate_caches(tinypy_code_object_t *code, t
         slot_count *= 2U;
     }
     size_t size = __tinypy_internal_code_caches_size(slot_count);
-    uint8_t *caches = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, size, out_error);
+    uint8_t *caches = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, size, out_error);
     if (caches == NULL) {
         return TINYPY_FALSE;
     }
@@ -408,7 +453,7 @@ static tinypy_bool_t __tinypy_code_argument(tinypy_vm_t *vm, tinypy_value_t *val
         TINYPY_MESSAGE_PART_LITERAL(" must be "),
         TINYPY_MESSAGE_PART_LITERAL("string"),
         TINYPY_MESSAGE_PART_LITERAL(", not "),
-        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 50U),
     };
 
     if (format != 'S') {
@@ -434,7 +479,7 @@ static tinypy_value_t *__tinypy_code_copy_identifiers(tinypy_vm_t *vm, tinypy_va
         if (TINYPY_VALUE_KIND(items[index]) != TINYPY_VALUE_STRING) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("name tuples must contain only strings, not '"),
-                TINYPY_MESSAGE_PART_TYPE_NAME(items[index]),
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(items[index], 500U),
                 TINYPY_MESSAGE_PART_LITERAL("'"),
             };
 

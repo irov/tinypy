@@ -47,11 +47,15 @@ static tinypy_value_t *__parsestrplus(tinypy_ast_builder_t *, const tinypy_cst_n
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_identifier_t __new_identifier(const char *n, tinypy_compile_ctx_t *arena) {
     size_t size = strlen(n);
-    tinypy_value_t *id = tinypy_string_from_bytes(arena->vm, n, size);
-    if (id != NULL) {
-        (void)tinypy_internal_string_intern(&id, NULL);
+    tinypy_value_t *id = tinypy_internal_string_from_bytes_checked(arena->vm, n, size, NULL);
+    if (id == NULL) {
+        return NULL;
     }
-    if (id != NULL && TINYPY_COMPILER_ARENA_ADD_VALUE(arena, id) != 0) {
+    if (tinypy_internal_string_intern_checked(&id, NULL) == 0) {
+        TINYPY_DECREF(id);
+        return NULL;
+    }
+    if (TINYPY_COMPILER_ARENA_ADD_VALUE(arena, id) != 0) {
         TINYPY_DECREF(id);
         return NULL;
     }

@@ -429,6 +429,79 @@ class BuiltinEdges(unittest.TestCase):
         self.assertIs(sum([1, 2], start), start)
         self.assertEqual(events, [('add', 1), ('add', 2)])
 
+    def test_sum_fast_paths_match_generic_addition(self):
+        self.assertEqual(sum([sys.maxint, 1]), sys.maxint + 1)
+        self.assertIs(type(sum([sys.maxint, 1])), long)
+        self.assertIs(type(sum([1, True, 2])), int)
+        self.assertIs(sum([], True), True)
+        self.assertEqual(sum([True, True], True), 3)
+        self.assertEqual(sum([1, 2.5, 3]), 6.5)
+        self.assertEqual(sum([0.5, 1, True], 0.5), 3.0)
+        self.assertEqual(sum([0.5, 10 ** 20]), 0.5 + 10 ** 20)
+        self.assertIs(type(sum([], 0.0)), float)
+        self.assertEqual(sum([2 ** 70, 1, 0.5]), 2 ** 70 + 1.5)
+        class Number(int):
+            pass
+        self.assertIs(type(sum([Number(2)])), int)
+        self.assertIs(type(sum([], Number(2))), Number)
+        events = []
+        class Right(object):
+            def __radd__(self, other):
+                events.append(other)
+                return 1.5
+        self.assertEqual(sum([1, 2, Right(), 3]), 4.5)
+        self.assertEqual(events, [3])
+
+    def test_sum_does_not_resume_exhausted_source(self):
+        class Source(object):
+            def __init__(self, items):
+                self.items = list(items)
+                self.calls = 0
+            def __iter__(self):
+                return self
+            def next(self):
+                self.calls += 1
+                if self.calls > len(self.items) + 1:
+                    raise AssertionError('resumed after StopIteration')
+                if self.calls > len(self.items):
+                    raise StopIteration
+                return self.items[self.calls - 1]
+        for items, start, expected in (([1, 2], 0, 3), ([1.5, 2], 0, 3.5), ([1, 2.5], 0, 3.5),
+                                       ([2 ** 70], 0, 2 ** 70), ([[1]], [], [1]), ([], 0.5, 0.5)):
+            source = Source(items)
+            self.assertEqual(sum(source, start), expected)
+            self.assertEqual(source.calls, len(items) + 1)
+        def failing(values):
+            for value in values:
+                yield value
+            raise KeyError('stop')
+        for values in ([1], [1.5], [1, 2 ** 70], [[]]):
+            self.assertRaises(KeyError, sum, failing(values), [] if values == [[]] else 0)
+
+    def test_enumerate_pairs_release_previous_items(self):
+        released = []
+        class Item(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                released.append(self.name)
+        def source():
+            for name in 'abc':
+                yield Item(name)
+        seen = []
+        for index, item in enumerate(source(), 3):
+            seen.append((index, item.name, list(released)))
+        del item
+        self.assertEqual(seen, [(3, 'a', []), (4, 'b', ['a']), (5, 'c', ['a', 'b'])])
+        self.assertEqual(released, ['a', 'b', 'c'])
+        pairs = enumerate('abc')
+        kept = next(pairs)
+        self.assertEqual((kept, list(pairs)), ((0, 'a'), [(1, 'b'), (2, 'c')]))
+        pairs = enumerate('ab')
+        first = next(pairs)
+        second = next(pairs)
+        self.assertEqual((first, second), ((0, 'a'), (1, 'b')))
+
     def test_min_releases_discarded_temporary_keys(self):
         references = []
         class Key(object):

@@ -3,6 +3,7 @@
 import sys
 import unittest
 import _sre
+import _weakref
 
 
 def _letter():
@@ -314,3 +315,56 @@ class SREDeep(unittest.TestCase):
         index[Name('v')] = 1
         index['w'] = 1
         self.assertEqual(sorted(found.groupdict().items()), [('v', 'a'), ('w', 'a')])
+
+    def test_unicode_subclass_subject_dies_with_its_last_reference(self):
+        pattern = _sre.compile(u'(.)', 0, [17, 4, 0, 1, 1, 21, 0, 2, 21, 1, 1], 1, {}, [None, None])
+        found = []
+        class Text(unicode):
+            def __del__(self):
+                found.append(pattern.match(self).group(1))
+        subject = Text(u'\xe9t\xe9')
+        reference = _weakref.ref(subject)
+        self.assertEqual(pattern.match(subject).group(1), u'\xe9')
+        del subject
+        self.assertIs(reference(), None)
+        self.assertEqual(found, [u'\xe9'])
+        self.assertEqual(pattern.match(u'\xfcber').group(1), u'\xfc')
+        self.assertEqual(pattern.match(u'\xfcber').group(1), u'\xfc')
+        self.assertEqual(pattern.match(Text(u'\xe0x')).group(1), u'\xe0')
+        self.assertEqual(found, [u'\xe9', u'\xe0'])
+
+    def test_argument_errors_name_the_method(self):
+        found = _optional().match('a')
+        scanner = _letter().scanner('aa')
+        for invoke, arguments, keywords, message in (
+                (scanner.match, (1,), {}, 'match() takes no arguments (1 given)'),
+                (scanner.search, (1,), {}, 'search() takes no arguments (1 given)'),
+                (scanner.search, (), {'pos': 1}, 'search() takes no keyword arguments'),
+                (found.group, (), {'default': 1}, 'group() takes no keyword arguments'),
+                (found.start, (1, 2), {}, 'start expected at most 1 arguments, got 2'),
+                (found.span, (), {'group': 1}, 'span() takes no keyword arguments'),
+                (found.expand, (), {}, 'expand() takes exactly one argument (0 given)'),
+                (found.expand, ('', ''), {}, 'expand() takes exactly one argument (2 given)'),
+                (_sre.compile, ('a', 0), {}, 'function takes at least 3 arguments (2 given)'),
+                (_sre.compile, ('a', 0, [1], 0, {}, [None], 1), {}, 'function takes at most 6 arguments (7 given)'),
+                (_sre.compile, ('a', 0, [1]), {'groups': 0}, 'compile() takes no keyword arguments'),
+                (_sre.getlower, (65,), {}, 'function takes exactly 2 arguments (1 given)'),
+                (_sre.getlower, (65, 0), {'flags': 0}, 'getlower() takes no keyword arguments'),
+                (_sre.getcodesize, (1,), {}, 'getcodesize() takes no arguments (1 given)')):
+            with self.assertRaises(TypeError) as context:
+                invoke(*arguments, **keywords)
+            self.assertEqual(str(context.exception), message)
+        self.assertEqual(scanner.match().span(), (0, 1))
+
+    def test_short_str_subclass_length_bounds_empty_match_scans(self):
+        class Text(str):
+            def __len__(self):
+                return 2
+        repeated = _sre.compile('x*', 0, [29, 6, 0, 4294967295L, 19, 120, 1, 1], 0, {}, [None])
+        subject = Text('abc')
+        self.assertEqual(repeated.sub('-', subject), '-a-b-')
+        self.assertEqual(repeated.subn('-', subject, 5), ('-a-b-', 3))
+        self.assertEqual(repeated.findall(subject), ['', '', ''])
+        self.assertEqual([found.span() for found in repeated.finditer(subject)], [(0, 0), (1, 1), (2, 2)])
+        self.assertEqual(repeated.split(subject), ['ab'])
+        self.assertEqual(repeated.search(subject, 3).span(), (2, 2))

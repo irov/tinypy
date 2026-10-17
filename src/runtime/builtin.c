@@ -56,7 +56,7 @@ static tinypy_message_part_t __tinypy_builtin_argument_type_name(tinypy_value_t 
 
         return none_name;
     }
-    tinypy_message_part_t type_name = TINYPY_MESSAGE_PART_TYPE_NAME(value);
+    tinypy_message_part_t type_name = TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 50U);
 
     return type_name;
 }
@@ -201,7 +201,7 @@ static tinypy_value_t *__tinypy_builtin_call_items(tinypy_vm_t *vm, tinypy_value
             size_t index;
 
             if (bound_count > sizeof(local_items) / sizeof(local_items[0])) {
-                bound_items = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, bound_count * sizeof(*bound_items), out_error);
+                bound_items = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, bound_count * sizeof(*bound_items), out_error);
                 if (bound_items == NULL) {
                     return NULL;
                 }
@@ -218,7 +218,11 @@ static tinypy_value_t *__tinypy_builtin_call_items(tinypy_vm_t *vm, tinypy_value
             return result;
         }
     }
-    tinypy_value_t *args = tinypy_tuple_from_items(vm, items, item_count);
+    tinypy_value_t *args = tinypy_internal_tuple_from_items_checked(vm, items, item_count, out_error);
+
+    if (args == NULL) {
+        return NULL;
+    }
     tinypy_value_t *result = tinypy_call(callable, args, NULL, out_error);
 
     TINYPY_DECREF(args);
@@ -393,7 +397,7 @@ static tinypy_value_t *__tinypy_builtin_len(tinypy_value_t *function, tinypy_val
             }
             const tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("object of type '"),
-                TINYPY_MESSAGE_PART_TYPE_NAME(value),
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
                 TINYPY_MESSAGE_PART_LITERAL("' has no len()")
             };
 
@@ -756,7 +760,7 @@ static tinypy_value_t *__tinypy_builtin_attribute_name(tinypy_value_t *function,
     if ((kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) && setting != 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("attribute name must be string, not '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(name),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(name, 200U),
             TINYPY_MESSAGE_PART_LITERAL("'")
         };
 
@@ -904,7 +908,7 @@ static tinypy_value_t *__tinypy_builtin_next(tinypy_value_t *function, tinypy_va
        reports a missing next method. */
     if (item->type->next == NULL && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(item, vm->internal_special_next_key) == 0) {
         const tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_TYPE_NAME(item),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(item, 200U),
             TINYPY_MESSAGE_PART_LITERAL(" object is not an iterator")
         };
 
@@ -1424,7 +1428,7 @@ static tinypy_value_t *__tinypy_builtin_filter_text(tinypy_vm_t *vm, tinypy_valu
         return TINYPY_RET(input);
     }
 
-    uint8_t *output = byte_size != 0U ? (uint8_t *)tinypy_internal_vm_allocate_checked(vm, byte_size, out_error) : NULL;
+    uint8_t *output = byte_size != 0U ? (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, byte_size, out_error) : NULL;
     size_t input_offset = 0U;
     size_t output_size = 0U;
     size_t output_code_points = 0U;
@@ -1650,7 +1654,7 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
             return NULL;
         }
         if (total != 0U) {
-            buffer = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, total, out_error);
+            buffer = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, total, out_error);
             if (buffer == NULL) {
                 TINYPY_DECREF(selected);
                 return NULL;
@@ -1744,7 +1748,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
         return NULL;
     }
     size_t scratch_size = iterable_count * (2U * sizeof(tinypy_value_t *) + 2U * sizeof(uint8_t));
-    uint8_t *scratch = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
+    uint8_t *scratch = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
     if (scratch == NULL) {
         return NULL;
     }
@@ -1917,7 +1921,7 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
         return NULL;
     }
     size_t scratch_size = iterable_count * 2U * sizeof(tinypy_value_t *);
-    tinypy_value_t **scratch = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
+    tinypy_value_t **scratch = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, scratch_size, out_error);
     if (scratch == NULL) {
         return NULL;
     }
@@ -2019,15 +2023,21 @@ zip_cleanup:
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* total + item for sum(), releasing both. */
+static tinypy_value_t *__tinypy_builtin_sum_add(tinypy_value_t *total, tinypy_value_t *item, tinypy_error_t **out_error) {
+    tinypy_value_t *next_total = tinypy_add(total, item, out_error);
+
+    TINYPY_DECREF(item);
+    TINYPY_DECREF(total);
+    return next_total;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_sum(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_error_t *iteration_error = NULL;
     tinypy_value_t *iterator;
     tinypy_value_t *total;
-    int64_t integer_total = 0;
-    tinypy_bool_t integer_fast_path;
-    tinypy_bool_t float_fast_path;
-    double float_total = 0.0;
+    tinypy_value_t *item = NULL;
 
     (void)self;
     (void)kwargs;
@@ -2048,78 +2058,84 @@ static tinypy_value_t *__tinypy_builtin_sum(tinypy_value_t *function, tinypy_val
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sum() can't sum strings [use ''.join(seq) instead]", out_error);
         return NULL;
     }
-    integer_fast_path = total->type == &vm->types[TINYPY_VALUE_INTEGER] || total->type == &vm->types[TINYPY_VALUE_BOOL];
-    if (integer_fast_path != 0) {
-        integer_total = TINYPY_INTEGER_VALUE(total);
+    /* builtin_sum: an exact int total adds int items in a C integer, then an
+       exact float total adds float and int items in a double; the first item
+       a loop does not take is added as an object and leaves the loop. */
+    if (total->type == &vm->types[TINYPY_VALUE_INTEGER]) {
+        int64_t integer_total = TINYPY_INTEGER_VALUE(total);
+
+        for (;;) {
+            item = tinypy_next(iterator, &iteration_error);
+            if (item == NULL || (item->type != &vm->types[TINYPY_VALUE_INTEGER] && item->type != &vm->types[TINYPY_VALUE_BOOL])) {
+                break;
+            }
+            int64_t item_value = TINYPY_INTEGER_VALUE(item);
+
+            if ((item_value > 0 && integer_total > INT64_MAX - item_value) || (item_value < 0 && integer_total < INT64_MIN - item_value)) {
+                break;
+            }
+            integer_total += item_value;
+            TINYPY_DECREF(item);
+        }
+        TINYPY_DECREF(total);
+        total = tinypy_integer_from_i64(vm, integer_total);
+        if (item == NULL) {
+            goto finish;
+        }
+        total = __tinypy_builtin_sum_add(total, item, out_error);
+        if (total == NULL) {
+            goto failed;
+        }
     }
-    float_fast_path = total->type == &vm->types[TINYPY_VALUE_FLOAT];
-    if (float_fast_path != 0) {
-        float_total = TINYPY_FLOAT_OBJECT(total)->value;
+    if (total->type == &vm->types[TINYPY_VALUE_FLOAT]) {
+        double float_total = TINYPY_FLOAT_OBJECT(total)->value;
+
+        for (;;) {
+            item = tinypy_next(iterator, &iteration_error);
+            if (item == NULL) {
+                break;
+            }
+            if (item->type == &vm->types[TINYPY_VALUE_FLOAT]) {
+                float_total += TINYPY_FLOAT_OBJECT(item)->value;
+            }
+            else if (item->type == &vm->types[TINYPY_VALUE_INTEGER] || item->type == &vm->types[TINYPY_VALUE_BOOL]) {
+                float_total += (double)TINYPY_INTEGER_VALUE(item);
+            }
+            else {
+                break;
+            }
+            TINYPY_DECREF(item);
+        }
+        TINYPY_DECREF(total);
+        total = tinypy_float_from_double(vm, float_total);
+        if (item == NULL) {
+            goto finish;
+        }
+        total = __tinypy_builtin_sum_add(total, item, out_error);
+        if (total == NULL) {
+            goto failed;
+        }
     }
     for (;;) {
-        tinypy_value_t *item = tinypy_next(iterator, &iteration_error);
-        tinypy_value_t *next_total;
-
+        item = tinypy_next(iterator, &iteration_error);
         if (item == NULL) {
             break;
         }
-        if (integer_fast_path != 0 && (item->type == &vm->types[TINYPY_VALUE_INTEGER] || item->type == &vm->types[TINYPY_VALUE_BOOL])) {
-            int64_t item_value = TINYPY_INTEGER_VALUE(item);
-
-            if (!((item_value > 0 && integer_total > INT64_MAX - item_value) || (item_value < 0 && integer_total < INT64_MIN - item_value))) {
-                integer_total += item_value;
-                TINYPY_DECREF(item);
-                if (total != NULL) {
-                    TINYPY_DECREF(total);
-                    total = NULL;
-                }
-                continue;
-            }
-        }
-        if (integer_fast_path != 0 && item->type == &vm->types[TINYPY_VALUE_FLOAT]) {
-            float_total = (double)integer_total;
-            integer_fast_path = TINYPY_FALSE;
-            float_fast_path = TINYPY_TRUE;
-        }
-        if (float_fast_path != 0 && (item->type == &vm->types[TINYPY_VALUE_FLOAT] || item->type == &vm->types[TINYPY_VALUE_INTEGER] || item->type == &vm->types[TINYPY_VALUE_BOOL])) {
-            float_total += item->type == &vm->types[TINYPY_VALUE_FLOAT] ? TINYPY_FLOAT_OBJECT(item)->value : (double)TINYPY_INTEGER_VALUE(item);
-            TINYPY_DECREF(item);
-            if (total != NULL) {
-                TINYPY_DECREF(total);
-                total = NULL;
-            }
-            continue;
-        }
+        total = __tinypy_builtin_sum_add(total, item, out_error);
         if (total == NULL) {
-            total = float_fast_path != 0 ? tinypy_float_from_double(vm, float_total) : tinypy_integer_from_i64(vm, integer_total);
-        }
-        integer_fast_path = TINYPY_FALSE;
-        float_fast_path = TINYPY_FALSE;
-        next_total = tinypy_add(total, item, out_error);
-
-        TINYPY_DECREF(item);
-        TINYPY_DECREF(total);
-        if (next_total == NULL) {
-            TINYPY_DECREF(iterator);
-            return NULL;
-        }
-        total = next_total;
-        if (total->type == &vm->types[TINYPY_VALUE_FLOAT]) {
-            float_fast_path = TINYPY_TRUE;
-            float_total = TINYPY_FLOAT_OBJECT(total)->value;
+            goto failed;
         }
     }
+finish:
     TINYPY_DECREF(iterator);
     if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
-        if (total != NULL) {
-            TINYPY_DECREF(total);
-        }
+        TINYPY_DECREF(total);
         return NULL;
     }
-    if (total == NULL) {
-        total = float_fast_path != 0 ? tinypy_float_from_double(vm, float_total) : tinypy_integer_from_i64(vm, integer_total);
-    }
     return total;
+failed:
+    TINYPY_DECREF(iterator);
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Offers a candidate of min or max, which becomes the best one when it is the
@@ -3001,7 +3017,7 @@ static tinypy_bool_t __tinypy_builtin_print_affix(tinypy_vm_t *vm, tinypy_value_
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_TEXT(name),
         TINYPY_MESSAGE_PART_LITERAL(" must be None, str or unicode, not "),
-        TINYPY_MESSAGE_PART_TYPE_NAME(value),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
     };
 
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -3018,6 +3034,20 @@ static tinypy_value_t *__tinypy_builtin_print_affix_value(tinypy_vm_t *vm, tinyp
     }
     tinypy_value_t *return_value_2 = tinypy_string_from_bytes(vm, default_bytes, default_size);
     return return_value_2;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyFile_WriteObject with Py_PRINT_RAW writes a unicode value as it is and
+   any other value, a str subtype included, as its str(). */
+static tinypy_bool_t __tinypy_builtin_print_write(tinypy_value_t *output, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *text = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE ? TINYPY_RET(value) : tinypy_object_str(value, out_error);
+
+    if (text == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t written = tinypy_internal_output_write_value(output, text, out_error);
+
+    TINYPY_DECREF(text);
+    return written;
 }
 //////////////////////////////////////////////////////////////////////////
 /* builtin_print parses its keywords with PyArg_ParseTupleAndKeywords; the
@@ -3074,29 +3104,16 @@ static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_v
     }
     ending_text = __tinypy_builtin_print_affix_value(vm, ending, "\n", 1U, unicode_default);
     for (index = 0U; index < argument_count; ++index) {
-        tinypy_value_t *text;
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, index);
-        tinypy_value_type_e item_kind = TINYPY_VALUE_KIND(item);
 
-        if (index != 0U && tinypy_internal_output_write_value(output, separator_text, out_error) == 0) {
+        if (index != 0U && __tinypy_builtin_print_write(output, separator_text, out_error) == 0) {
             goto cleanup;
         }
-        if (item_kind == TINYPY_VALUE_STRING || item_kind == TINYPY_VALUE_UNICODE) {
-            text = TINYPY_RET(item);
-        }
-        else {
-            text = tinypy_object_str(item, out_error);
-            if (text == NULL) {
-                goto cleanup;
-            }
-        }
-        if (tinypy_internal_output_write_value(output, text, out_error) == 0) {
-            TINYPY_DECREF(text);
+        if (__tinypy_builtin_print_write(output, item, out_error) == 0) {
             goto cleanup;
         }
-        TINYPY_DECREF(text);
     }
-    if (tinypy_internal_output_write_value(output, ending_text, out_error) != 0) {
+    if (__tinypy_builtin_print_write(output, ending_text, out_error) != 0) {
         result = TINYPY_RET_NONE(vm);
     }
 cleanup:
@@ -3133,7 +3150,7 @@ static tinypy_value_t *__tinypy_builtin_dir_locals(tinypy_vm_t *vm, tinypy_error
     if (TINYPY_VALUE_KIND(names) != TINYPY_VALUE_LIST) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("dir(): expected keys() of locals to be a list, not '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(names),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(names, 200U),
             TINYPY_MESSAGE_PART_LITERAL("'")
         };
 
@@ -3427,7 +3444,10 @@ static tinypy_value_t *__tinypy_builtin_import(tinypy_value_t *function, tinypy_
         fromlist = arguments[3];
     }
     (void)__tinypy_builtin_text_view(vm, arguments[0], &name_bytes, &name_size, out_error);
-    tinypy_value_t *module_key = tinypy_internal_name_from_bytes(vm, name_bytes, name_size);
+    tinypy_value_t *module_key = tinypy_internal_name_from_bytes_checked(vm, name_bytes, name_size, out_error);
+    if (module_key == NULL) {
+        goto complete;
+    }
     result = tinypy_import_module_key(module_key, globals, fromlist, (int32_t)level, out_error);
 
     TINYPY_DECREF(module_key);
@@ -3481,7 +3501,7 @@ static tinypy_value_t *__tinypy_builtin_ord(tinypy_value_t *function, tinypy_val
     else {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("ord() expected string of length 1, but "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(value),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
             TINYPY_MESSAGE_PART_LITERAL(" found")
         };
 
@@ -3523,7 +3543,7 @@ static tinypy_value_t *__tinypy_builtin_format(tinypy_value_t *function, tinypy_
         if (TINYPY_VALUE_KIND(format_spec) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(format_spec) != TINYPY_VALUE_UNICODE) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("format expects arg 2 to be string or unicode, not "),
-                TINYPY_MESSAGE_PART_TYPE_NAME(format_spec)
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(format_spec, 100U)
             };
 
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
@@ -3574,7 +3594,7 @@ static tinypy_value_t *__tinypy_builtin_base_repr(tinypy_value_t *function, tiny
             const tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_TEXT(method_name),
                 TINYPY_MESSAGE_PART_LITERAL(" returned non-string (type "),
-                TINYPY_MESSAGE_PART_TYPE_NAME(special),
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(special, 200U),
                 TINYPY_MESSAGE_PART_LITERAL(")"),
             };
 
@@ -3730,7 +3750,7 @@ static tinypy_value_t *__tinypy_builtin_compile_string(tinypy_value_t *value, co
             TINYPY_MESSAGE_PART_LITERAL("compile() argument "),
             {argument, 1U},
             TINYPY_MESSAGE_PART_LITERAL(" must be string without null bytes, not "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(value),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 50U),
         };
         TINYPY_DECREF(encoded);
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);

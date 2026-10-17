@@ -138,3 +138,54 @@ assert named_match.lastgroup == "y"
 optional = compile_pattern("(a)", 0, [17, 8, 1, 1, 1, 1, 0, 97, 0, 21, 0, 19, 97, 21, 1, 1], 1)
 assert optional.match("a").regs == ((0, 1), (0, 1))
 assert optional.sub("X", "aa") == "XX"
+
+# A str subclass reporting more characters than it holds, or a subject that
+# shrinks while it is scanned, bounds every scan by its real size; CPython 2.7
+# reads past the end of the buffer there.
+repeated = compile_pattern("x*", 0, [29, 6, 0, 4294967295L, 19, 120, 1, 1])
+
+
+class LongText(str):
+    def __len__(self):
+        return 8
+
+
+long_text = LongText("abc")
+assert repeated.sub("-", long_text) == "-a-b-c-"
+assert repeated.subn("-", long_text, 20) == ("-a-b-c-", 4)
+assert repeated.findall(long_text) == ["", "", "", ""]
+assert [found.span() for found in repeated.finditer(long_text)] == [(0, 0), (1, 1), (2, 2), (3, 3)]
+assert repeated.split(long_text) == ["abc"]
+assert repeated.search(long_text, 5).span() == (3, 3)
+
+shrinking = bytearray("aaaaaaaa")
+
+
+def shrink(found):
+    del shrinking[2:]
+    return "X"
+
+
+assert repeated.sub(shrink, shrinking) == bytearray("XaXaX")
+
+
+class ShrinkingBytes(bytearray):
+    def __getitem__(self, index):
+        del self[2:]
+        return bytearray.__getitem__(self, index)
+
+
+assert repeated.findall(ShrinkingBytes("aaaaaaaa")) == [bytearray(), bytearray(), bytearray()]
+
+shrinking = bytearray("aaaaaaaa")
+spans = []
+for found in repeated.finditer(shrinking):
+    spans.append(found.span())
+    del shrinking[2:]
+assert spans == [(0, 0), (1, 1), (2, 2)]
+
+shrinking = bytearray("aaaaaaaa")
+scanner = repeated.scanner(shrinking)
+assert scanner.match().span() == (0, 0)
+del shrinking[2:]
+assert [scanner.match().span(), scanner.match().span(), scanner.match()] == [(1, 1), (2, 2), None]

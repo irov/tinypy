@@ -381,6 +381,101 @@ static int32_t __test_nested_pending_reasons(void) {
     return 0;
 }
 
+static size_t __test_emit_nested_finally(uint8_t *code, size_t offset, size_t remaining, tinypy_bool_t returns) {
+    size_t setup = offset;
+
+    offset = __test_emit_instruction(code, offset, TINYPY_OP_SETUP_FINALLY, 0U);
+    offset = __test_emit_instruction(code, offset, TINYPY_OP_LOAD_CONST, 0U);
+    if (returns != 0) {
+        size_t branch = offset;
+
+        offset = __test_emit_instruction(code, offset, TINYPY_OP_POP_JUMP_IF_FALSE, 0U);
+        offset = __test_emit_instruction(code, offset, TINYPY_OP_LOAD_CONST, 0U);
+        offset = __test_emit_instruction(code, offset, TINYPY_OP_RETURN_VALUE, 0U);
+        __test_patch_argument(code, branch, (uint16_t)offset);
+    }
+    else {
+        offset = __test_emit_instruction(code, offset, TINYPY_OP_POP_TOP, 0U);
+    }
+    offset = __test_emit_instruction(code, offset, TINYPY_OP_POP_BLOCK, 0U);
+    offset = __test_emit_instruction(code, offset, TINYPY_OP_LOAD_CONST, 0U);
+    __test_patch_argument(code, setup, (uint16_t)(offset - setup - 3U));
+    if (remaining > 1U) {
+        offset = __test_emit_nested_finally(code, offset, remaining - 1U, returns);
+    }
+    offset = __test_emit_instruction(code, offset, TINYPY_OP_END_FINALLY, 0U);
+    return offset;
+}
+
+static int32_t __test_deeply_nested_finally(void) {
+    /* A finally clause is entered normally, by an exception and by return;
+       the clauses nested in it verify once for their context, not once for
+       every combination of these reasons. Each pending clause is modeled
+       three values wide. */
+    uint8_t code[512];
+    tinypy_bytecode_metadata_t metadata = __test_metadata(64U);
+    tinypy_bytecode_verify_result_t result;
+
+    for (size_t variant = 0U; variant < 2U; ++variant) {
+        size_t size = __test_emit_nested_finally(code, 0U, 16U, variant != 0U ? TINYPY_TRUE : TINYPY_FALSE);
+
+        size = __test_emit_instruction(code, size, TINYPY_OP_LOAD_CONST, 0U);
+        size = __test_emit_instruction(code, size, TINYPY_OP_RETURN_VALUE, 0U);
+        TEST_CHECK(__test_verify(code, size, &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_OK);
+        TEST_CHECK(result.computed_max_stack == 48U);
+    }
+    return 0;
+}
+
+static int32_t __test_code_below_its_floor(void) {
+    /* An exception unwinds the value stack to the level of its block, and
+       only END_FINALLY and WITH_CLEANUP consume the reason of a finally
+       clause: code that reads or pops below either is rejected before it
+       runs. */
+    static const uint8_t pop_below_block[] = {
+        TINYPY_OP_LOAD_CONST, 0U, 0U,    /* 0 */
+        TINYPY_OP_SETUP_EXCEPT, 7U, 0U,  /* 3 -> 13 */
+        TINYPY_OP_POP_TOP,               /* 6: below the block */
+        TINYPY_OP_LOAD_NAME, 0U, 0U,     /* 7 */
+        TINYPY_OP_RAISE_VARARGS, 1U, 0U, /* 10 */
+        TINYPY_OP_POP_TOP,               /* 13 */
+        TINYPY_OP_POP_TOP,               /* 14 */
+        TINYPY_OP_POP_TOP,               /* 15 */
+        TINYPY_OP_POP_TOP,               /* 16 */
+        TINYPY_OP_LOAD_CONST, 0U, 0U,    /* 17 */
+        TINYPY_OP_RETURN_VALUE           /* 20 */
+    };
+    static const uint8_t raise_below_block[] = {
+        TINYPY_OP_LOAD_CONST, 0U, 0U,    /* 0 */
+        TINYPY_OP_SETUP_EXCEPT, 3U, 0U,  /* 3 -> 9 */
+        TINYPY_OP_RAISE_VARARGS, 1U, 0U, /* 6: raises the value below the block */
+        TINYPY_OP_POP_TOP,               /* 9 */
+        TINYPY_OP_POP_TOP,               /* 10 */
+        TINYPY_OP_POP_TOP,               /* 11 */
+        TINYPY_OP_POP_TOP,               /* 12 */
+        TINYPY_OP_LOAD_CONST, 0U, 0U,    /* 13 */
+        TINYPY_OP_RETURN_VALUE           /* 16 */
+    };
+    static const uint8_t consume_reason[] = {
+        TINYPY_OP_SETUP_FINALLY, 4U, 0U, /* 0 -> 7 */
+        TINYPY_OP_POP_BLOCK,             /* 3 */
+        TINYPY_OP_LOAD_CONST, 0U, 0U,    /* 4: None marker */
+        TINYPY_OP_POP_TOP,               /* 7: pops the reason */
+        TINYPY_OP_LOAD_CONST, 0U, 0U,    /* 8 */
+        TINYPY_OP_RETURN_VALUE           /* 11 */
+    };
+    tinypy_bytecode_metadata_t metadata = __test_metadata(8U);
+    tinypy_bytecode_verify_result_t result;
+
+    TEST_CHECK(__test_verify(pop_below_block, sizeof(pop_below_block), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW);
+    TEST_CHECK(result.error_offset == 6U);
+    TEST_CHECK(__test_verify(raise_below_block, sizeof(raise_below_block), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW);
+    TEST_CHECK(result.error_offset == 6U);
+    TEST_CHECK(__test_verify(consume_reason, sizeof(consume_reason), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW);
+    TEST_CHECK(result.error_offset == 7U);
+    return 0;
+}
+
 static int32_t __test_variable_stack_effects(void) {
     static const uint8_t unpack_build[] = {
         TINYPY_OP_LOAD_CONST, 0U, 0U,
@@ -1033,6 +1128,12 @@ int main(void) {
         return 1;
     }
     if (__test_nested_pending_reasons() != 0) {
+        return 1;
+    }
+    if (__test_deeply_nested_finally() != 0) {
+        return 1;
+    }
+    if (__test_code_below_its_floor() != 0) {
         return 1;
     }
     if (__test_variable_stack_effects() != 0) {

@@ -289,6 +289,51 @@ static tinypy_bool_t __tinypy_render_double_literal(tinypy_render_builder_t *bui
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* An imaginary literal, whose value is complex(0.0, value) exactly. */
+static tinypy_bool_t __tinypy_render_imaginary_literal(tinypy_render_builder_t *builder, double value) {
+    tinypy_bool_t result;
+
+    if (value != value) {
+        tinypy_bool_t return_value_1 = __tinypy_render_text(builder, "(1e400j - 1e400j)");
+        return return_value_1;
+    }
+    if (value > DBL_MAX || value < -DBL_MAX) {
+        tinypy_bool_t return_value_2 = __tinypy_render_double_literal(builder, value) && __tinypy_render_character(builder, 'j');
+        return return_value_2;
+    }
+    tinypy_value_t *temporary = tinypy_complex_from_doubles(builder->compile->vm, 0.0, value);
+    result = __tinypy_render_repr_literal(builder, temporary);
+    TINYPY_DECREF(temporary);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Complex arithmetic combines the parts separately, so a real part and an
+   imaginary literal sum exactly unless a zero part would lose its sign:
+   0.0 - x keeps every imaginary part but -0.0, x - 0.0 every real part and
+   x + 0.0 every real part but -0.0. A sign-preserving form also needs no name
+   such as complex, which the program may rebind. */
+static tinypy_bool_t __tinypy_render_complex_literal(tinypy_render_builder_t *builder, double real_value, double imaginary_value) {
+    uint64_t real_bits;
+    uint64_t imaginary_bits;
+
+    (void)memcpy(&real_bits, &real_value, sizeof(real_bits));
+    (void)memcpy(&imaginary_bits, &imaginary_value, sizeof(imaginary_bits));
+    if (real_bits == 0U) {
+        tinypy_bool_t return_value_1 = __tinypy_render_imaginary_literal(builder, imaginary_value);
+        return return_value_1;
+    }
+    if (imaginary_bits == UINT64_C(0x8000000000000000)) {
+        tinypy_bool_t return_value_2 = __tinypy_render_text(builder, "(-(") && __tinypy_render_double_literal(builder, -real_value) && __tinypy_render_text(builder, " - 0j))");
+        return return_value_2;
+    }
+    if ((imaginary_bits >> 63U) != 0U || real_bits == UINT64_C(0x8000000000000000)) {
+        tinypy_bool_t return_value_3 = __tinypy_render_character(builder, '(') && __tinypy_render_double_literal(builder, real_value) && __tinypy_render_text(builder, " - ") && __tinypy_render_imaginary_literal(builder, -imaginary_value) && __tinypy_render_character(builder, ')');
+        return return_value_3;
+    }
+    tinypy_bool_t return_value_4 = __tinypy_render_character(builder, '(') && __tinypy_render_double_literal(builder, real_value) && __tinypy_render_text(builder, " + ") && __tinypy_render_imaginary_literal(builder, imaginary_value) && __tinypy_render_character(builder, ')');
+    return return_value_4;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_render_literal(tinypy_render_builder_t *builder, tinypy_value_t *value) {
     tinypy_value_type_e type = tinypy_typeof(value);
 
@@ -330,13 +375,8 @@ static tinypy_bool_t __tinypy_render_literal(tinypy_render_builder_t *builder, t
         double imaginary_value;
 
         tinypy_complex_as_doubles(value, &real_value, &imaginary_value);
-        if (real_value == real_value && real_value <= DBL_MAX && real_value >= -DBL_MAX && imaginary_value == imaginary_value && imaginary_value <= DBL_MAX && imaginary_value >= -DBL_MAX) {
-            tinypy_bool_t return_value_4 = __tinypy_render_repr_literal(builder, value);
-            return return_value_4;
-        }
-        /* Infinite parts cannot be combined arithmetically without producing nan. */
-        tinypy_bool_t return_value_5 = __tinypy_render_text(builder, "complex(") && __tinypy_render_double_literal(builder, real_value) && __tinypy_render_text(builder, ", ") && __tinypy_render_double_literal(builder, imaginary_value) && __tinypy_render_character(builder, ')');
-        return return_value_5;
+        tinypy_bool_t return_value_4 = __tinypy_render_complex_literal(builder, real_value, imaginary_value);
+        return return_value_4;
     }
     tinypy_bool_t return_value_6 = __tinypy_render_repr_literal(builder, value);
     return return_value_6;
@@ -510,6 +550,11 @@ static tinypy_bool_t __tinypy_render_slice(tinypy_render_builder_t *builder, tin
                 return TINYPY_FALSE;
             }
         }
+        /* k[1:2,] keeps its one-dimension tuple. */
+        if (TINYPY_AST_SEQUENCE_LENGTH(slice->v.ExtSlice.dims) == 1) {
+            function_result = __tinypy_render_character(builder, ',');
+            return function_result;
+        }
         return TINYPY_TRUE;
     default:
         return TINYPY_FALSE;
@@ -628,7 +673,8 @@ static tinypy_bool_t __tinypy_render_expression(tinypy_render_builder_t *builder
         if (__tinypy_render_character(builder, '(') == 0) {
             return TINYPY_FALSE;
         }
-        if (__tinypy_render_text(builder, expression->v.UnaryOp.op == TINYPY_AST_UNARY_NOT ? "not " : (expression->v.UnaryOp.op == TINYPY_AST_UNARY_INVERT ? "~" : (expression->v.UnaryOp.op == TINYPY_AST_UNARY_ADD ? "+" : "-"))) == 0 || __tinypy_render_expression(builder, expression->v.UnaryOp.operand) == 0) {
+        /* -(0j) must not become the literal -0j. */
+        if (__tinypy_render_text(builder, expression->v.UnaryOp.op == TINYPY_AST_UNARY_NOT ? "not " : (expression->v.UnaryOp.op == TINYPY_AST_UNARY_INVERT ? "~" : (expression->v.UnaryOp.op == TINYPY_AST_UNARY_ADD ? "+" : "-"))) == 0 || __tinypy_render_operand(builder, expression->v.UnaryOp.operand) == 0) {
             return TINYPY_FALSE;
         }
         tinypy_bool_t return_value_3 = __tinypy_render_character(builder, ')');

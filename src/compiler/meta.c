@@ -257,7 +257,9 @@ static tinypy_bool_t __tinypy_meta_binding_set(tinypy_meta_context_t *meta, tiny
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_ast_identifier_t __tinypy_meta_identifier_from_value(tinypy_meta_context_t *meta, tinypy_value_t *value, int32_t line, int32_t column) {
+/* A bound generated name follows the forbidden_check of the AST: None and
+   __debug__ cannot be assigned. */
+static tinypy_ast_identifier_t __tinypy_meta_identifier_from_value(tinypy_meta_context_t *meta, tinypy_value_t *value, tinypy_bool_t binding, int32_t line, int32_t column) {
     const char *bytes;
     size_t size;
     size_t index;
@@ -287,8 +289,20 @@ static tinypy_ast_identifier_t __tinypy_meta_identifier_from_value(tinypy_meta_c
         (void)__tinypy_meta_fail(meta, "generated name is a Python keyword", line, column);
         return NULL;
     }
-    tinypy_value_t *identifier = tinypy_string_from_bytes(meta->compile->vm, bytes, size);
-    (void)tinypy_internal_string_intern(&identifier, NULL);
+    if (binding != 0 && (strcmp(bytes, "None") == 0 || strcmp(bytes, "__debug__") == 0)) {
+        (void)__tinypy_meta_fail(meta, "generated name cannot be assigned", line, column);
+        return NULL;
+    }
+    tinypy_value_t *identifier = tinypy_internal_string_from_bytes_checked(meta->compile->vm, bytes, size, NULL);
+    if (identifier == NULL) {
+        tinypy_internal_compiler_memory_error(meta->compile);
+        return NULL;
+    }
+    if (tinypy_internal_string_intern_checked(&identifier, NULL) == 0) {
+        TINYPY_DECREF(identifier);
+        tinypy_internal_compiler_memory_error(meta->compile);
+        return NULL;
+    }
     tinypy_ast_identifier_t return_value_1 = (tinypy_ast_identifier_t)__tinypy_meta_track(meta, identifier, line, column);
     return return_value_1;
 }
@@ -790,7 +804,7 @@ static tinypy_ast_expression_t __tinypy_meta_clone_expression(tinypy_meta_contex
         if (name_value == NULL) {
             return NULL;
         }
-        name = __tinypy_meta_identifier_from_value(meta, name_value, expression->lineno, expression->col_offset);
+        name = __tinypy_meta_identifier_from_value(meta, name_value, TINYPY_FALSE, expression->lineno, expression->col_offset);
         if (name == NULL) {
             return NULL;
         }
@@ -949,7 +963,7 @@ static tinypy_ast_identifier_t __tinypy_meta_decorated_name(tinypy_meta_context_
                 return NULL;
             }
             value = __tinypy_meta_eval(meta, value_expression);
-            tinypy_ast_identifier_t return_value_1 = value != NULL ? __tinypy_meta_identifier_from_value(meta, value, line, column) : NULL;
+            tinypy_ast_identifier_t return_value_1 = value != NULL ? __tinypy_meta_identifier_from_value(meta, value, TINYPY_TRUE, line, column) : NULL;
             return return_value_1;
         }
     }
@@ -1059,7 +1073,7 @@ static tinypy_ast_statement_t __tinypy_meta_clone_statement(tinypy_meta_context_
                 return NULL;
             }
             name_value = __tinypy_meta_eval(meta, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(call->v.Call.args, 1));
-            name = name_value != NULL ? __tinypy_meta_identifier_from_value(meta, name_value, statement->lineno, statement->col_offset) : NULL;
+            name = name_value != NULL ? __tinypy_meta_identifier_from_value(meta, name_value, is_set, statement->lineno, statement->col_offset) : NULL;
             if (name == NULL) {
                 return NULL;
             }

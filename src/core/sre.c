@@ -455,10 +455,10 @@ static void *__tinypy_sre_grow(tinypy_sre_state_t *state, void *memory, size_t o
     void *grown;
 
     if (memory == NULL) {
-        grown = tinypy_internal_vm_allocate_checked(state->vm, new_size, NULL);
+        grown = __tinypy_internal_vm_allocate_checked(state->vm, new_size, NULL);
     }
     else {
-        grown = tinypy_internal_vm_reallocate_checked(state->vm, memory, old_size, new_size, NULL);
+        grown = __tinypy_internal_vm_reallocate_checked(state->vm, memory, old_size, new_size, NULL);
     }
     if (grown == NULL) {
         state->memory_failed = TINYPY_TRUE;
@@ -1250,7 +1250,11 @@ static tinypy_bool_t __tinypy_sre_subject_length(tinypy_vm_t *vm, tinypy_value_t
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "buffer size mismatch", out_error);
             return TINYPY_FALSE;
         }
-        size = (size_t)reported_size;
+        /* getstring takes a str subclass's length from __len__, but the
+           matcher never reads past the characters the string holds. */
+        if ((uint64_t)reported_size < size) {
+            size = (size_t)reported_size;
+        }
     }
     *out_size = size;
     return TINYPY_TRUE;
@@ -1393,7 +1397,7 @@ static tinypy_bool_t __tinypy_sre_state_decode(tinypy_sre_state_t *state, tinypy
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "regular expression input is too large", out_error);
         return TINYPY_FALSE;
     }
-    state->characters = (uint32_t *)tinypy_internal_vm_allocate_checked(vm, state->size * sizeof(*state->characters), out_error);
+    state->characters = (uint32_t *)__tinypy_internal_vm_allocate_checked(vm, state->size * sizeof(*state->characters), out_error);
     if (state->characters == NULL) {
         return TINYPY_FALSE;
     }
@@ -1446,17 +1450,23 @@ static tinypy_bool_t __tinypy_sre_state_initialize(tinypy_sre_state_t *state, ti
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Only the code points of an exact unicode subject are cached: releasing it
+   runs no Python code, and the cache never prolongs the life of an object
+   that has a __del__ or weak references. */
 static void __tinypy_sre_state_finalize(tinypy_sre_state_t *state) {
     tinypy_sre_pattern_object_t *pattern = state->pattern;
+    tinypy_value_t *released_string = NULL;
 
+    if (state->characters != NULL && state->string->type != &state->vm->types[TINYPY_VALUE_UNICODE]) {
+        tinypy_internal_vm_deallocate(state->vm, state->characters, state->size * sizeof(*state->characters));
+        state->characters = NULL;
+    }
     if (state->characters != NULL) {
         if (pattern->cache_characters != NULL) {
             tinypy_internal_vm_deallocate(state->vm, pattern->cache_characters, pattern->cache_size * sizeof(*pattern->cache_characters));
         }
         if (pattern->cache_string != state->string) {
-            if (pattern->cache_string != NULL) {
-                TINYPY_DECREF(pattern->cache_string);
-            }
+            released_string = pattern->cache_string;
             pattern->cache_string = state->string;
             TINYPY_INCREF(state->string);
         }
@@ -1476,6 +1486,10 @@ static void __tinypy_sre_state_finalize(tinypy_sre_state_t *state) {
         }
         pattern->cache_contexts = state->contexts;
         pattern->cache_contexts_size = state->context_capacity * sizeof(*state->contexts);
+    }
+    /* The replaced subject is released once the cache describes the new one. */
+    if (released_string != NULL) {
+        TINYPY_DECREF(released_string);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1521,8 +1535,12 @@ static tinypy_value_t *__tinypy_sre_execute(tinypy_sre_pattern_object_t *pattern
         return NULL;
     }
     string_size = __tinypy_sre_text_size(string);
+    /* The callers start inside the subject and step past each match: a pos
+       past its end means the subject shrank since, which ends the scan as a
+       start past the end ends sre_search. */
     if (pos > string_size) {
-        pos = string_size;
+        result = TINYPY_RET_NONE(vm);
+        return result;
     }
     if (endpos > string_size) {
         endpos = string_size;
@@ -1599,11 +1617,51 @@ static tinypy_value_t *__tinypy_sre_execute(tinypy_sre_pattern_object_t *pattern
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_sre_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_error_t **out_error) {
+/* Out of line, so that the methods it guards keep their small frames. */
+static TINYPY_NOINLINE void __tinypy_sre_method_receiver_error(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, const tinypy_type_t *type, tinypy_error_t **out_error) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, minimum, maximum, style, out_error) == TINYPY_FALSE) {
+        return;
+    }
+    tinypy_value_t *receiver = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *name = tinypy_native_function_name(function);
+    tinypy_message_part_t owner[3];
+    tinypy_message_part_t received[3];
+
+    tinypy_internal_type_message_name(type, owner);
+    tinypy_internal_type_message_name(receiver->type, received);
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(name),
+        TINYPY_MESSAGE_PART_LITERAL("' requires a '"), owner[0], owner[1], owner[2],
+        TINYPY_MESSAGE_PART_LITERAL("' object but received a '"), received[0], received[1], received[2],
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+    };
+
+    tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(function), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The receiver of an SRE method once the arguments after it pass the check
+   of its CPython counterpart. */
+static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_sre_method_receiver(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, const tinypy_type_t *type, tinypy_error_t **out_error) {
     size_t count = TINYPY_TUPLE_SIZE(args);
 
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || count < minimum || count > maximum) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "SRE method received invalid arguments", out_error);
+    if (count == 0U || count - 1U < minimum || count - 1U > maximum || (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_GET(args, 0U)->type != type) {
+        __tinypy_sre_method_receiver_error(function, args, kwargs, minimum, maximum, style, type, out_error);
+        return NULL;
+    }
+    tinypy_value_t *receiver = TINYPY_TUPLE_GET(args, 0U);
+    return receiver;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The PyArg_ParseTuple formats of compile and getlower name no function. */
+static tinypy_bool_t __tinypy_sre_function_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_error_t **out_error) {
+    size_t count = TINYPY_TUPLE_SIZE(args);
+
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_bool_t accepted = tinypy_internal_native_arguments_check(function, count, kwargs, minimum, maximum, TINYPY_ARITY_STYLE_PARSED, out_error);
+        return accepted;
+    }
+    if (count < minimum || count > maximum) {
+        tinypy_internal_make_arity_error(TINYPY_VALUE_VM(function), NULL, 0U, count, minimum, maximum, TINYPY_ARITY_STYLE_PARSED, out_error);
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;
@@ -1644,15 +1702,11 @@ static tinypy_value_t *__tinypy_sre_pattern_match_or_search(tinypy_value_t *func
     size_t pos;
     size_t endpos;
 
-    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 2U, 4U, out_error) == 0;
-    if (condition == 0) {
-        tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-        condition = TINYPY_VALUE_KIND(item_2) != TINYPY_VALUE_SRE_PATTERN;
-    }
-    if (condition) {
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 1U, 3U, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_PATTERN], out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(receiver);
     if (__tinypy_sre_bounds(pattern, args, 1U, &pos, &endpos, out_error) == 0) {
         return NULL;
     }
@@ -1716,15 +1770,11 @@ static tinypy_value_t *__tinypy_sre_match_group(tinypy_value_t *function, tinypy
     size_t count;
 
     (void)user_data;
-    tinypy_bool_t condition_3 = __tinypy_sre_method_arguments(vm, args, kwargs, 1U, SIZE_MAX, out_error) == 0;
-    if (condition_3 == 0) {
-        tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-        condition_3 = TINYPY_VALUE_KIND(item_2) != TINYPY_VALUE_SRE_MATCH;
-    }
-    if (condition_3) {
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 0U, SIZE_MAX, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_MATCH], out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(receiver);
     count = TINYPY_TUPLE_SIZE(args) - 1U;
     tinypy_value_t *none = TINYPY_RET_NONE(vm);
     if (count <= 1U) {
@@ -1787,15 +1837,11 @@ static tinypy_value_t *__tinypy_sre_match_groups(tinypy_value_t *function, tinyp
     size_t index;
 
     (void)user_data;
-    tinypy_bool_t condition_5 = __tinypy_sre_method_arguments(vm, args, kwargs, 1U, 2U, out_error) == 0;
-    if (condition_5 == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition_5 = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_MATCH;
-    }
-    if (condition_5) {
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 0U, 1U, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_MATCH], out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(receiver);
     tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(match->pattern);
     default_value = TINYPY_TUPLE_SIZE(args) == 2U ? TINYPY_TUPLE_GET(args, 1U) : &vm->none_object.base;
     if (pattern->groups == 0U) {
@@ -1849,15 +1895,11 @@ static tinypy_value_t *__tinypy_sre_match_span_method(tinypy_value_t *function, 
     size_t end;
     intptr_t operation = (intptr_t)user_data;
 
-    tinypy_bool_t condition_7 = __tinypy_sre_method_arguments(vm, args, kwargs, 1U, 2U, out_error) == 0;
-    if (condition_7 == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition_7 = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_MATCH;
-    }
-    if (condition_7) {
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 0U, 1U, TINYPY_ARITY_STYLE_UNPACK, &vm->types[TINYPY_VALUE_SRE_MATCH], out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(receiver);
     if (__tinypy_sre_match_span_value(match, args, &start, &end, out_error) == 0) {
         return NULL;
     }
@@ -1886,15 +1928,11 @@ static tinypy_value_t *__tinypy_sre_pattern_findall(tinypy_value_t *function, ti
     size_t endpos;
 
     (void)user_data;
-    tinypy_bool_t condition_8 = __tinypy_sre_method_arguments(vm, args, kwargs, 2U, 4U, out_error) == 0;
-    if (condition_8 == 0) {
-        tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-        condition_8 = TINYPY_VALUE_KIND(item_2) != TINYPY_VALUE_SRE_PATTERN;
-    }
-    if (condition_8) {
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 1U, 3U, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_PATTERN], out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(receiver);
     tinypy_value_t *string = TINYPY_TUPLE_GET(args, 1U);
     if (__tinypy_sre_bounds(pattern, args, 1U, &pos, &endpos, out_error) == 0) {
         return NULL;
@@ -1992,15 +2030,11 @@ static tinypy_value_t *__tinypy_sre_pattern_sub_expanded(tinypy_value_t *functio
     int64_t limit = 0;
     tinypy_bool_t callable;
 
-    tinypy_bool_t condition_9 = __tinypy_sre_method_arguments(vm, args, kwargs, 3U, 4U, out_error) == 0;
-    if (condition_9 == 0) {
-        tinypy_value_t *item_2 = TINYPY_TUPLE_GET(args, 0U);
-        condition_9 = TINYPY_VALUE_KIND(item_2) != TINYPY_VALUE_SRE_PATTERN;
-    }
-    if (condition_9) {
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 2U, 3U, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_PATTERN], out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(receiver);
     tinypy_value_t *replacement = TINYPY_TUPLE_GET(args, 1U);
     string = TINYPY_TUPLE_GET(args, 2U);
     if (TINYPY_TUPLE_SIZE(args) == 4U) {
@@ -2453,7 +2487,7 @@ static tinypy_value_t *__tinypy_sre_compile(tinypy_value_t *function, tinypy_val
     size_t index;
 
     (void)user_data;
-    if (__tinypy_sre_method_arguments(vm, args, kwargs, 3U, 6U, out_error) == 0) {
+    if (__tinypy_sre_function_arguments(function, args, kwargs, 3U, 6U, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     /* groups, groupindex and indexgroup are optional as in _sre.compile;
@@ -2532,8 +2566,7 @@ static tinypy_value_t *__tinypy_sre_getlower(tinypy_value_t *function, tinypy_va
     int64_t flags;
 
     (void)user_data;
-    if (__tinypy_sre_method_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "getlower arguments are invalid", out_error);
+    if (__tinypy_sre_function_arguments(function, args, kwargs, 2U, 2U, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *character_value = TINYPY_TUPLE_GET(args, 0U);
@@ -2562,7 +2595,8 @@ static tinypy_value_t *__tinypy_sre_getcodesize(tinypy_value_t *function, tinypy
     tinypy_value_t *result;
 
     (void)user_data;
-    if (__tinypy_sre_method_arguments(vm, args, kwargs, 0U, 0U, out_error) == 0) {
+    size_t count = TINYPY_TUPLE_SIZE(args);
+    if (tinypy_internal_native_arguments_check(function, count, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     result = tinypy_integer_from_i64(vm, INT64_C(4));
@@ -2658,15 +2692,11 @@ static tinypy_value_t *__tinypy_sre_match_groupdict(tinypy_value_t *function, ti
     tinypy_value_t *index_value;
 
     (void)user_data;
-    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 1U, 2U, out_error) == 0;
-    if (condition == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_MATCH;
-    }
-    if (condition) {
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 0U, 1U, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_MATCH], out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(receiver);
     tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(match->pattern);
     tinypy_value_t *result = tinypy_dict_new(vm);
     if (TINYPY_VALUE_KIND(pattern->groupindex) != TINYPY_VALUE_DICT) {
@@ -2713,15 +2743,10 @@ static tinypy_value_t *__tinypy_sre_match_expand(tinypy_value_t *function, tinyp
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0;
-    if (condition == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_MATCH;
-    }
-    if (condition) {
+    tinypy_value_t *match_value = __tinypy_sre_method_receiver(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, &vm->types[TINYPY_VALUE_SRE_MATCH], out_error);
+    if (match_value == NULL) {
         return NULL;
     }
-    tinypy_value_t *match_value = TINYPY_TUPLE_GET(args, 0U);
     tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(match_value);
     tinypy_value_t *items[3] = {match->pattern, match_value, TINYPY_TUPLE_GET(args, 1U)};
     tinypy_value_t *return_value_1 = __tinypy_sre_call_re_helper(vm, vm->internal_sre_expand_key, items, 3U, out_error);
@@ -2739,15 +2764,11 @@ static tinypy_value_t *__tinypy_sre_pattern_split(tinypy_value_t *function, tiny
     int64_t limit = 0;
 
     (void)user_data;
-    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 2U, 3U, out_error) == 0;
-    if (condition == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_PATTERN;
-    }
-    if (condition) {
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 1U, 2U, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_PATTERN], out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(receiver);
     string = TINYPY_TUPLE_GET(args, 1U);
     if (TINYPY_TUPLE_SIZE(args) == 3U) {
         int64_t count;
@@ -2782,8 +2803,8 @@ static tinypy_value_t *__tinypy_sre_pattern_split(tinypy_value_t *function, tiny
         match = TINYPY_SRE_MATCH_OBJECT(match_value);
         /* Python 2.7 never splits on an empty match. */
         if (match->start == match->end) {
+            pos = match->end + 1U;
             TINYPY_DECREF(match_value);
-            pos += 1U;
             continue;
         }
         piece = __tinypy_sre_text_slice(vm, string, last, match->start, out_error);
@@ -2881,16 +2902,11 @@ static void __tinypy_sre_scanner_traverse_references(tinypy_value_t *value, tiny
 static tinypy_value_t *__tinypy_sre_scanner_step(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0;
-    if (condition == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition = item->type != vm->sre_scanner_type;
-    }
-    if (condition) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected an SRE scanner", out_error);
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, vm->sre_scanner_type, out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_internal_sre_scanner_payload_t *payload = __tinypy_sre_scanner_payload(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_internal_sre_scanner_payload_t *payload = __tinypy_sre_scanner_payload(receiver);
     /* As in scanner_match and scanner_search, only a failed attempt or an
        empty match at endpos exhausts the scanner, which a start past endpos
        does not. */
@@ -2923,16 +2939,11 @@ static tinypy_value_t *__tinypy_sre_scanner_pattern(tinypy_value_t *function, ti
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 1U, 1U, out_error) == 0;
-    if (condition == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition = item->type != vm->sre_scanner_type;
-    }
-    if (condition) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected an SRE scanner", out_error);
+    tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, vm->sre_scanner_type, out_error);
+    if (receiver == NULL) {
         return NULL;
     }
-    tinypy_internal_sre_scanner_payload_t *payload = __tinypy_sre_scanner_payload(TINYPY_TUPLE_GET(args, 0U));
+    tinypy_internal_sre_scanner_payload_t *payload = __tinypy_sre_scanner_payload(receiver);
     tinypy_value_t *pattern = payload->pattern != NULL ? TINYPY_RET(payload->pattern) : TINYPY_RET_NONE(vm);
     return pattern;
 }
@@ -2975,15 +2986,10 @@ static tinypy_value_t *__tinypy_sre_pattern_scanner(tinypy_value_t *function, ti
         return NULL;
     }
 
-    tinypy_bool_t condition = __tinypy_sre_method_arguments(vm, args, kwargs, 2U, 4U, out_error) == 0;
-    if (condition == 0) {
-        tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-        condition = TINYPY_VALUE_KIND(item) != TINYPY_VALUE_SRE_PATTERN;
-    }
-    if (condition) {
+    tinypy_value_t *pattern_value = __tinypy_sre_method_receiver(function, args, kwargs, 1U, 3U, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_PATTERN], out_error);
+    if (pattern_value == NULL) {
         return NULL;
     }
-    tinypy_value_t *pattern_value = TINYPY_TUPLE_GET(args, 0U);
     tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(pattern_value);
     if (__tinypy_sre_bounds(pattern, args, 1U, &pos, &endpos, out_error) == 0) {
         return NULL;

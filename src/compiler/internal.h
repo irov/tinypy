@@ -109,6 +109,9 @@ void tinypy_internal_compiler_arena_destroy(tinypy_compile_ctx_t *ctx);
 int32_t tinypy_internal_compiler_arena_add_value(tinypy_compile_ctx_t *ctx, tinypy_value_t *value);
 tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const void *source, size_t source_size, tinypy_error_t **out_error);
 void tinypy_internal_compiler_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, tinypy_error_t **out_error);
+/* Reports the MemoryError of a checked VM allocation as the compile error, so
+   that a stage does not mistake the missing value for invalid source. */
+void tinypy_internal_compiler_memory_error(tinypy_compile_ctx_t *ctx);
 void tinypy_internal_compiler_error_text(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, int32_t line_number, int32_t column_offset, const char *text, size_t text_size, tinypy_error_t **out_error);
 /* Reports the failure of a runtime operation with the message of its error,
    which it releases; running out of memory stays a MemoryError instead of

@@ -121,15 +121,18 @@ Pool state принадлежит конкретной `tinypy_vm_t`; process gl
 для него не используются. Host видит реальные внешние allocations, а не каждый
 логический pooled object. При budget preflight `max_heap_bytes` учитывает VM
 object, arena table, полный зарезервированный размер arenas и все прямые
-allocations. Вычисляемые результаты `long`, text, buffer, list и tuple
-отклоняются с `MemoryError`, если они не помещаются в остаток budget.
+allocations; запрос, в котором host отказал, не учитывается. Вычисляемые
+результаты `long`, text, buffer, list и tuple отклоняются с `MemoryError`,
+если они не помещаются в остаток budget.
 
 Bootstrap VM выполняется целиком и только затем сверяется с budget: если
 занятая им память больше `max_heap_bytes`, `tinypy_vm_create` освобождает всё
-и возвращает NULL. Функции C API без error result, например `tinypy_dict_set`
-и `tinypy_list_append`, не являются fallible: их рост игнорирует budget и
-всегда завершается. Compiler и runtime при исчерпании budget сообщают
-`MemoryError`, не теряя данных.
+и возвращает NULL. Так же она поступает, если host allocator вернул NULL на
+сам объект VM или на запрос bootstrap, после которого bootstrap продолжается;
+остальные запросы bootstrap подчиняются общему правилу non-NULL. Функции C API
+без error result, например `tinypy_dict_set` и `tinypy_list_append`, не
+являются fallible: их рост игнорирует budget и всегда завершается. Compiler
+и runtime при исчерпании budget сообщают `MemoryError`, не теряя данных.
 
 Lifetime определяется reference counting. Ациклические объекты уничтожаются
 немедленно. Host обязан освободить owned references и разорвать owning cycles
@@ -138,11 +141,12 @@ Lifetime определяется reference counting. Ациклические �
 При уничтожении module его сохранённый снаружи словарь сохраняет ключи;
 значения byte-string ключей заменяются на `None` в два прохода: сначала имена
 с одним начальным `_`, затем остальные, кроме `__builtins__`. Нестроковые и
-Unicode ключи сохраняются. Traversal для диагностики циклов только читает
-ссылки и не очищает словарь. Python `module.__new__` создаёт объект без имени
-и словаря до инициализации; C accessors возвращают borrowed NULL для этих
-отсутствующих полей. Добавление значения и использование модуля как builtins
-создают словарь лениво.
+Unicode ключи сохраняются. Очистка обходит таблицу по индексу и не выделяет
+память, поэтому выполняется и при исчерпанном budget. Traversal для
+диагностики циклов только читает ссылки и не очищает словарь. Python
+`module.__new__` создаёт объект без имени и словаря до инициализации; C
+accessors возвращают borrowed NULL для этих отсутствующих полей. Добавление
+значения и использование модуля как builtins создают словарь лениво.
 
 Это основополагающее правило, а не отсутствующая возможность: runtime не ведёт
 реестр живых значений, а `tinypy_vm_destroy` не выполняет sweep недостижимых
@@ -150,14 +154,17 @@ Unicode ключи сохраняются. Traversal для диагностик
 исправляется в месте утечки ссылки; для поиска таких мест предназначены opt-in
 cycle diagnostics.
 
-`tinypy_vm_destroy` сначала вызывает финализаторы native values, достижимых из
-VM, пока все значения живы: сначала native instances, затем native functions,
-ведь финализатор instance ещё может вызвать method, чей финализатор
-освобождает user data вызова. Instance, последнюю ссылку на который сбросил
-финализатор, освобождается как обычно: его `__del__` выполняется до
-финализатора, пока native functions ещё не финализированы; у instance,
-освобождённого после своего финализатора, `__del__` не выполняется. Если
-финализаторы, освобождённые ими значения или отрисовка диагностик в конце
+`tinypy_vm_destroy` сначала вызывает финализаторы host native values, достижимых
+из VM, пока все значения живы: сначала instances native типов host, затем native
+functions, ведь финализатор instance ещё может вызвать method, чей финализатор
+освобождает user data вызова. Собственные native values runtime (memoryview,
+dictproxy, экземпляры исключений, struct sequences, `struct.Struct`, его native
+functions) host objects не держат: проходы их не финализируют, и они остаются
+доступными Python до освобождения памяти. Instance, последнюю ссылку на
+который сбросил финализатор, освобождается как обычно: его `__del__`
+выполняется до финализатора, пока native functions ещё не финализированы; у
+instance, освобождённого после своего финализатора, `__del__` не выполняется.
+Если финализаторы, освобождённые ими значения или отрисовка диагностик в конце
 прохода создают новые native values с финализаторами либо `__del__` воскрешает
 instance до его финализатора, проход повторяется для них, всего не более 8
 раз; значения, созданные последним проходом, освобождаются без финализаторов.
@@ -165,8 +172,13 @@ instance до его финализатора, проход повторяетс
 финализаторов. Финализатор вызывается ровно один раз; native function, чей
 финализатор уже выполнен, при вызове даёт RuntimeError, а bound method читает
 user data своего descriptor. Так же slots native instance, чей финализатор уже
-выполнен, и methods, зарегистрированные на его типе, дают RuntimeError, а не
-вызывают callbacks с payload уничтоженного host object.
+выполнен, methods, зарегистрированные на его типе, и native accessors его
+properties дают RuntimeError, а не вызывают callbacks с payload уничтоженного
+host object. Пока финализатор instance выполняется, instance остаётся
+доступным: финализатор может передать его Python. Ошибку, которую финализатор
+оставил, runtime сообщает как unraisable, называя instance так же, как
+`object.__repr__` (`<T object at 0x...>`): после финализатора callbacks типа
+host уже не вызываются.
 
 Модуль `sys` принадлежит VM через собственную ссылку: `sys.stdout`,
 `sys.displayhook` и `sys.exc_*` читаются и пишутся напрямую в его словарь, а
@@ -220,8 +232,13 @@ Functions, bound Python methods, code objects, generators, set и frozenset
 при закрытии во время уничтожения. Basic ref/proxy caches сохраняют порядок
 references и callbacks; изменение callable protocol referent не создаёт второй
 basic proxy. Lookup из `_remove_dead_weakref` выполняется один раз и подавляет
-только `KeyError`, включая subclasses. Weak references, созданные `__del__`
-объекта, который не был воскрешён, очищаются без вызова их callbacks. Объекты,
+только `KeyError`, включая subclasses. Weak references экземпляра очищаются
+до его `__del__`, а созданные этим `__del__`, если он не воскресил объект, —
+без вызова их callbacks. Класс, как в `type_dealloc` CPython, сохраняет weak
+references, через которые его перечисляют базы и находят его дескрипторы, до
+конца `__del__` своего метакласса: воскрешённый класс остаётся подклассом
+своих баз, а когда класс всё-таки освобождается, callbacks его weak references
+выполняются после `__del__`. Объекты,
 которые финализатор освобождает напрямую, не откладываются очередью
 освобождения, поэтому глубокая цепочка вызывает каждый `__del__` один раз.
 Уничтожаемая weak reference отсоединяется от referent до освобождения своих
@@ -269,6 +286,15 @@ custom `mro()` вычисляет MRO нового класса, поиск в �
 при обходе `tp_subclasses` в `mro_subclasses` CPython. После отката такой класс,
 как и в CPython 2.7, сохраняет свой MRO, но кеши поиска не запоминают ответы
 для MRO, классы которого уже не входят в MRO его баз.
+C3 MRO по умолчанию, как `mro_implementation` CPython 2.7, объединяет то, что
+даёт итерация `__bases__`, поэтому подкласс tuple с собственным `__iter__`
+может добавить в MRO типы вне баз; изменения таких типов видны сразу, а кеши
+поиска не запоминают ответы для такого MRO. Объект, который не является
+классом, CPython помещает в MRO и затем читает как тип; tinypy при создании
+класса, присваивании `__bases__` и вызове `type.mro()` отвергает его с
+TypeError «bases must be types». Как `class_name` CPython, сообщение
+«duplicate base class» называет первый повторённый элемент по `__name__`,
+иначе по repr, и показывает «?», если это не str.
 Member и getset descriptors, пережившие свой
 тип, остаются безопасными: repr показывает `<deleted type>`, а применение к
 объекту даёт TypeError.
@@ -478,7 +504,11 @@ Python-visible bundled surface намеренно ограничен memory-only
 - `_sre` исполняет Python 2.7 regex programs; `_sre.compile` проверяет program
   как `_validate` Python 2.7 и отклоняет любую другую с
   `RuntimeError("invalid SRE code")`; разбор replacement templates и
-  `Match.expand` используют `re._subx` и `re._expand`, предоставленные host;
+  `Match.expand` используют `re._subx` и `re._expand`, предоставленные host.
+  Длина subclass `str` из `__len__` не превышает длину самой строки, а subject,
+  укоротившийся во время `sub`, `findall`, `split`, `finditer` или scanner,
+  завершает поиск на своём текущем конце; CPython 2.7 в обоих случаях читает за
+  концом буфера;
 - filesystem-backed standard library, source-encoding discovery, process
   metadata, environment-dependent `sys` paths и standard I/O input не
   эмулируются. Их предоставляет host либо импортированный memory artifact.
@@ -492,21 +522,29 @@ Verifier контролирует:
 - argument width и `EXTENDED_ARG`;
 - jump targets;
 - block-stack transitions;
-- value-stack depth;
-- finally/with reason markers, их ширину и глубину продолжения;
+- value-stack depth: код не читает и не снимает значения ниже уровня своего
+  block, до которого исключение раскручивает стек;
+- finally/with reason markers и глубину продолжения;
 - indices names/constants/locals/free variables;
 - configured instruction и stack limits.
 
 Нормальный вход в cleanup требует доказанного None constant; verifier получает
-его признак из constants code object. Изменение или потребление reason marker
-сбрасывает доказательство, а cleanup без известного marker отвергается.
+его признак из constants code object. Значения, полученные except, код может
+изменить или потребить, и это сбрасывает доказательство; reason finally/with
+потребляют только `END_FINALLY` и `WITH_CLEANUP`, а cleanup без известного
+marker отвергается. Как и расчёт глубины стека CPython, verifier считает
+reason любой finally-ветки шириной исключения (три значения); причины входа в
+одну ветку из одного контекста объединяются, поэтому вложенные finally не
+умножают число состояний проверки.
 Это структурная проверка CFG и стека: типы произвольных Python-операндов и
 эффекты пользовательских callbacks проверяются runtime.
 
-`code()` и загрузчик marshal дополнительно требуют `co_nlocals ==
-len(co_varnames)` и места для аргументов: frame размечается по первому
-значению, а verifier проверяет local operands по второму. CPython принимает
-такие code objects, tinypy их отвергает.
+`code()`, C API `tinypy_code_new` и загрузчик marshal общей проверкой
+дополнительно требуют `co_nlocals == len(co_varnames)`, места для аргументов
+и exact strings в кортежах имён: frame размечается по первому значению, а
+verifier проверяет local operands по второму. CPython принимает такие code
+objects, tinypy их отвергает; `tinypy_code_new` возвращает NULL с pending
+`ValueError`.
 
 Frame execution поддерживает closures, generators, exception blocks,
 comprehensions, `with`, imports и tracing data code object.
@@ -765,7 +803,10 @@ Pure evaluator поддерживает literals и literal containers, boolean,
 arithmetic и bitwise operations, comparisons, membership и identity с
 `None`/bool. Полностью вычислимый `if` заменяется выбранной suite до symbol
 analysis. Calls, attributes, subscripts, lambdas и comprehensions оставляют
-условие runtime, хотя build constants внутри него уже заменены.
+условие runtime, хотя build constants внутри него уже заменены. Условие,
+вычисление которого поднимает исключение (`1 // 0`, unhashable ключ dict), так
+же остаётся runtime: исключение поднимается, когда и если условие выполняется;
+compile error даёт только `MemoryError`.
 
 Build constants заменяются и внутри целей присваивания: augmented assignment,
 `for`, `with`, `except` и comprehension targets. Suite, полностью удалённая
@@ -806,7 +847,9 @@ private-name mangling и `super`.
 пользовательские runtime functions. После pass любой оставшийся доступ или
 binding имени `meta` является compile error; `import meta.x` запрещён так же,
 как `import meta`. Staged tuple и list значения подставляются в generated code
-как displays, а не как constants. Generated name не может быть keyword.
+как displays, а не как constants. Generated name не может быть keyword, а
+связываемое имя (`meta.emit`, переименование declaration, `meta.setattr`) — так
+же `None` и `__debug__`.
 Evaluator meta учитывает `from __future__ import division` и те же границы
 результатов, что и build preprocessor.
 
@@ -815,9 +858,11 @@ owned result с canonical valid Python 2 source, source-map entries и SHA-256
 digest карты. Каждая generated declaration связывает generated position,
 template position, expansion position и semantic symbol. Canonical source
 компилируется в ту же программу: отрицательные числовые литералы и числовые
-операнды attribute/subscript заключаются в скобки, byte strings под
-`unicode_literals` получают префикс `b`, а complex literal с бесконечной
-частью записывается как `complex(...)`.
+операнды attribute, subscript и унарных операций заключаются в скобки, byte
+strings под `unicode_literals` получают префикс `b`, extended slice из одного
+измерения сохраняет запятую (`k[1:2,]`), а complex literal записывается
+imaginary literal либо его суммой или разностью с real частью так, что знаки
+нулей, бесконечности и nan сохраняются без имени `complex`.
 
 ## 12. Compile environment
 
@@ -845,7 +890,8 @@ Artifact содержит logical filename, canonical name, package metadata и 
 callback; `package_token` package artifact — путь каталога пакета, единственный
 элемент его `__path__`, без него `__path__` пуст. `sys.modules` поддерживает
 packages, circular imports и rollback при ошибке resolution, compilation или
-execution.
+execution; `MemoryError` при записи metadata модуля (`__name__`, `__file__`,
+`__path__`) или его регистрации в `sys.modules` откатывает import так же.
 Если loader при `reload` заменяет зарегистрированный объект, результатом
 становится этот объект; исходный модуль сохраняет свой namespace. Replacement
 не обязан быть модулем. Обычная повторная загрузка source artifact исполняется
@@ -943,7 +989,10 @@ runtime-регрессией во всех build profiles.
 
 Marshal reader и writer работают с raw Python 2.7 marshal-v2 objects. Direct
 code dump поддерживает size query и caller-owned output buffer. Writer
-сохраняет string interning/reference order и nested code objects.
+сохраняет string interning/reference order и nested code objects. Таблица
+interned strings direct dump выделяется из VM: отказ host или budget завершает
+dump с `TINYPY_MARSHAL_BYTE_LIMIT` и pending `MemoryError`, а запись никогда не
+выходит за capacity буфера.
 
 Artifact header содержит ABI versions, optimize level, profile digest, source
 hash, future flags, payload size и checksum. Loader никогда не принимает

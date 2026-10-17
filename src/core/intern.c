@@ -14,7 +14,7 @@ static tinypy_bool_t __tinypy_intern_resize(tinypy_vm_t *vm, size_t capacity, ti
     }
     bytes = capacity * sizeof(*entries);
     entries = checked != 0
-        ? (tinypy_intern_entry_t *)tinypy_internal_vm_allocate_checked(vm, bytes, out_error)
+        ? (tinypy_intern_entry_t *)__tinypy_internal_vm_allocate_checked(vm, bytes, out_error)
         : (tinypy_intern_entry_t *)tinypy_internal_vm_allocate(vm, bytes);
     if (entries == NULL) {
         return TINYPY_FALSE;

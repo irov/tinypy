@@ -28,9 +28,21 @@ static void __tinypy_output_unraisable_text(tinypy_value_t *stream, const void *
     __tinypy_output_unraisable_clear(TINYPY_VALUE_VM(stream), error);
 }
 //////////////////////////////////////////////////////////////////////////
+/* A native instance whose finalizer ran, the object of the report of an
+   error its finalizer left, has no host object left for the repr slot of its
+   type, so it is named as object.__repr__ names it. */
+static tinypy_value_t *__tinypy_output_unraisable_object_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && TINYPY_NATIVE_INSTANCE_OBJECT(value)->finalization == TINYPY_NATIVE_FINALIZATION_DONE) {
+        tinypy_value_t *text = tinypy_internal_object_default_repr(value, out_error);
+        return text;
+    }
+    tinypy_value_t *text = tinypy_object_repr(value, out_error);
+    return text;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_output_unraisable_repr(tinypy_value_t *stream, tinypy_value_t *value, const char *fallback) {
     tinypy_error_t *error = NULL;
-    tinypy_value_t *text = value != NULL ? tinypy_object_repr(value, &error) : NULL;
+    tinypy_value_t *text = value != NULL ? __tinypy_output_unraisable_object_repr(value, &error) : NULL;
 
     if (text == NULL) {
         __tinypy_output_unraisable_clear(TINYPY_VALUE_VM(stream), error);
@@ -291,6 +303,9 @@ static tinypy_value_t *__tinypy_output_write_method(tinypy_value_t *function, ti
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "output stream write requires a string", out_error);
         return NULL;
     }
+    /* file_write and file_writelines reset the softspace of print
+       statements once their argument is accepted. */
+    TINYPY_OUTPUT_STREAM_OBJECT(stream)->soft_space = TINYPY_FALSE;
     tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(stream)->channel, bytes, size);
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
@@ -358,6 +373,7 @@ static tinypy_value_t *__tinypy_output_writelines_method(tinypy_value_t *functio
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "writelines requires strings", out_error);
             return NULL;
         }
+        TINYPY_OUTPUT_STREAM_OBJECT(stream)->soft_space = TINYPY_FALSE;
         tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(stream)->channel, bytes, size);
         TINYPY_DECREF(line);
     }

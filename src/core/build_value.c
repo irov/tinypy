@@ -156,7 +156,7 @@ static tinypy_value_t *__tinypy_build_value_unicode(tinypy_vm_t *vm, const wchar
     }
 
     size_t capacity = size * 4U + 1U;
-    uint8_t *utf8 = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, capacity, NULL);
+    uint8_t *utf8 = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, capacity, NULL);
     if (utf8 == NULL) {
         return NULL;
     }

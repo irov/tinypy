@@ -865,7 +865,7 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
     if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_UNICODE && TINYPY_VALUE_KIND(container) == TINYPY_VALUE_STRING) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("'in <string>' requires string as left operand, not "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(item)
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(item, 200U)
         };
 
         tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(container), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -889,7 +889,7 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
     if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_UNICODE) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("coercing to Unicode: need string or buffer, "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(item),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(item, 80U),
             TINYPY_MESSAGE_PART_LITERAL(" found")
         };
 
@@ -970,17 +970,19 @@ static int32_t __tinypy_contains(tinypy_value_t *container, tinypy_value_t *item
         /* bytearray_contains reads a byte through PyNumber_AsSsize_t and
            takes any failure for an operand to read as a buffer. */
         if (tinypy_internal_number_as_index(item, TINYPY_ERROR_VALUE, &integer, out_error) == 0) {
-            const tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_LITERAL("Type "),
-                TINYPY_MESSAGE_PART_TYPE_NAME(item),
-                TINYPY_MESSAGE_PART_LITERAL(" doesn't support the buffer API")
-            };
-
             if (out_error != NULL && *out_error != NULL) {
                 tinypy_error_release(*out_error);
                 *out_error = NULL;
             }
             tinypy_vm_clear_error(vm);
+            /* Named after the clear, which may reassign the operand's
+               __class__, as _getbuffer names it after PyErr_Clear. */
+            const tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("Type "),
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(item, 100U),
+                TINYPY_MESSAGE_PART_LITERAL(" doesn't support the buffer API")
+            };
+
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
             return -1;
         }
@@ -1047,18 +1049,24 @@ static int32_t __tinypy_contains(tinypy_value_t *container, tinypy_value_t *item
     tinypy_value_t *iterator = tinypy_iter(container, &iteration_error);
 
     if (iterator == NULL) {
-        /* _PySequence_IterSearch reports any failure to iterate the same way. */
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("argument of type '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(container),
-            TINYPY_MESSAGE_PART_LITERAL("' is not iterable"),
-        };
+        /* _PySequence_IterSearch reports any failure to iterate the same way.
+           The type is held: clearing the failure may reassign the container's
+           __class__ and release the type that names it. */
+        tinypy_type_t *type = container->type;
 
+        TINYPY_INCREF(&type->base.base);
         if (iteration_error != NULL) {
             tinypy_error_release(iteration_error);
         }
         tinypy_internal_exception_clear_raised(vm);
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("argument of type '"),
+            TINYPY_MESSAGE_PART_TYPE_PRECISION(type, 200U),
+            TINYPY_MESSAGE_PART_LITERAL("' is not iterable"),
+        };
+
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        TINYPY_DECREF(&type->base.base);
         return -1;
     }
     for (;;) {

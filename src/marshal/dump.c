@@ -61,6 +61,10 @@ static tinypy_bool_t __tinypy_marshal_dump_put(tinypy_marshal_dump_writer_t *wri
         return TINYPY_FALSE;
     }
     if (writer->buffer != NULL) {
+        if (size > writer->capacity - writer->offset) {
+            __tinypy_marshal_dump_fail(writer, TINYPY_MARSHAL_BUFFER_TOO_SMALL, "caller marshal output buffer is too small");
+            return TINYPY_FALSE;
+        }
         if (size != 0U) {
             (void)memcpy(writer->buffer + writer->offset, bytes, size);
         }
@@ -208,16 +212,30 @@ static ptrdiff_t __tinypy_marshal_dump_find_intern(const tinypy_marshal_dump_wri
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_marshal_dump_add_intern(tinypy_marshal_dump_writer_t *writer, const tinypy_value_t *value) {
-    tinypy_value_t *index = tinypy_integer_from_i64(writer->vm, (int64_t)writer->intern_count);
-
+/* The size and write passes must reference the same strings, so a table
+   that cannot grow fails the dump instead of writing the string again. */
+static tinypy_bool_t __tinypy_marshal_dump_add_intern(tinypy_marshal_dump_writer_t *writer, const tinypy_value_t *value) {
     if (writer->intern_indices == NULL) {
-        writer->intern_indices = tinypy_dict_new(writer->vm);
+        writer->intern_indices = tinypy_internal_dict_new_checked(writer->vm, NULL);
+        if (writer->intern_indices == NULL) {
+            __tinypy_marshal_dump_fail(writer, TINYPY_MARSHAL_BYTE_LIMIT, "marshal intern table allocation failed");
+            return TINYPY_FALSE;
+        }
+    }
+    tinypy_value_t *index = tinypy_internal_integer_from_i64_checked(writer->vm, (int64_t)writer->intern_count, NULL);
+    if (index == NULL) {
+        __tinypy_marshal_dump_fail(writer, TINYPY_MARSHAL_BYTE_LIMIT, "marshal intern table allocation failed");
+        return TINYPY_FALSE;
     }
     /* The dictionary only retains the key; the writer never mutates it. */
-    tinypy_dict_set(writer->intern_indices, (tinypy_value_t *)value, index);
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(writer->vm, writer->intern_indices, (tinypy_value_t *)value, index, NULL);
     TINYPY_DECREF(index);
+    if (stored == 0) {
+        __tinypy_marshal_dump_fail(writer, TINYPY_MARSHAL_BYTE_LIMIT, "marshal intern table allocation failed");
+        return TINYPY_FALSE;
+    }
     writer->intern_count += 1U;
+    return TINYPY_TRUE;
 }
 
 static tinypy_bool_t __tinypy_marshal_dump_value(tinypy_marshal_dump_writer_t *writer, const tinypy_value_t *value, size_t depth, tinypy_marshal_dump_string_context_e string_context);
@@ -237,7 +255,9 @@ static tinypy_bool_t __tinypy_marshal_dump_string(tinypy_marshal_dump_writer_t *
             tinypy_bool_t return_value_1 = __tinypy_marshal_dump_u8(writer, (uint8_t)'R') && __tinypy_marshal_dump_i32(writer, (int32_t)index);
             return return_value_1;
         }
-        __tinypy_marshal_dump_add_intern(writer, value);
+        if (__tinypy_marshal_dump_add_intern(writer, value) == 0) {
+            return TINYPY_FALSE;
+        }
         if (__tinypy_marshal_dump_u8(writer, (uint8_t)'t') == 0) {
             return TINYPY_FALSE;
         }

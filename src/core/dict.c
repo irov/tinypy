@@ -276,7 +276,7 @@ static tinypy_dict_entry_t *__tinypy_internal_dict_table_allocate(tinypy_vm_t *v
         size_t table_size = __tinypy_internal_dict_table_size(capacity);
 
         entries = (tinypy_dict_entry_t *)(checked != 0
-                                              ? tinypy_internal_vm_allocate_checked(vm, table_size, out_error)
+                                              ? __tinypy_internal_vm_allocate_checked(vm, table_size, out_error)
                                               : tinypy_internal_vm_allocate(vm, table_size));
     }
     return entries;
@@ -1002,7 +1002,7 @@ static tinypy_bool_t __tinypy_internal_dict_update_keys_method(tinypy_value_t *t
     if (tinypy_is_callable(keys_method) == TINYPY_FALSE) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("attribute of type '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(keys_method),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(keys_method, 200U),
             TINYPY_MESSAGE_PART_LITERAL("' is not callable"),
         };
 

@@ -181,6 +181,73 @@ class ObjectCallbackAudit(unittest.TestCase):
         self.assertRaises(TypeError, probe, '__int__', int)
         self.assertRaises(TypeError, probe, '__new__', lambda value: object.__init__(value, 1))
 
+    def test_representation_holds_a_type_a_key_comparison_releases(self):
+        class Other(object):
+            pass
+        owner = []
+        text = self.released_by_lookup('__module__', repr, {}, owner, Other)
+        self.assertTrue(text.startswith('<%s.Released object at ' % __name__), text)
+        self.assertIs(type(owner[0]), Other)
+
+    def test_type_call_holds_the_winner_its_new_lookup_releases(self):
+        class OtherMeta(type):
+            pass
+        base = []
+        key = self.colliding_key('__new__', lambda: setattr(base[0], '__class__', OtherMeta))
+        def make():
+            Winner = type('Winner', (type,), {key: 1})
+            return Winner('Base', (object,), {})
+        base.append(make())
+        # A class write withdraws the lookups cached while the base was made.
+        type(base[0]).marker = 1
+        key.armed = True
+        try:
+            created = type('Created', (base[0],), {})
+        finally:
+            key.armed = False
+        self.assertEqual(type(created).__name__, 'Winner')
+
+    def test_error_messages_name_types_a_released_failure_frees(self):
+        # The release of a failure or of a result reassigns the __class__ of
+        # the only instance of a fresh class while its message is made.
+        state = {}
+        class Other(object):
+            pass
+        class Boom(Exception):
+            def __del__(self):
+                if state.pop('armed', False):
+                    state['subject'].__class__ = state['target']
+        def arm(subject, target):
+            state.update(subject=subject, target=target, armed=True)
+            return subject
+        def message(action):
+            try:
+                action()
+            except (TypeError, ValueError) as error:
+                return str(error)
+            return None
+        def boom(self):
+            raise Boom()
+        iterable = arm(type('S' * 60, (object,), {'__iter__': boom})(), Other)
+        self.assertEqual(message(lambda: 1 in iterable), "argument of type '%s' is not iterable" % ('S' * 60))
+        self.assertIs(type(iterable), Other)
+        index = arm(type('Index', (object,), {'__index__': boom})(), Other)
+        self.assertEqual(message(lambda: index in bytearray('abc')), "Type Other doesn't support the buffer API")
+        class Hexed(long):
+            def __hex__(self):
+                return type('R' * 60, (object,), {})()
+        self.assertEqual(message(lambda: '%x' % Hexed(5)), 'expected string or Unicode object, %s found' % ('R' * 60))
+        class Released(str):
+            def __del__(self):
+                if state.pop('armed', False):
+                    state['subject'].__class__ = state['target']
+        class Invalid(long):
+            def __hex__(self):
+                return Released('zz')
+        integer = arm(type('K' * 60, (Invalid,), {})(5), type('Target', (Invalid,), {}))
+        self.assertEqual(message(lambda: '%x' % integer), '%%x format: invalid result of __hex__ (type=%s)' % ('K' * 60))
+        self.assertEqual(type(integer).__name__, 'Target')
+
     def test_attribute_access_holds_a_type_a_key_comparison_releases(self):
         class Other(object):
             pass

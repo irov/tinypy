@@ -102,11 +102,13 @@ tinypy_bool_t tinypy_debugger_frame_set(tinypy_value_t *frame_value, tinypy_debu
     if (scope == TINYPY_DEBUGGER_SCOPE_LOCALS) {
         slot = __tinypy_debugger_frame_slot(frame, name, name_size, &cell);
         if (slot != NULL) {
+            tinypy_value_t *previous = *slot;
+
             TINYPY_INCREF(value);
-            if (*slot != NULL) {
-                TINYPY_DECREF(*slot);
-            }
             *slot = value;
+            if (previous != NULL) {
+                TINYPY_DECREF(previous);
+            }
             return TINYPY_TRUE;
         }
         if (cell != NULL) {
@@ -138,11 +140,13 @@ tinypy_bool_t tinypy_debugger_frame_delete(tinypy_value_t *frame_value, tinypy_d
     if (scope == TINYPY_DEBUGGER_SCOPE_LOCALS) {
         slot = __tinypy_debugger_frame_slot(frame, name, name_size, &cell);
         if (slot != NULL) {
-            if (*slot == NULL) {
+            tinypy_value_t *previous = *slot;
+
+            if (previous == NULL) {
                 return TINYPY_FALSE;
             }
-            TINYPY_DECREF(*slot);
             *slot = NULL;
+            TINYPY_DECREF(previous);
             return TINYPY_TRUE;
         }
         if (cell != NULL) {

@@ -70,9 +70,10 @@ typedef struct tinypy_bytecode_verify_result_t {
 /*
  * Scratch is linear in bytecode_size and contains no owning pointers after
  * the call.  It reserves TINYPY_BYTECODE_VERIFY_CONTEXTS_PER_BYTE abstract CFG
- * contexts per encoded byte; adversarial state expansion beyond that budget
- * reports TINYPY_BYTECODE_VERIFY_LIMIT_EXCEEDED.  The caller retains ownership
- * and may reuse the buffer immediately.
+ * contexts and one pending handler context per encoded byte; adversarial
+ * state expansion beyond that budget reports
+ * TINYPY_BYTECODE_VERIFY_LIMIT_EXCEEDED.  The caller retains ownership and
+ * may reuse the buffer immediately.
  */
 size_t tinypy_bytecode_verify_scratch_alignment(void);
 

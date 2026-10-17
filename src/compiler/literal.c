@@ -226,8 +226,11 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
         tinypy_value_t *return_value_1 = tinypy_integer_from_i64(ctx->vm, value);
         return return_value_1;
     }
-    tinypy_value_t *return_value_2 = tinypy_long_from_base15_digits(ctx->vm, sign, digits, digit_count);
-    return return_value_2;
+    tinypy_value_t *result = tinypy_internal_long_from_base15_digits_checked(ctx->vm, sign, digits, digit_count, NULL);
+    if (result == NULL) {
+        tinypy_internal_compiler_memory_error(ctx);
+    }
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx, const char *text, int32_t line_number, int32_t column_offset) {
@@ -574,29 +577,22 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
         }
         output[output_size++] = byte;
     }
-    if (unicode != 0) {
-        tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(ctx->vm, (const char *)output, output_size);
-        return return_value_1;
-    }
     tinypy_value_t *result;
 
-    if ((decoded_escape == 0 && ctx->source_literals_encoded == 0) || output_size == 0U) {
-        result = tinypy_internal_string_from_bytes_uninterned(ctx->vm, output, output_size);
-        return result;
+    if (unicode != 0) {
+        result = tinypy_internal_unicode_from_utf8_checked(ctx->vm, (const char *)output, output_size, NULL);
     }
-    if (output_size == 1U) {
-        /* One-byte strings of the VM are shared interned singletons, while an
-           escape-decoded or encoded literal is a distinct non-interned object
-           in CPython. */
-        uint8_t *bytes;
-
-        result = tinypy_internal_text_allocate_uninitialized(ctx->vm, TINYPY_VALUE_STRING, 1U, 0U, &bytes);
-        bytes[0] = output[0];
+    else if (decoded_escape == 0 && ctx->source_literals_encoded == 0) {
+        result = tinypy_internal_string_from_bytes_uninterned_checked(ctx->vm, output, output_size, NULL);
     }
     else {
-        result = tinypy_internal_string_from_bytes_uninterned(ctx->vm, output, output_size);
+        /* An escape-decoded or encoded literal is a new string in CPython,
+           not one of the shared interned one-byte strings. */
+        result = tinypy_internal_string_from_bytes_distinct_checked(ctx->vm, output, output_size, NULL);
     }
-    tinypy_internal_string_set_interned(result, 0);
+    if (result == NULL) {
+        tinypy_internal_compiler_memory_error(ctx);
+    }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -630,7 +626,16 @@ tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ct
     else {
         right_bytes = (const uint8_t *)tinypy_string_view(right, &right_size);
     }
-    if (unicode != 0) {
+    if (unicode == 0) {
+        /* string_concat returns the other operand of an empty one itself. */
+        if (left_size == 0U) {
+            return TINYPY_RET(right);
+        }
+        if (right_size == 0U) {
+            return TINYPY_RET(left);
+        }
+    }
+    else {
         if (left_type == TINYPY_VALUE_STRING) {
             for (index = 0U; index < left_size; ++index) {
                 if (left_bytes[index] >= 0x80U) {
@@ -653,12 +658,13 @@ tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ct
     }
     (void)memcpy(joined, left_bytes, left_size);
     (void)memcpy(joined + left_size, right_bytes, right_size);
-    if (unicode != 0) {
-        tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(ctx->vm, (const char *)joined, left_size + right_size);
-        return return_value_1;
+    tinypy_value_t *result = unicode != 0
+        ? tinypy_internal_unicode_from_utf8_checked(ctx->vm, (const char *)joined, left_size + right_size, NULL)
+        : tinypy_internal_string_from_bytes_uninterned_checked(ctx->vm, joined, left_size + right_size, NULL);
+    if (result == NULL) {
+        tinypy_internal_compiler_memory_error(ctx);
     }
-    tinypy_value_t *return_value_2 = tinypy_internal_string_from_bytes_uninterned(ctx->vm, joined, left_size + right_size);
-    return return_value_2;
+    return result;
 
 non_ascii:
     (void)tinypy_internal_raise_ascii_decode_error(ctx->vm, left_type == TINYPY_VALUE_STRING ? left : right, index, index + 1U, NULL);

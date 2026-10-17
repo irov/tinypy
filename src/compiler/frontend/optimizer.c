@@ -47,6 +47,7 @@ static tinypy_bool_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size
     /* Buildup new tuple of constants */
     newconst = __tinypy_frontend_tuple_new(consts, n);
     if (newconst == NULL) {
+        __tinypy_frontend_clear_raised(consts);
         return TINYPY_FALSE;
     }
     len_consts = TINYPY_COMPILER_LIST_GET_SIZE(consts);
@@ -85,12 +86,8 @@ static tinypy_bool_t __tuple_of_constants(uint8_t *codestr, tinypy_compiler_size
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_optimizer_unshared_string(tinypy_value_t *shared) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(shared);
-    size_t size = TINYPY_SIZED_SIZE(shared);
-    uint8_t *bytes;
-    tinypy_value_t *copy = tinypy_internal_text_allocate_uninitialized(vm, TINYPY_VALUE_STRING, size, 0U, &bytes);
+    tinypy_value_t *copy = tinypy_internal_string_from_bytes_distinct_checked(vm, TINYPY_TEXT_BYTES(shared), TINYPY_SIZED_SIZE(shared), NULL);
 
-    (void)memcpy(bytes, TINYPY_TEXT_BYTES(shared), size);
-    tinypy_internal_string_set_interned(copy, TINYPY_FALSE);
     TINYPY_COMPILER_DECREF(shared);
     return copy;
 }
@@ -180,6 +177,16 @@ static tinypy_bool_t __fold_binops_on_constants(uint8_t *codestr, tinypy_value_t
             /* One-byte strings are shared interned singletons, while string
                formatting yields a distinct non-interned string in CPython. */
             newconst = __tinypy_optimizer_unshared_string(newconst);
+        }
+        else if (opcode == TINYPY_OP_BINARY_ADD && TINYPY_SIZED_SIZE(newconst) == 1U) {
+            /* string_concat returns the one-byte operand itself. */
+            TINYPY_COMPILER_DECREF(newconst);
+            newconst = TINYPY_SIZED_SIZE(v) != 0U ? v : w;
+            TINYPY_COMPILER_INCREF(newconst);
+        }
+        if (newconst == NULL) {
+            __tinypy_frontend_clear_raised(v);
+            return TINYPY_FALSE;
         }
     }
     size = TINYPY_COMPILER_OBJECT_SIZE(newconst);

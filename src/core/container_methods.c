@@ -554,7 +554,7 @@ static tinypy_bool_t __tinypy_list_sort_compare(tinypy_vm_t *vm, tinypy_value_t 
         if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_INTEGER) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("comparison function must return int, not "),
-                TINYPY_MESSAGE_PART_TYPE_NAME(result)
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(result, 200U)
             };
 
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
@@ -813,7 +813,7 @@ static tinypy_bool_t __tinypy_list_sort_reserve(tinypy_list_sort_state_t *state,
         tinypy_internal_make_vm_error(state->vm, TINYPY_ERROR_MEMORY, "sort temporary storage is too large", out_error);
         return TINYPY_FALSE;
     }
-    tinypy_list_sort_item_t *temporary = (tinypy_list_sort_item_t *)tinypy_internal_vm_allocate_checked(state->vm, (size_t)need * sizeof(*temporary), out_error);
+    tinypy_list_sort_item_t *temporary = (tinypy_list_sort_item_t *)__tinypy_internal_vm_allocate_checked(state->vm, (size_t)need * sizeof(*temporary), out_error);
     if (temporary == NULL) {
         return TINYPY_FALSE;
     }
@@ -1356,7 +1356,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
         else {
             item_storage_size = size * sizeof(*sort_items);
             sort_storage_size = item_storage_size;
-            sort_storage = tinypy_internal_vm_allocate_checked(vm, sort_storage_size, out_error);
+            sort_storage = __tinypy_internal_vm_allocate_checked(vm, sort_storage_size, out_error);
             if (sort_storage == NULL) {
                 sorted = TINYPY_FALSE;
             }

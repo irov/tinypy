@@ -646,14 +646,14 @@ static tinypy_value_t *__tinypy_exception_str_method(tinypy_value_t *function, t
 }
 //////////////////////////////////////////////////////////////////////////
 /* The tp_str an exception type inherits through its MRO, or object_str,
-   which calls tp_repr, under the __str__ of object. */
+   which returns what tp_repr returns, under the __str__ of object. */
 static tinypy_value_t *__tinypy_exception_string(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *method = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_str_key);
     const tinypy_type_t *owner = __tinypy_exception_entry_owner(value->type, method, __tinypy_exception_str_method);
 
     if (owner == NULL) {
-        tinypy_value_t *representation = tinypy_object_repr(value, out_error);
+        tinypy_value_t *representation = tinypy_internal_object_call_representation(value, vm->internal_special_repr_key, out_error);
         return representation;
     }
     tinypy_value_t *result = __tinypy_exception_owner_string(value, owner, out_error);
@@ -916,7 +916,7 @@ static tinypy_bool_t __tinypy_exception_require_unicode_argument(tinypy_vm_t *vm
         return TINYPY_TRUE;
     }
     char position = (char)('1' + index);
-    tinypy_message_part_t type_name = TINYPY_MESSAGE_PART_TYPE_NAME(value);
+    tinypy_message_part_t type_name = TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 50U);
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
         type_name = (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("None");
     }
@@ -1382,7 +1382,7 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
         if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_NONE) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("__init__() should return None, not '"),
-                TINYPY_MESSAGE_PART_TYPE_NAME(result),
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(result, 200U),
                 TINYPY_MESSAGE_PART_LITERAL("'"),
             };
 

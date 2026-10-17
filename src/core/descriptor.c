@@ -372,6 +372,9 @@ tinypy_value_t *tinypy_internal_property_get(tinypy_value_t *descriptor, tinypy_
         tinypy_value_t *return_value_1 = tinypy_internal_eval_function_items(property->getter, &instance, 1U, NULL, out_error);
         return return_value_1;
     }
+    if (__tinypy_internal_native_accessor_check_live(property->getter, instance, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
     tinypy_value_t *args = tinypy_tuple_from_items(vm, &instance, 1U);
     tinypy_value_t *result = tinypy_call(property->getter, args, NULL, out_error);
     TINYPY_DECREF(args);
@@ -400,6 +403,9 @@ tinypy_bool_t tinypy_internal_property_set(tinypy_value_t *descriptor, tinypy_va
         }
         TINYPY_DECREF(result);
         return TINYPY_TRUE;
+    }
+    if (__tinypy_internal_native_accessor_check_live(callable, instance, out_error) == TINYPY_FALSE) {
+        return TINYPY_FALSE;
     }
     tinypy_value_t *args = tinypy_tuple_from_items(vm, items, count);
     tinypy_value_t *result = tinypy_call(callable, args, NULL, out_error);
@@ -1592,7 +1598,7 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         if (value != NULL && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_DICT) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("__dict__ must be set to a dictionary, not a '"),
-                TINYPY_MESSAGE_PART_TYPE_NAME(value),
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
                 TINYPY_MESSAGE_PART_LITERAL("'"),
             };
 

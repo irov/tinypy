@@ -109,6 +109,9 @@ typedef struct tinypy_intern_entry_t {
 #define TINYPY_TYPE_FLAG_ABSTRACT UINT64_C(16)
 #define TINYPY_TYPE_FLAG_PYTHON_HEAP UINT64_C(32)
 #define TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY UINT64_C(64)
+/* Exact instances have no weak references or finalizers to run before their
+   contents are released; a string must also be outside the intern table. */
+#define TINYPY_TYPE_FLAG_PLAIN_RELEASE UINT64_C(128)
 #define TINYPY_VM_STATE_LIVE UINT32_C(0x5450594c)
 #define TINYPY_VM_STATE_DESTROYING UINT32_C(0x54505944)
 #define TINYPY_BUILTIN_TYPE_COUNT ((size_t)TINYPY_VALUE_NATIVE_INSTANCE)
@@ -1297,7 +1300,8 @@ struct tinypy_type_t {
     tinypy_bool_t has_custom_mro;
     tinypy_bool_t bases_updating;
     /* The MRO was computed while the bases of a type of it were being
-       replaced, and is checked before the type gets a version. */
+       replaced, or merged from a tuple subclass of the bases, and is
+       checked before the type gets a version. */
     tinypy_bool_t rebasing_mro;
     /* __get__, __set__ and __delete__ known and overridden by Python code in
        a subclass of a built-in descriptor type while version equals
@@ -1324,6 +1328,11 @@ struct tinypy_type_t {
     tinypy_value_t *constructor_new;
     tinypy_value_t *constructor_init;
     tinypy_bool_t constructor_object_new;
+    /* While bases_updating, the index of the record of the type in the
+       __bases__ assignment that updates it, or UINT16_MAX past the records it
+       can number. It fills padding: a larger type would turn each indexing
+       of the VM type table on 64-bit targets from a shift into a multiply. */
+    uint16_t rebase_record_index;
     /* The cleared references of dead subclasses that the subclasses list
        still holds. */
     uint32_t subclasses_cleared;
@@ -1344,11 +1353,21 @@ typedef struct tinypy_instance_object_t {
     tinypy_value_t *slots[];
 } tinypy_instance_object_t;
 //////////////////////////////////////////////////////////////////////////
+/* A native instance runs its finalizer once. The finalizer may still hand the
+   instance to Python; its slots, the methods of its type and the native
+   accessors of its properties refuse it once the finalizer returned, and the
+   report of an error the finalizer left names it as object.__repr__ does. */
+typedef enum tinypy_native_finalization_e {
+    TINYPY_NATIVE_FINALIZATION_NONE = 0,
+    TINYPY_NATIVE_FINALIZATION_RUNNING = 1,
+    TINYPY_NATIVE_FINALIZATION_DONE = 2
+} tinypy_native_finalization_e;
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_native_instance_object_t {
     tinypy_value_t base;
     tinypy_value_t *dict;
     tinypy_value_t *weakrefs;
-    tinypy_bool_t finalized;
+    tinypy_native_finalization_e finalization;
     tinypy_internal_max_align_t payload;
 } tinypy_native_instance_object_t;
 //////////////////////////////////////////////////////////////////////////
@@ -1710,6 +1729,9 @@ typedef struct tinypy_enumerate_object_t {
     tinypy_value_t base;
     tinypy_value_t *iterator;
     tinypy_value_t *index;
+    /* en_result: the pair next returns, which it fills again once the
+       enumerate holds the only reference. */
+    tinypy_value_t *result;
 } tinypy_enumerate_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_reversed_object_t {
@@ -1988,6 +2010,8 @@ struct tinypy_vm_t {
     tinypy_allocator_t allocator;
     tinypy_host_t host;
     tinypy_bool_t has_host;
+    /* The host returned NULL for a request; a bootstrap that saw it fails. */
+    tinypy_bool_t allocation_refused;
     size_t max_heap_bytes;
     size_t allocated_bytes;
     uint64_t hash_secret_prefix;
@@ -2068,6 +2092,7 @@ struct tinypy_vm_t {
     tinypy_value_t *codec_search_path;
     tinypy_value_t *codec_cache;
     tinypy_value_t *codec_errors;
+    tinypy_value_t *struct_cache;
     /* Owned keys for internal C literals outside the fixed preset registry. */
     tinypy_value_t *internal_strings;
     /* Borrowed entries: a string removes itself before its storage is freed. */
@@ -2157,10 +2182,30 @@ static inline void __tinypy_internal_call_leave(tinypy_vm_t *vm) {
 //////////////////////////////////////////////////////////////////////////
 
 void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size);
-void *tinypy_internal_vm_allocate_checked(tinypy_vm_t *vm, size_t size, tinypy_error_t **out_error);
 void *tinypy_internal_vm_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size);
-void *tinypy_internal_vm_reallocate_checked(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, tinypy_error_t **out_error);
 void tinypy_internal_vm_deallocate(tinypy_vm_t *vm, void *memory, size_t size);
+/* The MemoryError of a refused checked request, made out of line so that a
+   checked request keeps the path of the pool inline. */
+void tinypy_internal_vm_allocation_error(tinypy_vm_t *vm, tinypy_error_t **out_error);
+//////////////////////////////////////////////////////////////////////////
+static inline void *__tinypy_internal_vm_allocate_checked(tinypy_vm_t *vm, size_t size, tinypy_error_t **out_error) {
+    void *memory = tinypy_internal_pool_allocate_checked(vm, size);
+
+    if (memory == NULL) {
+        tinypy_internal_vm_allocation_error(vm, out_error);
+    }
+    return memory;
+}
+//////////////////////////////////////////////////////////////////////////
+static inline void *__tinypy_internal_vm_reallocate_checked(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, tinypy_error_t **out_error) {
+    void *resized = tinypy_internal_pool_reallocate_checked(vm, memory, old_size, new_size);
+
+    if (resized == NULL) {
+        tinypy_internal_vm_allocation_error(vm, out_error);
+    }
+    return resized;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_decimal_double(tinypy_vm_t *vm, const char *text, size_t size, double *out_value);
 tinypy_value_t *tinypy_internal_long_from_double(tinypy_vm_t *vm, double value);
 
@@ -2179,7 +2224,19 @@ typedef struct tinypy_message_part_t {
 #define TINYPY_MESSAGE_PART_LITERAL(text) {text, sizeof(text) - 1U}
 #define TINYPY_MESSAGE_PART_TEXT(value) {(const char *)TINYPY_TEXT_BYTES(value), TINYPY_TEXT_BYTE_SIZE(value)}
 #define TINYPY_MESSAGE_PART_TYPE_NAME(value) {(value)->type->name, (value)->type->name_size}
+/* A part shown as "%.<precision>s" in the PyErr_Format message of CPython,
+   which bounds a name a program supplies. */
+static inline size_t __tinypy_internal_message_precision(size_t size, size_t precision) {
+    size_t shown = size < precision ? size : precision;
+    return shown;
+}
+#define TINYPY_MESSAGE_PART_TEXT_PRECISION(value, precision) {(const char *)TINYPY_TEXT_BYTES(value), __tinypy_internal_message_precision(TINYPY_TEXT_BYTE_SIZE(value), (precision))}
+#define TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, precision) {(value)->type->name, __tinypy_internal_message_precision((value)->type->name_size, (precision))}
+#define TINYPY_MESSAGE_PART_TYPE_PRECISION(type, precision) {(type)->name, __tinypy_internal_message_precision((type)->name_size, (precision))}
 #define TINYPY_MESSAGE_SIZE_BUFFER 21U
+/* Shortens consecutive parts that make one "%.<precision>s" field, such as a
+   type name with its module, to precision bytes in all. */
+void tinypy_internal_message_parts_precision(tinypy_message_part_t *parts, size_t part_count, size_t precision);
 void tinypy_internal_make_vm_error_parts(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const tinypy_message_part_t *parts, size_t part_count, tinypy_error_t **out_error);
 size_t tinypy_internal_format_size(char *buffer, size_t value);
 void tinypy_internal_make_arity_error(tinypy_vm_t *vm, const char *name, size_t name_size, size_t count, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error);
@@ -2239,6 +2296,9 @@ tinypy_value_t *tinypy_internal_string_from_bytes_checked(tinypy_vm_t *vm, const
 /* Bypass the intern table for compiler/wire bytes; keep the empty/char caches. */
 tinypy_value_t *tinypy_internal_string_from_bytes_uninterned(tinypy_vm_t *vm, const void *bytes, size_t size);
 tinypy_value_t *tinypy_internal_string_from_bytes_uninterned_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error);
+/* PyString_FromStringAndSize(NULL, size) filled afterwards: a new string that
+   is not interned even with one byte, unlike the shared char cache. */
+tinypy_value_t *tinypy_internal_string_from_bytes_distinct_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_unicode_from_utf8_checked(tinypy_vm_t *vm, const char *utf8, size_t size, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_integer_from_i64_checked(tinypy_vm_t *vm, int64_t value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_float_from_double_checked(tinypy_vm_t *vm, double value, tinypy_error_t **out_error);
@@ -2357,6 +2417,9 @@ void tinypy_internal_list_destroy(tinypy_value_t *value);
 void tinypy_internal_list_swap_contents(tinypy_value_t *left, tinypy_value_t *right);
 void tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity);
 tinypy_value_t *tinypy_internal_list_from_items_checked(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size, tinypy_error_t **out_error);
+/* Exactly size items of storage, as BUILD_LIST makes; the variant above grows
+   the storage the way list(iterable) does. */
+tinypy_value_t *tinypy_internal_list_from_items_exact_checked(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_dict_new_checked(tinypy_vm_t *vm, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_list_reserve_checked(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_list_extend_checked(tinypy_value_t *list, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error);
@@ -2408,6 +2471,7 @@ int32_t tinypy_internal_contains_builtin(tinypy_value_t *container, tinypy_value
 tinypy_value_t *tinypy_internal_iter_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_repr_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_str_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_object_default_repr(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
 /* _PyObject_Str: the str, a subtype included, or the unicode that represents
    a value. */
@@ -2493,7 +2557,7 @@ static inline tinypy_value_t **__tinypy_internal_instance_dict_slot(tinypy_value
     return slot;
 }
 tinypy_value_t **tinypy_internal_weakref_head_slot(tinypy_value_t *value);
-void tinypy_internal_weakref_clear(tinypy_value_t *value, tinypy_bool_t call_callbacks);
+void tinypy_internal_weakref_clear(tinypy_value_t *value, tinypy_bool_t finalized);
 void tinypy_internal_weakref_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_weakref_destroy(tinypy_value_t *value);
 tinypy_value_t *tinypy_internal_weakref_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
@@ -2540,7 +2604,9 @@ tinypy_bool_t tinypy_internal_type_layout_compatible(const tinypy_type_t *old_ty
 tinypy_bool_t tinypy_internal_type_is_host_native(const tinypy_type_t *type);
 tinypy_bool_t tinypy_internal_type_is_native_base(const tinypy_type_t *type);
 tinypy_type_t *tinypy_internal_type_new_from_values(tinypy_value_t *name, tinypy_value_t *const *bases, size_t base_count, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error);
-tinypy_type_t *tinypy_internal_type_new_from_tuple(tinypy_value_t *name, tinypy_value_t *bases, const tinypy_type_t *explicit_metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error);
+/* type_new over the bases tuple type(name, bases, dict) received, with the
+   winner metaclass it chose from them. */
+tinypy_type_t *tinypy_internal_type_new_from_tuple(tinypy_value_t *name, tinypy_value_t *bases, const tinypy_type_t *metaclass, tinypy_value_t *namespace_dict, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_type_mro_value_at(const tinypy_type_t *type, size_t index);
 tinypy_value_t *tinypy_internal_object_builtin_attribute(tinypy_value_t *value, tinypy_value_t *key);
 tinypy_bool_t tinypy_internal_object_kind_has_builtin_attributes(tinypy_value_type_e kind);
@@ -2701,6 +2767,7 @@ static inline tinypy_bool_t __tinypy_internal_object_overrides_dispatch(tinypy_v
 void tinypy_internal_object_initialize_special_keys(tinypy_vm_t *vm);
 /* Owned preset name, or an ordinary owned string for names outside the registry. */
 tinypy_value_t *tinypy_internal_name_from_bytes(tinypy_vm_t *vm, const char *name, size_t name_size);
+tinypy_value_t *tinypy_internal_name_from_bytes_checked(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_error_t **out_error);
 /* Borrowed, interned and retained by the VM; this API is for C literals only. */
 tinypy_value_t *tinypy_internal_string_from_literal(tinypy_vm_t *vm, const char *bytes, size_t size);
 #define TINYPY_INTERNAL_STRING(vm, literal) tinypy_internal_string_from_literal((vm), "" literal, sizeof("" literal) - 1U)
@@ -2726,6 +2793,14 @@ tinypy_value_t *tinypy_internal_type_function_key(tinypy_value_t *value, tinypy_
 /* Calls a Python function found on the receiver's type as its bound method,
    with at most two arguments after the receiver. */
 tinypy_value_t *tinypy_internal_call_type_function(tinypy_value_t *function, tinypy_value_t *receiver, tinypy_value_t *const *arguments, size_t argument_count, tinypy_error_t **out_error);
+/* The object fields of a code object in marshal order: bytecode, consts,
+   names, varnames, freevars, cellvars, filename, name and lnotab. */
+#define TINYPY_CODE_OBJECT_FIELD_COUNT 9U
+/* Why the fields cannot make a code object, or NULL when they can. Frames are
+   sized by local_count while the verifier bounds local operands by
+   len(varnames), so the two must agree, and every name must be an exact
+   string. */
+const char *tinypy_internal_code_fields_error(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *const *fields);
 tinypy_value_t *tinypy_internal_code_new_checked(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *bytecode, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *varnames, tinypy_value_t *freevars, tinypy_value_t *cellvars, tinypy_value_t *filename, tinypy_value_t *name, int32_t first_line_number, tinypy_value_t *lnotab, tinypy_error_t **out_error);
 void tinypy_internal_code_destroy(tinypy_value_t *value);
 tinypy_bool_t tinypy_internal_code_allocate_caches(tinypy_code_object_t *code, tinypy_error_t **out_error);
@@ -2805,6 +2880,7 @@ void tinypy_internal_initialize_native_descriptor_types(tinypy_vm_t *vm);
 void tinypy_internal_native_instance_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_native_instance_destroy(tinypy_value_t *value);
 void tinypy_internal_native_instance_finalize(tinypy_value_t *value);
+void tinypy_internal_native_instance_finalized_error(tinypy_value_t *instance, tinypy_error_t **out_error);
 void tinypy_internal_callable_descriptor_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_static_method_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_class_method_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error);
@@ -3051,6 +3127,16 @@ static inline void __tinypy_internal_value_release_zero_fast(tinypy_value_t *val
         return;
     }
     tinypy_internal_value_release_zero(value);
+}
+//////////////////////////////////////////////////////////////////////////
+/* A native accessor of a property reaches the payload of its instance as a
+   method of the type does, so a finalized instance refuses it as well. */
+static inline tinypy_bool_t __tinypy_internal_native_accessor_check_live(const tinypy_value_t *accessor, tinypy_value_t *instance, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(instance) != TINYPY_VALUE_NATIVE_INSTANCE || TINYPY_NATIVE_INSTANCE_OBJECT(instance)->finalization != TINYPY_NATIVE_FINALIZATION_DONE || TINYPY_VALUE_KIND(accessor) != TINYPY_VALUE_NATIVE_FUNCTION) {
+        return TINYPY_TRUE;
+    }
+    tinypy_internal_native_instance_finalized_error(instance, out_error);
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 #endif

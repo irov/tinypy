@@ -840,7 +840,7 @@ static tinypy_bool_t __tinypy_symbol_enter_block(tinypy_symbol_table_t *st, tiny
 static long __tinypy_symbol_lookup(tinypy_symbol_table_t *st, tinypy_value_t *name) {
     tinypy_value_t *mangled = __tinypy_frontend_mangle(st->arena, st->private_name, name);
     if (!mangled) {
-        return 0;
+        return -1;
     }
     tinypy_value_t *o = TINYPY_COMPILER_DICT_GET_ITEM(st->current->symbols, mangled);
     TINYPY_COMPILER_DECREF(mangled);

@@ -8,7 +8,7 @@
 static void __tinypy_item_invalid_index_result(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_error_t **out_error) {
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("__index__ returned non-(int,long) (type "),
-        TINYPY_MESSAGE_PART_TYPE_NAME(result),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(result, 200U),
         TINYPY_MESSAGE_PART_LITERAL(")")
     };
 
@@ -61,7 +61,7 @@ tinypy_value_t *tinypy_internal_index_value(tinypy_value_t *value, tinypy_error_
     else {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("'"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(value),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
             TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index")
         };
 
@@ -288,7 +288,7 @@ static void __tinypy_item_indices_error(tinypy_vm_t *vm, tinypy_message_part_t s
     tinypy_message_part_t parts[] = {
         sequence,
         TINYPY_MESSAGE_PART_LITERAL(" indices must be integers, not "),
-        TINYPY_MESSAGE_PART_TYPE_NAME(key)
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(key, 200U)
     };
 
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
@@ -299,7 +299,7 @@ static void __tinypy_item_indices_error(tinypy_vm_t *vm, tinypy_message_part_t s
 static void __tinypy_item_sequence_index_error(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("sequence index must be integer, not '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(key),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(key, 200U),
         TINYPY_MESSAGE_PART_LITERAL("'")
     };
 
@@ -382,7 +382,7 @@ static void __tinypy_item_unsupported(tinypy_value_t *container, tinypy_value_t 
     }
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("'"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(container),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(container, 200U),
         message
     };
     tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(container), TINYPY_ERROR_TYPE, parts, 3U, out_error);
@@ -518,7 +518,7 @@ static tinypy_value_t *__tinypy_item_string_slice(tinypy_value_t *container, con
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, const tinypy_internal_slice_indices_t *indices) {
+static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, const tinypy_internal_slice_indices_t *indices, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     const char *utf8;
     size_t byte_size;
@@ -532,7 +532,7 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
 
     utf8 = tinypy_unicode_utf8_view(container, &byte_size, &code_point_count);
     if (indices->length == 0U) {
-        tinypy_value_t *return_value_1 = tinypy_unicode_from_utf8(vm, NULL, 0U);
+        tinypy_value_t *return_value_1 = tinypy_internal_unicode_from_utf8_checked(vm, NULL, 0U, out_error);
         return return_value_1;
     }
     if (indices->step == 1) {
@@ -540,20 +540,23 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
             return TINYPY_RET(container);
         }
         if (byte_size == code_point_count) {
-            tinypy_value_t *return_value_2 = tinypy_unicode_from_utf8(vm, utf8 + (size_t)indices->start, indices->length);
+            tinypy_value_t *return_value_2 = tinypy_internal_unicode_from_utf8_checked(vm, utf8 + (size_t)indices->start, indices->length, out_error);
             return return_value_2;
         }
         size_t begin = tinypy_internal_unicode_byte_offset(container, (size_t)indices->start);
         size_t end_scalar = (size_t)indices->start + indices->length;
         size_t end = tinypy_internal_unicode_byte_offset(container, end_scalar);
-        tinypy_value_t *return_value_3 = tinypy_unicode_from_utf8(vm, utf8 + begin, end - begin);
+        tinypy_value_t *return_value_3 = tinypy_internal_unicode_from_utf8_checked(vm, utf8 + begin, end - begin, out_error);
         return return_value_3;
     }
     selected_capacity = indices->length > SIZE_MAX / 4U ? byte_size : indices->length * 4U;
     if (selected_capacity > byte_size) {
         selected_capacity = byte_size;
     }
-    selected = (char *)tinypy_internal_vm_allocate(vm, selected_capacity);
+    selected = (char *)__tinypy_internal_vm_allocate_checked(vm, selected_capacity, out_error);
+    if (selected == NULL) {
+        return NULL;
+    }
     if (indices->step > 0) {
         for (index = 0U; index < indices->length; ++index) {
             size_t target = (size_t)(indices->start + (int64_t)index * indices->step);
@@ -593,7 +596,7 @@ static tinypy_value_t *__tinypy_item_unicode_slice(tinypy_value_t *container, co
             selected_size += scalar_size;
         }
     }
-    tinypy_value_t *result = tinypy_unicode_from_utf8(vm, selected, selected_size);
+    tinypy_value_t *result = tinypy_internal_unicode_from_utf8_checked(vm, selected, selected_size, out_error);
     tinypy_internal_vm_deallocate(vm, selected, selected_capacity);
     return result;
 }
@@ -678,7 +681,7 @@ static tinypy_bool_t __tinypy_item_list_set_slice(tinypy_value_t *list, tinypy_v
     const char *negative_hint_message = ignore_negative_hint != 0 ? NULL : "error return without exception set";
     const char *type_message = indices.step == 1 ? "can only assign an iterable" : "must assign iterable to extended slice";
     tinypy_value_t *replacement = value == list
-                                      ? tinypy_list_from_items(vm, TINYPY_LIST_OBJECT(list)->items, TINYPY_LIST_SIZE(list))
+                                      ? tinypy_internal_list_from_items_exact_checked(vm, TINYPY_LIST_OBJECT(list)->items, TINYPY_LIST_SIZE(list), out_error)
                                       : __tinypy_item_collect_iterable(value, type_message, negative_hint_message, &aborted, out_error);
     if (replacement == NULL) {
         return aborted;
@@ -927,7 +930,7 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
             tinypy_value_t *return_value_5 = __tinypy_item_string_slice(container, &indices, out_error);
             return return_value_5;
         }
-        tinypy_value_t *return_value_6 = __tinypy_item_unicode_slice(container, &indices);
+        tinypy_value_t *return_value_6 = __tinypy_item_unicode_slice(container, &indices, out_error);
         return return_value_6;
     }
     if (kind == TINYPY_VALUE_TUPLE) {

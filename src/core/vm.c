@@ -64,7 +64,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_STRING], &vm->types[TINYPY_VALUE_TYPE], "str", 3U,
         offsetof(tinypy_string_object_t, bytes), 1U,
-        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE,
+        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE | TINYPY_TYPE_FLAG_PLAIN_RELEASE,
         &vm->types[TINYPY_VALUE_INVALID], NULL, NULL);
     vm->types[TINYPY_VALUE_STRING].create = tinypy_internal_string_create;
     __tinypy_internal_initialize_type(
@@ -82,7 +82,7 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_FLOAT], &vm->types[TINYPY_VALUE_TYPE], "float", 5U,
         sizeof(tinypy_float_object_t), 0U,
-        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE,
+        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE | TINYPY_TYPE_FLAG_PLAIN_RELEASE,
         &vm->types[TINYPY_VALUE_INSTANCE], NULL, NULL);
     vm->types[TINYPY_VALUE_FLOAT].create = tinypy_internal_float_create;
     __tinypy_internal_initialize_type(
@@ -95,19 +95,19 @@ static void __tinypy_internal_initialize_types(tinypy_vm_t *vm) {
         vm, &vm->types[TINYPY_VALUE_TUPLE], &vm->types[TINYPY_VALUE_TYPE], "tuple", 5U,
         offsetof(tinypy_tuple_object_t, items),
         sizeof(tinypy_value_t *),
-        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE,
+        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE | TINYPY_TYPE_FLAG_PLAIN_RELEASE,
         &vm->types[TINYPY_VALUE_INSTANCE], tinypy_internal_tuple_release_references, NULL);
     vm->types[TINYPY_VALUE_TUPLE].create = tinypy_internal_tuple_create;
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_LIST], &vm->types[TINYPY_VALUE_TYPE], "list", 4U,
         sizeof(tinypy_list_object_t), 0U,
-        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE, &vm->types[TINYPY_VALUE_INSTANCE],
+        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE | TINYPY_TYPE_FLAG_PLAIN_RELEASE, &vm->types[TINYPY_VALUE_INSTANCE],
         tinypy_internal_list_release_references, tinypy_internal_list_destroy);
     vm->types[TINYPY_VALUE_LIST].create = tinypy_internal_list_create;
     __tinypy_internal_initialize_type(
         vm, &vm->types[TINYPY_VALUE_DICT], &vm->types[TINYPY_VALUE_TYPE], "dict", 4U,
         sizeof(tinypy_dict_object_t), 0U,
-        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE, &vm->types[TINYPY_VALUE_INSTANCE],
+        TINYPY_TYPE_FLAG_IMMUTABLE | TINYPY_TYPE_FLAG_BASE_TYPE | TINYPY_TYPE_FLAG_PLAIN_RELEASE, &vm->types[TINYPY_VALUE_INSTANCE],
         tinypy_internal_dict_release_references, tinypy_internal_dict_destroy);
     vm->types[TINYPY_VALUE_DICT].create = tinypy_internal_dict_create;
     __tinypy_internal_initialize_type(
@@ -1726,31 +1726,17 @@ void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-void *tinypy_internal_vm_allocate_checked(tinypy_vm_t *vm, size_t size, tinypy_error_t **out_error) {
-    void *memory = tinypy_internal_pool_allocate_checked(vm, size);
-
-    if (memory == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "memory allocation failed", out_error);
-    }
-    return memory;
-}
-//////////////////////////////////////////////////////////////////////////
 void *tinypy_internal_vm_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size) {
     void *return_value_1 = tinypy_internal_pool_reallocate(vm, memory, old_size, new_size);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-void *tinypy_internal_vm_reallocate_checked(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size, tinypy_error_t **out_error) {
-    void *resized = tinypy_internal_pool_reallocate_checked(vm, memory, old_size, new_size);
-
-    if (resized == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "memory allocation failed", out_error);
-    }
-    return resized;
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_vm_deallocate(tinypy_vm_t *vm, void *memory, size_t size) {
     tinypy_internal_pool_deallocate(vm, memory, size);
+}
+//////////////////////////////////////////////////////////////////////////
+TINYPY_NOINLINE void tinypy_internal_vm_allocation_error(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "memory allocation failed", out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -1762,6 +1748,9 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
         allocator->user_data,
         sizeof(*vm),
         TINYPY_INTERNAL_ALIGNMENT);
+    if (vm == NULL) {
+        return NULL;
+    }
 
     size_t max_heap_bytes =
         config->struct_size >= (uint32_t)(offsetof(tinypy_vm_config_t, max_heap_bytes) + sizeof(config->max_heap_bytes))
@@ -1878,8 +1867,9 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     tinypy_dict_set(vm->builtins, vm->internal_reversed_key, &vm->types[TINYPY_VALUE_REVERSED].base.base);
     __tinypy_internal_initialize_modules(vm);
 
-    /* The bootstrap allocates without the budget and fits it as a whole. */
-    if (max_heap_bytes != 0U && vm->allocated_bytes > max_heap_bytes) {
+    /* The bootstrap allocates without the budget and fits it as a whole; a
+       request the host refused left it incomplete. */
+    if (vm->allocation_refused != 0 || (max_heap_bytes != 0U && vm->allocated_bytes > max_heap_bytes)) {
         tinypy_vm_destroy(vm);
         return NULL;
     }
@@ -2029,6 +2019,7 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph, tinypy_boo
     __tinypy_shutdown_add(graph, vm->codec_search_path);
     __tinypy_shutdown_add(graph, vm->codec_cache);
     __tinypy_shutdown_add(graph, vm->codec_errors);
+    __tinypy_shutdown_add(graph, vm->struct_cache);
     __tinypy_shutdown_add(graph, vm->internal_strings);
 #define TINYPY_INTERNAL_KEY_ROOT(field, name, intern_name) __tinypy_shutdown_add(graph, vm->field);
     TINYPY_INTERNAL_KEY_LIST(TINYPY_INTERNAL_KEY_ROOT)
@@ -2192,6 +2183,16 @@ static void __tinypy_shutdown_release_kind(tinypy_shutdown_graph_t *graph, tinyp
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* The instances the passes finalize: those of host native types, whose
+   finalizers release host objects. The runtime's own native instances hold
+   none and stay usable by Python until the sweep. The pass holds the
+   instance while it asks. */
+static tinypy_bool_t __tinypy_shutdown_is_host_instance(const tinypy_shutdown_entry_t *entry) {
+    tinypy_bool_t host_instance = entry->kind == TINYPY_VALUE_NATIVE_INSTANCE && tinypy_internal_type_is_host_native(entry->value->type) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return host_instance;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Native finalizers may touch other values, so they run while the VM is still
    live and every reachable object is intact. Instances finalize before
    functions: their finalizers may still call methods, whose finalizers
@@ -2224,7 +2225,7 @@ static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm, tinypy_
     for (index = 0U; index < graph.entry_count; ++index) {
         tinypy_shutdown_entry_t *entry = &graph.entries[index];
 
-        if (entry->kind != TINYPY_VALUE_NATIVE_INSTANCE || TINYPY_REFCNT(entry->value) == 1) {
+        if (__tinypy_shutdown_is_host_instance(entry) == 0 || TINYPY_REFCNT(entry->value) == 1) {
             continue;
         }
         tinypy_internal_native_instance_finalize(entry->value);
@@ -2235,7 +2236,7 @@ static tinypy_bool_t __tinypy_shutdown_finalize_natives(tinypy_vm_t *vm, tinypy_
         if (entry->kind != TINYPY_VALUE_NATIVE_INSTANCE) {
             continue;
         }
-        if (TINYPY_NATIVE_INSTANCE_OBJECT(entry->value)->finalized == 0 && TINYPY_REFCNT(entry->value) != 1) {
+        if (__tinypy_shutdown_is_host_instance(entry) != 0 && TINYPY_NATIVE_INSTANCE_OBJECT(entry->value)->finalization == TINYPY_NATIVE_FINALIZATION_NONE && TINYPY_REFCNT(entry->value) != 1) {
             unfinalized = TINYPY_TRUE;
         }
         TINYPY_DECREF(entry->value);

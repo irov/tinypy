@@ -278,6 +278,63 @@ class TypeDeep(unittest.TestCase):
                 raise KeyError('bases iterator')
         self.assertRaises(KeyError, type, 'C', Bases((object,)), {})
 
+    def test_bases_iteration_merges_types_outside_the_bases(self):
+        class Added(object):
+            pass
+        class Bases(tuple):
+            def __iter__(self):
+                return iter((Added,))
+        C = type('C', Bases((object,)), {})
+        self.assertEqual(C.__bases__, (object,))
+        self.assertEqual(C.__mro__, (C, object, Added))
+
+    def test_duplicate_bases_name_the_first_by_class_name(self):
+        class A(object):
+            pass
+        class B(object):
+            pass
+        with self.assertRaises(TypeError) as caught:
+            type('C', (A, B, B, A), {})
+        self.assertEqual(str(caught.exception), 'duplicate base class A')
+        class Named(object):
+            def __init__(self, name):
+                self.__name__ = name
+        class Text(str):
+            pass
+        class Unnamed(object):
+            @property
+            def __name__(self):
+                raise KeyError('name')
+            def __repr__(self):
+                return 'unnamed'
+        class Unrepresented(Unnamed):
+            def __repr__(self):
+                raise ValueError('repr')
+        for base, name in ((Named(12345), '?'), (Named(u'text'), '?'), (Named(Text('text')), 'text'),
+                           (Unnamed(), 'unnamed'), (Unrepresented(), '?'), (12, '12')):
+            class Bases(tuple):
+                def __iter__(self):
+                    return iter((base, base))
+            with self.assertRaises(TypeError) as caught:
+                type('C', Bases((object,)), {})
+            self.assertEqual(str(caught.exception), 'duplicate base class ' + name)
+
+    def test_bases_assignment_updates_every_descendant(self):
+        class A(object):
+            x = 'A'
+        class B(object):
+            x = 'B'
+        class Mid(A):
+            pass
+        leaves = [type('Leaf%d' % index, (Mid,), {}) for index in range(12)]
+        class Diamond(leaves[0], leaves[1]):
+            pass
+        Mid.__bases__ = (B,)
+        self.assertEqual([leaf.x for leaf in leaves], ['B'] * 12)
+        self.assertEqual(Diamond.__mro__, (Diamond, leaves[0], leaves[1], Mid, B, object))
+        Mid.__bases__ = (A,)
+        self.assertEqual((Diamond.x, leaves[11].__mro__), ('A', (leaves[11], Mid, A, object)))
+
     def test_slotnames_generic_declarations_and_cache(self):
         C = type('C', (object,), {'__slots__': {'a': 1, 'z': 2}})
         self.assertEqual(sorted(copy_reg._slotnames(C)), ['a', 'z'])

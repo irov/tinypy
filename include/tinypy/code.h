@@ -20,8 +20,11 @@ typedef enum tinypy_code_flag_e {
 
 /* Python 2.7 code object. Every object field is retained by the code object.
  * bytecode and lnotab are byte strings; consts, names, varnames, freevars and
- * cellvars are tuples; filename and name are byte strings. Returned field
- * values are borrowed. */
+ * cellvars are tuples; filename and name are byte strings. Like the marshal
+ * loader, tinypy_code_new returns NULL with ValueError pending unless the
+ * fields have these kinds, the name tuples hold only exact strings, the counts
+ * are not negative, local_count equals len(varnames) and the arguments fit in
+ * the locals. Returned field values are borrowed. */
 tinypy_value_t *tinypy_code_new(int32_t arg_count, int32_t local_count, int32_t stack_size, int32_t flags, tinypy_value_t *bytecode, tinypy_value_t *consts, tinypy_value_t *names, tinypy_value_t *varnames, tinypy_value_t *freevars, tinypy_value_t *cellvars, tinypy_value_t *filename, tinypy_value_t *name, int32_t first_line_number, tinypy_value_t *lnotab);
 int32_t tinypy_code_arg_count(const tinypy_value_t *code);
 int32_t tinypy_code_local_count(const tinypy_value_t *code);

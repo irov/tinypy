@@ -136,8 +136,9 @@ tinypy_marshal_result_e tinypy_marshal_load_code_v2(tinypy_vm_t *vm, const void 
  * options and out_error are optional. */
 tinypy_marshal_result_e tinypy_marshal_write_v2(const tinypy_marshal_document_t *document, void *buffer, size_t capacity, size_t *out_size, const tinypy_marshal_write_options_t *options, tinypy_marshal_error_t *out_error);
 /* Direct code dumping uses the owning VM allocator for a transient intern
- * table and releases it before returning. The output buffer remains owned by
- * the caller. */
+ * table and releases it before returning. A table allocation that the host or
+ * the heap budget refuses fails the dump with TINYPY_MARSHAL_BYTE_LIMIT and
+ * MemoryError pending. The output buffer remains owned by the caller. */
 tinypy_marshal_result_e tinypy_marshal_dump_code_v2(const tinypy_value_t *code, void *buffer, size_t capacity, size_t *out_size, const tinypy_marshal_write_options_t *options, tinypy_marshal_error_t *out_error);
 
 void tinypy_marshal_document_destroy(tinypy_marshal_document_t *document);

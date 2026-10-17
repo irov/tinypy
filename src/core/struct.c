@@ -32,12 +32,6 @@ typedef struct tinypy_struct_payload_t {
 
 #define TINYPY_STRUCT_CACHE_SIZE 100U
 
-typedef struct tinypy_struct_state_t {
-    tinypy_vm_t *vm;
-    size_t reference_count;
-    tinypy_value_t *cache;
-} tinypy_struct_state_t;
-
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_struct_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
     if (TINYPY_NATIVE_FUNCTION_OBJECT(function)->owner != NULL || TINYPY_NATIVE_FUNCTION_OBJECT(function)->self != NULL) {
@@ -158,31 +152,23 @@ static tinypy_bool_t __tinypy_struct_parse_format_uncached(tinypy_vm_t *vm, tiny
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_struct_cache_clear(tinypy_struct_state_t *state) {
-    tinypy_value_t *cache = state->cache;
+static void __tinypy_struct_cache_clear(tinypy_vm_t *vm) {
+    tinypy_value_t *cache = vm->struct_cache;
 
-    state->cache = NULL;
+    vm->struct_cache = NULL;
     if (cache != NULL) {
         TINYPY_DECREF(cache);
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_struct_state_finalize(void *user_data) {
-    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
-
-    state->reference_count -= 1U;
-    if (state->reference_count == 0U) {
-        __tinypy_struct_cache_clear(state);
-        tinypy_internal_vm_deallocate(state->vm, state, sizeof(*state));
+/* The VM owns the format cache, so the functions of the module need no
+   finalizer, which tinypy_vm_destroy would run while Python may still call
+   them. */
+static tinypy_value_t *__tinypy_struct_parse_format(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_struct_format_t *out_format, tinypy_error_t **out_error) {
+    if (vm->struct_cache == NULL) {
+        vm->struct_cache = tinypy_dict_new(vm);
     }
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_struct_parse_format(tinypy_struct_state_t *state, tinypy_value_t *value, tinypy_struct_format_t *out_format, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = state->vm;
-    if (state->cache == NULL) {
-        state->cache = tinypy_dict_new(vm);
-    }
-    tinypy_value_t *cache = TINYPY_RET(state->cache);
+    tinypy_value_t *cache = TINYPY_RET(vm->struct_cache);
     tinypy_value_t *cached = tinypy_internal_dict_get_optional_suppressed(vm, cache, value);
     if (cached != NULL) {
         TINYPY_INCREF(cached);
@@ -234,20 +220,21 @@ static tinypy_value_t *__tinypy_struct_parse_format(tinypy_struct_state_t *state
     return normalized;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_struct_call_format(tinypy_value_t *function, tinypy_struct_state_t *state, tinypy_value_t *args, tinypy_struct_format_t *out_format, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_struct_call_format(tinypy_value_t *function, tinypy_value_t *args, tinypy_struct_format_t *out_format, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *first = TINYPY_TUPLE_GET(args, 0U);
 
     if (TINYPY_NATIVE_FUNCTION_OBJECT(function)->owner != NULL || TINYPY_NATIVE_FUNCTION_OBJECT(function)->self != NULL) {
         tinypy_struct_payload_t *payload = (tinypy_struct_payload_t *)tinypy_native_instance_payload(first);
 
         if (payload->initialized == TINYPY_FALSE) {
-            tinypy_internal_make_vm_error(state->vm, TINYPY_ERROR_VALUE, "uninitialized Struct", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "uninitialized Struct", out_error);
             return NULL;
         }
         *out_format = payload->format;
         return TINYPY_RET(payload->format_value);
     }
-    tinypy_value_t *result = __tinypy_struct_parse_format(state, first, out_format, out_error);
+    tinypy_value_t *result = __tinypy_struct_parse_format(vm, first, out_format, out_error);
 
     return result;
 }
@@ -329,14 +316,14 @@ static tinypy_bool_t __tinypy_struct_as_double(tinypy_vm_t *vm, tinypy_value_t *
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_calcsize(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
 
+    (void)user_data;
     if (__tinypy_struct_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *format_value = __tinypy_struct_parse_format(state, item, &format, out_error);
+    tinypy_value_t *format_value = __tinypy_struct_parse_format(vm, item, &format, out_error);
     if (format_value == NULL) {
         return NULL;
     }
@@ -430,7 +417,7 @@ static tinypy_value_t *__tinypy_struct_unpack_values(tinypy_vm_t *vm, const tiny
         return result;
     }
     size_t allocation_size = format->item_count * sizeof(tinypy_value_t *);
-    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(vm, allocation_size, out_error);
+    tinypy_value_t **items = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, allocation_size, out_error);
     if (items == NULL) {
         return NULL;
     }
@@ -449,7 +436,7 @@ static tinypy_value_t *__tinypy_struct_unpack_values(tinypy_vm_t *vm, const tiny
         }
         items[index] = tinypy_float_from_double(vm, value);
     }
-    tinypy_value_t *result = tinypy_tuple_from_items(vm, items, format->item_count);
+    tinypy_value_t *result = tinypy_internal_tuple_from_items_checked(vm, items, format->item_count, out_error);
     for (index = 0U; index < format->item_count; ++index) {
         TINYPY_DECREF(items[index]);
     }
@@ -459,15 +446,15 @@ static tinypy_value_t *__tinypy_struct_unpack_values(tinypy_vm_t *vm, const tiny
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_unpack(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
     tinypy_struct_buffer_t buffer;
     tinypy_bool_t method = TINYPY_NATIVE_FUNCTION_OBJECT(function)->owner != NULL || TINYPY_NATIVE_FUNCTION_OBJECT(function)->self != NULL ? TINYPY_TRUE : TINYPY_FALSE;
 
+    (void)user_data;
     if (__tinypy_struct_arguments(function, args, kwargs, method != TINYPY_FALSE ? 1U : 2U, method != TINYPY_FALSE ? 1U : 2U, method != TINYPY_FALSE ? TINYPY_ARITY_STYLE_SINGLE : TINYPY_ARITY_STYLE_UNPACK, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *format_value = __tinypy_struct_call_format(function, state, args, &format, out_error);
+    tinypy_value_t *format_value = __tinypy_struct_call_format(function, args, &format, out_error);
     if (format_value == NULL) {
         return NULL;
     }
@@ -516,11 +503,11 @@ static void __tinypy_struct_item_count_error(tinypy_vm_t *vm, const char *operat
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_pack(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
     uint8_t *bytes;
     size_t index;
 
+    (void)user_data;
     if (__tinypy_struct_arguments(function, args, kwargs, 0U, SIZE_MAX, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
@@ -528,7 +515,7 @@ static tinypy_value_t *__tinypy_struct_pack(tinypy_value_t *function, tinypy_val
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "missing format argument", out_error);
         return NULL;
     }
-    tinypy_value_t *format_value = __tinypy_struct_call_format(function, state, args, &format, out_error);
+    tinypy_value_t *format_value = __tinypy_struct_call_format(function, args, &format, out_error);
     if (format_value == NULL) {
         return NULL;
     }
@@ -610,7 +597,6 @@ too_small: {
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_pack_into(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
     tinypy_struct_buffer_t buffer_view;
     size_t offset;
@@ -618,6 +604,7 @@ static tinypy_value_t *__tinypy_struct_pack_into(tinypy_value_t *function, tinyp
     tinypy_value_t *result = NULL;
     size_t index;
 
+    (void)user_data;
     if (__tinypy_struct_arguments(function, args, kwargs, 0U, SIZE_MAX, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
@@ -625,7 +612,7 @@ static tinypy_value_t *__tinypy_struct_pack_into(tinypy_value_t *function, tinyp
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "missing format argument", out_error);
         return NULL;
     }
-    tinypy_value_t *format_value = __tinypy_struct_call_format(function, state, args, &format, out_error);
+    tinypy_value_t *format_value = __tinypy_struct_call_format(function, args, &format, out_error);
     if (format_value == NULL) {
         return NULL;
     }
@@ -697,7 +684,6 @@ static tinypy_bool_t __tinypy_struct_known_keyword(tinypy_value_t *key, tinypy_v
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_unpack_from(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
     tinypy_struct_format_t format;
     tinypy_struct_buffer_t buffer_view;
     tinypy_value_t *buffer = TINYPY_TUPLE_SIZE(args) >= 2U ? TINYPY_TUPLE_GET(args, 1U) : NULL;
@@ -706,11 +692,12 @@ static tinypy_value_t *__tinypy_struct_unpack_from(tinypy_value_t *function, tin
     size_t offset = 0U;
     int64_t signed_offset = INT64_C(0);
 
+    (void)user_data;
     if (TINYPY_TUPLE_SIZE(args) == 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "missing format argument", out_error);
         return NULL;
     }
-    tinypy_value_t *format_value = __tinypy_struct_call_format(function, state, args, &format, out_error);
+    tinypy_value_t *format_value = __tinypy_struct_call_format(function, args, &format, out_error);
     if (format_value == NULL) {
         return NULL;
     }
@@ -949,47 +936,34 @@ static tinypy_value_t *__tinypy_struct_sizeof(tinypy_value_t *function, tinypy_v
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_clearcache(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_struct_state_t *state = (tinypy_struct_state_t *)user_data;
 
+    (void)user_data;
     if (__tinypy_struct_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    __tinypy_struct_cache_clear(state);
+    __tinypy_struct_cache_clear(vm);
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_struct_add_function(tinypy_value_t *module, tinypy_struct_state_t *state, tinypy_value_t *name, tinypy_native_function_callback_t callback) {
-    state->reference_count += 1U;
-    tinypy_internal_module_add_function(module, name, callback, state, __tinypy_struct_state_finalize);
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_struct_add_type_method(tinypy_type_t *type, tinypy_struct_state_t *state, tinypy_value_t *name, tinypy_native_function_callback_t callback) {
-    state->reference_count += 1U;
-    tinypy_internal_type_add_method(type, name, callback, state, __tinypy_struct_state_finalize, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_struct_module(tinypy_vm_t *vm) {
-    tinypy_struct_state_t *state = (tinypy_struct_state_t *)tinypy_internal_vm_allocate(vm, sizeof(*state));
     tinypy_value_t *module = tinypy_module_new_key(vm->internal_struct_module_name);
     tinypy_value_t *name = TINYPY_RET(vm->internal_struct_module_name);
     tinypy_value_t *doc = tinypy_string_from_bytes(vm, "Functions to convert between Python values and C structs.", 57U);
     tinypy_value_t *version = tinypy_string_from_bytes(vm, "0.2", 3U);
 
-    (void)memset(state, 0, sizeof(*state));
-    state->vm = vm;
     tinypy_module_add_value_key(module, vm->internal_special_name_key, name);
     tinypy_module_add_value_key(module, vm->internal_special_doc_key, doc);
     tinypy_module_add_value_key(module, vm->internal_special_version_key, version);
     tinypy_module_add_value_key(module, vm->internal_error_key, &vm->exception_types[TINYPY_EXCEPTION_VALUE_ERROR]->base.base);
     tinypy_module_add_value_key(module, vm->internal_py_struct_float_coerce_key, &vm->true_object.base);
     tinypy_module_add_value_key(module, vm->internal_py_struct_range_checking_key, &vm->true_object.base);
-    __tinypy_struct_add_function(module, state, vm->internal_calcsize_key, __tinypy_struct_calcsize);
-    __tinypy_struct_add_function(module, state, vm->internal_pack_key, __tinypy_struct_pack);
-    __tinypy_struct_add_function(module, state, vm->internal_unpack_key, __tinypy_struct_unpack);
-    __tinypy_struct_add_function(module, state, vm->internal_pack_into_key, __tinypy_struct_pack_into);
-    __tinypy_struct_add_function(module, state, vm->internal_unpack_from_key, __tinypy_struct_unpack_from);
-    __tinypy_struct_add_function(module, state, vm->internal_clearcache_key, __tinypy_struct_clearcache);
+    tinypy_internal_module_add_function(module, vm->internal_calcsize_key, __tinypy_struct_calcsize, NULL, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_pack_key, __tinypy_struct_pack, NULL, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_unpack_key, __tinypy_struct_unpack, NULL, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_pack_into_key, __tinypy_struct_pack_into, NULL, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_unpack_from_key, __tinypy_struct_unpack_from, NULL, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_clearcache_key, __tinypy_struct_clearcache, NULL, NULL);
     tinypy_native_type_spec_t spec;
     tinypy_native_type_spec_init(&spec);
     spec.payload_size = sizeof(tinypy_struct_payload_t);
@@ -1007,12 +981,12 @@ void tinypy_internal_initialize_struct_module(tinypy_vm_t *vm) {
     tinypy_internal_type_add_static_method(struct_type, vm->internal_special_new_key, __tinypy_struct_object_new, struct_type, NULL);
     tinypy_internal_initialize_struct_descriptors(struct_type);
     tinypy_internal_type_add_object_attribute_methods(struct_type);
-    __tinypy_struct_add_type_method(struct_type, state, vm->internal_special_init_key, __tinypy_struct_object_init);
-    __tinypy_struct_add_type_method(struct_type, state, vm->internal_pack_key, __tinypy_struct_pack);
-    __tinypy_struct_add_type_method(struct_type, state, vm->internal_unpack_key, __tinypy_struct_unpack);
-    __tinypy_struct_add_type_method(struct_type, state, vm->internal_pack_into_key, __tinypy_struct_pack_into);
-    __tinypy_struct_add_type_method(struct_type, state, vm->internal_unpack_from_key, __tinypy_struct_unpack_from);
-    __tinypy_struct_add_type_method(struct_type, state, vm->internal_special_sizeof_key, __tinypy_struct_sizeof);
+    tinypy_internal_type_add_method(struct_type, vm->internal_special_init_key, __tinypy_struct_object_init, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(struct_type, vm->internal_pack_key, __tinypy_struct_pack, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(struct_type, vm->internal_unpack_key, __tinypy_struct_unpack, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(struct_type, vm->internal_pack_into_key, __tinypy_struct_pack_into, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(struct_type, vm->internal_unpack_from_key, __tinypy_struct_unpack_from, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(struct_type, vm->internal_special_sizeof_key, __tinypy_struct_sizeof, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_module_add_value_key(module, vm->internal_struct_key, &struct_type->base.base);
     TINYPY_DECREF(&struct_type->base.base);
     TINYPY_DECREF(version);

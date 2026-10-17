@@ -749,8 +749,24 @@ static tinypy_bool_t __tinypy_representation_append_text(tinypy_representation_b
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyObject_Repr and _PyObject_Str take the str or unicode, a subtype
-   included, that the method representing a value returns, and name the
-   conversion asked for when it returns anything else. */
+   included, that the method or the slot representing a value returns, and
+   name the conversion asked for when it returns anything else. */
+static tinypy_bool_t __tinypy_representation_check_text(tinypy_vm_t *vm, tinypy_value_t *result, tinypy_bool_t raw, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(result) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(result) == TINYPY_VALUE_UNICODE) {
+        return TINYPY_TRUE;
+    }
+    tinypy_value_t *conversion = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_TEXT(conversion),
+        TINYPY_MESSAGE_PART_LITERAL(" returned non-string (type "),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(result, 200U),
+        TINYPY_MESSAGE_PART_LITERAL(")")
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t raw, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *result = tinypy_internal_object_call_representation(value, name, out_error);
@@ -758,37 +774,33 @@ static tinypy_value_t *__tinypy_representation_custom(tinypy_value_t *value, tin
     if (result == NULL) {
         return NULL;
     }
-    if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_UNICODE) {
-        tinypy_value_t *conversion = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_TEXT(conversion),
-            TINYPY_MESSAGE_PART_LITERAL(" returned non-string (type "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(result),
-            TINYPY_MESSAGE_PART_LITERAL(")")
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    if (__tinypy_representation_check_text(vm, result, raw, out_error) == 0) {
         TINYPY_DECREF(result);
         return NULL;
     }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The root keeps what its method returns; a nested value, which follows
-   some text of its container, appends it. */
+/* The root keeps the text representing it whole; a nested value, which
+   follows some text of its container, appends it. */
+static tinypy_bool_t __tinypy_representation_take_text(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_value_t *text, tinypy_bool_t raw, tinypy_error_t **out_error) {
+    if (value == builder->root && builder->size == 0U) {
+        builder->root_text = text;
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t appended = __tinypy_representation_append_text(builder, text, raw, out_error);
+    TINYPY_DECREF(text);
+    return appended;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_representation_special(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t raw, tinypy_error_t **out_error) {
     tinypy_value_t *result = __tinypy_representation_custom(value, name, raw, out_error);
 
     if (result == NULL) {
         return TINYPY_FALSE;
     }
-    if (value == builder->root && builder->size == 0U) {
-        builder->root_text = result;
-        return TINYPY_TRUE;
-    }
-    tinypy_bool_t appended = __tinypy_representation_append_text(builder, result, raw, out_error);
-    TINYPY_DECREF(result);
-    return appended;
+    tinypy_bool_t taken = __tinypy_representation_take_text(builder, value, result, raw, out_error);
+    return taken;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Returns an owned reference to the __module__ string of a class dictionary.
@@ -831,8 +843,10 @@ static void __tinypy_representation_class_qualified_name(tinypy_representation_b
 }
 //////////////////////////////////////////////////////////////////////////
 /* Instances of types defined in Python show the defining module, the way
-   object.__repr__ does in Python 2.7; built-in types stay unqualified. */
-static void __tinypy_representation_type_qualified_name(tinypy_representation_builder_t *builder, const tinypy_type_t *type) {
+   object.__repr__ does in Python 2.7; built-in types stay unqualified. The
+   type is held, as the lookup may reassign the __class__ of an instance. */
+static void __tinypy_representation_type_qualified_name(tinypy_representation_builder_t *builder, tinypy_type_t *type) {
+    TINYPY_INCREF(&type->base.base);
     tinypy_value_t *module = tinypy_type_get_attr_key(type, type->vm->internal_special_module_key);
 
     if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, type->vm->internal_builtin_module_name) == 0 && ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U || memchr(type->name, '.', type->name_size) == NULL)) {
@@ -840,6 +854,7 @@ static void __tinypy_representation_type_qualified_name(tinypy_representation_bu
         __tinypy_representation_append_character(builder, (uint8_t)'.');
     }
     __tinypy_representation_append(builder, type->name, type->name_size);
+    TINYPY_DECREF(&type->base.base);
 }
 //////////////////////////////////////////////////////////////////////////
 /* object_repr qualifies the name of a type defined in Python with its
@@ -957,14 +972,12 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         if (representation == NULL) {
             return TINYPY_FALSE;
         }
-        if (TINYPY_VALUE_KIND(representation) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(representation) != TINYPY_VALUE_UNICODE) {
+        if (__tinypy_representation_check_text(vm, representation, raw, out_error) == 0) {
             TINYPY_DECREF(representation);
-            tinypy_internal_make_vm_error(builder->vm, TINYPY_ERROR_TYPE, "representation slot returned a non-string", out_error);
             return TINYPY_FALSE;
         }
-        tinypy_bool_t appended = __tinypy_representation_append_text(builder, representation, raw, out_error);
-        TINYPY_DECREF(representation);
-        return appended;
+        tinypy_bool_t taken = __tinypy_representation_take_text(builder, value, representation, raw, out_error);
+        return taken;
     }
 
     if (raw != 0 && (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE)) {
@@ -1312,6 +1325,13 @@ tinypy_value_t *tinypy_internal_object_repr_builtin(tinypy_value_t *value, tinyp
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_str_builtin(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_t *result = __tinypy_representation_build(value, TINYPY_TRUE, TINYPY_TRUE, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* object.__repr__, which reads no slot of the type. */
+tinypy_value_t *tinypy_internal_object_default_repr(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_representation_default_object(value, TINYPY_FALSE, out_error);
 
     return result;
 }

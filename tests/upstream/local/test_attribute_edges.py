@@ -380,6 +380,30 @@ class AttributeEdges(unittest.TestCase):
             self.assertFalse(callable(Source()))
         self.assertTrue(callable(lambda: 17))
 
+    def test_classic_instance_dictionary_matches_equal_keys(self):
+        class Old:
+            shared = 'class'
+            def method(self):
+                return 'method'
+        instance = Old()
+        instance.__dict__[''.join(['sha', 'red'])] = 'instance'
+        self.assertEqual(instance.shared, 'instance')
+        class Key(str):
+            pass
+        other = Old()
+        other.__dict__[Key('shared')] = 'key'
+        other.__dict__[Key('method')] = lambda: 'instance method'
+        other.__dict__['__class__'] = 'ignored'
+        self.assertEqual((other.shared, other.method()), ('key', 'instance method'))
+        self.assertIs(other.__class__, Old)
+        self.assertEqual((Old().shared, Old().method()), ('class', 'method'))
+        try:
+            Old().missing
+        except AttributeError as error:
+            self.assertEqual(str(error), "Old instance has no attribute 'missing'")
+        else:
+            self.fail('no AttributeError')
+
     def test_classic_class_constructor_keywords_and_dictionary_identity(self):
         class Old:
             pass

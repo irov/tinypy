@@ -16,12 +16,23 @@ typedef enum tinypy_verify_reason_e {
     TINYPY_VERIFY_REASON_CONTINUE = 5
 } tinypy_verify_reason_e;
 
+/* A finally clause, which CPython's stack depth computation enters with
+   the three values of an exception whatever its reason, is modeled with
+   that width for every reason: the stashed values are opaque to the clause,
+   and its contexts differ only in the reasons that END_FINALLY dispatches
+   on. */
+#define TINYPY_VERIFY_MARKER_WIDTH 3U
+
 typedef struct tinypy_verify_state_t {
     size_t offset;
     size_t stack_depth;
     size_t block_index;
     size_t marker_index;
     size_t next_at_offset;
+    size_t next_consumer;
+    uint8_t queued;
+    uint8_t consumer;
+    uint8_t reserved[6];
 } tinypy_verify_state_t;
 
 typedef struct tinypy_verify_block_t {
@@ -33,11 +44,17 @@ typedef struct tinypy_verify_block_t {
     uint8_t reserved[7];
 } tinypy_verify_block_t;
 
+/* Markers are shared: one per handler and pending context, the reasons it
+   was entered with gathered as bits of tinypy_verify_reason_e. */
 typedef struct tinypy_verify_marker_t {
     size_t parent;
+    size_t handler;
     size_t resume_depth;
     size_t continue_target;
-    uint8_t reason;
+    size_t first_child;
+    size_t next_sibling;
+    size_t first_consumer;
+    uint8_t reasons;
     uint8_t needs_with_cleanup;
     uint8_t reserved[6];
 } tinypy_verify_marker_t;
@@ -76,13 +93,14 @@ typedef struct tinypy_verify_context_t {
     size_t state_count;
     size_t *worklist;
     size_t worklist_head;
-    size_t worklist_tail;
+    size_t worklist_count;
     tinypy_verify_block_t *blocks;
     size_t block_capacity;
     size_t block_count;
     tinypy_verify_marker_t *markers;
     size_t marker_capacity;
     size_t marker_count;
+    size_t first_root_marker;
     tinypy_bytecode_verify_result_t *result;
 } tinypy_verify_context_t;
 
@@ -177,7 +195,7 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify_scratch_size(size_t bytec
             state_count,
             sizeof(tinypy_verify_block_t),
             &blocks_size) || !__tinypy_verify_multiply_size(
-            state_count,
+            bytecode_size,
             sizeof(tinypy_verify_marker_t),
             &markers_size)) {
         return TINYPY_BYTECODE_VERIFY_SIZE_OVERFLOW;
@@ -232,7 +250,8 @@ static void __tinypy_verify_bind_scratch(tinypy_verify_context_t *context, void 
     context->markers = (tinypy_verify_marker_t *)(void *)(base + offset);
     context->state_capacity = state_count;
     context->block_capacity = state_count;
-    context->marker_capacity = state_count;
+    context->marker_capacity = context->bytecode_size;
+    context->first_root_marker = TINYPY_VERIFY_NO_MARKER;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_verify_argument_to_size(uint64_t argument, size_t *out_value) {
@@ -542,71 +561,140 @@ static tinypy_bool_t __tinypy_verify_blocks_equal(const tinypy_verify_context_t 
     return left == TINYPY_VERIFY_NO_BLOCK && right == TINYPY_VERIFY_NO_BLOCK;
 }
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_verify_reason_item_count(tinypy_verify_reason_e reason) {
-    switch (reason) {
-    case TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE:
-    case TINYPY_VERIFY_REASON_EXCEPTION_FINAL:
-        return 3U;
-    case TINYPY_VERIFY_REASON_RETURN:
-    case TINYPY_VERIFY_REASON_CONTINUE:
-        return 2U;
-    case TINYPY_VERIFY_REASON_BREAK:
-        return 1U;
-    case TINYPY_VERIFY_REASON_NORMAL:
-        return 1U;
-    default:
-        return 0U;
-    }
+static uint8_t __tinypy_verify_reason_bit(tinypy_verify_reason_e reason) {
+    uint8_t bit = (uint8_t)(1U << (uint32_t)reason);
+    return bit;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_verify_markers_equal(const tinypy_verify_context_t *context, size_t left, size_t right) {
-    while (left != TINYPY_VERIFY_NO_MARKER && right != TINYPY_VERIFY_NO_MARKER) {
-        const tinypy_verify_marker_t *left_marker = &context->markers[left];
-        const tinypy_verify_marker_t *right_marker = &context->markers[right];
-
-        if (left_marker->resume_depth != right_marker->resume_depth || left_marker->continue_target != right_marker->continue_target || left_marker->reason != right_marker->reason || left_marker->needs_with_cleanup !=
-                right_marker->needs_with_cleanup) {
-            return TINYPY_FALSE;
-        }
-
-        left = left_marker->parent;
-        right = right_marker->parent;
-    }
-
-    return left == TINYPY_VERIFY_NO_MARKER && right == TINYPY_VERIFY_NO_MARKER;
+static tinypy_bool_t __tinypy_verify_marker_catchable(const tinypy_verify_marker_t *marker) {
+    uint8_t catchable = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE);
+    tinypy_bool_t result = marker->reasons == catchable ? TINYPY_TRUE : TINYPY_FALSE;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_verify_marker_expected_depth(const tinypy_verify_marker_t *marker, size_t *out_depth) {
-    size_t verify_reason_item_count = __tinypy_verify_reason_item_count(
-        (tinypy_verify_reason_e)marker->reason);
     tinypy_bool_t return_value_1 = __tinypy_verify_add_size(
         marker->resume_depth,
-        verify_reason_item_count,
+        TINYPY_VERIFY_MARKER_WIDTH,
         out_depth);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t parent, tinypy_verify_reason_e reason, size_t resume_depth, size_t continue_target, uint8_t needs_with_cleanup, size_t *out_index) {
-    if (context->marker_count == context->marker_capacity) {
-        tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
-            context,
-            TINYPY_BYTECODE_VERIFY_LIMIT_EXCEEDED,
-            instruction->offset,
-            instruction->opcode,
-            (uint64_t)context->marker_capacity,
-            TINYPY_OPCODE_DECODE_OK);
-        return return_value_1;
+/* The lowest depth that code under a marker chain may reach: the values an
+   except clause received are its own to consume, while a finally reason and
+   the __exit__ below it are consumed only by END_FINALLY and WITH_CLEANUP.
+   SIZE_MAX, for a depth that does not fit, rejects every state. */
+static size_t __tinypy_verify_marker_floor(const tinypy_verify_context_t *context, size_t marker_index) {
+    size_t floor = 0U;
+
+    while (marker_index != TINYPY_VERIFY_NO_MARKER) {
+        const tinypy_verify_marker_t *marker = &context->markers[marker_index];
+        size_t marker_floor = marker->resume_depth;
+        tinypy_bool_t catchable = __tinypy_verify_marker_catchable(marker);
+
+        if (catchable == 0) {
+            if (!__tinypy_verify_marker_expected_depth(marker, &marker_floor)) {
+                return SIZE_MAX;
+            }
+            if (!__tinypy_verify_add_size(marker_floor, marker->needs_with_cleanup, &marker_floor)) {
+                return SIZE_MAX;
+            }
+        }
+        if (marker_floor > floor) {
+            floor = marker_floor;
+        }
+        if (catchable == 0) {
+            break;
+        }
+        marker_index = marker->parent;
+    }
+    return floor;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_verify_schedule(tinypy_verify_context_t *context, size_t state_index) {
+    tinypy_verify_state_t *state = &context->states[state_index];
+
+    if (state->queued != 0U) {
+        return;
+    }
+    state->queued = 1U;
+    context->worklist[(context->worklist_head + context->worklist_count) % context->state_capacity] = state_index;
+    context->worklist_count += 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+/* END_FINALLY and WITH_CLEANUP dispatch on the reasons of their marker, so
+   their states run again whenever it gains one. */
+static void __tinypy_verify_consume_reasons(tinypy_verify_context_t *context, size_t state_index) {
+    tinypy_verify_state_t *state = &context->states[state_index];
+    tinypy_verify_marker_t *marker = &context->markers[state->marker_index];
+
+    if (state->consumer != 0U) {
+        return;
+    }
+    state->consumer = 1U;
+    state->next_consumer = marker->first_consumer;
+    marker->first_consumer = state_index;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Finds the marker of a handler entered under parent, or makes it, and adds
+   reasons to it. Every way into a finally clause from one context shares a
+   marker, so nested clauses take one state per instruction instead of one
+   per combination of reasons. A marker continues to one loop target only. */
+static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t parent, uint8_t reasons, size_t handler, size_t resume_depth, size_t continue_target, uint8_t needs_with_cleanup, size_t *out_index) {
+    uint8_t catchable = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE);
+    uint8_t continues = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_CONTINUE);
+    size_t *link = parent != TINYPY_VERIFY_NO_MARKER ? &context->markers[parent].first_child : &context->first_root_marker;
+    size_t index = *link;
+
+    while (index != TINYPY_VERIFY_NO_MARKER) {
+        const tinypy_verify_marker_t *candidate = &context->markers[index];
+
+        if (candidate->handler == handler && candidate->resume_depth == resume_depth && candidate->needs_with_cleanup == needs_with_cleanup && (candidate->reasons == catchable) == (reasons == catchable)
+            && ((reasons & continues) == 0U || (candidate->reasons & continues) == 0U || candidate->continue_target == continue_target)) {
+            break;
+        }
+        index = candidate->next_sibling;
+    }
+    if (index == TINYPY_VERIFY_NO_MARKER) {
+        if (context->marker_count == context->marker_capacity) {
+            tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
+                context,
+                TINYPY_BYTECODE_VERIFY_LIMIT_EXCEEDED,
+                instruction->offset,
+                instruction->opcode,
+                (uint64_t)context->marker_capacity,
+                TINYPY_OPCODE_DECODE_OK);
+            return return_value_1;
+        }
+        index = context->marker_count;
+        context->marker_count += 1U;
+
+        tinypy_verify_marker_t *created = &context->markers[index];
+        created->parent = parent;
+        created->handler = handler;
+        created->resume_depth = resume_depth;
+        created->continue_target = TINYPY_VERIFY_NO_TARGET;
+        created->first_child = TINYPY_VERIFY_NO_MARKER;
+        created->next_sibling = *link;
+        created->first_consumer = TINYPY_VERIFY_NO_STATE;
+        created->reasons = 0U;
+        created->needs_with_cleanup = needs_with_cleanup;
+        (void)memset(created->reserved, 0, sizeof(created->reserved));
+        *link = index;
     }
 
-    tinypy_verify_marker_t *marker = &context->markers[context->marker_count];
-    marker->parent = parent;
-    marker->resume_depth = resume_depth;
-    marker->continue_target = continue_target;
-    marker->reason = (uint8_t)reason;
-    marker->needs_with_cleanup = needs_with_cleanup;
-    (void)memset(marker->reserved, 0, sizeof(marker->reserved));
-    *out_index = context->marker_count;
-    context->marker_count += 1U;
+    tinypy_verify_marker_t *marker = &context->markers[index];
+    *out_index = index;
+    if ((marker->reasons | reasons) == marker->reasons) {
+        return TINYPY_BYTECODE_VERIFY_OK;
+    }
+    if ((reasons & continues) != 0U) {
+        marker->continue_target = continue_target;
+    }
+    marker->reasons = (uint8_t)(marker->reasons | reasons);
+    for (size_t state_index = marker->first_consumer; state_index != TINYPY_VERIFY_NO_STATE; state_index = context->states[state_index].next_consumer) {
+        __tinypy_verify_schedule(context, state_index);
+    }
     return TINYPY_BYTECODE_VERIFY_OK;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -617,8 +705,8 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
         const tinypy_verify_marker_t *marker =
             &context->markers[marker_index];
 
-        if (marker->reason !=
-                (uint8_t)TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE || stack_depth != marker->resume_depth) {
+        tinypy_bool_t catchable = __tinypy_verify_marker_catchable(marker);
+        if (catchable == 0 || stack_depth != marker->resume_depth) {
             break;
         }
 
@@ -661,82 +749,59 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
         return return_value_3;
     }
 
-    if (marker_index != TINYPY_VERIFY_NO_MARKER) {
-        const tinypy_verify_marker_t *marker =
-            &context->markers[marker_index];
-        size_t minimum_depth;
-
-        if (!__tinypy_verify_marker_expected_depth(marker, &minimum_depth)) {
-            tinypy_bytecode_verify_status_e return_value_4 = __tinypy_verify_fail(
-                context,
-                TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
-                source_offset,
-                source_opcode,
-                UINT64_C(0),
-                TINYPY_OPCODE_DECODE_OK);
-            return return_value_4;
-        }
-        if (marker->reason ==
-            (uint8_t)TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE) {
-            minimum_depth = marker->resume_depth;
-        }
-        else if (marker->needs_with_cleanup != 0U && !__tinypy_verify_add_size(
-                     minimum_depth,
-                     1U,
-                     &minimum_depth)) {
-            tinypy_bytecode_verify_status_e return_value_5 = __tinypy_verify_fail(
-                context,
-                TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
-                source_offset,
-                source_opcode,
-                UINT64_C(0),
-                TINYPY_OPCODE_DECODE_OK);
-            return return_value_5;
-        }
-        if (stack_depth < minimum_depth) {
-            tinypy_bytecode_verify_status_e return_value_6 = __tinypy_verify_fail(
-                context,
-                TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE,
-                source_offset,
-                source_opcode,
-                (uint64_t)stack_depth,
-                TINYPY_OPCODE_DECODE_OK);
-            return return_value_6;
-        }
+    size_t marker_floor = __tinypy_verify_marker_floor(context, marker_index);
+    if (stack_depth < marker_floor) {
+        tinypy_bytecode_verify_status_e return_value_4 = __tinypy_verify_fail(
+            context,
+            TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE,
+            source_offset,
+            source_opcode,
+            (uint64_t)stack_depth,
+            TINYPY_OPCODE_DECODE_OK);
+        return return_value_4;
+    }
+    /* An exception unwinds the stack down to the level of its block, so no
+       code below the block may run. */
+    if (block_index != TINYPY_VERIFY_NO_BLOCK && stack_depth < context->blocks[block_index].level) {
+        tinypy_bytecode_verify_status_e return_value_5 = __tinypy_verify_fail(
+            context,
+            TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW,
+            source_offset,
+            source_opcode,
+            (uint64_t)stack_depth,
+            TINYPY_OPCODE_DECODE_OK);
+        return return_value_5;
     }
 
     state_index = context->state_heads[offset];
     while (state_index != TINYPY_VERIFY_NO_STATE) {
         tinypy_verify_state_t *state = &context->states[state_index];
 
-        if (__tinypy_verify_markers_equal(
-                context,
-                state->marker_index,
-                marker_index)) {
+        if (state->marker_index == marker_index) {
             if (!__tinypy_verify_blocks_equal(
                     context,
                     state->block_index,
                     block_index)) {
                 uint8_t verify_opcode_at = __tinypy_verify_opcode_at(context, offset);
-                tinypy_bytecode_verify_status_e return_value_7 = __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_6 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_BLOCK_STACK_MISMATCH,
                     offset,
                     verify_opcode_at,
                     (uint64_t)stack_depth,
                     TINYPY_OPCODE_DECODE_OK);
-                return return_value_7;
+                return return_value_6;
             }
             if (state->stack_depth != stack_depth) {
                 uint8_t verify_opcode_at = __tinypy_verify_opcode_at(context, offset);
-                tinypy_bytecode_verify_status_e return_value_8 = __tinypy_verify_fail(
+                tinypy_bytecode_verify_status_e return_value_7 = __tinypy_verify_fail(
                     context,
                     TINYPY_BYTECODE_VERIFY_STACK_DEPTH_MISMATCH,
                     offset,
                     verify_opcode_at,
                     (uint64_t)stack_depth,
                     TINYPY_OPCODE_DECODE_OK);
-                return return_value_8;
+                return return_value_7;
             }
 
             return TINYPY_BYTECODE_VERIFY_OK;
@@ -745,15 +810,15 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
         state_index = state->next_at_offset;
     }
 
-    if (context->state_count == context->state_capacity || context->worklist_tail == context->state_capacity) {
-        tinypy_bytecode_verify_status_e return_value_9 = __tinypy_verify_fail(
+    if (context->state_count == context->state_capacity) {
+        tinypy_bytecode_verify_status_e return_value_8 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_LIMIT_EXCEEDED,
             source_offset,
             source_opcode,
             (uint64_t)context->state_capacity,
             TINYPY_OPCODE_DECODE_OK);
-        return return_value_9;
+        return return_value_8;
     }
 
     state_index = context->state_count;
@@ -764,10 +829,13 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_enqueue(tinypy_verify_con
     state->block_index = block_index;
     state->marker_index = marker_index;
     state->next_at_offset = context->state_heads[offset];
+    state->next_consumer = TINYPY_VERIFY_NO_STATE;
+    state->queued = 0U;
+    state->consumer = 0U;
+    (void)memset(state->reserved, 0, sizeof(state->reserved));
     context->state_heads[offset] = state_index;
 
-    context->worklist[context->worklist_tail] = state_index;
-    context->worklist_tail += 1U;
+    __tinypy_verify_schedule(context, state_index);
     return TINYPY_BYTECODE_VERIFY_OK;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1066,21 +1134,38 @@ static tinypy_bool_t __tinypy_verify_get_effect(uint8_t opcode, uint64_t argumen
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bytecode_verify_status_e __tinypy_verify_apply_effect(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t stack_depth, const tinypy_verify_effect_t *effect, size_t *out_depth) {
-    size_t depth;
+/* The values that an instruction reads or pops lie above the level of the
+   innermost block, to which an exception it raises unwinds, and above the
+   floor of its markers. */
+static tinypy_bytecode_verify_status_e __tinypy_verify_check_reach(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, const tinypy_verify_state_t *state, size_t reach) {
+    size_t floor = __tinypy_verify_marker_floor(context, state->marker_index);
 
-    if (stack_depth < effect->required || stack_depth < effect->pop_count) {
+    if (state->block_index != TINYPY_VERIFY_NO_BLOCK && context->blocks[state->block_index].level > floor) {
+        floor = context->blocks[state->block_index].level;
+    }
+    if (state->stack_depth < reach || state->stack_depth - reach < floor) {
         tinypy_bytecode_verify_status_e return_value_1 = __tinypy_verify_fail(
             context,
             TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW,
             instruction->offset,
             instruction->opcode,
-            (uint64_t)stack_depth,
+            (uint64_t)state->stack_depth,
             TINYPY_OPCODE_DECODE_OK);
         return return_value_1;
     }
+    return TINYPY_BYTECODE_VERIFY_OK;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bytecode_verify_status_e __tinypy_verify_apply_effect(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, const tinypy_verify_state_t *state, const tinypy_verify_effect_t *effect, size_t *out_depth) {
+    size_t reach = effect->required > effect->pop_count ? effect->required : effect->pop_count;
+    size_t depth;
 
-    depth = stack_depth - effect->pop_count;
+    tinypy_bytecode_verify_status_e status = __tinypy_verify_check_reach(context, instruction, state, reach);
+    if (status != TINYPY_BYTECODE_VERIFY_OK) {
+        return status;
+    }
+
+    depth = state->stack_depth - effect->pop_count;
     if (!__tinypy_verify_add_size(depth, effect->push_count, &depth)) {
         tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
             context,
@@ -1149,9 +1234,10 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_push_block(tinypy_verify_
 //////////////////////////////////////////////////////////////////////////
 /* Unwinding past a block that sits below a pending finally discards that
    finally's stashed values, so the marker chain is trimmed to the markers
-   whose values still survive at the new stack depth. */
+   whose values still survive at the new stack depth: those that start below
+   it. */
 static size_t __tinypy_verify_surviving_marker(const tinypy_verify_context_t *context, size_t marker_index, size_t stack_depth) {
-    while (marker_index != TINYPY_VERIFY_NO_MARKER && context->markers[marker_index].resume_depth > stack_depth) {
+    while (marker_index != TINYPY_VERIFY_NO_MARKER && context->markers[marker_index].resume_depth >= stack_depth) {
         marker_index = context->markers[marker_index].parent;
     }
     return marker_index;
@@ -1245,10 +1331,9 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
                 needs_cleanup = 1U;
             }
 
-            size_t verify_reason_item_count = __tinypy_verify_reason_item_count(reason);
             if (!__tinypy_verify_add_size(
                     block->level,
-                    verify_reason_item_count,
+                    TINYPY_VERIFY_MARKER_WIDTH,
                     &handler_depth)) {
                 tinypy_bytecode_verify_status_e return_value_5 = __tinypy_verify_fail(
                     context,
@@ -1260,11 +1345,14 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_unwind_reason(tinypy_veri
                 return return_value_5;
             }
 
+            size_t parent_marker = __tinypy_verify_surviving_marker(context, pending_marker, block->level);
+            uint8_t reason_bit = __tinypy_verify_reason_bit(reason);
             status = __tinypy_verify_push_marker(
                 context,
                 instruction,
-                __tinypy_verify_surviving_marker(context, pending_marker, block->level),
-                reason,
+                parent_marker,
+                reason_bit,
+                block->handler,
                 resume_depth,
                 continue_target,
                 needs_cleanup,
@@ -1376,7 +1464,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         status = __tinypy_verify_apply_effect(
             context,
             &instruction,
-            state.stack_depth,
+            &state,
             &effect,
             &depth);
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
@@ -1427,11 +1515,13 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                     TINYPY_OPCODE_DECODE_OK);
                 return return_value_3;
             }
+            uint8_t catchable = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE);
             status = __tinypy_verify_push_marker(
                 context,
                 &instruction,
                 state.marker_index,
-                TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE,
+                catchable,
+                target,
                 level,
                 TINYPY_VERIFY_NO_TARGET,
                 0U,
@@ -1461,11 +1551,13 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                     TINYPY_OPCODE_DECODE_OK);
                 return return_value_5;
             }
+            uint8_t exception = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_EXCEPTION_FINAL);
             status = __tinypy_verify_push_marker(
                 context,
                 &instruction,
                 state.marker_index,
-                TINYPY_VERIFY_REASON_EXCEPTION_FINAL,
+                exception,
+                target,
                 level - 1U,
                 TINYPY_VERIFY_NO_TARGET,
                 1U,
@@ -1494,11 +1586,13 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                 TINYPY_OPCODE_DECODE_OK);
             return return_value_7;
         }
+        uint8_t exception = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_EXCEPTION_FINAL);
         status = __tinypy_verify_push_marker(
             context,
             &instruction,
             state.marker_index,
-            TINYPY_VERIFY_REASON_EXCEPTION_FINAL,
+            exception,
+            target,
             level,
             TINYPY_VERIFY_NO_TARGET,
             0U,
@@ -1557,12 +1651,12 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             if (needs_cleanup != 0U) {
                 resume_depth -= 1U;
             }
-            status = __tinypy_verify_push_marker(context, &instruction, state.marker_index, TINYPY_VERIFY_REASON_NORMAL,
-                resume_depth, TINYPY_VERIFY_NO_TARGET, needs_cleanup, &normal_marker);
+            uint8_t normal = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_NORMAL);
+            status = __tinypy_verify_push_marker(context, &instruction, state.marker_index, normal, block->handler, resume_depth, TINYPY_VERIFY_NO_TARGET, needs_cleanup, &normal_marker);
             if (status != TINYPY_BYTECODE_VERIFY_OK) {
                 return status;
             }
-            if (!__tinypy_verify_add_size(block->level, 1U, &depth)) {
+            if (!__tinypy_verify_add_size(block->level, TINYPY_VERIFY_MARKER_WIDTH, &depth)) {
                 status = __tinypy_verify_fail(context, TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW, offset, instruction.opcode, 0U, TINYPY_OPCODE_DECODE_OK);
                 return status;
             }
@@ -1592,16 +1686,18 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                     status = __tinypy_verify_fail(context, TINYPY_BYTECODE_VERIFY_INVALID_FINALLY_STATE, offset, instruction.opcode, 0U, TINYPY_OPCODE_DECODE_OK);
                     return status;
                 }
-                if (cleanup != 0U) {
-                    resume_depth -= 1U;
-                }
-                status = __tinypy_verify_push_marker(context, &instruction, state.marker_index, TINYPY_VERIFY_REASON_NORMAL,
-                    resume_depth, TINYPY_VERIFY_NO_TARGET, cleanup, &normal_marker);
+                status = __tinypy_verify_check_reach(context, &instruction, &state, cleanup);
                 if (status != TINYPY_BYTECODE_VERIFY_OK) {
                     return status;
                 }
-                status = __tinypy_verify_apply_effect(context, &instruction, state.stack_depth, &effect, &depth);
+                resume_depth -= cleanup;
+                uint8_t normal = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_NORMAL);
+                status = __tinypy_verify_push_marker(context, &instruction, state.marker_index, normal, instruction.next_offset, resume_depth, TINYPY_VERIFY_NO_TARGET, cleanup, &normal_marker);
                 if (status != TINYPY_BYTECODE_VERIFY_OK) {
+                    return status;
+                }
+                if (!__tinypy_verify_add_size(state.stack_depth, TINYPY_VERIFY_MARKER_WIDTH, &depth)) {
+                    status = __tinypy_verify_fail(context, TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW, offset, instruction.opcode, 0U, TINYPY_OPCODE_DECODE_OK);
                     return status;
                 }
                 status = __tinypy_verify_fallthrough(context, &instruction, depth, state.block_index, normal_marker);
@@ -1638,15 +1734,9 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             return status;
         }
 
-        status = __tinypy_verify_apply_effect(
-            context,
-            &instruction,
-            state.stack_depth,
-            &effect,
-            &depth);
-        if (status != TINYPY_BYTECODE_VERIFY_OK) {
-            return status;
-        }
+        /* __exit__, below the reason, leaves the stack. */
+        __tinypy_verify_consume_reasons(context, state_index);
+        depth = state.stack_depth - 1U;
 
         size_t cleaned_marker;
 
@@ -1654,7 +1744,8 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             context,
             &instruction,
             marker->parent,
-            (tinypy_verify_reason_e)marker->reason,
+            marker->reasons,
+            offset,
             marker->resume_depth,
             marker->continue_target,
             0U,
@@ -1673,36 +1764,20 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
             return status;
         }
 
-        if (marker->reason ==
-                (uint8_t)TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE || marker->reason ==
-                (uint8_t)TINYPY_VERIFY_REASON_EXCEPTION_FINAL) {
-            size_t suppressed_depth;
-
-            /* A true __exit__ result replaces the triple with None. */
-            if (!__tinypy_verify_add_size(
-                    marker->resume_depth,
-                    1U,
-                    &suppressed_depth)) {
-                tinypy_bytecode_verify_status_e return_value_16 = __tinypy_verify_fail(
-                    context,
-                    TINYPY_BYTECODE_VERIFY_STACK_OVERFLOW,
-                    offset,
-                    instruction.opcode,
-                    UINT64_C(1),
-                    TINYPY_OPCODE_DECODE_OK);
-                return return_value_16;
-            }
+        uint8_t exceptions = (uint8_t)(__tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE) | __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_EXCEPTION_FINAL));
+        if ((marker->reasons & exceptions) != 0U) {
             size_t normal_marker;
 
-            status = __tinypy_verify_push_marker(context, &instruction, marker->parent, TINYPY_VERIFY_REASON_NORMAL,
-                marker->resume_depth, TINYPY_VERIFY_NO_TARGET, 0U, &normal_marker);
+            /* A true __exit__ result replaces the triple with None. */
+            uint8_t normal = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_NORMAL);
+            status = __tinypy_verify_push_marker(context, &instruction, marker->parent, normal, offset, marker->resume_depth, TINYPY_VERIFY_NO_TARGET, 0U, &normal_marker);
             if (status != TINYPY_BYTECODE_VERIFY_OK) {
                 return status;
             }
             tinypy_bytecode_verify_status_e return_value_17 = __tinypy_verify_fallthrough(
                 context,
                 &instruction,
-                suppressed_depth,
+                depth,
                 state.block_index,
                 normal_marker);
             return return_value_17;
@@ -1720,8 +1795,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         const tinypy_verify_marker_t *marker =
             &context->markers[state.marker_index];
         size_t expected;
-        tinypy_verify_reason_e marker_reason =
-            (tinypy_verify_reason_e)marker->reason;
 
         if (!__tinypy_verify_marker_expected_depth(marker, &expected)) {
             tinypy_bytecode_verify_status_e return_value_19 = __tinypy_verify_fail(
@@ -1743,29 +1816,33 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
                 TINYPY_OPCODE_DECODE_OK);
             return return_value_22;
         }
-        if (marker_reason == TINYPY_VERIFY_REASON_NORMAL) {
+        __tinypy_verify_consume_reasons(context, state_index);
+        uint8_t normal = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_NORMAL);
+        if ((marker->reasons & normal) != 0U) {
             status = __tinypy_verify_fallthrough(context, &instruction, marker->resume_depth, state.block_index, marker->parent);
-            return status;
+            if (status != TINYPY_BYTECODE_VERIFY_OK) {
+                return status;
+            }
         }
-        if (marker_reason ==
-                TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE || marker_reason == TINYPY_VERIFY_REASON_EXCEPTION_FINAL) {
-            return TINYPY_BYTECODE_VERIFY_OK;
+        /* An exception is raised again; return, break and continue unwind
+           further. */
+        for (uint32_t reason = (uint32_t)TINYPY_VERIFY_REASON_RETURN; reason <= (uint32_t)TINYPY_VERIFY_REASON_CONTINUE; ++reason) {
+            uint8_t reason_bit = __tinypy_verify_reason_bit((tinypy_verify_reason_e)reason);
+            if ((marker->reasons & reason_bit) == 0U) {
+                continue;
+            }
+            status = __tinypy_verify_unwind_reason(context, &instruction, marker->resume_depth, state.block_index, (tinypy_verify_reason_e)reason, marker->continue_target, marker->parent);
+            if (status != TINYPY_BYTECODE_VERIFY_OK) {
+                return status;
+            }
         }
-        tinypy_bytecode_verify_status_e return_value_23 = __tinypy_verify_unwind_reason(
-            context,
-            &instruction,
-            marker->resume_depth,
-            state.block_index,
-            marker_reason,
-            marker->continue_target,
-            marker->parent);
-        return return_value_23;
+        return TINYPY_BYTECODE_VERIFY_OK;
 
     case TINYPY_OP_RETURN_VALUE:
         status = __tinypy_verify_apply_effect(
             context,
             &instruction,
-            state.stack_depth,
+            &state,
             &effect,
             &depth);
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
@@ -1811,7 +1888,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         status = __tinypy_verify_apply_effect(
             context,
             &instruction,
-            state.stack_depth,
+            &state,
             &effect,
             &depth);
         return status;
@@ -1831,15 +1908,9 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
 
     case TINYPY_OP_FOR_ITER:
         (void)__tinypy_verify_jump_target(&instruction, &target);
-        if (state.stack_depth < 1U) {
-            tinypy_bytecode_verify_status_e return_value_27 = __tinypy_verify_fail(
-                context,
-                TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW,
-                offset,
-                instruction.opcode,
-                (uint64_t)state.stack_depth,
-                TINYPY_OPCODE_DECODE_OK);
-            return return_value_27;
+        status = __tinypy_verify_check_reach(context, &instruction, &state, 1U);
+        if (status != TINYPY_BYTECODE_VERIFY_OK) {
+            return status;
         }
         if (!__tinypy_verify_add_size(state.stack_depth, 1U, &depth)) {
             tinypy_bytecode_verify_status_e return_value_28 = __tinypy_verify_fail(
@@ -1872,15 +1943,9 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
 
     case TINYPY_OP_JUMP_IF_FALSE_OR_POP:
     case TINYPY_OP_JUMP_IF_TRUE_OR_POP:
-        if (state.stack_depth < 1U) {
-            tinypy_bytecode_verify_status_e return_value_30 = __tinypy_verify_fail(
-                context,
-                TINYPY_BYTECODE_VERIFY_STACK_UNDERFLOW,
-                offset,
-                instruction.opcode,
-                (uint64_t)state.stack_depth,
-                TINYPY_OPCODE_DECODE_OK);
-            return return_value_30;
+        status = __tinypy_verify_check_reach(context, &instruction, &state, 1U);
+        if (status != TINYPY_BYTECODE_VERIFY_OK) {
+            return status;
         }
         (void)__tinypy_verify_jump_target(&instruction, &target);
         status = __tinypy_verify_enqueue(
@@ -1907,7 +1972,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         status = __tinypy_verify_apply_effect(
             context,
             &instruction,
-            state.stack_depth,
+            &state,
             &effect,
             &depth);
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
@@ -1939,7 +2004,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
     status = __tinypy_verify_apply_effect(
         context,
         &instruction,
-        state.stack_depth,
+        &state,
         &effect,
         &depth);
     if (status != TINYPY_BYTECODE_VERIFY_OK) {
@@ -1990,10 +2055,12 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_control_flow(tinypy_verif
         return status;
     }
 
-    while (context->worklist_head != context->worklist_tail) {
+    while (context->worklist_count != 0U) {
         size_t state_index = context->worklist[context->worklist_head];
 
-        context->worklist_head += 1U;
+        context->worklist_head = (context->worklist_head + 1U) % context->state_capacity;
+        context->worklist_count -= 1U;
+        context->states[state_index].queued = 0U;
         status = __tinypy_verify_process_state(context, state_index);
         if (status != TINYPY_BYTECODE_VERIFY_OK) {
             return status;

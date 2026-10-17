@@ -118,15 +118,24 @@ tinypy_value_t *tinypy_weakref_get(const tinypy_value_t *value) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyObject_ClearWeakRefs calls the callbacks; references created by a
-   finalizer that did not resurrect the object are cleared without them, as
-   _PyWeakref_ClearRef does in subtype_dealloc and instance_dealloc. */
-void tinypy_internal_weakref_clear(tinypy_value_t *value, tinypy_bool_t call_callbacks) {
+/* Clears the weak references of a dying object before its finalizers run
+   and once they have finalized it. PyObject_ClearWeakRefs calls the
+   callbacks; those a finalizer created on an instance it did not resurrect
+   go without them, as _PyWeakref_ClearRef in subtype_dealloc and
+   instance_dealloc. A type keeps its references, through which its bases
+   list it and its descriptors find it, until type_dealloc, after the __del__
+   of its metaclass that may resurrect it. */
+void tinypy_internal_weakref_clear(tinypy_value_t *value, tinypy_bool_t finalized) {
     tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(value);
 
     if (head_slot == NULL || *head_slot == NULL) {
         return;
     }
+    tinypy_bool_t type_value = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE ? TINYPY_TRUE : TINYPY_FALSE;
+    if (type_value != 0 && finalized == 0) {
+        return;
+    }
+    tinypy_bool_t call_callbacks = finalized == 0 || type_value != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *weakref_value = *head_slot;
     *head_slot = NULL;
     tinypy_value_t *current = weakref_value;
@@ -461,7 +470,7 @@ static tinypy_value_t *__tinypy_weakref_proxy_string(tinypy_value_t *proxy, tiny
 static tinypy_hash_t __tinypy_weakref_proxy_hash(tinypy_value_t *proxy, tinypy_error_t **out_error) {
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("unhashable type: '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(proxy),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(proxy, 200U),
         TINYPY_MESSAGE_PART_LITERAL("'"),
     };
 
@@ -587,7 +596,7 @@ static ptrdiff_t __tinypy_weakref_referent_length(tinypy_value_t *object, tinypy
         if (tinypy_vm_has_error(vm) == 0) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("object of type '"),
-                TINYPY_MESSAGE_PART_TYPE_NAME(object),
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(object, 200U),
                 TINYPY_MESSAGE_PART_LITERAL("' has no len()")
             };
 
@@ -704,7 +713,7 @@ static tinypy_value_t *__tinypy_weakref_referent_absolute(tinypy_value_t *object
     }
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("bad operand type for abs(): '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME(object),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(object, 200U),
         TINYPY_MESSAGE_PART_LITERAL("'")
     };
 
@@ -1464,7 +1473,7 @@ static tinypy_value_t *__tinypy_weakref_remove_function(tinypy_value_t *function
     if (TINYPY_VALUE_KIND(dict) != TINYPY_VALUE_DICT) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("_remove_dead_weakref() argument 1 must be dict, not "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(dict)
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(dict, 50U)
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);

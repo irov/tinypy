@@ -15,30 +15,33 @@ static inline size_t __tinypy_pool_block_size(uint32_t size_class) {
     return ((size_t)size_class + 1U) * TINYPY_INTERNAL_ALIGNMENT;
 }
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_pool_small_external_growth(const tinypy_vm_t *vm, size_t size) {
+/* The memory a new arena takes from the host: the arena, and the grown arena
+   table when the table has no unused entry left. */
+static size_t __tinypy_pool_arena_growth(const tinypy_vm_t *vm) {
     const tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
-    uint32_t size_class = (uint32_t)((size - 1U) / TINYPY_INTERNAL_ALIGNMENT);
 
-    if (allocator->used_pools[size_class].next_pool != &allocator->used_pools[size_class] || allocator->usable_arenas != NULL) {
-        return 0U;
+    if (allocator->unused_arenas != NULL) {
+        return TINYPY_INTERNAL_POOL_ARENA_SIZE;
     }
-    if (allocator->unused_arenas == NULL) {
-        uint32_t old_count = allocator->maximum_arena_count;
-        uint32_t new_count = old_count != 0U ? old_count << 1U : TINYPY_INTERNAL_POOL_INITIAL_ARENAS;
-        size_t table_growth = (size_t)(new_count - old_count) * sizeof(*allocator->arenas);
+    uint32_t old_count = allocator->maximum_arena_count;
+    uint32_t new_count = old_count != 0U ? old_count << 1U : TINYPY_INTERNAL_POOL_INITIAL_ARENAS;
+    size_t table_growth = (size_t)(new_count - old_count) * sizeof(*allocator->arenas);
 
-        if (table_growth > SIZE_MAX - TINYPY_INTERNAL_POOL_ARENA_SIZE) {
-            return SIZE_MAX;
-        }
-        return table_growth + TINYPY_INTERNAL_POOL_ARENA_SIZE;
+    if (table_growth > SIZE_MAX - TINYPY_INTERNAL_POOL_ARENA_SIZE) {
+        return SIZE_MAX;
     }
-    return TINYPY_INTERNAL_POOL_ARENA_SIZE;
+    return table_growth + TINYPY_INTERNAL_POOL_ARENA_SIZE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Only memory the host provided counts; a refusal is recorded for the
+   bootstrap check of tinypy_vm_create. */
 static void *__tinypy_pool_raw_allocate(tinypy_vm_t *vm, size_t size, size_t alignment) {
-    void *memory;
+    void *memory = vm->allocator.allocate(vm->allocator.user_data, size, alignment);
 
-    memory = vm->allocator.allocate(vm->allocator.user_data, size, alignment);
+    if (memory == NULL) {
+        vm->allocation_refused = TINYPY_TRUE;
+        return NULL;
+    }
     vm->allocated_bytes += size;
     return memory;
 }
@@ -52,6 +55,7 @@ static void *__tinypy_pool_raw_allocate_checked(tinypy_vm_t *vm, size_t size, si
     }
     memory = vm->allocator.allocate(vm->allocator.user_data, size, alignment);
     if (memory == NULL) {
+        vm->allocation_refused = TINYPY_TRUE;
         return NULL;
     }
     vm->allocated_bytes += size;
@@ -65,6 +69,10 @@ static void *__tinypy_pool_raw_reallocate(tinypy_vm_t *vm, void *memory, size_t 
         return memory;
     }
     resized = vm->allocator.reallocate(vm->allocator.user_data, memory, old_size, new_size, alignment);
+    if (resized == NULL) {
+        vm->allocation_refused = TINYPY_TRUE;
+        return NULL;
+    }
     if (new_size > old_size) {
         vm->allocated_bytes += new_size - old_size;
     }
@@ -89,6 +97,7 @@ static void *__tinypy_pool_raw_reallocate_checked(tinypy_vm_t *vm, void *memory,
     }
     resized = vm->allocator.reallocate(vm->allocator.user_data, memory, old_size, new_size, alignment);
     if (resized == NULL) {
+        vm->allocation_refused = TINYPY_TRUE;
         return NULL;
     }
     if (new_size > old_size) {
@@ -149,6 +158,15 @@ static tinypy_pool_arena_t *__tinypy_pool_new_arena(tinypy_vm_t *vm, tinypy_bool
     size_t excess;
 
     tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
+    /* Under a heap budget a checked request takes all of the growth or none
+       of it. */
+    if (checked != 0 && vm->max_heap_bytes != 0U) {
+        size_t growth = __tinypy_pool_arena_growth(vm);
+
+        if (vm->allocated_bytes > vm->max_heap_bytes || growth > vm->max_heap_bytes - vm->allocated_bytes) {
+            return NULL;
+        }
+    }
     if (allocator->unused_arenas == NULL) {
         if (__tinypy_pool_grow_arena_table(vm, checked) == 0) {
             return NULL;
@@ -389,16 +407,6 @@ void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size) {
 }
 //////////////////////////////////////////////////////////////////////////
 void *tinypy_internal_pool_allocate_checked(tinypy_vm_t *vm, size_t size) {
-    size_t external_growth;
-
-    if (size == 0U) {
-        size = 1U;
-    }
-    external_growth = size <= TINYPY_INTERNAL_POOL_SMALL_REQUEST ? __tinypy_pool_small_external_growth(vm, size) : size;
-    if (external_growth != 0U && vm->max_heap_bytes != 0U &&
-        (vm->allocated_bytes > vm->max_heap_bytes || external_growth > vm->max_heap_bytes - vm->allocated_bytes)) {
-        return NULL;
-    }
     void *memory = __tinypy_internal_pool_allocate(vm, size, TINYPY_TRUE);
 
     return memory;
@@ -479,6 +487,9 @@ void *tinypy_internal_pool_reallocate(tinypy_vm_t *vm, void *memory, size_t old_
     }
 
     resized = tinypy_internal_pool_allocate(vm, new_size);
+    if (resized == NULL) {
+        return NULL;
+    }
     copy_size = old_size < new_size ? old_size : new_size;
     (void)memcpy(resized, memory, copy_size);
     tinypy_internal_pool_deallocate(vm, memory, old_size);

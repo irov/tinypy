@@ -45,7 +45,9 @@ static size_t __tinypy_unicode_utf8_width(uint8_t lead) {
     return lead < 0x80U ? 1U : (lead < 0xe0U ? 2U : (lead < 0xf0U ? 3U : 4U));
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_unicode_build_index(tinypy_value_t *value) {
+/* The index only speeds offsets up: when the heap budget or the host has no
+   room for it, callers scan the text instead. */
+static tinypy_bool_t __tinypy_unicode_build_index(tinypy_value_t *value) {
     tinypy_unicode_object_t *unicode = TINYPY_UNICODE_OBJECT(value);
     size_t character_count = TINYPY_SIZED_SIZE(value);
     size_t table_count;
@@ -53,17 +55,19 @@ static void __tinypy_unicode_build_index(tinypy_value_t *value) {
     size_t byte_offset = 0U;
     size_t scalar_index;
 
-    if (unicode->index_offsets != NULL) {
-        return;
-    }
     table_count = (character_count + (size_t)TINYPY_UNICODE_INDEX_STRIDE - 1U) / (size_t)TINYPY_UNICODE_INDEX_STRIDE;
-    unicode->index_offsets = (size_t *)tinypy_internal_vm_allocate(TINYPY_VALUE_VM(value), table_count * sizeof(*unicode->index_offsets));
+    size_t *index_offsets = (size_t *)tinypy_internal_pool_allocate_checked(TINYPY_VALUE_VM(value), table_count * sizeof(*index_offsets));
+    if (index_offsets == NULL) {
+        return TINYPY_FALSE;
+    }
     for (scalar_index = 0U; scalar_index < character_count; ++scalar_index) {
         if (scalar_index % (size_t)TINYPY_UNICODE_INDEX_STRIDE == 0U) {
-            unicode->index_offsets[table_index++] = byte_offset;
+            index_offsets[table_index++] = byte_offset;
         }
         byte_offset += __tinypy_unicode_utf8_width(unicode->utf8[byte_offset]);
     }
+    unicode->index_offsets = index_offsets;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 size_t tinypy_internal_unicode_byte_offset(tinypy_value_t *value, size_t character_index) {
@@ -78,8 +82,12 @@ size_t tinypy_internal_unicode_byte_offset(tinypy_value_t *value, size_t charact
     if (unicode->byte_size == character_count) {
         return character_index;
     }
-    if (unicode->index_offsets == NULL && (character_count <= (size_t)TINYPY_UNICODE_INDEX_STRIDE || character_index <= (size_t)TINYPY_UNICODE_INDEX_STRIDE || character_count - character_index <= (size_t)TINYPY_UNICODE_INDEX_STRIDE)) {
-        if (character_index <= (size_t)TINYPY_UNICODE_INDEX_STRIDE) {
+    tinypy_bool_t indexed = unicode->index_offsets != NULL;
+    if (indexed == 0 && character_index > (size_t)TINYPY_UNICODE_INDEX_STRIDE && character_count - character_index > (size_t)TINYPY_UNICODE_INDEX_STRIDE) {
+        indexed = __tinypy_unicode_build_index(value);
+    }
+    if (indexed == 0) {
+        if (character_index <= character_count - character_index) {
             byte_offset = 0U;
             scalar_index = 0U;
             while (scalar_index < character_index) {
@@ -99,7 +107,6 @@ size_t tinypy_internal_unicode_byte_offset(tinypy_value_t *value, size_t charact
         }
         return byte_offset;
     }
-    __tinypy_unicode_build_index(value);
     scalar_index = character_index - character_index % (size_t)TINYPY_UNICODE_INDEX_STRIDE;
     byte_offset = unicode->index_offsets[character_index / (size_t)TINYPY_UNICODE_INDEX_STRIDE];
     while (scalar_index < character_index) {
@@ -143,7 +150,15 @@ size_t tinypy_internal_unicode_character_index(tinypy_value_t *value, size_t byt
         if (offset == byte_offset) {
             return index;
         }
-        __tinypy_unicode_build_index(value);
+        if (__tinypy_unicode_build_index(value) == 0) {
+            offset = 0U;
+            index = 0U;
+            while (offset < byte_offset) {
+                offset += __tinypy_unicode_utf8_width(unicode->utf8[offset]);
+                index += 1U;
+            }
+            return index;
+        }
     }
     size_t table_count = (character_count + (size_t)TINYPY_UNICODE_INDEX_STRIDE - 1U) / (size_t)TINYPY_UNICODE_INDEX_STRIDE;
     size_t low = 0U;
@@ -222,7 +237,7 @@ const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, tiny
     }
     if (unicode->native_buffer == NULL) {
         uint32_t *native = checked != 0
-            ? (uint32_t *)tinypy_internal_vm_allocate_checked(vm, *out_size, out_error)
+            ? (uint32_t *)__tinypy_internal_vm_allocate_checked(vm, *out_size, out_error)
             : (uint32_t *)tinypy_internal_vm_allocate(vm, *out_size);
         if (native == NULL) {
             return NULL;
@@ -257,7 +272,7 @@ const wchar_t *tinypy_unicode_wchar_view(tinypy_value_t *value, size_t *out_size
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "Unicode buffer is too large", out_error);
         return NULL;
     }
-    wchar_t *buffer = (wchar_t *)tinypy_internal_vm_allocate_checked(vm, (size + 1U) * sizeof(*buffer), out_error);
+    wchar_t *buffer = (wchar_t *)__tinypy_internal_vm_allocate_checked(vm, (size + 1U) * sizeof(*buffer), out_error);
     if (buffer == NULL) {
         return NULL;
     }

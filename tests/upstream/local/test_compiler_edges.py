@@ -89,6 +89,13 @@ class CompilerEdges(unittest.TestCase):
             else:
                 self.fail('expected SyntaxError')
 
+    def test_one_byte_string_constants(self):
+        # The compiler differential compares the marshal bytes of these
+        # constants with CPython's: an escape-decoded one-byte string stays a
+        # non-interned 's' string through concatenation with an empty one.
+        values = ('' '\xff', '\xfe' '', '' + '\xfd', '\xfc' + '', '\xfb' * 1, '' '!', '%s' % '\xfa')
+        self.assertEqual(values, ('\xff', '\xfe', '\xfd', '\xfc', '\xfb', '!', '\xfa'))
+
     def test_unknown_encoding_has_decoder_diagnostic(self):
         try:
             compile('# coding: made_up\nx=1', 'file', 'exec')

@@ -32,7 +32,7 @@ static tinypy_bool_t __tinypy_bytearray_reserve_checked(tinypy_value_t *value, s
         capacity += half + 1U;
     }
     if (bytearray->bytes == NULL) {
-        uint8_t *bytes = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, capacity, out_error);
+        uint8_t *bytes = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, capacity, out_error);
 
         if (bytes == NULL) {
             return TINYPY_FALSE;
@@ -40,7 +40,7 @@ static tinypy_bool_t __tinypy_bytearray_reserve_checked(tinypy_value_t *value, s
         bytearray->bytes = bytes;
     }
     else {
-        uint8_t *bytes = (uint8_t *)tinypy_internal_vm_reallocate_checked(vm, bytearray->bytes, bytearray->capacity, capacity, out_error);
+        uint8_t *bytes = (uint8_t *)__tinypy_internal_vm_reallocate_checked(vm, bytearray->bytes, bytearray->capacity, capacity, out_error);
 
         if (bytes == NULL) {
             return TINYPY_FALSE;
@@ -145,7 +145,7 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
     *out_size = 0U;
     if (tinypy_internal_bytes_view(source, &view, &view_size) != 0) {
         if (view_size != 0U) {
-            bytes = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, view_size, out_error);
+            bytes = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, view_size, out_error);
             if (bytes == NULL) {
                 return TINYPY_FALSE;
             }
@@ -176,7 +176,7 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
             return TINYPY_FALSE;
         }
         if (capacity != 0U) {
-            bytes = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, capacity, out_error);
+            bytes = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, capacity, out_error);
             if (bytes == NULL) {
                 TINYPY_DECREF(iterator);
                 return TINYPY_FALSE;
@@ -218,10 +218,10 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
             }
 
             if (bytes == NULL) {
-                bytes = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, new_capacity, out_error);
+                bytes = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, new_capacity, out_error);
             }
             else {
-                uint8_t *resized = (uint8_t *)tinypy_internal_vm_reallocate_checked(vm, bytes, capacity, new_capacity, out_error);
+                uint8_t *resized = (uint8_t *)__tinypy_internal_vm_reallocate_checked(vm, bytes, capacity, new_capacity, out_error);
 
                 if (resized == NULL) {
                     tinypy_internal_vm_deallocate(vm, bytes, capacity);
@@ -251,7 +251,7 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
         bytes = NULL;
     }
     else if (capacity != size) {
-        uint8_t *resized = (uint8_t *)tinypy_internal_vm_reallocate_checked(vm, bytes, capacity, size, out_error);
+        uint8_t *resized = (uint8_t *)__tinypy_internal_vm_reallocate_checked(vm, bytes, capacity, size, out_error);
 
         if (resized == NULL) {
             tinypy_internal_vm_deallocate(vm, bytes, capacity);
@@ -274,8 +274,8 @@ static tinypy_bool_t __tinypy_bytearray_concat_in_place(tinypy_value_t *left, ti
 
     if (tinypy_internal_bytes_view(right, &right_bytes, &right_size) == 0) {
         tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("can't concat "), TINYPY_MESSAGE_PART_TYPE_NAME(right),
-            TINYPY_MESSAGE_PART_LITERAL(" to "), TINYPY_MESSAGE_PART_TYPE_NAME(left),
+            TINYPY_MESSAGE_PART_LITERAL("can't concat "), TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(right, 100U),
+            TINYPY_MESSAGE_PART_LITERAL(" to "), TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(left, 100U),
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return TINYPY_FALSE;
@@ -294,7 +294,7 @@ static tinypy_bool_t __tinypy_bytearray_concat_in_place(tinypy_value_t *left, ti
     }
     uint8_t *snapshot = NULL;
     if (right_size != 0U) {
-        snapshot = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, right_size, out_error);
+        snapshot = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, right_size, out_error);
         if (snapshot == NULL) {
             return TINYPY_FALSE;
         }
@@ -492,7 +492,7 @@ static tinypy_value_t *__tinypy_bytearray_allocate_checked(tinypy_vm_t *vm, size
         return NULL;
     }
     if (size != 0U) {
-        bytearray->bytes = (uint8_t *)tinypy_internal_vm_allocate_checked(vm, size, out_error);
+        bytearray->bytes = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, size, out_error);
         if (bytearray->bytes == NULL) {
             TINYPY_DECREF(&bytearray->base.base);
             return NULL;
@@ -612,7 +612,7 @@ static tinypy_value_t *__tinypy_bytearray_encode(tinypy_vm_t *vm, tinypy_value_t
     if (tinypy_internal_bytes_view(encoded, &bytes, &size) == 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("can't concat "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(encoded),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(encoded, 100U),
             TINYPY_MESSAGE_PART_LITERAL(" to bytearray")
         };
 
@@ -1014,7 +1014,7 @@ static tinypy_bool_t __tinypy_bytearray_index_argument(tinypy_value_t *value, in
         }
         else {
             tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_LITERAL("'"), TINYPY_MESSAGE_PART_TYPE_NAME(value),
+                TINYPY_MESSAGE_PART_LITERAL("'"), TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
                 TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index"),
             };
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -1067,8 +1067,8 @@ static tinypy_value_t *__tinypy_bytearray_add_method(tinypy_value_t *function, t
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 1U);
     if (tinypy_internal_bytes_view(item, &right_bytes, &right_size) == 0) {
         tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("can't concat "), TINYPY_MESSAGE_PART_TYPE_NAME(left),
-            TINYPY_MESSAGE_PART_LITERAL(" to "), TINYPY_MESSAGE_PART_TYPE_NAME(item),
+            TINYPY_MESSAGE_PART_LITERAL("can't concat "), TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(left, 100U),
+            TINYPY_MESSAGE_PART_LITERAL(" to "), TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(item, 100U),
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
@@ -1289,7 +1289,7 @@ static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, 
     if (tinypy_internal_bytes_view(item, &needle, &needle_size) == 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("Type "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(item),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(item, 100U),
             TINYPY_MESSAGE_PART_LITERAL(" doesn't support the buffer API")
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -1404,7 +1404,7 @@ static tinypy_value_t *__tinypy_bytearray_join(tinypy_value_t *self, tinypy_valu
         if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(item) != TINYPY_VALUE_BYTEARRAY) {
             char prefix[96];
             int written = snprintf(prefix, sizeof(prefix), "can only join an iterable of bytes (item %zu has type '", index);
-            const tinypy_message_part_t parts[] = {{prefix, (size_t)written}, TINYPY_MESSAGE_PART_TYPE_NAME(item), TINYPY_MESSAGE_PART_LITERAL("')")};
+            const tinypy_message_part_t parts[] = {{prefix, (size_t)written}, TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(item, 100U), TINYPY_MESSAGE_PART_LITERAL("')")};
 
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
             TINYPY_DECREF(sequence);

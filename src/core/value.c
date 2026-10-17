@@ -39,7 +39,7 @@ tinypy_value_t *tinypy_internal_object_allocate(tinypy_vm_t *vm, tinypy_type_t *
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_allocate_checked(tinypy_vm_t *vm, tinypy_type_t *object_type, size_t allocation_size, tinypy_error_t **out_error) {
-    tinypy_value_t *value = (tinypy_value_t *)tinypy_internal_vm_allocate_checked(vm, allocation_size, out_error);
+    tinypy_value_t *value = (tinypy_value_t *)__tinypy_internal_vm_allocate_checked(vm, allocation_size, out_error);
 
     if (value == NULL) {
         return NULL;
@@ -378,7 +378,7 @@ static void __tinypy_internal_value_release_contents(tinypy_value_t *value) {
    reachable instance, has no host object left for its __del__, which runs
    before the finalizer and never after it. */
 static tinypy_bool_t __tinypy_internal_value_native_finalized(const tinypy_value_t *value) {
-    tinypy_bool_t finalized = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && TINYPY_NATIVE_INSTANCE_OBJECT(value)->finalized != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t finalized = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && TINYPY_NATIVE_INSTANCE_OBJECT(value)->finalization != TINYPY_NATIVE_FINALIZATION_NONE ? TINYPY_TRUE : TINYPY_FALSE;
 
     return finalized;
 }
@@ -419,6 +419,44 @@ static tinypy_bool_t __tinypy_internal_value_run_finalizers(tinypy_value_t *valu
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Clears the weak references of a dying object and runs its finalizers;
+   returns TRUE when one of them resurrected it. */
+static tinypy_bool_t __tinypy_internal_value_release_finalize(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_type_t *type = value->type;
+
+    if (type->weakref_offset != 0U) {
+        tinypy_internal_weakref_clear(value, TINYPY_FALSE);
+    }
+    /* The garbage a finalizer releases directly is not deferred: a deferred
+       frame or bound method would still refer to the object and make it look
+       resurrected. subtype_dealloc lowers the trashcan nesting the same way. */
+    size_t release_depth = vm->release_depth;
+    if (release_depth >= TINYPY_RELEASE_DEFER_DEPTH) {
+        vm->release_depth = TINYPY_RELEASE_DEFER_DEPTH - 1U;
+    }
+    tinypy_bool_t resurrected = __tinypy_internal_value_run_finalizers(value);
+    vm->release_depth = release_depth;
+    if (resurrected != 0) {
+        return TINYPY_TRUE;
+    }
+    /* Finalizers may replace __class__ and create new weak references. */
+    type = value->type;
+    if (type->weakref_offset != 0U) {
+        tinypy_internal_weakref_clear(value, TINYPY_TRUE);
+    }
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
+        tinypy_internal_string_unintern(value);
+    }
+    /* A dying weak reference leaves its referent's list before its dict and
+       slots are released or deferred: they may hold the last reference to
+       the referent, whose callbacks must not see it (CPython bug #3110). */
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_WEAKREF) {
+        tinypy_internal_weakref_destroy(value);
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = value->type;
@@ -431,34 +469,14 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
         vm->integer_free_count += 1U;
         return;
     }
-    if (type->weakref_offset != 0U) {
-        tinypy_internal_weakref_clear(value, TINYPY_TRUE);
-    }
-    /* The garbage a finalizer releases directly is not deferred: a deferred
-       frame or bound method would still refer to the object and make it look
-       resurrected. subtype_dealloc lowers the trashcan nesting the same way. */
-    size_t release_depth = vm->release_depth;
-    if (release_depth >= TINYPY_RELEASE_DEFER_DEPTH) {
-        vm->release_depth = TINYPY_RELEASE_DEFER_DEPTH - 1U;
-    }
-    tinypy_bool_t resurrected = __tinypy_internal_value_run_finalizers(value);
-    vm->release_depth = release_depth;
-    if (resurrected != 0) {
-        return;
-    }
-    /* Finalizers may replace __class__ and create new weak references. */
-    type = value->type;
-    if (type->weakref_offset != 0U) {
-        tinypy_internal_weakref_clear(value, TINYPY_FALSE);
-    }
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_STRING) {
-        tinypy_internal_string_unintern(value);
-    }
-    /* A dying weak reference leaves its referent's list before its dict and
-       slots are released or deferred: they may hold the last reference to
-       the referent, whose callbacks must not see it (CPython bug #3110). */
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_WEAKREF) {
-        tinypy_internal_weakref_destroy(value);
+    /* tupledealloc, list_dealloc and the like release the contents at once. */
+    tinypy_bool_t plain = (type->flags & TINYPY_TYPE_FLAG_PLAIN_RELEASE) != 0U && (type != &vm->types[TINYPY_VALUE_STRING] || TINYPY_STRING_OBJECT(value)->interned == 0) ? TINYPY_TRUE : TINYPY_FALSE;
+    if (plain == 0) {
+        tinypy_bool_t resurrected = __tinypy_internal_value_release_finalize(value);
+
+        if (resurrected != 0) {
+            return;
+        }
     }
     /* Only already-finalized zero-ref objects are deferred. Their ref word
        temporarily links the queue; no registry or extra allocation is needed. */
@@ -554,7 +572,7 @@ tinypy_value_t *tinypy_internal_string_concat_in_place(tinypy_vm_t *vm, tinypy_v
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_value_unregister(vm, left);
 #endif
-        grown = (tinypy_value_t *)tinypy_internal_vm_reallocate_checked(vm, left, old_allocation, new_allocation, NULL);
+        grown = (tinypy_value_t *)__tinypy_internal_vm_reallocate_checked(vm, left, old_allocation, new_allocation, NULL);
         if (grown == NULL) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
             __tinypy_internal_cycle_diagnostics_value_register(vm, left);
@@ -758,6 +776,20 @@ tinypy_value_t *tinypy_internal_string_from_bytes_uninterned(tinypy_vm_t *vm, co
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_string_from_bytes_uninterned_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error) {
     tinypy_value_t *result = __tinypy_internal_string_from_bytes(vm, bytes, size, TINYPY_FALSE, TINYPY_TRUE, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_string_from_bytes_distinct_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error) {
+    if (size == 0U) {
+        return TINYPY_RET_EMPTY_STRING(vm);
+    }
+    uint8_t *output;
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_STRING, size, 0U, &output, out_error);
+    if (result == NULL) {
+        return NULL;
+    }
+    (void)memcpy(output, bytes, size);
+    TINYPY_STRING_OBJECT(result)->interned = TINYPY_FALSE;
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

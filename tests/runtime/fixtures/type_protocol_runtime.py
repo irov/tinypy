@@ -1,4 +1,5 @@
 from _functools import partial
+from _weakref import ref
 import sys
 
 
@@ -889,3 +890,135 @@ for index in (1, 5, 2):
 assert registry_names() == ["Registered4", "Registered6", "Registered8"]
 del registered[:]
 assert registry_names() == []
+
+
+# A class keeps the weak references through which its bases list it until the
+# __del__ of its metaclass ran, as type_dealloc clears them after
+# subtype_dealloc called it: a class that __del__ resurrects stays listed, a
+# change to its base still reaches its lookup caches and constructor memos, and
+# the callbacks of its weak references run once it dies after all. CPython 2.7
+# keeps classes in reference cycles, which never die that way.
+resurrection_events = []
+resurrected_classes = []
+
+
+class ResurrectingMeta(type):
+    def __del__(cls):
+        resurrection_events.append("del")
+        if len(resurrection_events) == 1:
+            resurrected_classes.append(cls)
+
+
+class ResurrectionBase(object):
+    pass
+
+
+class ResurrectionPayload(object):
+    pass
+
+
+def resurrection_init(self):
+    self.tag = "init"
+
+
+def resurrection_read(value):
+    return type(value.attr).__name__
+
+
+ResurrectionBase.attr = ResurrectionPayload()
+ResurrectionBase.__init__ = resurrection_init
+resurrection_reference = ref(ResurrectingMeta("Resurrected", (ResurrectionBase,), {}), lambda reference: resurrection_events.append("callback"))
+assert resurrection_events == ["del"]
+resurrected = resurrected_classes[0]
+assert resurrection_reference() is resurrected
+assert ResurrectionBase.__subclasses__() == [resurrected]
+resurrected_instance = resurrected()
+assert resurrection_read(resurrected_instance) == resurrection_read(resurrected_instance) == "ResurrectionPayload"
+assert resurrected_instance.tag == resurrected().tag == "init"
+del ResurrectionBase.attr
+del ResurrectionBase.__init__
+try:
+    resurrection_read(resurrected_instance)
+except AttributeError:
+    pass
+else:
+    raise AssertionError("a resurrected class kept a deleted base attribute")
+assert not hasattr(resurrected(), "tag")
+del resurrected_instance, resurrected, resurrected_classes[:]
+assert resurrection_events == ["del", "del", "callback"]
+assert resurrection_reference() is None
+assert ResurrectionBase.__subclasses__() == []
+
+
+# The default MRO merges what the iteration of the bases gives, which a tuple
+# subclass may choose, as mro_implementation does with PySequence_List. A type
+# it adds outside the MROs of the bases is no registered base, so lookups in
+# that MRO are not cached; CPython 2.7 caches them and keeps a deleted
+# attribute. A non-class, which CPython puts in the MRO and then reads as a
+# type, is refused.
+class IterationAdded(object):
+    marker = ResurrectionPayload()
+
+
+class AddingBases(tuple):
+    def __iter__(self):
+        return iter((IterationAdded,))
+
+
+added = type("Added", AddingBases((object,)), {})
+assert added.__mro__ == (added, object, IterationAdded)
+added_instance = added()
+
+
+def added_marker(value):
+    return type(value.marker).__name__
+
+
+assert added_marker(added_instance) == added_marker(added_instance) == "ResurrectionPayload"
+del IterationAdded.marker
+try:
+    added_marker(added_instance)
+except AttributeError:
+    pass
+else:
+    raise AssertionError("a type added by the bases iteration kept a deleted attribute")
+
+
+class NonClassBases(tuple):
+    def __iter__(self):
+        return iter((len,))
+
+
+class NonClassMeta(type):
+    pass
+
+
+def bases_error(call):
+    try:
+        call()
+    except TypeError as error:
+        return str(error)
+    raise AssertionError("a non-class entered an MRO")
+
+
+assert bases_error(lambda: type("Refused", NonClassBases((object,)), {})) == "bases must be types"
+assert bases_error(lambda: NonClassMeta("Refused", NonClassBases((object,)), {})) == "bases must be types"
+
+
+class SwitchingBases(tuple):
+    non_class = False
+
+    def __iter__(self):
+        if SwitchingBases.non_class:
+            return iter((len,))
+        return tuple.__iter__(self)
+
+
+switching = type("Switching", SwitchingBases((object,)), {})
+switching_bases = switching.__bases__
+SwitchingBases.non_class = True
+assert bases_error(lambda: type.mro(switching)) == "bases must be types"
+assert bases_error(lambda: setattr(switching, "__bases__", SwitchingBases((object,)))) == "bases must be types"
+assert switching.__bases__ is switching_bases
+assert switching.__mro__ == (switching, object)
+SwitchingBases.non_class = False

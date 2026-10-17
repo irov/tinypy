@@ -919,6 +919,86 @@ static int32_t __test_compiler_symbol_table_arena_failure(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The marshal bytes of code, in a buffer the caller frees. */
+static uint8_t *__test_marshal_dump(tinypy_value_t *code, size_t *out_size) {
+    assert(tinypy_marshal_dump_code_v2(code, NULL, 0U, out_size, NULL, NULL) == TINYPY_MARSHAL_OK);
+    uint8_t *bytes = (uint8_t *)malloc(*out_size);
+    assert(bytes != NULL);
+    assert(tinypy_marshal_dump_code_v2(code, bytes, *out_size, out_size, NULL, NULL) == TINYPY_MARSHAL_OK);
+    return bytes;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Names, string, Unicode and long literals, a mangled private name, the
+   bytecode and line table buffers and the constant and name tuples all grow
+   with the source. Each host request above the pooled sizes that compiling
+   it makes fails in turn, and fails the compilation with MemoryError or
+   leaves its code as it is with nothing pending; the VM then compiles the
+   same code again. */
+static int32_t __test_compiler_computed_size_refusal(void) {
+    static const size_t source_capacity = 32768U;
+    char *source = (char *)malloc(source_capacity);
+    size_t size = 0U;
+    size_t refused_count = 0U;
+    size_t index;
+
+    assert(source != NULL);
+    size += (size_t)snprintf(source + size, source_capacity - size, "import os.path as p\nclass K%0700d(object):\n    def __private%0600d(self):\n        return self.__private%0600d\n", 0, 0, 0);
+    size += (size_t)snprintf(source + size, source_capacity - size, "text = 'a%0800d\\xff'\nunicode_text = u'\\xe9%0600d'\nnumber = 1%02000d\n", 0, 0, 0);
+    size += (size_t)snprintf(source + size, source_capacity - size, "values = (%s0)\ndef f(a):\n", "0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, ");
+    for (index = 0U; index < 300U; ++index) {
+        size += (size_t)snprintf(source + size, source_capacity - size, "    a = a + %u\n", (unsigned int)index);
+    }
+    /* A blank gap of more lines than one line table entry spans. */
+    (void)memset(source + size, '\n', 300U);
+    size += 300U;
+    size += (size_t)snprintf(source + size, source_capacity - size, "    return a\n");
+    test_failing_allocator_state_t state = {{0U, 0U}, 0U, 0U, 0U};
+    tinypy_vm_t *vm = __test_failing_vm_create(&state, 0U);
+    tinypy_compile_options_t options;
+    size_t expected_size;
+    size_t compiled_size;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *code = tinypy_compile_source(vm, source, size, "computed.py", 11U, &options, NULL);
+    assert(code != NULL);
+    uint8_t *expected = __test_marshal_dump(code, &expected_size);
+    tinypy_release(code);
+    for (index = 0U;; ++index) {
+        tinypy_error_t *error = NULL;
+
+        state.fail_size = 513U;
+        state.fail_maximum = 65536U;
+        state.fail_index = index;
+        code = tinypy_compile_source(vm, source, size, "computed.py", 11U, &options, &error);
+        tinypy_bool_t refused = state.fail_size == 0U ? TINYPY_TRUE : TINYPY_FALSE;
+        state.fail_size = 0U;
+        if (code == NULL) {
+            assert(refused != 0 && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+            tinypy_error_release(error);
+            tinypy_vm_clear_error(vm);
+            refused_count += 1U;
+            continue;
+        }
+        assert(error == NULL && tinypy_vm_has_error(vm) == 0);
+        tinypy_release(code);
+        if (refused == 0) {
+            break;
+        }
+    }
+    assert(refused_count > 8U);
+    code = tinypy_compile_source(vm, source, size, "computed.py", 11U, &options, NULL);
+    assert(code != NULL);
+    uint8_t *compiled = __test_marshal_dump(code, &compiled_size);
+    assert(compiled_size == expected_size && memcmp(compiled, expected, expected_size) == 0);
+    free(compiled);
+    free(expected);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
+    free(source);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 /* The tab size of an editor comment is read like atoi on an LP64 host,
    where a value past int truncates to its low 32 bits. */
 static int32_t __test_tab_size_comment(void) {
@@ -2304,9 +2384,38 @@ static int32_t __test_build_preprocessor(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A pure condition whose evaluation raises stays a runtime condition: the
+   compilation succeeds and, as in CPython, the exception rises when the
+   condition runs, here inside a function that is never called and inside try
+   statements that handle it. */
+static int32_t __test_preprocessor_raising_condition(void) {
+    static const char source[] = "def never_called():\n    if 1 // 0:\n        pass\ncaught = []\ntry:\n    if (-1) << (-1):\n        pass\nexcept ValueError:\n    caught.append(1)\ntry:\n    if '\\xff' < u'x':\n        pass\nexcept UnicodeDecodeError:\n    caught.append(2)\ntry:\n    if {[]: 1}:\n        pass\nexcept TypeError:\n    caught.append(3)\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR;
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "raising.py", 10U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_value_t *caught = __test_dict_get(vm, globals, "caught", 6U);
+    assert(tinypy_list_size(caught) == 3U);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_preprocess_renderer(void) {
     static const char source[] = "from __future__ import division, with_statement\nimport package.module as module\nfrom package import value as imported\n\nglobal_value = 1\nunicode_value = u'\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442'\ninfinite = 1e400\ncomplex_infinite = 1e400j\n\ndef generator(argument, optional=2, *args, **kwargs):\n    global global_value\n    assert argument, 'argument'\n    target = lambda item=1: item + optional\n    sequence = [item for item in (1, 2, 3) if item]\n    mapping = {item: item * 2 for item in sequence}\n    unique = {item for item in sequence}\n    sliced = sequence[0:2:1]\n    extended = sequence[0:1, ...]\n    representation = `mapping`\n    print >>kwargs['stream'], representation,\n    exec kwargs['code'] in kwargs, mapping\n    try:\n        with kwargs['context'] as context_value:\n            yield context_value\n    except ValueError as error:\n        raise TypeError, error, None\n    else:\n        pass\n    finally:\n        global_value += 1\n    del mapping[argument]\n\n@decorator\nclass Example(object):\n    @staticmethod\n    def method():\n        return u'value'\n\n@module.decorator\ndef decorated():\n    return (-5) ** 2, (-2j) ** 2, (1).real, 1 .imag\n";
     static const char bytes_source[] = "from __future__ import unicode_literals\nvalue = b'abc'\n";
+    /* Literals that the parser folds into one constant or whose repr is no
+       literal, and extended slices of one dimension. */
+    static const char same_program_source[] = "def f(complex, k):\n    return -(0j), -(5), +(5), ~(5), not (0), 1e400j, -1e400j\ndef g(k):\n    return k[..., ], k[1:2, ], k[:, ], k[::, ], k[1:2], k[1, ]\n";
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
     tinypy_compile_options_t options;
@@ -2336,7 +2445,7 @@ static int32_t __test_preprocess_renderer(void) {
     assert(strstr(expanded, "((-5) ** 2)") != NULL && strstr(expanded, "((-2j) ** 2)") != NULL);
     assert(strstr(expanded, "(1).real") != NULL && strstr(expanded, "(1).imag") != NULL);
     assert(strstr(expanded, "@module.decorator\n") != NULL);
-    assert(strstr(expanded, "complex(0.0, 1e400)") != NULL);
+    assert(strstr(expanded, "complex_infinite = 1e400j\n") != NULL);
     code = tinypy_compile_source(vm, expanded, expanded_size, "renderer.expanded.py", 20U, &options, &error);
     assert(code != NULL && error == NULL);
     tinypy_release(code);
@@ -2345,6 +2454,24 @@ static int32_t __test_preprocess_renderer(void) {
     assert(preprocessed != NULL && error == NULL);
     expanded = tinypy_preprocess_result_expanded_source(preprocessed, &expanded_size);
     assert(strstr(expanded, "value = b'abc'") != NULL);
+    tinypy_preprocess_result_destroy(preprocessed);
+    /* The canonical source compiles to the marshal bytes of the original. */
+    preprocessed = tinypy_preprocess_source(vm, same_program_source, sizeof(same_program_source) - 1U, "same.py", 7U, &options, &error);
+    assert(preprocessed != NULL && error == NULL);
+    expanded = tinypy_preprocess_result_expanded_source(preprocessed, &expanded_size);
+    code = tinypy_compile_source(vm, same_program_source, sizeof(same_program_source) - 1U, "same.py", 7U, &options, &error);
+    assert(code != NULL && error == NULL);
+    size_t original_size;
+    uint8_t *original = __test_marshal_dump(code, &original_size);
+    tinypy_release(code);
+    code = tinypy_compile_source(vm, expanded, expanded_size, "same.py", 7U, &options, &error);
+    assert(code != NULL && error == NULL);
+    size_t canonical_size;
+    uint8_t *canonical = __test_marshal_dump(code, &canonical_size);
+    assert(canonical_size == original_size && memcmp(canonical, original, original_size) == 0);
+    free(canonical);
+    free(original);
+    tinypy_release(code);
     tinypy_preprocess_result_destroy(preprocessed);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
@@ -2454,6 +2581,56 @@ static int32_t __test_meta_template(void) {
     execution_result = tinypy_compile_source(vm, invalid_source, sizeof(invalid_source) - 1U, "invalid_meta.py", 15U, &options, &error);
     assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_META);
     tinypy_error_release(error);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A generated name that a declaration or meta.setattr binds cannot be None
+   or __debug__, which Python 2 cannot assign; reading or deleting such an
+   attribute stays valid, in the canonical source too. */
+static int32_t __test_meta_unassignable_names(void) {
+    static const char *const bound_sources[] = {
+        "@meta.template\ndef T(Name):\n    @meta.emit(name=Name)\n    def generated():\n        pass\n\nmeta.expand(T, 'None')\n",
+        "@meta.template\ndef T(Name):\n    @meta.emit(name=Name)\n    class Generated(object):\n        pass\n\nmeta.expand(T, '__debug__')\n",
+        "@meta.template\ndef T(Name):\n    @meta.emit(name='g')\n    def generated(target):\n        meta.setattr(target, Name, 1)\n\nmeta.expand(T, 'None')\n"};
+    static const char read_source[] = "class O(object):\n    pass\no = O()\no.__dict__['None'] = 5\n@meta.template\ndef T(Name):\n    @meta.emit(name='g')\n    def generated(target):\n        value = meta.getattr(target, Name), meta.name(Name)\n        meta.delattr(target, Name)\n        return value\n\nG = meta.expand(T, 'None')\nresult = G(o), len(o.__dict__)\n";
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_t options;
+    tinypy_compile_options_t plain_options;
+    tinypy_error_t *error = NULL;
+    size_t index;
+    size_t expanded_size;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_META;
+    tinypy_compile_options_init(&plain_options, TINYPY_COMPILE_EXEC);
+    for (index = 0U; index < sizeof(bound_sources) / sizeof(bound_sources[0]); ++index) {
+        size_t source_size = strlen(bound_sources[index]);
+        tinypy_value_t *code = tinypy_compile_source(vm, bound_sources[index], source_size, "bound.py", 8U, &options, &error);
+        assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_META);
+        tinypy_error_release(error);
+        error = NULL;
+        tinypy_vm_clear_error(vm);
+    }
+    tinypy_value_t *result = tinypy_exec_source(vm, read_source, sizeof(read_source) - 1U, "read.py", 7U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_value_t *values = __test_dict_get(vm, globals, "result", 6U);
+    tinypy_value_t *read = tinypy_tuple_get(values, 0U);
+    assert(tinypy_integer_as_i64(tinypy_tuple_get(read, 0U)) == 5 && tinypy_typeof(tinypy_tuple_get(read, 1U)) == TINYPY_VALUE_NONE);
+    assert(tinypy_integer_as_i64(tinypy_tuple_get(values, 1U)) == 0);
+    tinypy_preprocess_result_t *preprocessed = tinypy_preprocess_source(vm, read_source, sizeof(read_source) - 1U, "read.py", 7U, &options, &error);
+    assert(preprocessed != NULL && error == NULL);
+    const char *expanded = tinypy_preprocess_result_expanded_source(preprocessed, &expanded_size);
+    tinypy_value_t *code = tinypy_compile_source(vm, expanded, expanded_size, "read.expanded.py", 16U, &plain_options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_release(code);
+    tinypy_preprocess_result_destroy(preprocessed);
+    tinypy_dict_clear(globals);
     tinypy_release(globals);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
@@ -2632,6 +2809,9 @@ int main(void) {
     if (__test_compiler_symbol_table_arena_failure() != 0) {
         return EXIT_FAILURE;
     }
+    if (__test_compiler_computed_size_refusal() != 0) {
+        return EXIT_FAILURE;
+    }
     if (__test_tab_size_comment() != 0) {
         return EXIT_FAILURE;
     }
@@ -2695,10 +2875,16 @@ int main(void) {
     if (__test_build_preprocessor() != 0) {
         return EXIT_FAILURE;
     }
+    if (__test_preprocessor_raising_condition() != 0) {
+        return EXIT_FAILURE;
+    }
     if (__test_preprocess_renderer() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_meta_template() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_meta_unassignable_names() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_meta_range_allocation_failure() != 0) {

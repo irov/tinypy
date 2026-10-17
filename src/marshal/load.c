@@ -47,7 +47,7 @@ static void *__tinypy_marshal_vm_allocate(void *user_data, size_t size, size_t a
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
 
     (void)alignment;
-    void *return_value_1 = tinypy_internal_vm_allocate_checked(vm, size, NULL);
+    void *return_value_1 = __tinypy_internal_vm_allocate_checked(vm, size, NULL);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -55,7 +55,7 @@ static void *__tinypy_marshal_vm_reallocate(void *user_data, void *memory, size_
     tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
 
     (void)alignment;
-    void *return_value_1 = tinypy_internal_vm_reallocate_checked(vm, memory, old_size, new_size, NULL);
+    void *return_value_1 = __tinypy_internal_vm_reallocate_checked(vm, memory, old_size, new_size, NULL);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -106,7 +106,7 @@ static tinypy_bool_t __tinypy_marshal_cache_append(tinypy_marshal_materializer_t
         }
         size_t new_capacity = materializer->cache_capacity == 0U ? 16U : materializer->cache_capacity * 2U;
         size_t new_size = new_capacity * sizeof(*materializer->cache);
-        tinypy_marshal_runtime_cache_entry_t *entries = (tinypy_marshal_runtime_cache_entry_t *)tinypy_internal_vm_allocate_checked(materializer->vm, new_size, NULL);
+        tinypy_marshal_runtime_cache_entry_t *entries = (tinypy_marshal_runtime_cache_entry_t *)__tinypy_internal_vm_allocate_checked(materializer->vm, new_size, NULL);
         if (entries == NULL) {
             return TINYPY_FALSE;
         }
@@ -170,7 +170,7 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_sequence(tinypy_mars
     tinypy_marshal_result_e result = TINYPY_MARSHAL_OK;
 
     if (count != 0U) {
-        items = (tinypy_value_t **)tinypy_internal_vm_allocate_checked(materializer->vm, count * sizeof(*items), NULL);
+        items = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(materializer->vm, count * sizeof(*items), NULL);
         if (items == NULL) {
             result = __tinypy_marshal_materialize_memory_error(materializer, source);
             return result;
@@ -256,43 +256,10 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_dict(tinypy_marshal_
     return TINYPY_MARSHAL_OK;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The interpreter sizes frames by nlocals and the verifier bounds local
-   operands by len(co_varnames), so a marshalled code object is only accepted
-   when the two agree and its fields have the kinds the runtime relies on. */
-static tinypy_marshal_result_e __tinypy_marshal_validate_code_fields(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, const tinypy_marshal_code_t *source_code, tinypy_value_t *const *fields) {
-    static const tinypy_value_type_e expected_kinds[9] = {TINYPY_VALUE_STRING, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_TUPLE, TINYPY_VALUE_STRING, TINYPY_VALUE_STRING, TINYPY_VALUE_STRING};
-    uint8_t wire_type = tinypy_marshal_object_wire_type(source);
-    size_t required_locals;
-    size_t index;
-
-    for (index = 0U; index < 9U; ++index) {
-        if (TINYPY_VALUE_KIND(fields[index]) != expected_kinds[index]) {
-            __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_CODE, wire_type, "code object field has an unexpected type");
-            return TINYPY_MARSHAL_INVALID_CODE;
-        }
-    }
-    if (source_code->argcount < 0 || source_code->nlocals < 0 || source_code->stacksize < 0 || (size_t)source_code->nlocals != TINYPY_TUPLE_SIZE(fields[3])) {
-        __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_CODE, wire_type, "code object nlocals does not match its variable names");
-        return TINYPY_MARSHAL_INVALID_CODE;
-    }
-    required_locals = (size_t)source_code->argcount;
-    if ((source_code->flags & TINYPY_CODE_VARARGS) != 0) {
-        required_locals += 1U;
-    }
-    if ((source_code->flags & TINYPY_CODE_VAR_KEYWORDS) != 0) {
-        required_locals += 1U;
-    }
-    if (required_locals > (size_t)source_code->nlocals) {
-        __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_CODE, wire_type, "code object argument count exceeds its local count");
-        return TINYPY_MARSHAL_INVALID_CODE;
-    }
-    return TINYPY_MARSHAL_OK;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_marshal_result_e __tinypy_marshal_materialize_code(tinypy_marshal_materializer_t *materializer, const tinypy_marshal_object_t *source, tinypy_value_t **out_value) {
     const tinypy_marshal_code_t *source_code = tinypy_marshal_code_view(source);
-    const tinypy_marshal_object_t *source_fields[9];
-    tinypy_value_t *fields[9] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    const tinypy_marshal_object_t *source_fields[TINYPY_CODE_OBJECT_FIELD_COUNT];
+    tinypy_value_t *fields[TINYPY_CODE_OBJECT_FIELD_COUNT] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     tinypy_marshal_result_e result = TINYPY_MARSHAL_OK;
     size_t index;
 
@@ -306,14 +273,21 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_code(tinypy_marshal_
     source_fields[7] = source_code->name;
     source_fields[8] = source_code->lnotab;
 
-    for (index = 0U; index < 9U; ++index) {
+    for (index = 0U; index < TINYPY_CODE_OBJECT_FIELD_COUNT; ++index) {
         result = __tinypy_marshal_materialize_object(materializer, source_fields[index], &fields[index]);
         if (result != TINYPY_MARSHAL_OK) {
             break;
         }
     }
     if (result == TINYPY_MARSHAL_OK) {
-        result = __tinypy_marshal_validate_code_fields(materializer, source, source_code, fields);
+        const char *fields_error = tinypy_internal_code_fields_error(source_code->argcount, source_code->nlocals, source_code->stacksize, source_code->flags, fields);
+
+        if (fields_error != NULL) {
+            uint8_t wire_type = tinypy_marshal_object_wire_type(source);
+
+            __tinypy_marshal_load_set_error(materializer->error, TINYPY_MARSHAL_INVALID_CODE, wire_type, fields_error);
+            result = TINYPY_MARSHAL_INVALID_CODE;
+        }
     }
     if (result == TINYPY_MARSHAL_OK) {
         *out_value = tinypy_internal_code_new_checked(source_code->argcount, source_code->nlocals, source_code->stacksize, source_code->flags, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], source_code->firstlineno, fields[8], NULL);
@@ -393,9 +367,11 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
                 return TINYPY_MARSHAL_OK;
             }
         }
+        /* r_object reads 's' into PyString_FromStringAndSize(NULL, n), which
+           shares no one-byte string. */
         *out_value = interned != 0
             ? tinypy_internal_string_from_bytes_checked(materializer->vm, bytes, size, NULL)
-            : tinypy_internal_string_from_bytes_uninterned_checked(materializer->vm, bytes, size, NULL);
+            : tinypy_internal_string_from_bytes_distinct_checked(materializer->vm, bytes, size, NULL);
         if (*out_value == NULL) {
             break;
         }
@@ -410,9 +386,6 @@ static tinypy_marshal_result_e __tinypy_marshal_materialize_object(tinypy_marsha
                 *out_value = NULL;
                 break;
             }
-        }
-        else if (size > 1U) {
-            tinypy_internal_string_set_interned(*out_value, 0);
         }
     }
         break;
