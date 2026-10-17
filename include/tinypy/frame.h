@@ -5,8 +5,10 @@
 
 /* Frames use one inline locals-plus allocation for fast locals, cell/free
  * slots and the value stack. A NULL locals argument aliases globals. Runtime
- * function locals are materialized only when observed. Returned object fields
- * are borrowed. */
+ * function locals are materialized only when observed; a function frame that
+ * exits releases its fast locals and its reference to the locals materialized
+ * from them, and materializes them anew when observed again. Returned object
+ * fields are borrowed. */
 tinypy_value_t *tinypy_frame_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals);
 tinypy_value_t *tinypy_frame_back(const tinypy_value_t *frame);
 tinypy_value_t *tinypy_frame_code(const tinypy_value_t *frame);

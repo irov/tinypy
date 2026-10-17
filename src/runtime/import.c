@@ -537,13 +537,16 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
             uint32_t feature_flags = __tinypy_import_compile_feature_flags(artifact);
             const tinypy_build_profile_t *build_profile = __tinypy_import_build_profile(artifact);
             int32_t optimize_level = __tinypy_import_compile_optimize_level(artifact, vm->optimize_level);
-            tinypy_value_t *eval_result;
+            tinypy_value_t *eval_result = NULL;
+            tinypy_bool_t attached = TINYPY_TRUE;
 
             if (__tinypy_import_has_compile_environment(artifact) != 0) {
-                tinypy_internal_code_attach_compile_options(code, feature_flags, optimize_level, build_profile);
+                attached = tinypy_internal_code_attach_compile_options(code, feature_flags, optimize_level, build_profile, out_error);
             }
-            tinypy_value_t *module_dict = tinypy_module_dict(module);
-            eval_result = tinypy_eval_code(code, module_dict, NULL, out_error);
+            if (attached != 0) {
+                tinypy_value_t *module_dict = tinypy_module_dict(module);
+                eval_result = tinypy_eval_code(code, module_dict, NULL, out_error);
+            }
             TINYPY_DECREF(code);
             if (eval_result != NULL) {
                 TINYPY_DECREF(eval_result);
@@ -637,20 +640,21 @@ static tinypy_bool_t __tinypy_import_is_package(tinypy_value_t *module) {
     return package;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_import_bind_submodule(tinypy_vm_t *vm, tinypy_value_t *parent, const char *name, size_t name_size, tinypy_value_t *module) {
-    tinypy_error_t *binding_error = NULL;
+/* add_submodule: a module gets the submodule in its namespace, whatever its
+   __setattr__ does; another object sys.modules holds gets it as an
+   attribute. A failure fails the import, which leaves the submodule in
+   sys.modules. */
+static tinypy_bool_t __tinypy_import_bind_submodule(tinypy_vm_t *vm, tinypy_value_t *parent, const char *name, size_t name_size, tinypy_value_t *module, tinypy_error_t **out_error) {
+    tinypy_value_t *key = tinypy_internal_name_from_bytes_checked(vm, name, name_size, out_error);
 
-    tinypy_value_t *key = tinypy_internal_name_from_bytes_checked(vm, name, name_size, &binding_error);
+    if (key == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *dict = TINYPY_VALUE_KIND(parent) == TINYPY_VALUE_MODULE ? tinypy_module_dict(parent) : NULL;
+    tinypy_bool_t bound = dict != NULL ? tinypy_internal_dict_set_checked(vm, dict, key, module, out_error) : tinypy_object_set_attr_value(parent, key, module, out_error);
 
-    /* Parents may be arbitrary objects placed into sys.modules. */
-    if (key != NULL) {
-        (void)tinypy_object_set_attr_value(parent, key, module, &binding_error);
-        TINYPY_DECREF(key);
-    }
-    if (binding_error != NULL) {
-        tinypy_error_release(binding_error);
-        tinypy_vm_clear_error(vm);
-    }
+    TINYPY_DECREF(key);
+    return bound;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_import_load_path(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *globals, size_t return_name_size, tinypy_value_t **out_tail, tinypy_bool_t *out_not_found, tinypy_error_t **out_error) {
@@ -690,13 +694,18 @@ static tinypy_value_t *__tinypy_import_load_path(tinypy_vm_t *vm, const char *na
         if (offset == return_name_size) {
             selected = TINYPY_RET(module);
         }
+        tinypy_bool_t bound = TINYPY_TRUE;
+
         if (parent != NULL) {
             if (fresh != 0) {
-                __tinypy_import_bind_submodule(vm, parent, name + component_start, offset - component_start, module);
+                bound = __tinypy_import_bind_submodule(vm, parent, name + component_start, offset - component_start, module, out_error);
             }
             TINYPY_DECREF(parent);
         }
         parent = module;
+        if (bound == 0) {
+            goto failure;
+        }
         component_start = offset + 1U;
     }
     if (out_tail != NULL) {
@@ -794,10 +803,17 @@ static tinypy_bool_t __tinypy_import_ensure_fromlist_impl(tinypy_vm_t *vm, tinyp
         submodule = __tinypy_import_load_one(vm, full_name, full_size, module_name, module_name_size, NULL, module, NULL, &fresh, &not_found, out_error);
         tinypy_internal_vm_deallocate(vm, full_name, full_size);
         if (submodule != NULL) {
+            tinypy_bool_t bound = TINYPY_TRUE;
+
             if (fresh != 0) {
-                __tinypy_import_bind_submodule(vm, module, item_bytes, item_size, submodule);
+                bound = __tinypy_import_bind_submodule(vm, module, item_bytes, item_size, submodule, out_error);
             }
             TINYPY_DECREF(submodule);
+            if (bound == 0) {
+                TINYPY_DECREF(item);
+                success = TINYPY_FALSE;
+                break;
+            }
         }
         else if (not_found == 0) {
             TINYPY_DECREF(item);

@@ -270,17 +270,6 @@ static tinypy_value_t *__tinypy_object_type_tuple(tinypy_vm_t *vm, tinypy_type_t
     X(internal_func_key, TINYPY_BUILTIN_ATTRIBUTE_FUNC) \
     X(internal_args_key, TINYPY_BUILTIN_ATTRIBUTE_ARGS) \
     X(internal_keywords_key, TINYPY_BUILTIN_ATTRIBUTE_KEYWORDS) \
-    X(internal_pattern_key, TINYPY_BUILTIN_ATTRIBUTE_PATTERN) \
-    X(internal_flags_key, TINYPY_BUILTIN_ATTRIBUTE_FLAGS) \
-    X(internal_groups_key, TINYPY_BUILTIN_ATTRIBUTE_GROUPS) \
-    X(internal_groupindex_key, TINYPY_BUILTIN_ATTRIBUTE_GROUPINDEX) \
-    X(internal_re_key, TINYPY_BUILTIN_ATTRIBUTE_RE) \
-    X(internal_string_key, TINYPY_BUILTIN_ATTRIBUTE_STRING) \
-    X(internal_pos_key, TINYPY_BUILTIN_ATTRIBUTE_POS) \
-    X(internal_endpos_key, TINYPY_BUILTIN_ATTRIBUTE_ENDPOS) \
-    X(internal_lastindex_key, TINYPY_BUILTIN_ATTRIBUTE_LASTINDEX) \
-    X(internal_regs_key, TINYPY_BUILTIN_ATTRIBUTE_REGS) \
-    X(internal_lastgroup_key, TINYPY_BUILTIN_ATTRIBUTE_LASTGROUP) \
     X(internal_co_argcount_key, TINYPY_BUILTIN_ATTRIBUTE_CO_ARGCOUNT) \
     X(internal_co_nlocals_key, TINYPY_BUILTIN_ATTRIBUTE_CO_NLOCALS) \
     X(internal_co_stacksize_key, TINYPY_BUILTIN_ATTRIBUTE_CO_STACKSIZE) \
@@ -605,84 +594,6 @@ static tinypy_value_t *__tinypy_object_get_partial_keywords(tinypy_value_t *valu
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_pattern_pattern(tinypy_value_t *value) {
-    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(value);
-    tinypy_value_t *result = TINYPY_RET(pattern->pattern);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_pattern_flags(tinypy_value_t *value) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(value);
-    tinypy_value_t *result = tinypy_integer_from_i64(vm, pattern->flags);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_pattern_groups(tinypy_value_t *value) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(value);
-    tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)pattern->groups);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_pattern_groupindex(tinypy_value_t *value) {
-    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(value);
-    tinypy_value_t *result = TINYPY_RET(pattern->groupindex);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_match_re(tinypy_value_t *value) {
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(value);
-    tinypy_value_t *result = TINYPY_RET(match->pattern);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_match_string(tinypy_value_t *value) {
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(value);
-    tinypy_value_t *result = TINYPY_RET(match->string);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_match_pos(tinypy_value_t *value) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(value);
-    tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)match->pos);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_match_endpos(tinypy_value_t *value) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(value);
-    tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)match->endpos);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_match_lastindex(tinypy_value_t *value) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(value);
-    tinypy_value_t *result = match->lastindex >= 0 ? tinypy_integer_from_i64(vm, (int64_t)match->lastindex) : TINYPY_RET_NONE(vm);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_match_regs(tinypy_value_t *value) {
-
-    tinypy_value_t *result = tinypy_internal_sre_match_regs(value);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_get_sre_match_lastgroup(tinypy_value_t *value) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(value);
-    tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(match->pattern);
-    if (match->lastindex < 0 || (size_t)match->lastindex >= TINYPY_LIST_SIZE(pattern->indexgroup)) {
-        tinypy_value_t *result = TINYPY_RET_NONE(vm);
-        return result;
-    }
-    tinypy_value_t *item = TINYPY_LIST_GET(pattern->indexgroup, (size_t)match->lastindex);
-    tinypy_value_t *result = TINYPY_RET(item);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_get_code_co_argcount(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_code_object_t *code = TINYPY_CODE_OBJECT(value);
@@ -909,21 +820,6 @@ static const tinypy_builtin_attribute_getter_t __tinypy_object_partial_getters[T
     [TINYPY_BUILTIN_ATTRIBUTE_ARGS] = __tinypy_object_get_partial_args,
     [TINYPY_BUILTIN_ATTRIBUTE_KEYWORDS] = __tinypy_object_get_partial_keywords,
 };
-static const tinypy_builtin_attribute_getter_t __tinypy_object_sre_pattern_getters[TINYPY_BUILTIN_ATTRIBUTE_COUNT] = {
-    [TINYPY_BUILTIN_ATTRIBUTE_PATTERN] = __tinypy_object_get_sre_pattern_pattern,
-    [TINYPY_BUILTIN_ATTRIBUTE_FLAGS] = __tinypy_object_get_sre_pattern_flags,
-    [TINYPY_BUILTIN_ATTRIBUTE_GROUPS] = __tinypy_object_get_sre_pattern_groups,
-    [TINYPY_BUILTIN_ATTRIBUTE_GROUPINDEX] = __tinypy_object_get_sre_pattern_groupindex,
-};
-static const tinypy_builtin_attribute_getter_t __tinypy_object_sre_match_getters[TINYPY_BUILTIN_ATTRIBUTE_COUNT] = {
-    [TINYPY_BUILTIN_ATTRIBUTE_RE] = __tinypy_object_get_sre_match_re,
-    [TINYPY_BUILTIN_ATTRIBUTE_STRING] = __tinypy_object_get_sre_match_string,
-    [TINYPY_BUILTIN_ATTRIBUTE_POS] = __tinypy_object_get_sre_match_pos,
-    [TINYPY_BUILTIN_ATTRIBUTE_ENDPOS] = __tinypy_object_get_sre_match_endpos,
-    [TINYPY_BUILTIN_ATTRIBUTE_LASTINDEX] = __tinypy_object_get_sre_match_lastindex,
-    [TINYPY_BUILTIN_ATTRIBUTE_REGS] = __tinypy_object_get_sre_match_regs,
-    [TINYPY_BUILTIN_ATTRIBUTE_LASTGROUP] = __tinypy_object_get_sre_match_lastgroup,
-};
 static const tinypy_builtin_attribute_getter_t __tinypy_object_code_getters[TINYPY_BUILTIN_ATTRIBUTE_COUNT] = {
     [TINYPY_BUILTIN_ATTRIBUTE_CO_ARGCOUNT] = __tinypy_object_get_code_co_argcount,
     [TINYPY_BUILTIN_ATTRIBUTE_CO_NLOCALS] = __tinypy_object_get_code_co_nlocals,
@@ -966,8 +862,6 @@ static const tinypy_builtin_attribute_getter_t *const __tinypy_object_builtin_ge
     [TINYPY_VALUE_FUNCTION] = __tinypy_object_function_getters,
     [TINYPY_VALUE_METHOD] = __tinypy_object_method_getters,
     [TINYPY_VALUE_PARTIAL] = __tinypy_object_partial_getters,
-    [TINYPY_VALUE_SRE_PATTERN] = __tinypy_object_sre_pattern_getters,
-    [TINYPY_VALUE_SRE_MATCH] = __tinypy_object_sre_match_getters,
     [TINYPY_VALUE_CODE] = __tinypy_object_code_getters,
     [TINYPY_VALUE_FRAME] = __tinypy_object_frame_getters,
     [TINYPY_VALUE_GENERATOR] = __tinypy_object_generator_getters,

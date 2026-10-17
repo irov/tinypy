@@ -218,7 +218,9 @@ typedef struct tinypy_intern_entry_t {
     X(internal_special_basicsize_key, "__basicsize__", 1) \
     X(internal_special_closure_key, "__closure__", 1) \
     X(internal_special_code_key, "__code__", 1) \
+    X(internal_special_copy_key, "__copy__", 1) \
     X(internal_special_debug_key, "__debug__", 1) \
+    X(internal_special_deepcopy_key, "__deepcopy__", 1) \
     X(internal_special_defaults_key, "__defaults__", 1) \
     X(internal_special_dictoffset_key, "__dictoffset__", 1) \
     X(internal_special_displayhook_key, "__displayhook__", 1) \
@@ -1593,6 +1595,23 @@ typedef struct tinypy_sre_match_object_t {
     ptrdiff_t lastindex;
 } tinypy_sre_match_object_t;
 //////////////////////////////////////////////////////////////////////////
+/* The members and getsets of the _sre types, which their descriptors read
+   through tinypy_internal_sre_field. */
+typedef enum tinypy_internal_sre_field_e {
+    TINYPY_INTERNAL_SRE_FIELD_PATTERN = 0,
+    TINYPY_INTERNAL_SRE_FIELD_FLAGS = 1,
+    TINYPY_INTERNAL_SRE_FIELD_GROUPS = 2,
+    TINYPY_INTERNAL_SRE_FIELD_GROUPINDEX = 3,
+    TINYPY_INTERNAL_SRE_FIELD_STRING = 4,
+    TINYPY_INTERNAL_SRE_FIELD_RE = 5,
+    TINYPY_INTERNAL_SRE_FIELD_POS = 6,
+    TINYPY_INTERNAL_SRE_FIELD_ENDPOS = 7,
+    TINYPY_INTERNAL_SRE_FIELD_LASTINDEX = 8,
+    TINYPY_INTERNAL_SRE_FIELD_LASTGROUP = 9,
+    TINYPY_INTERNAL_SRE_FIELD_REGS = 10,
+    TINYPY_INTERNAL_SRE_FIELD_SCANNER_PATTERN = 11
+} tinypy_internal_sre_field_e;
+//////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_dict_view_object_t {
     tinypy_value_t base;
     tinypy_value_t *dict;
@@ -2068,7 +2087,7 @@ struct tinypy_vm_t {
     tinypy_value_t *raised_type;
     tinypy_value_t *raised_value;
     tinypy_value_t *emergency_memory_error;
-    tinypy_error_t *pending_diagnostics;
+    tinypy_error_t *errors;
     tinypy_value_t *raised_traceback;
     tinypy_value_t *handled_type;
     tinypy_value_t *handled_value;
@@ -2148,9 +2167,10 @@ struct tinypy_error_t {
     size_t source_line_size;
     int32_t line_number;
     int32_t column_offset;
-    /* A diagnostic of a raised Python exception keeps the exception and its
-       VM until the message is first read, and the class it was raised with
-       until the kind is; the VM links it for shutdown. */
+    /* The VM links the error, which counts against its heap budget, until
+       the host releases it or the VM is destroyed. A diagnostic of a raised
+       Python exception keeps the exception until the message is first read,
+       and the class it was raised with until the kind is. */
     tinypy_vm_t *vm;
     tinypy_value_t *exception;
     tinypy_type_t *exception_type;
@@ -2190,6 +2210,11 @@ void tinypy_internal_vm_deallocate(tinypy_vm_t *vm, void *memory, size_t size);
 /* The MemoryError of a refused checked request, made out of line so that a
    checked request keeps the path of the pool inline. */
 void tinypy_internal_vm_allocation_error(tinypy_vm_t *vm, tinypy_error_t **out_error);
+/* An allocator for the components that take one, such as marshal documents
+   and build profiles, whose requests are checked requests of the VM heap:
+   they count against the heap budget, and one the host or the budget
+   refuses returns NULL with MemoryError pending. */
+tinypy_allocator_t tinypy_internal_vm_heap_allocator(tinypy_vm_t *vm);
 //////////////////////////////////////////////////////////////////////////
 static inline void *__tinypy_internal_vm_allocate_checked(tinypy_vm_t *vm, size_t size, tinypy_error_t **out_error) {
     void *memory = tinypy_internal_pool_allocate_checked(vm, size);
@@ -2212,12 +2237,12 @@ static inline void *__tinypy_internal_vm_reallocate_checked(tinypy_vm_t *vm, voi
 tinypy_bool_t tinypy_internal_decimal_double(tinypy_vm_t *vm, const char *text, size_t size, double *out_value);
 tinypy_value_t *tinypy_internal_long_from_double(tinypy_vm_t *vm, double value);
 
-void tinypy_internal_make_error(const tinypy_allocator_t *allocator, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error);
 void tinypy_internal_make_vm_error(tinypy_vm_t *vm, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error);
 /* The class an exception was raised with, or NULL for a classic class, maps
    to the kind of the error when the kind is first read. */
 void tinypy_internal_make_exception_error(tinypy_vm_t *vm, tinypy_type_t *exception_type, tinypy_value_t *exception, tinypy_error_t **out_error);
 void tinypy_internal_error_render_pending(tinypy_vm_t *vm);
+void tinypy_internal_error_detach_all(tinypy_vm_t *vm);
 //////////////////////////////////////////////////////////////////////////
 /* Message fragments joined into one exception message without formatting. */
 typedef struct tinypy_message_part_t {
@@ -2236,6 +2261,9 @@ static inline size_t __tinypy_internal_message_precision(size_t size, size_t pre
 #define TINYPY_MESSAGE_PART_TEXT_PRECISION(value, precision) {(const char *)TINYPY_TEXT_BYTES(value), __tinypy_internal_message_precision(TINYPY_TEXT_BYTE_SIZE(value), (precision))}
 #define TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, precision) {(value)->type->name, __tinypy_internal_message_precision((value)->type->name_size, (precision))}
 #define TINYPY_MESSAGE_PART_TYPE_PRECISION(type, precision) {(type)->name, __tinypy_internal_message_precision((type)->name_size, (precision))}
+/* The converterr of getargs names the type of an argument as "%.50s", and
+   None as "None". */
+#define TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(value) {TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE ? "None" : (value)->type->name, TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE ? 4U : __tinypy_internal_message_precision((value)->type->name_size, 50U)}
 #define TINYPY_MESSAGE_SIZE_BUFFER 21U
 /* Shortens consecutive parts that make one "%.<precision>s" field, such as a
    type name with its module, to precision bytes in all. */
@@ -2251,6 +2279,7 @@ void tinypy_internal_initialize_native_function_descriptors(tinypy_vm_t *vm);
 tinypy_bool_t tinypy_internal_native_function_compare_three_way(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error);
 void tinypy_internal_initialize_struct_descriptors(tinypy_type_t *type);
 void tinypy_internal_initialize_memoryview_descriptors(tinypy_type_t *type);
+void tinypy_internal_initialize_sre_descriptors(tinypy_vm_t *vm);
 void tinypy_internal_type_add_object_getattribute_method(tinypy_type_t *type);
 void tinypy_internal_type_add_object_attribute_methods(tinypy_type_t *type);
 tinypy_value_t *tinypy_internal_struct_get_field(tinypy_value_t *instance, tinypy_value_t *name, tinypy_error_t **out_error);
@@ -2533,6 +2562,7 @@ tinypy_bool_t tinypy_internal_slice_adjust_indices(tinypy_vm_t *vm, size_t size,
 tinypy_bool_t tinypy_internal_slice_indices(tinypy_value_t *slice_value, size_t size, tinypy_internal_slice_indices_t *out_indices, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_string_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_unicode(tinypy_value_t *value, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_bytearray_from_bytes_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 void tinypy_internal_bytearray_destroy(tinypy_value_t *value);
 void tinypy_internal_bytearray_swap_contents(tinypy_value_t *left, tinypy_value_t *right);
@@ -2577,7 +2607,7 @@ void tinypy_internal_initialize_functools_module(tinypy_vm_t *vm);
 void tinypy_internal_initialize_struct_module(tinypy_vm_t *vm);
 void tinypy_internal_initialize_copy_reg_module(tinypy_vm_t *vm);
 void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm);
-tinypy_value_t *tinypy_internal_sre_match_regs(tinypy_value_t *match_value);
+tinypy_value_t *tinypy_internal_sre_field(tinypy_value_t *instance, size_t field, tinypy_error_t **out_error);
 void tinypy_internal_initialize_sre_module(tinypy_vm_t *vm);
 void tinypy_internal_sre_pattern_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_sre_pattern_destroy(tinypy_value_t *value);
@@ -2645,6 +2675,7 @@ void tinypy_internal_initialize_output_type(tinypy_vm_t *vm);
 tinypy_bool_t tinypy_internal_output_write(tinypy_value_t *target, const void *bytes, size_t size, tinypy_error_t **out_error);
 void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object);
 tinypy_bool_t tinypy_internal_output_write_value(tinypy_value_t *target, tinypy_value_t *text, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_output_write_object(tinypy_value_t *target, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target, tinypy_bool_t new_flag);
 tinypy_bool_t tinypy_internal_output_flush_line(tinypy_vm_t *vm, tinypy_error_t **out_error);
 void tinypy_internal_type_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
@@ -2817,7 +2848,7 @@ void tinypy_internal_frame_free_list_push(tinypy_vm_t *vm, tinypy_value_t *frame
 void tinypy_internal_frame_free_list_finalize(tinypy_vm_t *vm);
 void tinypy_internal_frame_save_handled(tinypy_vm_t *vm);
 void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame);
-void tinypy_internal_frame_clear_local_slots(tinypy_frame_object_t *frame);
+void tinypy_internal_frame_clear_locals(tinypy_frame_object_t *frame);
 void tinypy_internal_frame_release_stack(tinypy_frame_object_t *frame, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_frame_new_function(tinypy_value_t *code, tinypy_value_t *globals);
 tinypy_value_t *tinypy_internal_frame_locals(tinypy_frame_object_t *frame);
@@ -2874,6 +2905,7 @@ tinypy_type_t *tinypy_internal_native_function_owner(const tinypy_value_t *funct
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_native_method_calls_unbound(tinypy_value_t *descriptor, tinypy_value_t *instance);
+tinypy_bool_t tinypy_internal_native_method_applies(tinypy_value_t *descriptor, tinypy_value_t *instance);
 tinypy_value_t *tinypy_internal_native_function_call_method(tinypy_value_t *descriptor, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 void tinypy_internal_native_method_free_list_push(tinypy_vm_t *vm, tinypy_value_t *value);
 void tinypy_internal_native_method_free_list_finalize(tinypy_vm_t *vm);
@@ -2931,14 +2963,14 @@ tinypy_bool_t tinypy_internal_exception_normalize_raised(tinypy_vm_t *vm, tinypy
 void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e kind, const char *message);
 void tinypy_internal_exception_clear_raised(tinypy_vm_t *vm);
 void tinypy_internal_exception_clear_handled(tinypy_vm_t *vm);
-tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_vm_t *vm, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile);
+tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_vm_t *vm, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile, tinypy_error_t **out_error);
 void tinypy_internal_compile_environment_retain(tinypy_compile_environment_t *environment);
 void tinypy_internal_compile_environment_release(tinypy_compile_environment_t *environment);
 uint32_t tinypy_internal_compile_environment_feature_flags(const tinypy_compile_environment_t *environment);
 int32_t tinypy_internal_compile_environment_optimize_level(const tinypy_compile_environment_t *environment);
 const tinypy_build_profile_t *tinypy_internal_compile_environment_build_profile(const tinypy_compile_environment_t *environment);
 void tinypy_internal_code_attach_compile_environment(tinypy_value_t *code, tinypy_compile_environment_t *environment);
-void tinypy_internal_code_attach_compile_options(tinypy_value_t *code, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile);
+tinypy_bool_t tinypy_internal_code_attach_compile_options(tinypy_value_t *code, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_compile_options_inherit_frame(tinypy_vm_t *vm, tinypy_compile_options_t *options);
 void tinypy_internal_exception_preserve_begin(tinypy_vm_t *vm, tinypy_internal_exception_state_t *state);
 void tinypy_internal_exception_preserve_end(tinypy_vm_t *vm, tinypy_internal_exception_state_t *state);

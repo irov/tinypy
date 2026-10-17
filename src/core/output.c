@@ -199,6 +199,46 @@ tinypy_bool_t tinypy_internal_output_write_value(tinypy_value_t *target, tinypy_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyFile_WriteObject with Py_PRINT_RAW looks the write method of the file up
+   before it converts the value: a unicode value is written as it is and any
+   other value, a str subtype included, as its str(). */
+tinypy_bool_t tinypy_internal_output_write_object(tinypy_value_t *target, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
+    tinypy_value_t *writer = NULL;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(target) != TINYPY_VALUE_OUTPUT_STREAM) {
+        writer = tinypy_object_get_attr_value(target, vm->internal_write_key, out_error);
+        if (writer == NULL) {
+            return TINYPY_FALSE;
+        }
+    }
+    tinypy_value_t *text = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE ? TINYPY_RET(value) : tinypy_object_str(value, out_error);
+    if (text == NULL) {
+        if (writer != NULL) {
+            TINYPY_DECREF(writer);
+        }
+        return TINYPY_FALSE;
+    }
+    if (writer == NULL) {
+        tinypy_bool_t emitted = tinypy_internal_output_write_value(target, text, out_error);
+
+        TINYPY_DECREF(text);
+        return emitted;
+    }
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &text, 1U);
+    tinypy_value_t *result = tinypy_call(writer, args, NULL, out_error);
+
+    TINYPY_DECREF(args);
+    TINYPY_DECREF(text);
+    TINYPY_DECREF(writer);
+    if (result == NULL) {
+        return TINYPY_FALSE;
+    }
+    TINYPY_DECREF(result);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target, tinypy_bool_t new_flag) {
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_OUTPUT_STREAM) {
         tinypy_output_stream_object_t *stream = TINYPY_OUTPUT_STREAM_OBJECT(target);

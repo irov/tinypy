@@ -96,6 +96,34 @@ class CompilerEdges(unittest.TestCase):
         values = ('' '\xff', '\xfe' '', '' + '\xfd', '\xfc' + '', '\xfb' * 1, '' '!', '%s' % '\xfa')
         self.assertEqual(values, ('\xff', '\xfe', '\xfd', '\xfc', '\xfb', '!', '\xfa'))
 
+    def test_line_continuation_decodes_string_literal(self):
+        # A literal whose only escape is a line continuation is decoded into a
+        # new string too, not the shared one-byte string.
+        values = ('|\
+', '' '-\
+')
+        self.assertEqual(values, ('|', '-'))
+        self.assertIsNot(values[0], chr(124))
+        self.assertIsNot(values[1], chr(45))
+
+    def test_adjacent_string_literals_join_once(self):
+        # Joining the parts pairwise kept every intermediate result until the
+        # end of the compilation and exceeded the compiler arena limit.
+        parts = ['%04d' % index for index in range(12000)]
+        source = 'value = (' + ' '.join(["'%s'" % part for part in parts]) + ')\n'
+        namespace = {}
+        exec compile(source, 'file', 'exec') in namespace
+        self.assertEqual(namespace['value'], ''.join(parts))
+        self.assertEqual(eval("'a' '' 'b' u'c' 'd'"), u'abcd')
+        for source, message in [("'ab' '\\xe9' 'cd' u'e' '\\x'", 'byte 0xe9 in position 2'),
+                                ("u'e' 'ab' '\\xe9cd' '\\x'", 'byte 0xe9 in position 0')]:
+            try:
+                compile(source, 'file', 'eval')
+            except SyntaxError as error:
+                self.assertEqual(error.msg, "(unicode error) 'ascii' codec can't decode %s: ordinal not in range(128)" % message)
+            else:
+                self.fail('expected SyntaxError')
+
     def test_unknown_encoding_has_decoder_diagnostic(self):
         try:
             compile('# coding: made_up\nx=1', 'file', 'exec')

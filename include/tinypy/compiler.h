@@ -74,6 +74,9 @@ struct tinypy_compile_options_t {
     int32_t optimize_level;
     uint32_t feature_flags;
     const tinypy_compile_limits_t *limits;
+    /* The compiled code keeps a copy of the profile in the VM heap, which
+     * counts against max_heap_bytes; a copy that the host or the budget
+     * refuses fails the compile with MemoryError. */
     const tinypy_build_profile_t *build_profile;
 };
 
@@ -172,6 +175,8 @@ tinypy_bool_t tinypy_preprocessor_name_is_reserved(const char *name, size_t name
 
 /* __NDEBUG__ is synthesized from optimize_level and must not be supplied by
  * the caller. Input order never affects the resulting sorted profile/digest.
+ * A request that allocator refuses fails the call with
+ * TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED, everything it allocated released.
  * limits and out_error are optional. */
 tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator_t *allocator, int32_t optimize_level, const tinypy_build_constant_t *constants, size_t constant_count, const tinypy_build_profile_limits_t *limits, tinypy_build_profile_t **out_profile, tinypy_build_profile_error_t *out_error);
 

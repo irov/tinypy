@@ -166,6 +166,66 @@ class TextConversionParity(unittest.TestCase):
         self.assertEqual(_error(lambda: '\xe9'.replace(None, u'b')),
                          ('TypeError', 'expected a string or other character buffer object'))
 
+    def test_unicode_replace_decodes_old_before_converting_new(self):
+        for new in (None, bytearray('a'), 1):
+            self.assertEqual(_decode_error(lambda: u'abc'.replace('\xe9', new)), ('\xe9', 0, 1))
+        self.assertEqual(_decode_error(lambda: u'abc'.replace('\xe9', 1, 2)), ('\xe9', 0, 1))
+        self.assertEqual(_decode_error(lambda: 'abc'.replace('\xe9', u'x')), ('\xe9', 0, 1))
+        self.assertEqual(_decode_error(lambda: 'abc'.replace(u'x', '\xe9')), ('\xe9', 0, 1))
+        self.assertEqual(_error(lambda: u'abc'.replace('b', None)),
+                         ('TypeError', 'coercing to Unicode: need string or buffer, NoneType found'))
+        self.assertEqual(_error(lambda: u'abc'.replace('b', bytearray('x'))),
+                         ('TypeError', 'decoding bytearray is not supported'))
+        self.assertEqual(u'abc'.replace('b', buffer('xy', 1)), u'ayc')
+
+    def test_print_function_looks_write_up_before_converting(self):
+        print_function = getattr(__builtin__, 'print')
+        log = []
+
+        class Item(object):
+            def __str__(self):
+                log.append('str')
+                return 'item'
+
+        class Logged(object):
+            def __getattr__(self, name):
+                log.append(name)
+                return log.append
+
+        class Failing(str):
+            def __str__(self):
+                raise KeyError('str')
+        print_function(Item(), Item(), sep=Text('|'), end='', file=Logged())
+        self.assertEqual(log, ['write', 'str', 'item', 'write', 'own-str', 'write', 'str', 'item', 'write', ''])
+        self.assertEqual(_error(print_function, Failing('x'), file=object()),
+                         ('AttributeError', "'object' object has no attribute 'write'"))
+
+    def test_unicode_c_format_decodes_the_padded_field(self):
+        self.assertEqual(_decode_error(lambda: format(255, u'8c')), ('       \xff', 7, 8))
+        self.assertEqual(_decode_error(lambda: format(255, u'<4c')), ('\xff   ', 0, 1))
+        self.assertEqual(_decode_error(lambda: format(255L, u'^5c')), ('  \xff  ', 2, 3))
+        self.assertEqual(_decode_error(lambda: u'{0:3c}'.format(200)), ('  \xc8', 2, 3))
+        self.assertEqual(_decode_error(lambda: u'{0:x>3c}'.format(200)), ('xx\xc8', 2, 3))
+        self.assertEqual(format(65, u'3c'), u'  A')
+        self.assertEqual(format(200, '3c'), '  \xc8')
+
+    def test_format_field_names_keep_braces(self):
+        self.assertEqual('{0[{1}]}'.format({'{1}': 'v'}), 'v')
+        self.assertEqual(u'{a{}}'.format(**{u'a{}': 5}), u'5')
+        self.assertEqual('{0[{}]!r:>4}'.format({'{}': 5}), '   5')
+        self.assertEqual(_error(lambda: '{0.{1}}'.format('x', 'y')),
+                         ('AttributeError', "'str' object has no attribute '{1}'"))
+        self.assertEqual(_error(lambda: '{0[{]}x}'.format({})), ('KeyError', "'{'"))
+        self.assertEqual(_error(lambda: '{0[{]}x}'.format({'{': 5})),
+                         ('ValueError', "Only '.' or '[' may follow ']' in format field specifier"))
+        self.assertEqual(_error(lambda: '{0:{1[{2}]}}'.format(1, {'{2}': '3'}, 4)),
+                         ('ValueError', 'Max string recursion exceeded'))
+        self.assertEqual(list('{a[{0!s:^3}}'._formatter_parser()), [('', 'a[{0', '^3}', 's')])
+        self.assertEqual(list(u'{a{}}x{0[{}]!r:>{1}}'._formatter_parser()),
+                         [(u'', u'a{}', u'', None), (u'x', u'0[{}]', u'>{1}', u'r')])
+        self.assertEqual(_error(lambda: list(u'{a[{0[]}}}'._formatter_parser())),
+                         ('ValueError', "Single '}' encountered in format string"))
+
 
 class ReleaseOrderParity(unittest.TestCase):
     def _released(self, make):
@@ -229,6 +289,28 @@ class ReleaseOrderParity(unittest.TestCase):
         self.assertEqual(self._released(mapping), [9, 0, 1])
         self.assertEqual(self._released(slotted), [0, 1, 9])
         self.assertEqual(self._released(getter), [9, 0, 1])
+
+    def test_dict_entry_removal_releases_in_cpython_order(self):
+        class Key(Released):
+            def __hash__(self):
+                return 1
+
+            def __eq__(self, other):
+                return isinstance(other, Key)
+
+        def delete(mapping, key):
+            del mapping[key]
+
+        def removed(remove):
+            log = []
+            mapping = {Key(log, 'key'): Released(log, 'value')}
+            remove(mapping, Key([], 'lookup'))
+            return list(log)
+        self.assertEqual(removed(delete), ['value', 'key'])
+        self.assertEqual(removed(lambda mapping, key: mapping.pop(key)), ['key', 'value'])
+        self.assertEqual(removed(lambda mapping, key: mapping.popitem()), ['value', 'key'])
+        self.assertEqual(removed(lambda mapping, key: mapping.clear()), ['key', 'value'])
+        self.assertEqual(removed(lambda mapping, key: mapping.__setitem__(key, 0)), ['value'])
 
 
 class MessagePrecisionParity(unittest.TestCase):
@@ -315,3 +397,56 @@ class MessagePrecisionParity(unittest.TestCase):
                          ('TypeError', "unsupported operand type(s) for pow(): '%s', 'int', 'int'" % ('T' * 100)))
         self.assertEqual(_error(str, type('Z', (object,), {'__str__': lambda self: long_type()})()),
                          ('TypeError', '__str__ returned non-string (type %s)' % short))
+
+    def test_argument_and_descriptor_messages(self):
+        import _codecs
+
+        class Classic:
+            pass
+        long_type = type('N' * 300, (object,), {})
+        meta = type('M' * 300, (type,), {})
+        name = 'N' * 50
+        self.assertEqual(_error(lambda: u'\xe9'.encode('ascii', 'x' * 600)),
+                         ('LookupError', "unknown error handler name '%s'" % ('x' * 400)))
+        self.assertEqual(_error(lambda: 'a'.encode(long_type())),
+                         ('TypeError', 'encode() argument 1 must be string, not ' + name))
+        self.assertEqual(_error(lambda: 'a'.decode('ascii', long_type())),
+                         ('TypeError', 'decode() argument 2 must be string, not ' + name))
+        self.assertEqual(_error(lambda: unicode('a', long_type())),
+                         ('TypeError', 'unicode() argument 2 must be string, not ' + name))
+        self.assertEqual(_error(lambda: 'a'.center(3, long_type())),
+                         ('TypeError', 'center() argument 2 must be char, not ' + name))
+        self.assertEqual(_error(lambda: bytearray('a').ljust(3, long_type())),
+                         ('TypeError', 'ljust() argument 2 must be char, not ' + name))
+        self.assertEqual(_error(lambda: bytearray.fromhex(long_type())),
+                         ('TypeError', 'fromhex() argument 1 must be string or read-only buffer, not ' + name))
+        self.assertEqual(_error(lambda: _codecs.utf_8_decode(long_type())),
+                         ('TypeError', 'utf_8_decode() argument 1 must be convertible to a buffer, not ' + name))
+        self.assertEqual(_error(lambda: __import__(long_type())),
+                         ('TypeError', '__import__() argument 1 must be string, not ' + name))
+        self.assertEqual(_error(lambda: type(sys)(long_type())),
+                         ('TypeError', 'module.__init__() argument 1 must be string, not ' + name))
+        self.assertEqual(_error(lambda: type(Classic)(long_type(), (), {})),
+                         ('TypeError', 'argument 1 must be string, not ' + name))
+        self.assertEqual(_error(lambda: str.upper(long_type())),
+                         ('TypeError', "descriptor 'upper' requires a 'str' object but received a '%s'" % ('N' * 100)))
+        self.assertEqual(_error(lambda: int.__add__(long_type(), 1)),
+                         ('TypeError', "descriptor '__add__' requires a 'int' object but received a '%s'" % ('N' * 100)))
+        self.assertEqual(_error(lambda: str.__dict__['upper'].__get__(long_type())),
+                         ('TypeError', "descriptor 'upper' for 'str' objects doesn't apply to '%s' object" % ('N' * 300)))
+        self.assertEqual(_error(lambda: dict.__dict__['fromkeys'](long_type())),
+                         ('TypeError', "descriptor 'fromkeys' requires a type but received a '%s'" % ('N' * 100)))
+        self.assertEqual(_error(lambda: dict.__dict__['fromkeys'](meta('X', (object,), {}))),
+                         ('TypeError', "descriptor 'fromkeys' requires a subtype of 'dict' but received '%s" % ('M' * 100)))
+
+    def test_code_and_generator_reprs(self):
+        namespace = {}
+        exec 'def %s():\n    yield 1\n' % ('g' * 300) in namespace
+        function = namespace['g' * 300]
+        namespace.clear()
+        code = compile('1', 'F' * 400, 'eval')
+        self.assertTrue(repr(function.__code__).startswith('<code object %s at 0x' % ('g' * 100)))
+        self.assertTrue(repr(code).endswith(', file "%s", line 1>' % ('F' * 300)))
+        self.assertTrue(repr(function()).startswith('<generator object %s at 0x' % ('g' * 200)))
+        unnumbered = type(code)(0, 0, 0, 0, '', (), (), (), 'f', 'n', 0, '')
+        self.assertTrue(repr(unnumbered).endswith(', file "f", line -1>'))

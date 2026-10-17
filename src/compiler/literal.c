@@ -372,7 +372,7 @@ static uint8_t __tinypy_compiler_literal_source_byte(tinypy_compile_ctx_t *ctx, 
     return byte;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx, const char *text, tinypy_bool_t future_unicode, int32_t line_number, int32_t column_offset) {
+static tinypy_value_t *__tinypy_compiler_parse_string(tinypy_compile_ctx_t *ctx, const char *text, tinypy_bool_t future_unicode, int32_t line_number, int32_t column_offset) {
     const uint8_t *source = (const uint8_t *)text;
     size_t size = strlen(text);
     size_t position = 0U;
@@ -463,16 +463,16 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
             output[output_size++] = byte;
             continue;
         }
+        /* parsestr decodes every literal holding a backslash, a line
+           continuation included, into a new string. */
+        decoded_escape = TINYPY_TRUE;
         if (byte == '\n') {
             continue;
         }
-        decoded_escape = 1; {
-            int32_t escaped = __tinypy_compiler_escape_value(byte);
-
-            if (escaped >= 0) {
-                output[output_size++] = (uint8_t)escaped;
-                continue;
-            }
+        int32_t escaped = __tinypy_compiler_escape_value(byte);
+        if (escaped >= 0) {
+            output[output_size++] = (uint8_t)escaped;
+            continue;
         }
         if (byte >= '0' && byte <= '7') {
             uint32_t value = (uint32_t)(byte - '0');
@@ -596,80 +596,100 @@ tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx,
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ctx, tinypy_value_t *left, tinypy_value_t *right, int32_t line_number, int32_t column_offset) {
-    tinypy_value_type_e left_type;
-    tinypy_value_type_e right_type;
-    const uint8_t *left_bytes;
-    const uint8_t *right_bytes;
-    size_t left_size;
-    size_t right_size;
-    uint8_t *joined;
-    tinypy_bool_t unicode;
+static tinypy_value_t *__tinypy_compiler_join_strings(tinypy_compile_ctx_t *ctx, tinypy_value_t *const *parts, size_t count, tinypy_bool_t unicode) {
+    size_t size = 0U;
     size_t index;
 
-    left_type = tinypy_typeof(left);
-    right_type = tinypy_typeof(right);
-    unicode = left_type == TINYPY_VALUE_UNICODE || right_type == TINYPY_VALUE_UNICODE;
-    if (left_type == TINYPY_VALUE_UNICODE) {
-        size_t code_point_count;
-
-        left_bytes = (const uint8_t *)tinypy_unicode_utf8_view(left, &left_size, &code_point_count);
+    for (index = 0U; index != count; ++index) {
+        size += TINYPY_TEXT_BYTE_SIZE(parts[index]);
     }
-    else {
-        left_bytes = (const uint8_t *)tinypy_string_view(left, &left_size);
-    }
-    if (right_type == TINYPY_VALUE_UNICODE) {
-        size_t code_point_count;
-
-        right_bytes = (const uint8_t *)tinypy_unicode_utf8_view(right, &right_size, &code_point_count);
-    }
-    else {
-        right_bytes = (const uint8_t *)tinypy_string_view(right, &right_size);
-    }
-    if (unicode == 0) {
-        /* string_concat returns the other operand of an empty one itself. */
-        if (left_size == 0U) {
-            return TINYPY_RET(right);
-        }
-        if (right_size == 0U) {
-            return TINYPY_RET(left);
-        }
-    }
-    else {
-        if (left_type == TINYPY_VALUE_STRING) {
-            for (index = 0U; index < left_size; ++index) {
-                if (left_bytes[index] >= 0x80U) {
-                    goto non_ascii;
-                }
-            }
-        }
-        if (right_type == TINYPY_VALUE_STRING) {
-            for (index = 0U; index < right_size; ++index) {
-                if (right_bytes[index] >= 0x80U) {
-                    goto non_ascii;
-                }
-            }
-        }
-    }
-    joined = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, left_size + right_size + 1U);
+    uint8_t *joined = (uint8_t *)tinypy_internal_compiler_arena_allocate_uninitialized(ctx, size);
     if (joined == NULL) {
-        __tinypy_compiler_literal_error(ctx, "concatenated string exceeds compiler arena limit", line_number, column_offset);
         return NULL;
     }
-    (void)memcpy(joined, left_bytes, left_size);
-    (void)memcpy(joined + left_size, right_bytes, right_size);
+    size_t offset = 0U;
+    for (index = 0U; index != count; ++index) {
+        size_t part_size = TINYPY_TEXT_BYTE_SIZE(parts[index]);
+
+        (void)memcpy(joined + offset, TINYPY_TEXT_BYTES(parts[index]), part_size);
+        offset += part_size;
+    }
     tinypy_value_t *result = unicode != 0
-        ? tinypy_internal_unicode_from_utf8_checked(ctx->vm, (const char *)joined, left_size + right_size, NULL)
-        : tinypy_internal_string_from_bytes_uninterned_checked(ctx->vm, joined, left_size + right_size, NULL);
+        ? tinypy_internal_unicode_from_utf8_checked(ctx->vm, (const char *)joined, size, NULL)
+        : tinypy_internal_string_from_bytes_uninterned_checked(ctx->vm, joined, size, NULL);
     if (result == NULL) {
         tinypy_internal_compiler_memory_error(ctx);
     }
     return result;
-
-non_ascii:
-    (void)tinypy_internal_raise_ascii_decode_error(ctx->vm, left_type == TINYPY_VALUE_STRING ? left : right, index, index + 1U, NULL);
-    if (ctx->vm->raised_value != NULL) {
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyUnicode_Concat decodes its str operand as ASCII: the str parts joined
+   before the first unicode part, or a str part after it. */
+static tinypy_bool_t __tinypy_compiler_concat_ascii(tinypy_compile_ctx_t *ctx, tinypy_value_t *const *parts, size_t count, int32_t line_number) {
+    tinypy_value_t *operand = count == 1U ? TINYPY_RET(parts[0]) : __tinypy_compiler_join_strings(ctx, parts, count, TINYPY_FALSE);
+    if (operand == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t ascii = tinypy_internal_text_ascii_compatible(ctx->vm, operand, NULL);
+    TINYPY_DECREF(operand);
+    if (ascii == 0 && ctx->vm->raised_value != NULL) {
         tinypy_internal_compiler_decode_error(ctx, ctx->vm->raised_value, line_number, TINYPY_TRUE);
     }
-    return NULL;
+    return ascii;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Adjacent literals, which parsestrplus folds pairwise, joined at once with
+   the results of that fold: a part among empty ones stays itself when it has
+   the type of the result, and joined str parts make a new string. */
+tinypy_value_t *tinypy_internal_compiler_parse_strings(tinypy_compile_ctx_t *ctx, const char *const *texts, size_t count, tinypy_bool_t future_unicode, int32_t line_number, int32_t column_offset) {
+    tinypy_value_t **parts = (tinypy_value_t **)tinypy_internal_compiler_arena_allocate_uninitialized(ctx, count * sizeof(*parts));
+    if (parts == NULL) {
+        return NULL;
+    }
+    tinypy_bool_t unicode = TINYPY_FALSE;
+    size_t non_empty_count = 0U;
+    size_t alone = 0U;
+    size_t parsed = 0U;
+
+    while (parsed != count) {
+        tinypy_value_t *part = __tinypy_compiler_parse_string(ctx, texts[parsed], future_unicode, line_number, column_offset);
+        if (part == NULL) {
+            break;
+        }
+        parts[parsed++] = part;
+        tinypy_bool_t part_unicode = TINYPY_VALUE_KIND(part) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
+        if (parsed == 1U) {
+            unicode = part_unicode;
+        }
+        else if (part_unicode != unicode) {
+            tinypy_bool_t ascii = part_unicode != 0
+                ? __tinypy_compiler_concat_ascii(ctx, parts, parsed - 1U, line_number)
+                : __tinypy_compiler_concat_ascii(ctx, &part, 1U, line_number);
+            if (ascii == 0) {
+                break;
+            }
+            unicode = TINYPY_TRUE;
+        }
+        if (TINYPY_TEXT_BYTE_SIZE(part) != 0U) {
+            non_empty_count += 1U;
+            alone = parsed - 1U;
+        }
+        else if (non_empty_count == 0U) {
+            alone = parsed - 1U;
+        }
+    }
+    tinypy_value_t *result = NULL;
+
+    if (parsed == count) {
+        tinypy_value_type_e type = unicode != 0 ? TINYPY_VALUE_UNICODE : TINYPY_VALUE_STRING;
+
+        result = non_empty_count <= 1U && TINYPY_VALUE_KIND(parts[alone]) == type
+            ? TINYPY_RET(parts[alone])
+            : __tinypy_compiler_join_strings(ctx, parts, count, unicode);
+    }
+    while (parsed != 0U) {
+        parsed -= 1U;
+        TINYPY_DECREF(parts[parsed]);
+    }
+    return result;
 }

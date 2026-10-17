@@ -17,8 +17,10 @@ const char *tinypy_error_source_line(const tinypy_error_t *error, size_t *out_si
 int32_t tinypy_error_line_number(const tinypy_error_t *error);
 int32_t tinypy_error_column_offset(const tinypy_error_t *error);
 
-/* The error stores a copy of the allocator vtable, so it does not require a
- * live VM in order to be released. */
+/* The error and its message count against the heap budget of the VM until
+ * the error is released or the VM is destroyed. The error stores a copy of
+ * the allocator vtable, so it does not require a live VM in order to be
+ * released. */
 void tinypy_error_release(tinypy_error_t *error);
 
 #endif

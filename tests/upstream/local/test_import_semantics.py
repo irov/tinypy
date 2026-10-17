@@ -36,6 +36,37 @@ class ImportSemantics(unittest.TestCase):
     def test_reload_of_builtin_module(self):
         self.assertTrue(reload(sys) is sys)
 
+    def test_submodule_binding_failure_fails_the_import(self):
+        # add_submodule: a module gets the submodule in its namespace whatever
+        # its __setattr__ does; the error of another parent's setattr fails
+        # the import, which leaves the submodule in sys.modules. The parents
+        # stand in for this package, where the submodule is found.
+        import local
+
+        class Refusing(object):
+            __path__ = local.__path__
+
+            def __setattr__(self, name, value):
+                raise ValueError('refused ' + name)
+
+        class Module(type(sys)):
+            def __setattr__(self, name, value):
+                raise ValueError('refused ' + name)
+        package = Module('local')
+        package.__dict__['__path__'] = local.__path__
+        try:
+            sys.modules['local'] = Refusing()
+            self.assertEqual(self.failure(__import__, 'local.review_bound_module'), 'ValueError: refused review_bound_module')
+            self.assertEqual(sys.modules.pop('local.review_bound_module').VALUE, 1)
+            self.assertEqual(self.failure(__import__, 'local', {}, {}, ['review_bound_module']), 'ValueError: refused review_bound_module')
+            self.assertEqual(sys.modules.pop('local.review_bound_module').VALUE, 1)
+            sys.modules['local'] = package
+            self.assertTrue(__import__('local.review_bound_module') is package)
+            self.assertTrue(package.review_bound_module is sys.modules['local.review_bound_module'])
+        finally:
+            sys.modules['local'] = local
+            sys.modules.pop('local.review_bound_module', None)
+
     def test_missing_dotted_name_reports_the_rest(self):
         self.assertEqual(self.failure(__import__, 'tinypy_missing_top.sub'), 'ImportError: No module named tinypy_missing_top.sub')
         self.assertEqual(self.failure(__import__, 'tinypy_missing_top.sub.deeper'), 'ImportError: No module named tinypy_missing_top.sub.deeper')

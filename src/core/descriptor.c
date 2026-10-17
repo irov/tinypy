@@ -103,7 +103,8 @@ typedef enum tinypy_internal_c_descriptor_field_e {
     TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC = 96,
     TINYPY_INTERNAL_C_DESCRIPTOR_EXCEPTION_MEMBER = 97,
     TINYPY_INTERNAL_C_DESCRIPTOR_STRUCT_SEQUENCE_ITEM = 98,
-    TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD = 99
+    TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD = 99,
+    TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD = 100
 } tinypy_internal_c_descriptor_field_e;
 
 //////////////////////////////////////////////////////////////////////////
@@ -1057,6 +1058,10 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         __tinypy_internal_c_descriptor_receiver_error(descriptor, instance, TINYPY_FALSE, out_error);
         return NULL;
     }
+    if (field == TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD) {
+        function_result = tinypy_internal_sre_field(instance, descriptor->index, out_error);
+        return function_result;
+    }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_REAL && field <= TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_DENOMINATOR) {
         tinypy_value_t *result = tinypy_internal_numeric_field(instance, (int32_t)field - (int32_t)TINYPY_INTERNAL_C_DESCRIPTOR_NUMERIC_REAL, out_error);
 
@@ -1470,7 +1475,7 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "f_lineno can only be set by a trace function", out_error);
         }
-        else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME || field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_CELL_CONTENT || field == TINYPY_INTERNAL_C_DESCRIPTOR_INSTANCE_WEAKREF || field == TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD || (TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR && field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC)) {
+        else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME || field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_CELL_CONTENT || field == TINYPY_INTERNAL_C_DESCRIPTOR_INSTANCE_WEAKREF || field == TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD || (TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR && ((field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC) || field == TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD))) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("attribute '"), {(const char *)TINYPY_TEXT_BYTES(descriptor->name), TINYPY_TEXT_BYTE_SIZE(descriptor->name)},
                 TINYPY_MESSAGE_PART_LITERAL("' of '"), {descriptor->owner->name, descriptor->owner->name_size},
@@ -1970,6 +1975,24 @@ void tinypy_internal_initialize_memoryview_descriptors(tinypy_type_t *type) {
 
         TINYPY_C_DESCRIPTOR_OBJECT(descriptor)->index = index;
         tinypy_type_set_attr_key(type, names[index], descriptor);
+        TINYPY_DECREF(descriptor);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The readonly members of _sre's types and the getsets of its match
+   objects, in the order of tinypy_internal_sre_field_e. */
+void tinypy_internal_initialize_sre_descriptors(tinypy_vm_t *vm) {
+    tinypy_type_t *pattern_type = &vm->types[TINYPY_VALUE_SRE_PATTERN];
+    tinypy_type_t *match_type = &vm->types[TINYPY_VALUE_SRE_MATCH];
+    tinypy_type_t *const owners[] = {pattern_type, pattern_type, pattern_type, pattern_type, match_type, match_type, match_type, match_type, match_type, match_type, match_type, vm->sre_scanner_type};
+    tinypy_value_t *const names[] = {vm->internal_pattern_key, vm->internal_flags_key, vm->internal_groups_key, vm->internal_groupindex_key, vm->internal_string_key, vm->internal_re_key, vm->internal_pos_key, vm->internal_endpos_key, vm->internal_lastindex_key, vm->internal_lastgroup_key, vm->internal_regs_key, vm->internal_pattern_key};
+
+    for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        tinypy_value_type_e kind = index >= (size_t)TINYPY_INTERNAL_SRE_FIELD_LASTINDEX && index <= (size_t)TINYPY_INTERNAL_SRE_FIELD_REGS ? TINYPY_VALUE_GETSET_DESCRIPTOR : TINYPY_VALUE_MEMBER_DESCRIPTOR;
+        tinypy_value_t *descriptor = __tinypy_internal_c_descriptor_new(vm, kind, owners[index], names[index], TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD, TINYPY_FALSE);
+
+        TINYPY_C_DESCRIPTOR_OBJECT(descriptor)->index = index;
+        tinypy_type_set_attr_key(owners[index], names[index], descriptor);
         TINYPY_DECREF(descriptor);
     }
 }

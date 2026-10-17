@@ -164,7 +164,7 @@ static tinypy_bool_t __tinypy_operator_remainder_is_dividend(const tinypy_intege
 //////////////////////////////////////////////////////////////////////////
 /* Unary plus and abs() of a numeric subclass instance yield the exact base
    type, as int_pos and friends do. */
-static tinypy_value_t *__tinypy_operator_exact_number(tinypy_vm_t *vm, tinypy_value_t *value) {
+static tinypy_value_t *__tinypy_operator_exact_number(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (value->type == &vm->types[kind] && kind != TINYPY_VALUE_BOOL) {
@@ -175,7 +175,7 @@ static tinypy_value_t *__tinypy_operator_exact_number(tinypy_vm_t *vm, tinypy_va
         return integer;
     }
     if (kind == TINYPY_VALUE_LONG) {
-        tinypy_value_t *copy = tinypy_long_from_base15_digits(vm, TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value));
+        tinypy_value_t *copy = tinypy_internal_long_from_base15_digits_checked(vm, TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value), out_error);
         return copy;
     }
     if (kind == TINYPY_VALUE_FLOAT) {
@@ -1401,7 +1401,7 @@ tinypy_value_t *tinypy_positive(tinypy_value_t *value, tinypy_error_t **out_erro
         return return_value_2;
     }
     if (__tinypy_operator_is_integer(kind) != 0 || kind == TINYPY_VALUE_FLOAT || kind == TINYPY_VALUE_COMPLEX) {
-        tinypy_value_t *exact = __tinypy_operator_exact_number(vm, value);
+        tinypy_value_t *exact = __tinypy_operator_exact_number(vm, value, out_error);
         return exact;
     }
     if (value->type->number_slots != NULL && value->type->number_slots->positive != NULL) {
@@ -2387,7 +2387,10 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
         size_t other_size;
 
         (void)tinypy_internal_bytes_view(other, &other_bytes, &other_size);
-        tinypy_value_t *decoded = tinypy_string_from_bytes(vm, (const char *)other_bytes, other_size);
+        tinypy_value_t *decoded = tinypy_internal_string_from_bytes_checked(vm, other_bytes, other_size, out_error);
+        if (decoded == NULL) {
+            return NULL;
+        }
         tinypy_value_t *text = __tinypy_operator_concat_text(vm, sequence, decoded, TINYPY_TRUE, out_error);
         TINYPY_DECREF(decoded);
         return text;
@@ -2959,7 +2962,10 @@ static tinypy_value_t *__tinypy_operator_integer_true_divide(tinypy_vm_t *vm, ti
         return zero;
     }
     shift = (diff > DBL_MIN_EXP ? diff : DBL_MIN_EXP) - DBL_MANT_DIG - 2;
-    magnitude = tinypy_long_from_base15_digits(vm, 1, dividend.digits, dividend.count);
+    magnitude = tinypy_internal_long_from_base15_digits_checked(vm, 1, dividend.digits, dividend.count, out_error);
+    if (magnitude == NULL) {
+        return NULL;
+    }
     if (shift <= 0) {
         shifted = __tinypy_operator_integer_left_shift(vm, magnitude, (size_t)(-shift), TINYPY_TRUE, out_error);
     }
@@ -4045,7 +4051,7 @@ tinypy_value_t *tinypy_internal_unary_builtin(tinypy_value_t *value, int32_t mod
             return result;
         }
         if (kind == TINYPY_VALUE_LONG) {
-            tinypy_value_t *result = tinypy_long_from_base15_digits(vm, TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value));
+            tinypy_value_t *result = tinypy_internal_long_from_base15_digits_checked(vm, TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value), out_error);
 
             return result;
         }
@@ -4072,7 +4078,7 @@ tinypy_value_t *tinypy_internal_unary_builtin(tinypy_value_t *value, int32_t mod
             tinypy_integer_view_t view;
 
             __tinypy_operator_integer_view(value, &view);
-            tinypy_value_t *result = tinypy_long_from_base15_digits(vm, -view.sign, view.digits, view.count);
+            tinypy_value_t *result = tinypy_internal_long_from_base15_digits_checked(vm, -view.sign, view.digits, view.count, out_error);
 
             return result;
         }
@@ -4110,7 +4116,7 @@ tinypy_value_t *tinypy_internal_unary_builtin(tinypy_value_t *value, int32_t mod
         return result;
     }
     if (kind == TINYPY_VALUE_LONG) {
-        tinypy_value_t *result = TINYPY_LONG_SIGN(value) < 0 ? tinypy_internal_unary_builtin(value, 1, out_error) : tinypy_long_from_base15_digits(vm, TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value));
+        tinypy_value_t *result = TINYPY_LONG_SIGN(value) < 0 ? tinypy_internal_unary_builtin(value, 1, out_error) : tinypy_internal_long_from_base15_digits_checked(vm, TINYPY_LONG_SIGN(value), TINYPY_LONG_OBJECT(value)->digits, TINYPY_LONG_DIGIT_COUNT(value), out_error);
 
         return result;
     }

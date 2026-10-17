@@ -4054,7 +4054,7 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
     }
     else {
         __tinypy_eval_unwind_stack(frame, 0U);
-        tinypy_internal_frame_clear_local_slots(frame);
+        tinypy_internal_frame_clear_locals(frame);
         if (TINYPY_REFCNT(frame_value) == 1) {
             tinypy_internal_frame_release_fast(frame);
         }

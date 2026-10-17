@@ -1739,6 +1739,42 @@ TINYPY_NOINLINE void tinypy_internal_vm_allocation_error(tinypy_vm_t *vm, tinypy
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "memory allocation failed", out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+static void *__tinypy_internal_vm_heap_allocate(void *user_data, size_t size, size_t alignment) {
+    tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
+
+    (void)alignment;
+    void *memory = __tinypy_internal_vm_allocate_checked(vm, size, NULL);
+    return memory;
+}
+//////////////////////////////////////////////////////////////////////////
+static void *__tinypy_internal_vm_heap_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
+    tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
+
+    (void)alignment;
+    void *resized = __tinypy_internal_vm_reallocate_checked(vm, memory, old_size, new_size, NULL);
+    return resized;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_vm_heap_deallocate(void *user_data, void *memory, size_t size, size_t alignment) {
+    tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
+
+    (void)alignment;
+    tinypy_internal_vm_deallocate(vm, memory, size);
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_allocator_t tinypy_internal_vm_heap_allocator(tinypy_vm_t *vm) {
+    tinypy_allocator_t allocator;
+
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = vm;
+    allocator.allocate = __tinypy_internal_vm_heap_allocate;
+    allocator.reallocate = __tinypy_internal_vm_heap_reallocate;
+    allocator.deallocate = __tinypy_internal_vm_heap_deallocate;
+    return allocator;
+}
+//////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
 
@@ -2297,6 +2333,7 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     tinypy_internal_cycle_diagnostics_finalize(vm);
 #endif
     tinypy_internal_pool_finalize(vm);
+    tinypy_internal_error_detach_all(vm);
 
     allocator = vm->allocator;
     allocator.deallocate(

@@ -377,8 +377,7 @@ tinypy_value_t *tinypy_internal_class_create(tinypy_type_t *type, tinypy_value_t
         if (index == 0U && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_STRING) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("argument 1 must be string, not "),
-                {TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE ? "None" : value->type->name,
-                 TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE ? 4U : value->type->name_size}
+                TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(value)
             };
 
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);

@@ -1573,3 +1573,61 @@ class EvaluationSemantics(unittest.TestCase):
         del function
         self.assertIs(reference(), None)
         self.assertEqual(called, [reference])
+
+    def test_exited_frame_lets_its_locals_snapshot_go(self):
+        # A frame whose f_locals or locals() snapshot holds the frame itself
+        # or a traceback through it: tinypy breaks the cycle when the frame
+        # exits, CPython collects it.
+        import _weakref
+
+        class Probe(object):
+            pass
+
+        def own_frame():
+            probe = Probe()
+            frame = sys._getframe()
+            frame.f_locals
+            return _weakref.ref(probe)
+
+        def traceback_frame():
+            probe = Probe()
+            try:
+                raise ValueError('x')
+            except ValueError:
+                traceback = sys.exc_info()[2]
+                traceback.tb_frame.f_locals
+            return _weakref.ref(probe)
+
+        def formatted_locals():
+            probe = Probe()
+            try:
+                {}['key']
+            except KeyError:
+                kind, error, traceback = sys.exc_info()
+                text = '%(kind)s' % locals()
+            return _weakref.ref(probe), text
+
+        def generator():
+            probe = Probe()
+            frame = sys._getframe()
+            frame.f_locals
+            yield _weakref.ref(probe)
+
+        def collected(reference):
+            try:
+                import gc
+            except ImportError:
+                pass
+            else:
+                gc.collect()
+            return reference() is None
+        iterator = generator()
+        finished = next(iterator)
+        self.assertEqual(list(iterator), [])
+        iterator = generator()
+        closed = next(iterator)
+        iterator = None
+        reference, text = formatted_locals()
+        self.assertEqual(text, "<type 'exceptions.KeyError'>")
+        self.assertEqual([collected(own_frame()), collected(traceback_frame()), collected(reference), collected(finished), collected(closed)],
+                         [True] * 5)

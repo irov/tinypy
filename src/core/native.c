@@ -198,9 +198,12 @@ static tinypy_bool_t __tinypy_native_function_check_receiver(tinypy_value_t *cal
         return TINYPY_TRUE;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+    /* methoddescr_call shows the type names as "%.100s", descr_check whole. */
+    size_t type_precision = binding != TINYPY_FALSE ? SIZE_MAX : 100U;
     tinypy_message_part_t owner[3];
 
     __tinypy_native_function_owner_name(callable, owner);
+    tinypy_internal_message_parts_precision(owner, 3U, type_precision);
     if (receiver == NULL) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
@@ -213,6 +216,7 @@ static tinypy_bool_t __tinypy_native_function_check_receiver(tinypy_value_t *cal
         tinypy_message_part_t receiver_name[3];
 
         tinypy_internal_type_message_name(receiver->type, receiver_name);
+        tinypy_internal_message_parts_precision(receiver_name, 3U, type_precision);
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
             TINYPY_MESSAGE_PART_LITERAL("' requires a '"), owner[0], owner[1], owner[2],
@@ -575,17 +579,42 @@ tinypy_value_t *tinypy_internal_native_function_call_items(tinypy_value_t *calla
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Whether a method call may run a method descriptor with the instance as self
-   instead of the built-in method binding would create. */
-tinypy_bool_t tinypy_internal_native_method_calls_unbound(tinypy_value_t *descriptor, tinypy_value_t *instance) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+/* An unbound method descriptor applies to the instances of its owner. */
+static tinypy_bool_t __tinypy_native_function_applies(tinypy_value_t *descriptor, tinypy_value_t *instance) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(descriptor);
 
-    if (descriptor->type != vm->native_method_descriptor_type || function->items_callback == NULL || function->self != NULL) {
+    if (function->self != NULL) {
         return TINYPY_FALSE;
     }
     tinypy_type_t *owner = tinypy_internal_native_function_owner(descriptor);
     tinypy_bool_t result = function->owner == NULL || (owner != NULL && tinypy_type_is_subtype(instance->type, owner) != TINYPY_FALSE) ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Whether a method call may run a method descriptor with the instance as self
+   instead of the built-in method binding would create. */
+tinypy_bool_t tinypy_internal_native_method_calls_unbound(tinypy_value_t *descriptor, tinypy_value_t *instance) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+
+    if (descriptor->type != vm->native_method_descriptor_type || TINYPY_NATIVE_FUNCTION_OBJECT(descriptor)->items_callback == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t result = __tinypy_native_function_applies(descriptor, instance);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Whether a method or slot wrapper descriptor may run with the instance as
+   self, as the C slot it stands for does, instead of the built-in method
+   binding would create. */
+tinypy_bool_t tinypy_internal_native_method_applies(tinypy_value_t *descriptor, tinypy_value_t *instance) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+
+    if (descriptor->type != vm->native_method_descriptor_type && descriptor->type != vm->native_wrapper_descriptor_type) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t result = __tinypy_native_function_applies(descriptor, instance);
 
     return result;
 }
@@ -748,7 +777,9 @@ static tinypy_value_t *__tinypy_native_class_method_descriptor_call(tinypy_value
     tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
     tinypy_message_part_t received_name[3];
 
+    /* classmethoddescr_call shows the type names as "%.100s". */
     tinypy_internal_type_message_name(class_value->type, received_name);
+    tinypy_internal_message_parts_precision(received_name, 3U, 100U);
     if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
@@ -764,6 +795,7 @@ static tinypy_value_t *__tinypy_native_class_method_descriptor_call(tinypy_value
         tinypy_message_part_t owner_name[3];
 
         __tinypy_native_function_owner_name(callable, owner_name);
+        tinypy_internal_message_parts_precision(owner_name, 3U, 100U);
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("descriptor '"), TINYPY_MESSAGE_PART_TEXT(function->name),
             TINYPY_MESSAGE_PART_LITERAL("' requires a subtype of '"), owner_name[0], owner_name[1], owner_name[2],

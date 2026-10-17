@@ -238,8 +238,7 @@ static tinypy_bool_t __tinypy_module_arguments(tinypy_vm_t *vm, tinypy_value_t *
         if (index == 0U && TINYPY_VALUE_KIND(values[index]) != TINYPY_VALUE_STRING) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("module.__init__() argument 1 must be string, not "),
-                {TINYPY_VALUE_KIND(values[index]) == TINYPY_VALUE_NONE ? "None" : values[index]->type->name,
-                 TINYPY_VALUE_KIND(values[index]) == TINYPY_VALUE_NONE ? 4U : values[index]->type->name_size}
+                TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(values[index])
             };
 
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);

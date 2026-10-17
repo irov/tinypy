@@ -692,27 +692,46 @@ static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *va
 /* slot_tp_repr and slot_tp_str: the result, of whatever type, of the
    __repr__ or __str__ of the type. One that is missing or does not bind,
    such as a slot wrapper of an unrelated type, is ignored there: the repr
-   reads as "<name object at address>" and the str as the repr. A classic
+   reads as "<name object at address>" and the str as the repr. A built-in
+   method that applies to the value stands for a C slot, such as
+   BaseException_str, which runs without a method to bind. A classic
    instance, as instance_repr and instance_str, looks the method up as an
    attribute and misses only one raising AttributeError; its repr then reads
    as "<module.name instance at address>". */
 tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *method;
-    int32_t found = tinypy_internal_object_lookup_special_key(value, name, &method, out_error);
+    tinypy_value_t *method = NULL;
 
-    if (found > 0) {
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+        if (tinypy_internal_object_lookup_special_key(value, name, &method, out_error) < 0) {
+            return NULL;
+        }
+    }
+    else {
+        tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, name);
+
+        if (attribute != NULL && tinypy_internal_native_method_applies(attribute, value) != 0) {
+            /* The call may drop the method from the type. */
+            TINYPY_INCREF(attribute);
+            tinypy_value_t *slot_result = tinypy_internal_native_function_call_method(attribute, value, NULL, 0U, NULL, out_error);
+
+            TINYPY_DECREF(attribute);
+            return slot_result;
+        }
+        if (attribute != NULL) {
+            method = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
+            if (method == NULL) {
+                __tinypy_representation_discard_error(vm, out_error);
+            }
+        }
+    }
+    if (method != NULL) {
         tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
         tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
         TINYPY_DECREF(args);
         TINYPY_DECREF(method);
         return result;
-    }
-    if (found < 0) {
-        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
-            return NULL;
-        }
-        __tinypy_representation_discard_error(vm, out_error);
     }
     if (name == vm->internal_special_str_key) {
         tinypy_value_t *representation = tinypy_internal_object_call_representation(value, vm->internal_special_repr_key, out_error);
@@ -1102,23 +1121,29 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         return TINYPY_TRUE;
     case TINYPY_VALUE_CODE: {
         tinypy_code_object_t *code = TINYPY_CODE_OBJECT(value);
+        size_t name_size = __tinypy_internal_message_precision(TINYPY_TEXT_BYTE_SIZE(code->name), 100U);
+        size_t filename_size = __tinypy_internal_message_precision(TINYPY_TEXT_BYTE_SIZE(code->filename), 300U);
 
+        /* code_repr shows the name as "%.100s", the file as "%.300s" and a
+           first line of 0 as -1. */
         __tinypy_representation_append(builder, "<code object ", 13U);
-        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(code->name), TINYPY_TEXT_BYTE_SIZE(code->name));
+        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(code->name), name_size);
         __tinypy_representation_append(builder, " at ", 4U);
         __tinypy_representation_pointer(builder, value);
         __tinypy_representation_append(builder, ", file \"", 8U);
-        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(code->filename), TINYPY_TEXT_BYTE_SIZE(code->filename));
+        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(code->filename), filename_size);
         __tinypy_representation_append(builder, "\", line ", 8U);
-        __tinypy_representation_integer(builder, code->first_line_number);
+        __tinypy_representation_integer(builder, code->first_line_number != 0 ? code->first_line_number : -1);
         __tinypy_representation_append_character(builder, (uint8_t)'>');
         return TINYPY_TRUE;
     }
     case TINYPY_VALUE_GENERATOR: {
         tinypy_value_t *code_name = TINYPY_CODE_OBJECT(TINYPY_GENERATOR_OBJECT(value)->code)->name;
+        size_t name_size = __tinypy_internal_message_precision(TINYPY_TEXT_BYTE_SIZE(code_name), 200U);
 
+        /* gen_repr shows the name as "%.200s". */
         __tinypy_representation_append(builder, "<generator object ", 18U);
-        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(code_name), TINYPY_TEXT_BYTE_SIZE(code_name));
+        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(code_name), name_size);
         __tinypy_representation_append(builder, " at ", 4U);
         __tinypy_representation_pointer(builder, value);
         __tinypy_representation_append_character(builder, (uint8_t)'>');

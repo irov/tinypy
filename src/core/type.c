@@ -918,7 +918,7 @@ static const tinypy_type_t **__tinypy_internal_collect_type_bases(tinypy_vm_t *v
     return types;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_internal_type_mangle_slot_name(tinypy_vm_t *vm, const char *class_name, size_t class_name_size, tinypy_value_t *slot_name) {
+static tinypy_value_t *__tinypy_internal_type_mangle_slot_name(tinypy_vm_t *vm, const char *class_name, size_t class_name_size, tinypy_value_t *slot_name, tinypy_error_t **out_error) {
     const uint8_t *bytes = TINYPY_TEXT_BYTES(slot_name);
     size_t size = TINYPY_TEXT_BYTE_SIZE(slot_name);
     size_t class_start = 0U;
@@ -935,11 +935,14 @@ static tinypy_value_t *__tinypy_internal_type_mangle_slot_name(tinypy_vm_t *vm, 
         return TINYPY_RET(slot_name);
     }
     mangled_size = 1U + class_name_size - class_start + size;
-    mangled = (uint8_t *)tinypy_internal_vm_allocate(vm, mangled_size);
+    mangled = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, mangled_size, out_error);
+    if (mangled == NULL) {
+        return NULL;
+    }
     mangled[0] = '_';
     (void)memcpy(mangled + 1U, class_name + class_start, class_name_size - class_start);
     (void)memcpy(mangled + 1U + class_name_size - class_start, bytes, size);
-    tinypy_value_t *result = tinypy_string_from_bytes(vm, mangled, mangled_size);
+    tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(vm, mangled, mangled_size, out_error);
     tinypy_internal_vm_deallocate(vm, mangled, mangled_size);
     return result;
 }
@@ -1042,7 +1045,10 @@ static tinypy_value_t *__tinypy_internal_type_parse_slots(tinypy_vm_t *vm, const
             *out_weakref = INT32_C(1);
             continue;
         }
-        name = __tinypy_internal_type_mangle_slot_name(vm, class_name, class_name_size, entry);
+        name = __tinypy_internal_type_mangle_slot_name(vm, class_name, class_name_size, entry, out_error);
+        if (name == NULL) {
+            goto cleanup;
+        }
         tinypy_bool_t appended = tinypy_internal_list_append_checked(names, name, out_error);
 
         TINYPY_DECREF(name);
@@ -1064,7 +1070,7 @@ static tinypy_value_t *__tinypy_internal_type_parse_slots(tinypy_vm_t *vm, const
         }
         TINYPY_DECREF(sorted);
     }
-    result = tinypy_tuple_from_items(vm, TINYPY_LIST_OBJECT(names)->items, TINYPY_LIST_SIZE(names));
+    result = tinypy_internal_tuple_from_items_checked(vm, TINYPY_LIST_OBJECT(names)->items, TINYPY_LIST_SIZE(names), out_error);
 cleanup:
     TINYPY_DECREF(names);
     TINYPY_DECREF(inputs);

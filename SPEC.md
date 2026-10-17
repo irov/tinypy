@@ -121,9 +121,12 @@ Pool state принадлежит конкретной `tinypy_vm_t`; process gl
 для него не используются. Host видит реальные внешние allocations, а не каждый
 логический pooled object. При budget preflight `max_heap_bytes` учитывает VM
 object, arena table, полный зарезервированный размер arenas и все прямые
-allocations; запрос, в котором host отказал, не учитывается. Вычисляемые
-результаты `long`, text, buffer, list и tuple отклоняются с `MemoryError`,
-если они не помещаются в остаток budget.
+allocations; запрос, в котором host отказал, не учитывается. `tinypy_error_t`
+вместе с message, отрисованным в него при первом чтении, тоже прямая
+allocation VM: он учитывается, пока host его не освободит или VM не будет
+уничтожена, но budget его не отклоняет, поэтому raise не зависит от остатка
+budget. Вычисляемые результаты `long`, text, buffer, list и tuple отклоняются с
+`MemoryError`, если они не помещаются в остаток budget.
 
 Bootstrap VM выполняется целиком и только затем сверяется с budget: если
 занятая им память больше `max_heap_bytes`, `tinypy_vm_create` освобождает всё
@@ -232,13 +235,19 @@ Functions, bound Python methods, code objects, generators, set и frozenset
 при закрытии во время уничтожения. Basic ref/proxy caches сохраняют порядок
 references и callbacks; изменение callable protocol referent не создаёт второй
 basic proxy. Lookup из `_remove_dead_weakref` выполняется один раз и подавляет
-только `KeyError`, включая subclasses. Weak references экземпляра очищаются
-до его `__del__`, а созданные этим `__del__`, если он не воскресил объект, —
-без вызова их callbacks. Класс, как в `type_dealloc` CPython, сохраняет weak
-references, через которые его перечисляют базы и находят его дескрипторы, до
-конца `__del__` своего метакласса: воскрешённый класс остаётся подклассом
-своих баз, а когда класс всё-таки освобождается, callbacks его weak references
-выполняются после `__del__`. Объекты,
+только `KeyError`, включая subclasses. Как в `subtype_dealloc`, weak
+references экземпляра, weak list которого добавил его класс, очищаются до его
+`__del__`, а созданные этим `__del__`, если он не воскресил объект, — без
+вызова их callbacks. У `type`, `set`, `frozenset` и `partial` weak list
+собственный: как их dealloc в CPython, он очищается после `__del__`
+подкласса, поэтому `__del__` видит weak references живыми, а callbacks, в том
+числе созданных им references, выполняются после него. Так класс сохраняет
+weak references, через которые его перечисляют базы и находят его
+дескрипторы, до конца `__del__` своего метакласса, и воскрешённый класс
+остаётся подклассом своих баз. Экземпляры подклассов native types, в том
+числе `_struct.Struct`, очищают weak references до `__del__` и native
+finalizer, как экземпляры классов, добавивших weak list; для
+`_struct.Struct` это отличие от CPython. Объекты,
 которые финализатор освобождает напрямую, не откладываются очередью
 освобождения, поэтому глубокая цепочка вызывает каждый `__del__` один раз.
 Уничтожаемая weak reference отсоединяется от referent до освобождения своих
@@ -279,7 +288,13 @@ custom `mro()` вычисляет MRO нового класса, поиск в �
 `__mro__` при каждом обращении возвращает новый кортеж с владеющими ссылками,
 и `C.__mro__ is C.__mro__` ложно, в отличие от CPython. Hook вызывается при
 создании типа и пересчёте MRO потомков после изменения баз; результат должен
-содержать классы с совместимым solid layout. Пересекающиеся реентерабельные
+содержать классы с совместимым solid layout. После присваивания `__bases__`
+MRO типа и каждого потомка вычисляется один раз: потомки — в ширину в порядке
+подклассов, каждый после пересчитываемых баз, поэтому hook видит их новые MRO.
+`mro_subclasses` CPython обходит `tp_subclasses` в глубину и вызывает hook
+потомка, достижимого несколькими путями, на каждом из них, в первый раз ещё со
+старым MRO другой его базы; tinypy намеренно вызывает hook один раз в
+детерминированном порядке. Пересекающиеся реентерабельные
 присваивания `__bases__` во время hook отвергаются с RuntimeError; неудачный
 пересчёт откатывает MRO и базы. Классы, которые Python-код (hook или сравнение
 ключей) создаёт во время пересчёта из заменяемого MRO, получают MRO заново, как
@@ -634,7 +649,11 @@ traceback удаляют имена, `sys.exc_info()` возвращает вм�
 
 При выходе из frame его fast locals освобождаются сразу, даже если frame
 остаётся достижим через traceback: без cyclic GC это разрывает циклы
-frame -> locals -> frame. Это намеренное отличие от CPython.
+frame -> locals -> frame. Вместе с ними function frame отпускает и mapping,
+который из них построили `f_locals` или `locals()`, а frame generator — когда
+generator завершается: тот, кто ещё держит mapping, получает его неизменным, а
+последующее чтение `f_locals` строит новый из освобождённых locals. Это
+намеренное отличие от CPython.
 
 `enumerate`, как `enum_next`, заполняет свою пару результата заново, пока
 владеет ею один. Исчерпанный `enumerate` отпускает свою пару, даже если её ещё
@@ -797,7 +816,9 @@ Immutable build profile хранит typed constants и deterministic digest.
 ^__[A-Z][A-Z0-9_]*__$
 ```
 
-Profile полностью копирует входные данные через host allocator. Input order не
+Profile полностью копирует входные данные через host allocator; запрос, в
+котором allocator отказал, завершает `tinypy_build_profile_create` с
+`TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED`, освободив всё выделенное. Input order не
 влияет на canonical ordering и digest. Optimize level входит в profile.
 
 При включённом `TINYPY_COMPILE_FEATURE_PREPROCESSOR` каждое чтение bare name
@@ -878,6 +899,9 @@ imaginary literal либо его суммой или разностью с real
 Каждый code object graph, полученный из source, разделяет refcounted immutable
 compile environment: feature flags, optimize level и optional deep copy build
 profile. Поэтому исходный host profile можно уничтожить сразу после compile.
+Environment и копия profile находятся в heap VM и учитываются в
+`max_heap_bytes`; отказ host или budget завершает compile или import с
+`MemoryError`.
 
 Python-visible `compile`, `eval` и string `exec` наследуют environment текущего
 frame. `dont_inherit` отключает только inheritance future flags и не отключает
@@ -901,6 +925,11 @@ callback; `package_token` package artifact — путь каталога пак�
 packages, circular imports и rollback при ошибке resolution, compilation или
 execution; `MemoryError` при записи metadata модуля (`__name__`, `__file__`,
 `__path__`) или его регистрации в `sys.modules` откатывает import так же.
+Загруженный submodule, как в `add_submodule`, привязывается к parent: module
+получает его в своём namespace, минуя `__setattr__`, другой объект из
+`sys.modules` — как атрибут. Ошибка привязки, исключение `__setattr__` или
+`MemoryError`, завершает import, а submodule, как в CPython, остаётся в
+`sys.modules`.
 Если loader при `reload` заменяет зарегистрированный объект, результатом
 становится этот объект; исходный модуль сохраняет свой namespace. Replacement
 не обязан быть модулем. Обычная повторная загрузка source artifact исполняется
@@ -962,8 +991,9 @@ exception, и исключение, которое обработал Python-к�
 Kind такого error так же вычисляется при первом чтении `tinypy_error_kind` по
 классу, с которым exception был поднят. `tinypy_vm_destroy` сначала вычисляет
 message и kind всех ещё не прочитанных errors, поэтому error остаётся пригодным
-и после уничтожения VM. Код, который выполняет чтение (`str()` или освобождение
-класса), может освободить сам error: тогда он освобождается после чтения, а
+и после уничтожения VM; до этого он учитывается в heap budget VM (раздел 5).
+Код, который выполняет чтение (`str()` или освобождение класса), может
+освободить сам error: тогда он освобождается после чтения, а
 `tinypy_error_message` возвращает пустой message.
 
 Recoverable categories включают:

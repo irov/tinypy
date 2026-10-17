@@ -304,7 +304,12 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
         code = tinypy_internal_compiler_compile(&ctx, out_error);
     }
     if (code != NULL) {
-        tinypy_internal_code_attach_compile_options(code, options->feature_flags, options->optimize_level, options->build_profile);
+        tinypy_bool_t attached = tinypy_internal_code_attach_compile_options(code, options->feature_flags, options->optimize_level, options->build_profile, out_error);
+
+        if (attached == 0) {
+            TINYPY_DECREF(code);
+            code = NULL;
+        }
     }
     tinypy_internal_compiler_arena_destroy(&ctx);
     return code;

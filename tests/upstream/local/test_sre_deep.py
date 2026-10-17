@@ -368,3 +368,130 @@ class SREDeep(unittest.TestCase):
         self.assertEqual([found.span() for found in repeated.finditer(subject)], [(0, 0), (1, 1), (2, 2)])
         self.assertEqual(repeated.split(subject), ['ab'])
         self.assertEqual(repeated.search(subject, 3).span(), (2, 2))
+
+    def test_failed_attempts_leave_the_marks_of_python27(self):
+        # MIN_REPEAT_ONE counts one item past its maximum before it fails,
+        # MIN_UNTIL keeps only the last mark around its tail, and BRANCH in a
+        # repeat saves marks up to the last mark only when it is above 0.
+        one = _sre.compile('(?!.??(a)c)\\w', 0, [17, 4, 0, 1, 1, 5, 17, 0, 31, 5, 0, 1, 2, 1, 21, 0, 19, 97, 21, 1, 19, 99,
+                                                  1, 15, 4, 9, 4, 0, 1], 1, {}, [None, None])
+        found = one.search('aab')
+        self.assertEqual((found.span(), found.regs, found.lastindex, found.groups()),
+                         ((0, 1), ((0, 1), (-1, -1)), None, (None,)))
+        until = _sre.compile('(?!(?:y)*?(a))\\B', 0, [17, 4, 0, 0, 0, 5, 16, 0, 28, 5, 0, 4294967295L, 19, 121, 23, 21, 0,
+                                                       19, 97, 21, 1, 1, 6, 4, 1], 1, {}, [None, None])
+        found = until.search('a1')
+        self.assertEqual((found.span(), found.regs, found.lastindex, found.groups()),
+                         ((1, 1), ((1, 1), (1, 1)), 1, ('',)))
+        branch = _sre.compile('(([abc]?)*?\\2|ab*)+?c', 0, [17, 4, 0, 1, 0, 28, 46, 1, 4294967295L, 21, 0, 7, 25, 28, 18, 0,
+                                                            4294967295L, 21, 2, 29, 10, 0, 1, 15, 5, 27, 97, 99, 0, 1, 21, 3,
+                                                            23, 12, 1, 18, 14, 12, 19, 97, 29, 6, 0, 4294967295L, 19, 98, 1,
+                                                            18, 2, 0, 21, 1, 23, 19, 99, 1], 2, {}, [None, None, None])
+        found = branch.search('ac')
+        self.assertEqual((found.span(), found.regs, found.lastindex, found.groups()),
+                         ((0, 2), ((0, 2), (2, 1), (-1, -1)), 1, ('', None)))
+
+    def test_data_attributes_are_readonly_members_and_getsets(self):
+        pattern = _optional()
+        found = pattern.match('a')
+        scanner = pattern.scanner('a')
+        for instance, name, members, getsets, values in (
+                (pattern, '_sre.SRE_Pattern', ('pattern', 'flags', 'groups', 'groupindex'), (),
+                 ('(?P<word>a)?', 0, 1, {'word': 1})),
+                (found, '_sre.SRE_Match', ('string', 're', 'pos', 'endpos'), ('lastindex', 'lastgroup', 'regs'),
+                 ('a', pattern, 0, 1, 1, 'word', ((0, 1), (0, 1)))),
+                (scanner, '_sre.SRE_Scanner', ('pattern',), (), (pattern,))):
+            owner = type(instance)
+            for attribute, value in zip(members + getsets, values):
+                descriptor = owner.__dict__[attribute]
+                member = attribute in members
+                self.assertEqual(type(descriptor).__name__, 'member_descriptor' if member else 'getset_descriptor')
+                self.assertEqual(repr(descriptor), "<%s '%s' of '%s' objects>" % ('member' if member else 'attribute',
+                                                                                   attribute, name))
+                self.assertIn(attribute, dir(instance))
+                self.assertIs(descriptor.__get__(None, owner), descriptor)
+                self.assertEqual(descriptor.__get__(instance, owner), value)
+                self.assertEqual(getattr(instance, attribute), value)
+                with self.assertRaises(TypeError) as context:
+                    descriptor.__get__(1, int)
+                self.assertEqual(str(context.exception), "descriptor '%s' for '%s' objects doesn't apply to 'int' object"
+                                 % (attribute, name))
+                message = 'readonly attribute' if member else "attribute '%s' of '%s' objects is not writable" % (attribute, name)
+                for change in (lambda: setattr(instance, attribute, 1), lambda: delattr(instance, attribute)):
+                    with self.assertRaises(TypeError if member else AttributeError) as context:
+                        change()
+                    self.assertEqual(str(context.exception), message)
+                self.assertEqual(getattr(instance, attribute), value)
+
+    def test_patterns_and_matches_refuse_copies(self):
+        pattern = _letter()
+        found = pattern.match('a')
+        for value, kind in ((pattern, 'pattern'), (found, 'match')):
+            for method, verb, arguments in (('__copy__', 'copy', ()), ('__deepcopy__', 'deepcopy', ({},))):
+                with self.assertRaises(TypeError) as context:
+                    getattr(value, method)(*arguments)
+                self.assertEqual(str(context.exception), 'cannot %s this %s object' % (verb, kind))
+            for call, message in ((lambda: value.__copy__(1), '__copy__() takes no arguments (1 given)'),
+                                  (lambda: value.__deepcopy__(), '__deepcopy__() takes exactly one argument (0 given)'),
+                                  (lambda: value.__deepcopy__(memo={}), '__deepcopy__() takes no keyword arguments')):
+                with self.assertRaises(TypeError) as context:
+                    call()
+                self.assertEqual(str(context.exception), message)
+        with self.assertRaises(TypeError) as context:
+            type(pattern).__copy__(found)
+        self.assertEqual(str(context.exception),
+                         "descriptor '__copy__' requires a '_sre.SRE_Pattern' object but received a '_sre.SRE_Match'")
+
+    def test_compile_parses_its_arguments_as_python27(self):
+        code = [19, 97, 1]
+        for arguments, kind, message in (
+                (('a', 'x', 'x'), TypeError, 'an integer is required'),
+                (('a', 1.5, code), TypeError, 'integer argument expected, got float'),
+                (('a', 1 << 31, code), OverflowError, 'signed integer is greater than maximum'),
+                (('a', -(1 << 31) - 1, code), OverflowError, 'signed integer is less than minimum'),
+                (('a', 0, 'x'), TypeError, 'argument 3 must be list, not str'),
+                (('a', 0, tuple(code)), TypeError, 'argument 3 must be list, not tuple'),
+                (('a', 0, None), TypeError, 'argument 3 must be list, not None'),
+                (('a', 0, code, 'x'), TypeError, 'an integer is required'),
+                (('a', 0, code, 1.5), TypeError, 'integer argument expected, got float'),
+                (('a', 0, code, 1 << 64), OverflowError, 'Python int too large to convert to C long')):
+            with self.assertRaises(kind) as context:
+                _sre.compile(*arguments)
+            self.assertEqual(str(context.exception), message)
+        class Integer(object):
+            def __init__(self, value):
+                self.value = value
+            def __int__(self):
+                return self.value
+        class Code(list):
+            pass
+        pattern = _sre.compile(5, Integer(0), Code([21, 0, 19, 97, 21, 1, 1]), Integer(1), 7, (None, 'name'))
+        self.assertEqual((pattern.pattern, pattern.flags, pattern.groups, pattern.groupindex), (5, 0, 1, 7))
+        found = pattern.match('a')
+        self.assertEqual((found.lastindex, found.lastgroup, found.group(1)), (1, 'name', 'a'))
+        with self.assertRaisesRegexp(IndexError, 'no such group'):
+            found.group('name')
+        self.assertIs(_sre.compile('a', 0, [21, 0, 19, 97, 21, 1, 1], 1, None, 3).match('a').lastgroup, None)
+
+    def test_negative_str_subclass_length_is_rejected_as_len_does(self):
+        class Text(str):
+            def __len__(self):
+                return -1
+        for call in (lambda: _letter().search(Text('abc')), lambda: len(Text('abc'))):
+            with self.assertRaises(ValueError) as context:
+                call()
+            self.assertEqual(str(context.exception), '__len__() should return >= 0')
+
+    def test_sre_types_are_final_and_immutable(self):
+        pattern = _letter()
+        for owner, name in ((type(pattern), '_sre.SRE_Pattern'), (type(pattern.match('a')), '_sre.SRE_Match'),
+                            (type(pattern.scanner('a')), '_sre.SRE_Scanner')):
+            with self.assertRaises(TypeError) as context:
+                type('Derived', (owner,), {})
+            self.assertEqual(str(context.exception), "type '%s' is not an acceptable base type" % name)
+            with self.assertRaises(TypeError) as context:
+                owner.extra = 1
+            self.assertEqual(str(context.exception), "can't set attributes of built-in/extension type '%s'" % name)
+            with self.assertRaises(TypeError) as context:
+                owner()
+            self.assertEqual(str(context.exception), "cannot create '%s' instances" % name)

@@ -1043,3 +1043,55 @@ LayoutBases.added = list
 assert bases_error(lambda: type.mro(laid_out)) == layout_error % "list"
 assert bases_error(lambda: setattr(laid_out, "__bases__", LayoutBases((object,)))) == layout_error % "list"
 assert laid_out.__mro__ == (laid_out, object, IterationAdded)
+
+
+# After a __bases__ assignment the type and each descendant get their MRO
+# once: the descendants breadth-first in subclass order, each after its bases
+# that are recomputed, so a custom mro() sees their new MROs. CPython 2.7's
+# mro_subclasses walks tp_subclasses depth-first and calls the hook of a
+# descendant once per path, the first time before its other base has its new
+# MRO: OrderA, OrderB, OrderC, OrderE (stale OrderD), OrderD, OrderE.
+order_hooks = []
+order_state = {"other": None}
+
+
+class OrderMeta(type):
+    def mro(cls):
+        other = order_state["other"]
+        if other is not None:
+            order_hooks.append((cls.__name__, all(other in base.__mro__ for base in cls.__bases__)))
+        return type.mro(cls)
+
+
+class OrderRoot(object):
+    __metaclass__ = OrderMeta
+
+
+class OrderOther(OrderRoot):
+    pass
+
+
+class OrderA(OrderRoot):
+    pass
+
+
+class OrderB(OrderA):
+    pass
+
+
+class OrderC(OrderB):
+    pass
+
+
+class OrderD(OrderA):
+    pass
+
+
+class OrderE(OrderB, OrderD):
+    pass
+
+
+order_state["other"] = OrderOther
+OrderA.__bases__ = (OrderOther,)
+assert order_hooks == [("OrderA", True), ("OrderB", True), ("OrderD", True), ("OrderC", True), ("OrderE", True)]
+assert mro_names(OrderE) == ["OrderE", "OrderB", "OrderD", "OrderA", "OrderOther", "OrderRoot", "object"]

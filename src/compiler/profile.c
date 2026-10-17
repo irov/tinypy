@@ -186,6 +186,15 @@ static void *__tinypy_profile_allocate(tinypy_build_profile_t *profile, size_t p
         profile->allocator.user_data,
         total_size,
         TINYPY_PROFILE_ALIGNMENT);
+    if (allocation == NULL) {
+        *out_result = __tinypy_profile_fail(
+            error,
+            TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED,
+            constant_index,
+            depth,
+            "build profile allocation failed");
+        return NULL;
+    }
     allocation->next = profile->allocations;
     allocation->total_size = total_size;
     profile->allocations = allocation;
@@ -759,6 +768,15 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
         allocator->user_data,
         sizeof(*profile),
         TINYPY_PROFILE_ALIGNMENT);
+    if (profile == NULL) {
+        tinypy_build_profile_result_e return_value_6 = __tinypy_profile_fail(
+            out_error,
+            TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED,
+            SIZE_MAX,
+            0U,
+            "build profile allocation failed");
+        return return_value_6;
+    }
     (void)memset(profile, 0, sizeof(*profile));
     profile->state = TINYPY_BUILD_PROFILE_STATE;
     profile->optimize_level = optimize_level;
@@ -945,7 +963,9 @@ const char *tinypy_build_profile_result_name(tinypy_build_profile_result_e resul
     }
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_vm_t *vm, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile) {
+/* The environment owns a copy of the profile in the VM heap. Copying a valid
+   profile fails only when the host or the heap budget refuses memory. */
+tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_vm_t *vm, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile, tinypy_error_t **out_error) {
     tinypy_build_constant_t *constants = NULL;
     size_t source_count;
     size_t constant_count = 0U;
@@ -955,7 +975,10 @@ tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_
 
     source_count = profile != NULL ? tinypy_build_profile_constant_count(profile) : 0U;
     if (source_count != 0U) {
-        constants = (tinypy_build_constant_t *)tinypy_internal_vm_allocate(vm, source_count * sizeof(*constants));
+        constants = (tinypy_build_constant_t *)__tinypy_internal_vm_allocate_checked(vm, source_count * sizeof(*constants), out_error);
+        if (constants == NULL) {
+            return NULL;
+        }
     }
     for (index = 0U; index < source_count; ++index) {
         const char *name;
@@ -974,12 +997,22 @@ tinypy_compile_environment_t *tinypy_internal_compile_environment_create(tinypy_
         constants[constant_count].value = *value;
         constant_count += 1U;
     }
-    result = profile != NULL ? tinypy_build_profile_create(&vm->allocator, profile->optimize_level, constants, constant_count, &profile->limits, &profile_copy, NULL) : TINYPY_BUILD_PROFILE_OK;
+    tinypy_allocator_t allocator = tinypy_internal_vm_heap_allocator(vm);
+    result = profile != NULL ? tinypy_build_profile_create(&allocator, profile->optimize_level, constants, constant_count, &profile->limits, &profile_copy, NULL) : TINYPY_BUILD_PROFILE_OK;
     if (constants != NULL) {
         tinypy_internal_vm_deallocate(vm, constants, source_count * sizeof(*constants));
     }
-    (void)result;
-    tinypy_compile_environment_t *environment = (tinypy_compile_environment_t *)tinypy_internal_vm_allocate(vm, sizeof(*environment));
+    if (result != TINYPY_BUILD_PROFILE_OK) {
+        tinypy_internal_vm_allocation_error(vm, out_error);
+        return NULL;
+    }
+    tinypy_compile_environment_t *environment = (tinypy_compile_environment_t *)__tinypy_internal_vm_allocate_checked(vm, sizeof(*environment), out_error);
+    if (environment == NULL) {
+        if (profile_copy != NULL) {
+            tinypy_build_profile_destroy(profile_copy);
+        }
+        return NULL;
+    }
     environment->state = TINYPY_COMPILE_ENVIRONMENT_STATE;
     environment->ref = 1;
     environment->vm = vm;

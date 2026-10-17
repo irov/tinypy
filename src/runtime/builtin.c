@@ -49,18 +49,6 @@ static tinypy_bool_t __tinypy_builtin_argument_count_message(tinypy_vm_t *vm, ti
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* converterr names None itself rather than its type. */
-static tinypy_message_part_t __tinypy_builtin_argument_type_name(tinypy_value_t *value) {
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
-        tinypy_message_part_t none_name = TINYPY_MESSAGE_PART_LITERAL("None");
-
-        return none_name;
-    }
-    tinypy_message_part_t type_name = TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 50U);
-
-    return type_name;
-}
-//////////////////////////////////////////////////////////////////////////
 static void __tinypy_builtin_release_arguments(tinypy_value_t **values, size_t count) {
     for (size_t index = 0U; index < count; ++index) {
         if (values[index] != NULL) {
@@ -3036,20 +3024,6 @@ static tinypy_value_t *__tinypy_builtin_print_affix_value(tinypy_vm_t *vm, tinyp
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyFile_WriteObject with Py_PRINT_RAW writes a unicode value as it is and
-   any other value, a str subtype included, as its str(). */
-static tinypy_bool_t __tinypy_builtin_print_write(tinypy_value_t *output, tinypy_value_t *value, tinypy_error_t **out_error) {
-    tinypy_value_t *text = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE ? TINYPY_RET(value) : tinypy_object_str(value, out_error);
-
-    if (text == NULL) {
-        return TINYPY_FALSE;
-    }
-    tinypy_bool_t written = tinypy_internal_output_write_value(output, text, out_error);
-
-    TINYPY_DECREF(text);
-    return written;
-}
-//////////////////////////////////////////////////////////////////////////
 /* builtin_print parses its keywords with PyArg_ParseTupleAndKeywords; the
    values are held while the output runs code. */
 static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -3106,14 +3080,14 @@ static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_v
     for (index = 0U; index < argument_count; ++index) {
         tinypy_value_t *item = TINYPY_TUPLE_GET(args, index);
 
-        if (index != 0U && __tinypy_builtin_print_write(output, separator_text, out_error) == 0) {
+        if (index != 0U && tinypy_internal_output_write_object(output, separator_text, out_error) == 0) {
             goto cleanup;
         }
-        if (__tinypy_builtin_print_write(output, item, out_error) == 0) {
+        if (tinypy_internal_output_write_object(output, item, out_error) == 0) {
             goto cleanup;
         }
     }
-    if (__tinypy_builtin_print_write(output, ending_text, out_error) != 0) {
+    if (tinypy_internal_output_write_object(output, ending_text, out_error) != 0) {
         result = TINYPY_RET_NONE(vm);
     }
 cleanup:
@@ -3324,7 +3298,7 @@ static tinypy_bool_t __tinypy_builtin_import_name(tinypy_value_t *name, tinypy_e
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("__import__() argument 1 must be string"),
             {has_nul != TINYPY_FALSE ? " without null bytes, not " : ", not ", has_nul != TINYPY_FALSE ? 25U : 6U},
-            {kind == TINYPY_VALUE_NONE ? "None" : name->type->name, kind == TINYPY_VALUE_NONE ? 4U : name->type->name_size},
+            TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(name),
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
         return TINYPY_FALSE;
@@ -3697,7 +3671,7 @@ static tinypy_value_t *__tinypy_builtin_intern(tinypy_value_t *function, tinypy_
     if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_STRING) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("intern() argument 1 must be string, not "),
-            __tinypy_builtin_argument_type_name(value)
+            TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(value)
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -3734,7 +3708,7 @@ static tinypy_value_t *__tinypy_builtin_compile_string(tinypy_value_t *value, co
             TINYPY_MESSAGE_PART_LITERAL("compile() argument "),
             {argument, 1U},
             TINYPY_MESSAGE_PART_LITERAL(" must be string, not "),
-            __tinypy_builtin_argument_type_name(value),
+            TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(value),
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;

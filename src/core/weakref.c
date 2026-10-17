@@ -122,20 +122,23 @@ tinypy_value_t *tinypy_weakref_get(const tinypy_value_t *value) {
    and once they have finalized it. PyObject_ClearWeakRefs calls the
    callbacks; those a finalizer created on an instance it did not resurrect
    go without them, as _PyWeakref_ClearRef in subtype_dealloc and
-   instance_dealloc. A type keeps its references, through which its bases
-   list it and its descriptors find it, until type_dealloc, after the __del__
-   of its metaclass that may resurrect it. */
+   instance_dealloc. subtype_dealloc clears them before __del__ only when the
+   class added the weak list: type, set, frozenset and partial have their own,
+   which their dealloc clears with the callbacks after the __del__ of a
+   subclass that may resurrect the instance. A type so keeps the references
+   through which its bases list it and its descriptors find it. */
 void tinypy_internal_weakref_clear(tinypy_value_t *value, tinypy_bool_t finalized) {
     tinypy_value_t **head_slot = tinypy_internal_weakref_head_slot(value);
 
     if (head_slot == NULL || *head_slot == NULL) {
         return;
     }
-    tinypy_bool_t type_value = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE ? TINYPY_TRUE : TINYPY_FALSE;
-    if (type_value != 0 && finalized == 0) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    tinypy_bool_t base_weak_list = kind == TINYPY_VALUE_TYPE || kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET || kind == TINYPY_VALUE_PARTIAL ? TINYPY_TRUE : TINYPY_FALSE;
+    if (base_weak_list != 0 && finalized == 0) {
         return;
     }
-    tinypy_bool_t call_callbacks = finalized == 0 || type_value != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t call_callbacks = finalized == 0 || base_weak_list != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *weakref_value = *head_slot;
     *head_slot = NULL;
     tinypy_value_t *current = weakref_value;

@@ -529,7 +529,7 @@ tinypy_value_t *tinypy_bytearray_from_bytes(tinypy_vm_t *vm, const void *bytes, 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_bytearray_from_bytes_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_internal_bytearray_from_bytes_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error) {
     tinypy_value_t *result = __tinypy_bytearray_allocate_checked(vm, size, out_error);
 
     if (result != NULL && size != 0U) {
@@ -629,7 +629,7 @@ static tinypy_value_t *__tinypy_bytearray_create(tinypy_vm_t *vm, tinypy_value_t
     int64_t requested_size = 0;
 
     if (source == NULL) {
-        tinypy_value_t *return_value_1 = __tinypy_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
+        tinypy_value_t *return_value_1 = tinypy_internal_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
         return return_value_1;
     }
     tinypy_value_type_e source_kind = TINYPY_VALUE_KIND(source);
@@ -650,7 +650,7 @@ static tinypy_value_t *__tinypy_bytearray_create(tinypy_vm_t *vm, tinypy_value_t
             return NULL;
         }
         (void)tinypy_internal_bytes_view(source_kind == TINYPY_VALUE_STRING ? source : encoded, &encoded_bytes, &encoded_size);
-        tinypy_value_t *result = __tinypy_bytearray_from_bytes_checked(vm, encoded_bytes, encoded_size, out_error);
+        tinypy_value_t *result = tinypy_internal_bytearray_from_bytes_checked(vm, encoded_bytes, encoded_size, out_error);
 
         TINYPY_DECREF(encoded);
         return result;
@@ -674,7 +674,7 @@ static tinypy_value_t *__tinypy_bytearray_create(tinypy_vm_t *vm, tinypy_value_t
         if (__tinypy_bytearray_count_size(vm, requested_size, &count, out_error) == 0) {
             return NULL;
         }
-        tinypy_value_t *result = __tinypy_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
+        tinypy_value_t *result = tinypy_internal_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
         if (result == NULL) {
             return NULL;
         }
@@ -803,11 +803,11 @@ tinypy_value_t *tinypy_internal_bytearray_get_item(tinypy_value_t *value, tinypy
             return NULL;
         }
         if (slice.length == 0U) {
-            tinypy_value_t *return_value_1 = __tinypy_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
+            tinypy_value_t *return_value_1 = tinypy_internal_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
             return return_value_1;
         }
         if (slice.step == 1) {
-            tinypy_value_t *return_value_2 = __tinypy_bytearray_from_bytes_checked(vm, TINYPY_BYTEARRAY_OBJECT(value)->bytes + (size_t)slice.start, slice.length, out_error);
+            tinypy_value_t *return_value_2 = tinypy_internal_bytearray_from_bytes_checked(vm, TINYPY_BYTEARRAY_OBJECT(value)->bytes + (size_t)slice.start, slice.length, out_error);
             return return_value_2;
         }
         result = __tinypy_bytearray_allocate_checked(vm, slice.length, out_error);
@@ -1036,7 +1036,7 @@ tinypy_value_t *tinypy_internal_bytearray_concat_bytes(tinypy_vm_t *vm, const ui
         return NULL;
     }
     if (left_size + right_size == 0U) {
-        tinypy_value_t *return_value_1 = __tinypy_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
+        tinypy_value_t *return_value_1 = tinypy_internal_bytearray_from_bytes_checked(vm, NULL, 0U, out_error);
         return return_value_1;
     }
     result = __tinypy_bytearray_allocate_checked(vm, left_size + right_size, out_error);
@@ -1458,7 +1458,7 @@ static tinypy_value_t *__tinypy_bytearray_bridge_value(tinypy_vm_t *vm, tinypy_v
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bytearray method returned a non-byte string", out_error);
             return NULL;
         }
-        tinypy_value_t *result = __tinypy_bytearray_from_bytes_checked(vm, bytes, size, out_error);
+        tinypy_value_t *result = tinypy_internal_bytearray_from_bytes_checked(vm, bytes, size, out_error);
         TINYPY_DECREF(value);
         return result;
     }
@@ -1488,7 +1488,7 @@ static tinypy_value_t *__tinypy_bytearray_bridge_value(tinypy_vm_t *vm, tinypy_v
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bytearray method returned a non-byte string", out_error);
             return NULL;
         }
-        tinypy_value_t *converted = __tinypy_bytearray_from_bytes_checked(vm, bytes, size, out_error);
+        tinypy_value_t *converted = tinypy_internal_bytearray_from_bytes_checked(vm, bytes, size, out_error);
 
         if (converted == NULL) {
             TINYPY_DECREF(result);
@@ -1515,7 +1515,7 @@ static tinypy_value_t *__tinypy_bytearray_bridge_value(tinypy_vm_t *vm, tinypy_v
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_ascii_transform(tinypy_vm_t *vm, tinypy_value_t *self, tinypy_value_t *name, tinypy_error_t **out_error) {
     size_t size = TINYPY_SIZED_SIZE(self);
-    tinypy_value_t *result = __tinypy_bytearray_from_bytes_checked(vm, TINYPY_BYTEARRAY_OBJECT(self)->bytes, size, out_error);
+    tinypy_value_t *result = tinypy_internal_bytearray_from_bytes_checked(vm, TINYPY_BYTEARRAY_OBJECT(self)->bytes, size, out_error);
     if (result == NULL) {
         return NULL;
     }
@@ -1668,7 +1668,7 @@ static tinypy_value_t *__tinypy_bytearray_bridge_method(tinypy_value_t *function
         if (fill_kind != TINYPY_VALUE_STRING || TINYPY_SIZED_SIZE(fill) != 1U) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_TEXT(name), TINYPY_MESSAGE_PART_LITERAL("() argument 2 must be char, not "),
-                {fill_kind == TINYPY_VALUE_NONE ? "None" : fill->type->name, fill_kind == TINYPY_VALUE_NONE ? 4U : fill->type->name_size},
+                TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(fill),
             };
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
             goto normalized_error;
@@ -1953,7 +1953,7 @@ static tinypy_value_t *__tinypy_bytearray_fromhex_method(tinypy_value_t *functio
     if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE && kind != TINYPY_VALUE_BUFFER) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("fromhex() argument 1 must be string or read-only buffer, not "),
-            {kind == TINYPY_VALUE_NONE ? "None" : source->type->name, kind == TINYPY_VALUE_NONE ? 4U : source->type->name_size},
+            TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(source),
         };
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;

@@ -1131,7 +1131,9 @@ static int32_t __tinypy_codegen_reference_type(tinypy_codegen_t *c, tinypy_value
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_codegen_lookup_arg(tinypy_value_t *dict, tinypy_value_t *name) {
+/* The index of a cell or free variable; -1 once its absence is reported or
+   when its key cannot be allocated, which leaves the MemoryError pending. */
+static int32_t __tinypy_codegen_lookup_arg(tinypy_codegen_t *c, tinypy_value_t *dict, tinypy_value_t *name) {
     tinypy_value_t *k, *v;
     k = __tinypy_bytecode_constant_key(name);
     if (k == NULL) {
@@ -1140,6 +1142,7 @@ static int32_t __tinypy_codegen_lookup_arg(tinypy_value_t *dict, tinypy_value_t 
     v = TINYPY_COMPILER_DICT_GET_ITEM(dict, k);
     TINYPY_COMPILER_DECREF(k);
     if (v == NULL) {
+        tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_RUNTIME, "closure variable is missing from the enclosing scope", c->u->u_lineno, 1, c->c_arena->out_error);
         return -1;
     }
     int32_t return_value_1 = (int32_t)TINYPY_COMPILER_INT_AS_LONG(v);
@@ -1172,13 +1175,12 @@ static tinypy_bool_t __tinypy_codegen_make_closure(tinypy_codegen_t *c, tinypy_c
         */
         reftype = __tinypy_codegen_reference_type(c, name);
         if (reftype == TINYPY_SYMBOL_SCOPE_CELL) {
-            arg = __tinypy_codegen_lookup_arg(c->u->u_cellvars, name);
+            arg = __tinypy_codegen_lookup_arg(c, c->u->u_cellvars, name);
         }
         else /* (reftype == TINYPY_SYMBOL_SCOPE_FREE) */ {
-            arg = __tinypy_codegen_lookup_arg(c->u->u_freevars, name);
+            arg = __tinypy_codegen_lookup_arg(c, c->u->u_freevars, name);
         }
         if (arg == -1) {
-            tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_RUNTIME, "closure variable is missing from the enclosing scope", c->u->u_lineno, 1, c->c_arena->out_error);
             return TINYPY_FALSE;
         }
         TINYPY_CODEGEN_ADD_INTEGER_OPCODE(c, TINYPY_OP_LOAD_CLOSURE, arg);

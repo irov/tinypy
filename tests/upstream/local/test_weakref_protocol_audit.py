@@ -280,6 +280,41 @@ class WeakrefProtocolAudit(unittest.TestCase):
             self.assertIs(reference(), value)
             self.assertTrue(factory.__weakrefoffset__ > 0)
 
+    def test_base_weak_list_is_cleared_after_subclass_del(self):
+        # subtype_dealloc clears a weak list the class added before __del__;
+        # the dealloc of set, frozenset and partial clears their own after
+        # it, with the callbacks of the references __del__ made.
+        from _functools import partial
+        events = []
+        references = []
+        def finalizer(self):
+            events.append(('del', references[0]() is self))
+            references.append(weakref.ref(self, lambda item: events.append('made in del')))
+        for base, arguments, expected in ((set, ((1,),), [('del', True), 'made in del', 'callback']),
+                                          (frozenset, ((1,),), [('del', True), 'made in del', 'callback']),
+                                          (partial, (len,), [('del', True), 'made in del', 'callback']),
+                                          (object, (), ['callback', ('del', False)])):
+            value = type('Finalized', (base,), {'__del__': finalizer})(*arguments)
+            references[:] = [weakref.ref(value, lambda item: events.append('callback'))]
+            del events[:]
+            value = None
+            self.assertEqual(events, expected)
+
+    def test_base_weak_list_survives_resurrecting_del(self):
+        events = []
+        kept = []
+        class Resurrecting(set):
+            def __del__(self):
+                if not events:
+                    kept.append(self)
+                events.append('del')
+        reference = weakref.ref(Resurrecting((1,)), lambda item: events.append('callback'))
+        self.assertIs(reference(), kept[0])
+        self.assertEqual(events, ['del'])
+        del kept[:]
+        self.assertIs(reference(), None)
+        self.assertEqual(events, ['del', 'del', 'callback'])
+
     def test_remove_dead_weakref_propagates_hash_callback_exception(self):
         marker = ValueError('hash')
         class Key(object):

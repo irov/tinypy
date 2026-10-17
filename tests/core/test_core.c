@@ -1417,6 +1417,7 @@ static int32_t __test_dictionary_runtime(void) {
     tinypy_value_t *key_a_equal = NULL;
     tinypy_value_t *value_one = NULL;
     tinypy_value_t *value_two = NULL;
+    tinypy_value_t *unhashable = NULL;
     tinypy_value_t *borrowed = NULL;
     size_t size;
     uint64_t version;
@@ -1484,6 +1485,28 @@ static int32_t __test_dictionary_runtime(void) {
     contains = tinypy_dict_contains(dict, key_a);
     TEST_CHECK(contains == 0);
 
+    /* A key whose hash or comparison raises leaves the exception raised. */
+    unhashable = tinypy_list_from_items(vm, NULL, 0U);
+    TEST_CHECK(tinypy_dict_get(dict, unhashable) == NULL);
+    TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+    tinypy_vm_clear_error(vm);
+    TEST_CHECK(tinypy_dict_get_optional(dict, unhashable) == NULL);
+    TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+    tinypy_vm_clear_error(vm);
+    contains = tinypy_dict_contains(dict, unhashable);
+    TEST_CHECK(contains == 0);
+    TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+    tinypy_vm_clear_error(vm);
+    tinypy_dict_set(dict, unhashable, value_one);
+    size = tinypy_dict_size(dict);
+    TEST_CHECK(size == 0U);
+    TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+    tinypy_vm_clear_error(vm);
+    tinypy_dict_delete(dict, unhashable);
+    TEST_CHECK(tinypy_vm_has_error(vm) != 0);
+    tinypy_vm_clear_error(vm);
+
+    tinypy_release(unhashable);
     tinypy_release(dict_equal);
     tinypy_release(value_two);
     tinypy_release(value_one);
@@ -2447,7 +2470,11 @@ static int32_t __test_exception_normalization(void) {
 /* tinypy_object_str and tinypy_object_repr report a failed lookup of the
    __str__ or __repr__ of a classic instance through their result, without an
    out_error as with one, and a lookup raising AttributeError falls back to
-   the default text, as instance_str and instance_repr do. */
+   the default text, as instance_str and instance_repr do. The built-in
+   __str__ and __repr__ of an exception run as the C slots BaseException_str
+   and BaseException_repr, with no method to bind, so a host refusing the
+   memory of one changes neither text; the held methods empty the free list,
+   and a build whose pool passes every request to the host sees the refusal. */
 static int32_t __test_representation_errors(void) {
     static const char define[] =
         "class Failing:\n"
@@ -2462,8 +2489,15 @@ static int32_t __test_representation_errors(void) {
         "    @property\n"
         "    def __str__(self):\n"
         "        raise AttributeError('str')\n"
+        "class Raised(ValueError):\n"
+        "    pass\n"
         "failing = Failing()\n"
-        "missing = Missing()\n";
+        "missing = Missing()\n"
+        "builtin = RuntimeError('cmp')\n"
+        "derived = Raised('own', 2)\n"
+        "held = [[].append for index in range(64)]\n";
+    static const char *const exception_names[] = {"builtin", "derived"};
+    static const char *const exception_texts[][2] = {{"cmp", "RuntimeError('cmp',)"}, {"('own', 2)", "Raised('own', 2)"}};
     static const char raise_failing[] = "raise failing\n";
     static const char default_prefix[] = "<__builtin__.Missing instance at 0x";
     static const char failed_message[] = "<exception str() failed>";
@@ -2515,6 +2549,24 @@ static int32_t __test_representation_errors(void) {
         const char *text = tinypy_string_view(texts[index], &size);
         TEST_CHECK(size > sizeof(default_prefix) - 1U && memcmp(text, default_prefix, sizeof(default_prefix) - 1U) == 0);
         tinypy_release(texts[index]);
+    }
+
+    for (size_t index = 0U; index < sizeof(exception_names) / sizeof(exception_names[0]); ++index) {
+        tinypy_value_t *exception_key = tinypy_string_from_bytes(vm, exception_names[index], strlen(exception_names[index]));
+        tinypy_value_t *exception = tinypy_dict_get(globals, exception_key);
+        tinypy_release(exception_key);
+        TEST_CHECK(exception != NULL);
+        state.fail_allocation_size = sizeof(tinypy_native_function_object_t);
+        texts[0] = tinypy_object_str(exception, &error);
+        texts[1] = tinypy_object_repr(exception, &error);
+        state.fail_allocation_size = 0U;
+        TEST_CHECK(texts[0] != NULL && texts[1] != NULL && error == NULL && tinypy_vm_has_error(vm) == 0);
+        for (size_t text_index = 0U; text_index < 2U; ++text_index) {
+            const char *text = tinypy_string_view(texts[text_index], &size);
+            const char *expected = exception_texts[index][text_index];
+            TEST_CHECK(size == strlen(expected) && memcmp(text, expected, size) == 0);
+            tinypy_release(texts[text_index]);
+        }
     }
 
     /* The diagnostic of an uncaught exception renders str() without an
@@ -7704,6 +7756,287 @@ static int32_t __test_computed_allocation_refusal(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* refuse_items(on) makes the host refuse the requests from an array of 100
+   items up to a tuple of 100 items, but not the tuple of 101 items in which
+   a call passes them with a receiver. */
+static tinypy_value_t *__test_native_refuse_items(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    test_native_signal_state_t *state = (test_native_signal_state_t *)tinypy_native_function_user_data(function);
+    size_t items_size = 100U * sizeof(tinypy_value_t *);
+
+    (void)self;
+    (void)count;
+    (void)kwargs;
+    (void)out_error;
+    int32_t refuse = tinypy_truth(items[0], NULL);
+    state->allocator_state->fail_allocation_above = refuse > 0 ? items_size - 1U : 0U;
+    state->allocator_state->fail_allocation_below = refuse > 0 ? offsetof(tinypy_tuple_object_t, items) + items_size + 1U : 0U;
+    tinypy_value_t *result = tinypy_none_get(state->vm);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Regular expression results sized by the subject, the group count or the
+   arguments raise MemoryError when the host refuses their memory: the group
+   slices of each subject kind, the marks of a match, groups(), regs,
+   group() of many indices and the program _sre.compile copies. */
+static int32_t __test_sre_allocation_refusal(void) {
+    static const char source[] =
+        "import _sre\n"
+        "s = 'a' * 700 + 'b'\n"
+        "repeated = _sre.compile('(a*)', 0, [21, 0, 29, 6, 0, 4294967295, 19, 97, 1, 21, 1, 1], 1)\n"
+        "grouped = _sre.compile('a', 0, [19, 97, 1], 100)\n"
+        "program = [19, 97] * 70 + [1]\n"
+        "found = [repeated.match(subject) for subject in (s, unicode(s), bytearray(s))]\n"
+        "many = grouped.match('a')\n"
+        "indices = (many,) + (0,) * 100\n"
+        "def probe(call, limit=refuse):\n"
+        "    call()\n"
+        "    limit(True)\n"
+        "    try:\n"
+        "        call()\n"
+        "    except MemoryError:\n"
+        "        return 'MemoryError'\n"
+        "    finally:\n"
+        "        limit(False)\n"
+        "    return 'returned'\n"
+        "calls = (lambda: found[0].group(1), lambda: found[1].group(1), lambda: found[2].group(1), lambda: repeated.findall(s),\n"
+        "         lambda: repeated.split(s), lambda: grouped.match('a'), lambda: many.groups(), lambda: many.regs,\n"
+        "         lambda: _sre.compile('a', 0, program))\n"
+        "check([probe(call) for call in calls], ['MemoryError'] * len(calls))\n"
+        "check(probe(lambda: type(many).group(*indices), refuse_items), 'MemoryError')\n"
+        "check([len(item.group(1)) for item in found] + [len(many.regs)], [700, 700, 700, 101])\n";
+    test_allocator_state_t allocator_state;
+    test_native_signal_state_t state;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    state.allocator_state = &allocator_state;
+    state.vm = vm;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *refuse = tinypy_native_function_new_items(vm, "refuse", 6U, __test_native_refuse_direct, 1U, 1U, &state, NULL);
+    tinypy_value_t *refuse_key = tinypy_string_from_bytes(vm, "refuse", 6U);
+    tinypy_dict_set(globals, refuse_key, refuse);
+    tinypy_release(refuse_key);
+    tinypy_release(refuse);
+    tinypy_value_t *refuse_items = tinypy_native_function_new_items(vm, "refuse_items", 12U, __test_native_refuse_items, 1U, 1U, &state, NULL);
+    tinypy_value_t *refuse_items_key = tinypy_string_from_bytes(vm, "refuse_items", 12U);
+    tinypy_dict_set(globals, refuse_items_key, refuse_items);
+    tinypy_release(refuse_items_key);
+    tinypy_release(refuse_items);
+    TEST_CHECK(__test_native_contract_run(vm, globals, source) == 0);
+
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* refuse_size(size) makes the host refuse every request of that size until
+   refuse_size(0); allocation_size(value) is the size its allocation took. */
+static tinypy_value_t *__test_native_refuse_size(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    test_allocator_state_t *state = (test_allocator_state_t *)tinypy_native_function_user_data(function);
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+
+    (void)self;
+    (void)count;
+    (void)kwargs;
+    (void)out_error;
+    state->fail_allocation_size = (size_t)tinypy_integer_as_i64(items[0]);
+    tinypy_value_t *result = tinypy_none_get(vm);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_allocation_size(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+
+    (void)self;
+    (void)count;
+    (void)kwargs;
+    (void)out_error;
+    size_t size = tinypy_internal_value_allocation_size(items[0]);
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)size);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Computed-size results the host refuses raise MemoryError: copies and
+   negations of longs, true division, parsed literals and the literal their
+   ValueError repeats, a buffer added to unicode, the operands of the
+   UnicodeDecodeError of '%' and format(), and the mangled names and tuple
+   of __slots__. */
+static int32_t __test_computed_result_refusal(void) {
+    static const char source[] =
+        "class L(long):\n"
+        "    pass\n"
+        "B = 1 << 40000\n"
+        "NB = -B\n"
+        "LB = L(B)\n"
+        "H = B >> 1\n"
+        "digits = '9' * 5000\n"
+        "nul_digits = ''.join(('9' * 700, '\\x00'))\n"
+        "u = u'\\xe9' * 10\n"
+        "b = buffer('y' * 700)\n"
+        "x = '\\xe9' * 700\n"
+        "rest = '%s' + x\n"
+        "spec = '{0:' + x + '}'\n"
+        "unicode_spec = u'{0!r:' + u'\\xe9' * 350 + u'}'\n"
+        "name = 'C' * 300\n"
+        "slot = '__' + 'x' * 600\n"
+        "slots = tuple('s%d' % index for index in range(100))\n"
+        "def probe(size, call):\n"
+        "    refuse_size(size)\n"
+        "    try:\n"
+        "        call()\n"
+        "    except Exception as error:\n"
+        "        return type(error).__name__\n"
+        "    finally:\n"
+        "        refuse_size(0)\n"
+        "    return 'returned'\n"
+        "long_size = allocation_size(B)\n"
+        "parsed_size = allocation_size(int(digits))\n"
+        "cases = ((long_size, lambda: -B), (long_size, lambda: ~B), (long_size, lambda: abs(NB)), (long_size, lambda: +LB),\n"
+        "         (long_size, lambda: B.__neg__()), (long_size, lambda: B.__pos__()), (long_size, lambda: NB.__abs__()), (long_size, lambda: B.__invert__()),\n"
+        "         (long_size, lambda: B.__truediv__(H)), (parsed_size, lambda: int(digits)), (parsed_size, lambda: long(digits)),\n"
+        "         (allocation_size(nul_digits), lambda: int(nul_digits, 10)),\n"
+        "         (allocation_size('y' * 700), lambda: u + b), (allocation_size(x), lambda: '%s%s' % (x, u'a')),\n"
+        "         (allocation_size(''.join(('%s', x))), lambda: rest % u'a'), (allocation_size(x), lambda: spec.format(u'a')),\n"
+        "         (allocation_size(u'\\xe9' * 350), lambda: unicode_spec.format(1)),\n"
+        "         (1 + len(name) + len(slot), lambda: type(name, (object,), {'__slots__': (slot,)})),\n"
+        "         (allocation_size(''.join(('_', name, slot))), lambda: type(name, (object,), {'__slots__': (slot,)})),\n"
+        "         (allocation_size(slots), lambda: type('S', (object,), {'__slots__': slots})))\n"
+        "check([probe(size, call) for size, call in cases], ['MemoryError'] * len(cases))\n"
+        "check([probe(0, call) for size, call in cases[-3:]], ['returned'] * 3)\n";
+    test_allocator_state_t allocator_state;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *refuse_size = tinypy_native_function_new_items(vm, "refuse_size", 11U, __test_native_refuse_size, 1U, 1U, &allocator_state, NULL);
+    tinypy_value_t *refuse_size_key = tinypy_string_from_bytes(vm, "refuse_size", 11U);
+    tinypy_dict_set(globals, refuse_size_key, refuse_size);
+    tinypy_release(refuse_size_key);
+    tinypy_release(refuse_size);
+    tinypy_value_t *allocation_size = tinypy_native_function_new_items(vm, "allocation_size", 15U, __test_native_allocation_size, 1U, 1U, NULL, NULL);
+    tinypy_value_t *allocation_size_key = tinypy_string_from_bytes(vm, "allocation_size", 15U);
+    tinypy_dict_set(globals, allocation_size_key, allocation_size);
+    tinypy_release(allocation_size_key);
+    tinypy_release(allocation_size);
+    TEST_CHECK(__test_native_contract_run(vm, globals, source) == 0);
+    TEST_CHECK(vm->allocated_bytes == allocator_state.outstanding_bytes);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* tinypy_build_profile_create fails with TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED,
+   leaving nothing allocated, when the host refuses any of its requests. The
+   copy a compile keeps of a profile is VM heap: it counts against the
+   budget, and a compile whose copy the host refuses raises MemoryError. */
+static int32_t __test_build_profile_allocation_refusal(void) {
+    static char text[16384];
+    static const char source[] = "x = 1\n";
+    tinypy_build_constant_t constant;
+    tinypy_build_profile_error_t profile_error;
+    tinypy_build_profile_t *profile = NULL;
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(text, 'p', sizeof(text));
+    (void)memset(&constant, 0, sizeof(constant));
+    constant.abi_version = TINYPY_COMPILER_ABI_VERSION;
+    constant.struct_size = (uint32_t)sizeof(constant);
+    constant.name = "__TEXT__";
+    constant.name_size = 8U;
+    tinypy_build_value_init(&constant.value, TINYPY_BUILD_VALUE_STRING);
+    constant.value.data = text;
+    constant.value.data_size = sizeof(text);
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    TEST_CHECK(tinypy_build_profile_create(&allocator, 0, &constant, 1U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
+    size_t request_count = state.allocation_calls;
+    tinypy_build_profile_destroy(profile);
+    for (size_t index = 1U; index <= request_count; ++index) {
+        state.fail_allocation_call = state.allocation_calls + index;
+        tinypy_build_profile_result_e result = tinypy_build_profile_create(&allocator, 0, &constant, 1U, NULL, &profile, &profile_error);
+        state.fail_allocation_call = 0U;
+        TEST_CHECK(result == TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED && profile == NULL && profile_error.code == TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED);
+        TEST_CHECK(state.outstanding_allocations == 0U);
+    }
+    TEST_CHECK(tinypy_build_profile_create(&allocator, 0, &constant, 1U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.build_profile = profile;
+    state.fail_allocation_above = sizeof(text);
+    state.fail_allocation_below = TINYPY_INTERNAL_POOL_ARENA_SIZE;
+    tinypy_value_t *code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "profile.py", 10U, &options, &error);
+    state.fail_allocation_above = 0U;
+    TEST_CHECK(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "profile.py", 10U, &options, &error);
+    TEST_CHECK(code != NULL && error == NULL);
+    tinypy_build_profile_destroy(profile);
+    TEST_CHECK(vm->allocated_bytes == state.outstanding_bytes);
+    tinypy_release(code);
+    TEST_CHECK(vm->allocated_bytes == state.outstanding_bytes);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U && state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* An error is a direct allocation of its VM, the message rendered into it
+   included: it counts against the heap budget until the host releases it,
+   and one the host still holds when the VM is destroyed stays readable and
+   is released after it. */
+static int32_t __test_error_heap_accounting(void) {
+    static const char large_source[] = "raise ValueError('x' * 4096)\n";
+    static const char kept_source[] = "raise KeyError('kept')\n";
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_error_t *kept = NULL;
+    size_t size = 0U;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    TEST_CHECK(tinypy_exec_source(vm, large_source, sizeof(large_source) - 1U, "large.py", 8U, globals, NULL, &options, &error) == NULL);
+    tinypy_vm_clear_error(vm);
+    TEST_CHECK(error != NULL && vm->allocated_bytes == state.outstanding_bytes);
+    const char *message = tinypy_error_message(error, &size);
+    TEST_CHECK(size == 4096U && message[0] == 'x');
+    TEST_CHECK(vm->allocated_bytes == state.outstanding_bytes);
+    TEST_CHECK(tinypy_exec_source(vm, kept_source, sizeof(kept_source) - 1U, "kept.py", 7U, globals, NULL, &options, &kept) == NULL);
+    tinypy_vm_clear_error(vm);
+    tinypy_error_release(error);
+    TEST_CHECK(kept != NULL && vm->allocated_bytes == state.outstanding_bytes);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    message = tinypy_error_message(kept, &size);
+    TEST_CHECK(size == 6U && strcmp(message, "'kept'") == 0 && tinypy_error_kind(kept) == TINYPY_ERROR_KEY);
+    tinypy_error_release(kept);
+    TEST_CHECK(state.outstanding_allocations == 0U && state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 typedef struct test_allocation_watch_t {
     test_allocator_state_t state;
     size_t size;
@@ -8500,9 +8833,25 @@ int main(int argc, char **argv) {
         int computed_allocation_refusal = __test_computed_allocation_refusal();
         return computed_allocation_refusal;
     }
+    if (strcmp(argv[1], "computed_result_refusal") == 0) {
+        int computed_result_refusal = __test_computed_result_refusal();
+        return computed_result_refusal;
+    }
+    if (strcmp(argv[1], "build_profile_allocation_refusal") == 0) {
+        int build_profile_allocation_refusal = __test_build_profile_allocation_refusal();
+        return build_profile_allocation_refusal;
+    }
+    if (strcmp(argv[1], "error_heap_accounting") == 0) {
+        int error_heap_accounting = __test_error_heap_accounting();
+        return error_heap_accounting;
+    }
     if (strcmp(argv[1], "allocation_refusal") == 0) {
         int allocation_refusal = __test_allocation_refusal();
         return allocation_refusal;
+    }
+    if (strcmp(argv[1], "sre_allocation_refusal") == 0) {
+        int sre_allocation_refusal = __test_sre_allocation_refusal();
+        return sre_allocation_refusal;
     }
     if (strcmp(argv[1], "text_heap_budget") == 0) {
         int text_heap_budget = __test_text_heap_budget();

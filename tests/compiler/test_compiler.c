@@ -1,4 +1,5 @@
 #include "tinypy/tinypy.h"
+#include "../../src/core/internal.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -996,6 +997,57 @@ static int32_t __test_compiler_computed_size_refusal(void) {
     tinypy_vm_destroy(vm);
     assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
     free(source);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The key that looks up a closure variable is a two-item tuple. Each host
+   request of that size fails in turn while a closure compiles under a
+   constant limit that stops code generation after it: the compilation fails
+   with MemoryError, never as a variable missing from the enclosing scope.
+   The host sees these requests only when no pool serves them. */
+static int32_t __test_compiler_closure_key_refusal(void) {
+    static const char source[] = "def outer():\n    x = 1\n    def inner():\n        return x\n    return inner\n";
+    test_failing_allocator_state_t state = {{0U, 0U}, 0U, 0U, 0U};
+    tinypy_vm_t *vm = __test_failing_vm_create(&state, 0U);
+    tinypy_compile_options_t options;
+    tinypy_compile_limits_t limits;
+    size_t index;
+
+    tinypy_compile_limits_init(&limits);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.limits = &limits;
+    for (limits.max_constants = 1U;; ++limits.max_constants) {
+        tinypy_value_t *code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "closure.py", 10U, &options, NULL);
+        if (code != NULL) {
+            tinypy_release(code);
+            break;
+        }
+        tinypy_vm_clear_error(vm);
+    }
+    /* One constant fewer refuses the last, which the module adds after the
+       closure. */
+    limits.max_constants -= 1U;
+    for (index = 0U;; ++index) {
+        tinypy_error_t *error = NULL;
+
+        state.fail_size = offsetof(tinypy_tuple_object_t, items) + 2U * sizeof(tinypy_value_t *);
+        state.fail_maximum = state.fail_size;
+        state.fail_index = index;
+        tinypy_value_t *code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "closure.py", 10U, &options, &error);
+        tinypy_bool_t refused = state.fail_size == 0U ? TINYPY_TRUE : TINYPY_FALSE;
+        state.fail_size = 0U;
+        assert(code == NULL && error != NULL);
+        tinypy_error_kind_e kind = tinypy_error_kind(error);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+        if (refused == 0) {
+            assert(kind == TINYPY_ERROR_COMPILER_LIMIT);
+            break;
+        }
+        assert(kind == TINYPY_ERROR_MEMORY);
+    }
+    tinypy_vm_destroy(vm);
+    assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2810,6 +2862,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_compiler_computed_size_refusal() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_compiler_closure_key_refusal() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_tab_size_comment() != 0) {

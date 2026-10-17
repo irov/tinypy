@@ -125,7 +125,7 @@ static tinypy_bool_t __tinypy_constructor_optional_arguments(tinypy_vm_t *vm, co
                         TINYPY_MESSAGE_PART_LITERAL("() argument "),
                         {(const char *)TINYPY_TEXT_BYTES(position_text), TINYPY_TEXT_BYTE_SIZE(position_text)},
                         {null_byte != 0 ? " must be string without null bytes, not " : " must be string, not ", null_byte != 0 ? 40U : 21U},
-                        {kind == TINYPY_VALUE_NONE ? "None" : value->type->name, kind == TINYPY_VALUE_NONE ? 4U : value->type->name_size}
+                        TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(value)
                     };
 
                     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
@@ -582,14 +582,14 @@ static void __tinypy_constructor_long_multiply_add(uint16_t *digits, size_t *cou
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_constructor_integer_from_digits(tinypy_vm_t *vm, int32_t sign, const uint16_t *digits, size_t digit_count, int32_t force_long) {
+static tinypy_value_t *__tinypy_constructor_integer_from_digits(tinypy_vm_t *vm, int32_t sign, const uint16_t *digits, size_t digit_count, int32_t force_long, tinypy_error_t **out_error) {
     uint64_t magnitude = UINT64_C(0);
     uint64_t limit = sign < 0 ? (uint64_t)INT64_MAX + UINT64_C(1) : (uint64_t)INT64_MAX;
     size_t index = digit_count;
     tinypy_bool_t fits = TINYPY_TRUE;
 
     if (force_long != 0) {
-        tinypy_value_t *return_value_1 = tinypy_long_from_base15_digits(vm, digit_count == 0U ? 0 : sign, digits, digit_count);
+        tinypy_value_t *return_value_1 = tinypy_internal_long_from_base15_digits_checked(vm, digit_count == 0U ? 0 : sign, digits, digit_count, out_error);
         return return_value_1;
     }
     while (index != 0U) {
@@ -613,7 +613,7 @@ static tinypy_value_t *__tinypy_constructor_integer_from_digits(tinypy_vm_t *vm,
         tinypy_value_t *return_value_2 = tinypy_integer_from_i64(vm, value);
         return return_value_2;
     }
-    tinypy_value_t *return_value_3 = tinypy_long_from_base15_digits(vm, sign, digits, digit_count);
+    tinypy_value_t *return_value_3 = tinypy_internal_long_from_base15_digits_checked(vm, sign, digits, digit_count, out_error);
     return return_value_3;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -630,7 +630,11 @@ static void __tinypy_constructor_integer_literal_error(tinypy_vm_t *vm, const ui
         }
     }
     size_t literal_size = whole == 0 && size - begin > literal_limit ? literal_limit : size - begin;
-    tinypy_value_t *literal = tinypy_string_from_bytes(vm, bytes + begin, literal_size);
+    tinypy_value_t *literal = tinypy_internal_string_from_bytes_checked(vm, bytes + begin, literal_size, out_error);
+
+    if (literal == NULL) {
+        return;
+    }
     tinypy_value_t *representation = tinypy_object_repr(literal, out_error);
 
     TINYPY_DECREF(literal);
@@ -797,8 +801,11 @@ static tinypy_value_t *__tinypy_constructor_integer_bytes(tinypy_vm_t *vm, const
         }
         __tinypy_constructor_long_multiply_add(digits, &output_count, multiplier, chunk);
     }
-    tinypy_value_t *result = __tinypy_constructor_integer_from_digits(vm, sign, digits, output_count, force_long);
+    tinypy_value_t *result = __tinypy_constructor_integer_from_digits(vm, sign, digits, output_count, force_long, out_error);
     tinypy_internal_vm_deallocate(vm, digits, capacity * sizeof(*digits));
+    if (result == NULL) {
+        return NULL;
+    }
     if (null_byte != NULL) {
         TINYPY_DECREF(result);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, force_long != 0 ? "null byte in argument for long()" : "null byte in argument for int()", out_error);

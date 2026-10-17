@@ -34,7 +34,6 @@ static tinypy_ast_expression_t __ast_for_testlist_comp(tinypy_ast_builder_t *, c
 static tinypy_ast_expression_t __ast_for_call(tinypy_ast_builder_t *, const tinypy_cst_node_t *, tinypy_ast_expression_t);
 
 static tinypy_value_t *__parsenumber(tinypy_ast_builder_t *, const char *, int32_t, int32_t);
-static tinypy_value_t *__parsestr(tinypy_ast_builder_t *, const tinypy_cst_node_t *n, const char *);
 static tinypy_value_t *__parsestrplus(tinypy_ast_builder_t *, const tinypy_cst_node_t *n);
 
 #ifndef LINENO
@@ -3506,33 +3505,17 @@ static tinypy_value_t *__parsenumber(tinypy_ast_builder_t *c, const char *s, int
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__parsestr(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, const char *s) {
-    tinypy_value_t *return_value_1 = tinypy_internal_compiler_parse_string(c->c_arena, s, c->c_future_unicode, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
-    return return_value_1;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__parsestrplus(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
-    int32_t index;
+    size_t count = (size_t)TINYPY_CST_CHILD_COUNT(n);
+    const char **texts = (const char **)tinypy_internal_compiler_arena_allocate_uninitialized(c->c_arena, count * sizeof(*texts));
+    size_t index;
 
-    tinypy_value_t *value = __parsestr(c, n, TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, 0)));
-    if (value == NULL) {
+    if (texts == NULL) {
         return NULL;
     }
-    for (index = 1; index < TINYPY_CST_CHILD_COUNT(n); index++) {
-        tinypy_value_t *item = __parsestr(c, n, TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, index)));
-        tinypy_value_t *joined;
-
-        if (item == NULL) {
-            TINYPY_DECREF(value);
-            return NULL;
-        }
-        joined = tinypy_internal_compiler_concat_strings(c->c_arena, value, item, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
-        TINYPY_DECREF(item);
-        TINYPY_DECREF(value);
-        if (joined == NULL) {
-            return NULL;
-        }
-        value = joined;
+    for (index = 0U; index != count; ++index) {
+        texts[index] = TINYPY_CST_TEXT(TINYPY_CST_CHILD(n, index));
     }
-    return value;
+    tinypy_value_t *return_value_1 = tinypy_internal_compiler_parse_strings(c->c_arena, texts, count, c->c_future_unicode, TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1);
+    return return_value_1;
 }

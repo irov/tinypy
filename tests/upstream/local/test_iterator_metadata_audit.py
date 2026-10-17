@@ -79,6 +79,24 @@ class IteratorMetadataAudit(unittest.TestCase):
                 self.assertIs(bound.__self__, iterator)
                 self.assertIs(bound.__objclass__, type(iterator))
 
+    def test_base_next_calls_the_slot_a_subclass_overrides(self):
+        class Numbered(enumerate):
+            def next(self):
+                return enumerate.next(self)[::-1]
+
+        class Chained(enumerate):
+            def next(self):
+                return super(Chained, self).next()
+
+        class Backward(reversed):
+            def next(self):
+                return reversed.next(self) * 2
+        self.assertEqual(list(Numbered('ab')), [('a', 0), ('b', 1)])
+        self.assertEqual(list(Chained('ab')), [(0, 'a'), (1, 'b')])
+        self.assertEqual(list(Backward('ab')), ['bb', 'aa'])
+        self.assertEqual(_error(enumerate.next, reversed('a')),
+                         ('TypeError', ("descriptor 'next' requires a 'enumerate' object but received a 'reversed'",)))
+
     def test_length_hint_is_an_ordinary_builtin_method(self):
         iterator = iter(bytearray('a'))
         self.assertEqual(type(iterator.__length_hint__).__name__, 'builtin_function_or_method')

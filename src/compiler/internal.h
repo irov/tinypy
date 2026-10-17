@@ -128,8 +128,8 @@ tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tiny
 tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx, const char *text, int32_t line_number, int32_t column_offset);
 tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const char *text, size_t size, double *out_value, int32_t line_number, int32_t column_offset);
 tinypy_bool_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size, uint32_t *out_code_point);
-tinypy_value_t *tinypy_internal_compiler_parse_string(tinypy_compile_ctx_t *ctx, const char *text, tinypy_bool_t future_unicode, int32_t line_number, int32_t column_offset);
-tinypy_value_t *tinypy_internal_compiler_concat_strings(tinypy_compile_ctx_t *ctx, tinypy_value_t *left, tinypy_value_t *right, int32_t line_number, int32_t column_offset);
+/* The value of adjacent string literals, decoded and joined in one buffer. */
+tinypy_value_t *tinypy_internal_compiler_parse_strings(tinypy_compile_ctx_t *ctx, const char *const *texts, size_t count, tinypy_bool_t future_unicode, int32_t line_number, int32_t column_offset);
 tinypy_bool_t tinypy_internal_preprocessor_transform(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module, uint32_t future_flags);
 tinypy_bool_t tinypy_internal_meta_transform(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module);
 tinypy_preprocess_result_t *tinypy_internal_preprocessor_render(tinypy_compile_ctx_t *ctx, struct tinypy_ast_module_s *module);

@@ -563,6 +563,7 @@
         "EvaluationSemantics.test_dir_without_arguments_lists_keys_of_mapping_locals",
         "EvaluationSemantics.test_except_target_survives_handler_in_python2",
         "EvaluationSemantics.test_exception_call_follows_constructor_changes",
+        "EvaluationSemantics.test_exited_frame_lets_its_locals_snapshot_go",
         "EvaluationSemantics.test_finally_return_replaces_pending_exception",
         "EvaluationSemantics.test_finally_scopes_after_early_return",
         "EvaluationSemantics.test_flat_operator_chains_compile",
@@ -1259,9 +1260,11 @@
       "path": "local/test_compiler_edges.py",
       "origin": "project-authored",
       "cases": [
+        "CompilerEdges.test_adjacent_string_literals_join_once",
         "CompilerEdges.test_filename_conversion_precedes_flags",
         "CompilerEdges.test_flags_use_int_protocol_before_mode_value",
         "CompilerEdges.test_legacy_source_buffers_observe_flag_callback",
+        "CompilerEdges.test_line_continuation_decodes_string_literal",
         "CompilerEdges.test_normalization_respects_input_mode",
         "CompilerEdges.test_one_byte_string_constants",
         "CompilerEdges.test_syntax_phases_preserve_args_shape",
@@ -1425,7 +1428,10 @@
       "cases": [
         "SREDeep.test_argument_errors_name_the_method",
         "SREDeep.test_buffer_subjects_return_sequence_slice_types",
+        "SREDeep.test_compile_parses_its_arguments_as_python27",
         "SREDeep.test_compile_rejects_programs_sre_compile_cannot_emit",
+        "SREDeep.test_data_attributes_are_readonly_members_and_getsets",
+        "SREDeep.test_failed_attempts_leave_the_marks_of_python27",
         "SREDeep.test_finditer_and_scanner_reject_keywords",
         "SREDeep.test_getlower_uses_integer_protocol_and_signed_c_int_limits",
         "SREDeep.test_group_defaults_accept_keywords_and_preserve_identity",
@@ -1436,13 +1442,16 @@
         "SREDeep.test_match_group_uses_sequence_slice_override_and_callback_recovers",
         "SREDeep.test_match_search_findall_accept_named_bounds_and_string_alias",
         "SREDeep.test_multiline_end_from_a_start_past_endpos",
+        "SREDeep.test_negative_str_subclass_length_is_rejected_as_len_does",
         "SREDeep.test_negative_update_counts_preserve_subject",
         "SREDeep.test_pattern_keyword_duplicates_missing_and_extras_are_rejected",
+        "SREDeep.test_patterns_and_matches_refuse_copies",
         "SREDeep.test_reversed_bounds_match_and_search_preserve_python2_difference",
         "SREDeep.test_scanner_finditer_and_sub_callback_matches_preserve_initial_pos",
         "SREDeep.test_scanner_match_starts_past_endpos",
         "SREDeep.test_short_str_subclass_length_bounds_empty_match_scans",
         "SREDeep.test_split_and_sub_accept_named_parameters",
+        "SREDeep.test_sre_types_are_final_and_immutable",
         "SREDeep.test_sub_count_conversion_precedes_template_helper_and_subject_validation",
         "SREDeep.test_unicode_subclass_subject_dies_with_its_last_reference",
         "SREDeep.test_unset_group_spans_are_undefined_as_a_whole"
@@ -2288,6 +2297,7 @@
       "path": "local/test_iterator_metadata_audit.py",
       "origin": "project-authored",
       "cases": [
+        "IteratorMetadataAudit.test_base_next_calls_the_slot_a_subclass_overrides",
         "IteratorMetadataAudit.test_bound_next_and_iter_are_method_wrappers",
         "IteratorMetadataAudit.test_builtin_iterator_names_and_modules",
         "IteratorMetadataAudit.test_bytearray_direct_hint_is_signed_after_shrink",
@@ -2497,6 +2507,8 @@
       "path": "local/test_weakref_protocol_audit.py",
       "origin": "project-authored",
       "cases": [
+        "WeakrefProtocolAudit.test_base_weak_list_is_cleared_after_subclass_del",
+        "WeakrefProtocolAudit.test_base_weak_list_survives_resurrecting_del",
         "WeakrefProtocolAudit.test_basic_reference_and_proxy_cache_survive_callbacks",
         "WeakrefProtocolAudit.test_call_counts_positional_and_keyword_arguments",
         "WeakrefProtocolAudit.test_callable_proxy_cache_survives_callability_change",
@@ -2672,6 +2684,7 @@
         "ImportSemantics.test_reload_of_builtin_module",
         "ImportSemantics.test_reload_of_submodule_names_the_component",
         "ImportSemantics.test_reload_of_unresolvable_module",
+        "ImportSemantics.test_submodule_binding_failure_fails_the_import",
         "ImportSemantics.test_system_exit_with_an_index_error_ends_no_name_walk"
       ]
     },
@@ -2679,20 +2692,27 @@
       "path": "local/test_parity_regressions.py",
       "origin": "project-authored",
       "cases": [
+        "MessagePrecisionParity.test_argument_and_descriptor_messages",
         "MessagePrecisionParity.test_attribute_messages",
         "MessagePrecisionParity.test_call_messages",
+        "MessagePrecisionParity.test_code_and_generator_reprs",
         "MessagePrecisionParity.test_name_and_import_messages",
         "MessagePrecisionParity.test_type_name_messages",
+        "ReleaseOrderParity.test_dict_entry_removal_releases_in_cpython_order",
         "ReleaseOrderParity.test_list_and_tuple_release_items_from_the_end",
         "ReleaseOrderParity.test_subclass_members_and_dict_precede_the_contents",
         "TextConversionParity.test_byte_replace_decodes_self_before_its_arguments",
         "TextConversionParity.test_classic_format_formats_str_whatever_the_lookup_raised",
+        "TextConversionParity.test_format_field_names_keep_braces",
         "TextConversionParity.test_object_str_of_an_exception_returns_what_repr_returns",
         "TextConversionParity.test_percent_restart_after_a_unicode_str_precedes_unicode",
         "TextConversionParity.test_percent_restart_decodes_the_rest_of_the_format_first",
+        "TextConversionParity.test_print_function_looks_write_up_before_converting",
         "TextConversionParity.test_print_function_writes_str_of_every_non_unicode_value",
         "TextConversionParity.test_proxy_str_returns_what_the_referent_str_returns",
-        "TextConversionParity.test_stream_write_and_writelines_reset_the_softspace"
+        "TextConversionParity.test_stream_write_and_writelines_reset_the_softspace",
+        "TextConversionParity.test_unicode_c_format_decodes_the_padded_field",
+        "TextConversionParity.test_unicode_replace_decodes_old_before_converting_new"
       ]
     }
   },

@@ -152,6 +152,24 @@ except KeyError:
     del parent_exception
 sys.exc_clear()
 
+
+# Frame exit releases the fast locals and lets the f_locals snapshot built
+# from them go, which CPython both keeps while the frame lives: whoever else
+# holds the snapshot keeps it as it was, and a later read builds a new one.
+def exited_frame():
+    value = "local"
+    frame = sys._getframe()
+    snapshot = frame.f_locals
+    snapshot["extra"] = value
+    return frame, snapshot
+
+
+exited, exited_snapshot = exited_frame()
+assert sorted(exited_snapshot) == ["extra", "frame", "value"]
+assert exited.f_locals == {}
+assert exited.f_locals is not exited_snapshot
+del exited, exited_snapshot
+
 original_limit = sys.getrecursionlimit()
 assert original_limit == 1000
 assert sys.maxunicode == 0x10ffff

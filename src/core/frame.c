@@ -237,8 +237,11 @@ void tinypy_internal_frame_release_fast(tinypy_frame_object_t *frame) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-/* The local, cell and free slots precede the value stack. */
-void tinypy_internal_frame_clear_local_slots(tinypy_frame_object_t *frame) {
+/* The local, cell and free slots precede the value stack. The f_locals
+   snapshot of an optimized frame only mirrors them, so the frame lets it go
+   with them, leaving it to whoever else holds it: a later read builds a new
+   one. */
+void tinypy_internal_frame_clear_locals(tinypy_frame_object_t *frame) {
     for (tinypy_value_t **slot = frame->locals_plus; slot != frame->value_stack; ++slot) {
         if (*slot != NULL) {
             tinypy_value_t *value = *slot;
@@ -246,6 +249,11 @@ void tinypy_internal_frame_clear_local_slots(tinypy_frame_object_t *frame) {
             *slot = NULL;
             TINYPY_DECREF(value);
         }
+    }
+    tinypy_value_t *locals = frame->locals;
+    if (locals != NULL && (TINYPY_CODE_FLAGS(frame->code) & (TINYPY_CODE_NEW_LOCALS | TINYPY_CODE_OPTIMIZED)) == (TINYPY_CODE_NEW_LOCALS | TINYPY_CODE_OPTIMIZED)) {
+        frame->locals = NULL;
+        TINYPY_DECREF(locals);
     }
 }
 //////////////////////////////////////////////////////////////////////////

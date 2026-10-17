@@ -43,42 +43,6 @@ static void __tinypy_marshal_load_set_error(tinypy_marshal_error_t *error, tinyp
     error->message_size = __tinypy_marshal_load_cstring_size(message);
 }
 //////////////////////////////////////////////////////////////////////////
-static void *__tinypy_marshal_vm_allocate(void *user_data, size_t size, size_t alignment) {
-    tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
-
-    (void)alignment;
-    void *return_value_1 = __tinypy_internal_vm_allocate_checked(vm, size, NULL);
-    return return_value_1;
-}
-//////////////////////////////////////////////////////////////////////////
-static void *__tinypy_marshal_vm_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
-    tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
-
-    (void)alignment;
-    void *return_value_1 = __tinypy_internal_vm_reallocate_checked(vm, memory, old_size, new_size, NULL);
-    return return_value_1;
-}
-//////////////////////////////////////////////////////////////////////////
-static void __tinypy_marshal_vm_deallocate(void *user_data, void *memory, size_t size, size_t alignment) {
-    tinypy_vm_t *vm = (tinypy_vm_t *)user_data;
-
-    (void)alignment;
-    tinypy_internal_vm_deallocate(vm, memory, size);
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_allocator_t __tinypy_marshal_vm_allocator(tinypy_vm_t *vm) {
-    tinypy_allocator_t allocator;
-
-    (void)memset(&allocator, 0, sizeof(allocator));
-    allocator.abi_version = TINYPY_ABI_VERSION;
-    allocator.struct_size = (uint32_t)sizeof(allocator);
-    allocator.user_data = vm;
-    allocator.allocate = __tinypy_marshal_vm_allocate;
-    allocator.reallocate = __tinypy_marshal_vm_reallocate;
-    allocator.deallocate = __tinypy_marshal_vm_deallocate;
-    return allocator;
-}
-//////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_marshal_cache_index(const tinypy_marshal_object_t *source, size_t capacity) {
     uintptr_t hash = (uintptr_t)source >> 4U;
     hash ^= hash >> 16U;
@@ -435,7 +399,7 @@ tinypy_marshal_result_e tinypy_marshal_load_code_v2(tinypy_vm_t *vm, const void 
     tinypy_marshal_result_e result;
 
     *out_code = NULL;
-    allocator = __tinypy_marshal_vm_allocator(vm);
+    allocator = tinypy_internal_vm_heap_allocator(vm);
     result = tinypy_marshal_read_v2(bytes, size, &allocator, limits, &document, out_error);
     if (result != TINYPY_MARSHAL_OK) {
         return result;

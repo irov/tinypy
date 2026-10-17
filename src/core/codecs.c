@@ -354,7 +354,7 @@ static tinypy_bool_t __tinypy_codecs_buffer_argument_accepted(tinypy_vm_t *vm, c
     tinypy_message_part_t parts[] = {
         {name, name_size},
         {heap_type != TINYPY_FALSE ? "() argument 1 must be convertible to a buffer, not " : "() argument 1 must be string or buffer, not ", heap_type != TINYPY_FALSE ? 51U : 44U},
-        {kind == TINYPY_VALUE_NONE ? "None" : value->type->name, kind == TINYPY_VALUE_NONE ? 4U : value->type->name_size},
+        TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(value),
     };
 
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
@@ -814,7 +814,7 @@ tinypy_value_t *tinypy_internal_codecs_lookup_error(tinypy_vm_t *vm, tinypy_valu
     if (handler == NULL) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("unknown error handler name '"),
-            TINYPY_MESSAGE_PART_TEXT(name),
+            TINYPY_MESSAGE_PART_TEXT_PRECISION(name, 400U),
             TINYPY_MESSAGE_PART_LITERAL("'"),
         };
 

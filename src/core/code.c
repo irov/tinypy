@@ -332,11 +332,16 @@ void tinypy_internal_code_attach_compile_environment(tinypy_value_t *code_value,
     }
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_code_attach_compile_options(tinypy_value_t *code, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile) {
+tinypy_bool_t tinypy_internal_code_attach_compile_options(tinypy_value_t *code, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
-    tinypy_compile_environment_t *environment = tinypy_internal_compile_environment_create(vm, feature_flags, optimize_level, profile);
+    tinypy_compile_environment_t *environment = tinypy_internal_compile_environment_create(vm, feature_flags, optimize_level, profile, out_error);
+
+    if (environment == NULL) {
+        return TINYPY_FALSE;
+    }
     tinypy_internal_code_attach_compile_environment(code, environment);
     tinypy_internal_compile_environment_release(environment);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_compile_options_inherit_frame(tinypy_vm_t *vm, tinypy_compile_options_t *options) {

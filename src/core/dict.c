@@ -1144,17 +1144,18 @@ tinypy_bool_t tinypy_internal_dict_delete_index(tinypy_vm_t *vm, tinypy_value_t 
     __tinypy_internal_dict_owner_modified(dict);
     TINYPY_DICT_OBJECT(dict)->used -= 1U;
     __tinypy_internal_dict_modified(dict);
-    if (out_key != NULL) {
-        *out_key = owned_key;
-    }
-    else {
-        TINYPY_DECREF(owned_key);
-    }
+    /* PyDict_DelItem releases the value before the key. */
     if (out_value != NULL) {
         *out_value = owned_value;
     }
     else {
         TINYPY_DECREF(owned_value);
+    }
+    if (out_key != NULL) {
+        *out_key = owned_key;
+    }
+    else {
+        TINYPY_DECREF(owned_key);
     }
     return TINYPY_TRUE;
 }
