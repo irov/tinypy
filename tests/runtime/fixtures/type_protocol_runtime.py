@@ -1022,3 +1022,24 @@ assert bases_error(lambda: setattr(switching, "__bases__", SwitchingBases((objec
 assert switching.__bases__ is switching_bases
 assert switching.__mro__ == (switching, object)
 SwitchingBases.non_class = False
+
+
+# A type the iteration adds must lay its instances out as a base does: a
+# dict or a list there would read the object instances of the class.
+class LayoutBases(tuple):
+    added = dict
+
+    def __iter__(self):
+        return iter(list(tuple.__iter__(self)) + [LayoutBases.added])
+
+
+layout_error = "mro() returned base with unsuitable layout ('%s')"
+assert bases_error(lambda: type("Refused", LayoutBases((object,)), {})) == layout_error % "dict"
+assert bases_error(lambda: NonClassMeta("Refused", LayoutBases((object,)), {})) == layout_error % "dict"
+LayoutBases.added = IterationAdded
+laid_out = type("LaidOut", LayoutBases((object,)), {})
+assert laid_out.__mro__ == (laid_out, object, IterationAdded)
+LayoutBases.added = list
+assert bases_error(lambda: type.mro(laid_out)) == layout_error % "list"
+assert bases_error(lambda: setattr(laid_out, "__bases__", LayoutBases((object,)))) == layout_error % "list"
+assert laid_out.__mro__ == (laid_out, object, IterationAdded)

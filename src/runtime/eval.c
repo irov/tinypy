@@ -2253,7 +2253,7 @@ static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_ob
                         name,
                         description,
                         TINYPY_MESSAGE_PART_LITERAL(" argument after * must be an iterable, not "),
-                        TINYPY_MESSAGE_PART_TYPE_NAME(iterable),
+                        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(iterable, TINYPY_EVAL_MESSAGE_NAME_LIMIT),
                     };
 
                     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);

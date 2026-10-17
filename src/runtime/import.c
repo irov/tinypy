@@ -835,7 +835,8 @@ static void __tinypy_import_discard_error(tinypy_vm_t *vm, tinypy_error_t **out_
 //////////////////////////////////////////////////////////////////////////
 /* Marks a name that an implicit relative import found missing, so later
    imports skip straight to the absolute name, as mark_miss does. An import
-   that failed keeps its own error, so its mark is made only if it fits. */
+   that failed keeps its own error, so its mark ignores the budget, as an
+   infallible dict store does. */
 static tinypy_bool_t __tinypy_import_mark_missing(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_bool_t failed, tinypy_error_t **out_error) {
     if (tinypy_dict_get_optional(vm->modules, key) != NULL) {
         return TINYPY_TRUE;

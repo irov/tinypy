@@ -502,6 +502,30 @@ class BuiltinEdges(unittest.TestCase):
         second = next(pairs)
         self.assertEqual((first, second), ((0, 'a'), (1, 'b')))
 
+    def test_exhausted_enumerate_lets_its_last_pair_go(self):
+        # CPython's collector frees a cycle through the pair an exhausted
+        # enumerate keeps; tinypy has no collector and drops that pair, which
+        # the allocator accounting of the case checks.
+        class Node(object):
+            pass
+        node = Node()
+        node.pairs = enumerate([node])
+        for pair in node.pairs:
+            pass
+        del pair
+        del node
+        # A pair the caller still holds stays as it is.
+        released = []
+        class Item(object):
+            def __del__(self):
+                released.append(True)
+        pairs = enumerate([Item()])
+        kept = next(pairs)
+        self.assertEqual(list(pairs), [])
+        self.assertEqual((kept[0], type(kept[1]), released), (0, Item, []))
+        del kept, pairs
+        self.assertEqual(released, [True])
+
     def test_min_releases_discarded_temporary_keys(self):
         references = []
         class Key(object):

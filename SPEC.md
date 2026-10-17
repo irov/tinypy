@@ -292,7 +292,11 @@ C3 MRO по умолчанию, как `mro_implementation` CPython 2.7, объ�
 поиска не запоминают ответы для такого MRO. Объект, который не является
 классом, CPython помещает в MRO и затем читает как тип; tinypy при создании
 класса, присваивании `__bases__` и вызове `type.mro()` отвергает его с
-TypeError «bases must be types». Как `class_name` CPython, сообщение
+TypeError «bases must be types». Так же CPython принимает добавленный итерацией
+тип, раскладка экземпляров которого не является раскладкой базы класса, и затем
+читает экземпляры класса как его экземпляры; tinypy отвергает такой тип с
+TypeError «mro() returned base with unsuitable layout», как тип custom
+`mro()`. Как `class_name` CPython, сообщение
 «duplicate base class» называет первый повторённый элемент по `__name__`,
 иначе по repr, и показывает «?», если это не str.
 Member и getset descriptors, пережившие свой
@@ -631,6 +635,11 @@ traceback удаляют имена, `sys.exc_info()` возвращает вм�
 При выходе из frame его fast locals освобождаются сразу, даже если frame
 остаётся достижим через traceback: без cyclic GC это разрывает циклы
 frame -> locals -> frame. Это намеренное отличие от CPython.
+
+`enumerate`, как `enum_next`, заполняет свою пару результата заново, пока
+владеет ею один. Исчерпанный `enumerate` отпускает свою пару, даже если её ещё
+держит переменная цикла: без cyclic GC последняя пара иначе держала бы цикл
+через свой элемент. Это тоже намеренное отличие от CPython.
 
 ## 8. Compiler
 

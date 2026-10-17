@@ -197,13 +197,13 @@ show('nulorder',lambda:type('C\0',(object,),{'__slots__':Slots()}).__name__)
 class Subtuple(tuple):
     def __iter__(self):
         events.append('bases-iter')
-        return iter((int,))
+        return iter((Plain,))
     def __len__(self):
         events.append('bases-len')
         return 1
     def __getitem__(self,key):
         events.append('bases-getitem')
-        return int
+        return Plain
 show('bases-subtuple',lambda:type('C',Subtuple((object,)),{}).__base__.__name__)
 class Subdict(dict):
     def __iter__(self):

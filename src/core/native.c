@@ -280,12 +280,20 @@ static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_internal_native_instance_chec
 }
 //////////////////////////////////////////////////////////////////////////
 /* A finalized function has no user data left for its callback, and a method
-   of a host native type no payload once its receiver is finalized. */
+   of a host native type no payload once its receiver is finalized. An
+   accessor, called directly as well, takes any first argument or none. */
 static tinypy_bool_t __tinypy_native_function_check_live(tinypy_value_t *callable, const tinypy_native_function_object_t *source, tinypy_value_t *receiver, tinypy_error_t **out_error) {
     if (source->call_check == TINYPY_NATIVE_CALL_CHECK_NONE) {
         return TINYPY_TRUE;
     }
     if (source->call_check == TINYPY_NATIVE_CALL_CHECK_RECEIVER) {
+        tinypy_bool_t live = __tinypy_internal_native_instance_check_live(receiver, out_error);
+        return live;
+    }
+    if (source->call_check == TINYPY_NATIVE_CALL_CHECK_ACCESSOR) {
+        if (receiver == NULL || TINYPY_VALUE_KIND(receiver) != TINYPY_VALUE_NATIVE_INSTANCE) {
+            return TINYPY_TRUE;
+        }
         tinypy_bool_t live = __tinypy_internal_native_instance_check_live(receiver, out_error);
         return live;
     }
@@ -303,7 +311,7 @@ static tinypy_bool_t __tinypy_native_function_check_live(tinypy_value_t *callabl
 static tinypy_value_t *__tinypy_native_function_invoke(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
     const tinypy_native_function_object_t *source = __tinypy_native_function_source(callable);
-    tinypy_value_t *receiver = source->call_check == TINYPY_NATIVE_CALL_CHECK_RECEIVER ? TINYPY_TUPLE_GET(args, 0U) : NULL;
+    tinypy_value_t *receiver = source->call_check == TINYPY_NATIVE_CALL_CHECK_RECEIVER || (source->call_check == TINYPY_NATIVE_CALL_CHECK_ACCESSOR && TINYPY_TUPLE_SIZE(args) != 0U) ? TINYPY_TUPLE_GET(args, 0U) : NULL;
 
     if (__tinypy_native_function_check_live(callable, source, receiver, out_error) == TINYPY_FALSE) {
         return NULL;
@@ -318,8 +326,9 @@ static tinypy_value_t *__tinypy_native_function_invoke(tinypy_value_t *callable,
 static tinypy_value_t *__tinypy_native_function_invoke_items(tinypy_value_t *callable, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
     const tinypy_native_function_object_t *source = __tinypy_native_function_source(callable);
+    tinypy_value_t *receiver = self == NULL && source->call_check == TINYPY_NATIVE_CALL_CHECK_ACCESSOR && count != 0U ? items[0] : self;
 
-    if (__tinypy_native_function_check_live(callable, source, self, out_error) == TINYPY_FALSE) {
+    if (__tinypy_native_function_check_live(callable, source, receiver, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     if (function->arity_style != TINYPY_ARITY_STYLE_UNCHECKED && tinypy_internal_native_arguments_check(callable, count, kwargs, function->minimum, function->maximum, function->arity_style, out_error) == TINYPY_FALSE) {

@@ -1138,8 +1138,12 @@ tinypy_value_t *tinypy_internal_enumerate_new(tinypy_value_t *iterable, tinypy_v
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_enumerate_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
+    tinypy_value_t *result = TINYPY_ENUMERATE_OBJECT(value)->result;
+
     visit(TINYPY_ENUMERATE_OBJECT(value)->iterator, user_data);
-    visit(TINYPY_ENUMERATE_OBJECT(value)->result, user_data);
+    if (result != NULL) {
+        visit(result, user_data);
+    }
     visit(TINYPY_ENUMERATE_OBJECT(value)->index, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1148,11 +1152,26 @@ tinypy_value_t *tinypy_internal_enumerate_iter(tinypy_value_t *value, tinypy_err
     return TINYPY_RET(value);
 }
 //////////////////////////////////////////////////////////////////////////
+/* enum_next keeps its last pair, which CPython's collector frees when the
+   items lead back to the enumerate. Without a collector an enumerate that
+   yields no item lets the pair go, whoever else holds it; an item after
+   that takes a new pair. */
+static void __tinypy_enumerate_release_pair(tinypy_enumerate_object_t *enumerate) {
+    tinypy_value_t *result = enumerate->result;
+
+    if (result == NULL) {
+        return;
+    }
+    enumerate->result = NULL;
+    TINYPY_DECREF(result);
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_enumerate_next(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_enumerate_object_t *enumerate = TINYPY_ENUMERATE_OBJECT(value);
     tinypy_value_t *item = tinypy_next(enumerate->iterator, out_error);
 
     if (item == NULL) {
+        __tinypy_enumerate_release_pair(enumerate);
         return NULL;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
@@ -1176,7 +1195,7 @@ tinypy_value_t *tinypy_internal_enumerate_next(tinypy_value_t *value, tinypy_err
 
     enumerate->index = next_index;
     /* enum_next: the pair the caller released takes the next items. */
-    if (TINYPY_REFCNT(result) == 1) {
+    if (result != NULL && TINYPY_REFCNT(result) == 1) {
         tinypy_value_t **pair = TINYPY_TUPLE_OBJECT(result)->items;
         tinypy_value_t *previous_index = pair[0];
         tinypy_value_t *previous_item = pair[1];

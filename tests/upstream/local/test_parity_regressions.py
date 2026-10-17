@@ -290,6 +290,9 @@ class MessagePrecisionParity(unittest.TestCase):
                          ('TypeError', "%s() got an unexpected keyword argument '%s'" % (name[:200], 'k' * 400)))
         self.assertEqual(_error(lambda: function(**5)),
                          ('TypeError', '%s() argument after ** must be a mapping, not int' % name[:200]))
+        long_type = type('T' * 250, (object,), {})
+        self.assertEqual(_error(lambda: function(*long_type())),
+                         ('TypeError', '%s() argument after * must be an iterable, not %s' % (name[:200], 'T' * 200)))
 
     def test_type_name_messages(self):
         long_type = type('T' * 250, (object,), {})

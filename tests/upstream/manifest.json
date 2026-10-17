@@ -1504,6 +1504,7 @@
         "BuiltinEdges.test_codec_names_resolve_like_the_encodings_search_function",
         "BuiltinEdges.test_dir_merge_survives_dict_replacement",
         "BuiltinEdges.test_enumerate_pairs_release_previous_items",
+        "BuiltinEdges.test_exhausted_enumerate_lets_its_last_pair_go",
         "BuiltinEdges.test_extend_accepts_float_length_result",
         "BuiltinEdges.test_float_length_overflow_is_reported",
         "BuiltinEdges.test_float_text_rounds_the_exact_binary_value",

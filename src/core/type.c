@@ -1325,6 +1325,62 @@ static void __tinypy_internal_rebase_destroy_mro(tinypy_type_t *type, tinypy_val
     TINYPY_DECREF(&vm->types[TINYPY_VALUE_TUPLE].base.base);
 }
 //////////////////////////////////////////////////////////////////////////
+/* Whether an MRO entry comes from a base, not only from the iteration of a
+   tuple subclass in __bases__. */
+static tinypy_bool_t __tinypy_internal_mro_entry_inherited(tinypy_value_t *const *bases, size_t base_count, const tinypy_value_t *entry) {
+    for (size_t index = 0U; index < base_count; ++index) {
+        if (bases[index] == entry) {
+            return TINYPY_TRUE;
+        }
+        if (TINYPY_VALUE_KIND(bases[index]) != TINYPY_VALUE_TYPE) {
+            continue;
+        }
+        const tinypy_type_t *base = (const tinypy_type_t *)bases[index];
+        size_t count = __tinypy_internal_type_mro_size_raw(base);
+
+        for (size_t position = 0U; position < count; ++position) {
+            if (__tinypy_internal_type_mro_value_at(base, position) == entry) {
+                return TINYPY_TRUE;
+            }
+        }
+    }
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A type that only the iteration of a tuple subclass in __bases__ adds to the
+   MRO lays its instances out as a base of the class does, as the types of a
+   custom mro() must; CPython 2.7 would read the instances of the class as
+   its instances. */
+static tinypy_bool_t __tinypy_internal_mro_check_added_layouts(tinypy_vm_t *vm, const tinypy_value_t *bases_source, tinypy_value_t *const *bases, size_t base_count, tinypy_value_t *const *entries, size_t count, tinypy_error_t **out_error) {
+    if (bases_source == NULL || bases_source->type == &vm->types[TINYPY_VALUE_TUPLE]) {
+        return TINYPY_TRUE;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        tinypy_value_t *entry = entries[index];
+
+        if (TINYPY_VALUE_KIND(entry) != TINYPY_VALUE_TYPE || __tinypy_internal_mro_entry_inherited(bases, base_count, entry) != 0) {
+            continue;
+        }
+        const tinypy_type_t *solid = __tinypy_internal_type_solid_base((const tinypy_type_t *)entry);
+        tinypy_bool_t fits = TINYPY_FALSE;
+
+        for (size_t base_index = 0U; base_index < base_count && fits == 0; ++base_index) {
+            fits = TINYPY_VALUE_KIND(bases[base_index]) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype(__tinypy_internal_type_solid_base((const tinypy_type_t *)bases[base_index]), solid) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        }
+        if (fits == 0) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("mro() returned base with unsuitable layout ('"),
+                {((const tinypy_type_t *)entry)->name, ((const tinypy_type_t *)entry)->name_size},
+                TINYPY_MESSAGE_PART_LITERAL("')"),
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_type_compute_mro(tinypy_type_t *type, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t base_count = __tinypy_internal_type_bases_size_raw(type);
@@ -1339,13 +1395,14 @@ tinypy_value_t *tinypy_internal_type_compute_mro(tinypy_type_t *type, tinypy_err
         bases[index] = __tinypy_internal_type_base_value_at(type, index);
     }
     merged = __tinypy_internal_c3_merge(vm, bases, base_count, type->bases, &merged_count, &merged_size, out_error);
+    tinypy_bool_t laid_out = merged != NULL ? __tinypy_internal_mro_check_added_layouts(vm, type->bases, bases, base_count, merged + 1, merged_count, out_error) : TINYPY_FALSE;
     tinypy_internal_vm_deallocate(vm, bases, base_count * sizeof(*bases));
     if (merged == NULL) {
         return NULL;
     }
     merged[0] = &type->base.base;
-    mro = tinypy_list_from_items(vm, NULL, 0U);
-    if (tinypy_internal_list_extend_checked(mro, merged, merged_count + 1U, out_error) == 0) {
+    mro = laid_out != 0 ? tinypy_list_from_items(vm, NULL, 0U) : NULL;
+    if (mro != NULL && tinypy_internal_list_extend_checked(mro, merged, merged_count + 1U, out_error) == 0) {
         TINYPY_DECREF(mro);
         mro = NULL;
     }
@@ -2170,6 +2227,14 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_value_t *internal_name_k
             TINYPY_DECREF(&type->base.base);
             return NULL;
         }
+        if (__tinypy_internal_mro_check_added_layouts(vm, type->bases, TINYPY_TUPLE_ITEMS(type->bases), TINYPY_TUPLE_SIZE(type->bases), mro_types + 1, mro_tail_count, out_error) == 0) {
+            for (index = 1U; index <= mro_tail_count; ++index) {
+                TINYPY_DECREF(mro_types[index]);
+            }
+            tinypy_internal_vm_deallocate(vm, mro_types, mro_workspace_size);
+            TINYPY_DECREF(&type->base.base);
+            return NULL;
+        }
         mro_types[0] = &type->base.base;
         type->mro = tinypy_internal_tuple_from_borrowed_items(vm, mro_types, mro_tail_count + 1U);
         __tinypy_internal_type_refresh_classic_mro(type, TINYPY_FALSE);
@@ -2684,6 +2749,20 @@ static void __tinypy_internal_type_reference_owner(tinypy_type_t *type, tinypy_n
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* A native accessor of a property that a host native type registers reaches
+   the payload of its first argument, as a method of the type does, also when
+   it is called directly. A finalized accessor stays finalized. */
+static void __tinypy_internal_type_check_accessor(tinypy_value_t *accessor) {
+    if (accessor == NULL || TINYPY_VALUE_KIND(accessor) != TINYPY_VALUE_NATIVE_FUNCTION) {
+        return;
+    }
+    tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(accessor);
+
+    if (function->call_check == TINYPY_NATIVE_CALL_CHECK_NONE) {
+        function->call_check = TINYPY_NATIVE_CALL_CHECK_ACCESSOR;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 /* Registration through the C API turns a fresh native function into a method
    descriptor of the type; a plain assignment from Python keeps builtins such
    as len unbound, as CPython does. */
@@ -2716,6 +2795,13 @@ void tinypy_type_set_attr_key(tinypy_type_t *type, tinypy_value_t *key, tinypy_v
                 __tinypy_internal_type_reference_owner(type, function);
             }
         }
+    }
+    else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_PROPERTY && tinypy_internal_type_is_host_native(type) != 0) {
+        tinypy_property_object_t *property = TINYPY_PROPERTY_OBJECT(value);
+
+        __tinypy_internal_type_check_accessor(property->getter);
+        __tinypy_internal_type_check_accessor(property->setter);
+        __tinypy_internal_type_check_accessor(property->deleter);
     }
     tinypy_dict_set(type->dict, key, value);
 }

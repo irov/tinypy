@@ -1050,30 +1050,28 @@ static int32_t __test_long_canonical(void) {
 
     /* As PyNumber_AsSsize_t: an int is an index, a float is not one, and a
      * long that int64_t cannot hold raises the overflow kind. */
-    {
-        int64_t index = 0;
-        tinypy_error_t *error = NULL;
+    int64_t index = 0;
+    tinypy_error_t *error = NULL;
 
-        value = tinypy_integer_from_i64(vm, INT64_C(-7));
-        TEST_CHECK(tinypy_number_as_index(value, TINYPY_ERROR_INDEX, &index, NULL) != 0);
-        TEST_CHECK(index == INT64_C(-7));
-        tinypy_release(value);
+    value = tinypy_integer_from_i64(vm, INT64_C(-7));
+    TEST_CHECK(tinypy_number_as_index(value, TINYPY_ERROR_INDEX, &index, NULL) != 0);
+    TEST_CHECK(index == INT64_C(-7));
+    tinypy_release(value);
 
-        value = tinypy_float_from_double(vm, 1.5);
-        TEST_CHECK(tinypy_number_as_index(value, TINYPY_ERROR_INDEX, &index, &error) == 0);
-        TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
-        tinypy_error_release(error);
-        tinypy_vm_clear_error(vm);
-        tinypy_release(value);
+    value = tinypy_float_from_double(vm, 1.5);
+    TEST_CHECK(tinypy_number_as_index(value, TINYPY_ERROR_INDEX, &index, &error) == 0);
+    TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+    tinypy_error_release(error);
+    tinypy_vm_clear_error(vm);
+    tinypy_release(value);
 
-        error = NULL;
-        value = tinypy_long_from_base15_digits(vm, 1, limit_digits, 69U);
-        TEST_CHECK(tinypy_number_as_index(value, TINYPY_ERROR_INDEX, &index, &error) == 0);
-        TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDEX);
-        tinypy_error_release(error);
-        tinypy_vm_clear_error(vm);
-        tinypy_release(value);
-    }
+    error = NULL;
+    value = tinypy_long_from_base15_digits(vm, 1, limit_digits, 69U);
+    TEST_CHECK(tinypy_number_as_index(value, TINYPY_ERROR_INDEX, &index, &error) == 0);
+    TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INDEX);
+    tinypy_error_release(error);
+    tinypy_vm_clear_error(vm);
+    tinypy_release(value);
 
     tinypy_vm_destroy(vm);
     TEST_CHECK(state.outstanding_allocations == 0U);
@@ -7029,7 +7027,7 @@ static tinypy_vm_t *__test_native_notify_vm(const tinypy_vm_config_t *config, te
    slots and the methods of that instance only as a RuntimeError, as it
    reaches a finalized native function: through a bound method made before,
    the method call, the descriptor, each slot and the native accessors of a
-   property. */
+   property, through the property or called directly. */
 static int32_t __test_native_destroy_finalized(void) {
     static const char source[] =
         "def attempt(call):\n"
@@ -7044,7 +7042,8 @@ static int32_t __test_native_destroy_finalized(void) {
         "        def assign():\n"
         "            node.value = 7\n"
         "        calls = (lambda: repr(node), lambda: hash(node), lambda: node == 5, lambda: node + 1, node, lambda: len(node),\n"
-        "                 bound, lambda: node.probe(), lambda: Node.probe(node), getattr(node, 'probe'), lambda: node.value, assign)\n"
+        "                 bound, lambda: node.probe(), lambda: Node.probe(node), getattr(node, 'probe'), lambda: node.value, assign,\n"
+        "                 lambda: Node.value.fget(node), lambda: Node.value.fset(node, 3), lambda: getattr(Node.value, 'fget')(node))\n"
         "        results = [attempt(call) for call in calls]\n"
         "        record(results.count(\"'Node' object was finalized\"), len(results))\n"
         "def on_finalize(value):\n"
@@ -7066,7 +7065,7 @@ static int32_t __test_native_destroy_finalized(void) {
     tinypy_release(module);
     tinypy_vm_destroy(vm);
     TEST_CHECK(state.finalized == 2U);
-    TEST_CHECK(state.attempts == 12U && state.refused == state.attempts);
+    TEST_CHECK(state.attempts == 15U && state.refused == state.attempts);
     TEST_CHECK(state.dead_calls == 0U);
     TEST_CHECK(allocator_state.outstanding_allocations == 0U);
     TEST_CHECK(allocator_state.outstanding_bytes == 0U);

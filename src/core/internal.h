@@ -1730,7 +1730,7 @@ typedef struct tinypy_enumerate_object_t {
     tinypy_value_t *iterator;
     tinypy_value_t *index;
     /* en_result: the pair next returns, which it fills again once the
-       enumerate holds the only reference. */
+       enumerate holds the only reference; NULL once the enumerate ran out. */
     tinypy_value_t *result;
 } tinypy_enumerate_object_t;
 //////////////////////////////////////////////////////////////////////////
@@ -1775,11 +1775,14 @@ typedef enum tinypy_native_descriptor_kind_e {
 //////////////////////////////////////////////////////////////////////////
 /* The check a native function makes before its callback runs: RECEIVER for
    a method of a host native type, whose receiver must still have its
-   payload, and FINALIZED once its finalizer ran, as its user data is gone. */
+   payload, ACCESSOR for an accessor of a property such a type registers,
+   whose first argument must as well when it is a native instance, and
+   FINALIZED once its finalizer ran, as its user data is gone. */
 typedef enum tinypy_native_call_check_e {
     TINYPY_NATIVE_CALL_CHECK_NONE = 0,
     TINYPY_NATIVE_CALL_CHECK_RECEIVER = 1,
-    TINYPY_NATIVE_CALL_CHECK_FINALIZED = 2
+    TINYPY_NATIVE_CALL_CHECK_FINALIZED = 2,
+    TINYPY_NATIVE_CALL_CHECK_ACCESSOR = 3
 } tinypy_native_call_check_e;
 //////////////////////////////////////////////////////////////////////////
 /* The three ways CPython 2.7 reports a C-level argument count mismatch:
