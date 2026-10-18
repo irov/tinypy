@@ -2157,6 +2157,77 @@ static int32_t __test_source_limit(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The compile functions read the options and the limits within their
+   struct_size: limits of the first layout, which ended after
+   max_arena_bytes, keep the defaults of the fields added since, and another
+   ABI version or a size below the first layout fails with TypeError. */
+static int32_t __test_compile_options_struct_size(void) {
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    size_t first_size = offsetof(tinypy_compile_limits_t, max_arena_bytes) + sizeof(size_t);
+    tinypy_compile_limits_t current;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    tinypy_compile_limits_init(&current);
+    current.struct_size = (uint32_t)first_size;
+    tinypy_compile_limits_t *first_limits = (tinypy_compile_limits_t *)malloc(first_size);
+    assert(first_limits != NULL);
+    (void)memcpy(first_limits, &current, first_size);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.limits = first_limits;
+    tinypy_value_t *code = tinypy_compile_source(vm, "x = 1\n", 6U, "first.py", 8U, &options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_release(code);
+    tinypy_preprocess_result_t *preprocessed = tinypy_preprocess_source(vm, "x = 1\n", 6U, "first.py", 8U, &options, &error);
+    assert(preprocessed != NULL && error == NULL);
+    tinypy_preprocess_result_destroy(preprocessed);
+    tinypy_value_t *result = tinypy_exec_source(vm, "x = 1\n", 6U, "first.py", 8U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    tinypy_release(result);
+    first_limits->max_source_bytes = 2U;
+    code = tinypy_compile_source(vm, "x = 1\n", 6U, "first.py", 8U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    first_limits->max_source_bytes = current.max_source_bytes;
+    first_limits->abi_version = 99U;
+    code = tinypy_compile_source(vm, "x = 1\n", 6U, "first.py", 8U, &options, &error);
+    assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    free(first_limits);
+    current.struct_size = (uint32_t)first_size - 1U;
+    options.limits = &current;
+    preprocessed = tinypy_preprocess_source(vm, "x = 1\n", 6U, "small.py", 8U, &options, &error);
+    assert(preprocessed == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    options.limits = NULL;
+    options.struct_size = (uint32_t)sizeof(options) - 1U;
+    result = tinypy_eval_source(vm, "1", 1U, "small.py", 8U, globals, NULL, &options, &error);
+    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    options.struct_size = (uint32_t)sizeof(options);
+    options.abi_version = 99U;
+    result = tinypy_exec_source(vm, "x = 1\n", 6U, "abi.py", 6U, globals, NULL, &options, &error);
+    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static size_t __test_append_text(char *buffer, size_t size, const char *text) {
     size_t text_size = strlen(text);
 
@@ -2602,7 +2673,11 @@ static int32_t __test_preprocess_renderer(void) {
     static const char bytes_source[] = "from __future__ import unicode_literals\nvalue = b'abc'\n";
     /* Literals that the parser folds into one constant or whose repr is no
        literal, and extended slices of one dimension. */
-    static const char same_program_source[] = "def f(complex, k):\n    return -(0j), -(5), +(5), ~(5), not (0), 1e400j, -1e400j\ndef g(k):\n    return k[..., ], k[1:2, ], k[:, ], k[::, ], k[1:2], k[1, ]\n";
+    static const char same_program_source[] = "def f(complex, k):\n    return -(0j), -(5), +(5), ~(5), not (0), 1e400j, -1e400j\ndef g(k):\n    return k[..., ], k[1:2, ], k[:, ], k[::, ], k[1:2], k[1, ]\n"
+                                              "def h(a, b, c):\n    return a - (b - c), (a ** b) ** c, a ** b ** c, -a ** b, (-a) ** b, a ** -b, -(a * b), - -a, -(2) ** 2, (a | b) & c, a << (b + c)\n"
+                                              "def i(a, b, c):\n    return not (a and b), (not a) == b, (a or b) or c, a or (b or c), (a < b) < c, (a if b else c) if a else b, a if b else c if a else b\n"
+                                              "def j(a, b, c):\n    exec (a if b else c) in a\n    return [d for d in (a if b else c) if (lambda: d)], lambda: lambda: a, (lambda: a)(), a[lambda: 1:2], (a + b).c\n"
+                                              "def k(a):\n    if a:\n        pass\n    elif not a:\n        pass\n    else:\n        if a:\n            pass\n        a = 1\n";
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
     tinypy_compile_options_t options;
@@ -2629,7 +2704,7 @@ static int32_t __test_preprocess_renderer(void) {
     assert(strstr(expanded, "u'\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442'") != NULL);
     /* Negative literals and numeric operands keep their parentheses, dotted
        decorators stay valid and infinite complex parts avoid nan. */
-    assert(strstr(expanded, "((-5) ** 2)") != NULL && strstr(expanded, "((-2j) ** 2)") != NULL);
+    assert(strstr(expanded, "return ((-5) ** 2, (-2j) ** 2, ") != NULL);
     assert(strstr(expanded, "(1).real") != NULL && strstr(expanded, "(1).imag") != NULL);
     assert(strstr(expanded, "@module.decorator\n") != NULL);
     assert(strstr(expanded, "complex_infinite = 1e400j\n") != NULL);
@@ -2661,6 +2736,56 @@ static int32_t __test_preprocess_renderer(void) {
     tinypy_release(code);
     tinypy_preprocess_result_destroy(preprocessed);
     tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A flat operator chain and an elif chain render without a recursion level
+   or an indentation level per link, and operators without redundant
+   parentheses, so their canonical source compiles to the same program. */
+static int32_t __test_preprocess_renderer_chains(void) {
+    static const size_t operand_count = 100000U;
+    static const size_t clause_count = 150U;
+    size_t capacity = operand_count * 4U + clause_count * 32U + 64U;
+    char *source = (char *)malloc(capacity);
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    size_t size = 0U;
+
+    assert(source != NULL);
+    size = __test_append_text(source, size, "x = a");
+    for (size_t index = 1U; index != operand_count; ++index) {
+        size = __test_append_text(source, size, " + a");
+    }
+    size = __test_append_text(source, size, "\nif x == 0:\n    pass\n");
+    for (size_t index = 1U; index != clause_count; ++index) {
+        size += (size_t)snprintf(source + size, capacity - size, "elif x == %zu:\n    pass\n", index);
+    }
+    size = __test_append_text(source, size, "else:\n    pass\n");
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_preprocess_result_t *preprocessed = tinypy_preprocess_source(vm, source, size, "chains.py", 9U, &options, &error);
+    assert(preprocessed != NULL && error == NULL);
+    size_t expanded_size;
+    const char *expanded = tinypy_preprocess_result_expanded_source(preprocessed, &expanded_size);
+    assert(expanded_size == size && memcmp(expanded, source, size) == 0);
+    tinypy_value_t *code = tinypy_compile_source(vm, source, size, "chains.py", 9U, &options, &error);
+    assert(code != NULL && error == NULL);
+    size_t original_size;
+    uint8_t *original = __test_marshal_dump(code, &original_size);
+    tinypy_release(code);
+    code = tinypy_compile_source(vm, expanded, expanded_size, "chains.py", 9U, &options, &error);
+    assert(code != NULL && error == NULL);
+    size_t canonical_size;
+    uint8_t *canonical = __test_marshal_dump(code, &canonical_size);
+    assert(canonical_size == original_size && memcmp(canonical, original, original_size) == 0);
+    free(canonical);
+    free(original);
+    tinypy_release(code);
+    tinypy_preprocess_result_destroy(preprocessed);
+    tinypy_vm_destroy(vm);
+    free(source);
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
@@ -2972,6 +3097,9 @@ int main(void) {
     if (__test_source_limit() != 0) {
         return EXIT_FAILURE;
     }
+    if (__test_compile_options_struct_size() != 0) {
+        return EXIT_FAILURE;
+    }
     if (__test_private_name_mangling() != 0) {
         return EXIT_FAILURE;
     }
@@ -3078,6 +3206,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_preprocess_renderer() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_preprocess_renderer_chains() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_meta_template() != 0) {

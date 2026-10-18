@@ -783,18 +783,21 @@ static tinypy_value_t *__tinypy_internal_method_cmp_method(tinypy_value_t *funct
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
-    int64_t order;
 
-    if (TINYPY_VALUE_KIND(right) == TINYPY_VALUE_METHOD) {
-        int32_t equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
+    /* wrap_cmpfunc takes a method only. */
+    if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_METHOD) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_TYPE_NAME(left), TINYPY_MESSAGE_PART_LITERAL(".__cmp__(x,y) requires y to be a '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(left), TINYPY_MESSAGE_PART_LITERAL("', not a '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(right), TINYPY_MESSAGE_PART_LITERAL("'")
+        };
 
-        if (equal < 0) {
-            return NULL;
-        }
-        order = equal != 0 ? 0 : ((uintptr_t)left < (uintptr_t)right ? INT64_C(-1) : INT64_C(1));
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
     }
-    else {
-        order = (uintptr_t)left < (uintptr_t)right ? INT64_C(-1) : INT64_C(1);
+    int32_t order;
+    if (tinypy_internal_method_compare_three_way(left, right, &order, out_error) == 0) {
+        return NULL;
     }
     tinypy_value_t *result = tinypy_integer_from_i64(vm, order);
 
@@ -1466,10 +1469,17 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         return TINYPY_FALSE;
     }
     if (descriptor->writable == 0) {
-        /* frame_setlineno refuses the assignment outside a trace function;
-           the getset descriptors of Python 2.7 without a setter name the
-           attribute, and its read-only members do not. */
-        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER) {
+        /* frame_setlineno refuses a deletion, a value other than an int and
+           the assignment outside a trace function; the getset descriptors
+           of Python 2.7 without a setter name the attribute, and its
+           read-only members do not. */
+        if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER && value == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "cannot delete attribute", out_error);
+        }
+        else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_INTEGER && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_BOOL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "lineno must be an integer", out_error);
+        }
+        else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "f_lineno can only be set by a trace function", out_error);
         }
         else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME || field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_CELL_CONTENT || field == TINYPY_INTERNAL_C_DESCRIPTOR_INSTANCE_WEAKREF || field == TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD || (TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR && ((field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC) || field == TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD))) {

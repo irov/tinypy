@@ -119,7 +119,10 @@ Runtime allocations размером до 512 bytes обслуживает VM-lo
 - pools имеют размер 4 KiB;
 - arenas имеют размер 256 KiB;
 - частично свободные arenas упорядочены от наиболее заполненной;
-- полностью свободная arena немедленно возвращается host allocator;
+- полностью свободная arena сразу возвращается host allocator, кроме
+  последней в этом порядке: как в CPython 3.9, одна полностью свободная arena
+  остаётся для повторного использования и освобождается не позже уничтожения
+  VM, а при заданном `max_heap_bytes` не остаётся ни одной;
 - allocations больше 512 bytes передаются host allocator напрямую.
 
 Pool state принадлежит конкретной `tinypy_vm_t`; process globals, TLS и locks
@@ -141,6 +144,18 @@ Bootstrap VM выполняется целиком и только затем с
 без error result, например `tinypy_dict_set` и `tinypy_list_append`, не
 являются fallible: их рост игнорирует budget и всегда завершается. Compiler
 и runtime при исчерпании budget сообщают `MemoryError`, не теряя данных.
+Length hint, который не помещается в адресное пространство 32-bit host, тоже
+даёт `MemoryError`, как невыделяемый размер на 64-bit host.
+
+Как `list_resize` и `PyByteArray_Resize`, list и bytearray, у которых после
+удаления занято меньше половины памяти, отдают её: list сокращается до размера
+с запасом `list_resize`, bytearray — до размера. Опустевший list сохраняет
+память одного append, а bytearray — один байт, чтобы стек из одного элемента
+не перевыделял её. Bytearray без памяти получает ровно нужный размер, а с
+памятью растёт в полтора раза, тогда как CPython добавляет восьмую часть и
+хранит завершающий нулевой байт; срез list с шагом 1, как `list_slice`,
+занимает ровно свои элементы. Поэтому `__sizeof__` и `__alloc__` совпадают с
+CPython там, где совпадают эти правила и размер заголовка объекта.
 
 Lifetime определяется reference counting. Ациклические объекты уничтожаются
 немедленно. Host обязан освободить owned references и разорвать owning cycles
@@ -352,6 +367,14 @@ custom `mro()` добавил вне баз, тоже видны сразу, т�
 CPython 2.7 может вернуть прежнее значение. Поиск в типе с classic базой
 кешируется, как в любом типе без custom `mro()`, поэтому повторный поиск не
 повторяет сравнения ключей словарей MRO; CPython 2.7 такие типы не кеширует.
+
+`hash()` вложенных друг в друга tuples, в том числе экземпляров подклассов
+tuple, сохранивших его `__hash__`, вычисляется без native рекурсии при любой
+глубине вложенности. Значения, hash которых хеширует другие значения, — bound
+methods, built-in методы с receiver и типы со slot hash, включая native types,
+— проверяют native stack budget (`max_stack_bytes`) и при его исчерпании
+поднимают RuntimeError, не занимая уровней рекурсии; CPython в этом случае
+исчерпывает C stack.
 
 Runtime `intern()`, имена compiler и interned строки marshal используют общую
 VM-local таблицу без владеющих ссылок. Строка удаляется из таблицы при переходе
@@ -575,6 +598,10 @@ Verifier контролирует:
 - indices names/constants/locals/free variables;
 - configured instruction и stack limits.
 
+Байт, не являющийся opcode, отвергается, только если до него доходит
+управление: peephole optimizer CPython 2.7 оставляет такой байт в мёртвом коде
+(§8), и CPython исполняет эту функцию.
+
 Нормальный вход в cleanup требует доказанного None constant; verifier получает
 его признак из constants code object. Значения, полученные except, код может
 изменить или потребить, и это сбрасывает доказательство; reason finally/with
@@ -737,18 +764,23 @@ tokenizer CPython: без cookie и BOM допустимы только ASCII by
 cookie с неизвестной кодировкой или cookie, противоречащий BOM, отвергается на
 своей строке («encoding problem: ...»), конец файла читается как ещё одна
 строка с пустым `text` (ошибка на нём — «invalid syntax» на строке, следующей
-за последней), а открытый многострочный token получает перед концом файла ещё
-один перевод строки. Флаг `TINYPY_COMPILE_FLAG_STRING_SOURCE`, режимы eval и
-single, а также `compile`, `exec` и `eval` из Python компилируют строку как
-string tokenizer CPython: bytes принимаются как есть, конец строки — «unexpected
-EOF while parsing», а завершающий CRLF в режиме exec добавляет пустую строку,
-как `translate_newlines`.
+за последней, а её `offset` считается по прежнему буферу tokenizer: последней
+прочитанной строке, первый байт которой заменён терминатором), а открытый
+многострочный token получает перед концом файла ещё один перевод строки, если
+файл не кончается одиночным `\r` (`Py_UniversalNewlineFgets` читает после него
+вперёд и встречает конец файла). Флаг `TINYPY_COMPILE_FLAG_STRING_SOURCE`,
+режимы eval и single, а также `compile`, `exec` и `eval` из Python компилируют
+строку как string tokenizer CPython: bytes принимаются как есть, конец строки —
+«unexpected EOF while parsing», а завершающий CRLF в режиме exec добавляет
+пустую строку, как `translate_newlines`.
 
 Cookie нормализуется как `get_normal_name`: написания `utf-8`, `latin-1`,
 `iso-8859-1`, `iso-latin-1` и их суффиксы идут по fast path, остальные ищутся
 в codec registry по правилам `encodings.aliases` и декодируют источник через
 codec: для строки — целиком («'utf8' codec can't decode byte ... in position
-N», lineno 0), для файла — построчно после строки cookie, как StreamReader.
+N», lineno 0), после чего строка заново кодируется в UTF-8, как в
+`translate_into_utf8`, что соединяет surrogate pair в один code point; для
+файла — построчно после строки cookie, как StreamReader.
 Файл читается моделью `readline` StreamReader, как её вызывает
 `decoding_fgets`: чтения по 72 байта, удваиваемые до 8000, пока строка не
 закончится, UTF-8 codec Python 2 принимает surrogates, ошибка декодирования
@@ -759,7 +791,8 @@ N», lineno 0), для файла — построчно после строки
 surrogate pair в один code point, как `PyUnicode_AsUTF8String` в `fp_readl`,
 и открытый token в конце такого файла не получает ещё одного перевода строки.
 `text` и `offset` SyntaxError восстанавливаются в объявленную кодировку как
-`PyTokenizer_RestoreEncoding`, `text` покрывает всю логическую строку
+`PyTokenizer_RestoreEncoding` (UTF-8 encoder соединяет surrogate pair в один
+code point), `text` покрывает всю логическую строку
 многострочного token, а «expected an indented block» предшествует
 «unexpected unindent», как в `err_input`.
 
@@ -777,6 +810,16 @@ digit, чего достаточно для точного округления 
 Compiler воспроизводит closures, cells, class scopes, name mangling, generators,
 comprehensions, future flags, code flags, constants ordering, line table и
 nested code objects Python 2.7.
+
+Peephole optimizer воспроизводит и правило CPython, которое заменяет
+`RETURN_VALUE LOAD_CONST None RETURN_VALUE` одним `RETURN_VALUE`, проверяя лишь
+байт через четыре после первого `RETURN_VALUE`: после `END_FINALLY` и
+`POP_BLOCK` (например, `return` в конце finally внутри try/except) четыре `NOP`
+кончаются внутри перехода, и его старший байт остаётся в мёртвом коде, как в
+CPython. Если этот байт принимает аргумент, CPython читает со сдвигом
+следующий за ним код, портит переходы и может упасть; tinypy заменяет `NOP` и
+этот байт, так что здесь его bytecode отличается от некорректного вывода
+CPython 2.7.18.
 
 Односимвольные и пустые byte strings являются разделяемыми interned
 singletons VM, как `characters[]` в CPython. Escape-decoded односимвольный
@@ -814,6 +857,12 @@ feature flags, limits, optional immutable build profile и флаги источ
 При `dont_inherit == 0` явно переданные flags объединяются с future flags
 текущего frame. Imports компилируют source с `dont_inherit == 1`.
 
+Options и limits читаются в пределах их `struct_size` (§3): поля, добавленные
+после меньшего размера, получают значения `tinypy_compile_options_init` и
+`tinypy_compile_limits_init`. Первая раскладка `tinypy_compile_limits_t`
+заканчивалась на `max_arena_bytes`; другой `abi_version` или размер меньше
+первой раскладки завершают вызов ошибкой `TINYPY_ERROR_TYPE`.
+
 Source host API в режиме exec считается текстом файла с logical filename:
 semantic SyntaxError из AST, future scanner и symbol table получает в `text`
 свою строку без начальных пробелов, как `PyErr_ProgramText`: строка файла
@@ -843,9 +892,9 @@ Compiler limits охватывают:
 - nesting: глубина parser stack и глубина AST операторов и выражений,
   включая цепочки elif и элементы with, каждый из которых вкладывает
   следующий оператор, и плоские цепочки attribute, call и subscript
-  trailers; symbol table и code generator обходят плоские цепочки бинарных
-  операторов без рекурсии, поэтому они учитываются только с preprocessor
-  или meta features;
+  trailers; symbol table, code generator и renderer canonical source (§11)
+  обходят плоские цепочки бинарных операторов без рекурсии, поэтому они
+  учитываются только с preprocessor или meta features;
 - symbols;
 - basic blocks;
 - instructions;
@@ -944,8 +993,12 @@ Evaluator meta учитывает `from __future__ import division` и те же
 owned result с canonical valid Python 2 source, source-map entries и SHA-256
 digest карты. Каждая generated declaration связывает generated position,
 template position, expansion position и semantic symbol. Canonical source
-компилируется в ту же программу: отрицательные числовые литералы и числовые
-операнды attribute, subscript и унарных операций заключаются в скобки, byte
+компилируется в ту же программу. Операнд получает скобки, только если этого
+требуют приоритет и ассоциативность операторов Python 2, а else с
+единственным if записывается как elif, поэтому длинные цепочки операторов и
+elif не упираются в лимиты parser и отступов.
+Отрицательные числовые литералы и числовые операнды attribute, subscript и
+арифметических унарных операций заключаются в скобки, byte
 strings под `unicode_literals` получают префикс `b`, extended slice из одного
 измерения сохраняет запятую (`k[1:2,]`), а complex literal записывается
 imaginary literal либо его суммой или разностью с real частью так, что знаки
@@ -998,19 +1051,28 @@ execution; `MemoryError` при записи metadata модуля (`__name__`, 
 Модуль, которого нет в `sys.modules`, ищется, как в `find_module`, по порядку:
 finders из `sys.meta_path`, finder host (`tinypy_vm_set_module_finder`),
 модули, которые создаёт сама VM, и resolver. `sys.meta_path`, который не
-является list, — `RuntimeError`, как в CPython. Request resolver передаёт в
-`package_path` borrowed `__path__` пакета submodule или `None` для top-level
-модуля, который host ищет там, где хранит модули (CLI — в `sys.path`, каким
-его оставила программа). `sys.path_hooks` и `sys.path_importer_cache` не
-существуют: элементы search path принадлежат host, core их не читает, и hook,
-установленный из Python, не был бы вызван.
+является list, — `RuntimeError`, как в CPython. Как `find_module`, import
+читает длину `sys.meta_path` один раз: finder, добавленный во время поиска,
+в нём не спрашивается, а finder, укоротивший list, завершает import
+`IndexError` от `PyList_GetItem`. Request resolver передаёт в
+`package_path` borrowed `__path__` пакета submodule, каким бы он ни был, или
+NULL для top-level модуля, который host ищет там, где хранит модули (CLI — в
+`sys.path`, каким его оставила программа); finders в этом случае, как в
+CPython, получают path `None`. Resolver без модуля возвращает NULL; exception,
+поднятая им до этого, завершает import, кроме `ImportError`, которая, как у
+finders, означает, что модуля нет (так CLI сообщает `RuntimeError` о
+`sys.path` или `__path__`, который не является list). `sys.path_hooks` и
+`sys.path_importer_cache` не существуют: элементы search path принадлежат
+host, core их не читает, и hook, установленный из Python, не был бы вызван.
 
 Оба вида finders следуют PEP 302: `find_module(name, path)` возвращает loader
 или `None`, и тогда спрашивается следующий источник. `ImportError` из
 `find_module` при import означает, как в `import_submodule`, что модуля нет и
 поиск закончен: implicit relative import переходит к absolute имени,
 отсутствующее имя from-list пропускается, иначе — `ImportError: No module
-named X`; `reload` сообщает эту ошибку как есть. Модуль, который возвращает
+named X`; `reload` сообщает эту ошибку как есть. Finder удерживается только
+на время своего `find_module`, поэтому finder, убранный из `sys.meta_path` или
+host, освобождается до `load_module` своего loader. Модуль, который возвращает
 `load_module(name)`, — результат import. В отличие от CPython, который
 оставляет `sys.modules` loader, import регистрирует возвращённый модуль, если
 loader не зарегистрировал никакого, и удаляет запись loader, который упал или
@@ -1020,7 +1082,12 @@ loader не зарегистрировал никакого, и удаляет �
 
 Relative import продолжает от пакета из `sys.modules`, как `get_parent` и
 `load_next`: его предки повторно не импортируются, даже если их нет в
-`sys.modules` или там `None`.
+`sys.modules` или там `None`. `None` на месте самого пакета для `load_next` —
+пакет без `__path__`: его submodules ищутся как top-level модули (finders
+получают path `None`, resolver — `package_path` NULL) и регистрируются под
+полными именами, а implicit import не переходит к absolute имени. В отличие
+от `is_builtin` CPython, модули VM при этом не находятся по последнему
+компоненту имени.
 
 VM сохраняет имена и значения namespaces своих модулей при создании, как
 `_PyImport_FixupExtension`: import такого модуля, удалённого из `sys.modules`,
@@ -1062,7 +1129,11 @@ exception, как `PyErr_NormalizeException`: value, которое не явл�
 подкласса даёт raised type свой класс. Если вызов падает, функция возвращает
 false, а pending остаётся exception, которую он поднял, с traceback исходной,
 если у неё нет своего; как `PyErr_NormalizeException`, она в свою очередь
-нормализуется, каждый раз на уровень рекурсии глубже, до recursion limit. Host, как `PyErr_PrintEx`, нормализует uncaught
+нормализуется, каждый раз на уровень рекурсии глубже, до recursion limit; за
+ним, как `PyExc_RecursionErrorInst`, pending становится RuntimeError
+«maximum recursion depth exceeded» с тем же traceback. RuntimeError recursion
+guard, как после `PyErr_Format`, остаётся ненормализованной до первого
+handler: нормализация на recursion limit заменяет и её. Host, как `PyErr_PrintEx`, нормализует uncaught
 exception после проверки SystemExit, до `sys.excepthook` и отчёта.
 Как `PyErr_GivenExceptionMatches`,
 `tinypy_exception_matches` сопоставляет класс экземпляра exception, а

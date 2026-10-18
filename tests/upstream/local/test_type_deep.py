@@ -376,3 +376,65 @@ class TypeDeep(unittest.TestCase):
                 raise AssertionError('getitem')
         C = type('C', (object,), Namespace(marker=7))
         self.assertEqual(C.marker, 7)
+
+    def test_hash_of_nested_tuple_subclass_instances(self):
+        class Record(tuple):
+            pass
+        class Shown(Record):
+            def __repr__(self):
+                return 'Shown'
+        def nest(depth):
+            value = Record()
+            for index in range(depth):
+                value = (Record if index % 3 else Shown)((value, index))
+            return value
+        first = nest(100000)
+        self.assertEqual(hash(first), hash(nest(100000)))
+        self.assertEqual(hash(first), hash(tuple(first)))
+        class Hashed(tuple):
+            def __hash__(self):
+                return 7
+        self.assertEqual(hash((Hashed((1,)), 2)), hash((7, 2)))
+
+    def test_unbindable_hash_probes_comparison_quietly(self):
+        class Mapping(dict):
+            pass
+        Mapping.__hash__ = tuple.__repr__
+        Mapping.__eq__ = str.__mul__
+        try:
+            hash(Mapping(a=1))
+        except TypeError as error:
+            self.assertEqual(str(error), "unhashable type: 'Mapping'")
+        else:
+            self.fail('Mapping must be unhashable')
+        class Plain(object):
+            pass
+        Plain.__hash__ = tuple.__repr__
+        Plain.__eq__ = str.__mul__
+        value = Plain()
+        self.assertEqual(hash(value), object.__hash__(value))
+
+    def test_type_defines_its_own_hash_slot_wrapper(self):
+        class Classic:
+            pass
+        class Meta(type):
+            pass
+        Derived = Meta('Derived', (object,), {})
+        self.assertIn('__hash__', type.__dict__)
+        self.assertIsNot(type.__hash__, object.__hash__)
+        self.assertEqual(repr(type.__hash__), "<slot wrapper '__hash__' of 'type' objects>")
+        for descriptor in (object.__init__, str.upper, dict.__dict__['fromkeys']):
+            self.assertNotIn('__hash__', type(descriptor).__dict__)
+            self.assertEqual(hash(descriptor), object.__hash__(descriptor))
+        self.assertIn('__hash__', type(object().__init__).__dict__)
+        for value, name in ((1, 'int'), ('a', 'str'), (Classic, 'classobj'), (Classic(), 'instance'), (None, 'NoneType')):
+            try:
+                type.__hash__(value)
+            except TypeError as error:
+                self.assertEqual(str(error), "descriptor '__hash__' requires a 'type' object but received a '%s'" % name)
+            else:
+                self.fail(name)
+        for value in (int, Derived, type):
+            self.assertEqual(type.__hash__(value), hash(value))
+            self.assertEqual(type.__hash__(value), object.__hash__(value))
+        self.assertEqual({int: 1, Derived: 2}[Derived], 2)

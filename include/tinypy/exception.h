@@ -22,7 +22,9 @@ tinypy_value_t *tinypy_vm_handled_exception(const tinypy_vm_t *vm);
  * instance of a subclass names its own class. Returns false when the call
  * fails; the exception it raised is then pending instead, normalized in turn
  * up to the recursion limit, with the original traceback unless it has its
- * own. Without a raised exception it does nothing. A host reporting an uncaught exception calls it, as PyErr_PrintEx
+ * own, and past the limit a RuntimeError "maximum recursion depth exceeded"
+ * keeps that traceback, as PyExc_RecursionErrorInst does. Without a raised
+ * exception it does nothing. A host reporting an uncaught exception calls it, as PyErr_PrintEx
  * does, before it reads the raised type and value. */
 tinypy_bool_t tinypy_vm_normalize_error(tinypy_vm_t *vm, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_vm_has_error(const tinypy_vm_t *vm);

@@ -41,6 +41,12 @@ typedef enum tinypy_compile_flag_e {
     TINYPY_COMPILE_FLAG_FUTURE_UNICODE_LITERALS = 0x20000
 } tinypy_compile_flag_e;
 
+/* The compile functions read the options and the limits within their
+ * struct_size: the fields that a smaller size predates keep the values of
+ * tinypy_compile_options_init and tinypy_compile_limits_init. The first
+ * layout of tinypy_compile_limits_t ended after max_arena_bytes; another
+ * abi_version or a struct_size below the first layout fails the call with
+ * TINYPY_ERROR_TYPE. */
 typedef struct tinypy_compile_limits_t {
     uint32_t abi_version;
     uint32_t struct_size;

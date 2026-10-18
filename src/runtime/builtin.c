@@ -57,15 +57,6 @@ static void __tinypy_builtin_release_arguments(tinypy_value_t **values, size_t c
     }
 }
 //////////////////////////////////////////////////////////////////////////
-/* A non-negative length hint past the address space reserves SIZE_MAX, which
-   fails with MemoryError as an unallocatable hint does on 64-bit hosts,
-   instead of narrowing into a 32-bit size_t. */
-static size_t __tinypy_builtin_hint_size(int64_t hint) {
-    size_t size = (uint64_t)hint > (uint64_t)SIZE_MAX ? SIZE_MAX : (size_t)hint;
-
-    return size;
-}
-//////////////////////////////////////////////////////////////////////////
 typedef tinypy_bool_t (*tinypy_builtin_argument_converter_t)(tinypy_vm_t *vm, size_t index, tinypy_value_t *value, void *context, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 /* vgetargskeywords: the argument count comes first, then each parameter in
@@ -609,33 +600,12 @@ static tinypy_bool_t __tinypy_builtin_check_class(tinypy_vm_t *vm, tinypy_value_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-int32_t tinypy_internal_object_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_error_t **out_error) {
+/* recursive_isinstance and recursive_issubclass, which
+   _PyObject_RealIsInstance and _PyObject_RealIsSubclass call without the
+   hooks of a metaclass. */
+static TINYPY_ALWAYS_INLINE int32_t __tinypy_builtin_real_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
-    tinypy_bool_t metaclass_result;
-    int32_t metaclass_handled;
 
-    if (subclass == 0 && TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_TYPE && object->type == (tinypy_type_t *)classinfo) {
-        return 1;
-    }
-    if (TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_TUPLE) {
-        int32_t result = 0;
-
-        if (__tinypy_builtin_instance_check_enter(vm, subclass, out_error) == 0) {
-            return -1;
-        }
-        for (size_t index = 0U; result == 0 && index < TINYPY_TUPLE_SIZE(classinfo); ++index) {
-            result = tinypy_internal_object_instance_check(object, TINYPY_TUPLE_GET(classinfo, index), subclass, out_error);
-        }
-        vm->evaluation_depth -= 1U;
-        return result;
-    }
-    metaclass_handled = __tinypy_builtin_metaclass_check(object, classinfo, subclass, &metaclass_result, out_error);
-    if (metaclass_handled < 0) {
-        return -1;
-    }
-    if (metaclass_handled != 0) {
-        return metaclass_result;
-    }
     if (subclass != 0) {
         if (TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_TYPE && TINYPY_VALUE_KIND(object) == TINYPY_VALUE_TYPE) {
             int32_t return_value_1 = tinypy_type_is_subtype((tinypy_type_t *)object, (tinypy_type_t *)classinfo);
@@ -689,6 +659,42 @@ int32_t tinypy_internal_object_instance_check(tinypy_value_t *object, tinypy_val
     }
     result = __tinypy_builtin_abstract_issubclass(vm, reported, classinfo, out_error);
     TINYPY_DECREF(reported);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_internal_object_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
+    tinypy_bool_t metaclass_result;
+    int32_t metaclass_handled;
+
+    if (subclass == 0 && TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_TYPE && object->type == (tinypy_type_t *)classinfo) {
+        return 1;
+    }
+    if (TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_TUPLE) {
+        int32_t result = 0;
+
+        if (__tinypy_builtin_instance_check_enter(vm, subclass, out_error) == 0) {
+            return -1;
+        }
+        for (size_t index = 0U; result == 0 && index < TINYPY_TUPLE_SIZE(classinfo); ++index) {
+            result = tinypy_internal_object_instance_check(object, TINYPY_TUPLE_GET(classinfo, index), subclass, out_error);
+        }
+        vm->evaluation_depth -= 1U;
+        return result;
+    }
+    metaclass_handled = __tinypy_builtin_metaclass_check(object, classinfo, subclass, &metaclass_result, out_error);
+    if (metaclass_handled < 0) {
+        return -1;
+    }
+    if (metaclass_handled != 0) {
+        return metaclass_result;
+    }
+    int32_t result = __tinypy_builtin_real_instance_check(object, classinfo, subclass, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+int32_t tinypy_internal_object_real_instance_check(tinypy_value_t *object, tinypy_value_t *classinfo, tinypy_bool_t subclass, tinypy_error_t **out_error) {
+    int32_t result = __tinypy_builtin_real_instance_check(object, classinfo, subclass, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1328,7 +1334,7 @@ static tinypy_value_t *__tinypy_builtin_sorted(tinypy_value_t *function, tinypy_
         TINYPY_DECREF(iterator);
         return NULL;
     }
-    size_t reserve_hint = hint < 0 ? 0U : __tinypy_builtin_hint_size(hint);
+    size_t reserve_hint = hint < 0 ? 0U : __tinypy_internal_hint_size(hint);
     if (tinypy_internal_list_reserve_checked(vm, list, reserve_hint, out_error) == 0) {
         TINYPY_DECREF(list);
         TINYPY_DECREF(iterator);
@@ -1551,7 +1557,7 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
         TINYPY_DECREF(iteration_source);
         return NULL;
     }
-    if (tinypy_internal_list_reserve_checked(vm, selected, __tinypy_builtin_hint_size(hint), out_error) == 0) {
+    if (tinypy_internal_list_reserve_checked(vm, selected, __tinypy_internal_hint_size(hint), out_error) == 0) {
         TINYPY_DECREF(selected);
         TINYPY_DECREF(iteration_source);
         return NULL;
@@ -1812,7 +1818,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
         if (hint < 0) {
             continue;
         }
-        size_t hint_size = __tinypy_builtin_hint_size(hint);
+        size_t hint_size = __tinypy_internal_hint_size(hint);
         if (hint_size > result_hint) {
             result_hint = hint_size;
         }
@@ -1980,7 +1986,7 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
         }
     }
     tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
-    size_t reserve_hint = result_hint < 0 ? 10U : __tinypy_builtin_hint_size(result_hint);
+    size_t reserve_hint = result_hint < 0 ? 10U : __tinypy_internal_hint_size(result_hint);
     if (tinypy_internal_list_reserve_checked(vm, result, reserve_hint, out_error) == 0) {
         TINYPY_DECREF(result);
         result = NULL;

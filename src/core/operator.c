@@ -2378,9 +2378,13 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(sequence);
     tinypy_value_type_e other_kind = TINYPY_VALUE_KIND(other);
 
-    /* list_inplace_concat, bytearray and buffer concatenation are their
-       types' own methods. */
-    if (kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_BUFFER || (kind == TINYPY_VALUE_LIST && inplace != 0)) {
+    if (kind == TINYPY_VALUE_LIST && inplace != 0) {
+        tinypy_value_t *extended = tinypy_internal_list_inplace_concat(sequence, other, out_error);
+
+        return extended;
+    }
+    /* bytearray and buffer concatenation are their types' own methods. */
+    if (kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_BUFFER) {
         tinypy_value_t *method_name = inplace != 0 ? vm->internal_special_iadd_key : vm->internal_special_add_key;
         tinypy_value_t *native = __tinypy_operator_call_type_method(sequence, method_name, &other, 1U, TINYPY_TRUE, out_error);
 
@@ -2677,6 +2681,11 @@ static tinypy_value_t *__tinypy_operator_call_inplace_slot(const tinypy_operator
         tinypy_binary_slot_t native = __tinypy_operator_native_slot(left->type, spec->native_inplace_offset);
 
         result = native(left, right, out_error);
+        return result;
+    }
+    /* The inherited __iadd__ of list stands for list_inplace_concat. */
+    if (slot == TINYPY_OPERATOR_SLOT_METHOD && TINYPY_VALUE_KIND(left) == TINYPY_VALUE_LIST) {
+        result = tinypy_internal_list_inplace_concat(left, right, out_error);
         return result;
     }
     /* slot_nb_inplace_* requires the method; a set's own one may decline. */

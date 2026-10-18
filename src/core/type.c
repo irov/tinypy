@@ -2920,6 +2920,14 @@ static inline tinypy_bool_t __tinypy_internal_type_constructor_current(uint64_t 
     return current;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The nearest base of a class that Python code did not create. */
+static const tinypy_type_t *__tinypy_internal_type_static_base(const tinypy_type_t *type) {
+    while ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && type->base_type != NULL) {
+        type = type->base_type;
+    }
+    return type;
+}
+//////////////////////////////////////////////////////////////////////////
 /* The __new__ of a class call and whether it is object's, borrowed from the
    class called, which its caller holds. __new__ and __init__ are memoized
    apart and looked up when type_call needs them: the key comparisons of
@@ -2950,6 +2958,36 @@ tinypy_value_t *tinypy_internal_type_constructor_new(tinypy_type_t *type) {
     tinypy_value_t *attribute = __tinypy_internal_type_new_attribute(type, &object_new);
 
     return attribute;
+}
+//////////////////////////////////////////////////////////////////////////
+/* slot_tp_new gets __new__ from the type, which binds what it finds there:
+   a static method yields its function, a class method is bound to the type,
+   which the call then receives a second time, and a plain function is an
+   unbound method. A __getattribute__ of the metaclass answers that lookup,
+   unless the entry is the __new__ of the built-in base, whose tp_new the
+   type inherits. The dispatch lookups may drop the entry from the class. */
+static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_internal_type_bind_new(tinypy_type_t *type, tinypy_value_t *new_attribute, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = type->vm;
+
+    TINYPY_INCREF(new_attribute);
+    if (__tinypy_internal_object_overrides_dispatch(&type->base.base, TINYPY_INTERNAL_DISPATCH_BIT(GETATTRIBUTE)) != 0) {
+        const tinypy_type_t *static_base = __tinypy_internal_type_static_base(type);
+
+        if (tinypy_internal_type_lookup_key(vm, static_base, vm->internal_special_new_key) != new_attribute) {
+            TINYPY_DECREF(new_attribute);
+            tinypy_value_t *constructor = tinypy_internal_object_get_attr_key(&type->base.base, vm->internal_special_new_key, out_error);
+            return constructor;
+        }
+    }
+    tinypy_value_t *callable = new_attribute->type == &vm->types[TINYPY_VALUE_STATIC_METHOD] ? tinypy_static_method_callable(new_attribute) : NULL;
+    tinypy_value_t *constructor = callable != NULL ? TINYPY_RET(callable) : tinypy_internal_descriptor_get_value(vm, new_attribute, NULL, type, out_error);
+    TINYPY_DECREF(new_attribute);
+    return constructor;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_type_bind_new(tinypy_type_t *type, tinypy_value_t *new_attribute, tinypy_error_t **out_error) {
+    tinypy_value_t *constructor = __tinypy_internal_type_bind_new(type, new_attribute, out_error);
+    return constructor;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The __init__ of a class call, borrowed. type_call asks the type of the
@@ -3037,11 +3075,8 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         /* A type that Python code did not create takes object.__new__ only
            when it is object itself or a host native type: the tp_new of the
            other built-in types without a constructor of their own is NULL. */
-        const tinypy_type_t *static_base = type;
+        const tinypy_type_t *static_base = __tinypy_internal_type_static_base(type);
 
-        while ((static_base->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && static_base->base_type != NULL) {
-            static_base = static_base->base_type;
-        }
         if (static_base != &vm->types[TINYPY_VALUE_INSTANCE] && tinypy_internal_type_is_host_native(static_base) == 0) {
             tinypy_internal_type_uncreatable_error(type, out_error);
             return NULL;
@@ -3055,12 +3090,7 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         __tinypy_internal_call_leave(vm);
     }
     else {
-        /* slot_tp_new gets __new__ from the type, which binds what it finds
-           there: a static method yields its function, a class method is
-           bound to the type, which the call then receives a second time, and
-           a plain function is an unbound method. */
-        tinypy_value_t *callable = new_attribute->type == &vm->types[TINYPY_VALUE_STATIC_METHOD] ? tinypy_static_method_callable(new_attribute) : NULL;
-        tinypy_value_t *constructor = callable != NULL ? TINYPY_RET(callable) : tinypy_internal_descriptor_get_value(vm, new_attribute, NULL, type, out_error);
+        tinypy_value_t *constructor = __tinypy_internal_type_bind_new(type, new_attribute, out_error);
         if (constructor == NULL) {
             return NULL;
         }
@@ -3104,11 +3134,12 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         }
     }
     /* Binding the arguments or the descriptor may release the class
-       attribute, so the call holds it. */
+       attribute, so the binding holds it. */
     TINYPY_INCREF(initializer_attribute);
     if (TINYPY_VALUE_KIND(initializer_attribute) == TINYPY_VALUE_FUNCTION) {
         /* A Python __init__ is entered directly with the instance prepended,
-           saving the bound method and the argument tuple. */
+           saving the bound method, which would hold the function across the
+           call, and the argument tuple. */
         tinypy_value_t *stack_items[8];
         tinypy_value_t **init_items = stack_items;
         size_t items_size = 0U;
@@ -3127,12 +3158,16 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
             (void)memcpy(init_items + 1, items, count * sizeof(*init_items));
         }
         initialize_result = tinypy_internal_eval_function_items(initializer_attribute, init_items, count + 1U, kwargs, out_error);
+        TINYPY_DECREF(initializer_attribute);
         if (init_items != stack_items) {
             tinypy_internal_vm_deallocate(vm, init_items, items_size);
         }
     }
     else {
+        /* As in slot_tp_init, only what the descriptor returned lives on
+           through the call. */
         initializer = tinypy_internal_descriptor_get_value(vm, initializer_attribute, instance, instance->type, out_error);
+        TINYPY_DECREF(initializer_attribute);
         initialize_result = NULL;
         if (initializer != NULL) {
             tinypy_value_t *call_args = __tinypy_internal_type_call_arguments(vm, items, count, args, out_error);
@@ -3144,7 +3179,6 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
             TINYPY_DECREF(initializer);
         }
     }
-    TINYPY_DECREF(initializer_attribute);
     if (initialize_result == NULL) {
         TINYPY_DECREF(instance);
         return NULL;

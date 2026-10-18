@@ -635,11 +635,19 @@ tinypy_value_t *tinypy_internal_native_function_call_method(tinypy_value_t *desc
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Runs a method or slot wrapper descriptor that applies to self as the C
-   slot it stands for, such as BaseException_str under PyObject_Str: the
-   caller guards the recursion, and the slot takes no level of its own. */
-tinypy_value_t *tinypy_internal_native_function_call_slot(tinypy_value_t *descriptor, tinypy_value_t *self, tinypy_error_t **out_error) {
+/* Runs a method or slot wrapper descriptor that applies to self, found under
+   the name of a slot, as the slot of the type does. update_one_slot installs
+   the C function of the slot wrapper of that name itself, such as
+   BaseException_str under PyObject_Str: the caller guards the recursion,
+   and the slot takes no level of its own. Any other built-in method runs
+   through the slot function, whose call takes a level. */
+tinypy_value_t *tinypy_internal_native_function_call_slot(tinypy_value_t *descriptor, tinypy_value_t *name, tinypy_value_t *self, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+
+    if (descriptor->type != vm->native_wrapper_descriptor_type || TINYPY_NAME_EQ(TINYPY_NATIVE_FUNCTION_OBJECT(descriptor)->name, name) == 0) {
+        tinypy_value_t *called = tinypy_internal_native_function_call_method(descriptor, self, NULL, 0U, NULL, out_error);
+        return called;
+    }
     TINYPY_CLEAR_ERROR(out_error);
     tinypy_value_t *result = __tinypy_native_function_invoke_self(vm, descriptor, self, NULL, 0U, NULL, out_error);
     return result;
@@ -1206,8 +1214,10 @@ void tinypy_internal_initialize_native_function_type(tinypy_vm_t *vm) {
             tinypy_internal_type_add_method(type, vm->internal_special_get_key, __tinypy_native_descriptor_get_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
         tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_native_function_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-        tinypy_internal_type_add_method(type, vm->internal_special_hash_key, __tinypy_native_function_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+        /* The descriptor types inherit the __hash__ of object, as their
+           tp_hash does; only method-wrapper defines its own. */
         if (type == vm->native_method_wrapper_type) {
+            tinypy_internal_type_add_method(type, vm->internal_special_hash_key, __tinypy_native_function_hash_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
             tinypy_internal_type_add_method(type, vm->internal_special_cmp_key, __tinypy_native_function_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
     }

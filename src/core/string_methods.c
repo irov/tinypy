@@ -3772,46 +3772,61 @@ static void __tinypy_utf8_append(tinypy_string_builder_t *builder, uint32_t code
     __tinypy_string_builder_code_point(builder, code_point);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *encoding = NULL;
-    tinypy_value_t *errors = NULL;
-    tinypy_bool_t decode = TINYPY_NATIVE_FUNCTION_OBJECT(function)->user_data != NULL;
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_text_codec_arguments(tinypy_vm_t *vm, tinypy_bool_t decode, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_value_t **out_encoding, tinypy_value_t **out_errors, tinypy_error_t **out_error) {
     const char *name = decode != 0 ? "decode" : "encode";
     tinypy_value_t *names[2] = {vm->internal_encoding_key, vm->internal_errors_key};
     tinypy_value_t *values[2];
-    tinypy_value_t *parameters;
-    tinypy_value_t *result;
 
-    parameters = tinypy_internal_tuple_from_items_checked(vm, items, count, out_error);
+    *out_encoding = NULL;
+    *out_errors = NULL;
+    tinypy_value_t *parameters = tinypy_internal_tuple_from_items_checked(vm, items, count, out_error);
     if (parameters == NULL) {
-        return NULL;
+        return TINYPY_FALSE;
     }
     tinypy_bool_t parsed = tinypy_internal_constructor_optional_arguments(vm, name, 6U, parameters, kwargs, names, 2U, UINT32_C(3), values, out_error);
 
     TINYPY_DECREF(parameters);
     if (parsed == 0) {
-        return NULL;
+        return TINYPY_FALSE;
     }
     if (values[0] != NULL) {
-        encoding = tinypy_internal_string_from_bytes_checked(vm, TINYPY_TEXT_BYTES(values[0]), TINYPY_TEXT_BYTE_SIZE(values[0]), out_error);
-        if (encoding == NULL) {
+        *out_encoding = tinypy_internal_string_from_bytes_checked(vm, TINYPY_TEXT_BYTES(values[0]), TINYPY_TEXT_BYTE_SIZE(values[0]), out_error);
+        if (*out_encoding == NULL) {
             tinypy_internal_constructor_release_arguments(values, 2U);
-            return NULL;
+            return TINYPY_FALSE;
         }
     }
     if (values[1] != NULL) {
-        errors = tinypy_internal_string_from_bytes_checked(vm, TINYPY_TEXT_BYTES(values[1]), TINYPY_TEXT_BYTE_SIZE(values[1]), out_error);
-        if (errors == NULL) {
+        *out_errors = tinypy_internal_string_from_bytes_checked(vm, TINYPY_TEXT_BYTES(values[1]), TINYPY_TEXT_BYTE_SIZE(values[1]), out_error);
+        if (*out_errors == NULL) {
             tinypy_internal_constructor_release_arguments(values, 2U);
-            if (encoding != NULL) {
-                TINYPY_DECREF(encoding);
+            if (*out_encoding != NULL) {
+                TINYPY_DECREF(*out_encoding);
+                *out_encoding = NULL;
             }
-            return NULL;
+            return TINYPY_FALSE;
         }
     }
     tinypy_internal_constructor_release_arguments(values, 2U);
-    result = tinypy_internal_text_codec(vm, self, encoding, errors, decode, TINYPY_TRUE, NULL, out_error);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_text_codec_arguments(tinypy_vm_t *vm, tinypy_bool_t decode, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_value_t **out_encoding, tinypy_value_t **out_errors, tinypy_error_t **out_error) {
+    tinypy_bool_t result = __tinypy_text_codec_arguments(vm, decode, items, count, kwargs, out_encoding, out_errors, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_bool_t decode = TINYPY_NATIVE_FUNCTION_OBJECT(function)->user_data != NULL;
+    tinypy_value_t *encoding;
+    tinypy_value_t *errors;
+
+    if (__tinypy_text_codec_arguments(vm, decode, items, count, kwargs, &encoding, &errors, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_internal_text_codec(vm, self, encoding, errors, decode, TINYPY_TRUE, NULL, out_error);
+
     if (errors != NULL) {
         TINYPY_DECREF(errors);
     }
@@ -3821,43 +3836,15 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t *out_consumed, tinypy_error_t **out_error) {
-    int32_t codec = 0;
-    int32_t error_mode;
+static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_text_codec_builtin(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_internal_builtin_codec_e builtin, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t *out_consumed, tinypy_error_t **out_error) {
+    int32_t codec = (int32_t)builtin;
+    int32_t error_mode = errors == NULL ? 0 : -2;
     tinypy_string_builder_t builder;
     const uint8_t *bytes;
     size_t size;
     size_t offset = 0U;
     tinypy_codec_error_state_t error_state = {NULL, NULL};
 
-    if ((encoding != NULL && tinypy_internal_codecs_validate_name(vm, encoding, out_error) == 0) || (errors != NULL && tinypy_internal_codecs_validate_name(vm, errors, out_error) == 0)) {
-        return NULL;
-    }
-    if (out_consumed != NULL) {
-        *out_consumed = TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE ? TINYPY_SIZED_SIZE(text) : TINYPY_TEXT_BYTE_SIZE(text);
-    }
-    tinypy_internal_builtin_codec_e builtin = encoding != NULL ? tinypy_internal_codecs_builtin(vm, encoding) : TINYPY_INTERNAL_BUILTIN_CODEC_ASCII;
-    if (builtin <= TINYPY_INTERNAL_BUILTIN_CODEC_LATIN1) {
-        codec = (int32_t)builtin;
-    }
-    else {
-        tinypy_value_t *return_value_1 = tinypy_internal_codecs_transform_registered(vm, text, encoding, errors, decode, out_error);
-
-        if (return_value_1 != NULL && __tinypy_string_is_text(return_value_1) == 0) {
-            const tinypy_message_part_t parts[] = {
-                {decode != 0 ? "decoder" : "encoder", 7U},
-                TINYPY_MESSAGE_PART_LITERAL(" did not return a string/unicode object (type="),
-                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(return_value_1, 400U),
-                TINYPY_MESSAGE_PART_LITERAL(")")
-            };
-
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-            TINYPY_DECREF(return_value_1);
-            return NULL;
-        }
-        return return_value_1;
-    }
-    error_mode = errors == NULL ? 0 : -2;
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
     bytes = TINYPY_TEXT_BYTES(text);
@@ -4062,6 +4049,40 @@ codec_error:
     __tinypy_string_builder_discard(&builder);
     __tinypy_codec_error_state_finalize(&error_state);
     return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t *out_consumed, tinypy_error_t **out_error) {
+    if ((encoding != NULL && tinypy_internal_codecs_validate_name(vm, encoding, out_error) == 0) || (errors != NULL && tinypy_internal_codecs_validate_name(vm, errors, out_error) == 0)) {
+        return NULL;
+    }
+    if (out_consumed != NULL) {
+        *out_consumed = TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE ? TINYPY_SIZED_SIZE(text) : TINYPY_TEXT_BYTE_SIZE(text);
+    }
+    tinypy_internal_builtin_codec_e builtin = encoding != NULL ? tinypy_internal_codecs_builtin(vm, encoding) : TINYPY_INTERNAL_BUILTIN_CODEC_ASCII;
+    if (builtin <= TINYPY_INTERNAL_BUILTIN_CODEC_LATIN1) {
+        tinypy_value_t *result = __tinypy_text_codec_builtin(vm, text, builtin, encoding, errors, decode, final, out_consumed, out_error);
+        return result;
+    }
+    tinypy_value_t *result = tinypy_internal_codecs_transform_registered(vm, text, encoding, errors, decode, out_error);
+
+    if (result != NULL && __tinypy_string_is_text(result) == 0) {
+        const tinypy_message_part_t parts[] = {
+            {decode != 0 ? "decoder" : "encoder", 7U},
+            TINYPY_MESSAGE_PART_LITERAL(" did not return a string/unicode object (type="),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(result, 400U),
+            TINYPY_MESSAGE_PART_LITERAL(")")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_text_codec_builtin(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_internal_builtin_codec_e builtin, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_error_t **out_error) {
+    tinypy_value_t *result = __tinypy_text_codec_builtin(vm, text, builtin, encoding, errors, decode, TINYPY_TRUE, NULL, out_error);
+    return result;
 }
 
 /* The operand state of PyString_Format: a tuple is consumed item by item, a

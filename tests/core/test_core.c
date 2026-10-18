@@ -378,21 +378,46 @@ static int32_t __test_allocator_accounting(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __test_pool_allocator(void) {
+/* Makes one-item tuples, which have no free list, until the pool takes
+   memory from the host for a new arena, and returns how many it made. */
+static size_t __test_pool_fill_arena(tinypy_vm_t *vm, const test_allocator_state_t *state, tinypy_value_t **values, size_t capacity) {
+    tinypy_value_t *items[1];
+    size_t allocation_calls = state->allocation_calls;
+    size_t count = 0U;
+
+    items[0] = tinypy_none_get(vm);
+    while (count < capacity && state->allocation_calls == allocation_calls) {
+        values[count] = tinypy_tuple_from_items(vm, items, 1U);
+        count += 1U;
+    }
+    tinypy_release(items[0]);
+    return count;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The pool keeps the last arena that becomes wholly free and returns the
+   others to the host; under a heap budget it keeps none. */
+static int32_t __test_pool_allocator_budget(size_t max_heap_bytes) {
     const size_t value_count = 20000U;
+    const size_t pass_count = 4U;
     test_allocator_state_t state;
     tinypy_allocator_t allocator;
     tinypy_vm_config_t config;
     tinypy_vm_t *vm;
     tinypy_value_t **values;
+    tinypy_value_t *items[1];
     size_t base_allocations;
+    size_t kept_allocations;
     size_t allocation_calls;
+    size_t deallocation_calls;
     size_t pooled_allocation_calls;
+    size_t count;
     size_t index;
 
     (void)memset(&state, 0, sizeof(state));
     allocator = __test_make_allocator(&state);
     config = __test_make_config(&allocator);
+    config.max_heap_bytes = max_heap_bytes;
+    kept_allocations = max_heap_bytes == 0U ? 1U : 0U;
     vm = tinypy_vm_create(&config);
     TEST_CHECK(vm != NULL);
     values = (tinypy_value_t **)malloc(value_count * sizeof(*values));
@@ -416,13 +441,44 @@ static int32_t __test_pool_allocator(void) {
     for (index = 0U; index < value_count; index += 1U) {
         tinypy_release(values[index]);
     }
-    TEST_CHECK(state.outstanding_allocations == base_allocations);
+    TEST_CHECK(state.outstanding_allocations <= base_allocations + kept_allocations);
+
+    /* A value that crosses into a new arena and goes again would otherwise
+       take the arena from the host and return it on every pass. */
+    count = __test_pool_fill_arena(vm, &state, values, value_count);
+    TEST_CHECK(count < value_count);
+    tinypy_release(values[count - 1U]);
+    allocation_calls = state.allocation_calls;
+    deallocation_calls = state.deallocation_calls;
+    items[0] = tinypy_none_get(vm);
+    for (index = 0U; index < pass_count; index += 1U) {
+        tinypy_value_t *value = tinypy_tuple_from_items(vm, items, 1U);
+
+        tinypy_release(value);
+    }
+    tinypy_release(items[0]);
+    TEST_CHECK(state.allocation_calls - allocation_calls == pass_count * (1U - kept_allocations));
+    TEST_CHECK(state.deallocation_calls - deallocation_calls == pass_count * (1U - kept_allocations));
+    for (index = 0U; index + 1U < count; index += 1U) {
+        tinypy_release(values[index]);
+    }
+    TEST_CHECK(state.outstanding_allocations <= base_allocations + kept_allocations);
 
     free(values);
     tinypy_vm_destroy(vm);
     TEST_CHECK(state.outstanding_allocations == 0U);
     TEST_CHECK(state.outstanding_bytes == 0U);
     return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_pool_allocator(void) {
+    const size_t max_heap_bytes = 64U * 1024U * 1024U;
+
+    if (__test_pool_allocator_budget(0U) != 0) {
+        return 1;
+    }
+    int32_t result = __test_pool_allocator_budget(max_heap_bytes);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_independent_vms(void) {
@@ -1276,7 +1332,8 @@ static int32_t __test_tuple_deep_release(void) {
     calls_before = state.allocation_calls;
     tinypy_release(current);
     TEST_CHECK(state.allocation_calls == calls_before);
-    TEST_CHECK(state.outstanding_allocations == base_allocations);
+    /* The pool keeps the last arena that became wholly free. */
+    TEST_CHECK(state.outstanding_allocations <= base_allocations + 1U);
 
     current = tinypy_integer_from_i64(vm, INT64_C(2));
     for (index = 0U; index < depth; index += 1U) {
@@ -1289,10 +1346,110 @@ static int32_t __test_tuple_deep_release(void) {
         current = next;
     }
     tinypy_release(current);
-    TEST_CHECK(state.outstanding_allocations == base_allocations);
+    TEST_CHECK(state.outstanding_allocations <= base_allocations + 1U);
     tinypy_vm_destroy(vm);
     TEST_CHECK(state.outstanding_allocations == 0U);
     TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* tinypy_tuple_set, like PyTuple_SetItem, takes an instance of a tuple
+   subclass, whose items lie behind the instance layout. */
+static int32_t __test_tuple_set_subclass(void) {
+    static const char source[] = "class Record(tuple): pass\nrecord = Record((1, 2))\n";
+    static const char check[] = "assert type(record) is Record and record == ('x', 2) and record[0] == 'x', record\n";
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "record.py", 9U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, "record", 6U);
+    tinypy_value_t *record = tinypy_dict_get(globals, key);
+    tinypy_release(key);
+    TEST_CHECK(record != NULL && tinypy_tuple_size(record) == 2U);
+    tinypy_value_t *item = tinypy_string_from_bytes(vm, "x", 1U);
+    tinypy_tuple_set(record, 0U, item);
+    TEST_CHECK(tinypy_tuple_get(record, 0U) == item);
+    tinypy_release(item);
+    result = tinypy_exec_source(vm, check, sizeof(check) - 1U, "check.py", 8U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U && state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A length hint past what a list can reserve, which on a 32-bit host lies
+   past the address space as well, runs out of memory with MemoryError set,
+   for every constructor that sizes its list from the hint. */
+static int32_t __test_length_hint_past_reserve(void) {
+    static const char source[] =
+        "class Hint(object):\n"
+        "    def __init__(self, size):\n"
+        "        self.size = size\n"
+        "    def __iter__(self):\n"
+        "        return iter([1, 2])\n"
+        "    def __length_hint__(self):\n"
+        "        return self.size\n"
+        "class Sized(Hint):\n"
+        "    def __len__(self):\n"
+        "        return self.size\n"
+        "class Record(tuple):\n"
+        "    pass\n"
+        "def star(*arguments):\n"
+        "    return arguments\n"
+        "builds = (tuple, list, Record, lambda source: star(*source), lambda source: [].extend(source), lambda source: [0].extend(source))\n"
+        "for size in sizes:\n"
+        "    for source in (Hint(size), Sized(size)):\n"
+        "        for build in builds:\n"
+        "            try:\n"
+        "                build(source)\n"
+        "            except MemoryError:\n"
+        "                pass\n"
+        "            else:\n"
+        "                raise AssertionError(size)\n";
+    const uint64_t sizes[] = {(uint64_t)(SIZE_MAX / sizeof(void *)) + UINT64_C(1), UINT64_C(1) << 62U};
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *items[2];
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    for (size_t index = 0U; index < sizeof(sizes) / sizeof(sizes[0]); ++index) {
+        items[index] = tinypy_integer_from_i64(vm, (int64_t)sizes[index]);
+    }
+    tinypy_value_t *size_tuple = tinypy_tuple_from_items(vm, items, sizeof(items) / sizeof(items[0]));
+    for (size_t index = 0U; index < sizeof(sizes) / sizeof(sizes[0]); ++index) {
+        tinypy_release(items[index]);
+    }
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, "sizes", 5U);
+    tinypy_dict_set(globals, key, size_tuple);
+    tinypy_release(key);
+    tinypy_release(size_tuple);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "hint.py", 7U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U && state.outstanding_bytes == 0U);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -5611,14 +5768,50 @@ static const tinypy_module_artifact_t *__test_module_finder_protocol_resolve(voi
     return artifact;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __test_module_finder_protocol_run(tinypy_vm_t *vm, const char *source, size_t source_size, const char *filename, tinypy_value_t *globals) {
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, source_size, filename, strlen(filename), globals, NULL, &options, &error);
+    if (result == NULL) {
+        size_t message_size = 0U;
+        const char *message = error != NULL ? tinypy_error_message(error, &message_size) : "";
+
+        (void)fprintf(stderr, "module finder protocol: %.*s\n", (int)message_size, message);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+        return TINYPY_FALSE;
+    }
+    tinypy_release(result);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_module_finder_drop(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+
+    (void)args;
+    (void)kwargs;
+    (void)user_data;
+    (void)out_error;
+    tinypy_vm_set_module_finder(vm, NULL);
+    tinypy_value_t *none = tinypy_none_get(vm);
+    return none;
+}
+//////////////////////////////////////////////////////////////////////////
 /* The host finder follows the protocol of sys.meta_path and comes after
    it: an ImportError of find_module means that nobody provides the module,
    so the host resolver is not asked, and the modules the VM provides come
-   before the resolver, which reload() of sys does not consult. */
+   before the resolver, which reload() of sys does not consult. The name an
+   implicit relative import misses is marked once the absolute head
+   imported, and a finder the host drops while it is asked is released
+   before its loader runs. */
 static int32_t __test_module_finder_protocol(void) {
     static const char finders[] =
         "import sys\n"
         "calls = []\n"
+        "events = []\n"
+        "sources = {'marked': 'import marked.sub\\n', 'marked.sub': 'import marked.other\\n', 'marked.other': ''}\n"
         "class Loader(object):\n"
         "    def __init__(self, origin):\n"
         "        self.origin = origin\n"
@@ -5626,20 +5819,41 @@ static int32_t __test_module_finder_protocol(void) {
         "        module = type(sys)(name)\n"
         "        module.origin = self.origin\n"
         "        return module\n"
+        "class SourceLoader(object):\n"
+        "    def load_module(self, name):\n"
+        "        module = sys.modules[name] = type(sys)(name)\n"
+        "        if name == 'marked':\n"
+        "            module.__path__ = []\n"
+        "        exec sources[name] in vars(module)\n"
+        "        return module\n"
         "class HostFinder(object):\n"
         "    def find_module(self, name, path=None):\n"
         "        calls.append(name)\n"
-        "        if name == 'finder_missing':\n"
+        "        if name == 'finder_missing' or name == 'marked.marked':\n"
         "            raise ImportError('the host finder has no ' + name)\n"
         "        if name.startswith('finder_'):\n"
         "            return Loader('host')\n"
+        "        if name in sources:\n"
+        "            return SourceLoader()\n"
         "        return None\n"
         "class MetaFinder(object):\n"
         "    def find_module(self, name, path=None):\n"
         "        if name == 'finder_meta':\n"
         "            return Loader('meta')\n"
         "        return None\n"
-        "host_finder = HostFinder()\n";
+        "class EventLoader(object):\n"
+        "    def load_module(self, name):\n"
+        "        events.append('load')\n"
+        "        return type(sys)(name)\n"
+        "class DroppedFinder(object):\n"
+        "    def __del__(self):\n"
+        "        events.append('finder released')\n"
+        "    def find_module(self, name, path=None):\n"
+        "        events.append('find')\n"
+        "        drop_finder()\n"
+        "        return EventLoader()\n"
+        "host_finder = HostFinder()\n"
+        "dropped_finder = DroppedFinder()\n";
     static const char checks[] =
         "try:\n"
         "    import finder_missing\n"
@@ -5662,12 +5876,18 @@ static int32_t __test_module_finder_protocol(void) {
         "    raise AssertionError('imported without sys.meta_path')\n"
         "sys.meta_path = []\n"
         "import resolved_module\n"
-        "assert resolved_module.maxint == 1 and calls[-1] == 'resolved_module'\n";
+        "assert resolved_module.maxint == 1 and calls[-1] == 'resolved_module'\n"
+        "start = len(calls)\n"
+        "import marked\n"
+        "assert calls[start:] == ['marked', 'marked.marked', 'marked.sub', 'marked.other'], calls[start:]\n"
+        "assert sys.modules['marked.marked'] is None\n";
+    static const char dropping[] =
+        "del dropped_finder\n"
+        "import dropped_module\n"
+        "assert events == ['find', 'finder released', 'load'], events\n";
     test_allocator_state_t allocator_state;
     tinypy_module_artifact_t artifact;
     tinypy_host_t host;
-    tinypy_compile_options_t options;
-    tinypy_error_t *error = NULL;
 
     (void)memset(&allocator_state, 0, sizeof(allocator_state));
     tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
@@ -5681,30 +5901,142 @@ static int32_t __test_module_finder_protocol(void) {
     config.host = &host;
     tinypy_vm_t *vm = tinypy_vm_create(&config);
     tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *drop_function = tinypy_native_function_new(vm, "drop_finder", 11U, __test_module_finder_drop, NULL, NULL);
+    tinypy_value_t *drop_key = tinypy_string_from_bytes(vm, "drop_finder", 11U);
 
-    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
-    tinypy_value_t *result = tinypy_exec_source(vm, finders, sizeof(finders) - 1U, "finders.py", 10U, globals, NULL, &options, &error);
-    TEST_CHECK(result != NULL && error == NULL);
-    tinypy_release(result);
+    tinypy_dict_set(globals, drop_key, drop_function);
+    tinypy_release(drop_key);
+    tinypy_release(drop_function);
+    TEST_CHECK(__test_module_finder_protocol_run(vm, finders, sizeof(finders) - 1U, "finders.py", globals) != TINYPY_FALSE);
     tinypy_value_t *finder_key = tinypy_string_from_bytes(vm, "host_finder", 11U);
     tinypy_value_t *finder = tinypy_dict_get(globals, finder_key);
     tinypy_release(finder_key);
     TEST_CHECK(finder != NULL);
     tinypy_vm_set_module_finder(vm, finder);
-    result = tinypy_exec_source(vm, checks, sizeof(checks) - 1U, "checks.py", 9U, globals, NULL, &options, &error);
-    if (result == NULL) {
-        size_t message_size = 0U;
-        const char *message = error != NULL ? tinypy_error_message(error, &message_size) : "";
-
-        (void)fprintf(stderr, "module finder protocol: %.*s\n", (int)message_size, message);
-        tinypy_error_release(error);
-        tinypy_vm_clear_error(vm);
-    }
-    TEST_CHECK(result != NULL);
-    tinypy_release(result);
-    tinypy_vm_set_module_finder(vm, NULL);
+    TEST_CHECK(__test_module_finder_protocol_run(vm, checks, sizeof(checks) - 1U, "checks.py", globals) != TINYPY_FALSE);
+    finder_key = tinypy_string_from_bytes(vm, "dropped_finder", 14U);
+    finder = tinypy_dict_get(globals, finder_key);
+    tinypy_release(finder_key);
+    TEST_CHECK(finder != NULL);
+    tinypy_vm_set_module_finder(vm, finder);
+    TEST_CHECK(__test_module_finder_protocol_run(vm, dropping, sizeof(dropping) - 1U, "dropping.py", globals) != TINYPY_FALSE);
+    TEST_CHECK(tinypy_vm_module_finder(vm) == NULL);
     tinypy_dict_clear(globals);
     tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+typedef struct test_module_resolver_state_t {
+    tinypy_vm_t *vm;
+    tinypy_module_artifact_t artifact;
+    size_t release_count;
+} test_module_resolver_state_t;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __test_module_request_is(const tinypy_module_request_t *request, const char *name) {
+    size_t name_size = strlen(name);
+
+    tinypy_bool_t equal = request->canonical_name_size == name_size && memcmp(request->canonical_name, name, name_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return equal;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Offers each module as source, with the field its name tells left NULL
+   but sized, or raises the error its name tells. */
+static const tinypy_module_artifact_t *__test_module_resolver_contract_resolve(void *user_data, const tinypy_module_request_t *request) {
+    static const char source[] = "VALUE = 1\n";
+    test_module_resolver_state_t *state = (test_module_resolver_state_t *)user_data;
+
+    if (__test_module_request_is(request, "raising_runtime") != TINYPY_FALSE) {
+        tinypy_vm_raise_error(state->vm, TINYPY_ERROR_RUNTIME, "the resolver failed");
+        return NULL;
+    }
+    if (__test_module_request_is(request, "raising_import") != TINYPY_FALSE) {
+        tinypy_vm_raise_error(state->vm, TINYPY_ERROR_IMPORT, "the resolver has no module");
+        return NULL;
+    }
+    (void)memset(&state->artifact, 0, sizeof(state->artifact));
+    state->artifact.abi_version = TINYPY_ABI_VERSION;
+    state->artifact.struct_size = (uint32_t)sizeof(state->artifact);
+    state->artifact.content_kind = TINYPY_MODULE_CONTENT_SOURCE;
+    state->artifact.data = source;
+    state->artifact.data_size = sizeof(source) - 1U;
+    state->artifact.canonical_name = request->canonical_name;
+    state->artifact.canonical_name_size = request->canonical_name_size;
+    if (__test_module_request_is(request, "null_filename") != TINYPY_FALSE) {
+        state->artifact.logical_filename_size = 6U;
+    }
+    if (__test_module_request_is(request, "null_token") != TINYPY_FALSE) {
+        state->artifact.flags = (uint32_t)TINYPY_MODULE_ARTIFACT_PACKAGE;
+        state->artifact.package_token_size = 4U;
+    }
+    return &state->artifact;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __test_module_resolver_contract_release(void *user_data, const tinypy_module_artifact_t *artifact) {
+    test_module_resolver_state_t *state = (test_module_resolver_state_t *)user_data;
+
+    (void)artifact;
+    state->release_count += 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Imports name, which must fail with an error of kind and message. */
+static tinypy_bool_t __test_module_import_fails(tinypy_vm_t *vm, const char *name, tinypy_error_kind_e kind, const char *message) {
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *module = tinypy_import_module(vm, name, strlen(name), NULL, NULL, 0, &error);
+    size_t message_size = 0U;
+    const char *text = error != NULL ? tinypy_error_message(error, &message_size) : "";
+    tinypy_bool_t failed = module == NULL && error != NULL && tinypy_error_kind(error) == kind && message_size == strlen(message) && memcmp(text, message, message_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+    if (module != NULL) {
+        tinypy_release(module);
+    }
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    tinypy_vm_clear_error(vm);
+    return failed;
+}
+//////////////////////////////////////////////////////////////////////////
+/* An artifact with a NULL field of nonzero size is invalid, and a resolver
+   that returns no artifact fails the import with the exception it raised,
+   except an ImportError, which means that it has no module. */
+static int32_t __test_module_resolver_contract(void) {
+    test_allocator_state_t allocator_state;
+    test_module_resolver_state_t resolver_state;
+    tinypy_host_t host;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    (void)memset(&resolver_state, 0, sizeof(resolver_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &resolver_state;
+    host.resolve_module = __test_module_resolver_contract_resolve;
+    host.release_module_artifact = __test_module_resolver_contract_release;
+    config.host = &host;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    resolver_state.vm = vm;
+
+    TEST_CHECK(__test_module_import_fails(vm, "null_filename", TINYPY_ERROR_IMPORT, "host resolver returned an invalid module artifact") != TINYPY_FALSE);
+    TEST_CHECK(__test_module_import_fails(vm, "null_token", TINYPY_ERROR_IMPORT, "host resolver returned an invalid module artifact") != TINYPY_FALSE);
+    TEST_CHECK(resolver_state.release_count == 2U);
+    TEST_CHECK(__test_module_import_fails(vm, "raising_runtime", TINYPY_ERROR_RUNTIME, "the resolver failed") != TINYPY_FALSE);
+    TEST_CHECK(__test_module_import_fails(vm, "raising_import", TINYPY_ERROR_IMPORT, "No module named raising_import") != TINYPY_FALSE);
+    tinypy_value_t *modules = tinypy_vm_modules(vm);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, "null_filename", 13U);
+    TEST_CHECK(tinypy_dict_contains(modules, key) == 0);
+    tinypy_release(key);
+    tinypy_value_t *module = tinypy_import_module(vm, "valid", 5U, NULL, NULL, 0, &error);
+    TEST_CHECK(module != NULL && error == NULL);
+    tinypy_value_t *value = tinypy_module_get_value(module, "VALUE", 5U);
+    TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == 1);
+    TEST_CHECK(resolver_state.release_count == 3U);
+    tinypy_release(module);
     tinypy_vm_destroy(vm);
     TEST_CHECK(allocator_state.outstanding_allocations == 0U);
     TEST_CHECK(allocator_state.outstanding_bytes == 0U);
@@ -9456,6 +9788,14 @@ int main(int argc, char **argv) {
         int return_value_12 = __test_tuple_deep_release();
         return return_value_12;
     }
+    if (strcmp(argv[1], "tuple_set_subclass") == 0) {
+        int result = __test_tuple_set_subclass();
+        return result;
+    }
+    if (strcmp(argv[1], "length_hint_past_reserve") == 0) {
+        int result = __test_length_hint_past_reserve();
+        return result;
+    }
     if (strcmp(argv[1], "hash_equal") == 0) {
         int return_value_13 = __test_hash_and_equality();
         return return_value_13;
@@ -9674,6 +10014,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "module_finder_protocol") == 0) {
         int result = __test_module_finder_protocol();
+        return result;
+    }
+    if (strcmp(argv[1], "module_resolver_contract") == 0) {
+        int result = __test_module_resolver_contract();
         return result;
     }
     if (strcmp(argv[1], "cycle_diagnostics") == 0) {

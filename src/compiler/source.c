@@ -221,10 +221,23 @@ static char *__tinypy_compiler_join_parts(tinypy_compile_ctx_t *ctx, const char 
     return message;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The code point of a surrogate pair, which the UTF-8 of a unicode object
+   holds as two three-byte sequences, at bytes; zero when none starts there. */
+static uint32_t __tinypy_compiler_surrogate_pair(const uint8_t *bytes, size_t size) {
+    if (size < 6U || bytes[0] != 0xedU || (bytes[1] & 0xf0U) != 0xa0U || (bytes[2] & 0xc0U) != 0x80U || bytes[3] != 0xedU || (bytes[4] & 0xf0U) != 0xb0U || (bytes[5] & 0xc0U) != 0x80U) {
+        return 0U;
+    }
+    uint32_t high = ((uint32_t)(bytes[1] & 0x0fU) << 6U) | (uint32_t)(bytes[2] & 0x3fU);
+    uint32_t low = ((uint32_t)(bytes[4] & 0x0fU) << 6U) | (uint32_t)(bytes[5] & 0x3fU);
+    uint32_t code_point = UINT32_C(0x10000) + (high << 10U) + low;
+    return code_point;
+}
+//////////////////////////////////////////////////////////////////////////
 /* dec_utf8 of PyTokenizer_RestoreEncoding: the text decodes from UTF-8 and
    re-encodes to the declared encoding, each invalid sequence replaced by
-   U+FFFD and each character the encoding lacks by '?'. Returns the encoded
-   size; output is optional. */
+   U+FFFD and each character the encoding lacks by '?'; the UTF-8 encoder
+   joins a surrogate pair into the code point it stands for. Returns the
+   encoded size; output is optional. */
 static size_t __tinypy_compiler_restore_text(const tinypy_compile_ctx_t *ctx, const uint8_t *bytes, size_t size, uint8_t *output) {
     size_t offset = 0U;
     size_t output_size = 0U;
@@ -238,17 +251,18 @@ static size_t __tinypy_compiler_restore_text(const tinypy_compile_ctx_t *ctx, co
             code_point = 0xfffdU;
         }
         if (ctx->source_diagnostic_utf8 != 0) {
-            size_t output_width = code_point == 0xfffdU ? 3U : width;
+            uint32_t pair = __tinypy_compiler_surrogate_pair(bytes + offset, size - offset);
 
-            if (output != NULL) {
-                if (code_point == 0xfffdU) {
-                    (void)memcpy(output + output_size, "\xef\xbf\xbd", 3U);
-                }
-                else {
-                    (void)memcpy(output + output_size, bytes + offset, width);
-                }
+            if (pair != 0U) {
+                code_point = pair;
+                width = 6U;
             }
-            output_size += output_width;
+            uint8_t encoded[4];
+            size_t encoded_size = tinypy_internal_utf8_encode(code_point, encoded);
+            if (output != NULL) {
+                (void)memcpy(output + output_size, encoded, encoded_size);
+            }
+            output_size += encoded_size;
         }
         else {
             if (output != NULL) {
@@ -317,6 +331,11 @@ static void __tinypy_compiler_report(tinypy_compile_ctx_t *ctx, tinypy_error_kin
         }
         line_bytes = (const char *)restored;
         line_size = restored_size;
+    }
+    /* err_input quotes the text as a C string. */
+    const char *terminator = line_bytes != NULL ? (const char *)memchr(line_bytes, '\0', line_size) : NULL;
+    if (terminator != NULL) {
+        line_size = (size_t)(terminator - line_bytes);
     }
     tinypy_internal_make_vm_error_location(ctx->vm, error_kind, message, ctx->logical_filename, ctx->filename_size, line_number, column_offset, line_bytes, line_size, TINYPY_TRUE, out_error);
 }
@@ -976,21 +995,10 @@ static tinypy_bool_t __tinypy_compiler_apply_cookie(tinypy_compile_ctx_t *ctx, c
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The code point of a surrogate pair, which the UTF-8 of a unicode object
-   holds as two three-byte sequences, at bytes; zero when none starts there. */
-static uint32_t __tinypy_compiler_surrogate_pair(const uint8_t *bytes, size_t size) {
-    if (size < 6U || bytes[0] != 0xedU || (bytes[1] & 0xf0U) != 0xa0U || bytes[3] != 0xedU || (bytes[4] & 0xf0U) != 0xb0U) {
-        return 0U;
-    }
-    uint32_t high = ((uint32_t)(bytes[1] & 0x0fU) << 6U) | (uint32_t)(bytes[2] & 0x3fU);
-    uint32_t low = ((uint32_t)(bytes[4] & 0x0fU) << 6U) | (uint32_t)(bytes[5] & 0x3fU);
-    uint32_t code_point = UINT32_C(0x10000) + (high << 10U) + low;
-    return code_point;
-}
-//////////////////////////////////////////////////////////////////////////
 /* PyUnicode_AsUTF8String encodes a surrogate pair as the code point it
-   stands for: in the source of a unicode object, and in the lines the codec
-   of a cookie decodes, from begin on. */
+   stands for: in the source of a unicode object, in a string the codec of
+   its cookie decodes, and in the lines of a file the codec decodes, from
+   begin on. */
 static const uint8_t *__tinypy_compiler_join_surrogates(tinypy_compile_ctx_t *ctx, const uint8_t *source, size_t size, size_t begin, size_t *out_size) {
     size_t index = begin;
 
@@ -1140,6 +1148,12 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
             output[output_size] = '\n';
             output_size += 1U;
         }
+        else if (ctx->source_is_file != 0 && input[source_size - 1U] == '\r') {
+            /* Py_UniversalNewlineFgets reads ahead after a CR, which at the
+               end of the file sets the end-of-file flag decoding_feof
+               checks: an open token reads no further newline. */
+            ctx->source_final_newline_added = TINYPY_TRUE;
+        }
     }
     output[output_size] = '\0';
     ctx->source.bytes = output;
@@ -1149,7 +1163,8 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     }
     tinypy_bool_t utf8 = codec == TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *encoding = TINYPY_RET(utf8 != 0 ? ctx->vm->internal_codec_utf8_name : ctx->vm->internal_codec_ascii_name);
-    /* translate_into_utf8 decodes the whole string before tokenizing. */
+    /* translate_into_utf8 decodes the whole string before tokenizing and
+       encodes it again. */
     const char *message;
     size_t message_size;
     tinypy_bool_t prepared = __tinypy_compiler_decode(ctx, output, output_size, encoding, &message, &message_size);
@@ -1164,5 +1179,9 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         }
     }
     TINYPY_DECREF(encoding);
+    if (prepared != 0) {
+        ctx->source.bytes = __tinypy_compiler_join_surrogates(ctx, output, output_size, 0U, &ctx->source.size);
+        prepared = ctx->source.bytes != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    }
     return prepared;
 }

@@ -156,10 +156,12 @@ tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_
         return TINYPY_FALSE;
     }
     /* Hint callbacks may mutate the destination. Python 2 ignores a hint
-       whose addition would overflow, then appends each yielded item. */
+       whose addition would overflow a Py_ssize_t, then appends each yielded
+       item. */
     size_t size = TINYPY_LIST_SIZE(list);
-    if (hint >= 0 && size <= (size_t)PTRDIFF_MAX && (uint64_t)hint <= (uint64_t)PTRDIFF_MAX - (uint64_t)size) {
-        if (tinypy_internal_list_reserve_checked(vm, list, size + (size_t)hint, out_error) == 0) {
+    if (hint >= 0 && (uint64_t)hint <= (uint64_t)INT64_MAX - (uint64_t)size) {
+        size_t reserve_hint = __tinypy_internal_hint_size(hint + (int64_t)size);
+        if (tinypy_internal_list_reserve_checked(vm, list, reserve_hint, out_error) == 0) {
             TINYPY_DECREF(iterator);
             return TINYPY_FALSE;
         }
@@ -210,6 +212,16 @@ static tinypy_value_t *__tinypy_list_extend_method(tinypy_value_t *function, tin
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* list_inplace_concat, the slot that the in-place '+' runs from the
+   evaluation loop. */
+tinypy_value_t *tinypy_internal_list_inplace_concat(tinypy_value_t *list, tinypy_value_t *iterable, tinypy_error_t **out_error) {
+    if (tinypy_internal_list_extend_iterable(list, iterable, "error return without exception set", out_error) == 0) {
+        return NULL;
+    }
+    return TINYPY_RET(list);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The __iadd__ wrapper runs list_inplace_concat under PyObject_Call. */
 static tinypy_value_t *__tinypy_list_inplace_add_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
 
     (void)user_data;
@@ -218,7 +230,7 @@ static tinypy_value_t *__tinypy_list_inplace_add_method(tinypy_value_t *function
     }
     tinypy_value_t *list = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *iterable = TINYPY_TUPLE_GET(args, 1U);
-    if (tinypy_internal_list_extend_iterable(list, iterable, "error return without exception set", out_error) == 0) {
+    if (tinypy_internal_list_extend_iterable(list, iterable, "NULL result without error in PyObject_Call", out_error) == 0) {
         return NULL;
     }
     return TINYPY_RET(list);

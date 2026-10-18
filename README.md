@@ -119,7 +119,9 @@ Recursive execution also checks native stack use on GCC, Clang and MSVC.
 configs use 1 MiB. The host should select a budget that fits its owner thread,
 allowing room for runtime call frames, callbacks and exception unwinding.
 Exceeding the byte budget raises `RuntimeError` even when the logical Python
-recursion limit has not been reached.
+recursion limit has not been reached. Hashing values that hash other values,
+such as bound methods, checks the same budget; nested tuples hash without
+native recursion.
 
 `tinypy_vm_config_t.max_heap_bytes` bounds the memory a VM holds; zero disables
 it. `tinypy_vm_create` returns NULL when the VM bootstrap alone exceeds the

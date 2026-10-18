@@ -372,6 +372,19 @@ static tinypy_value_t *__tinypy_eval_load_type_attr(tinypy_vm_t *vm, tinypy_valu
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* slot_tp_getattr_hook: with object's __getattribute__, a lookup that found
+   nothing, or whose descriptor raised AttributeError, gives way to a
+   __getattr__ of the type; PyObject_GenericGetAttr raises AttributeError
+   when there is none. Without an error pending, the dispatch memo tells. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_eval_load_attr_missing(tinypy_value_t *object, tinypy_value_t *name, tinypy_bool_t found_nothing, tinypy_error_t **out_error) {
+    if (found_nothing != 0 && __tinypy_internal_object_overrides_dispatch(object, TINYPY_INTERNAL_DISPATCH_BIT(GETATTR)) == 0) {
+        tinypy_internal_object_make_attribute_error_key(object, name, out_error);
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_internal_object_get_attr_hook_key(object, name, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 /* With out_unbound, a function or method descriptor of the type, or a
    function of a classic instance's class, that binding would make a method of
    the object is returned as it is, for the method call to run with the object
@@ -425,7 +438,7 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         uint64_t type_version = __tinypy_internal_type_version(type);
         /* A key comparison of the dispatch lookups may reassign __class__. */
         TINYPY_INCREF(&type->base.base);
-        if (__tinypy_internal_object_overrides_dispatch(object, TINYPY_INTERNAL_DISPATCH_BIT(GETATTRIBUTE) | TINYPY_INTERNAL_DISPATCH_BIT(GETATTR)) != 0) {
+        if (__tinypy_internal_object_overrides_dispatch(object, TINYPY_INTERNAL_DISPATCH_BIT(GETATTRIBUTE)) != 0) {
             TINYPY_DECREF(&type->base.base);
             tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
             return result;
@@ -522,15 +535,18 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         }
     }
     else {
-        /* PyObject_GenericGetAttr has nothing left to try: the type defines
-           neither __getattr__ nor __getattribute__ of its own. */
-        tinypy_internal_object_make_attribute_error_key(object, name, out_error);
+        TINYPY_DECREF(&type->base.base);
+        tinypy_value_t *missing = __tinypy_eval_load_attr_missing(object, name, TINYPY_TRUE, out_error);
+        return missing;
     }
 done:
     if (attribute != NULL) {
         TINYPY_DECREF(attribute);
     }
     TINYPY_DECREF(&type->base.base);
+    if (result == NULL) {
+        result = __tinypy_eval_load_attr_missing(object, name, TINYPY_FALSE, out_error);
+    }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

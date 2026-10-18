@@ -1226,12 +1226,7 @@ static tinypy_value_t *__tinypy_internal_struct_sequence_create(tinypy_type_t *t
     tinypy_value_t *const names[] = {vm->internal_sequence_key, vm->internal_dict_key};
     tinypy_value_t *arguments[2];
 
-    if (tinypy_internal_constructor_optional_arguments(vm, "structseq", 9U, args, kwargs, names, 2U, 0U, arguments, out_error) == 0) {
-        return NULL;
-    }
-    if (arguments[0] == NULL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Required argument 'sequence' (pos 1) not found", out_error);
-        tinypy_internal_constructor_release_arguments(arguments, 2U);
+    if (tinypy_internal_constructor_arguments(vm, "structseq", 9U, args, kwargs, names, 1U, 2U, arguments, out_error) == 0) {
         return NULL;
     }
     /* PySequence_Fast words a value that has no iterator itself. */
@@ -1467,21 +1462,7 @@ static tinypy_value_t *__tinypy_internal_sys_getsizeof(tinypy_value_t *function,
     tinypy_value_t *values[2];
 
     (void)user_data;
-    tinypy_bool_t parsed = tinypy_internal_constructor_optional_arguments(vm, "getsizeof", 9U, args, kwargs, names, 2U, 0U, values, out_error);
-    size_t count = TINYPY_TUPLE_SIZE(args) + (kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U);
-    /* A missing object is reported before the other argument errors, which
-       leave no value to tell whether it was given. */
-    tinypy_bool_t object_given = values[0] != NULL || TINYPY_TUPLE_SIZE(args) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
-    if (object_given == 0 && kwargs != NULL) {
-        object_given = tinypy_internal_constructor_keyword_optional(kwargs, names[0]) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-    }
-    if (object_given == 0 && count <= 2U) {
-        tinypy_internal_constructor_release_arguments(values, 2U);
-        (void)tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error);
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "Required argument 'object' (pos 1) not found", out_error);
-        return NULL;
-    }
-    if (parsed == TINYPY_FALSE) {
+    if (tinypy_internal_constructor_arguments(vm, "getsizeof", 9U, args, kwargs, names, 1U, 2U, values, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *result = __tinypy_internal_sys_sizeof(vm, values[0], values[1], out_error);
@@ -1793,20 +1774,19 @@ tinypy_bool_t tinypy_internal_recursion_check(tinypy_vm_t *vm, uintptr_t stack_a
     if (vm->evaluation_depth == 0U) {
         vm->native_stack_origin = stack_address;
     }
-    else if (stack_address != 0U && vm->native_stack_origin != 0U) {
-        stack_usage = (size_t)(stack_address > vm->native_stack_origin
-            ? stack_address - vm->native_stack_origin
-            : vm->native_stack_origin - stack_address);
+    else {
+        stack_usage = __tinypy_internal_native_stack_usage(vm, stack_address);
     }
     if (vm->evaluation_depth >= vm->recursion_limit || stack_usage >= vm->max_stack_bytes) {
-        tinypy_bool_t previous = vm->recursion_error;
-
-        vm->recursion_error = TINYPY_TRUE;
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, message, out_error);
-        vm->recursion_error = previous;
+        tinypy_internal_recursion_error(vm, message, out_error);
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+TINYPY_NOINLINE void tinypy_internal_recursion_error(tinypy_vm_t *vm, const char *message, tinypy_error_t **out_error) {
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, message, out_error);
+    vm->recursion_error = TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size) {

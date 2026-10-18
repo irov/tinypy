@@ -111,8 +111,9 @@ static inline tinypy_bool_t __tinypy_internal_dict_keys_equal(const tinypy_vm_t 
 }
 //////////////////////////////////////////////////////////////////////////
 /* lookdict: a key comparison that replaces the table or the compared entry
-   restarts the probe. The free slot reported for a missing key may still have
-   been filled by a comparison, so inserting callers examine it afterwards. */
+   restarts the probe. A missing key reports the first deleted slot of the
+   probe, which a key comparison may have filled since: the entry living
+   there is found, as the callers of lookdict take it. */
 static tinypy_bool_t __tinypy_internal_dict_lookup(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_hash_t hash, tinypy_dict_lookup_t *out_lookup, tinypy_error_t **out_error) {
     const tinypy_dict_entry_t *entries;
     size_t first_dummy = SIZE_MAX;
@@ -133,7 +134,12 @@ restart:
         const tinypy_dict_entry_t *entry = &entries[index];
 
         if (TINYPY_DICT_ENTRY_IS_EMPTY(entry)) {
-            out_lookup->index = first_dummy != SIZE_MAX ? first_dummy : index;
+            if (first_dummy != SIZE_MAX) {
+                out_lookup->index = first_dummy;
+                out_lookup->found = TINYPY_DICT_ENTRY_IS_ACTIVE(&entries[first_dummy]) ? TINYPY_TRUE : TINYPY_FALSE;
+                return TINYPY_TRUE;
+            }
+            out_lookup->index = index;
             return TINYPY_TRUE;
         }
         if (TINYPY_DICT_ENTRY_IS_DUMMY(entry)) {

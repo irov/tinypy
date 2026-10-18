@@ -661,3 +661,185 @@ class ContainerDeep(unittest.TestCase):
             self.assertEqual(_error(operation), expected)
         self.assertEqual(map(None, 'ab'), ['a', 'b'])
         self.assertEqual(_error(lambda: map(None, 5)), ('TypeError', "'int' object is not iterable"))
+
+    def test_shrinking_lists_give_storage_back(self):
+        def pop_all(items):
+            while len(items) > 1:
+                items.pop()
+        def pop_front(items):
+            while len(items) > 1:
+                items.pop(0)
+        def delete_tail(items):
+            del items[1:]
+        def assign_tail(items):
+            items[1:] = []
+        def delete_items(items):
+            while len(items) > 1:
+                del items[-1]
+        def remove_items(items):
+            while len(items) > 1:
+                items.remove(items[-1])
+        def delete_stride(items):
+            while len(items) > 1:
+                del items[1::2]
+        def delete_reversed(items):
+            del items[:0:-1]
+        empty_size = [].__sizeof__()
+        for shrink in (pop_all, pop_front, delete_tail, assign_tail, delete_items, remove_items, delete_stride, delete_reversed):
+            items = range(1000)
+            shrink(items)
+            self.assertTrue(items.__sizeof__() < empty_size + 64, shrink.__name__)
+            self.assertEqual(len(items), 1)
+            items.extend(range(5))
+            self.assertEqual(items[1:], range(5))
+        items = range(1000)
+        del items[::-1]
+        self.assertEqual((items, items.__sizeof__()), ([], empty_size))
+        items = range(1000)
+        items[:] = ()
+        self.assertEqual((items, items.__sizeof__()), ([], empty_size))
+
+    def test_shrinking_bytearrays_give_storage_back(self):
+        def pop_all(data):
+            while len(data) > 1:
+                data.pop()
+        def delete_tail(data):
+            del data[1:]
+        def assign_tail(data):
+            data[1:] = ''
+        def delete_items(data):
+            while len(data) > 1:
+                del data[-1]
+        def remove_items(data):
+            while len(data) > 1:
+                data.remove(data[-1])
+        def delete_stride(data):
+            while len(data) > 1:
+                del data[1::2]
+        def delete_reversed(data):
+            del data[:0:-1]
+        for shrink in (pop_all, delete_tail, assign_tail, delete_items, remove_items, delete_stride, delete_reversed):
+            data = bytearray(range(250) * 4)
+            shrink(data)
+            self.assertTrue(data.__alloc__() <= 4, shrink.__name__)
+            self.assertEqual(len(data), 1)
+            data.extend('abc')
+            self.assertEqual(data[1:], bytearray('abc'))
+        data = bytearray(1000)
+        del data[1:]
+        self.assertEqual(data.__alloc__(), 2)
+        data = bytearray(1000)
+        data.__init__()
+        self.assertTrue(data.__alloc__() <= 1)
+        data.__init__('xyz')
+        self.assertEqual(data, bytearray('xyz'))
+
+    def test_negative_length_hint_message_follows_the_call(self):
+        class Hint(object):
+            def __iter__(self):
+                return iter([1])
+            def __length_hint__(self):
+                return -1
+        class Derived(list):
+            pass
+        class Record(tuple):
+            pass
+        def augment(target):
+            target += Hint()
+        values = []
+        bound_extend = values.extend
+        evaluation = ('SystemError', 'error return without exception set')
+        call = ('SystemError', 'NULL result without error in PyObject_Call')
+        cases = [
+            (lambda: values.extend(Hint()), evaluation),
+            (lambda: bound_extend(Hint()), evaluation),
+            (lambda: augment(values), evaluation),
+            (lambda: augment(Derived()), evaluation),
+            (lambda: values.__iadd__(Hint()), call),
+            (lambda: list.__iadd__(values, Hint()), call),
+            (lambda: Derived().__iadd__(Hint()), call),
+            (lambda: Record(Hint()), call),
+            (lambda: apply(tuple.__new__, (tuple, Hint())), call),
+            (lambda: tuple(Hint()), call),
+            (lambda: list(Hint()), call),
+            (lambda: Derived(Hint()), call),
+            (lambda: bytearray().extend(Hint()), evaluation),
+            (lambda: bytearray.extend(bytearray(), Hint()), call),
+        ]
+        for operation, expected in cases:
+            self.assertEqual(_error(operation), expected)
+        self.assertEqual(values, [])
+
+    def test_huge_length_hint_runs_out_of_memory(self):
+        class Hint(object):
+            def __iter__(self):
+                return iter([1, 2])
+            def __length_hint__(self):
+                return 2 ** 62
+        class Sized(object):
+            def __iter__(self):
+                return iter([1, 2])
+            def __len__(self):
+                return 2 ** 62 + 5
+        class Record(tuple):
+            pass
+        def star(*arguments):
+            return arguments
+        for source in (Hint, Sized):
+            for build in (tuple, list, Record, lambda iterable: star(*iterable), lambda iterable: [].extend(iterable)):
+                self.assertEqual(_error(lambda: build(source()))[0], 'MemoryError')
+
+    def test_comparison_refilling_the_free_slot_finds_that_entry(self):
+        class Key(object):
+            def __init__(self, name, target=None):
+                self.name = name
+                self.target = target
+            def __hash__(self):
+                return 1
+            def __eq__(self, other):
+                target = self.target
+                self.target = None
+                if target is not None:
+                    if isinstance(target, dict):
+                        target[1] = 'refilled'
+                    else:
+                        target.add(1)
+                return self is other
+            def __repr__(self):
+                return self.name
+        def make(container):
+            if isinstance(container, dict):
+                container[1] = 'first'
+                colliding = Key('colliding')
+                container[colliding] = 'colliding'
+                del container[1]
+            else:
+                container.add(1)
+                colliding = Key('colliding')
+                container.add(colliding)
+                container.discard(1)
+            colliding.target = container
+            return container
+        probe = Key('probe')
+        def run(operation, container):
+            result = operation(make(container))
+            if isinstance(container, dict):
+                return result, sorted((repr(key), value) for key, value in container.items())
+            return result, sorted(repr(key) for key in container)
+        refilled = [('1', 'refilled'), ('colliding', 'colliding')]
+        cases = [
+            (lambda d: probe in d, {}, (True, refilled)),
+            (lambda d: d.has_key(probe), {}, (True, refilled)),
+            (lambda d: d.get(probe, 'default'), {}, ('refilled', refilled)),
+            (lambda d: d[probe], {}, ('refilled', refilled)),
+            (lambda d: d.setdefault(probe, 'default'), {}, ('refilled', refilled)),
+            (lambda d: d.pop(probe, 'default'), {}, ('refilled', refilled[1:])),
+            (lambda d: d.__delitem__(probe), {}, (None, refilled[1:])),
+            (lambda d: d.__setitem__(probe, 'stored'), {}, (None, [('1', 'stored'), ('colliding', 'colliding')])),
+            (lambda s: probe in s, set(), (True, ['1', 'colliding'])),
+            (lambda s: s.discard(probe), set(), (None, ['colliding'])),
+            (lambda s: s.remove(probe), set(), (None, ['colliding'])),
+            (lambda s: s.add(probe), set(), (None, ['1', 'colliding'])),
+        ]
+        for operation, container, expected in cases:
+            self.assertEqual(run(operation, container), expected)

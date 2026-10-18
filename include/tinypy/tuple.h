@@ -7,7 +7,9 @@
  * Items must already belong to vm. tinypy_tuple_new and tinypy_tuple_set are
  * embedding-only builders; Python code still observes immutable tuples.
  * Constructors return NULL when size cannot be represented by the object
- * allocation. tinypy_tuple_get returns a borrowed reference. */
+ * allocation. tinypy_tuple_get returns a borrowed reference. The accessors
+ * take an instance of a tuple subclass as well, as PyTuple_GetItem and
+ * PyTuple_SetItem do. */
 tinypy_value_t *tinypy_tuple_new(tinypy_vm_t *vm, size_t size);
 tinypy_value_t *tinypy_tuple_from_items(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size);
 size_t tinypy_tuple_size(const tinypy_value_t *value);

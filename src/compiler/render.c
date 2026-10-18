@@ -2,6 +2,8 @@
 
 #include "ast_nodes.h"
 #include "value_ops.h"
+#include "cst.h"
+#include "ast_builder.h"
 
 #include "tinypy/preprocessor.h"
 #include "tinypy/numeric.h"
@@ -34,6 +36,26 @@ typedef struct tinypy_render_builder_t {
     tinypy_source_map_record_t **records; /* source map records ordered by statement address */
     size_t record_count;
 } tinypy_render_builder_t;
+
+/* Python 2 operator precedence from the weakest: an operand takes
+   parentheses only where its precedence is below the one its position
+   requires, so operators nest in the canonical source as in the program. */
+typedef enum tinypy_render_precedence_e {
+    TINYPY_RENDER_PRECEDENCE_TEST = 0,
+    TINYPY_RENDER_PRECEDENCE_OR = 1,
+    TINYPY_RENDER_PRECEDENCE_AND = 2,
+    TINYPY_RENDER_PRECEDENCE_NOT = 3,
+    TINYPY_RENDER_PRECEDENCE_COMPARISON = 4,
+    TINYPY_RENDER_PRECEDENCE_BIT_OR = 5,
+    TINYPY_RENDER_PRECEDENCE_BIT_XOR = 6,
+    TINYPY_RENDER_PRECEDENCE_BIT_AND = 7,
+    TINYPY_RENDER_PRECEDENCE_SHIFT = 8,
+    TINYPY_RENDER_PRECEDENCE_ARITHMETIC = 9,
+    TINYPY_RENDER_PRECEDENCE_TERM = 10,
+    TINYPY_RENDER_PRECEDENCE_FACTOR = 11,
+    TINYPY_RENDER_PRECEDENCE_POWER = 12,
+    TINYPY_RENDER_PRECEDENCE_ATOM = 13
+} tinypy_render_precedence_e;
 
 struct tinypy_preprocess_result_t {
     uint32_t state;
@@ -431,11 +453,71 @@ static tinypy_bool_t __tinypy_render_number_literal(tinypy_render_builder_t *bui
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Operands of attribute access and subscription: compound expressions render
-   their own parentheses and a numeric literal needs them (1 .real). */
-static tinypy_bool_t __tinypy_render_operand(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
-    if (expression->kind != TINYPY_AST_KIND_NUM) {
+static tinypy_render_precedence_e __tinypy_render_binary_precedence(tinypy_ast_binary_operator_e operation) {
+    switch (operation) {
+    case TINYPY_AST_BINARY_BIT_OR:
+        return TINYPY_RENDER_PRECEDENCE_BIT_OR;
+    case TINYPY_AST_BINARY_BIT_XOR:
+        return TINYPY_RENDER_PRECEDENCE_BIT_XOR;
+    case TINYPY_AST_BINARY_BIT_AND:
+        return TINYPY_RENDER_PRECEDENCE_BIT_AND;
+    case TINYPY_AST_BINARY_LEFT_SHIFT:
+    case TINYPY_AST_BINARY_RIGHT_SHIFT:
+        return TINYPY_RENDER_PRECEDENCE_SHIFT;
+    case TINYPY_AST_BINARY_ADD:
+    case TINYPY_AST_BINARY_SUBTRACT:
+        return TINYPY_RENDER_PRECEDENCE_ARITHMETIC;
+    case TINYPY_AST_BINARY_POWER:
+        return TINYPY_RENDER_PRECEDENCE_POWER;
+    default:
+        return TINYPY_RENDER_PRECEDENCE_TERM;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_render_precedence_e __tinypy_render_precedence(tinypy_ast_expression_t expression) {
+    switch (expression->kind) {
+    case TINYPY_AST_KIND_LAMBDA:
+    case TINYPY_AST_KIND_IF_EXP:
+        return TINYPY_RENDER_PRECEDENCE_TEST;
+    case TINYPY_AST_KIND_BOOL_OP:
+        return expression->v.BoolOp.op == TINYPY_AST_BOOLEAN_AND ? TINYPY_RENDER_PRECEDENCE_AND : TINYPY_RENDER_PRECEDENCE_OR;
+    case TINYPY_AST_KIND_UNARY_OP:
+        return expression->v.UnaryOp.op == TINYPY_AST_UNARY_NOT ? TINYPY_RENDER_PRECEDENCE_NOT : TINYPY_RENDER_PRECEDENCE_FACTOR;
+    case TINYPY_AST_KIND_COMPARE:
+        return TINYPY_RENDER_PRECEDENCE_COMPARISON;
+    case TINYPY_AST_KIND_BIN_OP:
+        break;
+    default:
+        return TINYPY_RENDER_PRECEDENCE_ATOM;
+    }
+    tinypy_render_precedence_e binary_precedence = __tinypy_render_binary_precedence(expression->v.BinOp.op);
+    return binary_precedence;
+}
+//////////////////////////////////////////////////////////////////////////
+/* An operand whose position requires the given precedence. */
+static tinypy_bool_t __tinypy_render_operand_at(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression, tinypy_render_precedence_e precedence) {
+    tinypy_render_precedence_e own_precedence = __tinypy_render_precedence(expression);
+
+    if (own_precedence >= precedence) {
         tinypy_bool_t rendered = __tinypy_render_expression(builder, expression);
+        return rendered;
+    }
+    if (__tinypy_render_character(builder, '(') == 0) {
+        return TINYPY_FALSE;
+    }
+    if (__tinypy_render_expression(builder, expression) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t closed = __tinypy_render_character(builder, ')');
+    return closed;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Operands of attribute access, subscription, calls and the arithmetic
+   unary operators: a numeric literal keeps parentheses, as 1.real is no
+   attribute access and -5 is one literal while -(5) negates one. */
+static tinypy_bool_t __tinypy_render_operand(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression, tinypy_render_precedence_e precedence) {
+    if (expression->kind != TINYPY_AST_KIND_NUM) {
+        tinypy_bool_t rendered = __tinypy_render_operand_at(builder, expression, precedence);
         return rendered;
     }
     tinypy_bool_t result = __tinypy_render_character(builder, '(') && __tinypy_render_literal(builder, expression->v.Num.n) && __tinypy_render_character(builder, ')');
@@ -568,11 +650,11 @@ static tinypy_bool_t __tinypy_render_comprehensions(tinypy_render_builder_t *bui
         tinypy_ast_comprehension_t generator = (tinypy_ast_comprehension_t)TINYPY_AST_SEQUENCE_GET(generators, index);
         int32_t if_index;
 
-        if (__tinypy_render_text(builder, " for ") == 0 || __tinypy_render_expression(builder, generator->target) == 0 || __tinypy_render_text(builder, " in ") == 0 || __tinypy_render_expression(builder, generator->iter) == 0) {
+        if (__tinypy_render_text(builder, " for ") == 0 || __tinypy_render_expression(builder, generator->target) == 0 || __tinypy_render_text(builder, " in ") == 0 || __tinypy_render_operand_at(builder, generator->iter, TINYPY_RENDER_PRECEDENCE_OR) == 0) {
             return TINYPY_FALSE;
         }
         for (if_index = 0; if_index < TINYPY_AST_SEQUENCE_LENGTH(generator->ifs); ++if_index) {
-            if (__tinypy_render_text(builder, " if ") == 0 || __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(generator->ifs, if_index)) == 0) {
+            if (__tinypy_render_text(builder, " if ") == 0 || __tinypy_render_operand_at(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(generator->ifs, if_index), TINYPY_RENDER_PRECEDENCE_OR) == 0) {
                 return TINYPY_FALSE;
             }
         }
@@ -584,7 +666,7 @@ static tinypy_bool_t __tinypy_render_call(tinypy_render_builder_t *builder, tiny
     int32_t emitted = 0;
     int32_t index;
 
-    if (__tinypy_render_operand(builder, expression->v.Call.func) == 0 || __tinypy_render_character(builder, '(') == 0) {
+    if (__tinypy_render_operand(builder, expression->v.Call.func, TINYPY_RENDER_PRECEDENCE_ATOM) == 0 || __tinypy_render_character(builder, '(') == 0) {
         return TINYPY_FALSE;
     }
     for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.Call.args); ++index) {
@@ -627,6 +709,146 @@ static tinypy_bool_t __tinypy_render_call(tinypy_render_builder_t *builder, tiny
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The precedence that the left operand of a BinOp needs: ** groups from
+   the right and takes a primary on its left. */
+static tinypy_render_precedence_e __tinypy_render_left_precedence(tinypy_ast_expression_t expression) {
+    if (expression->v.BinOp.op == TINYPY_AST_BINARY_POWER) {
+        return TINYPY_RENDER_PRECEDENCE_ATOM;
+    }
+    tinypy_render_precedence_e left_precedence = __tinypy_render_binary_precedence(expression->v.BinOp.op);
+    return left_precedence;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The precedence that the right operand of a BinOp needs: ** takes a unary
+   operation on its right. */
+static tinypy_render_precedence_e __tinypy_render_right_precedence(tinypy_ast_expression_t expression) {
+    if (expression->v.BinOp.op == TINYPY_AST_BINARY_POWER) {
+        return TINYPY_RENDER_PRECEDENCE_FACTOR;
+    }
+    tinypy_render_precedence_e binary_precedence = __tinypy_render_binary_precedence(expression->v.BinOp.op);
+    tinypy_render_precedence_e right_precedence = (tinypy_render_precedence_e)(binary_precedence + 1);
+    return right_precedence;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Whether a BinOp of a chain spine needs parentheses as the left operand of
+   the BinOp above it. */
+static tinypy_bool_t __tinypy_render_spine_parenthesized(tinypy_ast_expression_t operand, tinypy_ast_expression_t parent) {
+    tinypy_render_precedence_e operand_precedence = __tinypy_render_binary_precedence(operand->v.BinOp.op);
+    tinypy_render_precedence_e left_precedence = __tinypy_render_left_precedence(parent);
+    tinypy_bool_t parenthesized = operand_precedence < left_precedence ? TINYPY_TRUE : TINYPY_FALSE;
+    return parenthesized;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A flat operator chain is a left-deep spine of BinOps, rendered from its
+   first operand without one recursion level per operator. A BinOp of the
+   spine that needs parentheses opens them before the first operand. */
+static tinypy_bool_t __tinypy_render_binary_chain(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
+    size_t count;
+    tinypy_ast_expression_t *chain = tinypy_internal_ast_operator_chain(builder->compile, expression, &count);
+
+    if (chain == NULL) {
+        return TINYPY_FALSE;
+    }
+    for (size_t index = 1U; index != count; ++index) {
+        if (__tinypy_render_spine_parenthesized(chain[index - 1U], chain[index]) == 0) {
+            continue;
+        }
+        if (__tinypy_render_character(builder, '(') == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    tinypy_render_precedence_e first_precedence = __tinypy_render_left_precedence(chain[0]);
+    if (__tinypy_render_operand_at(builder, chain[0]->v.BinOp.left, first_precedence) == 0) {
+        return TINYPY_FALSE;
+    }
+    for (size_t index = 0U; index != count; ++index) {
+        tinypy_ast_expression_t node = chain[index];
+        const char *operator_text = __tinypy_render_binary_operator(node->v.BinOp.op);
+        tinypy_render_precedence_e right_precedence = __tinypy_render_right_precedence(node);
+
+        if (__tinypy_render_character(builder, ' ') == 0) {
+            return TINYPY_FALSE;
+        }
+        if (__tinypy_render_text(builder, operator_text) == 0) {
+            return TINYPY_FALSE;
+        }
+        if (__tinypy_render_character(builder, ' ') == 0) {
+            return TINYPY_FALSE;
+        }
+        if (__tinypy_render_operand_at(builder, node->v.BinOp.right, right_precedence) == 0) {
+            return TINYPY_FALSE;
+        }
+        if (index + 1U == count || __tinypy_render_spine_parenthesized(node, chain[index + 1U]) == 0) {
+            continue;
+        }
+        if (__tinypy_render_character(builder, ')') == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A value of and binds tighter than and, one of or tighter than or, so a
+   nested operation of the same kind keeps the parentheses that nest it. */
+static tinypy_bool_t __tinypy_render_boolean_operation(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
+    tinypy_bool_t conjunction = expression->v.BoolOp.op == TINYPY_AST_BOOLEAN_AND ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_render_precedence_e value_precedence = conjunction != 0 ? TINYPY_RENDER_PRECEDENCE_NOT : TINYPY_RENDER_PRECEDENCE_AND;
+    int32_t value_count = TINYPY_AST_SEQUENCE_LENGTH(expression->v.BoolOp.values);
+
+    for (int32_t index = 0; index != value_count; ++index) {
+        tinypy_ast_expression_t value = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.BoolOp.values, index);
+
+        if (index != 0) {
+            if (__tinypy_render_text(builder, conjunction != 0 ? " and " : " or ") == 0) {
+                return TINYPY_FALSE;
+            }
+        }
+        if (__tinypy_render_operand_at(builder, value, value_precedence) == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_render_unary_operation(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
+    tinypy_ast_unary_operator_e operation = expression->v.UnaryOp.op;
+    tinypy_ast_expression_t operand = expression->v.UnaryOp.operand;
+
+    if (operation == TINYPY_AST_UNARY_NOT) {
+        if (__tinypy_render_text(builder, "not ") == 0) {
+            return TINYPY_FALSE;
+        }
+        tinypy_bool_t negated = __tinypy_render_operand_at(builder, operand, TINYPY_RENDER_PRECEDENCE_NOT);
+        return negated;
+    }
+    char operator_character = operation == TINYPY_AST_UNARY_INVERT ? '~' : (operation == TINYPY_AST_UNARY_ADD ? '+' : '-');
+    if (__tinypy_render_character(builder, operator_character) == 0) {
+        return TINYPY_FALSE;
+    }
+    /* -(0j) must not become the literal -0j. */
+    tinypy_bool_t rendered = __tinypy_render_operand(builder, operand, TINYPY_RENDER_PRECEDENCE_FACTOR);
+    return rendered;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The body and the test of a conditional expression are or_tests, its else
+   branch is a test, so a chain of them nests only through the else. */
+static tinypy_bool_t __tinypy_render_conditional(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
+    if (__tinypy_render_operand_at(builder, expression->v.IfExp.body, TINYPY_RENDER_PRECEDENCE_OR) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (__tinypy_render_text(builder, " if ") == 0) {
+        return TINYPY_FALSE;
+    }
+    if (__tinypy_render_operand_at(builder, expression->v.IfExp.test, TINYPY_RENDER_PRECEDENCE_OR) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (__tinypy_render_text(builder, " else ") == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t rendered = __tinypy_render_expression(builder, expression->v.IfExp.orelse);
+    return rendered;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_render_expression(tinypy_render_builder_t *builder, tinypy_ast_expression_t expression) {
     tinypy_bool_t function_result;
     int32_t index;
@@ -645,51 +867,34 @@ static tinypy_bool_t __tinypy_render_expression(tinypy_render_builder_t *builder
         function_result = __tinypy_render_identifier(builder, expression->v.Name.id);
         return function_result;
     case TINYPY_AST_KIND_ATTRIBUTE:
-        function_result = __tinypy_render_operand(builder, expression->v.Attribute.value) && __tinypy_render_character(builder, '.') && __tinypy_render_identifier(builder, expression->v.Attribute.attr);
+        function_result = __tinypy_render_operand(builder, expression->v.Attribute.value, TINYPY_RENDER_PRECEDENCE_ATOM) && __tinypy_render_character(builder, '.') && __tinypy_render_identifier(builder, expression->v.Attribute.attr);
         return function_result;
     case TINYPY_AST_KIND_SUBSCRIPT:
-        function_result = __tinypy_render_operand(builder, expression->v.Subscript.value) && __tinypy_render_character(builder, '[') && __tinypy_render_slice(builder, expression->v.Subscript.slice) && __tinypy_render_character(builder, ']');
+        function_result = __tinypy_render_operand(builder, expression->v.Subscript.value, TINYPY_RENDER_PRECEDENCE_ATOM) && __tinypy_render_character(builder, '[') && __tinypy_render_slice(builder, expression->v.Subscript.slice) && __tinypy_render_character(builder, ']');
         return function_result;
     case TINYPY_AST_KIND_BOOL_OP:
-        if (__tinypy_render_character(builder, '(') == 0) {
-            return TINYPY_FALSE;
-        }
-        for (index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(expression->v.BoolOp.values); ++index) {
-            if (index != 0 && __tinypy_render_text(builder, expression->v.BoolOp.op == TINYPY_AST_BOOLEAN_AND ? " and " : " or ") == 0) {
-                return TINYPY_FALSE;
-            }
-            if (__tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.BoolOp.values, index)) == 0) {
-                return TINYPY_FALSE;
-            }
-        }
-        tinypy_bool_t return_value_1 = __tinypy_render_character(builder, ')');
-        return return_value_1;
-    case TINYPY_AST_KIND_BIN_OP: {
-        const char *operator_text = __tinypy_render_binary_operator(expression->v.BinOp.op);
-        tinypy_bool_t return_value_2 = __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.BinOp.left) && __tinypy_render_character(builder, ' ') && __tinypy_render_text(builder, operator_text) && __tinypy_render_character(builder, ' ') && __tinypy_render_expression(builder, expression->v.BinOp.right) && __tinypy_render_character(builder, ')');
-        return return_value_2;
-    }
+        function_result = __tinypy_render_boolean_operation(builder, expression);
+        return function_result;
+    case TINYPY_AST_KIND_BIN_OP:
+        function_result = __tinypy_render_binary_chain(builder, expression);
+        return function_result;
     case TINYPY_AST_KIND_UNARY_OP:
-        if (__tinypy_render_character(builder, '(') == 0) {
-            return TINYPY_FALSE;
-        }
-        /* -(0j) must not become the literal -0j. */
-        if (__tinypy_render_text(builder, expression->v.UnaryOp.op == TINYPY_AST_UNARY_NOT ? "not " : (expression->v.UnaryOp.op == TINYPY_AST_UNARY_INVERT ? "~" : (expression->v.UnaryOp.op == TINYPY_AST_UNARY_ADD ? "+" : "-"))) == 0 || __tinypy_render_operand(builder, expression->v.UnaryOp.operand) == 0) {
-            return TINYPY_FALSE;
-        }
-        tinypy_bool_t return_value_3 = __tinypy_render_character(builder, ')');
-        return return_value_3;
+        function_result = __tinypy_render_unary_operation(builder, expression);
+        return function_result;
     case TINYPY_AST_KIND_LAMBDA:
-        if (__tinypy_render_text(builder, "(lambda ") == 0) {
+        if (__tinypy_render_text(builder, "lambda ") == 0) {
             return TINYPY_FALSE;
         }
-        if (__tinypy_render_arguments(builder, expression->v.Lambda.args) == 0 || __tinypy_render_text(builder, ": ") == 0 || __tinypy_render_expression(builder, expression->v.Lambda.body) == 0) {
+        if (__tinypy_render_arguments(builder, expression->v.Lambda.args) == 0) {
             return TINYPY_FALSE;
         }
-        tinypy_bool_t return_value_4 = __tinypy_render_character(builder, ')');
-        return return_value_4;
+        if (__tinypy_render_text(builder, ": ") == 0) {
+            return TINYPY_FALSE;
+        }
+        function_result = __tinypy_render_expression(builder, expression->v.Lambda.body);
+        return function_result;
     case TINYPY_AST_KIND_IF_EXP:
-        function_result = __tinypy_render_character(builder, '(') && __tinypy_render_expression(builder, expression->v.IfExp.body) && __tinypy_render_text(builder, " if ") && __tinypy_render_expression(builder, expression->v.IfExp.test) && __tinypy_render_text(builder, " else ") && __tinypy_render_expression(builder, expression->v.IfExp.orelse) && __tinypy_render_character(builder, ')');
+        function_result = __tinypy_render_conditional(builder, expression);
         return function_result;
     case TINYPY_AST_KIND_DICT:
         if (__tinypy_render_character(builder, '{') == 0) {
@@ -724,7 +929,7 @@ static tinypy_bool_t __tinypy_render_expression(tinypy_render_builder_t *builder
         function_result = __tinypy_render_text(builder, "(yield") && (expression->v.Yield.value == NULL || (__tinypy_render_character(builder, ' ') && __tinypy_render_expression(builder, expression->v.Yield.value))) && __tinypy_render_character(builder, ')');
         return function_result;
     case TINYPY_AST_KIND_COMPARE:
-        if (__tinypy_render_character(builder, '(') == 0 || __tinypy_render_expression(builder, expression->v.Compare.left) == 0) {
+        if (__tinypy_render_operand_at(builder, expression->v.Compare.left, TINYPY_RENDER_PRECEDENCE_BIT_OR) == 0) {
             return TINYPY_FALSE;
         }
         for (index = 0; index < expression->v.Compare.ops->size; ++index) {
@@ -735,14 +940,13 @@ static tinypy_bool_t __tinypy_render_expression(tinypy_render_builder_t *builder
             }
             tinypy_bool_t condition = condition_2;
             if (condition == 0) {
-                condition = __tinypy_render_expression(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Compare.comparators, index)) == 0;
+                condition = __tinypy_render_operand_at(builder, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Compare.comparators, index), TINYPY_RENDER_PRECEDENCE_BIT_OR) == 0;
             }
             if (condition) {
                 return TINYPY_FALSE;
             }
         }
-        tinypy_bool_t return_value_6 = __tinypy_render_character(builder, ')');
-        return return_value_6;
+        return TINYPY_TRUE;
     case TINYPY_AST_KIND_CALL:
         function_result = __tinypy_render_call(builder, expression);
         return function_result;
@@ -870,6 +1074,47 @@ static tinypy_bool_t __tinypy_render_aliases(tinypy_render_builder_t *builder, t
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* An else that holds one If is an elif, which the parser builds the same
+   way, so an elif chain renders at one indentation level however long. */
+static tinypy_bool_t __tinypy_render_if(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement, size_t indentation) {
+    tinypy_ast_statement_t clause = statement;
+    const char *keyword = "if ";
+
+    for (;;) {
+        if (__tinypy_render_text(builder, keyword) == 0) {
+            return TINYPY_FALSE;
+        }
+        if (__tinypy_render_expression(builder, clause->v.If.test) == 0) {
+            return TINYPY_FALSE;
+        }
+        if (__tinypy_render_text(builder, ":\n") == 0) {
+            return TINYPY_FALSE;
+        }
+        if (__tinypy_render_statement_sequence(builder, clause->v.If.body, indentation + 1U) == 0) {
+            return TINYPY_FALSE;
+        }
+        tinypy_ast_sequence_t *orelse = clause->v.If.orelse;
+        int32_t orelse_count = TINYPY_AST_SEQUENCE_LENGTH(orelse);
+        if (orelse_count == 0) {
+            return TINYPY_TRUE;
+        }
+        if (__tinypy_render_indent(builder, indentation) == 0) {
+            return TINYPY_FALSE;
+        }
+        tinypy_ast_statement_t next = (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(orelse, 0);
+        if (orelse_count != 1 || next->kind != TINYPY_AST_KIND_IF) {
+            break;
+        }
+        clause = next;
+        keyword = "elif ";
+    }
+    if (__tinypy_render_text(builder, "else:\n") == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t rendered = __tinypy_render_statement_sequence(builder, clause->v.If.orelse, indentation + 1U);
+    return rendered;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_render_statement(tinypy_render_builder_t *builder, tinypy_ast_statement_t statement, size_t indentation) {
     tinypy_bool_t function_result;
     tinypy_source_map_record_t *record = __tinypy_render_source_map_record(builder, statement);
@@ -961,15 +1206,8 @@ static tinypy_bool_t __tinypy_render_statement(tinypy_render_builder_t *builder,
         }
         return TINYPY_TRUE;
     case TINYPY_AST_KIND_IF:
-        if (__tinypy_render_text(builder, "if ") == 0 || __tinypy_render_expression(builder, statement->v.If.test) == 0 || __tinypy_render_text(builder, ":\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.If.body, indentation + 1U) == 0) {
-            return TINYPY_FALSE;
-        }
-        if (TINYPY_AST_SEQUENCE_LENGTH(statement->v.If.orelse) != 0) {
-            if (__tinypy_render_indent(builder, indentation) == 0 || __tinypy_render_text(builder, "else:\n") == 0 || __tinypy_render_statement_sequence(builder, statement->v.If.orelse, indentation + 1U) == 0) {
-                return TINYPY_FALSE;
-            }
-        }
-        return TINYPY_TRUE;
+        function_result = __tinypy_render_if(builder, statement, indentation);
+        return function_result;
     case TINYPY_AST_KIND_WITH:
         if (__tinypy_render_text(builder, "with ") == 0 || __tinypy_render_expression(builder, statement->v.With.context_expr) == 0 || (statement->v.With.optional_vars != NULL && (__tinypy_render_text(builder, " as ") == 0 || __tinypy_render_expression(builder, statement->v.With.optional_vars) == 0)) || __tinypy_render_text(builder, ":\n") == 0) {
             return TINYPY_FALSE;
@@ -1028,7 +1266,7 @@ static tinypy_bool_t __tinypy_render_statement(tinypy_render_builder_t *builder,
         }
         break;
     case TINYPY_AST_KIND_EXEC:
-        if (__tinypy_render_text(builder, "exec ") == 0 || __tinypy_render_expression(builder, statement->v.Exec.body) == 0) {
+        if (__tinypy_render_text(builder, "exec ") == 0 || __tinypy_render_operand_at(builder, statement->v.Exec.body, TINYPY_RENDER_PRECEDENCE_BIT_OR) == 0) {
             return TINYPY_FALSE;
         }
         if (statement->v.Exec.globals != NULL) {

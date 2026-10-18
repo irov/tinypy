@@ -451,6 +451,11 @@ static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, c
         TINYPY_CLEAR_ERROR(out_error);
         return TINYPY_RET(container);
     }
+    /* list_slice makes a list of exactly the items of the slice. */
+    if (tuple == 0 && indices->step == 1 && indices->length != 0U) {
+        tinypy_value_t *sliced = tinypy_internal_list_from_items_exact_checked(vm, TINYPY_LIST_OBJECT(container)->items + indices->start, indices->length, out_error);
+        return sliced;
+    }
     tinypy_value_t *result = tuple != 0
                                  ? tinypy_internal_tuple_new_checked(vm, indices->length, out_error)
                                  : tinypy_list_from_items(vm, NULL, 0U);
@@ -462,11 +467,6 @@ static tinypy_value_t *__tinypy_item_sequence_slice(tinypy_value_t *container, c
     if (tuple == 0 && tinypy_internal_list_reserve_checked(vm, result, indices->length, out_error) == 0) {
         TINYPY_DECREF(result);
         return NULL;
-    }
-    /* A contiguous list slice fits the reserved storage in one piece. */
-    if (tuple == 0 && indices->step == 1 && indices->length != 0U) {
-        tinypy_list_extend(result, TINYPY_LIST_OBJECT(container)->items + indices->start, indices->length);
-        return result;
     }
     for (index = 0U; index < indices->length; ++index) {
         size_t source_index = (size_t)(indices->start + (int64_t)index * indices->step);

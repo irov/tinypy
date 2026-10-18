@@ -23,7 +23,7 @@ struct tinypy_module_request_t {
     const char *importer_name;
     size_t importer_name_size;
     /* Borrowed: the __path__ of the package of a submodule, which
-     * find_module searches, or None for a top-level module, which the host
+     * find_module searches, or NULL for a top-level module, which the host
      * looks for where it keeps them (sys.path for the CLI). */
     tinypy_value_t *package_path;
 };

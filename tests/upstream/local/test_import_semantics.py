@@ -208,6 +208,214 @@ class ImportSemantics(unittest.TestCase):
                 if name.startswith('tinypy_meta'):
                     del sys.modules[name]
 
+    def test_meta_path_length_is_read_once(self):
+        # find_module reads the length of sys.meta_path once: a finder put
+        # in front of the one asked, or after the last one, is not asked for
+        # the name, and a finder that shortens the list ends the lookup with
+        # the IndexError of PyList_GetItem.
+        calls = []
+
+        class Declining(object):
+            def __init__(self, label, action=None):
+                self.label = label
+                self.action = action
+
+            def find_module(self, name, path=None):
+                calls.append(self.label)
+                if self.action is not None:
+                    self.action(self)
+                return None
+
+        saved = sys.meta_path[:]
+        try:
+            sys.meta_path[:] = [Declining('inserting', lambda finder: sys.meta_path.insert(0, Declining('inserted')))]
+            self.assertEqual(self.failure(__import__, 'tinypy_meta_absent'), 'ImportError: No module named tinypy_meta_absent')
+            sys.meta_path[:] = [Declining('appending', lambda finder: sys.meta_path.append(Declining('appended')))]
+            self.assertEqual(self.failure(__import__, 'tinypy_meta_absent'), 'ImportError: No module named tinypy_meta_absent')
+            sys.meta_path[:] = [Declining('removing', sys.meta_path.remove), Declining('next')]
+            self.assertEqual(self.failure(__import__, 'tinypy_meta_absent'), 'IndexError: list index out of range')
+            self.assertEqual(calls, ['inserting', 'appending', 'removing'])
+        finally:
+            sys.meta_path[:] = saved
+
+    def test_finder_is_released_before_its_loader_runs(self):
+        # find_module holds a finder of sys.meta_path only while it is asked.
+        events = []
+
+        class Loader(object):
+            def load_module(self, name):
+                events.append('load')
+                module = sys.modules[name] = type(sys)(name)
+                return module
+
+        class OneShot(object):
+            def __del__(self):
+                events.append('finder released')
+
+            def find_module(self, name, path=None):
+                events.append('find')
+                sys.meta_path.remove(self)
+                return Loader()
+
+        sys.meta_path.append(OneShot())
+        try:
+            self.assertEqual(__import__('tinypy_one_shot').__name__, 'tinypy_one_shot')
+            self.assertEqual(events, ['find', 'finder released', 'load'])
+        finally:
+            sys.meta_path[:] = [finder for finder in sys.meta_path if not isinstance(finder, OneShot)]
+            sys.modules.pop('tinypy_one_shot', None)
+
+    def test_relative_miss_is_marked_once_the_absolute_head_imported(self):
+        # load_next marks the name an implicit relative import misses as
+        # soon as the absolute head imported, before the rest of the name, so
+        # the finders are not asked for it again meanwhile.
+        calls = []
+        sources = {
+            'tinypy_mark': 'import tinypy_mark.sub\n',
+            'tinypy_mark.sub': 'import tinypy_mark.other\n',
+            'tinypy_mark.other': '',
+        }
+
+        class Loader(object):
+            def load_module(self, name):
+                module = sys.modules[name] = type(sys)(name)
+                if name == 'tinypy_mark':
+                    module.__path__ = []
+                module.marked = sys.modules.get('tinypy_mark.tinypy_mark', 'unmarked')
+                exec sources[name] in vars(module)
+                return module
+
+        class Finder(object):
+            def find_module(self, name, path=None):
+                calls.append(name)
+                if name in sources:
+                    return Loader()
+                return None
+
+        finder = Finder()
+        sys.meta_path.insert(0, finder)
+        try:
+            __import__('tinypy_mark')
+            self.assertEqual(calls, ['tinypy_mark', 'tinypy_mark.tinypy_mark', 'tinypy_mark.sub', 'tinypy_mark.other'])
+            self.assertTrue(sys.modules['tinypy_mark.sub'].marked is None)
+            self.assertTrue(sys.modules['tinypy_mark.tinypy_mark'] is None)
+        finally:
+            sys.meta_path.remove(finder)
+            # The import statements bind the package in the namespaces.
+            for name in list(sys.modules):
+                if name.startswith('tinypy_mark'):
+                    module = sys.modules.pop(name)
+                    if module is not None:
+                        vars(module).clear()
+
+    def test_relative_import_from_a_none_package(self):
+        # load_next continues from the None that marks a package missing as
+        # from a module without __path__: its submodules are searched as
+        # top-level modules and registered under its name, with no absolute
+        # name to fall back to.
+        import local
+        directory = local.__path__[0] + '/review_path_entry'
+        calls = []
+
+        class Finder(object):
+            def find_module(self, name, path=None):
+                calls.append((name, path))
+                return None
+
+        finder = Finder()
+        importer = {'__package__': 'tinypy_none_package'}
+        sys.path.insert(0, directory)
+        sys.meta_path.insert(0, finder)
+        sys.modules['tinypy_none_package'] = None
+        try:
+            module = __import__('review_path_module', importer, {}, [], 1)
+            self.assertEqual((module.__name__, module.VALUE), ('tinypy_none_package.review_path_module', 'path entry'))
+            self.assertTrue(sys.modules['tinypy_none_package.review_path_module'] is module)
+            self.assertFalse('review_path_module' in sys.modules)
+            self.assertEqual(self.failure(__import__, 'tinypy_none_absent', importer, {}, [], -1), 'ImportError: No module named tinypy_none_absent')
+            self.assertEqual(calls, [('tinypy_none_package.review_path_module', None), ('tinypy_none_package.tinypy_none_absent', None)])
+            self.assertEqual(self.failure(__import__, '', importer, {}, ['review_path_module'], 1), 'ValueError: Empty module name')
+        finally:
+            sys.meta_path.remove(finder)
+            sys.path.remove(directory)
+            for name in ('tinypy_none_package', 'tinypy_none_package.review_path_module'):
+                sys.modules.pop(name, None)
+
+    def test_empty_package_name_is_not_loaded(self):
+        # get_parent looks up the empty package name a leading dot leaves,
+        # which names no module.
+        message = "SystemError: Parent module '' not loaded, cannot perform relative import"
+        self.assertEqual(self.failure(__import__, 'x', {'__name__': '', '__path__': []}, {}, [], 1), message)
+        importer = {'__name__': '.x'}
+        self.assertEqual(self.failure(__import__, 'x', importer, {}, [], 1), message)
+        self.assertEqual(importer['__package__'], '')
+        importer = {'__name__': '..x'}
+        self.assertEqual(self.failure(__import__, 'x', importer, {}, [], 2), message)
+        self.assertEqual(importer['__package__'], '.')
+        self.assertEqual(self.failure(__import__, 'x', {'__package__': '.a'}, {}, [], 2), message)
+        self.assertEqual(self.failure(__import__, 'x', {'__package__': ''}, {}, [], 1), 'ValueError: Attempted relative import in non-package')
+
+    def test_classic_instance_names_are_sequences(self):
+        # PySequence_GetItem calls instance_item, which looks __getitem__ up
+        # like any attribute of a classic instance, __getattr__ included.
+        class Proxy:
+            def __init__(self, names):
+                self.names = names
+
+            def __getattr__(self, name):
+                if name == '__getitem__':
+                    return self.names.__getitem__
+                raise AttributeError(name)
+
+        class Empty:
+            pass
+
+        def import_star():
+            namespace = {}
+            exec 'from tinypy_classic_names import *' in namespace
+            return sorted(name for name in namespace if name != '__builtins__')
+
+        package = type(sys)('tinypy_classic_names')
+        package.__path__ = []
+        package.present = 1
+        sys.modules['tinypy_classic_names'] = package
+        try:
+            self.assertTrue(__import__('tinypy_classic_names', {}, {}, Proxy(['present', 'missing'])) is package)
+            package.__all__ = Proxy(['present'])
+            self.assertEqual(import_star(), ['present'])
+            self.assertEqual(self.failure(__import__, 'tinypy_classic_names', {}, {}, Empty()), "AttributeError: Empty instance has no attribute '__getitem__'")
+        finally:
+            del sys.modules['tinypy_classic_names']
+
+    def test_search_path_must_be_a_list(self):
+        # find_module requires sys.path and the __path__ of a package to be
+        # lists and reads a unicode entry encoded.
+        import local
+        directory = local.__path__[0] + '/review_path_entry'
+        message = 'RuntimeError: sys.path must be a list of directory names'
+        saved = sys.path
+        sys.path = tuple(saved)
+        try:
+            failure = self.failure(__import__, 'tinypy_tuple_path_module')
+        finally:
+            sys.path = saved
+        self.assertEqual(failure, message)
+        package = type(sys)('tinypy_tuple_package')
+        package.__path__ = (directory,)
+        sys.modules['tinypy_tuple_package'] = package
+        try:
+            self.assertEqual(self.failure(__import__, 'tinypy_tuple_package.review_path_module'), message)
+            package.__path__ = None
+            self.assertEqual(self.failure(__import__, 'tinypy_tuple_package.review_path_module'), message)
+        finally:
+            del sys.modules['tinypy_tuple_package']
+        sys.path.insert(0, unicode(directory))
+        try:
+            self.assertEqual(__import__('review_path_module').VALUE, 'path entry')
+        finally:
+            del sys.path[0]
+            sys.modules.pop('review_path_module', None)
+
     def test_search_path_is_read_when_importing(self):
         # find_module searches sys.path and the __path__ of a package as the
         # program leaves them.

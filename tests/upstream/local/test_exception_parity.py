@@ -4,6 +4,7 @@ state of built-in exceptions.
 Expectations are checked on CPython 2.7.18.
 """
 
+import sys
 import unittest
 
 
@@ -20,6 +21,22 @@ def _recursion_message(operation, *args):
     except RuntimeError as error:
         return str(error)
     raise AssertionError('operation must exceed the recursion limit')
+
+
+def _limited(operation, headroom, *args):
+    """Runs operation with the recursion limit a few levels above the frames
+    of the caller, so that the limit rather than the native stack stops it."""
+    frame = sys._getframe(1)
+    depth = 0
+    while frame is not None:
+        depth += 1
+        frame = frame.f_back
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(depth + headroom)
+    try:
+        return operation(*args)
+    finally:
+        sys.setrecursionlimit(limit)
 
 
 class ExceptionParity(unittest.TestCase):
@@ -108,6 +125,34 @@ class ExceptionParity(unittest.TestCase):
         own.args = (own,)
         self.assertEqual(_recursion_message(str, own), 'maximum recursion depth exceeded while getting the str of an object')
         own.args = ()
+
+    def test_builtin_method_under_another_slot_name_is_called(self):
+        class Representation(object):
+            __repr__ = object.__str__
+        class Unicode(Exception):
+            __str__ = Exception.__unicode__
+        class Swapped(Exception):
+            __repr__ = Exception.__unicode__
+            __str__ = object.__str__
+        class Classic:
+            __repr__ = object.__str__
+        class Inherited(Classic):
+            pass
+        cases = ((str, Representation()), (repr, Representation()), (unicode, Representation()),
+                 (lambda value: '%s' % (value,), Representation()), (unicode, Unicode(1)), (str, Swapped(1)),
+                 (repr, Classic()), (repr, Inherited()))
+        for operation, value in cases:
+            message = _limited(_recursion_message, 60, operation, value)
+            self.assertEqual(message, 'maximum recursion depth exceeded while calling a Python object')
+        sys.exc_clear()
+
+    def test_classic_lookup_takes_no_recursion_level(self):
+        class Base:
+            value = 1
+        derived = Base
+        for index in range(100):
+            derived = type(Base)('Derived%d' % index, (derived,), {})
+        self.assertEqual(_limited(lambda: (derived.value, derived().value, hasattr(derived, 'missing')), 20), (1, 1, False))
 
 if __name__ == '__main__':
     unittest.main()

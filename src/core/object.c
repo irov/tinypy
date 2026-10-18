@@ -1782,6 +1782,15 @@ tinypy_value_t *tinypy_internal_object_generic_get_attr_key(tinypy_value_t *valu
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_object_get_attr_hook_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_bool_t missing;
+
+    tinypy_value_t *getattr_hook = __tinypy_object_getattr_hook(vm, value);
+    tinypy_value_t *result = __tinypy_object_getattr_fallback(value, key, NULL, getattr_hook, TINYPY_FALSE, &missing, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_object_get_optional_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t **out_value, tinypy_error_t **out_error) {
     tinypy_bool_t missing;
 

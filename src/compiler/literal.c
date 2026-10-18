@@ -61,9 +61,12 @@ static void __tinypy_compiler_unicode_escape_error(tinypy_compile_ctx_t *ctx, co
 }
 //////////////////////////////////////////////////////////////////////////
 /* Prepare the byte domain consumed by the Python 2 Unicode escape decoder.
-   UTF-8 characters occupy ten escape bytes; Latin-1 characters occupy one.
-   Like decode_unicode, a backslash takes the next character along: an ASCII
-   one unchanged, a UTF-8 one as the escape of the backslash itself. */
+   The Latin-1 bytes Python tokenized, without a cookie or with one whose
+   normal name is Latin-1, occupy one byte each; every other character, one
+   a Latin-1 codec of the registry decoded included, occupies ten escape
+   bytes. Like decode_unicode, a backslash takes the next character along:
+   an ASCII one unchanged, a UTF-8 one as the escape of the backslash
+   itself. */
 static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx_t *ctx, const uint8_t *source, size_t size, size_t *out_size, int32_t line_number, int32_t column_offset) {
     static const char hex[] = "0123456789abcdef";
     size_t first_non_ascii = 0U;
@@ -74,7 +77,8 @@ static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx
         *out_size = size;
         return source;
     }
-    size_t expansion = ctx->source_is_latin1 != 0 ? 1U : 6U;
+    tinypy_bool_t latin1 = ctx->source_is_latin1 != 0 && ctx->source_diagnostic_transcoded == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    size_t expansion = latin1 != 0 ? 1U : 6U;
     if (size > (SIZE_MAX - 1U) / expansion) {
         __tinypy_compiler_literal_error(ctx, "string literal exceeds compiler arena limit", line_number, column_offset);
         return NULL;
@@ -92,7 +96,7 @@ static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx
         if (byte < 0x80U) {
             prepared[output_size++] = byte;
             offset += 1U;
-            if (ctx->source_is_latin1 != 0 || byte != '\\' || offset == size) {
+            if (latin1 != 0 || byte != '\\' || offset == size) {
                 continue;
             }
             if (source[offset] < 0x80U) {
@@ -137,7 +141,7 @@ static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx
             TINYPY_DECREF(input);
             return NULL;
         }
-        if (ctx->source_is_latin1 != 0) {
+        if (latin1 != 0) {
             prepared[output_size++] = (uint8_t)code_point;
         }
         else {
@@ -157,9 +161,6 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
     size_t position = 0U;
     int32_t sign = 1;
     uint32_t base = 10U;
-    size_t capacity;
-    uint16_t *digits;
-    size_t digit_count = 0U;
     uint64_t magnitude = 0U;
     int32_t fits_i64 = 1;
 
@@ -185,32 +186,14 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
         base = 8U;
         position += 1U;
     }
-    capacity = size + 2U;
-    digits = (uint16_t *)tinypy_internal_compiler_arena_allocate(ctx, capacity * sizeof(*digits));
-    if (digits == NULL) {
-        __tinypy_compiler_literal_error(ctx, "integer literal exceeds compiler arena limit", line_number, column_offset);
-        return NULL;
-    }
+    size_t digits_start = position;
+
     while (position < size) {
         int32_t digit = __tinypy_compiler_integer_digit((uint8_t)text[position], base);
-        uint32_t carry;
-        size_t index;
 
         if (digit < 0) {
             __tinypy_compiler_literal_error(ctx, "invalid integer literal", line_number, column_offset);
             return NULL;
-        }
-        carry = (uint32_t)digit;
-        for (index = 0U; index < digit_count; ++index) {
-            uint32_t product = (uint32_t)digits[index] * base + carry;
-
-            digits[index] = (uint16_t)(product & 0x7fffU);
-            carry = product >> 15U;
-        }
-        while (carry != 0U) {
-            digits[digit_count] = (uint16_t)(carry & 0x7fffU);
-            digit_count += 1U;
-            carry >>= 15U;
         }
         if (fits_i64 != 0) {
             uint64_t limit = sign < 0 ? UINT64_C(0x8000000000000000) : UINT64_C(0x7fffffffffffffff);
@@ -224,12 +207,6 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
         }
         position += 1U;
     }
-    while (digit_count != 0U && digits[digit_count - 1U] == 0U) {
-        digit_count -= 1U;
-    }
-    if (digit_count == 0U) {
-        sign = 0;
-    }
     if (force_long == 0 && fits_i64 != 0) {
         int64_t value;
 
@@ -241,6 +218,18 @@ static tinypy_value_t *__tinypy_compiler_parse_integer(tinypy_compile_ctx_t *ctx
         }
         tinypy_value_t *return_value_1 = tinypy_integer_from_i64(ctx->vm, value);
         return return_value_1;
+    }
+    size_t capacity = (size - digits_start) / 2U + 2U;
+    uint16_t *digits = (uint16_t *)tinypy_internal_compiler_arena_allocate(ctx, capacity * sizeof(*digits));
+
+    if (digits == NULL) {
+        __tinypy_compiler_literal_error(ctx, "integer literal exceeds compiler arena limit", line_number, column_offset);
+        return NULL;
+    }
+    size_t digit_count = tinypy_internal_long_digits_from_text((const uint8_t *)text + digits_start, size - digits_start, base, digits);
+
+    if (digit_count == 0U) {
+        sign = 0;
     }
     tinypy_value_t *result = tinypy_internal_long_from_base15_digits_checked(ctx->vm, sign, digits, digit_count, NULL);
     if (result == NULL) {

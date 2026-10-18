@@ -66,6 +66,17 @@ class CompilerDiagnostics(unittest.TestCase):
         self.assertTrue(latin1.msg.endswith('position 1-2: truncated \\xXX escape'))
         self.assertTrue(utf8.msg.endswith('position 10-11: truncated \\xXX escape'))
 
+    def test_registry_latin1_codec_expands_unicode_escapes(self):
+        # A Latin-1 codec of the registry decodes the source before it is
+        # tokenized, so its characters expand to ten-byte escapes too.
+        for name in ['latin1', 'l1', 'cp819']:
+            error = self.syntax_error("# coding: %s\nu'\xe9\\xq'" % name)
+            self.assertTrue(error.msg.endswith('position 10-11: truncated \\xXX escape'), error.msg)
+        error = self.syntax_error("# coding: latin1\nur'\xe9\\u12x'")
+        self.assertTrue(error.msg.endswith('position 10-13: truncated \\uXXXX'), error.msg)
+        value = eval('# coding: latin1\n(u"\xe9", ur"\\\xe9", u"\\\xe9", ur"\\\\\xe9", ur"\xe9\\u00e9")')
+        self.assertEqual(value, (u'\xe9', u'\\\xe9', u'\\\xe9', u'\\\\\xe9', u'\xe9\xe9'))
+
     def test_ascii_source_decoder_precedes_unicode_cookie_error(self):
         for source, byte in [('# coding: ascii\nx="\xe9"', 'e9'),
                              (u'# coding: ascii\nx="\xe9"', 'c3')]:
@@ -81,6 +92,18 @@ class CompilerDiagnostics(unittest.TestCase):
             error = self.syntax_error(source)
             self.assertEqual(error.text, text)
             self.assertEqual(error.offset, 2)
+
+    def test_restored_text_joins_surrogate_pairs(self):
+        # The UTF-8 encoder of the restoration joins a surrogate pair; the
+        # Latin-1 one replaces each surrogate.
+        pair = '\xed\xa0\xbd\xed\xb8\x80'
+        for source, location in [('# coding: utf-8\nx = "%s" $\n' % pair, (2, 12, 'x = "\xf0\x9f\x98\x80" $\n')),
+                                 ('\xef\xbb\xbfx = "%s" $\n' % pair, (1, 12, 'x = "\xf0\x9f\x98\x80" $\n')),
+                                 ('# coding: utf8\nx = (1,\n#%s' % pair, (3, 6, '#\xf0\x9f\x98\x80\n')),
+                                 ('# coding: utf-8\nx = "\xed\xa0\xbd\xed\xb8" $\n', (2, 14, 'x = "\xed\xa0\xbd\xef\xbf\xbd" $\n')),
+                                 ('# coding: latin-1\nx = "%s" $\n' % pair, (2, 10, 'x = "??" $\n'))]:
+            error = self.syntax_error(source, 'exec')
+            self.assertEqual((error.msg, error.lineno, error.offset, error.text), ('invalid syntax',) + location)
 
     def test_failed_adjacent_literal_keeps_its_error(self):
         # A str part after a unicode one that fails the ASCII check fails the
@@ -171,6 +194,20 @@ class CompilerDiagnostics(unittest.TestCase):
         module = __import__('compiler_files.codec_lines', {}, {}, ['x'])
         self.assertEqual((module.x, module.z, hasattr(module, 'y')), (u'\U0001f600', 1, False))
 
+    def test_end_of_file_offset_restores_the_stale_buffer(self):
+        # At the end of a file the tokenizer buffer holds a terminator over
+        # the first byte of the last line, which still restores the offset.
+        for name, offset in [('end_latin1_codec', 5), ('end_latin1', 6), ('end_utf8_invalid', 14)]:
+            error = self.import_error(name)
+            self.assertEqual((error.msg, error.lineno, error.offset, error.text), ('invalid syntax', 4, offset, ''))
+
+    def test_final_lone_cr_ends_the_file_at_once(self):
+        # Reading ahead after the CR finds the end of the file, so an open
+        # token gets no further newline.
+        error = self.import_error('final_cr_string')
+        self.assertEqual((error.msg, error.lineno, error.offset, error.text),
+                         ('EOF while scanning triple-quoted string literal', 3, 11, 's = """a\nb\n'))
+
     def test_byte_escape_message(self):
         for contents in ['\\x', '\\x0', '\\xg0', 'a\\x0q']:
             try:
@@ -243,6 +280,17 @@ class CompilerDiagnostics(unittest.TestCase):
         self.assertEqual((error.offset, error.text), (3, 'f(?)\n'))
         error = self.syntax_error(u'# coding: latin1\nmain(\xff)\n', 'exec')
         self.assertEqual((error.offset, error.text), (6, 'main(\xc3\xbf)\n'))
+
+    def test_codec_path_cookie_joins_surrogate_pairs(self):
+        # The string decoded through the codec is encoded again, which joins
+        # a surrogate pair; the fast path keeps the bytes. The expected text
+        # decodes at run time, as marshal joins a pair in a constant.
+        pair = '\xed\xa0\xbd\xed\xb8\x80'
+        for cookie, text in [('utf8', '\xf0\x9f\x98\x80'), ('u8', '\xf0\x9f\x98\x80'), ('utf-8', pair)]:
+            namespace = {}
+            exec compile('# coding: %s\nx = "%s"\ny = u"%s"\n' % (cookie, pair, pair), '<diagnostic>', 'exec') in namespace
+            self.assertEqual((namespace['x'], namespace['y']), (text, text.decode('utf-8')))
+        self.assertEqual(eval('# coding: utf8\nu"%s"' % pair), u'\U0001f600')
 
     def test_bom_with_cookie(self):
         for source, name in [('\xef\xbb\xbf# coding: latin-1\nx=1\n', 'iso-8859-1'),

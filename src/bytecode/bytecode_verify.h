@@ -86,7 +86,9 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify_scratch_size(size_t bytec
  * fallthrough with unchanged depth.  Runtime type/value behavior and the
  * exact instruction that raises an exception are intentionally out of scope.
  * Decode, operand, and jump-boundary checks cover every encoded instruction;
- * stack, block, marker, and fallthrough checks cover reachable CFG states.
+ * an opcode outside the instruction set and the stack, block, marker, and
+ * fallthrough checks cover reachable CFG states. CPython 2.7's peephole
+ * optimizer can leave such a byte of a split jump in dead code.
  */
 tinypy_bytecode_verify_status_e tinypy_bytecode_verify(const uint8_t *bytecode, size_t bytecode_size, const tinypy_bytecode_metadata_t *metadata, const tinypy_bytecode_verify_limits_t *limits, void *scratch, size_t scratch_size, tinypy_bytecode_verify_result_t *out_result);
 

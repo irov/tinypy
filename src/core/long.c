@@ -46,6 +46,80 @@ tinypy_value_t *tinypy_internal_long_from_base15_digits_checked(tinypy_vm_t *vm,
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static uint32_t __tinypy_internal_long_text_digit(uint8_t character) {
+    if (character <= (uint8_t)'9') {
+        return (uint32_t)(character - (uint8_t)'0');
+    }
+    if (character >= (uint8_t)'a') {
+        return (uint32_t)(character - (uint8_t)'a') + 10U;
+    }
+    return (uint32_t)(character - (uint8_t)'A') + 10U;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A power-of-two base packs the bits of every character in one pass, as
+   PyLong_FromString does. Another base multiplies the digits by its largest
+   power not above 2**49 once per run of characters: a 15-bit digit times
+   that power plus the carry stays within 64 bits. */
+size_t tinypy_internal_long_digits_from_text(const uint8_t *text, size_t size, uint32_t base, uint16_t *digits) {
+    size_t count = 0U;
+
+    if ((base & (base - 1U)) == 0U) {
+        uint32_t character_bits = 0U;
+        uint32_t accumulator = 0U;
+        uint32_t accumulated_bits = 0U;
+
+        while ((UINT32_C(1) << character_bits) != base) {
+            character_bits += 1U;
+        }
+        for (size_t index = size; index != 0U; --index) {
+            uint32_t digit = __tinypy_internal_long_text_digit(text[index - 1U]);
+
+            accumulator |= digit << accumulated_bits;
+            accumulated_bits += character_bits;
+            if (accumulated_bits >= 15U) {
+                digits[count++] = (uint16_t)(accumulator & TINYPY_LONG_BASE15_MASK);
+                accumulator >>= 15U;
+                accumulated_bits -= 15U;
+            }
+        }
+        if (accumulated_bits != 0U) {
+            digits[count++] = (uint16_t)accumulator;
+        }
+        while (count != 0U && digits[count - 1U] == 0U) {
+            count -= 1U;
+        }
+        return count;
+    }
+    size_t run_size = 0U;
+
+    for (uint64_t power = base; power <= (UINT64_C(1) << 49U); power *= base) {
+        run_size += 1U;
+    }
+    for (size_t index = 0U; index != size;) {
+        size_t run_end = size - index < run_size ? size : index + run_size;
+        uint64_t carry = 0U;
+        uint64_t power = 1U;
+
+        for (; index != run_end; ++index) {
+            uint32_t digit = __tinypy_internal_long_text_digit(text[index]);
+
+            carry = carry * base + digit;
+            power *= base;
+        }
+        for (size_t position = 0U; position != count; ++position) {
+            uint64_t current = (uint64_t)digits[position] * power + carry;
+
+            digits[position] = (uint16_t)(current & TINYPY_LONG_BASE15_MASK);
+            carry = current >> 15U;
+        }
+        while (carry != 0U) {
+            digits[count++] = (uint16_t)(carry & TINYPY_LONG_BASE15_MASK);
+            carry >>= 15U;
+        }
+    }
+    return count;
+}
+//////////////////////////////////////////////////////////////////////////
 /* digit_count must be representable by the allocation. */
 static tinypy_value_t *__tinypy_internal_long_from_canonical_digits(tinypy_vm_t *vm, int32_t sign, const uint16_t *digits, size_t digit_count) {
     size_t allocation_size = __tinypy_internal_long_allocation_size(digit_count);

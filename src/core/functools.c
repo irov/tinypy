@@ -48,7 +48,7 @@ tinypy_value_t *tinypy_internal_partial_create(tinypy_type_t *type, tinypy_value
     size_t argument_count = TINYPY_TUPLE_SIZE(args);
 
     if (argument_count == 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "partial expected at least one argument", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type 'partial' takes at least one argument", out_error);
         return NULL;
     }
     tinypy_value_t *callable = TINYPY_TUPLE_GET(args, 0U);
@@ -117,14 +117,6 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_partial_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != count || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_PARTIAL) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "partial method received invalid arguments", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_partial_call_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t count = TINYPY_TUPLE_SIZE(args);
@@ -157,7 +149,7 @@ static tinypy_value_t *__tinypy_partial_reduce_method(tinypy_value_t *function, 
     tinypy_value_t *result;
 
     (void)user_data;
-    if (__tinypy_partial_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     partial = TINYPY_PARTIAL_OBJECT(TINYPY_TUPLE_GET(args, 0U));
@@ -189,7 +181,7 @@ static tinypy_value_t *__tinypy_partial_setstate_method(tinypy_value_t *function
     tinypy_value_t *dict;
 
     (void)user_data;
-    if (__tinypy_partial_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     partial = TINYPY_PARTIAL_OBJECT(TINYPY_TUPLE_GET(args, 0U));

@@ -52,29 +52,16 @@ static void __tinypy_frontend_error_location(tinypy_tokenizer_t *tok, tinypy_par
     if (tok->buf == NULL || tok->cur == NULL || tok->cur < tok->buf) {
         return;
     }
+    /* At the end of a file the file tokenizer reads only a terminator into
+       its buffer, over the first byte of the last line it held: the quoted
+       text is empty, while the offset still counts that line, restored to
+       the declared encoding with the terminator. */
+    if (tok->phantom_line != 0) {
+        tok->buf[0] = '\0';
+    }
     error->offset = (int32_t)(tok->cur - tok->buf);
     error->text = tok->buf;
     error->text_size = (size_t)(tok->inp - tok->buf);
-    if (tok->phantom_line == 0) {
-        return;
-    }
-    /* The buffer of the file tokenizer is empty at the end of the file, but
-       its offset is still the length of the last line in the bytes Python
-       tokenized. */
-    error->text = "";
-    error->text_size = 0U;
-    if (tok->ctx->source_is_latin1 != 0 && tok->ctx->source_diagnostic_transcoded == 0) {
-        int32_t characters = 0;
-        const char *cursor = tok->buf;
-
-        while (cursor != tok->cur) {
-            if ((TINYPY_COMPILER_CHARMASK(*cursor) & 0xc0U) != 0x80U) {
-                characters += 1;
-            }
-            cursor += 1;
-        }
-        error->offset = characters;
-    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_cst_node_t *tinypy_internal_parse_source(tinypy_compile_ctx_t *ctx, const char *source, size_t source_size, const char *filename, const tinypy_parser_grammar_t *g, int32_t start, tinypy_parser_error_detail_t *error, int32_t *flags) {

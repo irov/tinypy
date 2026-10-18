@@ -723,12 +723,30 @@ static int32_t __test_decode_and_opcode_errors(void) {
     static const uint8_t extended_before_noarg[] = {
         TINYPY_OP_EXTENDED_ARG, 0U, 0U,
         TINYPY_OP_NOP};
+    /* CPython's peephole optimizer can leave a byte of a split jump after a
+       return, so an opcode outside the set fails only where control goes. */
+    static const uint8_t unknown_dead[] = {
+        TINYPY_OP_LOAD_CONST, 0U, 0U,
+        TINYPY_OP_RETURN_VALUE,
+        6U,
+        200U, 0U, 0U,
+        TINYPY_OPCODE_CALL_METHOD, 0U, 0U,
+        TINYPY_OP_LOAD_CONST, 0U, 0U,
+        TINYPY_OP_RETURN_VALUE};
+    static const uint8_t unknown_jumped[] = {
+        TINYPY_OP_JUMP_ABSOLUTE, 4U, 0U,
+        TINYPY_OP_NOP,
+        6U};
     tinypy_bytecode_metadata_t metadata = __test_metadata(8U);
     tinypy_bytecode_verify_result_t result;
 
     TEST_CHECK(__test_verify(unknown, sizeof(unknown), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_UNKNOWN_OPCODE);
     TEST_CHECK(result.error_offset == 0U);
     TEST_CHECK(result.error_opcode == 6U);
+    TEST_CHECK(__test_verify(unknown_dead, sizeof(unknown_dead), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_OK);
+    TEST_CHECK(result.instruction_count == 7U);
+    TEST_CHECK(__test_verify(unknown_jumped, sizeof(unknown_jumped), &metadata, NULL, &result) == TINYPY_BYTECODE_VERIFY_UNKNOWN_OPCODE);
+    TEST_CHECK(result.error_offset == 4U && result.error_opcode == 6U);
     TEST_CHECK(__test_verify(
                    unknown_with_argument,
                    sizeof(unknown_with_argument),
@@ -1013,6 +1031,17 @@ static int32_t __test_method_calls(void) {
         TINYPY_OP_CALL_FUNCTION, 0U, 0U, /* 16 */
         TINYPY_OP_RETURN_VALUE           /* 19 */
     };
+    /* Bytes of the internal opcodes in dead code are no method calls. */
+    static const uint8_t dead_internal[] = {
+        TINYPY_OP_LOAD_FAST, 0U, 0U,       /* 0 */
+        TINYPY_OP_LOAD_ATTR, 0U, 0U,       /* 3 */
+        TINYPY_OP_CALL_FUNCTION, 0U, 0U,   /* 6 */
+        TINYPY_OP_RETURN_VALUE,            /* 9 */
+        TINYPY_OPCODE_CALL_METHOD, 0U, 0U, /* 10 */
+        TINYPY_OPCODE_CALL_METHOD, 0U, 0U, /* 13 */
+        TINYPY_OPCODE_LOAD_METHOD, 0U, 0U, /* 16 */
+        TINYPY_OP_RETURN_VALUE             /* 19 */
+    };
     uint8_t out_code[64];
 
     TEST_CHECK(__test_find_method_calls(simple, sizeof(simple), out_code) == 1U);
@@ -1024,6 +1053,9 @@ static int32_t __test_method_calls(void) {
     TEST_CHECK(out_code[15] == TINYPY_OP_LOAD_ATTR);
     TEST_CHECK(__test_find_method_calls(plain, sizeof(plain), out_code) == 0U);
     TEST_CHECK(memcmp(out_code, plain, sizeof(plain)) == 0);
+    TEST_CHECK(__test_find_method_calls(dead_internal, sizeof(dead_internal), out_code) == 1U);
+    TEST_CHECK(out_code[3] == TINYPY_OPCODE_LOAD_METHOD && out_code[6] == TINYPY_OPCODE_CALL_METHOD);
+    TEST_CHECK(memcmp(out_code + 9, dead_internal + 9, sizeof(dead_internal) - 9U) == 0);
     return 0;
 }
 

@@ -560,6 +560,117 @@ class AttributeEdges(unittest.TestCase):
         self.assertEqual(Removing().missing, 'removed missing')
         sys.exc_clear()
 
+    def test_getattr_hook_follows_repeated_lookups(self):
+        class Descriptor(object):
+            def __init__(self, error):
+                self.error = error
+            def __get__(self, instance, owner):
+                raise self.error
+        class Hooked(object):
+            data = 'class'
+            failing = Descriptor(AttributeError('descriptor'))
+            broken = Descriptor(KeyError('descriptor'))
+            def __init__(self):
+                self.member = 'instance'
+            def method(self):
+                return 'method'
+            @property
+            def failing_property(self):
+                raise AttributeError('property')
+            def __getattr__(self, name):
+                if name == 'raising':
+                    raise AttributeError('hook ' + name)
+                if name == 'callable':
+                    return lambda value: 'called ' + value
+                return 'hook ' + name
+        class Slotted(Hooked):
+            __slots__ = ('slot',)
+        class Static(object):
+            __getattr__ = staticmethod(lambda name: 'static ' + name)
+        class Old:
+            data = 'old class'
+            def __getattr__(self, name):
+                return 'old ' + name
+        def read(instance):
+            values = [instance.member, instance.data, instance.method(), instance.failing, instance.failing_property, instance.absent, instance.callable('value')]
+            try:
+                instance.broken
+            except KeyError as error:
+                values.append(error.args)
+            try:
+                instance.raising
+            except AttributeError as error:
+                values.append(error.args)
+            return values
+        expected = ['instance', 'class', 'method', 'hook failing', 'hook failing_property', 'hook absent', 'called value', ('descriptor',), ('hook raising',)]
+        for _ in range(3):
+            self.assertEqual(read(Hooked()), expected)
+            slotted = Slotted()
+            self.assertEqual((read(slotted), slotted.slot), (expected, 'hook slot'))
+            slotted.slot = 'slot'
+            self.assertEqual(slotted.slot, 'slot')
+            self.assertEqual((Static().absent, Old().data, Old().absent), ('static absent', 'old class', 'old absent'))
+        class Lazy(object):
+            def __init__(self):
+                self.calls = []
+            def __getattr__(self, name):
+                self.calls.append(name)
+                setattr(self, name, name.upper())
+                return name.upper()
+        lazy = Lazy()
+        self.assertEqual(([lazy.first for _ in range(3)], [lazy.second for _ in range(2)], lazy.calls), (['FIRST'] * 3, ['SECOND'] * 2, ['first', 'second']))
+        class Recursive(object):
+            def __getattr__(self, name):
+                return self.other
+        with self.assertRaises(RuntimeError):
+            Recursive().value
+        sys.exc_clear()
+
+    def test_getattr_hook_changes_take_effect_on_repeated_lookups(self):
+        def absent(instance):
+            try:
+                return instance.absent
+            except AttributeError as error:
+                return error.args
+        class Base(object):
+            pass
+        class Derived(Base):
+            pass
+        derived = Derived()
+        results = [absent(derived)]
+        Base.__getattr__ = lambda self, name: 'base ' + name
+        results.append(absent(derived))
+        Derived.__getattr__ = lambda self, name: 'derived ' + name
+        results.append(absent(derived))
+        del Derived.__getattr__
+        results.append(absent(derived))
+        del Base.__getattr__
+        results.append(absent(derived))
+        missing = ("'Derived' object has no attribute 'absent'",)
+        self.assertEqual(results, [missing, 'base absent', 'derived absent', 'base absent', missing])
+        class Hooked(object):
+            def __getattr__(self, name):
+                return 'hooked ' + name
+        class Plain(object):
+            pass
+        instance = Plain()
+        results = []
+        for cls in (Plain, Hooked, Plain, Hooked):
+            instance.__class__ = cls
+            results.append(absent(instance))
+        missing = ("'Plain' object has no attribute 'absent'",)
+        self.assertEqual(results, [missing, 'hooked absent', missing, 'hooked absent'])
+        class Vanishing(object):
+            @property
+            def absent(self):
+                del Vanishing.absent
+                raise AttributeError('vanishing')
+            def __getattr__(self, name):
+                return 'vanishing ' + name
+        vanishing = Vanishing()
+        self.assertEqual((absent(vanishing), absent(vanishing)), ('vanishing absent', 'vanishing absent'))
+        sys.exc_clear()
+
     def test_iteration_falls_back_to_getitem_when_iter_fails_to_bind(self):
         class Failing(object):
             @property

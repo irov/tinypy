@@ -31,3 +31,25 @@ except TypeError:
     pass
 else:
     raise AssertionError("tuple subtype accepted nonempty slots")
+
+# hash() of values nested through bound methods recurses natively, as
+# instancemethod_hash does; the native stack budget stops that recursion
+# with RuntimeError where CPython would exhaust the stack.
+class Holder(object):
+    def method(self):
+        pass
+
+
+unbound = Holder.__dict__["method"]
+nested = 1
+for index in range(100):
+    nested = unbound.__get__(Record(nested, index), Holder)
+assert hash(nested) == hash(unbound.__get__(Record(nested.im_self[0], 99), Holder)), "nested method hash"
+for index in range(100000):
+    nested = unbound.__get__(Record(nested, index), Holder)
+try:
+    hash(nested)
+except RuntimeError as error:
+    assert str(error) == "maximum recursion depth exceeded", error
+else:
+    raise AssertionError("hash of deeply nested methods")

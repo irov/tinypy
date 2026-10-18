@@ -155,3 +155,20 @@ class CompilerEdges(unittest.TestCase):
                              ('file', 0, 0, None))
         else:
             self.fail('expected unknown encoding failure')
+
+    def test_return_rule_keeps_split_jump_byte_in_dead_code(self):
+        # The peephole rule for RETURN LOAD_CONST None RETURN checks only the
+        # byte four after the first RETURN: after END_FINALLY and POP_BLOCK it
+        # splits the jump over the handler and leaves its high byte 6, which
+        # is no opcode, in dead code. The function and the handler still run.
+        source = ('def f():\n    a = 0\n    try:\n        try:\n            %s\n'
+                  '        finally:\n            return a\n    except NameError:\n'
+                  + '        a = 1\n' * 267)
+        for body, result in [('a = 1', 1), ('del a', None)]:
+            namespace = {}
+            exec source % body in namespace
+            code = namespace['f'].func_code.co_code
+            index = code.index(chr(83))
+            self.assertEqual([ord(c) for c in code[index:index + 3]], [83, 6, 4])
+            self.assertEqual(namespace['f'](), result)
+            namespace.clear()

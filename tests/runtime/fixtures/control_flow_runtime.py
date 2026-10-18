@@ -274,3 +274,29 @@ def break_from_except_in_finally():
 
 
 assert break_from_except_in_finally() == []
+
+
+# CPython's peephole rule for RETURN LOAD_CONST None RETURN checks only the
+# byte four after the first RETURN, so after END_FINALLY and POP_BLOCK it
+# splits the jump over the handler. When the remaining high byte takes an
+# argument, CPython reads it over the handler and crashes or breaks the jump
+# to the handler; tinypy clears that byte as well.
+def split_jump_source(high, body):
+    for loads in range(3):
+        if (256 * high - 4 * loads) % 6 == 0:
+            break
+    stores = 11 + (256 * high - 4 * loads) // 6
+    return ("def f():\n    a = 0\n    try:\n        try:\n            " + body + "\n"
+            "        finally:\n            return a\n    except NameError:\n"
+            + "        a = 1\n" * stores + "        a\n" * loads)
+
+
+for high in [93, 100, 116]:
+    for body, expected in [("a = 1", 1), ("del a", None)]:
+        namespace = {}
+        exec split_jump_source(high, body) in namespace
+        code = namespace["f"].func_code.co_code
+        index = code.index(chr(83))
+        assert ord(code[index + 1]) == 4
+        assert namespace["f"]() == expected
+        namespace.clear()

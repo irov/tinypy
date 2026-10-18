@@ -10,8 +10,11 @@
 #if defined(_WIN32)
 #include <io.h>
 #else
-#include <dirent.h>
 #include <unistd.h>
+#endif
+#if defined(__APPLE__)
+#include <limits.h>
+#include <sys/attr.h>
 #endif
 
 /* PyTraceBack_LIMIT and the line buffer of tb_displayline. */
@@ -289,6 +292,25 @@ static char *__tinypy_cli_directory_name(const char *path) {
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
+static const char *__tinypy_cli_text_view(const tinypy_value_t *value, size_t *out_size) {
+    if (value == NULL) {
+        *out_size = 0U;
+        return NULL;
+    }
+    if (tinypy_typeof(value) == TINYPY_VALUE_STRING) {
+        const char *return_value_1 = (const char *)tinypy_string_view(value, out_size);
+        return return_value_1;
+    }
+    if (tinypy_typeof(value) == TINYPY_VALUE_UNICODE) {
+        size_t code_point_count;
+
+        const char *return_value_2 = tinypy_unicode_utf8_view(value, out_size, &code_point_count);
+        return return_value_2;
+    }
+    *out_size = 0U;
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 /* PySys_GetObject: a borrowed attribute of the sys module of the VM or NULL. */
 static tinypy_value_t *__tinypy_cli_sys_value(const tinypy_cli_runtime_t *runtime, const char *name, size_t name_size) {
     if (runtime->sys_module == NULL) {
@@ -298,42 +320,47 @@ static tinypy_value_t *__tinypy_cli_sys_value(const tinypy_cli_runtime_t *runtim
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
-/* case_ok: a file system that ignores case also opens the file of a name
-   spelled differently, so the directory must list the name exactly. */
-static tinypy_bool_t __tinypy_cli_case_ok(const char *directory, const char *name, size_t name_size) {
-    tinypy_bool_t found = TINYPY_FALSE;
+/* case_ok: a file system that ignores case, as on Windows and macOS, also
+   opens the file of a name spelled differently, so the directory entry of
+   path must store its last name_size bytes exactly; other systems tell case
+   apart themselves. */
+static tinypy_bool_t __tinypy_cli_case_ok(const char *path, size_t name_size) {
 #if defined(_WIN32)
-    size_t directory_size = strlen(directory);
-    char *path = (char *)malloc(directory_size + name_size + 2U);
-    size_t cursor = directory_size;
-
-    (void)memcpy(path, directory, directory_size);
-    if (directory_size != 0U) {
-        path[cursor++] = '/';
-    }
-    (void)memcpy(path + cursor, name, name_size);
-    path[cursor + name_size] = '\0';
+    const char *name = path + strlen(path) - name_size;
     struct _finddata_t data;
     intptr_t handle = _findfirst(path, &data);
-    free(path);
     if (handle == -1) {
         return TINYPY_FALSE;
     }
-    found = strlen(data.name) == name_size && memcmp(data.name, name, name_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t found = strlen(data.name) == name_size && memcmp(data.name, name, name_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
     (void)_findclose(handle);
-#else
-    DIR *stream = opendir(directory[0] != '\0' ? directory : ".");
-    if (stream == NULL) {
+    return found;
+#elif defined(__APPLE__)
+    /* The name the file system stores for the entry, read without listing
+       the directory as the readdir of case_ok does. */
+    const char *name = path + strlen(path) - name_size;
+    struct attrlist request;
+    struct {
+        uint32_t length;
+        attrreference_t name;
+        char text[NAME_MAX * 3 + 1];
+    } __attribute__((aligned(4), packed)) reply;
+
+    (void)memset(&request, 0, sizeof(request));
+    request.bitmapcount = ATTR_BIT_MAP_COUNT;
+    request.commonattr = ATTR_CMN_NAME;
+    int status = getattrlist(path, &request, &reply, sizeof(reply), FSOPT_NOFOLLOW);
+    if (status != 0 || reply.name.attr_length == 0U) {
         return TINYPY_FALSE;
     }
-    const struct dirent *entry = readdir(stream);
-    while (entry != NULL && found == TINYPY_FALSE) {
-        found = strlen(entry->d_name) == name_size && memcmp(entry->d_name, name, name_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
-        entry = readdir(stream);
-    }
-    (void)closedir(stream);
-#endif
+    const char *stored = (const char *)&reply.name + reply.name.attr_dataoffset;
+    tinypy_bool_t found = strlen(stored) == name_size && memcmp(stored, name, name_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
     return found;
+#else
+    (void)path;
+    (void)name_size;
+    return TINYPY_TRUE;
+#endif
 }
 //////////////////////////////////////////////////////////////////////////
 /* find_module in one directory of the search path: the package directory
@@ -371,10 +398,10 @@ static const tinypy_module_artifact_t *__tinypy_cli_try_module(tinypy_cli_contex
         return NULL;
     }
     char *package_directory = package != 0 ? __tinypy_cli_string_duplicate(path, name_start + tail_size) : NULL;
-    size_t entry_name_size = package != 0 ? tail_size : tail_size + suffix_size;
-    tinypy_bool_t exact = __tinypy_cli_case_ok(directory, path + name_start, entry_name_size);
-    if (exact != TINYPY_FALSE && package_directory != NULL) {
-        exact = __tinypy_cli_case_ok(package_directory, package_suffix + 1U, suffix_size - 1U);
+    tinypy_bool_t exact = package_directory != NULL ? __tinypy_cli_case_ok(package_directory, tail_size) : TINYPY_TRUE;
+    if (exact != TINYPY_FALSE) {
+        size_t file_name_size = package_directory != NULL ? suffix_size - 1U : tail_size + suffix_size;
+        exact = __tinypy_cli_case_ok(path, file_name_size);
     }
     if (exact == TINYPY_FALSE) {
         free(package_directory);
@@ -407,28 +434,28 @@ static const tinypy_module_artifact_t *__tinypy_cli_try_module(tinypy_cli_contex
 }
 //////////////////////////////////////////////////////////////////////////
 /* find_module searches the __path__ of the package of a submodule and
-   sys.path for a top-level module, as the program leaves them; entries that
-   are not strings naming a directory are skipped. */
+   sys.path for a top-level module, as the program leaves them: a search
+   path that is not a list raises RuntimeError, a unicode entry names the
+   directory in UTF-8, the file system encoding of CPython on macOS, and
+   other entries that are not strings naming a directory are skipped. */
 static const tinypy_module_artifact_t *__tinypy_cli_resolve_module(void *user_data, const tinypy_module_request_t *request) {
     tinypy_cli_context_t *context = (tinypy_cli_context_t *)user_data;
     tinypy_value_t *search_path = request->package_path;
 
-    if (search_path == NULL || tinypy_typeof(search_path) == TINYPY_VALUE_NONE) {
+    if (search_path == NULL) {
         search_path = __tinypy_cli_sys_value(context->runtime, "path", 4U);
     }
     if (search_path == NULL || tinypy_typeof(search_path) != TINYPY_VALUE_LIST) {
+        tinypy_vm_raise_error(context->runtime->vm, TINYPY_ERROR_RUNTIME, "sys.path must be a list of directory names");
         return NULL;
     }
     size_t count = tinypy_list_size(search_path);
     for (size_t index = 0U; index < count; ++index) {
         tinypy_value_t *entry = tinypy_list_get(search_path, index);
         size_t entry_size;
+        const char *directory = __tinypy_cli_text_view(entry, &entry_size);
 
-        if (tinypy_typeof(entry) != TINYPY_VALUE_STRING) {
-            continue;
-        }
-        const char *directory = (const char *)tinypy_string_view(entry, &entry_size);
-        if (strlen(directory) != entry_size) {
+        if (directory == NULL || memchr(directory, '\0', entry_size) != NULL) {
             continue;
         }
         const tinypy_module_artifact_t *artifact = __tinypy_cli_try_module(context, request, directory, entry_size, INT32_C(1));
@@ -519,25 +546,6 @@ static tinypy_bool_t __tinypy_cli_error_is_incomplete(const tinypy_error_t *erro
     message = tinypy_error_message(error, &message_size);
     tinypy_bool_t return_value_1 = __tinypy_cli_message_contains(message, message_size, "unexpected EOF") != 0 || __tinypy_cli_message_contains(message, message_size, "unexpected end of file") != 0 || __tinypy_cli_message_contains(message, message_size, "EOF while scanning") != 0 || __tinypy_cli_message_contains(message, message_size, "expected an indented block") != 0;
     return return_value_1;
-}
-//////////////////////////////////////////////////////////////////////////
-static const char *__tinypy_cli_text_view(const tinypy_value_t *value, size_t *out_size) {
-    if (value == NULL) {
-        *out_size = 0U;
-        return NULL;
-    }
-    if (tinypy_typeof(value) == TINYPY_VALUE_STRING) {
-        const char *return_value_1 = (const char *)tinypy_string_view(value, out_size);
-        return return_value_1;
-    }
-    if (tinypy_typeof(value) == TINYPY_VALUE_UNICODE) {
-        size_t code_point_count;
-
-        const char *return_value_2 = tinypy_unicode_utf8_view(value, out_size, &code_point_count);
-        return return_value_2;
-    }
-    *out_size = 0U;
-    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyString_AsString: a byte string as is, a unicode string in the ASCII

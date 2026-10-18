@@ -36,6 +36,9 @@
 #define TINYPY_COMPILE_DEFAULT_GENERATED_AST_NODES ((size_t)4194304U)
 #define TINYPY_COMPILE_DEFAULT_GENERATED_SOURCE_BYTES ((size_t)67108864U)
 #define TINYPY_COMPILE_DEFAULT_SOURCE_MAP_ENTRIES ((size_t)1048576U)
+/* The first layouts of the options and the limits that the API took. */
+#define TINYPY_COMPILE_OPTIONS_FIRST_SIZE (offsetof(tinypy_compile_options_t, build_profile) + sizeof(const tinypy_build_profile_t *))
+#define TINYPY_COMPILE_LIMITS_FIRST_SIZE (offsetof(tinypy_compile_limits_t, max_arena_bytes) + sizeof(size_t))
 
 //////////////////////////////////////////////////////////////////////////
 static uint32_t __tinypy_compiler_inherited_flags(const tinypy_compile_ctx_t *ctx) {
@@ -199,6 +202,37 @@ void tinypy_compile_options_init(tinypy_compile_options_t *options, tinypy_compi
     options->dont_inherit = 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The host's options and limits are read within their struct_size: the
+   fields that an older layout predates keep the values of the init
+   functions. Another ABI version or a size below the first layout is
+   refused. */
+static tinypy_bool_t __tinypy_compiler_read_options(tinypy_vm_t *vm, const tinypy_compile_options_t *options, tinypy_compile_options_t *out_options, tinypy_compile_limits_t *out_limits, tinypy_error_t **out_error) {
+    if (options->abi_version != TINYPY_COMPILER_ABI_VERSION || options->struct_size < (uint32_t)TINYPY_COMPILE_OPTIONS_FIRST_SIZE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "compile options ABI mismatch", out_error);
+        return TINYPY_FALSE;
+    }
+    size_t options_size = options->struct_size < (uint32_t)sizeof(*out_options) ? (size_t)options->struct_size : sizeof(*out_options);
+
+    tinypy_compile_options_init(out_options, options->mode);
+    (void)memcpy(out_options, options, options_size);
+    out_options->struct_size = (uint32_t)sizeof(*out_options);
+    out_options->limits = out_limits;
+    tinypy_compile_limits_init(out_limits);
+    const tinypy_compile_limits_t *limits = options->limits;
+    if (limits == NULL) {
+        return TINYPY_TRUE;
+    }
+    if (limits->abi_version != TINYPY_COMPILER_ABI_VERSION || limits->struct_size < (uint32_t)TINYPY_COMPILE_LIMITS_FIRST_SIZE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "compile limits ABI mismatch", out_error);
+        return TINYPY_FALSE;
+    }
+    size_t limits_size = limits->struct_size < (uint32_t)sizeof(*out_limits) ? (size_t)limits->struct_size : sizeof(*out_limits);
+
+    (void)memcpy(out_limits, limits, limits_size);
+    out_limits->struct_size = (uint32_t)sizeof(*out_limits);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* A stage that failed without a diagnostic of its own failed on the
    MemoryError of an allocation, or on the given error. */
 static void __tinypy_compiler_stage_error(tinypy_compile_ctx_t *ctx, tinypy_error_kind_e error_kind, const char *message, tinypy_error_t **out_error) {
@@ -325,9 +359,16 @@ static tinypy_bool_t __tinypy_compiler_string_source(const tinypy_compile_option
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {
-    tinypy_bool_t string_source = __tinypy_compiler_string_source(options);
+    tinypy_compile_options_t effective_options;
+    tinypy_compile_limits_t effective_limits;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (__tinypy_compiler_read_options(vm, options, &effective_options, &effective_limits, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_bool_t string_source = __tinypy_compiler_string_source(&effective_options);
     tinypy_bool_t file_text = string_source != 0 ? TINYPY_FALSE : TINYPY_TRUE;
-    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, TINYPY_FALSE, string_source, file_text, logical_filename, filename_size, options, out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_compiler_compile_source(vm, source, source_size, TINYPY_FALSE, string_source, file_text, logical_filename, filename_size, &effective_options, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -337,23 +378,19 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
 
     TINYPY_CLEAR_ERROR(out_error);
     (void)memset(&ctx, 0, sizeof(ctx));
+    if (__tinypy_compiler_read_options(vm, options, &ctx.options, &ctx.limits, out_error) == 0) {
+        return NULL;
+    }
     ctx.vm = vm;
-    ctx.options = *options;
     ctx.logical_filename = logical_filename;
     ctx.filename_size = filename_size;
-    ctx.source_default_latin1 = __tinypy_compiler_string_source(options);
+    ctx.source_default_latin1 = __tinypy_compiler_string_source(&ctx.options);
     ctx.source_is_file = ctx.source_default_latin1 != 0 ? TINYPY_FALSE : TINYPY_TRUE;
     if (ctx.source_is_file != 0) {
         ctx.program_text.bytes = (const uint8_t *)source;
         ctx.program_text.size = source_size;
     }
     ctx.out_error = out_error;
-    if (options->limits != NULL) {
-        ctx.limits = *options->limits;
-    }
-    else {
-        tinypy_compile_limits_init(&ctx.limits);
-    }
     if (tinypy_internal_compiler_source_prepare(&ctx, source, source_size, out_error) == 0) {
         goto complete;
     }
@@ -375,10 +412,15 @@ complete:
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_compiler_run_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, tinypy_value_t *globals, tinypy_value_t *locals, const tinypy_compile_options_t *options, tinypy_compile_mode_e mode, int32_t discard_result, tinypy_error_t **out_error) {
-    tinypy_compile_options_t local_options = *options;
+    tinypy_compile_options_t effective_options;
+    tinypy_compile_limits_t effective_limits;
 
-    local_options.mode = mode;
-    tinypy_value_t *code = tinypy_compile_source(vm, source, source_size, logical_filename, filename_size, &local_options, out_error);
+    TINYPY_CLEAR_ERROR(out_error);
+    if (__tinypy_compiler_read_options(vm, options, &effective_options, &effective_limits, out_error) == 0) {
+        return NULL;
+    }
+    effective_options.mode = mode;
+    tinypy_value_t *code = tinypy_compile_source(vm, source, source_size, logical_filename, filename_size, &effective_options, out_error);
     if (code == NULL) {
         return NULL;
     }

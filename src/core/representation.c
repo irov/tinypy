@@ -101,6 +101,26 @@ static void __tinypy_representation_append_character(tinypy_representation_build
     __tinypy_representation_append(builder, &character, 1U);
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyString_FromFormat shows the text of a "%s" argument up to its first
+   NUL. */
+static size_t __tinypy_representation_c_string_size(const uint8_t *bytes, size_t size) {
+    const uint8_t *terminator = (const uint8_t *)memchr(bytes, 0, size);
+    size_t shown = terminator != NULL ? (size_t)(terminator - bytes) : size;
+
+    return shown;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Appends a string whole, or as a "%s" argument shows it. */
+static void __tinypy_representation_append_string(tinypy_representation_builder_t *builder, tinypy_value_t *text, tinypy_bool_t whole) {
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(text);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(text);
+
+    if (whole == 0) {
+        size = __tinypy_representation_c_string_size(bytes, size);
+    }
+    __tinypy_representation_append(builder, bytes, size);
+}
+//////////////////////////////////////////////////////////////////////////
 /* Py_ReprEnter: the containers being represented are tracked across nested
    repr calls, so one met again inside its own representation is shown
    abbreviated even when a user __repr__ asked for it. */
@@ -696,11 +716,12 @@ static tinypy_value_t *__tinypy_representation_default_object(tinypy_value_t *va
    __repr__ or __str__ of the type. One that is missing or does not bind,
    such as a slot wrapper of an unrelated type, is ignored there: the repr
    reads as "<name object at address>" and the str as the repr. A built-in
-   method that applies to the value stands for a C slot, such as
-   BaseException_str, which runs without a method to bind. A classic
-   instance, as instance_repr and instance_str, looks the method up as an
-   attribute and misses only one raising AttributeError; its repr then reads
-   as "<module.name instance at address>". */
+   method that applies to the value runs without a method to bind, as the C
+   slot it stands for when it is the slot wrapper of that name, such as
+   BaseException_str. A classic instance, as instance_repr and instance_str,
+   looks the method up as an attribute and misses only one raising
+   AttributeError; its repr then reads as "<module.name instance at
+   address>". */
 tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *method = NULL;
@@ -717,7 +738,7 @@ tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value
         if (attribute != NULL && tinypy_internal_native_method_applies(attribute, value) != 0) {
             /* The call may drop the method from the type. */
             TINYPY_INCREF(attribute);
-            tinypy_value_t *slot_result = tinypy_internal_native_function_call_slot(attribute, value, out_error);
+            tinypy_value_t *slot_result = tinypy_internal_native_function_call_slot(attribute, name, value, out_error);
 
             TINYPY_DECREF(attribute);
             return slot_result;
@@ -845,23 +866,45 @@ static tinypy_value_t *__tinypy_representation_dict_module(tinypy_vm_t *vm, tiny
 //////////////////////////////////////////////////////////////////////////
 /* Old-style classes and their instances show the defining module, falling
    back to "?" the way Python 2.7 does when it is missing; class_str shows the
-   bare name then. The class is held, as the probe may replace the class of
-   an instance. */
-static void __tinypy_representation_class_qualified_name(tinypy_representation_builder_t *builder, tinypy_value_t *class_value, tinypy_bool_t bare_without_module) {
+   bare name then, and otherwise both texts whole, which class_repr and
+   instance_repr show as C strings. The class is held, as the probe may
+   replace the class of an instance. */
+static void __tinypy_representation_class_qualified_name(tinypy_representation_builder_t *builder, tinypy_value_t *class_value, tinypy_bool_t class_string) {
     TINYPY_INCREF(class_value);
     tinypy_value_t *module = __tinypy_representation_dict_module(builder->vm, tinypy_class_dict(class_value));
     tinypy_value_t *name = tinypy_class_name(class_value);
 
     if (module != NULL) {
-        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
+        __tinypy_representation_append_string(builder, module, class_string);
         __tinypy_representation_append_character(builder, (uint8_t)'.');
         TINYPY_DECREF(module);
     }
-    else if (bare_without_module == 0) {
+    else if (class_string == 0) {
         __tinypy_representation_append(builder, "?.", 2U);
     }
-    __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name));
+    __tinypy_representation_append_string(builder, name, class_string);
     TINYPY_DECREF(class_value);
+}
+//////////////////////////////////////////////////////////////////////////
+/* type_repr and object_repr qualify the name of a type with its module, a
+   string other than "__builtin__" shown as a C string; a built-in type with
+   a dotted name names its module itself. */
+static void __tinypy_representation_type_module(tinypy_representation_builder_t *builder, tinypy_type_t *type, tinypy_value_t *module) {
+    if (module == NULL || TINYPY_VALUE_KIND(module) != TINYPY_VALUE_STRING) {
+        return;
+    }
+    if ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U && memchr(type->name, '.', type->name_size) != NULL) {
+        return;
+    }
+    tinypy_value_t *builtin_name = builder->vm->internal_builtin_module_name;
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(module);
+    size_t size = __tinypy_representation_c_string_size(bytes, TINYPY_TEXT_BYTE_SIZE(module));
+
+    if (size == TINYPY_TEXT_BYTE_SIZE(builtin_name) && memcmp(bytes, TINYPY_TEXT_BYTES(builtin_name), size) == 0) {
+        return;
+    }
+    __tinypy_representation_append(builder, bytes, size);
+    __tinypy_representation_append_character(builder, (uint8_t)'.');
 }
 //////////////////////////////////////////////////////////////////////////
 /* Instances of types defined in Python show the defining module, the way
@@ -871,10 +914,7 @@ static void __tinypy_representation_type_qualified_name(tinypy_representation_bu
     TINYPY_INCREF(&type->base.base);
     tinypy_value_t *module = tinypy_type_get_attr_key(type, type->vm->internal_special_module_key);
 
-    if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, type->vm->internal_builtin_module_name) == 0 && ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U || memchr(type->name, '.', type->name_size) == NULL)) {
-        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
-        __tinypy_representation_append_character(builder, (uint8_t)'.');
-    }
+    __tinypy_representation_type_module(builder, type, module);
     __tinypy_representation_append(builder, type->name, type->name_size);
     TINYPY_DECREF(&type->base.base);
 }
@@ -919,26 +959,47 @@ static TINYPY_NOINLINE tinypy_bool_t __tinypy_representation_object_string(tinyp
     return inherited;
 }
 //////////////////////////////////////////////////////////////////////////
-/* instancemethod_repr names the class and the function by their __name__,
-   or "?" when that is missing or no string; another error of the lookup
-   fails the representation. */
-static tinypy_bool_t __tinypy_representation_qualifier(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_error_t **out_error) {
+/* instancemethod_repr names the function and the class of a method by their
+   __name__, owned, or NULL for "?" when that is missing or no string, and
+   another error of the lookup fails the representation. A function, a
+   classic class and a class whose metaclass is type answer for their
+   __name__ themselves, and a method without a class has none. */
+static tinypy_bool_t __tinypy_representation_method_name(tinypy_value_t *value, tinypy_value_t **out_name, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *name = NULL;
 
-    tinypy_value_t *name;
-    if (tinypy_internal_object_get_optional_attr_key(value, vm->internal_special_name_key, &name, out_error) < 0) {
+    *out_name = NULL;
+    if (value->type == &vm->types[TINYPY_VALUE_NONE]) {
+        return TINYPY_TRUE;
+    }
+    if (value->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
+        name = TINYPY_RET(TINYPY_FUNCTION_OBJECT(value)->name);
+    }
+    else if (value->type == &vm->types[TINYPY_VALUE_CLASS]) {
+        name = TINYPY_RET(TINYPY_CLASS_OBJECT(value)->name);
+    }
+    else if (value->type == &vm->types[TINYPY_VALUE_TYPE] && (((tinypy_type_t *)value)->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U) {
+        name = TINYPY_RET(((tinypy_type_t *)value)->name_object);
+    }
+    else if (tinypy_internal_object_get_optional_attr_key(value, vm->internal_special_name_key, &name, out_error) < 0) {
         return TINYPY_FALSE;
     }
-    if (name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING) {
-        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name));
-    }
-    else {
-        __tinypy_representation_append_character(builder, (uint8_t)'?');
-    }
-    if (name != NULL) {
+    if (name != NULL && TINYPY_VALUE_KIND(name) != TINYPY_VALUE_STRING) {
         TINYPY_DECREF(name);
+        name = NULL;
     }
+    *out_name = name;
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Appends and releases a name of __tinypy_representation_method_name. */
+static void __tinypy_representation_take_method_name(tinypy_representation_builder_t *builder, tinypy_value_t *name) {
+    if (name == NULL) {
+        __tinypy_representation_append_character(builder, (uint8_t)'?');
+        return;
+    }
+    __tinypy_representation_append_string(builder, name, TINYPY_FALSE);
+    TINYPY_DECREF(name);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error);
@@ -964,6 +1025,41 @@ static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder
     tinypy_bool_t result = __tinypy_representation_value_impl(builder, value, raw, out_error);
     vm->evaluation_depth -= 1U;
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* instancemethod_repr asks the function for its name before the class, and
+   shows both names and the repr of self as C strings. */
+static tinypy_bool_t __tinypy_representation_instance_method(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(value);
+
+    tinypy_value_t *function_name;
+    if (__tinypy_representation_method_name(method->function, &function_name, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *owner_name;
+    if (__tinypy_representation_method_name(method->owner, &owner_name, out_error) == 0) {
+        if (function_name != NULL) {
+            TINYPY_DECREF(function_name);
+        }
+        return TINYPY_FALSE;
+    }
+    __tinypy_representation_append(builder, method->self != NULL ? "<bound method " : "<unbound method ", method->self != NULL ? 14U : 16U);
+    __tinypy_representation_take_method_name(builder, owner_name);
+    __tinypy_representation_append_character(builder, (uint8_t)'.');
+    __tinypy_representation_take_method_name(builder, function_name);
+    if (method->self == NULL) {
+        __tinypy_representation_append_character(builder, (uint8_t)'>');
+        return TINYPY_TRUE;
+    }
+    __tinypy_representation_append(builder, " of ", 4U);
+    size_t start = builder->size;
+    if (__tinypy_representation_value(builder, method->self, INT32_C(0), out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    size_t shown = __tinypy_representation_c_string_size(builder->bytes + start, builder->size - start);
+    builder->size = start + shown;
+    __tinypy_representation_append_character(builder, (uint8_t)'>');
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error) {
@@ -1073,10 +1169,7 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         /* Python classes use their own module; native types retain their
            qualified C name, including module prefixes. */
         __tinypy_representation_append(builder, heap_type != 0 ? "<class '" : "<type '", heap_type != 0 ? 8U : 7U);
-        if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, type_value->vm->internal_builtin_module_name) == 0 && (heap_type != TINYPY_FALSE || memchr(type_value->name, '.', type_value->name_size) == NULL)) {
-            __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
-            __tinypy_representation_append_character(builder, (uint8_t)'.');
-        }
+        __tinypy_representation_type_module(builder, type_value, module);
         __tinypy_representation_append(builder, type_value->name, type_value->name_size);
         __tinypy_representation_append(builder, "'>", 2U);
         return TINYPY_TRUE;
@@ -1092,35 +1185,13 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         __tinypy_representation_pointer(builder, value);
         __tinypy_representation_append_character(builder, (uint8_t)'>');
         return TINYPY_TRUE;
-    case TINYPY_VALUE_METHOD: {
-        tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(value);
-        tinypy_bool_t bound = method->self != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-
-        __tinypy_representation_append(builder, bound != 0 ? "<bound method " : "<unbound method ", bound != 0 ? 14U : 16U);
-        if (__tinypy_representation_qualifier(builder, method->owner, out_error) == 0) {
-            return TINYPY_FALSE;
-        }
-        __tinypy_representation_append_character(builder, (uint8_t)'.');
-        if (__tinypy_representation_qualifier(builder, method->function, out_error) == 0) {
-            return TINYPY_FALSE;
-        }
-        if (bound == 0) {
-            __tinypy_representation_append_character(builder, (uint8_t)'>');
-            return TINYPY_TRUE;
-        }
-        __tinypy_representation_append(builder, " of ", 4U);
-        if (__tinypy_representation_value(builder, method->self, INT32_C(0), out_error) == 0) {
-            return TINYPY_FALSE;
-        }
-        __tinypy_representation_append_character(builder, (uint8_t)'>');
-        return TINYPY_TRUE;
-    }
+    case TINYPY_VALUE_METHOD:
+        function_result = __tinypy_representation_instance_method(builder, value, out_error);
+        return function_result;
     case TINYPY_VALUE_FUNCTION:
         __tinypy_representation_append(builder, "<function ", 10U);
         tinypy_value_t *function_name = tinypy_function_name(value);
-        const uint8_t *bytes_2 = TINYPY_TEXT_BYTES(function_name);
-        size_t byte_size_2 = TINYPY_TEXT_BYTE_SIZE(function_name);
-        __tinypy_representation_append(builder, bytes_2, byte_size_2);
+        __tinypy_representation_append_string(builder, function_name, TINYPY_FALSE);
         __tinypy_representation_append(builder, " at ", 4U);
         __tinypy_representation_pointer(builder, value);
         __tinypy_representation_append_character(builder, (uint8_t)'>');
@@ -1195,20 +1266,16 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         tinypy_value_t *module_name = __tinypy_representation_module_attribute(value, vm->internal_special_name_key);
         tinypy_value_t *module_file = __tinypy_representation_module_attribute(value, vm->internal_special_file_key);
 
+        /* module_repr shows the name and the file as C strings. */
         if (module_name == NULL || TINYPY_VALUE_KIND(module_name) != TINYPY_VALUE_STRING) {
             __tinypy_representation_append_character(builder, (uint8_t)'?');
         }
         else {
-            const uint8_t *bytes_3 = TINYPY_STRING_OBJECT(module_name)->bytes;
-            size_t byte_size_3 = TINYPY_STRING_SIZE(module_name);
-
-            __tinypy_representation_append(builder, bytes_3, byte_size_3 < 80U ? byte_size_3 : 80U);
+            __tinypy_representation_append_string(builder, module_name, TINYPY_FALSE);
         }
         if (module_file != NULL && TINYPY_VALUE_KIND(module_file) == TINYPY_VALUE_STRING) {
-            size_t file_size = TINYPY_STRING_SIZE(module_file);
-
             __tinypy_representation_append(builder, "' from '", 8U);
-            __tinypy_representation_append(builder, TINYPY_STRING_OBJECT(module_file)->bytes, file_size < 300U ? file_size : 300U);
+            __tinypy_representation_append_string(builder, module_file, TINYPY_FALSE);
             __tinypy_representation_append(builder, "'>", 2U);
         }
         else {

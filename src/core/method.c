@@ -272,37 +272,50 @@ tinypy_value_t *tinypy_internal_method_call(tinypy_value_t *callable, tinypy_val
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* instancemethod_compare orders methods by their functions, then by their
+   receivers, of which a missing one comes first. */
+tinypy_bool_t tinypy_internal_method_compare_three_way(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_method_object_t *left_method = TINYPY_METHOD_OBJECT(left);
+    tinypy_method_object_t *right_method = TINYPY_METHOD_OBJECT(right);
+    tinypy_value_t *left_function = left_method->function;
+    tinypy_value_t *right_function = right_method->function;
+
+    /* Python functions have no comparison of their own and order by their
+       addresses. */
+    if (left_function->type == &vm->types[TINYPY_VALUE_FUNCTION] && right_function->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
+        *out_order = tinypy_internal_comparison_fallback_order(left_function, right_function);
+    }
+    else if (tinypy_internal_compare_three_way(left_function, right_function, out_order, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (*out_order != 0 || left_method->self == right_method->self) {
+        return TINYPY_TRUE;
+    }
+    if (left_method->self == NULL || right_method->self == NULL) {
+        *out_order = left_method->self == NULL ? -1 : 1;
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t result = tinypy_internal_compare_three_way(left_method->self, right_method->self, out_order, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* instancemethod has no rich comparison: every comparison of two methods
+   takes the order of instancemethod_compare. */
 tinypy_value_t *tinypy_internal_method_compare(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
-    tinypy_method_object_t *left_method;
-    tinypy_method_object_t *right_method;
-    int32_t equal;
 
     if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_METHOD) {
         tinypy_value_t *return_value_1 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_1;
     }
-    if (operation != TINYPY_COMPARE_EQUAL && operation != TINYPY_COMPARE_NOT_EQUAL) {
-        tinypy_value_t *return_value_2 = TINYPY_RET_NOT_IMPLEMENTED(vm);
-        return return_value_2;
-    }
-    /* instancemethod_richcompare compares the functions with == too. */
-    left_method = TINYPY_METHOD_OBJECT(left);
-    right_method = TINYPY_METHOD_OBJECT(right);
-    equal = tinypy_compare_bool(left_method->function, right_method->function, TINYPY_COMPARE_EQUAL, out_error);
-    if (equal > 0 && left_method->self != right_method->self) {
-        if (left_method->self == NULL || right_method->self == NULL) {
-            equal = 0;
-        }
-        else {
-            equal = tinypy_compare_bool(left_method->self, right_method->self, TINYPY_COMPARE_EQUAL, out_error);
-        }
-    }
-    if (equal < 0) {
+    int32_t order;
+    if (tinypy_internal_method_compare_three_way(left, right, &order, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value_3 = tinypy_bool_from_i32(vm, operation == TINYPY_COMPARE_EQUAL ? equal : equal == 0);
-    return return_value_3;
+    int32_t holds = tinypy_internal_comparison_order_holds((tinypy_compare_operation_e)operation, order);
+    tinypy_value_t *result = tinypy_bool_from_i32(vm, holds);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_method_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {

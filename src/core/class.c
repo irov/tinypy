@@ -20,10 +20,23 @@ static tinypy_value_t *__tinypy_class_dict_probe(tinypy_vm_t *vm, tinypy_value_t
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
-/* class_lookup, which only the recursion limit fails. A key comparison that
-   replaced the dictionary or the bases holding the attribute found may have
-   freed it, so that attribute is looked up again. */
-static tinypy_value_t *__tinypy_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
+/* class_lookup recurses into a base without a recursion check, so only the
+   native stack guard fails it; the level it takes keeps the origin of that
+   guard. */
+static tinypy_value_t *__tinypy_class_lookup_base(tinypy_vm_t *vm, tinypy_value_t *base, tinypy_value_t *key) {
+    if (__tinypy_internal_native_stack_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
+        return NULL;
+    }
+    vm->evaluation_depth += 1U;
+    tinypy_value_t *attribute = tinypy_internal_class_lookup_key(vm, base, key);
+    vm->evaluation_depth -= 1U;
+    return attribute;
+}
+//////////////////////////////////////////////////////////////////////////
+/* class_lookup. A key comparison that replaced the dictionary or the bases
+   holding the attribute found may have freed it, so that attribute is looked
+   up again. */
+tinypy_value_t *tinypy_internal_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
     for (;;) {
         tinypy_value_t *dict = TINYPY_RET(class_object->dict);
@@ -39,7 +52,7 @@ static tinypy_value_t *__tinypy_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t
         }
         tinypy_value_t *bases = TINYPY_RET(class_object->bases);
         for (size_t index = 0U; attribute == NULL && index < TINYPY_TUPLE_SIZE(bases); ++index) {
-            attribute = tinypy_internal_class_lookup_key(vm, TINYPY_TUPLE_GET(bases, index), key);
+            attribute = __tinypy_class_lookup_base(vm, TINYPY_TUPLE_GET(bases, index), key);
             if (attribute == NULL && vm->raised_type != NULL) {
                 break;
             }
@@ -52,17 +65,7 @@ static tinypy_value_t *__tinypy_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t
     }
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key) {
-    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
-        return NULL;
-    }
-    vm->evaluation_depth += 1U;
-    tinypy_value_t *result = __tinypy_class_lookup_key(vm, class_value, key);
-    vm->evaluation_depth -= 1U;
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-/* A lookup that fails with a pending error, such as the recursion limit,
+/* A lookup that fails with a pending error, such as the stack guard,
    reports it through out_error too, unless that already holds one. */
 static tinypy_value_t *__tinypy_class_lookup_key_checked(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_value_t *attribute = tinypy_internal_class_lookup_key(vm, class_value, key);
@@ -161,7 +164,7 @@ static void __tinypy_class_set_hook(tinypy_value_t **slot, tinypy_value_t *hook)
    sets aside the exception pending before. A hook found is stored owned,
    and the result is the number still missing. */
 static size_t __tinypy_class_find_hooks(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *const *names, tinypy_value_t **hooks, size_t count, size_t missing) {
-    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
+    if (__tinypy_internal_native_stack_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
         tinypy_internal_exception_clear_raised(vm);
         return missing;
     }

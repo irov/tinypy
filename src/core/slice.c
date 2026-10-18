@@ -14,12 +14,13 @@ tinypy_value_t *tinypy_slice_new(tinypy_vm_t *vm, tinypy_value_t *start, tinypy_
     return &slice->base;
 }
 //////////////////////////////////////////////////////////////////////////
+/* slice_dealloc releases the step first. */
 void tinypy_internal_slice_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_slice_object_t *slice = TINYPY_SLICE_OBJECT(value);
 
+    visit(slice->step, user_data);
     visit(slice->start, user_data);
     visit(slice->stop, user_data);
-    visit(slice->step, user_data);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_slice_start(const tinypy_value_t *slice) {

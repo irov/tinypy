@@ -94,7 +94,8 @@ typedef struct tinypy_compile_ctx_t {
     /* Diagnostics restore their text and offset to the declared encoding
        like PyTokenizer_RestoreEncoding; a transcoded diagnostic quotes the
        tokenizer text itself, as Python decoded such a source before
-       tokenizing it. */
+       tokenizing it; the unicode literals of such a source decode from that
+       text as well. */
     tinypy_bool_t source_diagnostic_latin1;
     tinypy_bool_t source_diagnostic_utf8;
     tinypy_bool_t source_diagnostic_transcoded;

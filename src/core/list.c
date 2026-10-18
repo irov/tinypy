@@ -29,6 +29,13 @@ static inline size_t __tinypy_internal_list_storage_size(size_t capacity) {
     return capacity * sizeof(tinypy_value_t *);
 }
 //////////////////////////////////////////////////////////////////////////
+/* The margin list_resize allocates past a new size. */
+static inline size_t __tinypy_internal_list_margin(size_t size) {
+    size_t margin = (size >> 3U) + (size < 9U ? 3U : 6U);
+
+    return margin;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity, tinypy_bool_t checked, tinypy_error_t **out_error) {
     size_t old_size;
     size_t new_size;
@@ -46,7 +53,7 @@ static tinypy_bool_t __tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_valu
         return TINYPY_FALSE;
     }
 
-    extra = (minimum_capacity >> 3U) + (minimum_capacity < 9U ? 3U : 6U);
+    extra = __tinypy_internal_list_margin(minimum_capacity);
     if (minimum_capacity > SIZE_MAX - extra) {
         new_capacity = minimum_capacity;
     }
@@ -86,6 +93,40 @@ tinypy_bool_t tinypy_internal_list_reserve_checked(tinypy_vm_t *vm, tinypy_value
     tinypy_bool_t result = __tinypy_internal_list_reserve(vm, list, minimum_capacity, TINYPY_TRUE, out_error);
 
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* list_resize to a smaller size: storage less than half used shrinks to the
+   size and its margin. An emptied list gives its storage back as list_clear
+   does, except the storage that one append takes, which a stack pushing and
+   popping one item would otherwise reallocate each time. A shrink that
+   cannot reallocate keeps the larger storage. */
+static void __tinypy_internal_list_shrink(tinypy_value_t *list) {
+    tinypy_list_object_t *object = TINYPY_LIST_OBJECT(list);
+    size_t size = TINYPY_SIZED_SIZE(list);
+    size_t allocated = object->allocated;
+
+    if (size == 0U) {
+        if (allocated <= 1U + __tinypy_internal_list_margin(1U)) {
+            return;
+        }
+        tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(list), object->items, __tinypy_internal_list_storage_size(allocated));
+        object->items = NULL;
+        object->allocated = 0U;
+        return;
+    }
+    if (size >= allocated >> 1U) {
+        return;
+    }
+    size_t capacity = size + __tinypy_internal_list_margin(size);
+    if (capacity == allocated) {
+        return;
+    }
+    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_reallocate(TINYPY_VALUE_VM(list), object->items, __tinypy_internal_list_storage_size(allocated), __tinypy_internal_list_storage_size(capacity));
+    if (items == NULL) {
+        return;
+    }
+    object->items = items;
+    object->allocated = capacity;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_list_shrink_to_fit(tinypy_vm_t *vm, tinypy_value_t *list) {
@@ -365,9 +406,7 @@ void tinypy_list_delete(tinypy_value_t *list, size_t index) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_remove(TINYPY_VALUE_VM(list), list, index);
 #endif
-    if (TINYPY_LIST_SIZE(list) < TINYPY_LIST_OBJECT(list)->allocated / 2U) {
-        tinypy_internal_list_shrink_to_fit(TINYPY_VALUE_VM(list), list);
-    }
+    __tinypy_internal_list_shrink(list);
     TINYPY_DECREF(previous);
 }
 //////////////////////////////////////////////////////////////////////////
@@ -453,6 +492,9 @@ tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, s
         __tinypy_internal_cycle_diagnostics_list_insert(vm, list, start + index, items[index]);
     }
 #endif
+    if (new_size < size) {
+        __tinypy_internal_list_shrink(list);
+    }
     __tinypy_list_detach_end(vm, displaced, count, TINYPY_TRUE);
     return TINYPY_TRUE;
 }
@@ -527,6 +569,7 @@ tinypy_bool_t tinypy_internal_list_delete_strided_checked(tinypy_value_t *list, 
     (void)memset(object->items + size - count, 0, count * sizeof(tinypy_value_t *));
     object->base.size = size - count;
     object->mutation_version += UINT64_C(1);
+    __tinypy_internal_list_shrink(list);
     __tinypy_list_detach_end(vm, displaced, count, TINYPY_FALSE);
     return TINYPY_TRUE;
 }
@@ -548,6 +591,7 @@ tinypy_value_t *tinypy_list_pop(tinypy_value_t *list, size_t index) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_remove(TINYPY_VALUE_VM(list), list, index);
 #endif
+    __tinypy_internal_list_shrink(list);
     return item;
 }
 //////////////////////////////////////////////////////////////////////////

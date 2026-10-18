@@ -35,9 +35,12 @@ The CLI runs a program the way `python2.7` does:
   command and standard input; `__main__` has `__package__` `None`,
   `__builtins__` the `__builtin__` module and `__file__` only for a file;
 - like `find_module`, a module is searched for in `sys.path`, and a submodule
-  in the `__path__` of its package, as the program leaves them; in each
-  directory a package directory with `__init__.py` comes before the
-  `module.py` file, and only a file named exactly as the module counts, also
+  in the `__path__` of its package, as the program leaves them: a search path
+  that is not a list raises RuntimeError, a unicode entry names its directory
+  in UTF-8, the file system encoding of CPython on macOS, and other entries
+  that are not strings are skipped; in each directory a package directory
+  with `__init__.py` comes before the `module.py` file, and, as `case_ok`
+  checks on Windows and macOS, only a file named exactly as the module counts
   on a file system that ignores case;
 - `-t` warns once per file about inconsistent tabs and spaces in indentation
   and `-tt` makes them a TabError, as in CPython; the default checks nothing;

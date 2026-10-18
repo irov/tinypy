@@ -292,6 +292,16 @@ void tinypy_internal_pool_finalize(tinypy_vm_t *vm) {
         __tinypy_pool_raw_deallocate(vm, allocation, allocation->size, TINYPY_INTERNAL_ALIGNMENT);
     }
     allocator->cached_allocation_bytes = 0U;
+    /* The wholly free arena that deallocation keeps. */
+    tinypy_pool_arena_t *arena = allocator->usable_arenas;
+    while (arena != NULL) {
+        tinypy_pool_arena_t *next_arena = arena->next_arena;
+
+        if (arena->free_pool_count == arena->total_pool_count) {
+            __tinypy_pool_release_arena(vm, arena);
+        }
+        arena = next_arena;
+    }
     for (size_class = 0U; size_class < TINYPY_INTERNAL_POOL_CLASS_COUNT; ++size_class) {
         tinypy_pool_t *head;
 
@@ -441,7 +451,12 @@ void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size)
         arena->free_pools = pool;
         arena->free_pool_count += 1U;
         free_pool_count = arena->free_pool_count;
-        if (free_pool_count == arena->total_pool_count) {
+        /* Usable arenas are ordered by their free pools, so only the last
+           one stays when it is wholly free: as in CPython 3.9, it is kept
+           for reuse rather than allocated again by each pass of a loop that
+           crosses an arena boundary. Under a heap budget it goes back to the
+           host, as the transient allocations do. */
+        if (free_pool_count == arena->total_pool_count && (arena->next_arena != NULL || vm->max_heap_bytes != 0U)) {
             __tinypy_pool_release_arena(vm, arena);
             return;
         }

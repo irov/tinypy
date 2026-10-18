@@ -910,7 +910,9 @@ static int32_t __tinypy_contains(tinypy_value_t *container, tinypy_value_t *item
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     TINYPY_CLEAR_ERROR(out_error);
-    if (dispatch_special != 0 && __tinypy_internal_object_overrides_dispatch(container, TINYPY_INTERNAL_DISPATCH_BIT(CONTAINS)) != 0) {
+    /* instance_contains looks __contains__ up below, where an AttributeError
+       falls back to iteration. */
+    if (dispatch_special != 0 && TINYPY_VALUE_KIND(container) != TINYPY_VALUE_OLD_INSTANCE && __tinypy_internal_object_overrides_dispatch(container, TINYPY_INTERNAL_DISPATCH_BIT(CONTAINS)) != 0) {
         tinypy_value_t *result = __tinypy_comparison_call_binary(container, vm->internal_special_contains_key, item, TINYPY_FALSE, out_error);
         int32_t truth;
 
@@ -1390,7 +1392,7 @@ static tinypy_bool_t __tinypy_comparison_try_rich(tinypy_value_t *left, tinypy_v
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_comparison_order_holds(tinypy_compare_operation_e operation, int32_t order) {
+int32_t tinypy_internal_comparison_order_holds(tinypy_compare_operation_e operation, int32_t order) {
     switch (operation) {
     case TINYPY_COMPARE_LESS:
         return order < 0 ? 1 : 0;
@@ -1408,7 +1410,7 @@ static int32_t __tinypy_comparison_order_holds(tinypy_compare_operation_e operat
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_comparison_order_value(tinypy_vm_t *vm, tinypy_compare_operation_e operation, int32_t order) {
-    int32_t comparison = __tinypy_comparison_order_holds(operation, order);
+    int32_t comparison = tinypy_internal_comparison_order_holds(operation, order);
     tinypy_value_t *result = tinypy_bool_from_i32(vm, comparison);
 
     return result;
@@ -1460,7 +1462,7 @@ static int32_t __tinypy_comparison_exact_scalar(const tinypy_value_t *left, cons
     else {
         return -1;
     }
-    int32_t result = __tinypy_comparison_order_holds(operation, order);
+    int32_t result = tinypy_internal_comparison_order_holds(operation, order);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1917,6 +1919,10 @@ static tinypy_bool_t __tinypy_comparison_three_way_inner(tinypy_value_t *left, t
         else if (kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
             tinypy_internal_make_vm_error(TINYPY_VALUE_VM(left), TINYPY_ERROR_TYPE, "cannot compare sets using cmp()", out_error);
             return TINYPY_FALSE;
+        }
+        else if (kind == TINYPY_VALUE_METHOD) {
+            tinypy_bool_t result = tinypy_internal_method_compare_three_way(left, right, out_order, out_error);
+            return result;
         }
     }
     static const tinypy_compare_operation_e operations[3] = {TINYPY_COMPARE_EQUAL, TINYPY_COMPARE_LESS, TINYPY_COMPARE_GREATER};

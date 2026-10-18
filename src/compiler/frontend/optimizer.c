@@ -303,6 +303,20 @@ static uint32_t *__markblocks(tinypy_compile_ctx_t *arena, uint8_t *code, tinypy
     }
     return blocks;
 }
+//////////////////////////////////////////////////////////////////////////
+/* The count of NOPs after a RETURN that drop LOAD_CONST None RETURN. Like
+   CPython, the rule checks only the byte four after the RETURN, so after two
+   instructions without an argument the NOPs end inside a third one and its
+   high argument byte remains in dead code. A byte without an argument stays,
+   as in CPython; one with an argument would be decoded over the code after
+   it, where CPython's walk goes astray, breaks jumps or crashes, so it
+   becomes a NOP as well. */
+static size_t __tinypy_optimizer_return_nop_count(const uint8_t *codestr, tinypy_compiler_size_t i) {
+    if (TINYPY_COMPILER_OPCODE_HAS_ARGUMENT(codestr[i + 1]) || TINYPY_COMPILER_OPCODE_HAS_ARGUMENT(codestr[i + 2]) || !TINYPY_COMPILER_OPCODE_HAS_ARGUMENT(codestr[i + 3]) || !TINYPY_COMPILER_OPCODE_HAS_ARGUMENT(codestr[i + 5])) {
+        return 4U;
+    }
+    return 5U;
+}
 /* Perform basic peephole optimizations to components of a code object.
    The consts object should still be in list form to allow new constants
    to be appended.
@@ -603,7 +617,8 @@ tinypy_value_t *__tinypy_bytecode_optimize(tinypy_compile_ctx_t *arena, tinypy_v
                 continue;
             }
             if (codestr[i + 4] == TINYPY_OP_RETURN_VALUE && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, i, 5)) {
-                memset(codestr + i + 1, TINYPY_OP_NOP, 4);
+                size_t nop_count = __tinypy_optimizer_return_nop_count(codestr, i);
+                memset(codestr + i + 1, TINYPY_OP_NOP, nop_count);
             }
             else if (TINYPY_OPTIMIZER_IS_UNCONDITIONAL_JUMP(codestr[i + 1]) && TINYPY_OPTIMIZER_IS_BASIC_BLOCK(blocks, i, 4)) {
                 memset(codestr + i + 1, TINYPY_OP_NOP, 3);

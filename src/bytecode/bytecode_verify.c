@@ -429,16 +429,6 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_first_pass(tinypy_verify_
                 decode_status);
             return return_value_1;
         }
-        if (instruction.defined == 0U) {
-            tinypy_bytecode_verify_status_e return_value_2 = __tinypy_verify_fail(
-                context,
-                TINYPY_BYTECODE_VERIFY_UNKNOWN_OPCODE,
-                offset,
-                instruction.opcode,
-                instruction.argument,
-                TINYPY_OPCODE_DECODE_OK);
-            return return_value_2;
-        }
 
         context->boundaries[offset] = 1U;
         context->result->instruction_count += 1U;
@@ -1438,6 +1428,16 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_process_state(tinypy_veri
         offset,
         &instruction);
 
+    if (instruction.defined == 0U) {
+        tinypy_bytecode_verify_status_e unknown_opcode = __tinypy_verify_fail(
+            context,
+            TINYPY_BYTECODE_VERIFY_UNKNOWN_OPCODE,
+            offset,
+            instruction.opcode,
+            instruction.argument,
+            TINYPY_OPCODE_DECODE_OK);
+        return unknown_opcode;
+    }
     if (!__tinypy_verify_get_effect(
             instruction.opcode,
             instruction.argument,
@@ -2338,18 +2338,20 @@ size_t tinypy_bytecode_find_method_calls(const uint8_t *bytecode, size_t bytecod
             pending_count += 1U;
         }
     }
-    /* Method calls nest without crossing, as their operands do. */
+    /* Method calls nest without crossing, as their operands do. Dead code
+       may hold the bytes of the internal opcodes, so only the rewritten
+       instructions count. */
     offset = 0U;
     while (offset < bytecode_size) {
         tinypy_decoded_instruction_t instruction;
 
-        (void)tinypy_opcode_decode(out_bytecode, bytecode_size, offset, &instruction);
+        (void)tinypy_opcode_decode(bytecode, bytecode_size, offset, &instruction);
         offset = instruction.next_offset;
-        if (instruction.opcode == TINYPY_OPCODE_LOAD_METHOD) {
+        if (instruction.opcode == TINYPY_OP_LOAD_ATTR && out_bytecode[instruction.next_offset - 3U] == (uint8_t)TINYPY_OPCODE_LOAD_METHOD) {
             active += 1U;
             deepest = active > deepest ? active : deepest;
         }
-        else if (instruction.opcode == TINYPY_OPCODE_CALL_METHOD) {
+        else if (instruction.opcode == TINYPY_OP_CALL_FUNCTION && out_bytecode[instruction.next_offset - 3U] == (uint8_t)TINYPY_OPCODE_CALL_METHOD) {
             active -= 1U;
         }
     }

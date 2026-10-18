@@ -140,3 +140,17 @@ try:
 finally:
     sys.meta_path.remove(finder)
     sys.modules.pop("contract_unregistered", None)
+
+# Under the None that marks a package missing, the modules the VM provides
+# are not found by the last component of the name, as is_builtin in CPython
+# finds them (SPEC, imports).
+sys.modules["none_package"] = None
+try:
+    try:
+        __import__("sys", {"__package__": "none_package"}, None, [], 1)
+    except ImportError as error:
+        assert str(error) == "No module named sys"
+    else:
+        raise AssertionError("a VM module was found under a None package")
+finally:
+    del sys.modules["none_package"]

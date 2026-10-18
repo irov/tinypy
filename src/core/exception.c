@@ -482,15 +482,20 @@ cleanup:
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* subtype_dealloc releases the __slots__ members, the clear function of the
+   family its fields, and BaseException_clear then the dictionary, the
+   arguments and the message. */
 static void __tinypy_exception_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
     tinypy_internal_exception_payload_t *payload = __tinypy_exception_payload(value);
+    tinypy_value_t **dict_slot = tinypy_internal_object_dict_slot(value);
+    size_t index;
 
-    tinypy_internal_instance_release_references(value, visit, user_data);
-    if (payload->args != NULL) {
-        visit(payload->args, user_data);
-    }
-    if (payload->message != NULL) {
-        visit(payload->message, user_data);
+    for (index = 0U; index < value->type->slot_count; ++index) {
+        tinypy_value_t *slot = *tinypy_internal_object_member_slot(value, index);
+
+        if (slot != NULL) {
+            visit(slot, user_data);
+        }
     }
     if (__tinypy_exception_has_unicode_payload(value) != 0) {
         tinypy_internal_unicode_error_payload_t *unicode = (tinypy_internal_unicode_error_payload_t *)payload;
@@ -504,18 +509,27 @@ static void __tinypy_exception_release_references(tinypy_value_t *value, tinypy_
         if (unicode->reason != NULL) {
             visit(unicode->reason, user_data);
         }
-        return;
     }
-    /* The other families keep T_OBJECT members behind the base payload. */
-    size_t member_count = (value->type->native_payload_size - __tinypy_exception_members_size(0U)) / sizeof(tinypy_value_t *);
-    size_t index;
+    else {
+        /* The other families keep T_OBJECT members behind the base payload. */
+        size_t member_count = (value->type->native_payload_size - __tinypy_exception_members_size(0U)) / sizeof(tinypy_value_t *);
 
-    for (index = 0U; index < member_count; ++index) {
-        tinypy_value_t *member = *__tinypy_exception_member_slot(value, index);
+        for (index = 0U; index < member_count; ++index) {
+            tinypy_value_t *member = *__tinypy_exception_member_slot(value, index);
 
-        if (member != NULL) {
-            visit(member, user_data);
+            if (member != NULL) {
+                visit(member, user_data);
+            }
         }
+    }
+    if (dict_slot != NULL && *dict_slot != NULL) {
+        visit(*dict_slot, user_data);
+    }
+    if (payload->args != NULL) {
+        visit(payload->args, user_data);
+    }
+    if (payload->message != NULL) {
+        visit(payload->message, user_data);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -569,19 +583,11 @@ static tinypy_value_t *__tinypy_exception_owner_string(tinypy_value_t *value, co
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_exception_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exception method received invalid arguments", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_exception_getitem_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_exception_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     /* wrap_sq_item of BaseException_getitem: the argument is an index into
@@ -606,7 +612,7 @@ static tinypy_value_t *__tinypy_exception_getslice_method(tinypy_value_t *functi
     int64_t bounds[2];
 
     (void)user_data;
-    if (__tinypy_exception_method_arguments(vm, args, kwargs, 3U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     for (size_t index = 0U; index < 2U; ++index) {
@@ -636,9 +642,7 @@ static tinypy_value_t *__tinypy_exception_getslice_method(tinypy_value_t *functi
 /* The __str__ slot wrapper of an exception type with a tp_str of its own,
    user_data. */
 static tinypy_value_t *__tinypy_exception_str_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    if (__tinypy_exception_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *result = __tinypy_exception_owner_string(TINYPY_TUPLE_GET(args, 0U), (const tinypy_type_t *)user_data, out_error);
@@ -666,7 +670,7 @@ static tinypy_value_t *__tinypy_exception_unicode_method(tinypy_value_t *functio
     tinypy_value_t *self;
 
     (void)user_data;
-    if (__tinypy_exception_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     self = TINYPY_TUPLE_GET(args, 0U);
@@ -709,7 +713,7 @@ static tinypy_value_t *__tinypy_exception_repr_method(tinypy_value_t *function, 
     uint8_t *result_bytes;
 
     (void)user_data;
-    if (__tinypy_exception_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     self = TINYPY_TUPLE_GET(args, 0U);
@@ -753,10 +757,8 @@ static tinypy_value_t *__tinypy_exception_reduce(tinypy_value_t *self, tinypy_va
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_exception_reduce_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
     (void)user_data;
-    if (__tinypy_exception_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -771,7 +773,7 @@ static tinypy_value_t *__tinypy_exception_environment_reduce_method(tinypy_value
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_exception_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -802,7 +804,7 @@ static tinypy_value_t *__tinypy_exception_setstate_method(tinypy_value_t *functi
     size_t position = 0U;
 
     (void)user_data;
-    if (__tinypy_exception_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     self = TINYPY_TUPLE_GET(args, 0U);
@@ -1334,7 +1336,7 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
     /* The tp_new of every built-in exception type is BaseException_new,
        entered directly when its __new__ entry applies to type. */
     if (new_attribute != NULL && __tinypy_exception_new_owner(type, new_attribute) == NULL) {
-        tinypy_value_t *constructor = tinypy_internal_descriptor_get_value(vm, new_attribute, NULL, type, out_error);
+        tinypy_value_t *constructor = tinypy_internal_type_bind_new(type, new_attribute, out_error);
         if (constructor == NULL) {
             return NULL;
         }
@@ -1355,18 +1357,13 @@ tinypy_value_t *tinypy_internal_exception_instantiate(tinypy_type_t *type, tinyp
     initializer_attribute = tinypy_internal_type_constructor_init(instance->type);
     const tinypy_type_t *initializer_owner = __tinypy_exception_entry_owner(instance->type, initializer_attribute, __tinypy_exception_init);
     if (initializer_owner != NULL) {
-        /* The built-in __init__ of a type runs under the call guard of
-           tinypy_call but without a bound method, and keeps an exact args
-           tuple as it is. */
-        if (__tinypy_internal_call_enter(vm, out_error) == 0) {
-            TINYPY_DECREF(instance);
-            return NULL;
-        }
+        /* The built-in __init__ of a type is its tp_init, which type_call
+           enters without a recursion level or a bound method, and keeps an
+           exact args tuple as it is. */
         tinypy_value_t *const *items = tinypy_internal_tuple_items(args);
         tinypy_value_t *arguments = args->type == &vm->types[TINYPY_VALUE_TUPLE] ? TINYPY_RET(args) : tinypy_tuple_from_items(vm, items, TINYPY_TUPLE_SIZE(args));
         tinypy_bool_t initialized = __tinypy_exception_initialize(instance, initializer_owner, arguments, kwargs, out_error);
 
-        __tinypy_internal_call_leave(vm);
         TINYPY_DECREF(arguments);
         if (initialized == 0) {
             TINYPY_DECREF(instance);
@@ -1447,6 +1444,7 @@ void tinypy_internal_exception_clear_raised(tinypy_vm_t *vm) {
     vm->raised_type = NULL;
     vm->raised_value = NULL;
     vm->raised_traceback = NULL;
+    vm->recursion_error = TINYPY_FALSE;
     if (type != NULL) {
         TINYPY_DECREF(type);
     }
@@ -1821,6 +1819,13 @@ static tinypy_bool_t __tinypy_exception_normalize_raised_step(tinypy_vm_t *vm, t
     tinypy_value_t *value = vm->raised_value;
     tinypy_value_t *value_type = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_OLD_INSTANCE_OBJECT(value)->class_object : &value->type->base.base;
 
+    /* The RuntimeError of the recursion guard is made without its call,
+       which fails at the recursion limit as it did. */
+    if (vm->recursion_error != 0 && vm->evaluation_depth >= vm->recursion_limit) {
+        return TINYPY_FALSE;
+    }
+    vm->recursion_error = TINYPY_FALSE;
+
     /* An instance of exactly the class is normalized, unless the
        __subclasscheck__ of a metaclass, which PyObject_IsSubclass asks even
        about the class itself, may disagree; that of type would not. */
@@ -1891,17 +1896,28 @@ static tinypy_bool_t __tinypy_exception_normalize_raised_step(tinypy_vm_t *vm, t
 //////////////////////////////////////////////////////////////////////////
 /* PyErr_NormalizeException of the pending exception: when the call fails,
    the error raised instead is normalized in turn, each time a recursion
-   level deeper, and the result is false. */
+   level deeper, and the result is false. Past the recursion limit the error
+   becomes PyExc_RecursionErrorInst with the traceback kept. */
 tinypy_bool_t tinypy_internal_exception_normalize_raised(tinypy_vm_t *vm, tinypy_error_t **out_error) {
     if (__tinypy_exception_normalize_raised_step(vm, out_error) != 0) {
         return TINYPY_TRUE;
     }
     size_t depth = vm->evaluation_depth;
+    tinypy_bool_t normalized = TINYPY_FALSE;
 
-    while (vm->raised_value != NULL && vm->evaluation_depth < vm->recursion_limit) {
+    while (normalized == 0 && vm->raised_value != NULL && vm->evaluation_depth < vm->recursion_limit) {
         vm->evaluation_depth += 1U;
-        if (__tinypy_exception_normalize_raised_step(vm, out_error) != 0) {
-            break;
+        normalized = __tinypy_exception_normalize_raised_step(vm, out_error);
+    }
+    if (normalized == 0 && vm->raised_value != NULL) {
+        tinypy_value_t *traceback = vm->raised_traceback;
+
+        vm->raised_traceback = NULL;
+        tinypy_internal_exception_raise_kind(vm, TINYPY_ERROR_RUNTIME, "maximum recursion depth exceeded");
+        vm->raised_traceback = traceback;
+        if (out_error != NULL && *out_error != NULL) {
+            tinypy_error_release(*out_error);
+            *out_error = NULL;
         }
     }
     vm->evaluation_depth = depth;

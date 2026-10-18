@@ -287,8 +287,7 @@ tinypy_value_t *tinypy_tuple_get(const tinypy_value_t *value, size_t index) {
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_tuple_set(tinypy_value_t *value, size_t index, tinypy_value_t *item) {
-
-    tinypy_value_t **items = TINYPY_TUPLE_OBJECT(value)->items;
+    tinypy_value_t **items = TINYPY_TUPLE_ITEMS(value);
     tinypy_value_t *previous = items[index];
     TINYPY_INCREF(item);
     items[index] = item;

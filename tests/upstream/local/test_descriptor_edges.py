@@ -302,6 +302,64 @@ class DescriptorEdges(unittest.TestCase):
         self.assertEqual(Overridden(2), ('own get', 2))
         sys.exc_clear()
 
+    def test_new_is_looked_up_through_the_metaclass_getattribute(self):
+        lookups = []
+        class Meta(type):
+            def __getattribute__(cls, name):
+                if name == '__new__':
+                    lookups.append(type.__getattribute__(cls, '__name__'))
+                    if lookups[-1] == 'Replaced':
+                        return lambda *args: ('replaced', len(args))
+                return type.__getattribute__(cls, name)
+        class Plain(object):
+            __metaclass__ = Meta
+        class Own(object):
+            __metaclass__ = Meta
+            def __new__(cls, *args):
+                return object.__new__(cls)
+            def __init__(self, *args):
+                self.args = args
+        class Derived(Own):
+            pass
+        class Number(int):
+            __metaclass__ = Meta
+        class OwnNumber(int):
+            __metaclass__ = Meta
+            def __new__(cls, value):
+                return int.__new__(cls, value + 1)
+        class Replaced(object):
+            __metaclass__ = Meta
+            def __new__(cls):
+                return 'own'
+        class Error(Exception):
+            __metaclass__ = Meta
+            def __new__(cls, *args):
+                return Exception.__new__(cls, *args)
+        self.assertIs(type(Plain()), Plain)
+        self.assertEqual((Own(1).args, Derived(2).args, Number(3), OwnNumber(4), Replaced(5, 6), Error(7).args),
+                         ((1,), (2,), 3, 5, ('replaced', 3), (7,)))
+        self.assertEqual(lookups, ['Own', 'Derived', 'OwnNumber', 'Replaced', 'Error'])
+
+    def test_init_descriptor_is_released_before_the_call(self):
+        log = []
+        class Tracked(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                log.append(self.name)
+        class Bound(Tracked):
+            def __call__(self, *args):
+                log.append(('call', args))
+        class Dropping(Tracked):
+            def __get__(self, instance, owner):
+                owner.__init__ = None
+                return Bound('bound')
+        class Initialized(object):
+            pass
+        Initialized.__init__ = Dropping('descriptor')
+        Initialized(1)
+        self.assertEqual(log, ['descriptor', ('call', (1,)), 'bound'])
+
     def test_classic_lookup_calls_every_descriptor_get(self):
         class Slotted(object):
             __slots__ = ('slot',)
@@ -392,6 +450,116 @@ class DescriptorEdges(unittest.TestCase):
         self.assertFalse(Method(items.append, owner) != Method(items.append, owner))
         self.assertEqual(hash(Method(text.upper, owner)), hash(Method(text.upper, owner)))
         sys.exc_clear()
+
+    def test_instancemethod_repr_asks_the_function_first(self):
+        lookups = []
+        class Owner(object):
+            def __getattr__(self, name):
+                lookups.append('owner ' + name)
+                raise KeyError('owner')
+        class Function(object):
+            def __call__(self):
+                pass
+            def __getattr__(self, name):
+                lookups.append('function ' + name)
+                raise ValueError('function')
+        class Named(object):
+            __name__ = 'named'
+            def __call__(self):
+                pass
+        Method = type(Named.__call__)
+        self.assertRaises(ValueError, repr, Method(Function(), 1, Owner()))
+        self.assertEqual(lookups, ['function __name__'])
+        del lookups[:]
+        self.assertRaises(KeyError, repr, Method(Named(), 1, Owner()))
+        self.assertEqual(lookups, ['owner __name__'])
+        class Plain(object):
+            __name__ = 'shadowed'
+            def method(self):
+                pass
+        self.assertEqual(repr(Plain.method), '<unbound method Plain.method>')
+        self.assertEqual(repr(Method(Named(), None, Plain)), '<unbound method Plain.named>')
+        self.assertEqual(repr(Method(Plain.__dict__['method'], 1)), '<bound method ?.method of 1>')
+        sys.exc_clear()
+
+    def test_instancemethod_compares_like_instancemethod_compare(self):
+        calls = []
+        class Value(object):
+            def __init__(self, value):
+                self.value = value
+            def method(self):
+                pass
+            def other(self):
+                pass
+            def __eq__(self, other):
+                calls.append('eq')
+                return False
+            def __cmp__(self, other):
+                calls.append('cmp')
+                return cmp(self.value, other.value)
+        first, second, third = Value(1), Value(2), Value(3)
+        methods = [third.method, first.method, second.method]
+        self.assertEqual([method.im_self.value for method in sorted(methods)], [1, 2, 3])
+        self.assertEqual((max(methods).im_self.value, min(methods).im_self.value), (3, 1))
+        self.assertEqual((cmp(third.method, first.method), cmp(first.method, Value(1).method)), (1, 0))
+        self.assertTrue(first.method < second.method <= third.method)
+        del calls[:]
+        self.assertTrue(first.method == Value(1).method)
+        self.assertFalse(first.method != Value(1).method)
+        self.assertEqual(calls, ['cmp', 'cmp'])
+        del calls[:]
+        self.assertFalse(first.method == first.other)
+        self.assertTrue(first.method in [first.method, first.other])
+        self.assertEqual(calls, [])
+        self.assertEqual(cmp(first.method, first.other), -cmp(first.other, first.method))
+        self.assertEqual((cmp(Value.method, first.method), cmp(first.method, Value.method)), (-1, 1))
+        self.assertEqual((first.method.__cmp__(second.method), type(first.method).__cmp__(second.method, first.method)), (-1, 1))
+        with self.assertRaises(TypeError) as caught:
+            first.method.__cmp__(1)
+        self.assertEqual(caught.exception.args, ("instancemethod.__cmp__(x,y) requires y to be a 'instancemethod', not a 'int'",))
+        class Failing(object):
+            def method(self):
+                pass
+            def __cmp__(self, other):
+                raise KeyError('cmp')
+        self.assertRaises(KeyError, cmp, Failing().method, Failing().method)
+        self.assertRaises(KeyError, lambda: Failing().method == Failing().method)
+        sys.exc_clear()
+
+    def test_reprs_show_names_as_c_strings(self):
+        def head(text):
+            return text.split(' at 0x')[0]
+        class Plain(object):
+            pass
+        class Classic:
+            pass
+        Plain.__module__ = 'a\x00b'
+        Classic.__module__ = 'c\x00d'
+        self.assertEqual(repr(Plain), "<class 'a.Plain'>")
+        self.assertEqual(head(repr(Plain())), '<a.Plain object')
+        self.assertEqual(head(repr(Classic)), '<class c.Classic')
+        self.assertEqual(head(repr(Classic())), '<c.Classic instance')
+        self.assertEqual(str(Classic), 'c\x00d.Classic')
+        Plain.__module__ = '__builtin__\x00b'
+        self.assertEqual((repr(Plain), head(repr(Plain()))), ("<class 'Plain'>", '<Plain object'))
+        Named = type(Classic)('k\x00z', (), {'__module__': 'm'})
+        self.assertEqual((head(repr(Named)), head(repr(Named())), str(Named)), ('<class m.k', '<m.k instance', 'm.k\x00z'))
+        def function(self):
+            pass
+        function.__name__ = 'f\x00g'
+        self.assertEqual(head(repr(function)), '<function f')
+        class Shown(object):
+            def __repr__(self):
+                return 'a\x00b'
+        Shown.method = function
+        self.assertEqual(repr(Shown().method), '<bound method Shown.f of a>')
+        module = type(sys)('n\x00o')
+        self.assertEqual(repr(module), "<module 'n' (built-in)>")
+        module.__file__ = 'f\x00g'
+        self.assertEqual(repr(module), "<module 'n' from 'f'>")
+        module = type(sys)('x' * 100)
+        module.__file__ = 'y' * 400
+        self.assertEqual(repr(module), "<module '%s' from '%s'>" % ('x' * 100, 'y' * 400))
 
     def test_property_copy_methods_take_one_argument(self):
         examples = ((lambda: property().getter(), 'getter() takes exactly one argument (0 given)'),
