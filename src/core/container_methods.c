@@ -1386,17 +1386,25 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     if (keys_ready != 0) {
         sorted = __tinypy_list_sort_items(vm, sort_items, size, compare, out_error);
     }
+    /* listsort releases the keys in the order the sort left them, before
+       the final reverse, and those computed before a key function failed
+       from the last one. */
+    if (has_keys != 0 && keys_ready != 0) {
+        for (index = 0U; index < size; ++index) {
+            TINYPY_DECREF(sort_items[index].key);
+        }
+    }
+    else if (has_keys != 0) {
+        for (index = key_count; index != 0U; --index) {
+            TINYPY_DECREF(sort_items[index - 1U].key);
+        }
+    }
     if (keys_ready != 0 && reverse != 0) {
         __tinypy_list_sort_reverse_items(sort_items, 0U, size);
     }
     if (keys_ready != 0) {
         for (index = 0U; index < size; ++index) {
             saved_items[index] = sort_items[index].value;
-        }
-    }
-    if (has_keys != 0) {
-        for (index = 0U; index < key_count; ++index) {
-            TINYPY_DECREF(sort_items[index].key);
         }
     }
     if (sort_storage != NULL) {
@@ -1422,8 +1430,8 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_extend(vm, list, 0U, saved_items, size);
 #endif
-    for (index = 0U; index < added_size; ++index) {
-        TINYPY_DECREF(added_items[index]);
+    for (index = added_size; index != 0U; --index) {
+        TINYPY_DECREF(added_items[index - 1U]);
     }
     if (added_items != NULL) {
         tinypy_internal_vm_deallocate(vm, added_items, added_allocated * sizeof(*added_items));
@@ -1928,15 +1936,8 @@ static tinypy_value_t *__tinypy_container_binary_method(tinypy_value_t *function
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_container_compare_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
-        return NULL;
-    }
-    tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
-    tinypy_compare_operation_e operation = (tinypy_compare_operation_e)(intptr_t)user_data;
+tinypy_value_t *tinypy_internal_container_compare(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_value_type_e left_kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
     tinypy_bool_t compatible = left_kind == right_kind ? TINYPY_TRUE : TINYPY_FALSE;
@@ -1968,8 +1969,19 @@ static tinypy_value_t *__tinypy_container_compare_method(tinypy_value_t *functio
         tinypy_value_t *not_implemented = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return not_implemented;
     }
-    tinypy_value_t *return_value_1 = tinypy_internal_compare_builtin_value(left, right, operation, out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_compare_builtin_value(left, right, (tinypy_compare_operation_e)operation, out_error);
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_container_compare_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
+    int32_t operation = (int32_t)(intptr_t)user_data;
+    tinypy_value_t *result = tinypy_internal_container_compare(left, right, operation, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_container_cmp_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

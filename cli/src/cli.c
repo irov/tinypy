@@ -8,9 +8,9 @@
 #include <time.h>
 
 #if defined(_WIN32)
-#include <direct.h>
 #include <io.h>
 #else
+#include <dirent.h>
 #include <unistd.h>
 #endif
 
@@ -36,8 +36,9 @@ typedef struct tinypy_cli_allocation_header_t {
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_cli_context_t {
     tinypy_cli_allocator_state_t allocator;
-    char *import_roots[2];
-    size_t import_root_count;
+    /* sys.path[0]; the resolver searches sys.path as the program leaves it. */
+    char *import_root;
+    const struct tinypy_cli_runtime_t *runtime;
     int32_t optimize_level;
     uint32_t compile_flags;
 } tinypy_cli_context_t;
@@ -255,16 +256,6 @@ static tinypy_bool_t __tinypy_cli_read_file(const char *path, uint8_t **out_data
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static char *__tinypy_cli_current_directory(void) {
-#if defined(_WIN32)
-    char *return_value = _getcwd(NULL, 0);
-    return return_value;
-#else
-    char *return_value = getcwd(NULL, 0U);
-    return return_value;
-#endif
-}
-//////////////////////////////////////////////////////////////////////////
 /* PySys_SetArgv resolves the script path before taking its directory, so
    sys.path[0] is absolute; a path that cannot be resolved is used as given. */
 static char *__tinypy_cli_resolved_path(const char *path) {
@@ -298,54 +289,104 @@ static char *__tinypy_cli_directory_name(const char *path) {
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
-static char *__tinypy_cli_module_path(const char *root, const char *name, size_t name_size, int32_t package) {
+/* PySys_GetObject: a borrowed attribute of the sys module of the VM or NULL. */
+static tinypy_value_t *__tinypy_cli_sys_value(const tinypy_cli_runtime_t *runtime, const char *name, size_t name_size) {
+    if (runtime->sys_module == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *value = tinypy_module_get_value(runtime->sys_module, name, name_size);
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+/* case_ok: a file system that ignores case also opens the file of a name
+   spelled differently, so the directory must list the name exactly. */
+static tinypy_bool_t __tinypy_cli_case_ok(const char *directory, const char *name, size_t name_size) {
+    tinypy_bool_t found = TINYPY_FALSE;
+#if defined(_WIN32)
+    size_t directory_size = strlen(directory);
+    char *path = (char *)malloc(directory_size + name_size + 2U);
+    size_t cursor = directory_size;
+
+    (void)memcpy(path, directory, directory_size);
+    if (directory_size != 0U) {
+        path[cursor++] = '/';
+    }
+    (void)memcpy(path + cursor, name, name_size);
+    path[cursor + name_size] = '\0';
+    struct _finddata_t data;
+    intptr_t handle = _findfirst(path, &data);
+    free(path);
+    if (handle == -1) {
+        return TINYPY_FALSE;
+    }
+    found = strlen(data.name) == name_size && memcmp(data.name, name, name_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    (void)_findclose(handle);
+#else
+    DIR *stream = opendir(directory[0] != '\0' ? directory : ".");
+    if (stream == NULL) {
+        return TINYPY_FALSE;
+    }
+    const struct dirent *entry = readdir(stream);
+    while (entry != NULL && found == TINYPY_FALSE) {
+        found = strlen(entry->d_name) == name_size && memcmp(entry->d_name, name, name_size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        entry = readdir(stream);
+    }
+    (void)closedir(stream);
+#endif
+    return found;
+}
+//////////////////////////////////////////////////////////////////////////
+/* find_module in one directory of the search path: the package directory
+   with its __init__.py comes before the module file, each named exactly
+   as the module. */
+static const tinypy_module_artifact_t *__tinypy_cli_try_module(tinypy_cli_context_t *context, const tinypy_module_request_t *request, const char *directory, size_t directory_size, int32_t package) {
     static const char module_suffix[] = ".py";
     static const char package_suffix[] = "/__init__.py";
     const char *suffix = package != 0 ? package_suffix : module_suffix;
-    size_t root_size = strlen(root);
-    size_t suffix_size = strlen(suffix);
-    size_t path_size;
-    char *path;
-    size_t index;
-    size_t cursor;
-    int32_t separator = root_size != 0U && root[root_size - 1U] != '/' && root[root_size - 1U] != '\\';
-
-    if (root_size > SIZE_MAX - (size_t)separator - name_size - suffix_size) {
-        return NULL;
-    }
-    path_size = root_size + (size_t)separator + name_size + suffix_size;
-    path = (char *)malloc(path_size + 1U);
-    cursor = 0U;
-    if (root_size != 0U) {
-        (void)memcpy(path, root, root_size);
-        cursor = root_size;
-    }
-    if (separator != 0) {
-        path[cursor++] = '/';
-    }
-    for (index = 0U; index < name_size; index += 1U) {
-        path[cursor++] = name[index] == '.' ? '/' : name[index];
-    }
-    (void)memcpy(path + cursor, suffix, suffix_size);
-    cursor += suffix_size;
-    path[cursor] = '\0';
-    return path;
-}
-//////////////////////////////////////////////////////////////////////////
-static const tinypy_module_artifact_t *__tinypy_cli_try_module(tinypy_cli_context_t *context, const tinypy_module_request_t *request, const char *root, int32_t package) {
-    tinypy_cli_artifact_t *entry;
-    char *path = __tinypy_cli_module_path(root, request->canonical_name, request->canonical_name_size, package);
+    size_t suffix_size = package != 0 ? sizeof(package_suffix) - 1U : sizeof(module_suffix) - 1U;
+    const char *tail = request->canonical_name;
+    size_t tail_size = request->canonical_name_size;
+    size_t separator = directory_size != 0U && directory[directory_size - 1U] != '/' && directory[directory_size - 1U] != '\\' ? 1U : 0U;
     uint8_t *source;
     size_t source_size;
 
-    if (path == NULL || __tinypy_cli_read_file(path, &source, &source_size) == 0) {
+    for (size_t index = 0U; index < request->canonical_name_size; ++index) {
+        if (request->canonical_name[index] == '.') {
+            tail = request->canonical_name + index + 1U;
+            tail_size = request->canonical_name_size - index - 1U;
+        }
+    }
+    size_t name_start = directory_size + separator;
+    size_t path_size = name_start + tail_size + suffix_size;
+    char *path = (char *)malloc(path_size + 1U);
+    (void)memcpy(path, directory, directory_size);
+    if (separator != 0U) {
+        path[directory_size] = '/';
+    }
+    (void)memcpy(path + name_start, tail, tail_size);
+    (void)memcpy(path + name_start + tail_size, suffix, suffix_size);
+    path[path_size] = '\0';
+    if (__tinypy_cli_read_file(path, &source, &source_size) == 0) {
         free(path);
         return NULL;
     }
-    entry = (tinypy_cli_artifact_t *)calloc(1U, sizeof(*entry));
+    char *package_directory = package != 0 ? __tinypy_cli_string_duplicate(path, name_start + tail_size) : NULL;
+    size_t entry_name_size = package != 0 ? tail_size : tail_size + suffix_size;
+    tinypy_bool_t exact = __tinypy_cli_case_ok(directory, path + name_start, entry_name_size);
+    if (exact != TINYPY_FALSE && package_directory != NULL) {
+        exact = __tinypy_cli_case_ok(package_directory, package_suffix + 1U, suffix_size - 1U);
+    }
+    if (exact == TINYPY_FALSE) {
+        free(package_directory);
+        free(source);
+        free(path);
+        return NULL;
+    }
+    tinypy_cli_artifact_t *entry = (tinypy_cli_artifact_t *)calloc(1U, sizeof(*entry));
     entry->source = source;
     entry->canonical_name = __tinypy_cli_string_duplicate(request->canonical_name, request->canonical_name_size);
     entry->logical_filename = path;
+    entry->package_directory = package_directory;
     entry->artifact.abi_version = TINYPY_ABI_VERSION;
     entry->artifact.struct_size = (uint32_t)sizeof(entry->artifact);
     entry->artifact.content_kind = TINYPY_MODULE_CONTENT_SOURCE;
@@ -355,30 +396,46 @@ static const tinypy_module_artifact_t *__tinypy_cli_try_module(tinypy_cli_contex
     entry->artifact.canonical_name = entry->canonical_name;
     entry->artifact.canonical_name_size = request->canonical_name_size;
     entry->artifact.logical_filename = entry->logical_filename;
-    entry->artifact.logical_filename_size = strlen(entry->logical_filename);
-    if (package != 0) {
-        size_t directory_size = strlen(path) - (sizeof("/__init__.py") - 1U);
-
-        entry->package_directory = __tinypy_cli_string_duplicate(path, directory_size);
-        entry->artifact.package_token = entry->package_directory;
-        entry->artifact.package_token_size = directory_size;
+    entry->artifact.logical_filename_size = path_size;
+    if (package_directory != NULL) {
+        entry->artifact.package_token = package_directory;
+        entry->artifact.package_token_size = name_start + tail_size;
     }
     entry->artifact.compile_feature_flags = 0U;
     entry->artifact.compile_optimize_level = context->optimize_level;
     return &entry->artifact;
 }
 //////////////////////////////////////////////////////////////////////////
+/* find_module searches the __path__ of the package of a submodule and
+   sys.path for a top-level module, as the program leaves them; entries that
+   are not strings naming a directory are skipped. */
 static const tinypy_module_artifact_t *__tinypy_cli_resolve_module(void *user_data, const tinypy_module_request_t *request) {
     tinypy_cli_context_t *context = (tinypy_cli_context_t *)user_data;
-    size_t index;
+    tinypy_value_t *search_path = request->package_path;
 
-    for (index = 0U; index < context->import_root_count; index += 1U) {
-        const tinypy_module_artifact_t *artifact = __tinypy_cli_try_module(context, request, context->import_roots[index], INT32_C(0));
+    if (search_path == NULL || tinypy_typeof(search_path) == TINYPY_VALUE_NONE) {
+        search_path = __tinypy_cli_sys_value(context->runtime, "path", 4U);
+    }
+    if (search_path == NULL || tinypy_typeof(search_path) != TINYPY_VALUE_LIST) {
+        return NULL;
+    }
+    size_t count = tinypy_list_size(search_path);
+    for (size_t index = 0U; index < count; ++index) {
+        tinypy_value_t *entry = tinypy_list_get(search_path, index);
+        size_t entry_size;
 
+        if (tinypy_typeof(entry) != TINYPY_VALUE_STRING) {
+            continue;
+        }
+        const char *directory = (const char *)tinypy_string_view(entry, &entry_size);
+        if (strlen(directory) != entry_size) {
+            continue;
+        }
+        const tinypy_module_artifact_t *artifact = __tinypy_cli_try_module(context, request, directory, entry_size, INT32_C(1));
         if (artifact != NULL) {
             return artifact;
         }
-        artifact = __tinypy_cli_try_module(context, request, context->import_roots[index], INT32_C(1));
+        artifact = __tinypy_cli_try_module(context, request, directory, entry_size, INT32_C(0));
         if (artifact != NULL) {
             return artifact;
         }
@@ -543,15 +600,6 @@ static tinypy_value_t *__tinypy_cli_module(tinypy_vm_t *vm, const char *name, si
     }
     tinypy_retain(module);
     return module;
-}
-//////////////////////////////////////////////////////////////////////////
-/* PySys_GetObject: a borrowed attribute of the sys module of the VM or NULL. */
-static tinypy_value_t *__tinypy_cli_sys_value(const tinypy_cli_runtime_t *runtime, const char *name, size_t name_size) {
-    if (runtime->sys_module == NULL) {
-        return NULL;
-    }
-    tinypy_value_t *value = tinypy_module_get_value(runtime->sys_module, name, name_size);
-    return value;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The sys.stderr object when one is set; None counts as lost. */
@@ -899,6 +947,35 @@ static void __tinypy_cli_release_syntax_location(tinypy_cli_syntax_location_t *l
     (void)memset(location, 0, sizeof(*location));
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyInt_AsLong: an int or a long as it is, and any other value through its
+   __int__, which has to return one. */
+static tinypy_bool_t __tinypy_cli_int_as_long(tinypy_vm_t *vm, tinypy_value_t *value, int64_t *out_value) {
+    tinypy_value_type_e kind = tinypy_typeof(value);
+
+    if (kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_LONG) {
+        tinypy_bool_t converted = __tinypy_cli_as_integer(value, out_value);
+        return converted;
+    }
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *method = tinypy_object_get_attr(value, "__int__", 7U, &error);
+    if (method == NULL) {
+        __tinypy_cli_discard_error(vm, error);
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, NULL, 0U);
+    tinypy_value_t *result = tinypy_call(method, args, NULL, &error);
+
+    tinypy_release(args);
+    tinypy_release(method);
+    if (result == NULL) {
+        __tinypy_cli_discard_error(vm, error);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t converted = __tinypy_cli_as_integer(result, out_value);
+    tinypy_release(result);
+    return converted;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_cli_attribute_integer(tinypy_vm_t *vm, tinypy_value_t *value, const char *name, size_t name_size, int32_t *out_value, tinypy_bool_t none_allowed) {
     tinypy_error_t *error = NULL;
     tinypy_value_t *attribute = tinypy_object_get_attr(value, name, name_size, &error);
@@ -913,7 +990,7 @@ static tinypy_bool_t __tinypy_cli_attribute_integer(tinypy_vm_t *vm, tinypy_valu
         *out_value = -1;
         return TINYPY_TRUE;
     }
-    tinypy_bool_t converted = __tinypy_cli_as_integer(attribute, &number);
+    tinypy_bool_t converted = __tinypy_cli_int_as_long(vm, attribute, &number);
     tinypy_release(attribute);
     if (converted == 0) {
         return TINYPY_FALSE;
@@ -1533,20 +1610,12 @@ static tinypy_bool_t __tinypy_cli_set_sys_values(tinypy_cli_runtime_t *runtime, 
         tinypy_release(items[index]);
     }
     free(items);
-    items = (tinypy_value_t **)malloc((context->import_root_count != 0U ? context->import_root_count : 1U) * sizeof(*items));
-    for (index = 0U; index < context->import_root_count; index += 1U) {
-        size_t import_root_size;
-
-        import_root_size = strlen(context->import_roots[index]);
-        items[index] = tinypy_string_from_bytes(vm, context->import_roots[index], import_root_size);
-    }
-    list = tinypy_list_from_items(vm, items, context->import_root_count);
+    size_t import_root_size = strlen(context->import_root);
+    tinypy_value_t *import_root = tinypy_string_from_bytes(vm, context->import_root, import_root_size);
+    list = tinypy_list_from_items(vm, &import_root, 1U);
     tinypy_module_add_value(sys_module, "path", 4U, list);
     tinypy_release(list);
-    for (index = 0U; index < context->import_root_count; index += 1U) {
-        tinypy_release(items[index]);
-    }
-    free(items);
+    tinypy_release(import_root);
     tinypy_value_t *hook = tinypy_native_function_new(vm, "excepthook", 10U, __tinypy_cli_excepthook, runtime, NULL);
     tinypy_module_add_value(sys_module, "excepthook", 10U, hook);
     tinypy_module_add_value(sys_module, "__excepthook__", 14U, hook);
@@ -1741,7 +1810,7 @@ static void __tinypy_cli_clear_named_module(tinypy_vm_t *vm, tinypy_value_t *mod
    __builtin__ namespace stays intact for the VM. The survivors dictionary
    lives in sys.modules, a root of the VM. */
 static void __tinypy_cli_cleanup_modules(tinypy_vm_t *vm) {
-    static const char *const sys_deletes[] = {"path", "argv", "ps1", "ps2", "exitfunc", "exc_type", "exc_value", "exc_traceback", "last_type", "last_value", "last_traceback", "path_hooks", "path_importer_cache", "meta_path"};
+    static const char *const sys_deletes[] = {"path", "argv", "ps1", "ps2", "exitfunc", "exc_type", "exc_value", "exc_traceback", "last_type", "last_value", "last_traceback", "meta_path"};
     static const char *const sys_files[] = {"stdin", "__stdin__", "stdout", "__stdout__", "stderr", "__stderr__"};
     static const char survivors_name[] = "__tinypy_finalizing__";
     tinypy_value_t *modules = tinypy_vm_modules(vm);
@@ -2038,19 +2107,11 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
     if (script_argument >= 0 && strcmp(argv[script_argument], "-") != 0) {
         char *resolved = __tinypy_cli_resolved_path(argv[script_argument]);
 
-        context.import_roots[context.import_root_count++] = __tinypy_cli_directory_name(resolved);
+        context.import_root = __tinypy_cli_directory_name(resolved);
         free(resolved);
-        context.import_roots[context.import_root_count] = __tinypy_cli_current_directory();
-        if (context.import_roots[context.import_root_count] != NULL && strcmp(context.import_roots[0], context.import_roots[context.import_root_count]) != 0) {
-            context.import_root_count += 1U;
-        }
-        else {
-            free(context.import_roots[context.import_root_count]);
-            context.import_roots[context.import_root_count] = NULL;
-        }
     }
     else {
-        context.import_roots[context.import_root_count++] = __tinypy_cli_string_duplicate("", 0U);
+        context.import_root = __tinypy_cli_string_duplicate("", 0U);
     }
     (void)memset(&allocator, 0, sizeof(allocator));
     allocator.abi_version = TINYPY_ABI_VERSION;
@@ -2079,6 +2140,7 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
     begin = clock();
     vm = tinypy_vm_create(&config);
     __tinypy_cli_runtime_initialize(&runtime, vm);
+    context.runtime = &runtime;
     main_module = __tinypy_cli_create_main(vm, interactive != 0 || command_argument >= 0 ? NULL : filename);
     globals = tinypy_module_dict(main_module);
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
@@ -2129,8 +2191,7 @@ int32_t tinypy_cli_run(int32_t argc, char **argv) {
 
         (void)fprintf(stderr, "tinypy stats: cpu_seconds=%.6f peak_heap_bytes=%zu peak_allocations=%zu total_allocations=%zu outstanding_bytes=%zu outstanding_allocations=%zu\n", cpu_seconds, context.allocator.peak_bytes, context.allocator.peak_allocations, context.allocator.total_allocations, context.allocator.current_bytes, context.allocator.current_allocations);
     }
-    free(context.import_roots[0]);
-    free(context.import_roots[1]);
+    free(context.import_root);
     free(owned_source);
     if (command_argument >= 0 || script_argument < 0) {
         free(python_argv);

@@ -31,9 +31,14 @@ The CLI runs a program the way `python2.7` does:
   tokenizer rules of CPython (ASCII unless a PEP 263 cookie or a BOM declares
   the encoding); `-c` compiles its command as a string, and `-` or piped
   standard input is the file `<stdin>`;
-- `sys.path[0]` is the resolved directory of the script, or `''` for a
+- `sys.path` holds the resolved directory of the script, or `''` for a
   command and standard input; `__main__` has `__package__` `None`,
   `__builtins__` the `__builtin__` module and `__file__` only for a file;
+- like `find_module`, a module is searched for in `sys.path`, and a submodule
+  in the `__path__` of its package, as the program leaves them; in each
+  directory a package directory with `__init__.py` comes before the
+  `module.py` file, and only a file named exactly as the module counts, also
+  on a file system that ignores case;
 - `-t` warns once per file about inconsistent tabs and spaces in indentation
   and `-tt` makes them a TabError, as in CPython; the default checks nothing;
   the flags apply to the main program;

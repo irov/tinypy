@@ -165,7 +165,7 @@ static tinypy_bool_t __tinypy_buffer_normalize_index(tinypy_value_t *value, tiny
     int64_t index;
     size_t size;
 
-    if (tinypy_internal_object_has_special_key(key, vm->internal_special_index_key) == 0) {
+    if (tinypy_internal_index_check(key) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "sequence index must be integer", out_error);
         return TINYPY_FALSE;
     }
@@ -355,7 +355,7 @@ static tinypy_value_t *__tinypy_buffer_repeat(tinypy_value_t *buffer, tinypy_val
     int64_t count;
     uint8_t *output;
 
-    if (tinypy_internal_object_has_special_key(count_value, vm->internal_special_index_key) == 0) {
+    if (tinypy_internal_index_check(count_value) == 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("'"),
             TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(count_value, 200U),
@@ -834,7 +834,7 @@ static tinypy_bool_t __tinypy_memoryview_index(tinypy_value_t *instance, tinypy_
     int64_t index;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(instance);
-    if (tinypy_internal_object_has_special_key(key, vm->internal_special_index_key) == 0) {
+    if (tinypy_internal_index_check(key) == 0) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("cannot index memory using \""),
             TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(key, 200U),

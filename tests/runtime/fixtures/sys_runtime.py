@@ -7,8 +7,8 @@ assert sys.getdefaultencoding() == "ascii"
 assert "_struct" in sys.builtin_module_names
 assert sys.warnoptions == []
 assert sys.meta_path == []
-assert sys.path_hooks == []
-assert sys.path_importer_cache == {}
+assert not hasattr(sys, "path_hooks")
+assert not hasattr(sys, "path_importer_cache")
 
 for exit_code in (None, 7, "exit"):
     try:
@@ -118,6 +118,14 @@ for frame_attribute in (
     assert frame_attribute in dir(current_frame)
 assert current_frame.f_code.co_name == "<module>"
 assert current_frame.f_restricted is False
+# tinypy has no restricted execution mode: replaced builtins only replace the
+# names a frame looks up.
+def restricted_probe():
+    pass
+restricted_globals = {"__builtins__": {}, "sys": sys, "probe": restricted_probe}
+assert eval("sys._getframe().f_restricted", restricted_globals) is False
+assert eval("probe.func_globals", restricted_globals) is globals()
+assert eval("probe.func_code.co_name", restricted_globals) == "restricted_probe"
 current_frame.f_trace = "trace marker"
 assert current_frame.f_trace == "trace marker"
 

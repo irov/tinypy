@@ -1216,8 +1216,15 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
         }
         if (numeric != 0) {
             /* Mapping-only objects receive a long key; sequence indexing
-               builds an int before invoking a Python __getitem__. */
-            tinypy_bool_t sequence = TINYPY_VALUE_KIND(value) != TINYPY_VALUE_DICT && ((value->type->sequence_slots != NULL && value->type->sequence_slots->get_item != NULL) || tinypy_internal_object_has_special_key(value, vm->internal_special_getitem_key) != 0);
+               builds an int before invoking a Python __getitem__. A classic
+               instance is a sequence when hasattr finds its __getitem__. */
+            tinypy_bool_t sequence;
+            if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
+                sequence = tinypy_object_has_attr_value(value, vm->internal_special_getitem_key);
+            }
+            else {
+                sequence = TINYPY_VALUE_KIND(value) != TINYPY_VALUE_DICT && ((value->type->sequence_slots != NULL && value->type->sequence_slots->get_item != NULL) || tinypy_internal_object_has_special_key(value, vm->internal_special_getitem_key) != 0);
+            }
 
             key = sequence != 0 ? tinypy_integer_from_i64(vm, position) : tinypy_long_from_i64(vm, position);
         }
@@ -1801,7 +1808,7 @@ static int64_t __tinypy_string_normalized_bound(tinypy_vm_t *vm, tinypy_value_t 
     if (value == NULL || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NONE) {
         return fallback;
     }
-    if (tinypy_internal_object_has_special_key(value, vm->internal_special_index_key) == 0) {
+    if (tinypy_internal_index_check(value) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice indices must be integers or None or have an __index__ method", out_error);
         return INT64_MIN;
     }
@@ -3559,13 +3566,12 @@ static const char *__tinypy_codec_utf8_decode_reason(const uint8_t *bytes, size_
     return "invalid continuation byte";
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_codec_unicode_reason(tinypy_vm_t *vm, tinypy_value_t *text, int32_t codec, tinypy_bool_t decode, size_t start) {
+static const char *__tinypy_codec_unicode_reason(tinypy_value_t *text, int32_t codec, tinypy_bool_t decode, size_t start) {
     const char *reason_text = decode != 0 ? (codec == 0 ? "ordinal not in range(128)" : __tinypy_codec_utf8_decode_reason(TINYPY_TEXT_BYTES(text) + start, TINYPY_TEXT_BYTE_SIZE(text) - start)) : (codec == 0 ? "ordinal not in range(128)" : "ordinal not in range(256)");
-    tinypy_value_t *result = tinypy_string_from_bytes(vm, reason_text, strlen(reason_text));
-    return result;
+    return reason_text;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_codec_unicode_exception(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, int32_t codec, tinypy_bool_t decode, size_t start, size_t end, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_codec_unicode_exception(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, int32_t codec, tinypy_bool_t decode, size_t start, size_t end, const char *reason_text, tinypy_error_t **out_error) {
     /* The codecs read a subclass instance as the exact str or unicode the
        error holds, so its handlers never run the overrides of the subclass. */
     tinypy_value_t *object = tinypy_internal_immutable_subclass_copy(&vm->types[TINYPY_VALUE_KIND(text)], TINYPY_RET(text), out_error);
@@ -3579,7 +3585,7 @@ static tinypy_value_t *__tinypy_codec_unicode_exception(tinypy_vm_t *vm, tinypy_
     (void)encoding;
     tinypy_value_t *start_value = tinypy_integer_from_i64(vm, (int64_t)start);
     tinypy_value_t *end_value = tinypy_integer_from_i64(vm, (int64_t)end);
-    tinypy_value_t *reason = __tinypy_codec_unicode_reason(vm, text, codec, decode, start);
+    tinypy_value_t *reason = tinypy_string_from_bytes(vm, reason_text, strlen(reason_text));
     tinypy_value_t *items[5] = {encoding_value, object, start_value, end_value, reason};
     tinypy_value_t *args = tinypy_tuple_from_items(vm, items, 5U);
     tinypy_value_t *exception = tinypy_exception_new(vm->exception_types[decode != 0 ? TINYPY_EXCEPTION_UNICODE_DECODE_ERROR : TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR], args, out_error);
@@ -3596,17 +3602,19 @@ static tinypy_value_t *__tinypy_codec_unicode_exception(tinypy_vm_t *vm, tinypy_
 static void __tinypy_codec_update_unicode_exception(tinypy_vm_t *vm, tinypy_value_t *exception, tinypy_value_t *text, int32_t codec, tinypy_bool_t decode, size_t start, size_t end) {
     tinypy_internal_unicode_error_payload_t *payload = (tinypy_internal_unicode_error_payload_t *)tinypy_native_instance_payload(exception);
     tinypy_value_t *previous_reason = payload->reason;
+    const char *reason_text = __tinypy_codec_unicode_reason(text, codec, decode, start);
 
     payload->start = (int64_t)start;
     payload->end = (int64_t)end;
-    payload->reason = __tinypy_codec_unicode_reason(vm, text, codec, decode, start);
+    payload->reason = tinypy_string_from_bytes(vm, reason_text, strlen(reason_text));
     if (previous_reason != NULL) {
         TINYPY_DECREF(previous_reason);
     }
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_codec_raise_unicode_error(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, int32_t codec, tinypy_bool_t decode, size_t start, size_t end, tinypy_error_t **out_error) {
-    tinypy_value_t *exception = __tinypy_codec_unicode_exception(vm, text, encoding, codec, decode, start, end, out_error);
+    const char *reason_text = __tinypy_codec_unicode_reason(text, codec, decode, start);
+    tinypy_value_t *exception = __tinypy_codec_unicode_exception(vm, text, encoding, codec, decode, start, end, reason_text, out_error);
 
     if (exception == NULL) {
         return TINYPY_FALSE;
@@ -3673,7 +3681,9 @@ static tinypy_bool_t __tinypy_codec_call_error_handler(tinypy_vm_t *vm, tinypy_s
         }
     }
     if (state->exception == NULL) {
-        state->exception = __tinypy_codec_unicode_exception(vm, text, encoding, codec, decode, start, end, out_error);
+        const char *reason_text = __tinypy_codec_unicode_reason(text, codec, decode, start);
+
+        state->exception = __tinypy_codec_unicode_exception(vm, text, encoding, codec, decode, start, end, reason_text, out_error);
         if (state->exception == NULL) {
             return TINYPY_FALSE;
         }
@@ -3977,7 +3987,16 @@ tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text
         size_t width = tinypy_internal_utf8_decode(bytes + offset, size - offset, &code_point);
 
         if (width == 0U) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_UNICODE_ENCODE, "invalid internal unicode value", out_error);
+            /* Only a value made from invalid UTF-8, which the contract of
+               tinypy_unicode_from_utf8 rules out, has a sequence that no
+               codec encodes. */
+            size_t character = tinypy_internal_unicode_character_index(text, offset);
+            tinypy_value_t *exception = __tinypy_codec_unicode_exception(vm, text, encoding, codec, TINYPY_FALSE, character, character + 1U, "invalid internal unicode value", out_error);
+
+            if (exception != NULL) {
+                (void)tinypy_exception_raise(exception, NULL, out_error);
+                TINYPY_DECREF(exception);
+            }
             goto codec_error;
         }
         if (codec == 1) {

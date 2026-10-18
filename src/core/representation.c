@@ -717,7 +717,7 @@ tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value
         if (attribute != NULL && tinypy_internal_native_method_applies(attribute, value) != 0) {
             /* The call may drop the method from the type. */
             TINYPY_INCREF(attribute);
-            tinypy_value_t *slot_result = tinypy_internal_native_function_call_method(attribute, value, NULL, 0U, NULL, out_error);
+            tinypy_value_t *slot_result = tinypy_internal_native_function_call_slot(attribute, value, out_error);
 
             TINYPY_DECREF(attribute);
             return slot_result;
@@ -919,52 +919,49 @@ static TINYPY_NOINLINE tinypy_bool_t __tinypy_representation_object_string(tinyp
     return inherited;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_representation_qualifier(tinypy_representation_builder_t *builder, tinypy_value_t *value) {
-    const uint8_t *bytes = (const uint8_t *)"?";
-    size_t size = 1U;
-    tinypy_value_t *name = NULL;
+/* instancemethod_repr names the class and the function by their __name__,
+   or "?" when that is missing or no string; another error of the lookup
+   fails the representation. */
+static tinypy_bool_t __tinypy_representation_qualifier(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
-    if (value == NULL) {
-        __tinypy_representation_append(builder, bytes, size);
-        return;
+    tinypy_value_t *name;
+    if (tinypy_internal_object_get_optional_attr_key(value, vm->internal_special_name_key, &name, out_error) < 0) {
+        return TINYPY_FALSE;
     }
-    switch (TINYPY_VALUE_KIND(value)) {
-    case TINYPY_VALUE_TYPE:
-        bytes = (const uint8_t *)((tinypy_type_t *)value)->name;
-        size = ((tinypy_type_t *)value)->name_size;
-        break;
-    case TINYPY_VALUE_CLASS:
-        name = tinypy_class_name(value);
-        break;
-    case TINYPY_VALUE_FUNCTION:
-        name = tinypy_function_name(value);
-        break;
-    case TINYPY_VALUE_NATIVE_FUNCTION:
-        name = tinypy_native_function_name(value);
-        break;
-    default:
-        break;
+    if (name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING) {
+        __tinypy_representation_append(builder, TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name));
     }
-    if (name != NULL && (TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(name) == TINYPY_VALUE_UNICODE)) {
-        bytes = TINYPY_TEXT_BYTES(name);
-        size = TINYPY_TEXT_BYTE_SIZE(name);
+    else {
+        __tinypy_representation_append_character(builder, (uint8_t)'?');
     }
-    __tinypy_representation_append(builder, bytes, size);
+    if (name != NULL) {
+        TINYPY_DECREF(name);
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
-/* PyObject_Repr and _PyObject_Str guard against runaway recursion. */
-static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+/* PyObject_Repr and _PyObject_Str guard against runaway recursion around
+   the slot that represents a value. */
+static tinypy_bool_t __tinypy_representation_recursion_enter(tinypy_vm_t *vm, tinypy_bool_t raw, tinypy_error_t **out_error) {
     const char *message = raw != 0 ? "maximum recursion depth exceeded while getting the str of an object" : "maximum recursion depth exceeded while getting the repr of an object";
-    tinypy_bool_t result;
 
     if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), message, out_error) == 0) {
         return TINYPY_FALSE;
     }
     vm->evaluation_depth += 1U;
-    result = __tinypy_representation_value_impl(builder, value, raw, out_error);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_representation_value(tinypy_representation_builder_t *builder, tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+    if (__tinypy_representation_recursion_enter(vm, raw, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t result = __tinypy_representation_value_impl(builder, value, raw, out_error);
     vm->evaluation_depth -= 1U;
     return result;
 }
@@ -1100,9 +1097,13 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         tinypy_bool_t bound = method->self != NULL ? TINYPY_TRUE : TINYPY_FALSE;
 
         __tinypy_representation_append(builder, bound != 0 ? "<bound method " : "<unbound method ", bound != 0 ? 14U : 16U);
-        __tinypy_representation_qualifier(builder, method->owner);
+        if (__tinypy_representation_qualifier(builder, method->owner, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
         __tinypy_representation_append_character(builder, (uint8_t)'.');
-        __tinypy_representation_qualifier(builder, method->function);
+        if (__tinypy_representation_qualifier(builder, method->function, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
         if (bound == 0) {
             __tinypy_representation_append_character(builder, (uint8_t)'>');
             return TINYPY_TRUE;
@@ -1263,6 +1264,23 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* The method overriding the representation of the root gives it whole,
+   under the guard of PyObject_Repr and _PyObject_Str. It stays out of line,
+   so the caller can pass the call on without keeping its builder on the C
+   stack. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_representation_root_special(tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *name = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
+
+    if (__tinypy_representation_recursion_enter(vm, raw, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *custom = __tinypy_representation_custom(value, name, raw, out_error);
+
+    vm->evaluation_depth -= 1U;
+    return custom;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tinypy_bool_t raw, tinypy_bool_t skip_root_special, tinypy_error_t **out_error) {
     tinypy_representation_builder_t builder;
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
@@ -1271,11 +1289,9 @@ static tinypy_value_t *__tinypy_representation_build(tinypy_value_t *value, tiny
     if (raw != 0 && value->type == &vm->types[TINYPY_VALUE_STRING]) {
         return TINYPY_RET(value);
     }
-    /* A method overriding the representation of the root gives it whole. */
     uint64_t special = raw != 0 ? TINYPY_INTERNAL_DISPATCH_BIT(STR) : TINYPY_INTERNAL_DISPATCH_BIT(REPR);
     if (skip_root_special == 0 && __tinypy_internal_object_overrides_dispatch(value, special) != 0) {
-        tinypy_value_t *name = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
-        tinypy_value_t *custom = __tinypy_representation_custom(value, name, raw, out_error);
+        tinypy_value_t *custom = __tinypy_representation_root_special(value, raw, out_error);
 
         return custom;
     }

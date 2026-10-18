@@ -537,23 +537,28 @@ void tinypy_internal_native_argument_cache_finalize(tinypy_vm_t *vm) {
 //////////////////////////////////////////////////////////////////////////
 /* An items callback takes self and the items as they are; a tuple callback
    takes one owned argument tuple of both, which it may retain. Its public ABI
-   and recursion guard stay unchanged. */
-static tinypy_value_t *__tinypy_native_function_call_self(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+   stays unchanged. */
+static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_native_function_invoke_self(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(callable);
 
     if (function->items_callback != NULL) {
-        vm->evaluation_depth += 1U;
         tinypy_value_t *result = __tinypy_native_function_invoke_items(callable, self, items, count, kwargs, out_error);
-        vm->evaluation_depth -= 1U;
         return result;
     }
     tinypy_value_t *args = __tinypy_native_arguments_acquire(vm, self, items, count, out_error);
     if (args == NULL) {
         return NULL;
     }
-    vm->evaluation_depth += 1U;
     tinypy_value_t *result = __tinypy_native_function_invoke(callable, args, kwargs, out_error);
     __tinypy_native_arguments_release(vm, args);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A called built-in function takes a recursion level for the Python calls
+   it makes. */
+static tinypy_value_t *__tinypy_native_function_call_self(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    vm->evaluation_depth += 1U;
+    tinypy_value_t *result = __tinypy_native_function_invoke_self(vm, callable, self, items, count, kwargs, out_error);
     vm->evaluation_depth -= 1U;
     return result;
 }
@@ -630,6 +635,16 @@ tinypy_value_t *tinypy_internal_native_function_call_method(tinypy_value_t *desc
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Runs a method or slot wrapper descriptor that applies to self as the C
+   slot it stands for, such as BaseException_str under PyObject_Str: the
+   caller guards the recursion, and the slot takes no level of its own. */
+tinypy_value_t *tinypy_internal_native_function_call_slot(tinypy_value_t *descriptor, tinypy_value_t *self, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(descriptor);
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_t *result = __tinypy_native_function_invoke_self(vm, descriptor, self, NULL, 0U, NULL, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_native_method_free_list_push(tinypy_vm_t *vm, tinypy_value_t *value) {
     tinypy_native_function_object_t *method = TINYPY_NATIVE_FUNCTION_OBJECT(value);
     method->function = vm->native_method_free_list != NULL ? &vm->native_method_free_list->base : NULL;
@@ -703,7 +718,7 @@ static tinypy_value_t *__tinypy_native_function_bind(tinypy_value_t *descriptor,
     return &method->base;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_internal_native_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error) {
     tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(descriptor);
 
     TINYPY_CLEAR_ERROR(out_error);
@@ -757,9 +772,9 @@ tinypy_value_t *tinypy_internal_native_function_bind_class(tinypy_value_t *descr
 //////////////////////////////////////////////////////////////////////////
 /* classmethod_get: the class the descriptor is found through, or the type of
    the instance. */
-static tinypy_value_t *__tinypy_native_class_method_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
-    tinypy_type_t *class_type = owner != NULL ? owner : instance->type;
-    tinypy_value_t *method = tinypy_internal_native_function_bind_class(descriptor, &class_type->base.base, out_error);
+static tinypy_value_t *__tinypy_native_class_method_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error) {
+    tinypy_value_t *class_value = owner != NULL ? owner : &instance->type->base.base;
+    tinypy_value_t *method = tinypy_internal_native_function_bind_class(descriptor, class_value, out_error);
 
     return method;
 }
@@ -1030,12 +1045,13 @@ void tinypy_internal_initialize_native_descriptor_types(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* wrap_descr_get: None stands for a missing instance or owner. */
 static tinypy_value_t *__tinypy_native_descriptor_get_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t count = TINYPY_TUPLE_SIZE(args);
     tinypy_value_t *descriptor;
     tinypy_value_t *instance;
-    tinypy_type_t *owner;
+    tinypy_value_t *owner;
 
     (void)user_data;
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 2U, TINYPY_ARITY_STYLE_UNPACK, out_error) == 0) {
@@ -1043,21 +1059,18 @@ static tinypy_value_t *__tinypy_native_descriptor_get_method(tinypy_value_t *fun
     }
     descriptor = TINYPY_TUPLE_GET(args, 0U);
     instance = TINYPY_TUPLE_GET(args, 1U);
-    owner = TINYPY_NATIVE_FUNCTION_OBJECT(descriptor)->owner;
+    owner = count == 3U ? TINYPY_TUPLE_GET(args, 2U) : NULL;
     if (TINYPY_VALUE_KIND(instance) == TINYPY_VALUE_NONE) {
         instance = NULL;
     }
-    if (instance == NULL && (count == 2U || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 2U)) == TINYPY_VALUE_NONE)) {
+    if (owner != NULL && TINYPY_VALUE_KIND(owner) == TINYPY_VALUE_NONE) {
+        owner = NULL;
+    }
+    if (instance == NULL && owner == NULL) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__get__(None, None) is invalid", out_error);
         return NULL;
     }
-    if (descriptor->type == vm->native_class_method_descriptor_type) {
-        tinypy_value_t *class_value = count == 3U && TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 2U)) != TINYPY_VALUE_NONE ? TINYPY_TUPLE_GET(args, 2U) : &instance->type->base.base;
-        tinypy_value_t *method = tinypy_internal_native_function_bind_class(descriptor, class_value, out_error);
-
-        return method;
-    }
-    tinypy_value_t *return_value_1 = tinypy_internal_native_function_descriptor_get(descriptor, instance, owner, out_error);
+    tinypy_value_t *return_value_1 = descriptor->type->descriptor_get(descriptor, instance, owner, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

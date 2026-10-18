@@ -332,9 +332,11 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
         }
         TINYPY_DECREF(method);
     }
+    /* slot_tp_del and instance_dealloc restore the exception they saved over
+       an error of the lookup of __del__, which nothing reports. */
     if (error != NULL) {
-        tinypy_internal_output_unraisable(vm, value);
         tinypy_error_release(error);
+        tinypy_internal_exception_clear_raised(vm);
     }
     __tinypy_internal_value_finalizer_leave(vm);
     tinypy_internal_exception_preserve_end(vm, &exception_state);

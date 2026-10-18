@@ -102,66 +102,21 @@ tinypy_bool_t tinypy_class_is_subclass(const tinypy_value_t *class_value, const 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_class_bind_impl(tinypy_value_t *class_value, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_error_t **out_error) {
+/* class_getattr and instance_getattr2 call the tp_descr_get of whatever
+   they find, with the class as its owner; a function and an initialised
+   static method are bound directly. */
+static tinypy_value_t *__tinypy_class_bind(tinypy_value_t *class_value, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(attribute);
 
-    if (kind == TINYPY_VALUE_FUNCTION) {
-        tinypy_value_t *return_value_1 = tinypy_method_new(attribute, instance, class_value);
-        return return_value_1;
-    }
-    if (kind == TINYPY_VALUE_METHOD) {
-        tinypy_value_t *method = tinypy_internal_method_bind(attribute, instance, class_value, out_error);
+    if (TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_FUNCTION) {
+        tinypy_value_t *method = tinypy_method_new(attribute, instance, class_value);
         return method;
     }
-    /* A Python subclass of staticmethod or classmethod binds through its
-       __get__, which may be its own. */
-    if (kind == TINYPY_VALUE_STATIC_METHOD && attribute->type == &vm->types[TINYPY_VALUE_STATIC_METHOD]) {
-        tinypy_value_t *callable = tinypy_static_method_callable(attribute);
-
+    tinypy_value_t *callable = attribute->type == &vm->types[TINYPY_VALUE_STATIC_METHOD] ? tinypy_static_method_callable(attribute) : NULL;
+    if (callable != NULL) {
         return TINYPY_RET(callable);
     }
-    if (kind == TINYPY_VALUE_CLASS_METHOD && attribute->type == &vm->types[TINYPY_VALUE_CLASS_METHOD]) {
-        tinypy_value_t *return_value_2 = tinypy_internal_class_method_bind(attribute, class_value, out_error);
-        return return_value_2;
-    }
-    if ((attribute->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && tinypy_internal_type_lookup_key(vm, attribute->type, vm->internal_special_get_key) != NULL) {
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(attribute, vm->internal_special_get_key, out_error);
-        tinypy_value_t *none = NULL;
-        tinypy_value_t *items[2];
-        tinypy_value_t *args;
-        tinypy_value_t *result;
-
-        if (method == NULL) {
-            return NULL;
-        }
-        if (instance == NULL) {
-            none = TINYPY_RET_NONE(vm);
-        }
-        items[0] = instance != NULL ? instance : none;
-        items[1] = class_value;
-        args = tinypy_tuple_from_items(vm, items, 2U);
-        result = tinypy_call(method, args, NULL, out_error);
-        TINYPY_DECREF(args);
-        if (none != NULL) {
-            TINYPY_DECREF(none);
-        }
-        TINYPY_DECREF(method);
-        return result;
-    }
-    if (kind == TINYPY_VALUE_PROPERTY && instance != NULL) {
-        tinypy_value_t *return_value_3 = attribute->type->descriptor_get(attribute, instance, NULL, out_error);
-        return return_value_3;
-    }
-    return TINYPY_RET(attribute);
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_class_bind(tinypy_value_t *class_value, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_error_t **out_error) {
-    TINYPY_INCREF(class_value);
-    TINYPY_INCREF(attribute);
-    tinypy_value_t *result = __tinypy_class_bind_impl(class_value, attribute, instance, out_error);
-    TINYPY_DECREF(attribute);
-    TINYPY_DECREF(class_value);
+    tinypy_value_t *result = tinypy_internal_descriptor_get_class_value(vm, attribute, instance, class_value, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

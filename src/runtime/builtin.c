@@ -66,12 +66,15 @@ static size_t __tinypy_builtin_hint_size(int64_t hint) {
     return size;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef tinypy_bool_t (*tinypy_builtin_argument_converter_t)(tinypy_vm_t *vm, size_t index, tinypy_value_t *value, void *context, tinypy_error_t **out_error);
+//////////////////////////////////////////////////////////////////////////
 /* vgetargskeywords: the argument count comes first, then each parameter in
-   order takes its positional or keyword value, and only then are the
-   keywords no parameter took rejected. Each value is held as soon as it is
-   taken: the keywords may be the caller's dict, which a colliding key's
-   comparison in a later lookup, or converting a value, can clear. */
-static tinypy_bool_t __tinypy_builtin_named_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t *const *names, size_t parameter_count, size_t required_count, tinypy_value_t **out_values, tinypy_error_t **out_error) {
+   order takes its positional or keyword value, which convertitem converts
+   before the next parameter is looked at, and only then are the keywords no
+   parameter took rejected. Each value is held as soon as it is taken: the
+   keywords may be the caller's dict, which a colliding key's comparison in a
+   later lookup, or converting a value, can clear. */
+static tinypy_bool_t __tinypy_builtin_named_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t *const *names, size_t parameter_count, size_t required_count, tinypy_builtin_argument_converter_t converter, void *context, tinypy_value_t **out_values, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t positional_count = TINYPY_TUPLE_SIZE(args);
     size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
@@ -120,8 +123,13 @@ static tinypy_bool_t __tinypy_builtin_named_arguments(tinypy_value_t *function, 
             __tinypy_builtin_release_arguments(out_values, index);
             return TINYPY_FALSE;
         }
-        if (out_values[index] != NULL) {
-            TINYPY_INCREF(out_values[index]);
+        if (out_values[index] == NULL) {
+            continue;
+        }
+        TINYPY_INCREF(out_values[index]);
+        if (converter != NULL && converter(vm, index, out_values[index], context, out_error) == 0) {
+            __tinypy_builtin_release_arguments(out_values, index + 1U);
+            return TINYPY_FALSE;
         }
     }
     if (keyword_count == 0U) {
@@ -226,6 +234,12 @@ static tinypy_bool_t __tinypy_builtin_apply_sequence(tinypy_value_t *value) {
     }
     if (kind == TINYPY_VALUE_DICT || kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
         return TINYPY_FALSE;
+    }
+    /* PySequence_Check asks a classic instance hasattr(value, '__getitem__'),
+       __getattr__ included. */
+    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_bool_t classic_result = tinypy_object_has_attr_value(value, vm->internal_special_getitem_key);
+        return classic_result;
     }
     tinypy_bool_t result = tinypy_internal_object_has_special_key(value, vm->internal_special_getitem_key);
 
@@ -2786,19 +2800,31 @@ static tinypy_bool_t __tinypy_builtin_round_number(tinypy_vm_t *vm, tinypy_value
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* builtin_round parses "d|O": the number converts with the parameters. */
+static tinypy_bool_t __tinypy_builtin_round_argument(tinypy_vm_t *vm, size_t index, tinypy_value_t *value, void *context, tinypy_error_t **out_error) {
+    if (index != 0U) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t converted = __tinypy_builtin_round_number(vm, value, (double *)context, out_error);
+    return converted;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_round(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *const parameter_names[] = {vm->internal_number_key, vm->internal_ndigits_key};
     tinypy_value_t *arguments[2];
-    double number;
+    double number = 0.0;
     int64_t digits = 0;
     double result;
 
     (void)user_data;
-    if (__tinypy_builtin_named_arguments(function, args, kwargs, parameter_names, 2U, 1U, arguments, out_error) == 0) {
+    /* Converting the number as it is taken matters only while a keyword
+       may still be rejected after it. */
+    tinypy_bool_t keywords = kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+    if (__tinypy_builtin_named_arguments(function, args, kwargs, parameter_names, 2U, 1U, keywords != 0 ? __tinypy_builtin_round_argument : NULL, &number, arguments, out_error) == 0) {
         return NULL;
     }
-    tinypy_bool_t converted = __tinypy_builtin_round_number(vm, arguments[0], &number, out_error);
+    tinypy_bool_t converted = keywords != 0 ? TINYPY_TRUE : __tinypy_builtin_round_number(vm, arguments[0], &number, out_error);
     if (converted != 0 && arguments[1] != NULL) {
         converted = tinypy_internal_index_as_i64(arguments[1], &digits, TINYPY_TRUE, out_error);
     }
@@ -2905,12 +2931,7 @@ static tinypy_bool_t __tinypy_builtin_dir_add_class(tinypy_value_t *names, tinyp
             success = __tinypy_builtin_dir_add_dict(names, dictionary, out_error);
         }
         else {
-            tinypy_value_t *keys = tinypy_object_get_attr_value(dictionary, vm->internal_keys_key, out_error);
-
-            success = keys != NULL ? tinypy_internal_dict_update_mapping(names, dictionary, keys, out_error) : TINYPY_FALSE;
-            if (keys != NULL) {
-                TINYPY_DECREF(keys);
-            }
+            success = tinypy_internal_dict_update_mapping(names, dictionary, out_error);
         }
         TINYPY_DECREF(dictionary);
         if (success == 0) {
@@ -3046,7 +3067,7 @@ static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_v
 
     (void)user_data;
     tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
-    tinypy_bool_t parsed = __tinypy_builtin_named_arguments(function, empty, kwargs, parameter_names, 3U, 0U, arguments, out_error);
+    tinypy_bool_t parsed = __tinypy_builtin_named_arguments(function, empty, kwargs, parameter_names, 3U, 0U, NULL, NULL, arguments, out_error);
 
     TINYPY_DECREF(empty);
     if (parsed == 0) {
@@ -3055,22 +3076,24 @@ static tinypy_value_t *__tinypy_builtin_print(tinypy_value_t *function, tinypy_v
     tinypy_value_t *separator = arguments[0] != NULL ? arguments[0] : &vm->none_object.base;
     tinypy_value_t *ending = arguments[1] != NULL ? arguments[1] : &vm->none_object.base;
     tinypy_value_t *target = arguments[2] != NULL ? arguments[2] : &vm->none_object.base;
-    if (__tinypy_builtin_print_affix(vm, vm->internal_sep_key, separator, out_error) == 0
-        || __tinypy_builtin_print_affix(vm, vm->internal_end_key, ending, out_error) == 0) {
-        goto cleanup;
-    }
+    /* A None sys.stdout prints nothing before sep and end are checked; a
+       missing one fails at the first write. */
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_NONE) {
         tinypy_value_t *sys_dict = TINYPY_MODULE_OBJECT(vm->sys_module)->dict;
 
         target = tinypy_internal_dict_get_optional(vm, sys_dict, vm->internal_stdout_key);
-        if (target == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "lost sys.stdout", out_error);
-            goto cleanup;
-        }
-        if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_NONE) {
+        if (target != NULL && TINYPY_VALUE_KIND(target) == TINYPY_VALUE_NONE) {
             result = TINYPY_RET_NONE(vm);
             goto cleanup;
         }
+    }
+    if (__tinypy_builtin_print_affix(vm, vm->internal_sep_key, separator, out_error) == 0
+        || __tinypy_builtin_print_affix(vm, vm->internal_end_key, ending, out_error) == 0) {
+        goto cleanup;
+    }
+    if (target == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "writeobject with NULL file", out_error);
+        goto cleanup;
     }
     output = TINYPY_RET(target);
     unicode_default = TINYPY_VALUE_KIND(separator) == TINYPY_VALUE_UNICODE || TINYPY_VALUE_KIND(ending) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
@@ -3114,16 +3137,8 @@ cleanup:
    or a dict subclass overriding keys(), sorted in place. */
 static tinypy_value_t *__tinypy_builtin_dir_locals(tinypy_vm_t *vm, tinypy_error_t **out_error) {
     tinypy_value_t *locals = vm->current_frame != NULL ? tinypy_internal_frame_locals(vm->current_frame) : vm->builtins;
-    tinypy_value_t *keys = tinypy_object_get_attr_value(locals, vm->internal_keys_key, out_error);
+    tinypy_value_t *names = tinypy_internal_mapping_keys(locals, out_error);
 
-    if (keys == NULL) {
-        return NULL;
-    }
-    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
-    tinypy_value_t *names = tinypy_call(keys, empty, NULL, out_error);
-
-    TINYPY_DECREF(empty);
-    TINYPY_DECREF(keys);
     if (names == NULL) {
         return NULL;
     }
@@ -3297,8 +3312,14 @@ static tinypy_bool_t __tinypy_builtin_import_name(tinypy_value_t *name, tinypy_e
     tinypy_bool_t text = kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE;
     tinypy_bool_t has_nul = text != TINYPY_FALSE && memchr(TINYPY_TEXT_BYTES(name), 0, TINYPY_TEXT_BYTE_SIZE(name)) != NULL;
 
-    if (kind == TINYPY_VALUE_UNICODE && tinypy_internal_codecs_validate_name(vm, name, out_error) == TINYPY_FALSE) {
-        return TINYPY_FALSE;
+    /* The "s" format encodes unicode with the default encoding before it
+       looks for NUL bytes, which ASCII keeps where they are. */
+    if (kind == TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *encoded = tinypy_internal_text_codec(vm, name, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+        if (encoded == NULL) {
+            return TINYPY_FALSE;
+        }
+        TINYPY_DECREF(encoded);
     }
     if (text == TINYPY_FALSE || has_nul != TINYPY_FALSE) {
         tinypy_message_part_t parts[] = {
@@ -3851,51 +3872,58 @@ static tinypy_bool_t __tinypy_builtin_source_view(tinypy_vm_t *vm, tinypy_value_
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct tinypy_builtin_compile_arguments_t {
+    tinypy_value_t *filename;
+    tinypy_value_t *mode;
+    int64_t flags;
+    int64_t dont_inherit;
+} tinypy_builtin_compile_arguments_t;
+//////////////////////////////////////////////////////////////////////////
+/* builtin_compile parses "Oss|ii". */
+static tinypy_bool_t __tinypy_builtin_compile_argument(tinypy_vm_t *vm, size_t index, tinypy_value_t *value, void *context, tinypy_error_t **out_error) {
+    tinypy_builtin_compile_arguments_t *converted = (tinypy_builtin_compile_arguments_t *)context;
+
+    (void)vm;
+    if (index == 1U) {
+        converted->filename = __tinypy_builtin_compile_string(value, "2", out_error);
+        return converted->filename != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    if (index == 2U) {
+        converted->mode = __tinypy_builtin_compile_string(value, "3", out_error);
+        return converted->mode != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    if (index == 0U) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t integer = __tinypy_builtin_compile_integer(value, index == 3U ? &converted->flags : &converted->dont_inherit, out_error);
+    return integer;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_compile(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *const parameter_names[] = {vm->internal_source_key, vm->internal_filename_key, vm->internal_mode_key, vm->internal_flags_key, vm->internal_dont_inherit_key};
     tinypy_value_t *arguments[5] = {NULL, NULL, NULL, NULL, NULL};
+    tinypy_builtin_compile_arguments_t converted = {NULL, NULL, 0, 0};
     const void *source;
     size_t source_size;
     const char *filename;
     size_t filename_size;
     tinypy_compile_mode_e mode;
     tinypy_compile_options_t options;
-    int64_t flags = 0;
-    int64_t dont_inherit = 0;
     tinypy_bool_t source_is_unicode;
-    tinypy_value_t *filename_value;
-    tinypy_value_t *mode_value;
     tinypy_value_t *result = NULL;
     const uint32_t obsolete_flags = UINT32_C(0x10);
     const uint32_t supported_flags = (uint32_t)(TINYPY_COMPILE_FLAG_DONT_IMPLY_DEDENT | TINYPY_COMPILE_FLAG_FUTURE_DIVISION | TINYPY_COMPILE_FLAG_FUTURE_ABSOLUTE_IMPORT | TINYPY_COMPILE_FLAG_FUTURE_WITH_STATEMENT | TINYPY_COMPILE_FLAG_FUTURE_PRINT_FUNCTION | TINYPY_COMPILE_FLAG_FUTURE_UNICODE_LITERALS);
 
     (void)user_data;
-    if (__tinypy_builtin_named_arguments(function, args, kwargs, parameter_names, 5U, 3U, arguments, out_error) == 0) {
-        return NULL;
+    if (__tinypy_builtin_named_arguments(function, args, kwargs, parameter_names, 5U, 3U, __tinypy_builtin_compile_argument, &converted, arguments, out_error) == 0) {
+        goto release_converted;
     }
-    filename_value = __tinypy_builtin_compile_string(arguments[1], "2", out_error);
-    if (filename_value == NULL) {
-        __tinypy_builtin_release_arguments(arguments, 5U);
-        return NULL;
-    }
-    mode_value = __tinypy_builtin_compile_string(arguments[2], "3", out_error);
-    if (mode_value == NULL) {
-        TINYPY_DECREF(filename_value);
-        __tinypy_builtin_release_arguments(arguments, 5U);
-        return NULL;
-    }
-    filename = (const char *)tinypy_string_view(filename_value, &filename_size);
-    if (arguments[3] != NULL && __tinypy_builtin_compile_integer(arguments[3], &flags, out_error) == 0) {
+    filename = (const char *)tinypy_string_view(converted.filename, &filename_size);
+    if (__tinypy_builtin_compile_mode(vm, converted.mode, &mode, out_error) == 0) {
         goto done;
     }
-    if (arguments[4] != NULL && __tinypy_builtin_compile_integer(arguments[4], &dont_inherit, out_error) == 0) {
-        goto done;
-    }
-    if (__tinypy_builtin_compile_mode(vm, mode_value, &mode, out_error) == 0) {
-        goto done;
-    }
-    if (flags < 0 || (uint64_t)flags > UINT32_MAX || ((uint32_t)flags & ~(supported_flags | obsolete_flags)) != 0U) {
+    if (converted.flags < 0 || (uint64_t)converted.flags > UINT32_MAX || ((uint32_t)converted.flags & ~(supported_flags | obsolete_flags)) != 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "compile(): unrecognised flags", out_error);
         goto done;
     }
@@ -3910,13 +3938,18 @@ static tinypy_value_t *__tinypy_builtin_compile(tinypy_value_t *function, tinypy
     if (tinypy_internal_compile_options_inherit_frame(vm, &options) == 0) {
         options.optimize_level = vm->optimize_level;
     }
-    options.flags = (uint32_t)flags & supported_flags;
-    options.dont_inherit = dont_inherit != 0 ? 1 : 0;
+    options.flags = (uint32_t)converted.flags & supported_flags;
+    options.dont_inherit = converted.dont_inherit != 0 ? 1 : 0;
     result = tinypy_internal_compiler_compile_source(vm, source, source_size, source_is_unicode, source_is_unicode == 0 ? TINYPY_TRUE : TINYPY_FALSE, TINYPY_FALSE, filename, filename_size, &options, out_error);
 done:
-    TINYPY_DECREF(mode_value);
-    TINYPY_DECREF(filename_value);
     __tinypy_builtin_release_arguments(arguments, 5U);
+release_converted:
+    if (converted.mode != NULL) {
+        TINYPY_DECREF(converted.mode);
+    }
+    if (converted.filename != NULL) {
+        TINYPY_DECREF(converted.filename);
+    }
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

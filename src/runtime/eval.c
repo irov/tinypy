@@ -2043,53 +2043,13 @@ static void __tinypy_eval_decode_trusted(const uint8_t *bytecode, size_t instruc
 }
 //////////////////////////////////////////////////////////////////////////
 /* Names a callable for messages the way PyEval_GetFuncName and
-   PyEval_GetFuncDesc do, with the name as "%.200s". */
+   PyEval_GetFuncDesc do, with the name as "%.200s", after the call unpacked
+   a bound method into its function. */
 static void __tinypy_eval_callable_name(tinypy_value_t *callable, tinypy_message_part_t *out_name, tinypy_message_part_t *out_description) {
-    static const char call_description[] = "()";
-    static const char constructor_description[] = " constructor";
-    static const char instance_description[] = " instance";
-    static const char object_description[] = " object";
-    tinypy_value_t *name = NULL;
-    const char *description = object_description;
-    size_t description_size = sizeof(object_description) - 1U;
+    tinypy_value_t *function = TINYPY_VALUE_KIND(callable) == TINYPY_VALUE_METHOD && TINYPY_METHOD_OBJECT(callable)->self != NULL ? TINYPY_METHOD_OBJECT(callable)->function : callable;
 
-    switch (TINYPY_VALUE_KIND(callable)) {
-    case TINYPY_VALUE_METHOD:
-        __tinypy_eval_callable_name(TINYPY_METHOD_OBJECT(callable)->function, out_name, out_description);
-        return;
-    case TINYPY_VALUE_FUNCTION:
-        name = TINYPY_FUNCTION_OBJECT(callable)->name;
-        description = call_description;
-        description_size = sizeof(call_description) - 1U;
-        break;
-    case TINYPY_VALUE_NATIVE_FUNCTION:
-        name = TINYPY_NATIVE_FUNCTION_OBJECT(callable)->name;
-        description = call_description;
-        description_size = sizeof(call_description) - 1U;
-        break;
-    case TINYPY_VALUE_CLASS:
-        name = TINYPY_CLASS_OBJECT(callable)->name;
-        description = constructor_description;
-        description_size = sizeof(constructor_description) - 1U;
-        break;
-    case TINYPY_VALUE_OLD_INSTANCE:
-        name = TINYPY_CLASS_OBJECT(TINYPY_OLD_INSTANCE_OBJECT(callable)->class_object)->name;
-        description = instance_description;
-        description_size = sizeof(instance_description) - 1U;
-        break;
-    default:
-        break;
-    }
-    if (name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING) {
-        out_name->bytes = (const char *)TINYPY_TEXT_BYTES(name);
-        out_name->size = __tinypy_internal_message_precision(TINYPY_TEXT_BYTE_SIZE(name), TINYPY_EVAL_MESSAGE_NAME_LIMIT);
-    }
-    else {
-        out_name->bytes = callable->type->name;
-        out_name->size = __tinypy_internal_message_precision(callable->type->name_size, TINYPY_EVAL_MESSAGE_NAME_LIMIT);
-    }
-    out_description->bytes = description;
-    out_description->size = description_size;
+    tinypy_internal_callable_message_name(function, out_name, out_description);
+    out_name->size = __tinypy_internal_message_precision(out_name->size, TINYPY_EVAL_MESSAGE_NAME_LIMIT);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_eval_keyword_name_valid(tinypy_value_t *key) {
@@ -2099,36 +2059,23 @@ static tinypy_bool_t __tinypy_eval_keyword_name_valid(tinypy_value_t *key) {
     return valid;
 }
 //////////////////////////////////////////////////////////////////////////
-/* ext_do_call passes a dictionary on as it is, or a PyDict_Copy of it when
-   keyword arguments join it. */
-static tinypy_value_t *__tinypy_eval_call_keyword_mapping(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *source, tinypy_bool_t extended, tinypy_error_t **out_error) {
+/* ext_do_call copies a ** mapping other than a dict with PyDict_Update. */
+static tinypy_value_t *__tinypy_eval_call_keyword_mapping(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *source, tinypy_error_t **out_error) {
     tinypy_message_part_t name;
     tinypy_message_part_t description;
-    tinypy_value_t *mapping;
-    tinypy_value_t *keys_method = NULL;
     tinypy_error_t *mapping_error = NULL;
-    int32_t mapping_status;
-    tinypy_bool_t attribute_error;
 
-    if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_DICT) {
-        tinypy_value_t *result = extended != 0 ? tinypy_internal_dict_copy(source, out_error) : tinypy_internal_dict_snapshot(source, out_error);
-        return result;
+    tinypy_value_t *mapping = tinypy_dict_new(vm);
+    if (tinypy_internal_dict_update_mapping(mapping, source, &mapping_error) != 0) {
+        return mapping;
     }
-    mapping_status = tinypy_internal_object_get_optional_attr_key(source, vm->internal_keys_key, &keys_method, &mapping_error);
-    if (mapping_status > 0) {
-        mapping = tinypy_dict_new(vm);
-        tinypy_bool_t updated = tinypy_internal_dict_update_mapping(mapping, source, keys_method, &mapping_error);
-
-        TINYPY_DECREF(keys_method);
-        if (updated != 0) {
-            return mapping;
-        }
-        TINYPY_DECREF(mapping);
-    }
-    attribute_error = vm->raised_type != NULL && TINYPY_VALUE_KIND(vm->raised_type) == TINYPY_VALUE_TYPE
+    TINYPY_DECREF(mapping);
+    /* PyDict_Update reports a value without keys with AttributeError, which
+       ext_do_call words as a mapping error. */
+    tinypy_bool_t attribute_error = vm->raised_type != NULL && TINYPY_VALUE_KIND(vm->raised_type) == TINYPY_VALUE_TYPE
         ? tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_ATTRIBUTE_ERROR])
         : (mapping_error != NULL && tinypy_error_kind(mapping_error) == TINYPY_ERROR_ATTRIBUTE);
-    if (mapping_status == 0 || attribute_error != 0) {
+    if (attribute_error != 0) {
         if (mapping_error != NULL) {
             tinypy_error_release(mapping_error);
         }
@@ -2152,49 +2099,81 @@ static tinypy_value_t *__tinypy_eval_call_keyword_mapping(tinypy_vm_t *vm, tinyp
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
+/* ext_do_call converts a * iterable other than a tuple with
+   PySequence_Tuple and words its TypeError, unless a generator raised it. */
+static tinypy_value_t *__tinypy_eval_call_star_tuple(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *iterable, tinypy_error_t **out_error) {
+    tinypy_error_t *conversion_error = NULL;
+    tinypy_value_t *star = tinypy_internal_sequence_tuple(iterable, "error return without exception set", &conversion_error);
+
+    if (star != NULL) {
+        return star;
+    }
+    if (conversion_error != NULL && tinypy_error_kind(conversion_error) == TINYPY_ERROR_TYPE && TINYPY_VALUE_KIND(iterable) != TINYPY_VALUE_GENERATOR) {
+        tinypy_message_part_t name;
+        tinypy_message_part_t description;
+
+        tinypy_error_release(conversion_error);
+        tinypy_vm_clear_error(vm);
+        __tinypy_eval_callable_name(callable, &name, &description);
+        tinypy_message_part_t parts[] = {
+            name,
+            description,
+            TINYPY_MESSAGE_PART_LITERAL(" argument after * must be an iterable, not "),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(iterable, TINYPY_EVAL_MESSAGE_NAME_LIMIT),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    }
+    else if (out_error != NULL) {
+        *out_error = conversion_error;
+    }
+    else if (conversion_error != NULL) {
+        tinypy_error_release(conversion_error);
+    }
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+/* update_keyword_args stores one keyword pair of a call. */
+static tinypy_bool_t __tinypy_eval_add_keyword(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *kwargs, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
+    if (__tinypy_eval_keyword_name_valid(key) == 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t contains;
+    if (tinypy_internal_dict_contains_checked(vm, kwargs, key, &contains, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (contains != 0) {
+        tinypy_message_part_t name;
+        tinypy_message_part_t description;
+
+        __tinypy_eval_callable_name(callable, &name, &description);
+        tinypy_message_part_t parts[] = {
+            name,
+            description,
+            TINYPY_MESSAGE_PART_LITERAL(" got multiple values for keyword argument '"),
+            TINYPY_MESSAGE_PART_TEXT_PRECISION(key, TINYPY_EVAL_MESSAGE_NAME_LIMIT),
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, kwargs, key, value, out_error);
+    return stored;
+}
+//////////////////////////////////////////////////////////////////////////
 /* update_keyword_args: the keyword pairs of a call, the last one first. */
 static tinypy_bool_t __tinypy_eval_add_keywords(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_error_t **out_error) {
     for (size_t index = keyword_count; index != 0U; --index) {
         tinypy_value_t *key = keyword_items[(index - 1U) * 2U];
         tinypy_value_t *value = keyword_items[(index - 1U) * 2U + 1U];
 
-        if (__tinypy_eval_keyword_name_valid(key) == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
-            return TINYPY_FALSE;
-        }
-        tinypy_bool_t contains;
-        if (tinypy_internal_dict_contains_checked(vm, kwargs, key, &contains, out_error) == 0) {
-            return TINYPY_FALSE;
-        }
-        if (contains != 0) {
-            tinypy_message_part_t name;
-            tinypy_message_part_t description;
-
-            __tinypy_eval_callable_name(callable, &name, &description);
-            tinypy_message_part_t parts[] = {
-                name,
-                description,
-                TINYPY_MESSAGE_PART_LITERAL(" got multiple values for keyword argument '"),
-                TINYPY_MESSAGE_PART_TEXT_PRECISION(key, TINYPY_EVAL_MESSAGE_NAME_LIMIT),
-                TINYPY_MESSAGE_PART_LITERAL("'"),
-            };
-
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-            return TINYPY_FALSE;
-        }
-        if (tinypy_internal_dict_set_checked(vm, kwargs, key, value, out_error) == 0) {
+        if (__tinypy_eval_add_keyword(vm, callable, kwargs, key, value, out_error) == 0) {
             return TINYPY_FALSE;
         }
     }
     return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-/* A Python function, called directly or through a bound method, binds its
-   arguments without keeping the containers they came in. */
-static tinypy_bool_t __tinypy_eval_binds_python_function(tinypy_vm_t *vm, tinypy_value_t *callable) {
-    tinypy_bool_t result = callable->type == &vm->types[TINYPY_VALUE_FUNCTION]
-        || (callable->type == &vm->types[TINYPY_VALUE_METHOD] && TINYPY_METHOD_OBJECT(callable)->self != NULL && TINYPY_METHOD_OBJECT(callable)->function->type == &vm->types[TINYPY_VALUE_FUNCTION]);
-    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* call_function pops the arguments left on the stack from the last one;
@@ -2206,108 +2185,33 @@ static inline void __tinypy_eval_release_arguments(tinypy_value_t **items, size_
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t argument, tinypy_bool_t has_varargs, tinypy_bool_t has_var_keywords, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t argument, tinypy_error_t **out_error) {
     size_t positional_count = argument & 0xffU;
     size_t keyword_count = (argument >> 8U) & 0xffU;
     size_t argument_slots = positional_count + keyword_count * 2U;
-    size_t consumed = 1U + argument_slots + (has_varargs != 0 ? 1U : 0U) + (has_var_keywords != 0 ? 1U : 0U);
     tinypy_value_t *args = NULL;
     tinypy_value_t *kwargs = NULL;
     tinypy_value_t *result;
     tinypy_bool_t direct_bound_function = TINYPY_FALSE;
 
-    tinypy_value_t **first = frame->stack_top - consumed;
-    tinypy_bool_t direct_function = has_varargs == 0 && first[0]->type == &vm->types[TINYPY_VALUE_FUNCTION];
-    if (has_varargs == 0 && first[0]->type == &vm->types[TINYPY_VALUE_METHOD]) {
+    tinypy_value_t **first = frame->stack_top - 1U - argument_slots;
+    tinypy_bool_t direct_function = first[0]->type == &vm->types[TINYPY_VALUE_FUNCTION];
+    if (first[0]->type == &vm->types[TINYPY_VALUE_METHOD]) {
         tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(first[0]);
 
         direct_bound_function = method->self != NULL && method->function->type == &vm->types[TINYPY_VALUE_FUNCTION];
     }
-    tinypy_bool_t direct_native = has_varargs == 0 && first[0]->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION];
-    tinypy_bool_t direct_class = has_varargs == 0 && first[0]->type == &vm->types[TINYPY_VALUE_TYPE];
-    if (has_var_keywords != 0) {
-        size_t mapping_offset = 1U + positional_count + keyword_count * 2U + (has_varargs != 0 ? 1U : 0U);
-        tinypy_value_t *mapping = first[mapping_offset];
-
-        /* A Python function binds its arguments without keeping the
-           dictionary, so the copy ext_do_call makes for other callables is
-           skipped. */
-        if (keyword_count == 0U && TINYPY_VALUE_KIND(mapping) == TINYPY_VALUE_DICT && __tinypy_eval_binds_python_function(vm, first[0]) != 0) {
-            kwargs = TINYPY_RET(mapping);
-        }
-        else {
-            kwargs = __tinypy_eval_call_keyword_mapping(vm, first[0], mapping, keyword_count != 0U, out_error);
-            if (kwargs == NULL) {
-                result = NULL;
-                goto cleanup;
-            }
-        }
-    }
-    if (has_varargs != 0) {
-        tinypy_value_t *iterable = first[1U + positional_count + keyword_count * 2U];
-        tinypy_value_t *star = iterable;
-
-        if (TINYPY_VALUE_KIND(iterable) != TINYPY_VALUE_TUPLE) {
-            tinypy_error_t *conversion_error = NULL;
-            tinypy_value_t *constructor_args = tinypy_tuple_from_items(vm, &iterable, 1U);
-
-            star = tinypy_internal_tuple_create(&vm->types[TINYPY_VALUE_TUPLE], constructor_args, NULL, &conversion_error);
-            TINYPY_DECREF(constructor_args);
-            if (star == NULL) {
-                if (conversion_error != NULL && tinypy_error_kind(conversion_error) == TINYPY_ERROR_TYPE && TINYPY_VALUE_KIND(iterable) != TINYPY_VALUE_GENERATOR) {
-                    tinypy_message_part_t name;
-                    tinypy_message_part_t description;
-
-                    tinypy_error_release(conversion_error);
-                    tinypy_vm_clear_error(vm);
-                    __tinypy_eval_callable_name(first[0], &name, &description);
-                    tinypy_message_part_t parts[] = {
-                        name,
-                        description,
-                        TINYPY_MESSAGE_PART_LITERAL(" argument after * must be an iterable, not "),
-                        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(iterable, TINYPY_EVAL_MESSAGE_NAME_LIMIT),
-                    };
-
-                    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                }
-                else if (out_error != NULL) {
-                    *out_error = conversion_error;
-                }
-                else if (conversion_error != NULL) {
-                    tinypy_error_release(conversion_error);
-                }
-                result = NULL;
-                goto cleanup;
-            }
-        }
-        /* A Python function copies its arguments, so it can take the tuple
-           itself; a bound method's call makes a new one with the receiver. */
-        if (positional_count == 0U && __tinypy_eval_binds_python_function(vm, first[0]) != 0) {
-            args = TINYPY_RET(star);
-        }
-        else {
-            args = tinypy_internal_tuple_join_items_checked(vm, NULL, first + 1U, positional_count, tinypy_internal_tuple_items(star), TINYPY_TUPLE_SIZE(star), out_error);
-        }
-        if (star != iterable) {
-            TINYPY_DECREF(star);
-        }
-        if (args == NULL) {
-            result = NULL;
-            goto cleanup;
-        }
-    }
-    else if (direct_function == 0 && direct_bound_function == 0 && direct_native == 0 && direct_class == 0) {
+    tinypy_bool_t direct_native = first[0]->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION];
+    tinypy_bool_t direct_class = first[0]->type == &vm->types[TINYPY_VALUE_TYPE];
+    if (direct_function == 0 && direct_bound_function == 0 && direct_native == 0 && direct_class == 0) {
         args = tinypy_internal_tuple_from_items_checked(vm, first + 1U, positional_count, out_error);
         if (args == NULL) {
             result = NULL;
             goto cleanup;
         }
     }
-    if ((keyword_count != 0U || has_var_keywords != 0)
-        && ((direct_function == 0 && direct_bound_function == 0) || has_var_keywords != 0)) {
-        if (kwargs == NULL) {
-            kwargs = tinypy_dict_new(vm);
-        }
+    if (keyword_count != 0U && direct_function == 0 && direct_bound_function == 0) {
+        kwargs = tinypy_dict_new(vm);
         if (__tinypy_eval_add_keywords(vm, first[0], kwargs, first + 1U + positional_count, keyword_count, out_error) == 0) {
             result = NULL;
             goto cleanup;
@@ -2316,7 +2220,7 @@ static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_ob
     if (direct_function != 0) {
         tinypy_value_t *const *keyword_items = first + 1U + positional_count;
 
-        result = __tinypy_eval_function_items_keywords(first[0], first + 1U, positional_count, kwargs, kwargs == NULL ? keyword_items : NULL, kwargs == NULL ? keyword_count : 0U, out_error);
+        result = __tinypy_eval_function_items_keywords(first[0], first + 1U, positional_count, NULL, keyword_items, keyword_count, out_error);
     }
     else if (direct_bound_function != 0) {
         tinypy_value_t *bound_method = first[0];
@@ -2324,7 +2228,7 @@ static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_ob
         tinypy_value_t *const *keyword_items = first + 1U + positional_count;
 
         first[0] = method->self;
-        result = __tinypy_eval_function_items_keywords(method->function, first, positional_count + 1U, kwargs, kwargs == NULL ? keyword_items : NULL, kwargs == NULL ? keyword_count : 0U, out_error);
+        result = __tinypy_eval_function_items_keywords(method->function, first, positional_count + 1U, NULL, keyword_items, keyword_count, out_error);
         first[0] = bound_method;
     }
     else if (direct_native != 0) {
@@ -2344,13 +2248,155 @@ cleanup:
     if (kwargs != NULL) {
         TINYPY_DECREF(kwargs);
     }
-    __tinypy_eval_release_arguments(first + 1U + argument_slots, consumed - 1U - argument_slots);
     if (direct_bound_function != 0) {
         tinypy_internal_method_release(first[0]);
     }
     else {
         TINYPY_DECREF(first[0]);
     }
+    frame->stack_top = first;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* ext_do_call: a bound method gives way to its receiver, the first positional
+   argument, before the ** mapping and then the * iterable leave the stack; a
+   mapping or iterable converted into a dict or a tuple goes at once. The
+   keyword pairs move into the dict and the positional arguments into the
+   argument tuple, which goes after the call, before the dict, the star
+   tuple, the callable and what a failure left on the stack. */
+static tinypy_value_t *__tinypy_eval_call_extended(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t argument, tinypy_bool_t has_varargs, tinypy_bool_t has_var_keywords, tinypy_error_t **out_error) {
+    size_t positional_count = argument & 0xffU;
+    size_t keyword_count = (argument >> 8U) & 0xffU;
+    size_t consumed = 1U + positional_count + keyword_count * 2U + (has_varargs != 0 ? 1U : 0U) + (has_var_keywords != 0 ? 1U : 0U);
+    tinypy_value_t **first = frame->stack_top - consumed;
+    tinypy_value_t **positional = first + 1U;
+    tinypy_value_t *function = first[0];
+    tinypy_value_t *kwargs = NULL;
+    tinypy_value_t *mapping = NULL;
+    tinypy_value_t *star = NULL;
+    tinypy_value_t *args = NULL;
+    tinypy_value_t *result = NULL;
+    tinypy_bool_t caller_dict = TINYPY_FALSE;
+    tinypy_bool_t collected = TINYPY_FALSE;
+
+    if (function->type == &vm->types[TINYPY_VALUE_METHOD] && TINYPY_METHOD_OBJECT(function)->self != NULL) {
+        tinypy_value_t *bound_method = function;
+
+        first[0] = TINYPY_RET(TINYPY_METHOD_OBJECT(bound_method)->self);
+        function = TINYPY_RET(TINYPY_METHOD_OBJECT(bound_method)->function);
+        tinypy_internal_method_release(bound_method);
+        positional = first;
+        positional_count += 1U;
+    }
+    else {
+        TINYPY_INCREF(function);
+    }
+    if (has_var_keywords != 0) {
+        kwargs = __tinypy_eval_pop_owned(frame);
+        caller_dict = TINYPY_VALUE_KIND(kwargs) == TINYPY_VALUE_DICT ? TINYPY_TRUE : TINYPY_FALSE;
+        if (caller_dict == 0) {
+            tinypy_value_t *converted = __tinypy_eval_call_keyword_mapping(vm, function, kwargs, out_error);
+
+            if (converted == NULL) {
+                goto done;
+            }
+            TINYPY_DECREF(kwargs);
+            kwargs = converted;
+        }
+    }
+    if (has_varargs != 0) {
+        star = __tinypy_eval_pop_owned(frame);
+        if (TINYPY_VALUE_KIND(star) != TINYPY_VALUE_TUPLE) {
+            tinypy_value_t *converted = __tinypy_eval_call_star_tuple(vm, function, star, out_error);
+
+            if (converted == NULL) {
+                goto done;
+            }
+            TINYPY_DECREF(star);
+            star = converted;
+        }
+    }
+    if (keyword_count != 0U) {
+        tinypy_value_t *source = kwargs;
+
+        kwargs = source != NULL ? tinypy_internal_dict_copy(source, out_error) : tinypy_internal_dict_new_checked(vm, out_error);
+        if (source != NULL) {
+            TINYPY_DECREF(source);
+        }
+        if (kwargs == NULL) {
+            goto done;
+        }
+        for (size_t index = keyword_count; index != 0U; --index) {
+            tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
+            tinypy_value_t *key = __tinypy_eval_pop_owned(frame);
+            tinypy_bool_t added = __tinypy_eval_add_keyword(vm, function, kwargs, key, value, out_error);
+
+            TINYPY_DECREF(key);
+            TINYPY_DECREF(value);
+            if (added == 0) {
+                TINYPY_DECREF(kwargs);
+                kwargs = NULL;
+                goto done;
+            }
+        }
+    }
+    else if (caller_dict != 0 && function->type != &vm->types[TINYPY_VALUE_FUNCTION]) {
+        /* A callable other than a Python function, which binds its arguments
+           without keeping the dict, receives a snapshot of the caller's dict,
+           released right before it. */
+        mapping = kwargs;
+        kwargs = tinypy_internal_dict_snapshot(mapping, out_error);
+        if (kwargs == NULL) {
+            goto done;
+        }
+    }
+    tinypy_bool_t items_call = function->type == &vm->types[TINYPY_VALUE_FUNCTION] || function->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION];
+    if (star != NULL && positional_count == 0U) {
+        args = TINYPY_RET(star);
+    }
+    else if (star != NULL || items_call == 0) {
+        tinypy_value_t *const *star_items = star != NULL ? tinypy_internal_tuple_items(star) : NULL;
+        size_t star_count = star != NULL ? TINYPY_TUPLE_SIZE(star) : 0U;
+
+        args = tinypy_internal_tuple_join_items_checked(vm, NULL, positional, positional_count, star_items, star_count, out_error);
+        if (args == NULL) {
+            goto done;
+        }
+    }
+    collected = TINYPY_TRUE;
+    if (items_call == 0) {
+        result = tinypy_call(function, args, kwargs, out_error);
+    }
+    else {
+        tinypy_value_t *const *items = args != NULL ? tinypy_internal_tuple_items(args) : positional;
+        size_t item_count = args != NULL ? TINYPY_TUPLE_SIZE(args) : positional_count;
+
+        if (function->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
+            result = __tinypy_eval_function_items_keywords(function, items, item_count, kwargs, NULL, 0U, out_error);
+        }
+        else {
+            result = tinypy_internal_native_function_call_items(function, items, item_count, kwargs, out_error);
+        }
+    }
+done:
+    if (args != NULL) {
+        TINYPY_DECREF(args);
+    }
+    if (collected != 0) {
+        __tinypy_eval_release_arguments(positional, positional_count);
+        frame->stack_top = positional;
+    }
+    if (kwargs != NULL) {
+        TINYPY_DECREF(kwargs);
+    }
+    if (mapping != NULL) {
+        TINYPY_DECREF(mapping);
+    }
+    if (star != NULL) {
+        TINYPY_DECREF(star);
+    }
+    TINYPY_DECREF(function);
+    __tinypy_eval_release_arguments(first, (size_t)(frame->stack_top - first));
     frame->stack_top = first;
     return result;
 }
@@ -3881,8 +3927,11 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             if (method_call != 0 && __tinypy_eval_peek(frame, 2U + (argument & 0xffU) + ((argument >> 8U) & 0xffU) * 2U) != NULL) {
                 call_result = __tinypy_eval_call_method(vm, frame, argument, out_error);
             }
+            else if (has_varargs != 0 || has_var_keywords != 0) {
+                call_result = __tinypy_eval_call_extended(vm, frame, argument, has_varargs, has_var_keywords, out_error);
+            }
             else {
-                call_result = __tinypy_eval_call_stack(vm, frame, argument, has_varargs, has_var_keywords, out_error);
+                call_result = __tinypy_eval_call_stack(vm, frame, argument, out_error);
                 if (method_call != 0) {
                     frame->stack_top -= 1;
                 }

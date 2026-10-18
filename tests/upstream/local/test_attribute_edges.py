@@ -439,3 +439,208 @@ class AttributeEdges(unittest.TestCase):
         self.assertIs(type(mixed), type)
         self.assertEqual(mixed.__bases__, (Old, object))
         self.assertEqual(mixed().marker, 17)
+
+    def test_metaclass_entries_shadowing_type_metadata_use_the_namespace(self):
+        class Meta(type):
+            pass
+        class Shadowed(object):
+            __metaclass__ = Meta
+            'shadowed doc'
+        Shadowed.__doc__ = 'assigned doc'
+        self.assertEqual((Shadowed.__dict__['__doc__'], Shadowed.__doc__, Shadowed().__doc__),
+                         ('assigned doc', 'assigned doc', 'assigned doc'))
+        del Shadowed.__doc__
+        self.assertEqual(Shadowed.__doc__, object.__doc__)
+        del Shadowed.__module__
+        self.assertEqual(Shadowed.__module__, Meta.__module__)
+        with self.assertRaises(AttributeError) as caught:
+            del Shadowed.__module__
+        self.assertEqual(caught.exception.args, ('__module__',))
+        class FlagsMeta(type):
+            __flags__ = 'meta flags'
+        class Flagged(object):
+            __metaclass__ = FlagsMeta
+        Flagged.__flags__ = 2
+        self.assertEqual((Flagged.__flags__, Flagged.__dict__['__flags__']), (2, 2))
+        with self.assertRaises(TypeError) as caught:
+            Meta.__flags__ = 2
+        self.assertEqual(caught.exception.args, ('readonly attribute',))
+        sys.exc_clear()
+
+    def test_partial_subclass_overrides_its_fields(self):
+        from _functools import partial
+        class Overriding(partial):
+            @property
+            def args(self):
+                return 'own args'
+            func = property(lambda self: 'own func')
+            keywords = 'own keywords'
+        class Plain(partial):
+            pass
+        value = Overriding(len, [1, 2])
+        self.assertEqual((value.args, value.func, value.keywords, getattr(value, 'args'), value()),
+                         ('own args', 'own func', 'own keywords', 'own args', 2))
+        plain = Plain(len, [1], key=3)
+        self.assertEqual((plain.func, plain.args, plain.keywords), (len, ([1],), {'key': 3}))
+
+    def test_object_getattribute_is_generic_on_classes(self):
+        class Base(object):
+            inherited = 'inherited'
+        class Meta(type):
+            meta = 'meta'
+        class Class(Base):
+            __metaclass__ = Meta
+            own = staticmethod(len)
+            def method(self):
+                pass
+        class Old:
+            member = 1
+        get = object.__getattribute__
+        self.assertIs(get(Class, 'own'), Class.__dict__['own'])
+        self.assertIs(get(Class, 'method'), Class.__dict__['method'])
+        self.assertEqual((get(Class, 'meta'), get(Class, u'meta'), get(Class, '__name__')), ('meta', 'meta', 'Class'))
+        self.assertIs(get(Class, '__class__'), Meta)
+        self.assertIs(get(Old, '__class__'), type(Old))
+        self.assertEqual(type.__getattribute__(Class, 'inherited'), 'inherited')
+        self.assertEqual(type(Old).__getattribute__(Old, 'member'), 1)
+        examples = ((Class, 'inherited', "'Meta' object has no attribute 'inherited'"),
+                    (Class, 'missing', "'Meta' object has no attribute 'missing'"),
+                    (Old, 'member', "'classobj' object has no attribute 'member'"),
+                    (Old(), 'member', "'instance' object has no attribute 'member'"))
+        for target, name, message in examples:
+            with self.assertRaises(AttributeError) as caught:
+                get(target, name)
+            self.assertEqual(caught.exception.args, (message,))
+        sys.exc_clear()
+
+    def test_classic_instance_getattribute_uses_the_class_and_hook(self):
+        class Old:
+            member = 1
+            def __getattr__(self, name):
+                return 'hook ' + name
+        instance = Old()
+        get = type(instance).__getattribute__
+        self.assertEqual((get(instance, 'member'), get(instance, 'missing')), (1, 'hook missing'))
+        self.assertIs(get(instance, '__class__'), Old)
+        self.assertIs(object.__getattribute__(instance, '__class__'), type(instance))
+
+    def test_methods_and_super_objects_under_object_getattribute(self):
+        class Base(object):
+            member = 'base'
+        class Class(Base):
+            def method(self):
+                pass
+        bound = Class().method
+        self.assertIs(object.__getattribute__(bound, 'im_func'), Class.__dict__['method'])
+        self.assertEqual(type(bound).__getattribute__(bound, 'func_name'), 'method')
+        delegating = super(Class, Class())
+        self.assertEqual(super.__getattribute__(delegating, 'member'), 'base')
+        self.assertIs(object.__getattribute__(delegating, '__thisclass__'), Class)
+        for target, name in ((bound, 'func_name'), (delegating, 'member')):
+            with self.assertRaises(AttributeError):
+                object.__getattribute__(target, name)
+        sys.exc_clear()
+
+    def test_getattr_hook_is_fetched_before_getattribute_runs(self):
+        class Adding(object):
+            def __getattribute__(self, name):
+                if name == 'missing' and '__getattr__' not in Adding.__dict__:
+                    Adding.__getattr__ = lambda self, name: 'added ' + name
+                return object.__getattribute__(self, name)
+        with self.assertRaises(AttributeError):
+            Adding().missing
+        self.assertEqual(Adding().missing, 'added missing')
+        class Removing(object):
+            def __getattr__(self, name):
+                return 'removed ' + name
+            def __getattribute__(self, name):
+                if name == 'missing':
+                    del Removing.__getattr__
+                return object.__getattribute__(self, name)
+        self.assertEqual(Removing().missing, 'removed missing')
+        sys.exc_clear()
+
+    def test_iteration_falls_back_to_getitem_when_iter_fails_to_bind(self):
+        class Failing(object):
+            @property
+            def __iter__(self):
+                raise KeyError('iter')
+        class Sequence(Failing):
+            def __getitem__(self, index):
+                if index < 2:
+                    return index
+                raise IndexError(index)
+        self.assertEqual(list(Sequence()), [0, 1])
+        with self.assertRaises(TypeError) as caught:
+            iter(Failing())
+        self.assertEqual(caught.exception.args, ("'Failing' object is not iterable",))
+        class Raising(object):
+            def __init__(self, error):
+                self.error = error
+            def __get__(self, instance, owner):
+                raise self.error
+        class Old:
+            __iter__ = Raising(AttributeError('iter'))
+            def __getitem__(self, index):
+                if index < 1:
+                    return index
+                raise IndexError(index)
+        self.assertEqual(list(Old()), [0])
+        Old.__getitem__ = Raising(KeyError('getitem'))
+        with self.assertRaises(TypeError) as caught:
+            iter(Old())
+        self.assertEqual(caught.exception.args, ('iteration over non-sequence',))
+        Old.__iter__ = Raising(KeyError('iter'))
+        with self.assertRaises(KeyError):
+            iter(Old())
+        sys.exc_clear()
+
+    def test_finalizer_lookup_errors_are_not_reported(self):
+        class Stream(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                self.parts.append(text)
+        class Failing(object):
+            @property
+            def __del__(self):
+                raise KeyError('lookup')
+        class Descriptor(object):
+            def __get__(self, instance, owner):
+                raise KeyError('classic lookup')
+        class Old:
+            __del__ = Descriptor()
+        class Raising(object):
+            def __del__(self):
+                raise ValueError('call')
+        stream = Stream()
+        saved = sys.stderr
+        sys.stderr = stream
+        try:
+            Failing()
+            Old()
+            self.assertEqual(stream.parts, [])
+            Raising()
+        finally:
+            sys.stderr = saved
+        self.assertIn('ValueError', ''.join(stream.parts))
+
+    def test_type_and_object_method_arity_messages(self):
+        class Class(object):
+            pass
+        instance = Class()
+        examples = ((lambda: Class.mro(1), 'mro() takes no arguments (1 given)'),
+                    (lambda: Class.__subclasses__(1), '__subclasses__() takes no arguments (1 given)'),
+                    (lambda: Class.__instancecheck__(), '__instancecheck__() takes exactly one argument (0 given)'),
+                    (lambda: Class.__subclasscheck__(1, 2), '__subclasscheck__() takes exactly one argument (2 given)'),
+                    (lambda: Class.__subclasscheck__(key=1), '__subclasscheck__() takes no keyword arguments'),
+                    (lambda: object.__setattr__(instance, 'name'), ' expected 2 arguments, got 1'),
+                    (lambda: type.__setattr__(Class, 'name'), ' expected 2 arguments, got 1'),
+                    (lambda: object.__delattr__(instance), 'expected 1 arguments, got 0'),
+                    (lambda: object.__getattribute__(instance), 'expected 1 arguments, got 0'),
+                    (lambda: object.__setattr__(instance, 'name', 1, key=2), 'wrapper __setattr__ doesn\'t take keyword arguments'))
+        for call, message in examples:
+            with self.assertRaises(TypeError) as caught:
+                call()
+            self.assertEqual(caught.exception.args, (message,))
+        sys.exc_clear()

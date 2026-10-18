@@ -37,7 +37,12 @@ Core не обращается напрямую к:
 - загрузка shared libraries из core;
 - Python-visible `_ast` и `compile(ast, ...)`;
 - одновременное выполнение одной VM несколькими потоками;
-- автоматический cyclic GC.
+- автоматический cyclic GC;
+- restricted execution mode CPython 2.7: `__builtins__` в globals, отличный от
+  builtins VM, только подменяет пространство имён builtins frame, ограничения
+  на `func_globals`, `func_code`, `__dict__` классов и экземпляров, присваивание
+  `__class__` и другие операции не применяются, а `f_restricted` всегда
+  `False`.
 
 ## 3. C ABI
 
@@ -824,7 +829,11 @@ semantic SyntaxError из AST, future scanner и symbol table получает �
 `TINYPY_COMPILE_FLAG_STRING_SOURCE` и режимы eval и single не являются
 файлами, и `text` таких ошибок равен `None`. Unicode source `compile`, `exec`
 и `eval` кодируется в UTF-8, как `PyUnicode_AsUTF8String`, которая соединяет
-surrogate pair в один code point.
+surrogate pair в один code point. SyntaxError с location создаётся из
+`(msg, (filename, lineno, offset, text))`, как в `err_input` и
+`compiler_error`, поэтому его `message` пуст; SyntaxError, поднятый только с
+message, получает location через атрибуты, как в `PyErr_SyntaxLocation`, и
+сохраняет `message`.
 
 Compiler limits охватывают:
 
@@ -981,7 +990,49 @@ execution; `MemoryError` при записи metadata модуля (`__name__`, 
 Если loader при `reload` заменяет зарегистрированный объект, результатом
 становится этот объект; исходный модуль сохраняет свой namespace. Replacement
 не обязан быть модулем. Обычная повторная загрузка source artifact исполняется
-в прежнем namespace.
+в прежнем namespace и, как `PyImport_ExecCodeModuleEx`, сохраняет собственный
+`__builtins__` модуля. `reload` модуля, reload которого уже идёт, возвращает
+этот модуль, как `modules_reloading`; в отличие от CPython, вложенный reload
+другого модуля эту отметку не снимает.
+
+Модуль, которого нет в `sys.modules`, ищется, как в `find_module`, по порядку:
+finders из `sys.meta_path`, finder host (`tinypy_vm_set_module_finder`),
+модули, которые создаёт сама VM, и resolver. `sys.meta_path`, который не
+является list, — `RuntimeError`, как в CPython. Request resolver передаёт в
+`package_path` borrowed `__path__` пакета submodule или `None` для top-level
+модуля, который host ищет там, где хранит модули (CLI — в `sys.path`, каким
+его оставила программа). `sys.path_hooks` и `sys.path_importer_cache` не
+существуют: элементы search path принадлежат host, core их не читает, и hook,
+установленный из Python, не был бы вызван.
+
+Оба вида finders следуют PEP 302: `find_module(name, path)` возвращает loader
+или `None`, и тогда спрашивается следующий источник. `ImportError` из
+`find_module` при import означает, как в `import_submodule`, что модуля нет и
+поиск закончен: implicit relative import переходит к absolute имени,
+отсутствующее имя from-list пропускается, иначе — `ImportError: No module
+named X`; `reload` сообщает эту ошибку как есть. Модуль, который возвращает
+`load_module(name)`, — результат import. В отличие от CPython, который
+оставляет `sys.modules` loader, import регистрирует возвращённый модуль, если
+loader не зарегистрировал никакого, и удаляет запись loader, который упал или
+вернул `None`; `None` сообщается как `No module named X`, в том числе в
+`reload` (CPython возвращает `None`). `reload` возвращает модуль loader и
+оставляет `sys.modules` таким, каким его оставил loader.
+
+Relative import продолжает от пакета из `sys.modules`, как `get_parent` и
+`load_next`: его предки повторно не импортируются, даже если их нет в
+`sys.modules` или там `None`.
+
+VM сохраняет имена и значения namespaces своих модулей при создании, как
+`_PyImport_FixupExtension`: import такого модуля, удалённого из `sys.modules`,
+создаёт новый модуль с этими именами, а `reload` возвращает им сохранённые
+значения, не удаляя добавленные имена; resolver для них не вызывается.
+`sys.modules`, `sys.meta_path` и `sys.exc_type`, как в CPython, в сохранённые
+имена не входят. Сохранённые значения живут до `tinypy_vm_destroy`, как копии
+extension modules до `_PyImport_Fini`; поэтому и таблицы `copy_reg`, который в
+CPython написан на Python, с зарегистрированными в них объектами переживают
+очистку namespaces host.
+`__main__` входит в `sys.builtin_module_names`, но не создаётся заново:
+`ImportError: Cannot re-init internal module __main__`.
 
 Output streams, warnings, diagnostics и formatted tracebacks направляются host
 callbacks. Callback input действителен только на время вызова, если явно не
@@ -1017,6 +1068,9 @@ exception после проверки SystemExit, до `sys.excepthook` и от�
 `tinypy_exception_matches` сопоставляет класс экземпляра exception, а
 значение, которое не является exception class, — по identity, и не поднимает
 exception: ошибку `__subclasscheck__` metaclass она сообщает как unraisable.
+Каждый уровень вложенных tuples кандидатов, в том числе в `except`, занимает
+уровень рекурсии, поэтому вложенность глубже recursion limit поднимает
+RuntimeError, тогда как CPython рекурсирует без ограничения.
 Поэтому ненормализованное raised value SystemExit не совпадает с SystemExit.
 Host, завершающий программу как `Py_Finalize`, до `tinypy_vm_destroy` вызывает
 `sys.exitfunc`, а затем заменяет значения module namespaces на `None` в
@@ -1054,6 +1108,11 @@ Recoverable categories включают:
 - host module resolution failure.
 
 Error одновременно устанавливает корректное Python exception state в VM.
+`tinypy_vm_raise_error` поднимает встроенный класс kind с message как
+единственным аргументом; `TINYPY_ERROR_UNICODE_DECODE` и
+`TINYPY_ERROR_UNICODE_ENCODE` поднимают UnicodeError, так как
+UnicodeDecodeError и UnicodeEncodeError принимают пять полей codec error,
+которые им даёт `tinypy_exception_new`.
 
 Pending exception при входе в C API сбрасывают только точки входа верхнего
 уровня: `tinypy_compile_source`, `tinypy_eval_source`, `tinypy_exec_source`,

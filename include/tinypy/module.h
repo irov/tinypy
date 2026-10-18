@@ -22,6 +22,10 @@ struct tinypy_module_request_t {
     size_t canonical_name_size;
     const char *importer_name;
     size_t importer_name_size;
+    /* Borrowed: the __path__ of the package of a submodule, which
+     * find_module searches, or None for a top-level module, which the host
+     * looks for where it keeps them (sys.path for the CLI). */
+    tinypy_value_t *package_path;
 };
 //////////////////////////////////////////////////////////////////////////
 struct tinypy_module_artifact_t {
@@ -59,6 +63,13 @@ tinypy_value_t *tinypy_module_get_value(tinypy_value_t *module, const char *name
 void tinypy_module_add_value_key(tinypy_value_t *module, tinypy_value_t *name, tinypy_value_t *value);
 tinypy_value_t *tinypy_module_get_value_key(tinypy_value_t *module, tinypy_value_t *name);
 tinypy_value_t *tinypy_vm_modules(const tinypy_vm_t *vm);
+/* The finder of the host, retained until it is replaced or the VM is
+ * destroyed, follows the PEP 302 protocol of a sys.meta_path entry and is
+ * asked after sys.meta_path: find_module(name, path) returns a loader or
+ * None, and an ImportError it raises means that nobody provides the module.
+ * The module load_module(name) returns is the result of the import, which
+ * registers it when the loader did not and removes the entry of a loader
+ * that failed or returned None, reported as not found. NULL removes it. */
 void tinypy_vm_set_module_finder(tinypy_vm_t *vm, tinypy_value_t *finder);
 tinypy_value_t *tinypy_vm_module_finder(const tinypy_vm_t *vm);
 tinypy_value_t *tinypy_import_module(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *globals, tinypy_value_t *fromlist, int32_t level, tinypy_error_t **out_error);

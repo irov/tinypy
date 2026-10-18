@@ -263,3 +263,143 @@ class DescriptorEdges(unittest.TestCase):
             self.assertIs(sys.exc_info()[1], error)
         sys.exc_clear()
         self.assertEqual(events, [('second', True), ('first', True)])
+
+    def test_uninitialized_callable_descriptors_raise_when_bound(self):
+        class Old:
+            pass
+        for factory, message in ((staticmethod, 'uninitialized staticmethod object'),
+                                 (classmethod, 'uninitialized classmethod object')):
+            Old.member = factory.__new__(factory)
+            for read in (lambda: Old.member, lambda: Old().member):
+                with self.assertRaises(RuntimeError) as caught:
+                    read()
+                self.assertEqual(caught.exception.args, (message,))
+            self.assertFalse(hasattr(Old(), 'member'))
+            created = type('Created', (object,), {'__new__': factory.__new__(factory)})
+            with self.assertRaises(RuntimeError) as caught:
+                created()
+            self.assertEqual(caught.exception.args, (message,))
+        sys.exc_clear()
+
+    def test_new_is_bound_as_an_attribute_of_the_type(self):
+        class Late(object):
+            pass
+        Late.__new__ = lambda cls: 'late'
+        with self.assertRaises(TypeError) as caught:
+            Late()
+        self.assertEqual(caught.exception.args, ('unbound method <lambda>() must be called with Late instance as first argument (got type instance instead)',))
+        class Binder(object):
+            def __get__(self, instance, owner):
+                return lambda *args: ('bound', instance, owner, args)
+        class Described(object):
+            __new__ = Binder()
+        self.assertEqual(Described(1), ('bound', None, Described, (Described, 1)))
+        class Static(staticmethod):
+            def __get__(self, instance, owner=None):
+                return lambda *args: ('own get', len(args))
+        class Overridden(object):
+            __new__ = Static(lambda cls: 'raw')
+        self.assertEqual(Overridden(2), ('own get', 2))
+        sys.exc_clear()
+
+    def test_classic_lookup_calls_every_descriptor_get(self):
+        class Slotted(object):
+            __slots__ = ('slot',)
+        class Base(object):
+            pass
+        class Old:
+            slot = Slotted.__dict__['slot']
+            real = int.__dict__['real']
+            upper = str.__dict__['upper']
+            unbound = super(Base)
+        examples = (('slot', "descriptor 'slot' for 'Slotted' objects doesn't apply to 'instance' object"),
+                    ('real', "descriptor 'real' for 'int' objects doesn't apply to 'instance' object"),
+                    ('upper', "descriptor 'upper' for 'str' objects doesn't apply to 'instance' object"),
+                    ('unbound', 'super(type, obj): obj must be an instance or subtype of type'))
+        instance = Old()
+        for name, message in examples:
+            self.assertIs(getattr(Old, name), Old.__dict__[name])
+            with self.assertRaises(TypeError) as caught:
+                getattr(instance, name)
+            self.assertEqual(caught.exception.args, (message,))
+            self.assertFalse(hasattr(instance, name))
+        Old.fromkeys = dict.__dict__['fromkeys']
+        for target in (Old, instance):
+            with self.assertRaises(TypeError) as caught:
+                target.fromkeys
+            self.assertEqual(caught.exception.args, ("descriptor 'fromkeys' for type 'dict' needs a type, not a 'classobj' as arg 2",))
+        sys.exc_clear()
+
+    def test_heap_descriptor_get_is_called_unbound(self):
+        class Counter(object):
+            def __call__(self, *args):
+                return len(args)
+        class Static(object):
+            __get__ = staticmethod(lambda *args: args)
+        class Plain(object):
+            __get__ = Counter()
+        class Owner(object):
+            static = Static()
+            plain = Plain()
+        class Old:
+            static = Static()
+            plain = Plain()
+        for target in (Owner, Owner(), Old, Old()):
+            with self.assertRaises(TypeError) as caught:
+                target.static
+            self.assertEqual(caught.exception.args, ("'staticmethod' object is not callable",))
+            self.assertEqual(target.plain, 3)
+        sys.exc_clear()
+
+    def test_weakref_getset_requires_a_weak_list(self):
+        class Referable(object):
+            pass
+        class Text(str):
+            pass
+        class Mixed(Referable, Text):
+            pass
+        value = Mixed()
+        self.assertEqual((hasattr(value, '__weakref__'), Mixed.__weakrefoffset__), (False, 0))
+        with self.assertRaises(AttributeError) as caught:
+            value.__weakref__
+        self.assertEqual(caught.exception.args, ('This object has no __weakref__',))
+        sys.exc_clear()
+
+    def test_instancemethod_names_its_parts_like_the_interpreter(self):
+        class Owner(object):
+            def method(self):
+                pass
+        Method = type(Owner.method)
+        class Callable(object):
+            __name__ = 'callable name'
+            def __call__(self, *args):
+                return args
+        class Named(object):
+            __name__ = 'named'
+        self.assertTrue(repr(Method(Callable(), Owner())).startswith('<bound method ?.callable name of '))
+        self.assertTrue(repr(Method(Owner().method, Owner())).startswith('<bound method ?.method of '))
+        self.assertEqual(repr(Method(len, None, Named())), '<unbound method named.len>')
+        examples = ((Callable(), 'Callable object'), (int, 'type object'), (Owner().method, 'method()'),
+                    (str.upper, 'method_descriptor object'), (len, 'len()'), (Method(Callable(), 1), 'Callable()'))
+        for function, name in examples:
+            with self.assertRaises(TypeError) as caught:
+                Method(function, None, int)('text')
+            self.assertEqual(caught.exception.args, ('unbound method %s must be called with int instance as first argument (got str instance instead)' % name,))
+        items = []
+        text = 'text'
+        owner = Owner()
+        self.assertTrue(Method(items.append, owner) == Method(items.append, owner))
+        self.assertFalse(Method(items.append, owner) != Method(items.append, owner))
+        self.assertEqual(hash(Method(text.upper, owner)), hash(Method(text.upper, owner)))
+        sys.exc_clear()
+
+    def test_property_copy_methods_take_one_argument(self):
+        examples = ((lambda: property().getter(), 'getter() takes exactly one argument (0 given)'),
+                    (lambda: property().setter(1, 2), 'setter() takes exactly one argument (2 given)'),
+                    (lambda: property().deleter(function=1), 'deleter() takes no keyword arguments'),
+                    (lambda: property.getter(1, 2), "descriptor 'getter' requires a 'property' object but received a 'int'"))
+        for call, message in examples:
+            with self.assertRaises(TypeError) as caught:
+                call()
+            self.assertEqual(caught.exception.args, (message,))
+        sys.exc_clear()

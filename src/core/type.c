@@ -2913,21 +2913,6 @@ void tinypy_instance_set_attr_key(tinypy_value_t *instance_value, tinypy_value_t
     TINYPY_DECREF(dict);
 }
 //////////////////////////////////////////////////////////////////////////
-/* slot_tp_new gets __new__ from the type: a static method yields its
-   function and a class method is bound to the type, which the call then
-   receives a second time. */
-static tinypy_value_t *__tinypy_internal_type_new_callable(tinypy_type_t *type, tinypy_value_t *attribute, tinypy_error_t **out_error) {
-    if (TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_STATIC_METHOD) {
-        tinypy_value_t *callable = tinypy_static_method_callable(attribute);
-        return TINYPY_RET(callable);
-    }
-    if (TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_CLASS_METHOD) {
-        tinypy_value_t *method = tinypy_internal_class_method_bind(attribute, &type->base.base, out_error);
-        return method;
-    }
-    return TINYPY_RET(attribute);
-}
-//////////////////////////////////////////////////////////////////////////
 /* A type keeps each constructor of its calls while it keeps its version. */
 static inline tinypy_bool_t __tinypy_internal_type_constructor_current(uint64_t version, uint64_t constructor_version) {
     tinypy_bool_t current = version != 0U && constructor_version == version ? TINYPY_TRUE : TINYPY_FALSE;
@@ -3070,7 +3055,12 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         __tinypy_internal_call_leave(vm);
     }
     else {
-        tinypy_value_t *constructor = __tinypy_internal_type_new_callable(type, new_attribute, out_error);
+        /* slot_tp_new gets __new__ from the type, which binds what it finds
+           there: a static method yields its function, a class method is
+           bound to the type, which the call then receives a second time, and
+           a plain function is an unbound method. */
+        tinypy_value_t *callable = new_attribute->type == &vm->types[TINYPY_VALUE_STATIC_METHOD] ? tinypy_static_method_callable(new_attribute) : NULL;
+        tinypy_value_t *constructor = callable != NULL ? TINYPY_RET(callable) : tinypy_internal_descriptor_get_value(vm, new_attribute, NULL, type, out_error);
         if (constructor == NULL) {
             return NULL;
         }
@@ -3103,6 +3093,15 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
             return NULL;
         }
         return instance;
+    }
+    /* object_init only refuses arguments, so a call of a class taking
+       object.__new__ without any skips an __init__ that is object's. */
+    if (object_new != 0 && count == 0U && (kwargs == NULL || TINYPY_DICT_SIZE(kwargs) == 0U) && TINYPY_VALUE_KIND(initializer_attribute) != TINYPY_VALUE_FUNCTION) {
+        tinypy_value_t *object_initializer = tinypy_internal_type_constructor_init(&vm->types[TINYPY_VALUE_INSTANCE]);
+
+        if (initializer_attribute == object_initializer) {
+            return instance;
+        }
     }
     /* Binding the arguments or the descriptor may release the class
        attribute, so the call holds it. */

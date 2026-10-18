@@ -377,6 +377,67 @@ class ReleaseOrderParity(unittest.TestCase):
         self.assertEqual(released(lambda make: cmp(make('a'), make('b'))), ['b', 'a'])
         self.assertEqual(released(lambda make: sorted([], key=make('key'), cmp=make('cmp'))), ['key', 'cmp'])
 
+    def test_star_and_keyword_calls_release_in_cpython_order(self):
+        class Operand(Released):
+            def method(self, *args, **kwargs):
+                pass
+
+        class Keys(Released):
+            def keys(self):
+                return ['key']
+
+            def __getitem__(self, key):
+                return Released(self.log, 'item')
+
+        def function(*args, **kwargs):
+            pass
+
+        def released(operation):
+            log = []
+            try:
+                operation(lambda name, kind=Operand: kind(log, name))
+            except TypeError:
+                sys.exc_clear()
+            return log
+        self.assertEqual(released(lambda make: make('self').method(make('a'), *[make('b')])), ['a', 'self', 'b'])
+        self.assertEqual(released(lambda make: make('self').method(**{'k': make('a')})), ['self', 'a'])
+        self.assertEqual(released(lambda make: make('self').method(make('a'), k=make('b'), *(make('c'),))), ['a', 'self', 'b', 'c'])
+        self.assertEqual(released(lambda make: function(make('a'), *make('b'))), ['b', 'a'])
+        self.assertEqual(released(lambda make: function(make('a'), **make('b'))), ['b', 'a'])
+        self.assertEqual(released(lambda make: function(make('a'), key=make('b'), **make('c'))), ['c', 'b', 'a'])
+        self.assertEqual(released(lambda make: function(make('a'), key=make('b'), **{'key': make('c')})), ['b', 'c', 'a'])
+        self.assertEqual(released(lambda make: function(make('a'), *make('b'), **{'key': make('c')})), ['c', 'b', 'a'])
+        self.assertEqual(released(lambda make: function(make('a'), *[make('b')], key=make('c'), **{'other': make('d')})), ['a', 'd', 'c', 'b'])
+        self.assertEqual(released(lambda make: function(make('a'), **make('keys', Keys))), ['keys', 'a', 'item'])
+        self.assertEqual(released(lambda make: len(*[(make('a'), make('b'))])), ['b', 'a'])
+
+    def test_sort_releases_keys_and_additions_in_listsort_order(self):
+        log = []
+
+        class Key(Released):
+            def __lt__(self, other):
+                return self.name < other.name
+
+        def key(value):
+            if value == 9:
+                raise ValueError(value)
+            return Key(log, value)
+        self.assertEqual(sorted([5, 3, 8, 1], key=key, reverse=True), [8, 5, 3, 1])
+        self.assertEqual(log, [1, 3, 5, 8])
+        del log[:]
+        self.assertRaises(ValueError, sorted, [5, 3, 8, 1, 9, 2, 7], key=key)
+        sys.exc_clear()
+        self.assertEqual(log, [1, 8, 3, 5])
+        del log[:]
+        items = [3, 1, 2]
+
+        def growing(value):
+            items.append(Released(log, value))
+            return value
+        self.assertRaises(ValueError, items.sort, key=growing)
+        sys.exc_clear()
+        self.assertEqual(log, [2, 1, 3])
+
 
 class MessagePrecisionParity(unittest.TestCase):
     def test_attribute_messages(self):

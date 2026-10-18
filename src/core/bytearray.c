@@ -409,7 +409,7 @@ tinypy_bool_t tinypy_internal_sequence_index(tinypy_value_t *key, int64_t *out_i
 static tinypy_bool_t __tinypy_bytearray_index(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_value_t *value, const char *type_message, size_t *out_index, tinypy_error_t **out_error) {
     int64_t index;
 
-    if (tinypy_internal_object_has_special_key(key, vm->internal_special_index_key) == 0) {
+    if (tinypy_internal_index_check(key) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, type_message, out_error);
         return TINYPY_FALSE;
     }
@@ -638,7 +638,7 @@ static tinypy_value_t *__tinypy_bytearray_create(tinypy_vm_t *vm, tinypy_value_t
     }
     /* A byte string contributes its bytes even when it has __index__. */
     tinypy_bool_t has_count = TINYPY_FALSE;
-    if (source_kind != TINYPY_VALUE_STRING && (source_kind == TINYPY_VALUE_BOOL || source_kind == TINYPY_VALUE_INTEGER || source_kind == TINYPY_VALUE_LONG || tinypy_internal_object_has_special_key(source, vm->internal_special_index_key) != 0)) {
+    if (source_kind != TINYPY_VALUE_STRING && tinypy_internal_index_check(source) != 0) {
         if (tinypy_internal_index_as_i64(source, &requested_size, TINYPY_FALSE, out_error) != TINYPY_FALSE) {
             has_count = TINYPY_TRUE;
         }
@@ -717,7 +717,7 @@ static tinypy_bool_t __tinypy_bytearray_initialize(tinypy_value_t *value, tinypy
     }
     /* A byte string contributes its bytes even when it has __index__. */
     tinypy_bool_t has_count = TINYPY_FALSE;
-    if (source_kind != TINYPY_VALUE_STRING && (source_kind == TINYPY_VALUE_BOOL || source_kind == TINYPY_VALUE_INTEGER || source_kind == TINYPY_VALUE_LONG || tinypy_internal_object_has_special_key(source, vm->internal_special_index_key) != 0)) {
+    if (source_kind != TINYPY_VALUE_STRING && tinypy_internal_index_check(source) != 0) {
         if (tinypy_internal_index_as_i64(source, &requested_size, TINYPY_FALSE, out_error) != TINYPY_FALSE) {
             has_count = TINYPY_TRUE;
         }
@@ -989,7 +989,7 @@ tinypy_value_t *tinypy_internal_bytearray_repr(tinypy_value_t *value, tinypy_err
 static tinypy_bool_t __tinypy_bytearray_index_argument(tinypy_value_t *value, int64_t *out_integer, tinypy_bool_t bound, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
-    if (tinypy_internal_object_has_special_key(value, vm->internal_special_index_key) == TINYPY_FALSE) {
+    if (tinypy_internal_index_check(value) == TINYPY_FALSE) {
         if (bound != TINYPY_FALSE) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice indices must be integers or None or have an __index__ method", out_error);
         }

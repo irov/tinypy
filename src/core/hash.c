@@ -369,6 +369,27 @@ static tinypy_hash_t __tinypy_internal_hash_identity(const tinypy_value_t *value
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Whether the type of a new-style value keeps the __hash__ of object, so that
+   it hashes by identity as the tp_hash it inherits does. A class of
+   instances answers from its memo of the specials it overrides. */
+static tinypy_bool_t __tinypy_internal_hash_inherits_object(const tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+        return TINYPY_FALSE;
+    }
+    if (kind == TINYPY_VALUE_INSTANCE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
+        tinypy_bool_t overrides = __tinypy_internal_object_overrides_dispatch((tinypy_value_t *)value, TINYPY_INTERNAL_DISPATCH_BIT(HASH));
+        return overrides == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    tinypy_value_t *object_hash = tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_hash_key);
+    tinypy_value_t *type_hash = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_hash_key);
+    tinypy_bool_t inherits = type_hash == object_hash ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return inherits;
+}
+//////////////////////////////////////////////////////////////////////////
 /* slot_tp_hash: a __hash__ that fails to bind counts as absent, so the
    object is unhashable when it compares and hashes by identity otherwise. */
 static int32_t __tinypy_internal_hash_unbound_special(tinypy_value_t *value, tinypy_hash_t *out_hash, tinypy_error_t **out_error) {
@@ -601,6 +622,10 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
 
         /* PyObject_Hash readies a type without tp_hash. */
         value->type->flags &= ~TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
+        if (__tinypy_internal_hash_inherits_object(value) != 0) {
+            function_result = __tinypy_internal_hash_identity(value);
+            return function_result;
+        }
         int32_t special = __tinypy_internal_hash_special(value, TINYPY_FALSE, &hash, out_error);
 
         if (special > 0) {

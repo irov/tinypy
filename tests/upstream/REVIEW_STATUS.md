@@ -261,7 +261,7 @@ that evidence.
 | Original item | Current status | Implementation |
 | --- | --- | --- |
 | 1: long-to-double accumulation | Fixed | `long.c` bounds its significand accumulator, preserves sticky bits, rounds ties to even and reports overflow. Ordinary powers, rounding and overflow cases agree with CPython. |
-| 2: implicit relative imports | Fixed | `import.c` tries a relative parent only when already registered; explicit missing parents fail. Missing-relative markers also avoid repeated failed loads. |
+| 2: implicit relative imports | Fixed | `import.c` tries a relative parent only when already registered; explicit missing parents fail. Missing-relative markers also avoid repeated failed loads. In the eighth pass a relative import continues from the package it takes from `sys.modules`, as `get_parent` and `load_next` do, so a missing or None ancestor is not imported again. |
 | 3: heap-budget MemoryError recursion | Hardened | A reserved MemoryError instance avoids recursive construction; checked pool allocations can reuse storage without external growth. Existing allocation and recovery tests pass. |
 | 4: unbound builtin receiver validation | Already fixed by the earlier corpus changes | Native dispatch validates the receiver before a callback accesses its storage. The binding corpus remains active. |
 | 5: recursive `type.__call__` dispatch | Fixed | Calls the internal type constructor directly. Normal metaclass delegation is covered. |
@@ -330,7 +330,7 @@ that evidence.
 | Defaults longer than argument count | Fixed: use the applicable tail of defaults. |
 | Evaluating generator code | Fixed: construct a generator instead of immediately running its body. An oracle case also verifies that generator name lookup uses globals rather than the supplied custom locals. |
 | Unbound method checks/rebinding | Earlier fixes retained; the binding corpus passes. |
-| Import hook dispatch | Fixed; use frame builtins and Python 2's four-argument implicit import convention. |
+| Import hook dispatch | Fixed; use frame builtins and Python 2's four-argument implicit import convention. In the eighth pass `sys.meta_path` finders come before the host finder, both with the PEP 302 protocol of `import_submodule` (an ImportError of `find_module` means not found, a loader returning None reports the module missing); `sys.path_hooks` and `sys.path_importer_cache` are gone, since the host resolver owns path entries. The VM saves the namespaces of its modules, which an import re-creates once they leave `sys.modules` and `reload` restores; a reload of a module being reloaded returns it and keeps its `__builtins__`. SPEC records where the finder contract differs from CPython's. |
 | Generator throw tuple normalization | Fixed for new-style and classic exceptions. As in `PyErr_NormalizeException`, the exception that a failed normalization raises instead is normalized in turn, up to the recursion limit, for `raise`, `except`, `throw` and hosts. |
 | `print >>None`, Unicode whitespace and softspace type | Fixed; output state is integer 0/1 and recognizes Unicode whitespace. In the fifth pass `write` and `writelines` of the standard streams reset it once they accept their argument, as `file_write` does, and `print()` writes the `str()` of every item, separator and ending that is not unicode, a str subtype included, as `PyFile_WriteObject` with `Py_PRINT_RAW`. In the sixth pass `print()` looks the `write` method of the file up before it converts each value, as `PyFile_WriteObject` does. |
 | Exception matching and metaclass subclass checks | Fixed for successful custom checks, preserving the pending exception. Failed checks report an unraisable error and continue matching with the original pending exception; both paths are covered. A metaclass that inherits the `__instancecheck__` or `__subclasscheck__` of `type` gets the default rules without a call, as those hooks are the default rules in CPython; copied into a class that is not a metaclass, they still bind to the classinfo and raise TypeError. |
@@ -423,6 +423,17 @@ These are explicit scope decisions, rather than pending implementation items:
   keeps the nesting within the native stack guard of instrumented builds, so
   every finalizer of a long chain runs. Native finalizers still run as the
   last reference goes, since a host may hand the value out until then.
+- Since the eighth pass a heap type's `__getattr__` is fetched before its own
+  `__getattribute__` runs, as `slot_tp_getattr_hook` does. Without a
+  `__getattribute__` of its own the generic lookup fetches `__getattr__` only
+  after an AttributeError, which keeps attribute hits free of that lookup: a
+  property getter or key comparison that replaces or removes `__getattr__`
+  during a failing lookup changes the hook called, where CPython calls the
+  one fetched before.
+- Restricted execution is not implemented: a `__builtins__` other than the
+  VM's builtins only replaces the builtin names a frame looks up, and since
+  the eighth pass `f_restricted` is always False rather than reporting a
+  restriction that nothing enforces.
 - Verification proves reachable CFG stack/block/finally structure. It is not
   a static type proof for arbitrary Python values; code/closure/cell operands
   also have runtime validation, and the trusted-code artifact policy remains.

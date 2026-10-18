@@ -68,18 +68,10 @@ tinypy_value_t *tinypy_internal_slice_create(tinypy_type_t *type, tinypy_value_t
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_slice_method_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, size_t count, tinypy_error_t **out_error) {
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice method received invalid arguments", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_slice_field_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    if (__tinypy_slice_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     /* The getter is reachable unbound through the property's fget. */
@@ -119,7 +111,7 @@ static tinypy_value_t *__tinypy_slice_indices_method(tinypy_value_t *function, t
     tinypy_value_t *items[3];
 
     (void)user_data;
-    if (__tinypy_slice_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == 0) {
         return NULL;
     }
     if (tinypy_internal_index_as_i64(TINYPY_TUPLE_GET(args, 1U), &length, TINYPY_FALSE, out_error) == 0) {
@@ -163,13 +155,19 @@ static tinypy_value_t *__tinypy_slice_cmp_method(tinypy_value_t *function, tinyp
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_slice_method_arguments(vm, args, kwargs, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
     if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_SLICE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice.__cmp__ requires a slice operand", out_error);
+        const tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("slice.__cmp__(x,y) requires y to be a 'slice', not a '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(right),
+            TINYPY_MESSAGE_PART_LITERAL("'")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
     }
     int32_t equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
@@ -189,10 +187,8 @@ static tinypy_value_t *__tinypy_slice_cmp_method(tinypy_value_t *function, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_slice_repr_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
     (void)user_data;
-    if (__tinypy_slice_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_object_repr(TINYPY_TUPLE_GET(args, 0U), out_error);
@@ -203,7 +199,7 @@ static tinypy_value_t *__tinypy_slice_hash_method(tinypy_value_t *function, tiny
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    if (__tinypy_slice_method_arguments(vm, args, kwargs, 1U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "unhashable type", out_error);

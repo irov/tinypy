@@ -1156,15 +1156,12 @@ static tinypy_compare_operation_e __tinypy_comparison_reverse_operation(tinypy_c
     return reversed[(size_t)operation];
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_comparison_try_native_rich_slot(tinypy_value_t *receiver, tinypy_value_t *argument, tinypy_compare_operation_e operation, tinypy_bool_t *out_handled, tinypy_value_t **out_value, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_comparison_try_native_rich_slot(tinypy_value_t *receiver, tinypy_compare_slot_t slot, tinypy_value_t *argument, tinypy_compare_operation_e operation, tinypy_bool_t *out_handled, tinypy_value_t **out_value, tinypy_error_t **out_error) {
     tinypy_value_t *result;
     tinypy_bool_t not_implemented;
 
     *out_handled = INT32_C(0);
-    if (receiver->type->rich_compare == NULL) {
-        return TINYPY_TRUE;
-    }
-    result = receiver->type->rich_compare(receiver, argument, (int32_t)operation, out_error);
+    result = slot(receiver, argument, (int32_t)operation, out_error);
     if (result == NULL) {
         *out_handled = INT32_C(1);
         return TINYPY_FALSE;
@@ -1195,10 +1192,29 @@ typedef char tinypy_comparison_dispatch_follows_operations_t[
     && TINYPY_INTERNAL_DISPATCH_GT - TINYPY_INTERNAL_DISPATCH_LT == (int32_t)TINYPY_COMPARE_GREATER
     && TINYPY_INTERNAL_DISPATCH_GE - TINYPY_INTERNAL_DISPATCH_LT == (int32_t)TINYPY_COMPARE_GREATER_EQUAL ? 1 : -1];
 //////////////////////////////////////////////////////////////////////////
+/* The built-in types whose __lt__ and siblings are the rich comparison of
+   tinypy_internal_container_compare. */
+static tinypy_bool_t __tinypy_comparison_container_family(const tinypy_value_t *value) {
+    switch (TINYPY_VALUE_KIND(value)) {
+    case TINYPY_VALUE_FLOAT:
+    case TINYPY_VALUE_COMPLEX:
+    case TINYPY_VALUE_STRING:
+    case TINYPY_VALUE_UNICODE:
+    case TINYPY_VALUE_TUPLE:
+    case TINYPY_VALUE_LIST:
+    case TINYPY_VALUE_DICT:
+    case TINYPY_VALUE_SET:
+    case TINYPY_VALUE_FROZENSET:
+    case TINYPY_VALUE_BYTEARRAY:
+        return TINYPY_TRUE;
+    default:
+        return TINYPY_FALSE;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_comparison_try_half_rich(tinypy_value_t *receiver, tinypy_value_t *argument, tinypy_compare_operation_e operation, tinypy_bool_t *out_handled, tinypy_value_t **out_value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
     tinypy_internal_dispatch_e special = (tinypy_internal_dispatch_e)(TINYPY_INTERNAL_DISPATCH_LT + (int32_t)operation);
-    tinypy_value_t *name = tinypy_internal_dispatch_key(vm, special);
     tinypy_bool_t not_implemented;
 
     /* half_richcompare reaches a classic __getattr__; a missing method is
@@ -1206,6 +1222,7 @@ static tinypy_bool_t __tinypy_comparison_try_half_rich(tinypy_value_t *receiver,
     if (TINYPY_VALUE_KIND(receiver) != TINYPY_VALUE_OLD_INSTANCE && __tinypy_internal_object_defines_dispatch(receiver, TINYPY_INTERNAL_DISPATCH_MASK(special)) == 0) {
         return TINYPY_TRUE;
     }
+    tinypy_value_t *name = tinypy_internal_dispatch_key(vm, special);
     tinypy_value_t *result = __tinypy_comparison_call_binary(receiver, name, argument, TINYPY_TRUE, out_error);
 
     if (result == NULL) {
@@ -1239,7 +1256,14 @@ static tinypy_bool_t __tinypy_comparison_try_rich_slot(tinypy_value_t *receiver,
         return TINYPY_TRUE;
     }
     if (receiver->type->rich_compare != NULL) {
-        tinypy_bool_t result = __tinypy_comparison_try_native_rich_slot(receiver, argument, operation, out_handled, out_value, out_error);
+        tinypy_bool_t result = __tinypy_comparison_try_native_rich_slot(receiver, receiver->type->rich_compare, argument, operation, out_handled, out_value, out_error);
+        return result;
+    }
+    /* The comparisons of the built-in types behind
+       tinypy_internal_container_compare are their slot, which a subclass
+       keeping all of them inherits. */
+    if (__tinypy_comparison_container_family(receiver) != 0) {
+        tinypy_bool_t result = __tinypy_comparison_try_native_rich_slot(receiver, tinypy_internal_container_compare, argument, operation, out_handled, out_value, out_error);
         return result;
     }
     tinypy_bool_t result = __tinypy_comparison_try_half_rich(receiver, argument, operation, out_handled, out_value, out_error);

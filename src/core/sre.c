@@ -2827,14 +2827,7 @@ static tinypy_bool_t __tinypy_sre_match_groupdict_fill(tinypy_sre_match_object_t
         TINYPY_DECREF(snapshot);
         return TINYPY_TRUE;
     }
-    tinypy_value_t *keys = tinypy_object_get_attr_value(groupindex, vm->internal_keys_key, out_error);
-    if (keys == NULL) {
-        return TINYPY_FALSE;
-    }
-    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
-    tinypy_value_t *names = tinypy_call(keys, empty, NULL, out_error);
-    TINYPY_DECREF(empty);
-    TINYPY_DECREF(keys);
+    tinypy_value_t *names = tinypy_internal_mapping_keys(groupindex, out_error);
     if (names == NULL) {
         return TINYPY_FALSE;
     }

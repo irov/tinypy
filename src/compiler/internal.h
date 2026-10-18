@@ -45,6 +45,11 @@ typedef struct tinypy_compile_ctx_t {
     /* The host source as its file holds it, which semantic errors quote like
        PyErr_ProgramText; empty for the strings of compile, exec and eval. */
     tinypy_source_view_t program_text;
+    /* The line of program_text that a diagnostic quoted last and where it
+       starts: the diagnostics of a pass follow the source, so the next one
+       reads on from there. */
+    int32_t program_line_number;
+    size_t program_line_start;
     const char *logical_filename;
     size_t filename_size;
     tinypy_compiler_arena_block_t *arena_blocks;

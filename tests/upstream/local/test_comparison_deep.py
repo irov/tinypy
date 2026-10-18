@@ -1,5 +1,6 @@
 """Project-authored Python 2 comparison, hash and truth protocol witnesses."""
 
+import sys
 import unittest
 import _weakref as weakref
 
@@ -426,3 +427,26 @@ class ComparisonDeep(unittest.TestCase):
         self.assertEqual(cmp(set([1]), frozenset([1, 2])), -1)
         self.assertRaises(TypeError, cmp, set([1]), set([1]))
         self.assertRaises(TypeError, cmp, set([1]), frozenset([2]))
+
+    def test_builtin_subclasses_compare_through_the_inherited_slot(self):
+        # A subclass keeping the comparisons of its built-in base compares
+        # through the slot it inherits, so nested values run out of the
+        # recursion budget in cmp rather than in a call.
+        class List(list):
+            pass
+        class Tuple(tuple):
+            pass
+        class Dict(dict):
+            pass
+        messages = []
+        for wrap in (lambda item: List([item]), lambda item: Tuple((item,)), lambda item: Dict({1: item})):
+            left = right = 0
+            for index in range(sys.getrecursionlimit() + 100):
+                left = wrap(left)
+                right = wrap(right)
+            for compare in (lambda: left == right, lambda: left < right):
+                try:
+                    compare()
+                except RuntimeError as error:
+                    messages.append(str(error))
+        self.assertEqual(messages, ['maximum recursion depth exceeded in cmp'] * 6)

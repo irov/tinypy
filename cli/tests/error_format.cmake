@@ -120,6 +120,13 @@ tinypy_expect(caret_past_text CODES 1 ARGS -c "raise SyntaxError('bad', ('f.py',
 tinypy_expect(caret_indented CODES 1 ARGS -c "exec 'if 1:\\n  x = 1\\n y = 2'"
     STDERR "  File \"<string>\", line 3\n    y = 2\n        ^\nIndentationError: unindent does not match any outer indentation level\n")
 
+# parse_syntax_error reads lineno and offset with PyInt_AsLong, which takes
+# the __int__ of any other value and gives up on a result that is no integer.
+tinypy_expect(syntax_location_int_conversion CODES 0 ARGS -c "import sys\nclass I(object):\n    def __int__(self):\n        return 2\nclass C:\n    def __int__(self):\n        return 3L\ns = SyntaxError('m', ('f', 1, 2, 'abcdef'))\ns.lineno = 2.5\ns.offset = I()\nsys.excepthook(SyntaxError, s, None)\ns.lineno = C()\nsys.excepthook(SyntaxError, s, None)"
+    STDERR_EQUAL "  File \"f\", line 2\n    abcdef\n     ^\nSyntaxError: m\n  File \"f\", line 3\n    abcdef\n     ^\nSyntaxError: m\n")
+tinypy_expect(syntax_location_int_not_integer CODES 0 ARGS -c "import sys\nclass B(object):\n    def __int__(self):\n        return 'x'\ns = SyntaxError('m', ('f', 1, 2, 'abcdef'))\ns.offset = B()\nsys.excepthook(SyntaxError, s, None)"
+    STDERR_EQUAL "SyntaxError: m (f, line 1)\n")
+
 # The message of an exception whose str() fails.
 tinypy_expect(str_failed CODES 1 ARGS -c "class E(Exception):\n    def __str__(self):\n        return 42\nraise E()"
     STDERR "__main__.E: <exception str() failed>\n")

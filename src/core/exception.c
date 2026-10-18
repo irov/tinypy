@@ -264,45 +264,46 @@ static tinypy_value_t *__tinypy_exception_key_string(tinypy_value_t *value, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 /* EnvironmentError_str: a filename selects the three-field form; otherwise
-   errno and strerror must both be set, even to None. The fields go through
+   errno and strerror must both be set, even to None. They are read after
+   the repr of the filename, which may change them. The fields go through
    %-formatting, which a unicode field turns into unicode text. */
 static tinypy_value_t *__tinypy_exception_environment_string(tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *fields[TINYPY_EXCEPTION_ENVIRONMENT_MEMBER_COUNT];
+    tinypy_value_t *fields[2];
     tinypy_value_t *items[TINYPY_EXCEPTION_ENVIRONMENT_MEMBER_COUNT];
     tinypy_value_t *filename_repr = NULL;
     tinypy_value_t *result = NULL;
     size_t index;
 
-    for (index = 0U; index < TINYPY_EXCEPTION_ENVIRONMENT_MEMBER_COUNT; ++index) {
-        fields[index] = __tinypy_exception_member(value, index);
-    }
-    size_t field_count = fields[TINYPY_EXCEPTION_ENVIRONMENT_FILENAME] != NULL ? 3U : 2U;
-    if (field_count == 2U && (fields[TINYPY_EXCEPTION_ENVIRONMENT_ERRNO] == NULL || fields[TINYPY_EXCEPTION_ENVIRONMENT_STRERROR] == NULL)) {
-        result = __tinypy_exception_base_string(value, out_error);
-        goto cleanup;
-    }
-    for (index = 0U; index < 2U; ++index) {
-        items[index] = fields[index] != NULL ? fields[index] : &vm->none_object.base;
-    }
-    if (field_count == 3U) {
-        filename_repr = tinypy_object_repr(fields[TINYPY_EXCEPTION_ENVIRONMENT_FILENAME], out_error);
+    tinypy_value_t *filename = __tinypy_exception_member(value, TINYPY_EXCEPTION_ENVIRONMENT_FILENAME);
+    if (filename != NULL) {
+        filename_repr = tinypy_object_repr(filename, out_error);
+        TINYPY_DECREF(filename);
         if (filename_repr == NULL) {
-            goto cleanup;
+            return NULL;
         }
         items[TINYPY_EXCEPTION_ENVIRONMENT_FILENAME] = filename_repr;
     }
-    tinypy_value_t *format = field_count == 3U ? tinypy_string_from_bytes(vm, "[Errno %s] %s: %s", 17U) : tinypy_string_from_bytes(vm, "[Errno %s] %s", 13U);
-    tinypy_value_t *arguments = tinypy_tuple_from_items(vm, items, field_count);
+    for (index = 0U; index < 2U; ++index) {
+        fields[index] = __tinypy_exception_member(value, index);
+        items[index] = fields[index] != NULL ? fields[index] : &vm->none_object.base;
+    }
+    size_t field_count = filename_repr != NULL ? 3U : 2U;
+    if (field_count == 2U && (fields[TINYPY_EXCEPTION_ENVIRONMENT_ERRNO] == NULL || fields[TINYPY_EXCEPTION_ENVIRONMENT_STRERROR] == NULL)) {
+        result = __tinypy_exception_base_string(value, out_error);
+    }
+    else {
+        tinypy_value_t *format = field_count == 3U ? tinypy_string_from_bytes(vm, "[Errno %s] %s: %s", 17U) : tinypy_string_from_bytes(vm, "[Errno %s] %s", 13U);
+        tinypy_value_t *arguments = tinypy_tuple_from_items(vm, items, field_count);
 
-    result = tinypy_internal_string_percent(format, arguments, out_error);
-    TINYPY_DECREF(arguments);
-    TINYPY_DECREF(format);
-cleanup:
+        result = tinypy_internal_string_percent(format, arguments, out_error);
+        TINYPY_DECREF(arguments);
+        TINYPY_DECREF(format);
+    }
     if (filename_repr != NULL) {
         TINYPY_DECREF(filename_repr);
     }
-    for (index = 0U; index < TINYPY_EXCEPTION_ENVIRONMENT_MEMBER_COUNT; ++index) {
+    for (index = 0U; index < 2U; ++index) {
         if (fields[index] != NULL) {
             TINYPY_DECREF(fields[index]);
         }
@@ -826,7 +827,13 @@ static tinypy_value_t *__tinypy_exception_setstate_method(tinypy_value_t *functi
         tinypy_value_type_e key_kind = TINYPY_VALUE_KIND(key);
 
         if (key_kind != TINYPY_VALUE_STRING && key_kind != TINYPY_VALUE_UNICODE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "attribute name must be string", out_error);
+            const tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("attribute name must be string, not '"),
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(key, 200U),
+                TINYPY_MESSAGE_PART_LITERAL("'")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
             return NULL;
         }
         TINYPY_INCREF(key);
@@ -1114,10 +1121,11 @@ static tinypy_exception_type_index_e __tinypy_exception_index_from_error(tinypy_
         return TINYPY_EXCEPTION_ATTRIBUTE_ERROR;
     case TINYPY_ERROR_LOOKUP:
         return TINYPY_EXCEPTION_LOOKUP_ERROR;
+    /* A message alone cannot construct UnicodeDecodeError or
+       UnicodeEncodeError, which take the five fields of a codec error. */
     case TINYPY_ERROR_UNICODE_DECODE:
-        return TINYPY_EXCEPTION_UNICODE_DECODE_ERROR;
     case TINYPY_ERROR_UNICODE_ENCODE:
-        return TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR;
+        return TINYPY_EXCEPTION_UNICODE_ERROR;
     case TINYPY_ERROR_BUFFER:
         return TINYPY_EXCEPTION_BUFFER_ERROR;
     case TINYPY_ERROR_MEMORY:
@@ -1563,8 +1571,6 @@ void tinypy_internal_exception_restore_handled(tinypy_vm_t *vm, tinypy_value_t *
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e kind, const char *message) {
-    tinypy_value_t *value;
-
     if (vm->exception_types[TINYPY_EXCEPTION_BASE] == NULL) {
         return;
     }
@@ -1577,25 +1583,27 @@ void tinypy_internal_exception_raise_kind(tinypy_vm_t *vm, tinypy_error_kind_e k
     size_t exception_string_length = __tinypy_exception_string_length(message);
     tinypy_value_t *text = tinypy_string_from_bytes(vm, message, exception_string_length);
     tinypy_value_t *args = tinypy_tuple_from_items(vm, &text, 1U);
-    tinypy_exception_type_index_e exception_index_from_error = __tinypy_exception_index_from_error(kind);
-    /* At the recursion limit, calling even the built-in __init__ would enter
-       the call guard again while constructing its own RuntimeError. */
-    value = vm->recursion_error == 0 && vm->evaluation_depth < vm->recursion_limit
-        ? tinypy_internal_exception_instantiate(vm->exception_types[exception_index_from_error], args, NULL, NULL)
-        : NULL;
-    if (value == NULL) {
-        tinypy_internal_exception_clear_raised(vm);
-        value = __tinypy_exception_allocate_blank(vm->exception_types[exception_index_from_error]);
-        tinypy_internal_exception_payload_t *payload = __tinypy_exception_payload(value);
 
-        __tinypy_exception_replace_args(payload, args);
-        TINYPY_INCREF(args);
-        TINYPY_DECREF(payload->message);
-        payload->message = text;
-        TINYPY_INCREF(text);
-    }
+    tinypy_internal_exception_raise_kind_args(vm, kind, args);
     TINYPY_DECREF(args);
     TINYPY_DECREF(text);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The built-in class of a kind is immutable, so its call is BaseException_new
+   and its own tp_init, entered directly: at the recursion limit their call
+   guard would only raise a RuntimeError of its own. When the arguments do
+   not suit the class, its tp_init leaves its error pending instead. */
+void tinypy_internal_exception_raise_kind_args(tinypy_vm_t *vm, tinypy_error_kind_e kind, tinypy_value_t *args) {
+    if (vm->exception_types[TINYPY_EXCEPTION_BASE] == NULL) {
+        return;
+    }
+    tinypy_type_t *type = vm->exception_types[__tinypy_exception_index_from_error(kind)];
+    tinypy_value_t *value = __tinypy_exception_allocate_blank(type);
+
+    if (__tinypy_exception_initialize(value, type, args, NULL, NULL) == 0) {
+        TINYPY_DECREF(value);
+        return;
+    }
     tinypy_internal_exception_set_raised(vm, value, NULL);
     TINYPY_DECREF(value);
 }

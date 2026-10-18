@@ -17,7 +17,7 @@ static void __tinypy_item_invalid_index_result(tinypy_vm_t *vm, tinypy_value_t *
 //////////////////////////////////////////////////////////////////////////
 /* PyIndex_Check: classic instances always qualify and fail on conversion
    when they lack __index__. */
-static tinypy_bool_t __tinypy_item_is_index(tinypy_value_t *value) {
+tinypy_bool_t tinypy_internal_index_check(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
@@ -159,7 +159,7 @@ tinypy_bool_t tinypy_internal_index_as_i64(tinypy_value_t *value, int64_t *out_i
 //////////////////////////////////////////////////////////////////////////
 /* _PyEval_SliceIndexNotNone reads the bounds of list.index and tuple.index. */
 tinypy_bool_t tinypy_internal_slice_index_not_none(tinypy_value_t *value, int64_t *out_index, tinypy_error_t **out_error) {
-    if (__tinypy_item_is_index(value) == 0) {
+    if (tinypy_internal_index_check(value) == 0) {
         tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "slice indices must be integers or have an __index__ method", out_error);
         return TINYPY_FALSE;
     }
@@ -169,7 +169,7 @@ tinypy_bool_t tinypy_internal_slice_index_not_none(tinypy_value_t *value, int64_
 //////////////////////////////////////////////////////////////////////////
 /* _PyEval_SliceIndex */
 static tinypy_bool_t __tinypy_item_slice_index(tinypy_value_t *value, int64_t *out_index, tinypy_error_t **out_error) {
-    if (__tinypy_item_is_index(value) == 0) {
+    if (tinypy_internal_index_check(value) == 0) {
         tinypy_internal_make_vm_error(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, "slice indices must be integers or None or have an __index__ method", out_error);
         return TINYPY_FALSE;
     }
@@ -314,7 +314,7 @@ static tinypy_bool_t __tinypy_item_position(tinypy_value_t *container, tinypy_va
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(container);
     int64_t index;
 
-    if (__tinypy_item_is_index(key) == 0) {
+    if (tinypy_internal_index_check(key) == 0) {
         if (kind == TINYPY_VALUE_TUPLE) {
             __tinypy_item_indices_error(vm, (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("tuple"), key, out_error);
         }
@@ -374,7 +374,7 @@ static tinypy_bool_t __tinypy_item_has_sequence_protocol(const tinypy_value_t *c
 static void __tinypy_item_unsupported(tinypy_value_t *container, tinypy_value_t *key, tinypy_message_part_t sequence_message, tinypy_message_part_t message, tinypy_error_t **out_error) {
     int64_t index;
 
-    if (__tinypy_item_has_sequence_protocol(container) != 0 && __tinypy_item_is_index(key) != 0) {
+    if (__tinypy_item_has_sequence_protocol(container) != 0 && tinypy_internal_index_check(key) != 0) {
         if (__tinypy_item_number_as_ssize(key, TINYPY_FALSE, TINYPY_ERROR_INDEX, &index, out_error) == 0) {
             return;
         }
@@ -816,7 +816,7 @@ static tinypy_value_t *__tinypy_item_exception_get(tinypy_value_t *container, ti
     int64_t index;
     int64_t length;
 
-    if (__tinypy_item_is_index(key) == 0) {
+    if (tinypy_internal_index_check(key) == 0) {
         __tinypy_item_sequence_index_error(vm, key, out_error);
         return NULL;
     }
@@ -838,6 +838,46 @@ static tinypy_value_t *__tinypy_item_exception_get(tinypy_value_t *container, ti
 
     TINYPY_DECREF(position);
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The kinds whose values slice themselves: str, unicode, tuple and list. */
+static tinypy_bool_t __tinypy_item_sliced_sequence(tinypy_value_type_e kind) {
+    tinypy_bool_t sliced = kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_LIST ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return sliced;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The slice of a str, unicode, tuple or list by indices that are not yet
+   adjusted to its length, which the unpacking of a slice object may have
+   changed for a list. */
+static tinypy_value_t *__tinypy_item_sequence_slice_indices(tinypy_value_t *container, tinypy_internal_slice_indices_t *indices, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(container);
+    size_t size;
+
+    if (kind == TINYPY_VALUE_STRING) {
+        (void)tinypy_string_view(container, &size);
+    }
+    else if (kind == TINYPY_VALUE_UNICODE) {
+        size_t byte_size;
+        (void)tinypy_unicode_utf8_view(container, &byte_size, &size);
+    }
+    else {
+        size = TINYPY_SIZED_SIZE(container);
+    }
+    if (tinypy_internal_slice_adjust_indices(vm, size, indices, out_error) == 0) {
+        return NULL;
+    }
+    if (kind == TINYPY_VALUE_STRING) {
+        tinypy_value_t *return_value_1 = __tinypy_item_string_slice(container, indices, out_error);
+        return return_value_1;
+    }
+    if (kind == TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *return_value_2 = __tinypy_item_unicode_slice(container, indices, out_error);
+        return return_value_2;
+    }
+    tinypy_value_t *return_value_3 = __tinypy_item_sequence_slice(container, indices, out_error);
+    return return_value_3;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_item_get_missing(tinypy_value_t *container, tinypy_value_t *key, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {
@@ -897,22 +937,8 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
        as it refuses any key without __index__. */
     if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE && kind != TINYPY_VALUE_XRANGE) {
         tinypy_internal_slice_indices_t indices;
-        size_t size;
 
-        if (kind == TINYPY_VALUE_TUPLE) {
-            size = TINYPY_TUPLE_SIZE(container);
-        }
-        else if (kind == TINYPY_VALUE_LIST) {
-            size = TINYPY_LIST_SIZE(container);
-        }
-        else if (kind == TINYPY_VALUE_STRING) {
-            (void)tinypy_string_view(container, &size);
-        }
-        else if (kind == TINYPY_VALUE_UNICODE) {
-            size_t byte_size;
-            (void)tinypy_unicode_utf8_view(container, &byte_size, &size);
-        }
-        else {
+        if (__tinypy_item_sliced_sequence(kind) == 0) {
             if (dispatch_special != 0 && tinypy_internal_object_has_special_key(container, vm->internal_special_getitem_key) != 0) {
                 tinypy_value_t *return_value_3 = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &key, 1U, out_error);
                 return return_value_3;
@@ -920,20 +946,11 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
             tinypy_value_t *missing = __tinypy_item_get_missing(container, key, dispatch_special, out_error);
             return missing;
         }
-        if (tinypy_internal_slice_unpack(key, &indices, out_error) == 0
-            || tinypy_internal_slice_adjust_indices(vm, kind == TINYPY_VALUE_LIST ? TINYPY_LIST_SIZE(container) : size, &indices, out_error) == 0) {
+        if (tinypy_internal_slice_unpack(key, &indices, out_error) == 0) {
             return NULL;
         }
-        if (kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_LIST) {
-            tinypy_value_t *return_value_4 = __tinypy_item_sequence_slice(container, &indices, out_error);
-            return return_value_4;
-        }
-        if (kind == TINYPY_VALUE_STRING) {
-            tinypy_value_t *return_value_5 = __tinypy_item_string_slice(container, &indices, out_error);
-            return return_value_5;
-        }
-        tinypy_value_t *return_value_6 = __tinypy_item_unicode_slice(container, &indices, out_error);
-        return return_value_6;
+        tinypy_value_t *return_value_4 = __tinypy_item_sequence_slice_indices(container, &indices, out_error);
+        return return_value_4;
     }
     if (kind == TINYPY_VALUE_TUPLE) {
         if (__tinypy_item_position(container, key, "tuple index out of range", &index, out_error) == 0) {
@@ -982,7 +999,7 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
 //////////////////////////////////////////////////////////////////////////
 /* ISINDEX of ceval: an omitted bound or one with an index. */
 static tinypy_bool_t __tinypy_item_is_slice_offset(tinypy_value_t *bound) {
-    tinypy_bool_t offset = bound == NULL || __tinypy_item_is_index(bound) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t offset = bound == NULL || tinypy_internal_index_check(bound) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
 
     return offset;
 }
@@ -1075,6 +1092,19 @@ static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tin
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Reads a slice bound that needs no conversion, an exact int, into an index;
+   an omitted bound or None keeps the default of the index. */
+static tinypy_bool_t __tinypy_item_plain_bound(tinypy_vm_t *vm, tinypy_value_t *bound, int64_t *in_out_index) {
+    if (bound == NULL || TINYPY_VALUE_KIND(bound) == TINYPY_VALUE_NONE) {
+        return TINYPY_TRUE;
+    }
+    if (bound->type != &vm->types[TINYPY_VALUE_INTEGER]) {
+        return TINYPY_FALSE;
+    }
+    *in_out_index = TINYPY_INTEGER_VALUE(bound);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Whether apply_slice and assign_slice use sq_slice and sq_ass_slice: both
    bounds must be offsets, and only classic instances and types with the
    legacy method have the slot, which subclasses keep even when they override
@@ -1099,7 +1129,19 @@ static tinypy_bool_t __tinypy_item_uses_offsets(tinypy_value_t *container, tinyp
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_get_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(container);
 
+    /* An exact sequence sliced by bounds that need no conversion slices
+       itself without a slice object, as its sq_slice does. */
+    if (__tinypy_item_sliced_sequence(kind) != 0 && container->type == &vm->types[kind]) {
+        tinypy_internal_slice_indices_t indices = {0, INT64_MAX, 1, 0U};
+
+        if (__tinypy_item_plain_bound(vm, start, &indices.start) != 0 && __tinypy_item_plain_bound(vm, stop, &indices.stop) != 0) {
+            TINYPY_CLEAR_ERROR(out_error);
+            tinypy_value_t *result = __tinypy_item_sequence_slice_indices(container, &indices, out_error);
+            return result;
+        }
+    }
     if (__tinypy_item_uses_offsets(container, vm->internal_special_getslice_key, start, stop) != 0) {
         tinypy_value_t *return_value_1 = __tinypy_item_call_offsets(container, vm->internal_special_getslice_key, vm->internal_special_getitem_key, start, stop, NULL, out_error);
         return return_value_1;

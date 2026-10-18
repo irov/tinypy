@@ -166,7 +166,7 @@ tinypy_value_t *tinypy_internal_super_create(tinypy_type_t *type, tinypy_value_t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_super_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_internal_super_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error) {
     tinypy_super_object_t *super_value = TINYPY_SUPER_OBJECT(descriptor);
 
     (void)owner;
@@ -207,7 +207,7 @@ static tinypy_value_t *__tinypy_super_get_method(tinypy_value_t *function, tinyp
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__get__(None, None) is invalid", out_error);
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_internal_super_descriptor_get(TINYPY_TUPLE_GET(args, 0U), instance, instance != NULL ? instance->type : NULL, out_error);
+    tinypy_value_t *return_value_1 = tinypy_internal_super_descriptor_get(TINYPY_TUPLE_GET(args, 0U), instance, instance != NULL ? &instance->type->base.base : NULL, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////

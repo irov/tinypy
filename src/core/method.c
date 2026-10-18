@@ -27,6 +27,68 @@ static void __tinypy_method_class_name(tinypy_value_t *class_object, char *buffe
     tinypy_internal_exception_preserve_end(vm, &state);
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyEval_GetFuncName and PyEval_GetFuncDesc: a method is named after its
+   function and described as a call, and of the native functions only a
+   builtin function or method is named after itself. */
+void tinypy_internal_callable_message_name(tinypy_value_t *callable, tinypy_message_part_t *out_name, tinypy_message_part_t *out_description) {
+    static const char call_description[] = "()";
+    static const char constructor_description[] = " constructor";
+    static const char instance_description[] = " instance";
+    static const char object_description[] = " object";
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+    tinypy_value_t *function = callable;
+    tinypy_value_t *name = NULL;
+    tinypy_bool_t named_call = TINYPY_FALSE;
+
+    while (TINYPY_VALUE_KIND(function) == TINYPY_VALUE_METHOD) {
+        function = TINYPY_METHOD_OBJECT(function)->function;
+    }
+    switch (TINYPY_VALUE_KIND(function)) {
+    case TINYPY_VALUE_FUNCTION:
+        name = TINYPY_FUNCTION_OBJECT(function)->name;
+        named_call = TINYPY_TRUE;
+        break;
+    case TINYPY_VALUE_NATIVE_FUNCTION:
+        if (function->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION]) {
+            name = TINYPY_NATIVE_FUNCTION_OBJECT(function)->name;
+            named_call = TINYPY_TRUE;
+        }
+        break;
+    case TINYPY_VALUE_CLASS:
+        name = TINYPY_CLASS_OBJECT(function)->name;
+        break;
+    case TINYPY_VALUE_OLD_INSTANCE:
+        name = TINYPY_CLASS_OBJECT(TINYPY_OLD_INSTANCE_OBJECT(function)->class_object)->name;
+        break;
+    default:
+        break;
+    }
+    if (name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING) {
+        out_name->bytes = (const char *)TINYPY_TEXT_BYTES(name);
+        out_name->size = TINYPY_TEXT_BYTE_SIZE(name);
+    }
+    else {
+        out_name->bytes = function->type->name;
+        out_name->size = function->type->name_size;
+    }
+    if (function != callable || named_call != 0) {
+        out_description->bytes = call_description;
+        out_description->size = sizeof(call_description) - 1U;
+    }
+    else if (TINYPY_VALUE_KIND(callable) == TINYPY_VALUE_CLASS) {
+        out_description->bytes = constructor_description;
+        out_description->size = sizeof(constructor_description) - 1U;
+    }
+    else if (TINYPY_VALUE_KIND(callable) == TINYPY_VALUE_OLD_INSTANCE) {
+        out_description->bytes = instance_description;
+        out_description->size = sizeof(instance_description) - 1U;
+    }
+    else {
+        out_description->bytes = object_description;
+        out_description->size = sizeof(object_description) - 1U;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_method_receiver_error(tinypy_method_object_t *method, tinypy_value_t *receiver, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&method->base);
     char owner_name[256];
@@ -49,24 +111,16 @@ static void __tinypy_method_receiver_error(tinypy_method_object_t *method, tinyp
     else {
         memcpy(receiver_name, "nothing", sizeof("nothing"));
     }
-    tinypy_value_t *name = TINYPY_VALUE_KIND(method->function) == TINYPY_VALUE_FUNCTION ? TINYPY_FUNCTION_OBJECT(method->function)->name
-        : TINYPY_VALUE_KIND(method->function) == TINYPY_VALUE_NATIVE_FUNCTION ? TINYPY_NATIVE_FUNCTION_OBJECT(method->function)->name : NULL;
-    const char *function_name = name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING ? (const char *)TINYPY_TEXT_BYTES(name) : "?";
-    size_t function_size = name != NULL && TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING ? TINYPY_TEXT_BYTE_SIZE(name) : 1U;
-
-    if (name != NULL) {
-        TINYPY_INCREF(name);
-    }
+    tinypy_message_part_t function_name;
+    tinypy_message_part_t function_description;
+    tinypy_internal_callable_message_name(method->function, &function_name, &function_description);
     tinypy_message_part_t parts[] = {
-        TINYPY_MESSAGE_PART_LITERAL("unbound method "), {function_name, function_size},
-        TINYPY_MESSAGE_PART_LITERAL("() must be called with "), {owner_name, strlen(owner_name)},
+        TINYPY_MESSAGE_PART_LITERAL("unbound method "), function_name, function_description,
+        TINYPY_MESSAGE_PART_LITERAL(" must be called with "), {owner_name, strlen(owner_name)},
         TINYPY_MESSAGE_PART_LITERAL(" instance as first argument (got "), {receiver_name, strlen(receiver_name)},
         {receiver != NULL ? " instance instead)" : " instead)", receiver != NULL ? 18U : 9U}
     };
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-    if (name != NULL) {
-        TINYPY_DECREF(name);
-    }
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -150,14 +204,14 @@ void tinypy_internal_method_free_list_finalize(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+tinypy_value_t *tinypy_internal_function_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error) {
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_value_t *return_value_1 = tinypy_method_new(descriptor, instance, &owner->base.base);
+    tinypy_value_t *return_value_1 = tinypy_method_new(descriptor, instance, owner);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_method_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
-    tinypy_value_t *result = tinypy_internal_method_bind(descriptor, instance, &owner->base.base, out_error);
+tinypy_value_t *tinypy_internal_method_descriptor_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error) {
+    tinypy_value_t *result = tinypy_internal_method_bind(descriptor, instance, owner, out_error);
 
     return result;
 }
@@ -232,22 +286,20 @@ tinypy_value_t *tinypy_internal_method_compare(tinypy_value_t *left, tinypy_valu
         tinypy_value_t *return_value_2 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_2;
     }
+    /* instancemethod_richcompare compares the functions with == too. */
     left_method = TINYPY_METHOD_OBJECT(left);
     right_method = TINYPY_METHOD_OBJECT(right);
-    if (left_method->function != right_method->function) {
-        equal = 0;
-    }
-    else if (left_method->self == right_method->self) {
-        equal = 1;
-    }
-    else if (left_method->self == NULL || right_method->self == NULL) {
-        equal = 0;
-    }
-    else {
-        equal = tinypy_compare_bool(left_method->self, right_method->self, TINYPY_COMPARE_EQUAL, out_error);
-        if (equal < 0) {
-            return NULL;
+    equal = tinypy_compare_bool(left_method->function, right_method->function, TINYPY_COMPARE_EQUAL, out_error);
+    if (equal > 0 && left_method->self != right_method->self) {
+        if (left_method->self == NULL || right_method->self == NULL) {
+            equal = 0;
         }
+        else {
+            equal = tinypy_compare_bool(left_method->self, right_method->self, TINYPY_COMPARE_EQUAL, out_error);
+        }
+    }
+    if (equal < 0) {
+        return NULL;
     }
     tinypy_value_t *return_value_3 = tinypy_bool_from_i32(vm, operation == TINYPY_COMPARE_EQUAL ? equal : equal == 0);
     return return_value_3;

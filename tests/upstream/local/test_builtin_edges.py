@@ -1,6 +1,7 @@
 """Project-authored Python 2 iterator builtin and container callback witnesses."""
 
 import unittest
+import __builtin__
 import _codecs
 import _struct
 import _weakref as weakref
@@ -912,3 +913,133 @@ class BuiltinEdges(unittest.TestCase):
         self.assertEqual([repr(round(value, 2)) for value in values], ['0.13', '0.38', '-0.13', '2.67', '1.0', '0.28', '-0.0', '0.5', '2.5'])
         self.assertEqual([repr(round(value, digits)) for value, digits in ((123456789.987654321, 5), (1e15 + 0.5, 1), (0.1 + 0.2, 15), (5e-324, 19), (-2.5, 19))],
                          ['123456789.98765', '1000000000000000.5', '0.3', '0.0', '-2.5'])
+
+    def test_classic_instances_supply_index_and_items_through_getattr(self):
+        class Proxy:
+            def __init__(self, target):
+                self.target = target
+            def __getattr__(self, name):
+                return getattr(self.target, name)
+        class Plain:
+            pass
+        class Failing:
+            def __getattr__(self, name):
+                if name == '__getitem__':
+                    raise KeyError(name)
+                raise AttributeError(name)
+        class Items(object):
+            def __index__(self):
+                return 1
+            def __iter__(self):
+                return iter([7, 8])
+            def __getitem__(self, index):
+                return [7, 8][index]
+            def __len__(self):
+                return 2
+        class KeyTypes(object):
+            def __getitem__(self, key):
+                return type(key).__name__
+        two = Proxy(2)
+        items = Proxy(Items())
+        self.assertEqual(bytearray(two), bytearray(2))
+        self.assertEqual(bytearray(items), bytearray(1))
+        data = bytearray('abcd')
+        data.__init__(two)
+        self.assertEqual(data, bytearray(2))
+        self.assertEqual(bytearray('abcd')[two], 99)
+        data = bytearray('abcd')
+        data[two] = 65
+        del data[items]
+        self.assertEqual(data, bytearray('aAd'))
+        self.assertEqual(bytearray('ab').__mul__(two), bytearray('abab'))
+        self.assertEqual(bytearray('abcd').find('c', two), 2)
+        self.assertEqual(list(enumerate('ab', two)), [(2, 'a'), (3, 'b')])
+        self.assertEqual('abcd'.find('c', two), 2)
+        self.assertEqual(u'abcc'.count(u'c', 0, two), 0)
+        self.assertEqual(memoryview('abcd')[two], 'c')
+        self.assertEqual(buffer('abcd')[two], 'c')
+        self.assertEqual(buffer('ab').__mul__(two), 'abab')
+        self.assertEqual(sys.float_info[items], sys.float_info.max_exp)
+        self.assertEqual(apply(max, items), 8)
+        self.assertEqual('{0[1]}'.format(Proxy(KeyTypes())), 'int')
+        self.assertEqual(list(reversed(Proxy('abc'))), ['c', 'b', 'a'])
+        for function in (lambda value: bytearray('abc')[value], lambda value: list(enumerate('ab', value)), lambda value: 'abc'.find('b', value),
+                         lambda value: memoryview('abc')[value], lambda value: buffer('abc')[value], lambda value: sys.float_info[value]):
+            self.assertEqual(error_text(function, Plain()), 'TypeError: object cannot be interpreted as an index')
+        self.assertEqual(error_text(apply, max, two), 'TypeError: apply() arg 2 expected sequence, found instance')
+        self.assertEqual(error_text(apply, max, Failing()), 'TypeError: apply() arg 2 expected sequence, found instance')
+        self.assertEqual(error_text(reversed, Failing()), 'TypeError: argument to reversed() must be a sequence')
+        self.assertEqual(error_text(iter, Failing()), 'TypeError: iteration over non-sequence')
+
+    def test_print_function_checks_stdout_before_its_affixes(self):
+        print_function = getattr(__builtin__, 'print')
+        class Collect(object):
+            def __init__(self):
+                self.parts = []
+            def write(self, text):
+                self.parts.append(text)
+        saved = sys.stdout
+        try:
+            sys.stdout = None
+            self.assertEqual(print_function(1, sep=5), None)
+            self.assertEqual(print_function(end=5, file=None), None)
+            self.assertEqual(error_text(print_function, 1, file=Collect(), sep=5), 'TypeError: sep must be None, str or unicode, not int')
+            del sys.stdout
+            self.assertEqual(error_text(print_function, end=5), 'TypeError: end must be None, str or unicode, not int')
+            self.assertEqual(error_text(print_function, 1), 'TypeError: writeobject with NULL file')
+            self.assertEqual(error_text(print_function), 'TypeError: writeobject with NULL file')
+            collect = Collect()
+            print_function(1, 2, file=collect)
+            self.assertEqual(collect.parts, ['1', ' ', '2', '\n'])
+        finally:
+            sys.stdout = saved
+
+    def test_mapping_keys_and_argument_parsing_messages(self):
+        class NoKeys(object):
+            keys = None
+            def __getitem__(self, key):
+                raise KeyError(key)
+        class Hint(object):
+            def __iter__(self):
+                return iter([1, 2])
+            def __length_hint__(self):
+                return -1
+        class Integer(object):
+            def __init__(self, log, name):
+                self.log = log
+                self.name = name
+            def __int__(self):
+                self.log.append(self.name)
+                return 0
+        not_callable = "TypeError: attribute of type 'NoneType' is not callable"
+        self.assertEqual(error_text(lambda: (lambda **kwargs: kwargs)(**NoKeys())), not_callable)
+        self.assertEqual(error_text(lambda: '{a}'.format(**NoKeys())), not_callable)
+        self.assertEqual(error_text(eval, 'dir()', {}, NoKeys()), not_callable)
+        self.assertEqual(error_text(lambda: (lambda *args: args)(*Hint())), 'SystemError: error return without exception set')
+        self.assertEqual(error_text(slice(1).indices), 'TypeError: indices() takes exactly one argument (0 given)')
+        self.assertEqual(error_text(slice(1).indices, 1, 2), 'TypeError: indices() takes exactly one argument (2 given)')
+        self.assertEqual(error_text(slice(1).indices, x=1), 'TypeError: indices() takes no keyword arguments')
+        self.assertEqual(error_text(slice(1).__cmp__), 'TypeError: expected 1 arguments, got 0')
+        self.assertEqual(error_text(slice(1).__cmp__, 1), "TypeError: slice.__cmp__(x,y) requires y to be a 'slice', not a 'int'")
+        self.assertEqual(error_text(slice(1).__repr__, 1), 'TypeError: expected 0 arguments, got 1')
+        self.assertEqual(error_text(compile, '1', 5, 'eval', 0, flags=0), 'TypeError: compile() argument 2 must be string, not int')
+        self.assertEqual(error_text(compile, '1', 5, 'eval', bogus=0), 'TypeError: compile() argument 2 must be string, not int')
+        self.assertEqual(error_text(compile, '1', 5), 'TypeError: compile() argument 2 must be string, not int')
+        log = []
+        self.assertEqual(error_text(compile, '1', 'f', 'eval', Integer(log, 'flags'), bogus=1), "TypeError: 'bogus' is an invalid keyword argument for this function")
+        self.assertEqual(error_text(compile, '1', 'f', 'eval', Integer(log, 'positional'), flags=Integer(log, 'keyword')), "TypeError: Argument given by name ('flags') and position (4)")
+        self.assertEqual(log, ['flags'])
+        self.assertEqual(error_text(round, 'x', bogus=1), 'TypeError: a float is required')
+        float_info = type(sys.float_info)
+        long_info = type(sys.long_info)
+        self.assertEqual(float_info((1,) * 11).max, 1)
+        self.assertEqual(long_info(iter([5, 6]), {}), (5, 6))
+        self.assertEqual(repr(long_info.__new__(long_info, [5, 6])), 'sys.long_info(bits_per_digit=5, sizeof_digit=6)')
+        reduced = sys.float_info.__reduce__()
+        self.assertEqual(reduced[0](*reduced[1]), sys.float_info)
+        self.assertEqual(error_text(long_info, (1,)), 'TypeError: sys.long_info() takes a 2-sequence (1-sequence given)')
+        self.assertEqual(error_text(long_info, 5), 'TypeError: constructor requires a sequence')
+        self.assertEqual(error_text(long_info, (1, 2), 5), 'TypeError: sys.long_info() takes a dict as second arg, if any')
+        self.assertEqual(error_text(long_info), "TypeError: Required argument 'sequence' (pos 1) not found")
+        self.assertEqual(error_text(long_info, (1, 2), {}, 3), 'TypeError: structseq() takes at most 2 arguments (3 given)')
+        self.assertEqual(error_text(type(sys.version_info), (2, 7, 18, 'final', 0)), "TypeError: cannot create 'sys.version_info' instances")

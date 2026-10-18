@@ -5595,6 +5595,122 @@ static int32_t __test_module_finder(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Offers every module it is asked for, as source that sets maxint. */
+static const tinypy_module_artifact_t *__test_module_finder_protocol_resolve(void *user_data, const tinypy_module_request_t *request) {
+    static const char source[] = "maxint = 1\n";
+    tinypy_module_artifact_t *artifact = (tinypy_module_artifact_t *)user_data;
+
+    (void)memset(artifact, 0, sizeof(*artifact));
+    artifact->abi_version = TINYPY_ABI_VERSION;
+    artifact->struct_size = (uint32_t)sizeof(*artifact);
+    artifact->content_kind = TINYPY_MODULE_CONTENT_SOURCE;
+    artifact->data = source;
+    artifact->data_size = sizeof(source) - 1U;
+    artifact->canonical_name = request->canonical_name;
+    artifact->canonical_name_size = request->canonical_name_size;
+    return artifact;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The host finder follows the protocol of sys.meta_path and comes after
+   it: an ImportError of find_module means that nobody provides the module,
+   so the host resolver is not asked, and the modules the VM provides come
+   before the resolver, which reload() of sys does not consult. */
+static int32_t __test_module_finder_protocol(void) {
+    static const char finders[] =
+        "import sys\n"
+        "calls = []\n"
+        "class Loader(object):\n"
+        "    def __init__(self, origin):\n"
+        "        self.origin = origin\n"
+        "    def load_module(self, name):\n"
+        "        module = type(sys)(name)\n"
+        "        module.origin = self.origin\n"
+        "        return module\n"
+        "class HostFinder(object):\n"
+        "    def find_module(self, name, path=None):\n"
+        "        calls.append(name)\n"
+        "        if name == 'finder_missing':\n"
+        "            raise ImportError('the host finder has no ' + name)\n"
+        "        if name.startswith('finder_'):\n"
+        "            return Loader('host')\n"
+        "        return None\n"
+        "class MetaFinder(object):\n"
+        "    def find_module(self, name, path=None):\n"
+        "        if name == 'finder_meta':\n"
+        "            return Loader('meta')\n"
+        "        return None\n"
+        "host_finder = HostFinder()\n";
+    static const char checks[] =
+        "try:\n"
+        "    import finder_missing\n"
+        "except ImportError as error:\n"
+        "    assert str(error) == 'No module named finder_missing', error\n"
+        "else:\n"
+        "    raise AssertionError('the resolver was asked after the finder')\n"
+        "import finder_hosted\n"
+        "assert finder_hosted.origin == 'host' and sys.modules['finder_hosted'] is finder_hosted\n"
+        "sys.meta_path.append(MetaFinder())\n"
+        "import finder_meta\n"
+        "assert finder_meta.origin == 'meta' and 'finder_meta' not in calls\n"
+        "assert reload(sys) is sys and sys.maxint > 1 and calls[-1] == 'sys'\n"
+        "del sys.meta_path\n"
+        "try:\n"
+        "    import finder_unlisted\n"
+        "except RuntimeError as error:\n"
+        "    assert str(error) == 'sys.meta_path must be a list of import hooks', error\n"
+        "else:\n"
+        "    raise AssertionError('imported without sys.meta_path')\n"
+        "sys.meta_path = []\n"
+        "import resolved_module\n"
+        "assert resolved_module.maxint == 1 and calls[-1] == 'resolved_module'\n";
+    test_allocator_state_t allocator_state;
+    tinypy_module_artifact_t artifact;
+    tinypy_host_t host;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &artifact;
+    host.resolve_module = __test_module_finder_protocol_resolve;
+    host.release_module_artifact = __test_heap_budget_release;
+    config.host = &host;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, finders, sizeof(finders) - 1U, "finders.py", 10U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_value_t *finder_key = tinypy_string_from_bytes(vm, "host_finder", 11U);
+    tinypy_value_t *finder = tinypy_dict_get(globals, finder_key);
+    tinypy_release(finder_key);
+    TEST_CHECK(finder != NULL);
+    tinypy_vm_set_module_finder(vm, finder);
+    result = tinypy_exec_source(vm, checks, sizeof(checks) - 1U, "checks.py", 9U, globals, NULL, &options, &error);
+    if (result == NULL) {
+        size_t message_size = 0U;
+        const char *message = error != NULL ? tinypy_error_message(error, &message_size) : "";
+
+        (void)fprintf(stderr, "module finder protocol: %.*s\n", (int)message_size, message);
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+    }
+    TEST_CHECK(result != NULL);
+    tinypy_release(result);
+    tinypy_vm_set_module_finder(vm, NULL);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Consumes the value returned by the build operation under test. */
 static tinypy_bool_t __test_build_value_matches(tinypy_value_t *value, const char *expected) {
     if (value == NULL) {
@@ -6363,6 +6479,137 @@ static tinypy_value_t *__test_global(tinypy_value_t *globals, const char *name) 
 
     tinypy_release(key);
     return value;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Releases text, a result of tinypy_object_str or tinypy_object_repr, and
+   tells whether it is the str expected. */
+static tinypy_bool_t __test_text_is(tinypy_value_t *text, const char *expected) {
+    if (text == NULL) {
+        return TINYPY_FALSE;
+    }
+    size_t size = 0U;
+    const char *bytes = (const char *)tinypy_string_view(text, &size);
+    size_t expected_size = strlen(expected);
+    tinypy_bool_t equal = tinypy_typeof(text) == TINYPY_VALUE_STRING && size == expected_size && memcmp(bytes, expected, size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+    tinypy_release(text);
+    return equal;
+}
+//////////////////////////////////////////////////////////////////////////
+/* tinypy_vm_raise_error raises a complete instance of the class of every
+   kind, UnicodeError for the kinds of the codec errors, whose fields
+   tinypy_exception_new gives. The str and the repr of a nested exception
+   take the levels of PyObject_Str and PyObject_Repr, and nested candidate
+   tuples match up to the recursion limit. */
+static int32_t __test_exception_contracts(void) {
+    static const char define[] =
+        "import sys\n"
+        "def nest(cls, depth):\n"
+        "    exception = cls('leaf')\n"
+        "    for index in range(depth):\n"
+        "        exception = cls(exception)\n"
+        "    return exception\n"
+        "def candidates(depth):\n"
+        "    candidate = (ValueError,)\n"
+        "    for index in range(depth):\n"
+        "        candidate = (KeyError, candidate)\n"
+        "    return candidate\n"
+        "str_ok = nest(ValueError, 39)\n"
+        "str_deep = nest(ValueError, 40)\n"
+        "repr_ok = nest(ValueError, 18)\n"
+        "repr_deep = nest(ValueError, 19)\n"
+        "within = candidates(30)\n"
+        "beyond = candidates(60)\n"
+        "instance = ValueError('raised')\n"
+        "decode_args = ('utf-8', '\\xff', 0, 1, 'invalid start byte')\n"
+        "sys.setrecursionlimit(40)\n";
+    static const char restore[] = "sys.setrecursionlimit(1000)\n";
+    test_allocator_state_t state;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    error = __test_exception_diagnostic(vm, globals, define, sizeof(define) - 1U);
+    TEST_CHECK(error == NULL);
+
+    for (int32_t kind = (int32_t)TINYPY_ERROR_TYPE; kind < (int32_t)TINYPY_ERROR_MEMORY; ++kind) {
+        tinypy_vm_raise_error(vm, (tinypy_error_kind_e)kind, "host message");
+        tinypy_value_t *raised = tinypy_vm_raised_exception(vm);
+        tinypy_value_t *raised_type = tinypy_vm_raised_exception_type(vm);
+        TEST_CHECK(raised != NULL && raised_type != NULL);
+        TEST_CHECK(tinypy_exception_matches(raised, raised_type, &error) == 1 && error == NULL);
+        tinypy_retain(raised);
+        tinypy_vm_clear_error(vm);
+        tinypy_value_t *text = tinypy_object_str(raised, &error);
+        TEST_CHECK(__test_text_is(text, kind == (int32_t)TINYPY_ERROR_KEY ? "'host message'" : "host message") != 0 && error == NULL);
+        tinypy_release(raised);
+    }
+    tinypy_value_t *builtins = tinypy_vm_builtins(vm);
+    tinypy_value_t *unicode_error = __test_global(builtins, "UnicodeError");
+    TEST_CHECK(unicode_error != NULL);
+    for (int32_t kind = (int32_t)TINYPY_ERROR_UNICODE_DECODE; kind <= (int32_t)TINYPY_ERROR_UNICODE_ENCODE; ++kind) {
+        tinypy_vm_raise_error(vm, (tinypy_error_kind_e)kind, "host message");
+        TEST_CHECK(tinypy_vm_raised_exception_type(vm) == unicode_error);
+        tinypy_value_t *raised = tinypy_vm_raised_exception(vm);
+        tinypy_value_t *text = tinypy_object_repr(raised, &error);
+        TEST_CHECK(__test_text_is(text, "UnicodeError('host message',)") != 0 && error == NULL);
+        tinypy_value_t *message = tinypy_object_get_attr(raised, "message", 7U, &error);
+        TEST_CHECK(__test_text_is(message, "host message") != 0 && error == NULL);
+        TEST_CHECK(tinypy_vm_normalize_error(vm, &error) != 0 && error == NULL && tinypy_vm_raised_exception(vm) == raised);
+        tinypy_vm_clear_error(vm);
+    }
+    tinypy_value_t *decode_error = __test_global(builtins, "UnicodeDecodeError");
+    tinypy_value_t *decode_args = __test_global(globals, "decode_args");
+    TEST_CHECK(decode_error != NULL && decode_args != NULL);
+    tinypy_value_t *decoded = tinypy_exception_new(tinypy_value_as_type(decode_error), decode_args, &error);
+    TEST_CHECK(decoded != NULL && error == NULL);
+    tinypy_value_t *decoded_text = tinypy_object_str(decoded, &error);
+    TEST_CHECK(__test_text_is(decoded_text, "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte") != 0 && error == NULL);
+    tinypy_release(decoded);
+
+    /* Each nesting takes one level of str and two of repr, its own and that
+       of its arguments, so with the limit at 40 the str of 40 nestings and
+       the repr of 19 exceed it, as in CPython. */
+    static const char *const representations[][3] = {
+        {"str_ok", "str_deep", "maximum recursion depth exceeded while getting the str of an object"},
+        {"repr_ok", "repr_deep", "maximum recursion depth exceeded while getting the repr of an object"}};
+    tinypy_value_t *(*const conversions[2])(tinypy_value_t *, tinypy_error_t **) = {&tinypy_object_str, &tinypy_object_repr};
+    for (size_t index = 0U; index < 2U; ++index) {
+        tinypy_value_t *fitting = __test_global(globals, representations[index][0]);
+        tinypy_value_t *exceeding = __test_global(globals, representations[index][1]);
+        tinypy_value_t *fitting_text = conversions[index](fitting, &error);
+        TEST_CHECK(fitting_text != NULL && error == NULL);
+        tinypy_release(fitting_text);
+        tinypy_value_t *exceeding_text = conversions[index](exceeding, &error);
+        TEST_CHECK(exceeding_text == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_RUNTIME);
+        size_t size = 0U;
+        const char *message = tinypy_error_message(error, &size);
+        TEST_CHECK(size == strlen(representations[index][2]) && memcmp(message, representations[index][2], size) == 0);
+        tinypy_error_release(error);
+        error = NULL;
+        tinypy_vm_clear_error(vm);
+    }
+
+    tinypy_value_t *instance = __test_global(globals, "instance");
+    tinypy_value_t *within = __test_global(globals, "within");
+    tinypy_value_t *beyond = __test_global(globals, "beyond");
+    TEST_CHECK(tinypy_exception_matches(instance, within, &error) == 1 && error == NULL);
+    TEST_CHECK(tinypy_exception_matches(instance, beyond, &error) == -1 && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_RUNTIME);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    error = __test_exception_diagnostic(vm, globals, restore, sizeof(restore) - 1U);
+    TEST_CHECK(error == NULL);
+
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
 }
 //////////////////////////////////////////////////////////////////////////
 /* tinypy_equal compares container items and entries with == while holding
@@ -9241,6 +9488,10 @@ int main(int argc, char **argv) {
         int return_value_24 = __test_exception_state_lost_runtime();
         return return_value_24;
     }
+    if (strcmp(argv[1], "exception_contracts") == 0) {
+        int result = __test_exception_contracts();
+        return result;
+    }
     if (strcmp(argv[1], "exception_diagnostics") == 0) {
         int result = __test_exception_diagnostics();
         return result;
@@ -9420,6 +9671,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "module_finder") == 0) {
         int return_value_22 = __test_module_finder();
         return return_value_22;
+    }
+    if (strcmp(argv[1], "module_finder_protocol") == 0) {
+        int result = __test_module_finder_protocol();
+        return result;
     }
     if (strcmp(argv[1], "cycle_diagnostics") == 0) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)

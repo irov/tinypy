@@ -1038,17 +1038,6 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
     }
     tinypy_value_t *iterable = values[0];
     tinypy_value_t *start = values[1];
-    if (start != NULL && TINYPY_VALUE_KIND(start) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(start) != TINYPY_VALUE_INTEGER && TINYPY_VALUE_KIND(start) != TINYPY_VALUE_LONG
-        && tinypy_internal_object_has_special_key(start, vm->internal_special_index_key) == TINYPY_FALSE) {
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("'"),
-            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(start, 200U),
-            TINYPY_MESSAGE_PART_LITERAL("' object cannot be interpreted as an index"),
-        };
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        __tinypy_enumerate_release_arguments(values);
-        return NULL;
-    }
     tinypy_value_t *counter = start != NULL ? tinypy_internal_index_value(start, out_error) : tinypy_integer_from_i64(vm, INT64_C(0));
 
     if (counter == NULL) {
@@ -1221,19 +1210,10 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
     tinypy_bool_t has_get_item = check_sequence == 0 || (sequence->type->sequence_slots != NULL && sequence->type->sequence_slots->get_item != NULL) ? TINYPY_TRUE : TINYPY_FALSE;
 
-    /* PySequence_Check fetches the __getitem__ of a classic instance like
-       any attribute, __getattr__ included. */
+    /* PySequence_Check asks a classic instance hasattr(sequence,
+       '__getitem__'), __getattr__ included. */
     if (has_get_item == 0 && TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_OLD_INSTANCE) {
-        tinypy_value_t *method;
-        int32_t found = tinypy_internal_object_lookup_special_key(sequence, vm->internal_special_getitem_key, &method, out_error);
-
-        if (found < 0) {
-            return TINYPY_FALSE;
-        }
-        if (found > 0) {
-            TINYPY_DECREF(method);
-            has_get_item = TINYPY_TRUE;
-        }
+        has_get_item = tinypy_object_has_attr_value(sequence, vm->internal_special_getitem_key);
     }
     else if (has_get_item == 0) {
         has_get_item = tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key);
@@ -1598,21 +1578,69 @@ static tinypy_value_t *__tinypy_iter_result(tinypy_vm_t *vm, tinypy_value_t *val
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
+static void __tinypy_iter_clear_error(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    if (out_error != NULL && *out_error != NULL) {
+        tinypy_error_release(*out_error);
+        *out_error = NULL;
+    }
+    tinypy_internal_exception_clear_raised(vm);
+}
+//////////////////////////////////////////////////////////////////////////
+/* After a lookup of __iter__ that found nothing or failed: slot_tp_iter
+   drops any error of that lookup and instance_getiter only an
+   AttributeError, which leaves found 0. Both then iterate by index when they
+   find __getitem__, which slot_tp_iter binds, instance_getiter fetches
+   through __getattr__ too and PySeqIter_New fetches once more for
+   PySequence_Check; a failure to find it reports the object as not
+   iterable. */
+static tinypy_value_t *__tinypy_iter_getitem_fallback(tinypy_vm_t *vm, tinypy_value_t *value, int32_t found, tinypy_error_t **out_error) {
+    tinypy_bool_t classic = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_value_t *method;
+
+    if (found < 0 && classic != 0) {
+        return NULL;
+    }
+    __tinypy_iter_clear_error(vm, out_error);
+    found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_getitem_key, &method, out_error);
+    if (found > 0 && classic != 0) {
+        TINYPY_DECREF(method);
+        found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_getitem_key, &method, out_error);
+    }
+    if (found > 0) {
+        TINYPY_DECREF(method);
+        tinypy_value_t *iterator = __tinypy_internal_iterator_new(value);
+
+        TINYPY_ITERATOR_OBJECT(iterator)->mode = INT32_C(4);
+        return iterator;
+    }
+    __tinypy_iter_clear_error(vm, out_error);
+    if (classic != 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "iteration over non-sequence", out_error);
+        return NULL;
+    }
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 200U),
+        TINYPY_MESSAGE_PART_LITERAL("' object is not iterable"),
+    };
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind;
 
     TINYPY_CLEAR_ERROR(out_error);
     if (dispatch_special != 0 && __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(ITER)) != 0) {
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_iter_key, out_error);
-        tinypy_value_t *args;
-        tinypy_value_t *result;
-
-        if (method == NULL) {
-            return NULL;
+        tinypy_value_t *method;
+        int32_t found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_iter_key, &method, out_error);
+        if (found <= 0) {
+            tinypy_value_t *iterator = __tinypy_iter_getitem_fallback(vm, value, found, out_error);
+            return iterator;
         }
-        args = TINYPY_RET_EMPTY_TUPLE(vm);
-        result = tinypy_call(method, args, NULL, out_error);
+        tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
+        tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
         TINYPY_DECREF(args);
         TINYPY_DECREF(method);
         tinypy_value_t *iterator = __tinypy_iter_result(vm, value, result, out_error);
@@ -1648,33 +1676,15 @@ static tinypy_value_t *__tinypy_iter(tinypy_value_t *value, tinypy_bool_t dispat
             tinypy_value_t *iterator = __tinypy_iter_result(vm, value, result, out_error);
             return iterator;
         }
-        /* instance_getiter fetches __getitem__ through __getattr__ too, and
-           PySeqIter_New fetches it once more for PySequence_Check. */
         if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
-            found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_getitem_key, &method, out_error);
-            if (found > 0) {
-                TINYPY_DECREF(method);
-                found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_getitem_key, &method, out_error);
-            }
-            if (found > 0) {
-                TINYPY_DECREF(method);
-            }
+            tinypy_value_t *iterator = __tinypy_iter_getitem_fallback(vm, value, found, out_error);
+            return iterator;
         }
-        else {
-            found = tinypy_internal_object_has_special_key(value, vm->internal_special_getitem_key) != 0 ? INT32_C(1) : INT32_C(0);
-        }
-        if (found < 0) {
-            return NULL;
-        }
-        if (found > 0) {
+        if (tinypy_internal_object_has_special_key(value, vm->internal_special_getitem_key) != 0) {
             tinypy_value_t *iterator = __tinypy_internal_iterator_new(value);
 
             TINYPY_ITERATOR_OBJECT(iterator)->mode = INT32_C(4);
             return iterator;
-        }
-        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "iteration over non-sequence", out_error);
-            return NULL;
         }
     }
     /* PySequence_Check: a type with sq_item and no tp_iter, as a native type

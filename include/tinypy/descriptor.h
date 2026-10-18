@@ -3,6 +3,9 @@
 
 #include "tinypy/types.h"
 
+/* The callable getters return the wrapped callable borrowed, or NULL for a
+ * descriptor that staticmethod.__new__ or classmethod.__new__ created without
+ * running __init__. */
 tinypy_value_t *tinypy_static_method_new(tinypy_value_t *callable);
 tinypy_value_t *tinypy_static_method_callable(const tinypy_value_t *descriptor);
 tinypy_value_t *tinypy_class_method_new(tinypy_value_t *callable);

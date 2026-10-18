@@ -32,18 +32,6 @@ tinypy_value_t *tinypy_internal_object_encode_attribute_name(tinypy_value_t *key
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_object_type_metadata_read_only(tinypy_value_t *key) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(key);
-    tinypy_value_t *const metadata[] = {vm->internal_special_bases_key, vm->internal_special_mro_key, vm->internal_special_base_key, vm->internal_special_flags_key, vm->internal_special_basicsize_key, vm->internal_special_itemsize_key, vm->internal_special_dictoffset_key, vm->internal_special_weakrefoffset_key, vm->internal_special_dict_key, vm->internal_special_doc_key, vm->internal_special_class_key};
-
-    for (size_t index = 0U; index < sizeof(metadata) / sizeof(metadata[0]); ++index) {
-        if (TINYPY_NAME_EQ(key, metadata[index]) != 0) {
-            return TINYPY_TRUE;
-        }
-    }
-    return TINYPY_FALSE;
-}
-//////////////////////////////////////////////////////////////////////////
 /* Classic classes and their instances name the class itself, the way Python
    2.7 reports a missing attribute on them; other objects use the tp_name.
    The owner and the name are shown with the precisions of the message. */
@@ -1263,42 +1251,45 @@ static int32_t __tinypy_descriptor_python_method(tinypy_value_t *attribute, tiny
     return status;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_descriptor_get_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
+/* slot_tp_descr_get calls the __get__ that the type of a heap descriptor
+   holds as it is, without binding it: a static method there is called
+   itself. */
+static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_descriptor_get_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error) {
     if (attribute->type->descriptor_get != NULL && __tinypy_descriptor_slot_inherited(attribute, vm->internal_special_get_key, TINYPY_DESCRIPTOR_SLOT_GET) != 0) {
         tinypy_value_t *return_value_1 = attribute->type->descriptor_get(attribute, instance, owner, out_error);
         return return_value_1;
     }
-    tinypy_value_t *method;
-    int32_t status = __tinypy_descriptor_python_method(attribute, vm->internal_special_get_key, &method, out_error);
-    if (status <= 0) {
-        tinypy_value_t *unbound = status == 0 ? TINYPY_RET(attribute) : NULL;
-        return unbound;
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_t *method = (attribute->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U ? tinypy_internal_type_lookup_key(vm, attribute->type, vm->internal_special_get_key) : NULL;
+    if (method == NULL) {
+        return TINYPY_RET(attribute);
     }
-    tinypy_value_t *none = NULL;
-    tinypy_value_t *items[2];
-    tinypy_value_t *args;
-    tinypy_value_t *result;
+    tinypy_value_t *items[3] = {attribute, instance != NULL ? instance : &vm->none_object.base, owner};
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, items, 3U);
 
-    if (instance == NULL) {
-        none = TINYPY_RET_NONE(vm);
-    }
-    items[0] = instance != NULL ? instance : none;
-    items[1] = &owner->base.base;
-    args = tinypy_tuple_from_items(vm, items, 2U);
-    result = tinypy_call(method, args, NULL, out_error);
-    TINYPY_DECREF(args);
-    if (none != NULL) {
-        TINYPY_DECREF(none);
-    }
+    TINYPY_INCREF(method);
+    tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
     TINYPY_DECREF(method);
+    TINYPY_DECREF(args);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_descriptor_get_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_type_t *owner, tinypy_error_t **out_error) {
     TINYPY_INCREF(attribute);
     TINYPY_INCREF(&owner->base.base);
-    tinypy_value_t *result = __tinypy_descriptor_get_value(vm, attribute, instance, owner, out_error);
+    tinypy_value_t *result = __tinypy_descriptor_get_value(vm, attribute, instance, &owner->base.base, out_error);
     TINYPY_DECREF(&owner->base.base);
+    TINYPY_DECREF(attribute);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* class_getattr and instance_getattr2 give the tp_descr_get of an attribute
+   found in a classic class that class as its owner. */
+tinypy_value_t *tinypy_internal_descriptor_get_class_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_value_t *class_value, tinypy_error_t **out_error) {
+    TINYPY_INCREF(attribute);
+    TINYPY_INCREF(class_value);
+    tinypy_value_t *result = __tinypy_descriptor_get_value(vm, attribute, instance, class_value, out_error);
+    TINYPY_DECREF(class_value);
     TINYPY_DECREF(attribute);
     return result;
 }
@@ -1493,9 +1484,10 @@ tinypy_bool_t tinypy_internal_descriptor_delete_value(tinypy_vm_t *vm, tinypy_va
 }
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
-/* PyObject_GenericGetAttr: a data descriptor wins over the instance dict
-   only when it also defines __get__. */
-static tinypy_value_t *__tinypy_internal_instance_attribute(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
+/* PyObject_GenericGetAttr over the dictionary that dict_slot holds, if
+   any: a data descriptor wins over that dictionary only when it also
+   defines __get__. */
+static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_internal_instance_attribute(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t **dict_slot, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_type_t *type = value->type;
     tinypy_value_t *attribute;
     tinypy_value_t *result = NULL;
@@ -1509,7 +1501,6 @@ static tinypy_value_t *__tinypy_internal_instance_attribute(tinypy_vm_t *vm, tin
             goto done;
         }
     }
-    tinypy_value_t **dict_slot = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_FUNCTION ? &TINYPY_FUNCTION_OBJECT(value)->dict : tinypy_internal_object_dict_slot(value);
     if (dict_slot != NULL && *dict_slot != NULL) {
         tinypy_value_t *dict = *dict_slot;
 
@@ -1584,19 +1575,30 @@ static void __tinypy_object_clear_attribute_error(tinypy_vm_t *vm, tinypy_error_
     tinypy_internal_exception_clear_raised(vm);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_getattr_fallback(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *result, tinypy_bool_t suppress_missing, tinypy_bool_t allow_getattr, tinypy_bool_t *out_missing, tinypy_error_t **out_error) {
+/* The __getattr__ of a heap type, owned, looked up once: the key
+   comparisons of another lookup could change it. */
+static tinypy_value_t *__tinypy_object_getattr_hook(tinypy_vm_t *vm, tinypy_value_t *value) {
+    if ((value->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) {
+        return NULL;
+    }
+    tinypy_value_t *hook = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getattr_key);
+    if (hook != NULL) {
+        TINYPY_INCREF(hook);
+    }
+    return hook;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Calls the __getattr__ hook, which it consumes, after an AttributeError. */
+static tinypy_value_t *__tinypy_object_getattr_fallback(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *result, tinypy_value_t *hook, tinypy_bool_t suppress_missing, tinypy_bool_t *out_missing, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_t *hook = NULL;
 
     if (result != NULL) {
+        if (hook != NULL) {
+            TINYPY_DECREF(hook);
+        }
         return result;
     }
-    if (allow_getattr != TINYPY_FALSE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
-        hook = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getattr_key);
-    }
     if (hook != NULL) {
-        /* Releasing the AttributeError may run a finalizer that drops it. */
-        TINYPY_INCREF(hook);
         if (__tinypy_object_error_present(vm, out_error) != 0) {
             if (__tinypy_object_attribute_error(vm, out_error) == 0) {
                 TINYPY_DECREF(hook);
@@ -1652,17 +1654,27 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
             ((tinypy_type_t *)value)->flags &= ~TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY;
         }
     }
+    /* slot_tp_getattr_hook fetches __getattr__ before it calls
+       __getattribute__, which may add or remove one. */
     if (skip_custom == TINYPY_FALSE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && __tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(GETATTRIBUTE)) != 0) {
+        tinypy_value_t *getattr_hook = __tinypy_object_getattr_hook(vm, value);
         tinypy_value_t *hook = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getattribute_key);
 
         if (hook != NULL) {
             result = __tinypy_object_call_attribute_hook(vm, value, hook, key, out_error);
-            tinypy_value_t *return_value_1 = __tinypy_object_getattr_fallback(value, key, result, suppress_missing, TINYPY_TRUE, out_missing, out_error);
+            tinypy_value_t *return_value_1 = __tinypy_object_getattr_fallback(value, key, result, getattr_hook, suppress_missing, out_missing, out_error);
             return return_value_1;
         }
+        if (getattr_hook != NULL) {
+            TINYPY_DECREF(getattr_hook);
+        }
     }
+    /* A heap type may define a name that the builtin attributes also
+       provide. Of the kinds a subclass may derive, only partial provides
+       ordinary names, so the type is asked about those of a partial alone. */
     tinypy_bool_t canonical_key = key->type == &vm->types[TINYPY_VALUE_STRING] ? TINYPY_TRUE : TINYPY_FALSE;
-    tinypy_bool_t builtin_attribute = canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && ((kind != TINYPY_VALUE_INSTANCE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) || name_size < 2U || name[0] != '_') ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t ordinary_name = name_size < 2U || name[0] != '_' ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t builtin_attribute = canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && ((kind != TINYPY_VALUE_INSTANCE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) || (ordinary_name != TINYPY_FALSE && kind != TINYPY_VALUE_PARTIAL)) ? TINYPY_TRUE : TINYPY_FALSE;
     if (canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && builtin_attribute == TINYPY_FALSE) {
         tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
         builtin_attribute = attribute == NULL || TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_GETSET_DESCRIPTOR ? TINYPY_TRUE : TINYPY_FALSE;
@@ -1675,11 +1687,14 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
     }
     if (value->type->get_attribute != NULL) {
         result = value->type->get_attribute(value, key, out_error);
-        tinypy_value_t *return_value_2 = __tinypy_object_getattr_fallback(value, key, result, suppress_missing, skip_custom == TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE, out_missing, out_error);
+        tinypy_value_t *getattr_hook = result == NULL && skip_custom == TINYPY_FALSE ? __tinypy_object_getattr_hook(vm, value) : NULL;
+        tinypy_value_t *return_value_2 = __tinypy_object_getattr_fallback(value, key, result, getattr_hook, suppress_missing, out_missing, out_error);
         return return_value_2;
     }
     if (kind == TINYPY_VALUE_INSTANCE || kind == TINYPY_VALUE_FUNCTION || value->type->dict_offset != 0U) {
-        result = __tinypy_internal_instance_attribute(vm, value, key, out_error);
+        tinypy_value_t **dict_slot = kind == TINYPY_VALUE_FUNCTION ? &TINYPY_FUNCTION_OBJECT(value)->dict : tinypy_internal_object_dict_slot(value);
+
+        result = __tinypy_internal_instance_attribute(vm, value, dict_slot, key, out_error);
     }
     else if (kind == TINYPY_VALUE_TYPE) {
         result = __tinypy_internal_type_attribute(vm, value, key, out_error);
@@ -1705,7 +1720,8 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
         tinypy_value_t *return_value_3 = __tinypy_object_get_attr_key(method->function, key, suppress_missing, skip_custom, out_missing, out_error);
         return return_value_3;
     }
-    tinypy_value_t *return_value_4 = __tinypy_object_getattr_fallback(value, key, result, suppress_missing, skip_custom == TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE, out_missing, out_error);
+    tinypy_value_t *getattr_hook = result == NULL && skip_custom == TINYPY_FALSE ? __tinypy_object_getattr_hook(vm, value) : NULL;
+    tinypy_value_t *return_value_4 = __tinypy_object_getattr_fallback(value, key, result, getattr_hook, suppress_missing, out_missing, out_error);
     return return_value_4;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1716,32 +1732,54 @@ tinypy_value_t *tinypy_internal_object_get_attr_key(tinypy_value_t *value, tinyp
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The tp_getattro of the type of value without the hooks of a heap type,
+   which the __getattribute__ entry of a built-in type calls. */
 tinypy_value_t *tinypy_internal_object_get_base_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_bool_t missing;
 
-    /* PyObject_GenericGetAttr on a classic instance sees the attributes of
-       the instance type alone: neither its dictionary nor its class. */
-    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-        tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
-
-        if (attribute == NULL) {
-            tinypy_message_part_t parts[] = {
-                TINYPY_MESSAGE_PART_LITERAL("'"),
-                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 50U),
-                TINYPY_MESSAGE_PART_LITERAL("' object has no attribute '"),
-                TINYPY_MESSAGE_PART_TEXT_PRECISION(key, 400U),
-                TINYPY_MESSAGE_PART_LITERAL("'"),
-            };
-
-            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-            return NULL;
-        }
-        tinypy_value_t *bound = tinypy_internal_descriptor_get_value(vm, attribute, value, value->type, out_error);
-        return bound;
-    }
     tinypy_value_t *return_value_1 = __tinypy_object_get_attr_key(value, key, TINYPY_FALSE, TINYPY_TRUE, &missing, out_error);
     return return_value_1;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyObject_GenericGetAttr, the __getattribute__ of object: the descriptors
+   of the type and the dictionary of the object, which is the namespace of a
+   type. That is the own lookup without hooks of an object, except for a
+   type, a method, which also looks in its function, and an object whose
+   type has a lookup of its own, such as a classic class or instance or a
+   super object. */
+tinypy_value_t *tinypy_internal_object_generic_get_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind != TINYPY_VALUE_TYPE && kind != TINYPY_VALUE_METHOD && value->type->get_attribute == NULL) {
+        tinypy_value_t *result = tinypy_internal_object_get_base_attr_key(value, key, out_error);
+        return result;
+    }
+    if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *encoded_key = tinypy_internal_object_encode_attribute_name(key, out_error);
+
+        if (encoded_key == NULL) {
+            return NULL;
+        }
+        tinypy_value_t *result = tinypy_internal_object_generic_get_attr_key(value, encoded_key, out_error);
+        TINYPY_DECREF(encoded_key);
+        return result;
+    }
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_t **dict_slot = kind == TINYPY_VALUE_TYPE ? &((tinypy_type_t *)value)->dict : (value->type->dict_offset != 0U ? tinypy_internal_object_dict_slot(value) : NULL);
+    tinypy_value_t *result = __tinypy_internal_instance_attribute(vm, value, dict_slot, key, out_error);
+    if (result == NULL && __tinypy_object_error_present(vm, out_error) == 0) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 50U),
+            TINYPY_MESSAGE_PART_LITERAL("' object has no attribute '"),
+            TINYPY_MESSAGE_PART_TEXT_PRECISION(key, 400U),
+            TINYPY_MESSAGE_PART_LITERAL("'"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    }
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 int32_t tinypy_internal_object_get_optional_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t **out_value, tinypy_error_t **out_error) {
@@ -1880,25 +1918,11 @@ tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_
         TINYPY_DECREF(dict);
         return inserted;
     }
+    /* The metadata of a type are data descriptors of type itself, so what
+       reaches its namespace here is an ordinary attribute or one that a
+       metaclass shadows with an entry of its own. */
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE) {
         tinypy_type_t *type = (tinypy_type_t *)value;
-        const char *name = NULL;
-        size_t name_size = 0U;
-
-        if (__tinypy_object_key_text(key, &name, &name_size) != 0) {
-            if (TINYPY_NAME_EQ(key, vm->internal_special_bases_key) != 0) {
-                tinypy_bool_t return_value_3 = tinypy_internal_type_set_bases(type, attribute_value, out_error);
-                return return_value_3;
-            }
-            if (TINYPY_NAME_EQ(key, vm->internal_special_name_key) != 0) {
-                tinypy_bool_t return_value_4 = tinypy_internal_type_set_name(type, attribute_value, out_error);
-                return return_value_4;
-            }
-            if (__tinypy_object_type_metadata_read_only(key) != 0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type metadata is read-only", out_error);
-                return TINYPY_FALSE;
-            }
-        }
         tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, type->dict, key, attribute_value, out_error);
         return stored;
     }
@@ -2122,15 +2146,7 @@ tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tiny
         dict = dict_slot != NULL ? *dict_slot : NULL;
     }
     else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_TYPE) {
-        tinypy_type_t *type = (tinypy_type_t *)value;
-        const char *name = NULL;
-        size_t name_size = 0U;
-
-        if (__tinypy_object_key_text(key, &name, &name_size) != 0 && (TINYPY_NAME_EQ(key, vm->internal_special_name_key) != 0 || TINYPY_NAME_EQ(key, vm->internal_special_module_key) != 0 || __tinypy_object_type_metadata_read_only(key) != 0)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type metadata cannot be deleted", out_error);
-            return TINYPY_FALSE;
-        }
-        dict = type->dict;
+        dict = ((tinypy_type_t *)value)->dict;
     }
     else if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_MODULE) {
         dict = tinypy_module_dict(value);

@@ -159,8 +159,11 @@ static void __tinypy_compiler_source_line(const tinypy_source_view_t *source, in
 //////////////////////////////////////////////////////////////////////////
 /* Locates a line of the host file read with universal newlines, as Python
    reads a file again for its diagnostics: the bounds of its characters and
-   whether a newline ends it. A line past the end of the file is empty. */
-static tinypy_bool_t __tinypy_compiler_program_line(const tinypy_source_view_t *source, int32_t line_number, size_t *out_start, size_t *out_end, tinypy_bool_t *out_newline) {
+   whether a newline ends it. A line past the end of the file is empty. The
+   search starts at the line located last unless the line is before it, so
+   the diagnostics of a pass read the file once, as linecache does. */
+static tinypy_bool_t __tinypy_compiler_program_line(tinypy_compile_ctx_t *ctx, int32_t line_number, size_t *out_start, size_t *out_end, tinypy_bool_t *out_newline) {
+    const tinypy_source_view_t *source = &ctx->program_text;
     size_t position = 0U;
     int32_t line = 1;
 
@@ -170,12 +173,18 @@ static tinypy_bool_t __tinypy_compiler_program_line(const tinypy_source_view_t *
     if (line_number <= 0 || source->bytes == NULL) {
         return TINYPY_FALSE;
     }
+    if (ctx->program_line_number != 0 && ctx->program_line_number <= line_number) {
+        position = ctx->program_line_start;
+        line = ctx->program_line_number;
+    }
     for (;;) {
         size_t end = position;
         while (end < source->size && source->bytes[end] != '\n' && source->bytes[end] != '\r') {
             end += 1U;
         }
         if (line == line_number || end == source->size) {
+            ctx->program_line_number = line;
+            ctx->program_line_start = position;
             *out_start = line == line_number ? position : end;
             *out_end = end;
             *out_newline = end < source->size ? TINYPY_TRUE : TINYPY_FALSE;
@@ -384,7 +393,7 @@ void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const ch
     size_t start;
     size_t end;
     tinypy_bool_t newline;
-    if (__tinypy_compiler_program_line(&ctx->program_text, line_number, &start, &end, &newline) != 0) {
+    if (__tinypy_compiler_program_line(ctx, line_number, &start, &end, &newline) != 0) {
         /* PyErr_ProgramText reads the line through a 1000-byte buffer until
            a read ends the line: a longer line leaves its last part, and one
            that fills the buffer up to the end of the file nothing. */
@@ -819,7 +828,7 @@ tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx,
     size_t start;
     size_t end;
     tinypy_bool_t newline;
-    tinypy_bool_t found = __tinypy_compiler_program_line(&ctx->program_text, line_number, &start, &end, &newline);
+    tinypy_bool_t found = __tinypy_compiler_program_line(ctx, line_number, &start, &end, &newline);
     if (found != 0 && (start != end || newline != 0)) {
         while (start != end && __tinypy_compiler_is_space(ctx->program_text.bytes[start]) != 0) {
             start += 1U;

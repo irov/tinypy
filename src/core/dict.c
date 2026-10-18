@@ -952,12 +952,40 @@ static tinypy_bool_t __tinypy_internal_dict_set_pair(tinypy_value_t *target, tin
     return inserted;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy_value_t *source, tinypy_value_t *keys_method, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
+/* PyMapping_Keys calls the method through PyObject_CallMethod, which
+   requires the attribute to be callable. */
+tinypy_value_t *tinypy_internal_mapping_keys(tinypy_value_t *mapping, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(mapping);
+    tinypy_value_t *keys_method = tinypy_internal_object_get_attr_key(mapping, vm->internal_keys_key, out_error);
+
+    if (keys_method == NULL) {
+        return NULL;
+    }
+    if (tinypy_is_callable(keys_method) == TINYPY_FALSE) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("attribute of type '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(keys_method, 200U),
+            TINYPY_MESSAGE_PART_LITERAL("' is not callable"),
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        TINYPY_DECREF(keys_method);
+        return NULL;
+    }
     tinypy_value_t *empty_args = TINYPY_RET_EMPTY_TUPLE(vm);
     tinypy_value_t *keys = tinypy_call(keys_method, empty_args, NULL, out_error);
 
     TINYPY_DECREF(empty_args);
+    TINYPY_DECREF(keys_method);
+    return keys;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyDict_Merge copies any mapping other than a dict through
+   PyMapping_Keys and its item protocol. */
+tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
+    tinypy_value_t *keys = tinypy_internal_mapping_keys(source, out_error);
+
     if (keys == NULL) {
         return TINYPY_FALSE;
     }
@@ -990,31 +1018,6 @@ tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-/* PyMapping_Keys reaches the method through PyObject_CallMethod, which
-   fetches the attribute again and requires it to be callable. */
-static tinypy_bool_t __tinypy_internal_dict_update_keys_method(tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
-
-    tinypy_value_t *keys_method = tinypy_internal_object_get_attr_key(source, vm->internal_keys_key, out_error);
-    if (keys_method == NULL) {
-        return TINYPY_FALSE;
-    }
-    if (tinypy_is_callable(keys_method) == TINYPY_FALSE) {
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("attribute of type '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(keys_method, 200U),
-            TINYPY_MESSAGE_PART_LITERAL("' is not callable"),
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        TINYPY_DECREF(keys_method);
-        return TINYPY_FALSE;
-    }
-    tinypy_bool_t result = tinypy_internal_dict_update_mapping(target, source, keys_method, out_error);
-    TINYPY_DECREF(keys_method);
-    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyDict_Merge presizes for another dictionary and reuses its stored hashes;
@@ -1056,13 +1059,14 @@ tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_va
     }
 
     /* dict_update_common probes keys like PyObject_HasAttrString: the
-       attribute is discarded and any failure is cleared. */
+       attribute is discarded, any failure is cleared, and PyMapping_Keys
+       fetches it again. */
     tinypy_value_t *keys_probe;
     tinypy_error_t *probe_error = NULL;
     int32_t mapping_status = tinypy_internal_object_get_optional_attr_key(source, vm->internal_keys_key, &keys_probe, &probe_error);
     if (mapping_status > 0) {
         TINYPY_DECREF(keys_probe);
-        tinypy_bool_t result = __tinypy_internal_dict_update_keys_method(target, source, out_error);
+        tinypy_bool_t result = tinypy_internal_dict_update_mapping(target, source, out_error);
         return result;
     }
     if (mapping_status < 0) {

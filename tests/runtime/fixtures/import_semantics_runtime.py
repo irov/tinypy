@@ -98,3 +98,45 @@ try:
         raise AssertionError("reload accepted an unregistered parent")
 finally:
     sys.modules[parent_name] = parent
+
+# The loaders of sys.meta_path and of the host finder: the module a loader
+# returns is registered when it registered none, and a loader that fails or
+# returns None leaves no entry, as PEP 302 asks of loaders.
+class ContractLoader(object):
+    def load_module(self, name):
+        module = type(sys)(name)
+        if name == "contract_unregistered":
+            return module
+        sys.modules[name] = module
+        if name == "contract_failing":
+            raise ValueError("loader failed")
+        return None
+
+class ContractFinder(object):
+    def find_module(self, name, path=None):
+        if name.startswith("contract_"):
+            return ContractLoader()
+        return None
+
+finder = ContractFinder()
+sys.meta_path.append(finder)
+try:
+    module = __import__("contract_unregistered")
+    assert sys.modules["contract_unregistered"] is module
+    try:
+        __import__("contract_failing")
+    except ValueError as error:
+        assert str(error) == "loader failed"
+    else:
+        raise AssertionError("the failing loader succeeded")
+    assert "contract_failing" not in sys.modules
+    try:
+        __import__("contract_none")
+    except ImportError as error:
+        assert str(error) == "No module named contract_none"
+    else:
+        raise AssertionError("a loader returning None imported a module")
+    assert "contract_none" not in sys.modules
+finally:
+    sys.meta_path.remove(finder)
+    sys.modules.pop("contract_unregistered", None)
