@@ -18,7 +18,7 @@ typedef struct tinypy_ast_builder_t {
     tinypy_bool_t c_future_unicode;          /* __future__ unicode literals flag */
     tinypy_compile_ctx_t *c_arena; /* arena for allocating memeory */
     const char *c_filename;        /* filename */
-    int32_t c_depth;               /* expression nesting depth */
+    int32_t c_depth;               /* AST nesting depth */
 } tinypy_ast_builder_t;
 
 static tinypy_ast_sequence_t *__seq_for_testlist(tinypy_ast_builder_t *, const tinypy_cst_node_t *);
@@ -81,9 +81,20 @@ static tinypy_bool_t __ast_nesting_check(tinypy_ast_builder_t *c, const tinypy_c
     size_t limit = c->c_arena->limits.max_nesting;
 
     if (limit != 0U && (size_t)depth > limit) {
-        tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_COMPILER_LIMIT, "expression nesting limit exceeded", TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1, c->c_arena->out_error);
+        tinypy_internal_compiler_error(c->c_arena, TINYPY_ERROR_COMPILER_LIMIT, "nesting limit exceeded", TINYPY_AST_LINE_NUMBER(n), n->column_offset + 1, c->c_arena->out_error);
         return TINYPY_FALSE;
     }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* An elif nests its If in the orelse of the clause before it, and a with
+   item its With in the body of the item before it; the AST walkers recurse
+   through each, so a clause is built at the depth of its position. */
+static tinypy_bool_t __ast_enter_clause(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n, int32_t depth) {
+    if (__ast_nesting_check(c, n, depth) == 0) {
+        return TINYPY_FALSE;
+    }
+    c->c_depth = depth;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2973,6 +2984,7 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
         return return_value_2;
     }
     else if (s[2] == 'i') {
+        int32_t depth = c->c_depth;
         int32_t i, n_elif;
         tinypy_bool_t has_else = TINYPY_FALSE;
         tinypy_ast_expression_t expression;
@@ -2993,6 +3005,9 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
 
             orelse = TINYPY_AST_SEQUENCE_NEW(1, c->c_arena);
             if (!orelse) {
+                return NULL;
+            }
+            if (__ast_enter_clause(c, TINYPY_CST_CHILD(n, TINYPY_CST_CHILD_COUNT(n) - 6), depth + n_elif) == 0) {
                 return NULL;
             }
             expression = __ast_for_expr(c, TINYPY_CST_CHILD(n, TINYPY_CST_CHILD_COUNT(n) - 6));
@@ -3027,6 +3042,9 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
             if (!newobj) {
                 return NULL;
             }
+            if (__ast_enter_clause(c, TINYPY_CST_CHILD(n, off), depth + n_elif - i) == 0) {
+                return NULL;
+            }
             expression = __ast_for_expr(c, TINYPY_CST_CHILD(n, off));
             if (!expression) {
                 return NULL;
@@ -3045,6 +3063,7 @@ static tinypy_ast_statement_t __ast_for_if_stmt(tinypy_ast_builder_t *c, const t
             TINYPY_AST_SEQUENCE_SET(newobj, 0, elif_statement);
             orelse = newobj;
         }
+        c->c_depth = depth;
         expression = __ast_for_expr(c, TINYPY_CST_CHILD(n, 1));
         if (!expression) {
             return NULL;
@@ -3325,12 +3344,16 @@ static tinypy_ast_statement_t __ast_for_with_item(tinypy_ast_builder_t *c, const
 /* TINYPY_GRAMMAR_WITH_STMT: 'with' TINYPY_GRAMMAR_WITH_ITEM (',' TINYPY_GRAMMAR_WITH_ITEM)* ':' TINYPY_GRAMMAR_SUITE */
 //////////////////////////////////////////////////////////////////////////
 static tinypy_ast_statement_t __ast_for_with_stmt(tinypy_ast_builder_t *c, const tinypy_cst_node_t *n) {
+    int32_t depth = c->c_depth;
     int32_t i;
     tinypy_ast_statement_t ret;
 
     /* process the with items inside-out */
     i = TINYPY_CST_CHILD_COUNT(n) - 1;
     /* the TINYPY_GRAMMAR_SUITE of the innermost with item is the TINYPY_GRAMMAR_SUITE of the with TINYPY_GRAMMAR_STMT */
+    if (__ast_enter_clause(c, n, depth + (i - 3) / 2) == 0) {
+        return NULL;
+    }
     tinypy_ast_sequence_t *inner = __ast_for_suite(c, TINYPY_CST_CHILD(n, i));
     if (!inner) {
         return NULL;
@@ -3338,6 +3361,7 @@ static tinypy_ast_statement_t __ast_for_with_stmt(tinypy_ast_builder_t *c, const
 
     for (;;) {
         i -= 2;
+        c->c_depth = depth + (i - 1) / 2;
         ret = __ast_for_with_item(c, TINYPY_CST_CHILD(n, i), inner);
         if (!ret) {
             return NULL;
@@ -3353,7 +3377,7 @@ static tinypy_ast_statement_t __ast_for_with_stmt(tinypy_ast_builder_t *c, const
         }
         TINYPY_AST_SEQUENCE_SET(inner, 0, ret);
     }
-
+    c->c_depth = depth;
     return ret;
 }
 //////////////////////////////////////////////////////////////////////////

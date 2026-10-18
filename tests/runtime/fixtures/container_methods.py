@@ -2047,3 +2047,64 @@ sorted_values = [1, 3, 2]
 apply(sorted_values.sort, (), sort_keywords)
 assert sorted_values == [3, 2, 1]
 assert sort_keywords == {}
+
+
+
+# dict.fromkeys of a dict presizes its table for the source; a key comparison
+# that grows the source past that size must not fill the table up (CPython
+# 2.7 probes forever there).
+class GrowingSourceKey(object):
+    armed = False
+
+    def __hash__(self):
+        return 1
+
+    def __eq__(self, other):
+        if GrowingSourceKey.armed:
+            GrowingSourceKey.armed = False
+            growing_source.update(dict.fromkeys(range(100, 140), 0))
+        return False
+
+
+growing_source = {1: 0, GrowingSourceKey(): 0}
+GrowingSourceKey.armed = True
+growing_result = dict.fromkeys(growing_source, 5)
+assert not GrowingSourceKey.armed
+assert len(growing_source) == 42
+assert 2 < len(growing_result) <= 42
+assert set(growing_result.values()) == set([5])
+for growing_key in growing_result:
+    assert growing_key in growing_source
+
+
+# A key comparison may also clear the result of dict.fromkeys, which a class
+# shares through __new__: the smaller table it leaves grows before it fills
+# up (CPython 2.7 probes forever there too).
+shared_result = {}
+
+
+class ClearingResultKey(object):
+    armed = False
+
+    def __hash__(self):
+        return 1
+
+    def __eq__(self, other):
+        if ClearingResultKey.armed and len(shared_result) > 20:
+            ClearingResultKey.armed = False
+            shared_result.clear()
+        return False
+
+
+class SharedResultDict(dict):
+    def __new__(cls):
+        return shared_result
+
+
+clearing_source = dict.fromkeys([ClearingResultKey() for clearing_index in range(60)])
+ClearingResultKey.armed = True
+assert SharedResultDict.fromkeys(clearing_source) is shared_result
+assert not ClearingResultKey.armed
+assert 0 < len(shared_result) < 60
+for clearing_key in shared_result:
+    assert clearing_key in clearing_source

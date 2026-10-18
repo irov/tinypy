@@ -211,3 +211,20 @@ cell_owner = own_cell()
 rebound_cell = next(cell_owner)
 assert cmp(rebound_cell, next(other_cell())) == -1
 assert rebound_cell.cell_contents is None
+
+
+# A str holding a non-ASCII byte never equals unicode text, even when it holds
+# the UTF-8 bytes the unicode is stored as and either operand is a subclass
+# instance (CPython also warns with UnicodeWarning there).
+class StrSubclass(str):
+    pass
+
+
+class UnicodeSubclass(unicode):
+    pass
+
+
+for data, text in ((StrSubclass("caf\xc3\xa9"), u"caf\xe9"), ("caf\xc3\xa9", UnicodeSubclass(u"caf\xe9")), (StrSubclass("caf\xc3\xa9"), UnicodeSubclass(u"caf\xe9"))):
+    assert (data == text) is False and (text == data) is False
+    assert (data != text) is True and (text != data) is True
+assert StrSubclass("abc") == UnicodeSubclass(u"abc")

@@ -1631,3 +1631,151 @@ class EvaluationSemantics(unittest.TestCase):
         self.assertEqual(text, "<type 'exceptions.KeyError'>")
         self.assertEqual([collected(own_frame()), collected(traceback_frame()), collected(reference), collected(finished), collected(closed)],
                          [True] * 5)
+
+    def test_locals_snapshot_maps_each_group_from_the_last_name(self):
+        # map_to_dict inserts the names of a group from the last one, which
+        # decides the order of the names that collide in the dictionary.
+        def outer(acc, count, data):
+            total = 1; name = 2; item = 3; k = 4; j = 5; a = 6; b = 7; foo = 8
+
+            def inner():
+                z = 0; value = 1; b = 2; a = 3; foo = 4
+                return locals().keys(), acc, total, k, j
+            return locals().keys(), inner
+
+        def generator(acc, count):
+            total = 1; name = 2; item = 3; k = 4; j = 5; a = 6; b = 7; foo = 8
+            yield sys._getframe().f_locals.keys(), vars().keys()
+        keys, inner = outer(1, 2, 3)
+        self.assertEqual(keys, ['a', 'count', 'b', 'name', 'k', 'j', 'item', 'inner', 'total', 'foo', 'data', 'acc'])
+        self.assertEqual(inner()[0], ['a', 'acc', 'foo', 'k', 'z', 'value', 'j', 'b', 'total'])
+        expected = ['a', 'count', 'b', 'name', 'k', 'j', 'item', 'total', 'foo', 'acc']
+        self.assertEqual(next(generator(1, 2)), (expected, expected))
+
+    def test_generator_locals_survive_a_finalizer_finishing_the_generator(self):
+        # Syncing f_locals releases the stale value of a rebound name, whose
+        # __del__ finishes the suspended generator the frame belongs to.
+        class Closer(object):
+            def __del__(self):
+                generators[0].close()
+
+        def value_first():
+            value = Closer()
+            kept = 'kept'
+            yield 1
+            value = 'rebound'
+            yield 2
+
+        def value_last():
+            kept = 'kept'
+            value = Closer()
+            yield 1
+            value = 'rebound'
+            yield 2
+        for body in (value_first, value_last):
+            generators = [body()]
+            next(generators[0])
+            frame = generators[0].gi_frame
+            frame.f_locals
+            next(generators[0])
+            snapshot = generators[0].gi_frame.f_locals
+            self.assertEqual((snapshot['kept'], snapshot['value'], generators[0].gi_frame), ('kept', 'rebound', None))
+            self.assertIs(frame.f_locals, snapshot)
+
+        tasks = {}
+        released = []
+
+        class Handle(object):
+            def __del__(self):
+                released.append(tasks.pop('worker', None) is not None)
+
+        def worker():
+            for handle in (Handle() for index in range(2)):
+                yield
+        tasks['worker'] = worker()
+        next(tasks['worker'])
+        self.assertEqual(sorted(tasks['worker'].gi_frame.f_locals), ['Handle', 'handle'])
+        next(tasks['worker'])
+        self.assertEqual(sorted(tasks['worker'].gi_frame.f_locals), ['Handle', 'handle'])
+        self.assertEqual((tasks, released), ({}, [True, False]))
+
+    def test_long_finalizer_chains_run_every_finalizer(self):
+        # The trashcan: a release nested deep in finalizers waits for the
+        # outermost one, so every close and __del__ of a long chain runs.
+        closed = []
+        deleted = []
+
+        def body(previous):
+            try:
+                yield
+            finally:
+                closed.append(previous is None)
+
+        class Link(object):
+            def __init__(self, following):
+                self.following = following
+
+            def __del__(self):
+                deleted.append(self.following is None)
+                self.following = None
+        generator = None
+        pipeline = iter(range(3))
+        link = None
+        for index in range(5000):
+            generator = body(generator)
+            next(generator)
+            pipeline = (item + 1 for item in pipeline)
+            link = Link(link)
+        del generator, pipeline
+        self.assertEqual((len(closed), closed.count(True)), (5000, 1))
+        del link
+        # CPython empties the trashcan of subtype_dealloc at the next list.
+        flushed = [None]
+        del flushed
+        self.assertEqual((len(deleted), deleted.count(True)), (5000, 1))
+
+    def test_finalizer_chains_outlive_class_updates_and_custom_mro(self):
+        # Whether a class has __del__ comes from its last lookup, so neither
+        # a __del__ that updates a class attribute nor a class with an mro()
+        # of its own ends the trashcan for a long chain.
+        class Counted(object):
+            alive = 0
+
+            def __init__(self, following):
+                Counted.alive += 1
+                self.following = following
+
+            def __del__(self):
+                Counted.alive -= 1
+                self.following = None
+
+        class Reversed(type):
+            def mro(cls):
+                order = type.mro(cls)
+                return order[:1] + order[:0:-1]
+
+        class Base(object):
+            pass
+
+        deleted = []
+
+        class Ordered(Base):
+            __metaclass__ = Reversed
+
+            def __init__(self, following):
+                self.following = following
+
+            def __del__(self):
+                deleted.append(self.following is None)
+                self.following = None
+        self.assertEqual(Ordered.__mro__, (Ordered, object, Base))
+        counted = None
+        ordered = None
+        for index in range(5000):
+            counted = Counted(counted)
+            ordered = Ordered(ordered)
+        del counted, ordered
+        flushed = [None]
+        del flushed
+        self.assertEqual(Counted.alive, 0)
+        self.assertEqual((len(deleted), deleted.count(True)), (5000, 1))

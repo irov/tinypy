@@ -61,6 +61,15 @@ static tinypy_value_t **__tinypy_debugger_frame_slot(tinypy_frame_object_t *fram
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Whether the locals tinypy_internal_frame_locals lent are a dict: they are
+   NULL once the frame died, and exec or eval may give a frame another
+   mapping. */
+static tinypy_bool_t __tinypy_debugger_frame_locals_dict(const tinypy_value_t *locals) {
+    tinypy_bool_t dict = locals != NULL && TINYPY_VALUE_KIND(locals) == TINYPY_VALUE_DICT ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return dict;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_debugger_frame_get(const tinypy_value_t *frame_value, tinypy_debugger_scope_e scope, const char *name, size_t name_size) {
     tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame_value);
     tinypy_value_t *dictionary;
@@ -78,6 +87,9 @@ tinypy_value_t *tinypy_debugger_frame_get(const tinypy_value_t *frame_value, tin
             return return_value_1;
         }
         dictionary = tinypy_internal_frame_locals(frame);
+        if (__tinypy_debugger_frame_locals_dict(dictionary) == 0) {
+            return NULL;
+        }
     }
     else if (scope == TINYPY_DEBUGGER_SCOPE_GLOBALS) {
         dictionary = frame->globals;
@@ -116,6 +128,9 @@ tinypy_bool_t tinypy_debugger_frame_set(tinypy_value_t *frame_value, tinypy_debu
             return TINYPY_TRUE;
         }
         dictionary = tinypy_internal_frame_locals(frame);
+        if (__tinypy_debugger_frame_locals_dict(dictionary) == 0) {
+            return TINYPY_FALSE;
+        }
     }
     else if (scope == TINYPY_DEBUGGER_SCOPE_GLOBALS) {
         dictionary = frame->globals;
@@ -157,6 +172,9 @@ tinypy_bool_t tinypy_debugger_frame_delete(tinypy_value_t *frame_value, tinypy_d
             return TINYPY_TRUE;
         }
         dictionary = tinypy_internal_frame_locals(frame);
+        if (__tinypy_debugger_frame_locals_dict(dictionary) == 0) {
+            return TINYPY_FALSE;
+        }
     }
     else if (scope == TINYPY_DEBUGGER_SCOPE_GLOBALS) {
         dictionary = frame->globals;

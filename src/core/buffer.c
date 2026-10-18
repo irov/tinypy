@@ -60,10 +60,14 @@ tinypy_value_t *tinypy_buffer_from_object(tinypy_value_t *object, size_t offset,
         offset += source->offset;
         object = source->owner;
     }
+    /* The view of a unicode owner reads the code units it caches. */
     if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_UNICODE) {
         size_t owner_size;
+        const uint8_t *native = tinypy_internal_unicode_native_buffer(object, &owner_size, NULL);
 
-        (void)tinypy_internal_unicode_native_buffer(object, TINYPY_FALSE, &owner_size, NULL);
+        if (native == NULL) {
+            return NULL;
+        }
     }
     tinypy_buffer_object_t *buffer = (tinypy_buffer_object_t *)tinypy_internal_value_allocate(vm, TINYPY_VALUE_BUFFER, sizeof(*buffer));
     buffer->owner = object;
@@ -133,7 +137,7 @@ tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "buffer object expected", out_error);
         return NULL;
     }
-    if (TINYPY_VALUE_KIND(owner) == TINYPY_VALUE_UNICODE && tinypy_internal_unicode_native_buffer(owner, TINYPY_TRUE, &owner_size, out_error) == NULL) {
+    if (TINYPY_VALUE_KIND(owner) == TINYPY_VALUE_UNICODE && tinypy_internal_unicode_native_buffer(owner, &owner_size, out_error) == NULL) {
         return NULL;
     }
     if (offset < 0) {
@@ -321,7 +325,7 @@ static tinypy_value_t *__tinypy_buffer_concat(tinypy_value_t *left, tinypy_value
     if (left_size == 0U) {
         return TINYPY_RET(right);
     }
-    if (TINYPY_VALUE_KIND(right) == TINYPY_VALUE_UNICODE && tinypy_internal_unicode_native_buffer(right, TINYPY_TRUE, &right_size, out_error) == NULL) {
+    if (TINYPY_VALUE_KIND(right) == TINYPY_VALUE_UNICODE && tinypy_internal_unicode_native_buffer(right, &right_size, out_error) == NULL) {
         return NULL;
     }
     right_bytes = __tinypy_buffer_owner_view(right, &right_size);

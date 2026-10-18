@@ -893,7 +893,9 @@ static tinypy_value_t *__tinypy_get_item(tinypy_value_t *container, tinypy_value
         }
         return TINYPY_RET(item);
     }
-    if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE) {
+    /* xrange has only sq_item, which PyObject_GetItem refuses a slice for,
+       as it refuses any key without __index__. */
+    if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_SLICE && kind != TINYPY_VALUE_XRANGE) {
         tinypy_internal_slice_indices_t indices;
         size_t size;
 

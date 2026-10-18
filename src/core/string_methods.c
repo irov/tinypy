@@ -1299,7 +1299,10 @@ static tinypy_value_t *__tinypy_string_format_convert(tinypy_vm_t *vm, tinypy_va
         (void)snprintf(message, sizeof(message), "Unknown conversion specifier %c", (int)conversion);
     }
     else {
-        (void)snprintf(message, sizeof(message), "Unknown conversion specifier \\x%" PRIx32, (uint32_t)conversion);
+        /* A byte string format shows its char sign-extended. */
+        uint32_t code = unicode != 0 ? (uint32_t)conversion : (uint32_t)(int32_t)(int8_t)conversion;
+
+        (void)snprintf(message, sizeof(message), "Unknown conversion specifier \\x%" PRIx32, code);
     }
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, message, out_error);
     return NULL;
@@ -3563,6 +3566,13 @@ static tinypy_value_t *__tinypy_codec_unicode_reason(tinypy_vm_t *vm, tinypy_val
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_codec_unicode_exception(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, int32_t codec, tinypy_bool_t decode, size_t start, size_t end, tinypy_error_t **out_error) {
+    /* The codecs read a subclass instance as the exact str or unicode the
+       error holds, so its handlers never run the overrides of the subclass. */
+    tinypy_value_t *object = tinypy_internal_immutable_subclass_copy(&vm->types[TINYPY_VALUE_KIND(text)], TINYPY_RET(text), out_error);
+
+    if (object == NULL) {
+        return NULL;
+    }
     tinypy_value_t *canonical = codec == 0 ? vm->internal_codec_ascii_name : (codec == 1 ? vm->internal_codec_utf8_name : vm->internal_codec_latin1_name);
     tinypy_value_t *encoding_value = TINYPY_RET(canonical);
 
@@ -3570,7 +3580,7 @@ static tinypy_value_t *__tinypy_codec_unicode_exception(tinypy_vm_t *vm, tinypy_
     tinypy_value_t *start_value = tinypy_integer_from_i64(vm, (int64_t)start);
     tinypy_value_t *end_value = tinypy_integer_from_i64(vm, (int64_t)end);
     tinypy_value_t *reason = __tinypy_codec_unicode_reason(vm, text, codec, decode, start);
-    tinypy_value_t *items[5] = {encoding_value, text, start_value, end_value, reason};
+    tinypy_value_t *items[5] = {encoding_value, object, start_value, end_value, reason};
     tinypy_value_t *args = tinypy_tuple_from_items(vm, items, 5U);
     tinypy_value_t *exception = tinypy_exception_new(vm->exception_types[decode != 0 ? TINYPY_EXCEPTION_UNICODE_DECODE_ERROR : TINYPY_EXCEPTION_UNICODE_ENCODE_ERROR], args, out_error);
 
@@ -3579,6 +3589,7 @@ static tinypy_value_t *__tinypy_codec_unicode_exception(tinypy_vm_t *vm, tinypy_
     TINYPY_DECREF(end_value);
     TINYPY_DECREF(start_value);
     TINYPY_DECREF(encoding_value);
+    TINYPY_DECREF(object);
     return exception;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -4607,8 +4618,9 @@ static void __tinypy_percent_clear_conversion_error(tinypy_vm_t *vm, tinypy_erro
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyFloat_AsDouble: a float is read as is, any other operand through
-   __float__; %-formatting of a byte string reports any failure as "float
-   argument required", and format() checks the result as PyNumber_Float. */
+   __float__, which a classic instance always looks up as an attribute;
+   %-formatting of a byte string reports any failure as "float argument
+   required", and format() checks the result as PyNumber_Float. */
 static tinypy_bool_t __tinypy_percent_float_operand(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_bool_t type_error, tinypy_bool_t number_float, double *out_number, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_bool_t converted = TINYPY_FALSE;
@@ -4627,8 +4639,10 @@ static tinypy_bool_t __tinypy_percent_float_operand(tinypy_vm_t *vm, tinypy_valu
         converted = tinypy_long_as_double(value, out_number, &float_error);
     }
     else {
-        tinypy_bool_t handled;
-        tinypy_value_t *number = tinypy_internal_call_conversion(value, vm->internal_special_float_key, &handled, &float_error);
+        tinypy_bool_t handled = TINYPY_TRUE;
+        tinypy_value_t *number = kind == TINYPY_VALUE_OLD_INSTANCE
+            ? tinypy_internal_call_classic_conversion(value, vm->internal_special_float_key, &float_error)
+            : tinypy_internal_call_conversion(value, vm->internal_special_float_key, &handled, &float_error);
 
         if (handled == 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "a float is required", &float_error);
@@ -4765,7 +4779,8 @@ static void __tinypy_percent_append_padded(tinypy_string_builder_t *output, tiny
 //////////////////////////////////////////////////////////////////////////
 /* %d and its kin take an int or long as is and read any other number
    through nb_int (__int__, or __trunc__ of a classic instance) and, should
-   that fail, __long__, the way PyString_Format tries PyNumber_Int and
+   that fail, nb_long (__long__, or nb_int again for a classic instance
+   without it), the way PyString_Format tries PyNumber_Int and
    PyNumber_Long; any failure is a TypeError. */
 static tinypy_value_t *__tinypy_percent_integer_operand(tinypy_vm_t *vm, tinypy_value_t *value, uint8_t conversion, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
@@ -4779,7 +4794,7 @@ static tinypy_value_t *__tinypy_percent_integer_operand(tinypy_vm_t *vm, tinypy_
 
         for (index = 0U; index < 2U; ++index) {
             tinypy_bool_t handled;
-            tinypy_value_t *integer = index == 0U ? tinypy_internal_call_int_conversion(value, &handled, out_error) : tinypy_internal_call_conversion(value, vm->internal_special_long_key, &handled, out_error);
+            tinypy_value_t *integer = index == 0U ? tinypy_internal_call_int_conversion(value, &handled, out_error) : tinypy_internal_call_long_conversion(value, &handled, out_error);
 
             if (integer != NULL) {
                 tinypy_value_type_e integer_kind = TINYPY_VALUE_KIND(integer);
@@ -4965,16 +4980,42 @@ static tinypy_bool_t __tinypy_percent_append_character(tinypy_vm_t *vm, tinypy_s
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Whether the width or precision digit loop of PyString_Format read the
+   character at offset through Py_CHARMASK: it follows digits, which hold a
+   nonzero one or follow '.', as the flags take every '0' before a width. */
+static tinypy_bool_t __tinypy_percent_after_digits(const uint8_t *bytes, size_t offset) {
+    tinypy_bool_t nonzero = TINYPY_FALSE;
+    size_t index = offset;
+
+    while (index != 0U && bytes[index - 1U] >= (uint8_t)'0' && bytes[index - 1U] <= (uint8_t)'9') {
+        index -= 1U;
+        if (bytes[index] != (uint8_t)'0') {
+            nonzero = TINYPY_TRUE;
+        }
+    }
+    if (index == offset) {
+        return TINYPY_FALSE;
+    }
+    if (nonzero != 0) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t precision = index != 0U && bytes[index - 1U] == (uint8_t)'.' ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return precision;
+}
+//////////////////////////////////////////////////////////////////////////
 /* A byte string format reads the character as a C char, so a byte above 0x7f
-   shows sign-extended; a unicode format shows '?' for a character outside
+   shows sign-extended unless a width or precision digit loop read it, and a
+   NUL shows as itself; a unicode format shows '?' for a character outside
    printable ASCII and counts the index in characters from where it took
    over the formatting. */
 static void __tinypy_percent_unsupported(tinypy_vm_t *vm, tinypy_value_t *format, size_t offset, tinypy_bool_t unicode, size_t unicode_begin, tinypy_error_t **out_error) {
     const uint8_t *bytes = TINYPY_TEXT_BYTES(format);
-    uint32_t code_point = (uint32_t)(int32_t)(int8_t)bytes[offset];
+    tinypy_bool_t masked = __tinypy_percent_after_digits(bytes, offset);
+    uint32_t code_point = masked != 0 ? (uint32_t)bytes[offset] : (uint32_t)(int32_t)(int8_t)bytes[offset];
     char character = (char)bytes[offset];
     size_t index = offset;
-    char tail[64];
+    char message[96];
 
     if (TINYPY_VALUE_KIND(format) == TINYPY_VALUE_UNICODE) {
         (void)tinypy_internal_utf8_decode(bytes + offset, TINYPY_TEXT_BYTE_SIZE(format) - offset, &code_point);
@@ -4987,14 +5028,9 @@ static void __tinypy_percent_unsupported(tinypy_vm_t *vm, tinypy_value_t *format
     if (unicode != 0) {
         character = code_point >= UINT32_C(31) && code_point <= UINT32_C(126) ? (char)code_point : '?';
     }
-    int tail_size = snprintf(tail, sizeof(tail), "' (0x%" PRIx32 ") at index %zu", code_point, index);
-    const tinypy_message_part_t parts[] = {
-        TINYPY_MESSAGE_PART_LITERAL("unsupported format character '"),
-        {&character, 1U},
-        {tail, (size_t)tail_size}
-    };
+    int message_size = snprintf(message, sizeof(message), "unsupported format character '%c' (0x%" PRIx32 ") at index %zu", character, code_point, index);
 
-    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    tinypy_internal_raise_text_exception(vm, TINYPY_EXCEPTION_VALUE_ERROR, message, (size_t)message_size, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 /* A unicode operand restarts %-formatting of a byte string as unicode:

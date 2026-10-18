@@ -1084,6 +1084,35 @@ static int32_t __test_tab_size_comment(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PySys_WriteStderr writes the -t warning to the C stderr when sys.stderr
+   is missing or its write fails, so the compile goes on. */
+static int32_t __test_tab_warning_without_stderr(void) {
+    static const char body[] = "if 1:\n        a = 1\n\tb = 2\n";
+    static const char *const setups[] = {"import sys\nsys.stderr = None\n", "import sys\nclass Stream(object):\n    def write(self, text):\n        raise ValueError(text)\nsys.stderr = Stream()\n", "import sys\ndel sys.stderr\n"};
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+
+    for (size_t index = 0U; index != sizeof(setups) / sizeof(setups[0]); ++index) {
+        tinypy_compile_options_t options;
+        tinypy_error_t *error = NULL;
+        tinypy_value_t *globals = tinypy_dict_new(vm);
+
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        size_t setup_size = strlen(setups[index]);
+        tinypy_value_t *result = tinypy_exec_source(vm, setups[index], setup_size, "setup.py", 8U, globals, NULL, &options, &error);
+        assert(result != NULL && error == NULL);
+        tinypy_release(result);
+        tinypy_release(globals);
+        options.flags = (uint32_t)TINYPY_COMPILE_FLAG_TAB_WARNING;
+        tinypy_value_t *code = tinypy_compile_source(vm, body, sizeof(body) - 1U, "tabs.py", 7U, &options, &error);
+        assert(code != NULL && error == NULL);
+        tinypy_release(code);
+    }
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_exec_eval_and_dynamic_compile(void) {
     static const char source[] =
         "from __future__ import division\n"
@@ -2192,6 +2221,112 @@ static int32_t __test_expression_nesting_limit(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct test_nesting_case_t {
+    size_t max_nesting;
+    size_t chains;
+    size_t clauses;
+    tinypy_bool_t with_items;
+    tinypy_bool_t compiles;
+} test_nesting_case_t;
+//////////////////////////////////////////////////////////////////////////
+/* Elif chains of clauses, each nested in the last clause of the chain
+   around it, or the items of one with statement. */
+static size_t __test_append_nested_clauses(char *buffer, size_t chains, size_t clauses, tinypy_bool_t with_items) {
+    size_t size = 0U;
+
+    if (with_items != 0) {
+        size = __test_append_text(buffer, size, "with a");
+        for (size_t clause = 1U; clause != clauses; ++clause) {
+            size = __test_append_text(buffer, size, ", a");
+        }
+        size = __test_append_text(buffer, size, ": pass\n");
+        buffer[size] = '\0';
+        return size;
+    }
+    for (size_t chain = 0U; chain != chains; ++chain) {
+        for (size_t clause = 0U; clause != clauses; ++clause) {
+            for (size_t indent = 0U; indent != chain; ++indent) {
+                size = __test_append_text(buffer, size, " ");
+            }
+            size = __test_append_text(buffer, size, clause == 0U ? "if a: pass\n" : (clause + 1U == clauses ? "elif a:\n" : "elif a: pass\n"));
+        }
+    }
+    for (size_t indent = 0U; indent != chains; ++indent) {
+        size = __test_append_text(buffer, size, " ");
+    }
+    size = __test_append_text(buffer, size, "x = 1\n");
+    buffer[size] = '\0';
+    return size;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_statement_nesting_limit(void) {
+    /* Every elif nests its If in the orelse of the clause before it and
+       every with item its With in the body of the item before it: the AST
+       walkers recurse through them, so they count towards the nesting
+       limit, which a chain fails before any walker visits it. */
+    static const test_nesting_case_t cases[] = {
+        {0U, 1U, 1201U, TINYPY_FALSE, TINYPY_FALSE},
+        {0U, 4U, 301U, TINYPY_FALSE, TINYPY_FALSE},
+        {0U, 1U, 1201U, TINYPY_TRUE, TINYPY_FALSE},
+        {100U, 1U, 151U, TINYPY_FALSE, TINYPY_FALSE},
+        {100U, 1U, 61U, TINYPY_FALSE, TINYPY_TRUE},
+        {100U, 3U, 41U, TINYPY_FALSE, TINYPY_FALSE},
+        {100U, 2U, 41U, TINYPY_FALSE, TINYPY_TRUE},
+        {100U, 1U, 150U, TINYPY_TRUE, TINYPY_FALSE},
+        {100U, 1U, 15U, TINYPY_TRUE, TINYPY_TRUE}};
+    static char source[32768];
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+
+    for (size_t index = 0U; index != sizeof(cases) / sizeof(cases[0]); ++index) {
+        const test_nesting_case_t *nesting = &cases[index];
+        tinypy_compile_options_t options;
+        tinypy_compile_limits_t limits;
+        tinypy_error_t *error = NULL;
+
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        tinypy_compile_limits_init(&limits);
+        if (nesting->max_nesting != 0U) {
+            limits.max_nesting = nesting->max_nesting;
+        }
+        options.limits = &limits;
+        size_t size = __test_append_nested_clauses(source, nesting->chains, nesting->clauses, nesting->with_items);
+        tinypy_value_t *code = tinypy_compile_source(vm, source, size, "nesting.py", 10U, &options, &error);
+        if (nesting->compiles != 0) {
+            assert(code != NULL && error == NULL);
+            tinypy_release(code);
+            continue;
+        }
+        assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
+        tinypy_error_release(error);
+    }
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Each conditional statement of a flat sequence jumps to the code after it:
+   the stack depth walk follows such a jump without a recursion level. */
+static int32_t __test_stack_depth_walk_sequence(void) {
+    static char source[262144];
+    test_allocator_state_t state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    size_t size = 0U;
+
+    for (size_t index = 0U; index != 20000U; ++index) {
+        size = __test_append_text(source, size, "if a: pass\n");
+    }
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *code = tinypy_compile_source(vm, source, size, "sequence.py", 11U, &options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_release(code);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_source_positions_and_literals(void) {
     static const char invalid_utf8[] = "x = 1\ny = 2\nz = '\xff'\n";
     static const char tab_width[] = "# tab-width: 99999999999999999999\nvalue = 1\n";
@@ -2870,6 +3005,9 @@ int main(void) {
     if (__test_tab_size_comment() != 0) {
         return EXIT_FAILURE;
     }
+    if (__test_tab_warning_without_stderr() != 0) {
+        return EXIT_FAILURE;
+    }
     if (__test_exec_eval_and_dynamic_compile() != 0) {
         return EXIT_FAILURE;
     }
@@ -2922,6 +3060,12 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_expression_nesting_limit() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_statement_nesting_limit() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_stack_depth_walk_sequence() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_source_positions_and_literals() != 0) {

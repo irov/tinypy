@@ -162,6 +162,12 @@ static tinypy_hash_t __tinypy_internal_hash_double(double value) {
 
     fraction = modf(value, &integral);
     if (fraction == 0.0) {
+        /* An integral value int64_t holds hashes as that integer, as the
+           long of the same value does. */
+        if (integral >= -0x1p63 && integral < 0x1p63) {
+            tinypy_hash_t integer_hash = __tinypy_internal_hash_fix((uint64_t)(int64_t)integral);
+            return integer_hash;
+        }
         tinypy_hash_t return_value_1 = __tinypy_internal_hash_integral_double(integral);
         return return_value_1;
     }
@@ -929,7 +935,9 @@ static tinypy_bool_t __tinypy_internal_text_equal(const tinypy_value_t *left, co
     size_t right_size = TINYPY_TEXT_BYTE_SIZE(right);
     size_t index;
 
-    if (left->type != right->type) {
+    /* A str equals a unicode only when it decodes as ASCII; subclasses
+       compare as their base. */
+    if (TINYPY_VALUE_KIND(left) != TINYPY_VALUE_KIND(right)) {
         const tinypy_value_t *string = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_STRING ? left : right;
         const uint8_t *string_bytes = TINYPY_TEXT_BYTES(string);
 

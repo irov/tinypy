@@ -1903,43 +1903,55 @@ tinypy_bool_t tinypy_internal_exception_normalize_raised(tinypy_vm_t *vm, tinypy
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_exception_raise(tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {
+/* The exception and traceback the embedding API raises: a class is
+   instantiated without arguments and None stands for no traceback. Returns
+   a new reference to the instance and lends the traceback, or NULL. */
+tinypy_value_t *tinypy_internal_exception_raise_arguments(tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_value_t **out_traceback, tinypy_error_t **out_error) {
     tinypy_value_t *value = exception;
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(exception);
-    TINYPY_CLEAR_ERROR(out_error);
+    *out_traceback = NULL;
     if (__tinypy_exception_is_class(vm, exception) != 0) {
         tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(vm);
 
         value = tinypy_call(exception, args, NULL, out_error);
         TINYPY_DECREF(args);
         if (value == NULL) {
-            return TINYPY_FALSE;
+            return NULL;
         }
         if (tinypy_internal_exception_check_normalized(exception, value, out_error) == 0) {
             TINYPY_DECREF(value);
-            return TINYPY_FALSE;
+            return NULL;
         }
     }
     else if (__tinypy_exception_is_instance(vm, exception) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "exceptions must be old-style classes or derived from BaseException", out_error);
-        return TINYPY_FALSE;
+        return NULL;
+    }
+    else {
+        TINYPY_INCREF(value);
     }
     if (traceback != NULL && TINYPY_VALUE_KIND(traceback) != TINYPY_VALUE_NONE && TINYPY_VALUE_KIND(traceback) != TINYPY_VALUE_TRACEBACK) {
-        if (value != exception) {
-            TINYPY_DECREF(value);
-        }
+        TINYPY_DECREF(value);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "raise traceback must be a traceback or None", out_error);
+        return NULL;
+    }
+    if (traceback != NULL && TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK) {
+        *out_traceback = traceback;
+    }
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_exception_raise(tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(exception);
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_t *raised_traceback = NULL;
+    tinypy_value_t *value = tinypy_internal_exception_raise_arguments(exception, traceback, &raised_traceback, out_error);
+    if (value == NULL) {
         return TINYPY_FALSE;
     }
-    tinypy_value_t *raised_traceback = NULL;
-    if (traceback != NULL && TINYPY_VALUE_KIND(traceback) == TINYPY_VALUE_TRACEBACK) {
-        raised_traceback = traceback;
-    }
     tinypy_internal_exception_set_raised(vm, value, raised_traceback);
-    if (value != exception) {
-        TINYPY_DECREF(value);
-    }
+    TINYPY_DECREF(value);
     tinypy_internal_exception_make_diagnostic(vm, out_error);
     return TINYPY_TRUE;
 }

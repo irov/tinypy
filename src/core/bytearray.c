@@ -562,25 +562,6 @@ void tinypy_internal_bytearray_destroy(tinypy_value_t *value) {
     tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), bytearray->bytes, bytearray->capacity);
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_bytearray_swap_contents(tinypy_value_t *left, tinypy_value_t *right) {
-    if (TINYPY_BYTEARRAY_OBJECT(left)->exports != 0U) {
-        if (TINYPY_SIZED_SIZE(left) != 0U) {
-            (void)memcpy(TINYPY_BYTEARRAY_OBJECT(left)->bytes, TINYPY_BYTEARRAY_OBJECT(right)->bytes, TINYPY_SIZED_SIZE(left));
-        }
-        return;
-    }
-    size_t size = TINYPY_SIZED_SIZE(left);
-    size_t capacity = TINYPY_BYTEARRAY_OBJECT(left)->capacity;
-    uint8_t *bytes = TINYPY_BYTEARRAY_OBJECT(left)->bytes;
-
-    TINYPY_SIZED_SIZE(left) = TINYPY_SIZED_SIZE(right);
-    TINYPY_BYTEARRAY_OBJECT(left)->capacity = TINYPY_BYTEARRAY_OBJECT(right)->capacity;
-    TINYPY_BYTEARRAY_OBJECT(left)->bytes = TINYPY_BYTEARRAY_OBJECT(right)->bytes;
-    TINYPY_SIZED_SIZE(right) = size;
-    TINYPY_BYTEARRAY_OBJECT(right)->capacity = capacity;
-    TINYPY_BYTEARRAY_OBJECT(right)->bytes = bytes;
-}
-//////////////////////////////////////////////////////////////////////////
 /* The arguments come back owned: the keywords may be the caller's dict, which
    a codec or the __index__ of the source can clear. */
 static tinypy_bool_t __tinypy_bytearray_constructor_arguments(tinypy_vm_t *vm, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t **out_values, tinypy_error_t **out_error) {

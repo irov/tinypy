@@ -3,6 +3,14 @@
 import unittest
 
 
+def _error(operation):
+    try:
+        operation()
+    except Exception as error:
+        return type(error).__name__, str(error)
+    raise AssertionError('operation must raise')
+
+
 class ContainerDeep(unittest.TestCase):
     def test_dict_setdefault_hashes_missing_key_once(self):
         events = []
@@ -449,3 +457,207 @@ class ContainerDeep(unittest.TestCase):
             self.assertIs(type(target.copy()), Sub)
             for method in ('union', 'intersection', 'difference', 'symmetric_difference'):
                 self.assertIs(type(getattr(target, method)([2, 3])), Sub)
+
+    def test_object_init_only_checks_its_arguments(self):
+        class Mixin(object):
+            def __init__(self):
+                super(Mixin, self).__init__()
+                self.ready = True
+        class Items(list, Mixin):
+            def __init__(self, data):
+                list.__init__(self, data)
+                Mixin.__init__(self)
+        class Bag(set, Mixin):
+            def __init__(self, data):
+                set.__init__(self, data)
+                Mixin.__init__(self)
+        items = Items([1, 2, 3])
+        self.assertEqual(items, [1, 2, 3])
+        self.assertTrue(items.ready)
+        self.assertEqual(sorted(Bag('ab')), ['a', 'b'])
+        target = [1, 2]
+        self.assertIs(object.__init__(target), None)
+        self.assertEqual(target, [1, 2])
+        mapping = {1: 2}
+        object.__init__(mapping, x=1)
+        self.assertEqual(mapping, {1: 2})
+        array = bytearray('ab')
+        object.__init__(array, 3)
+        self.assertEqual(array, bytearray('ab'))
+        self.assertIs(tuple.__init__, object.__init__)
+        self.assertIs(tuple.__init__([], 5), None)
+        self.assertEqual(_error(lambda: object.__init__(object(), 1)), ('TypeError', 'object.__init__() takes no parameters'))
+        class Plain(list):
+            __init__ = object.__init__
+        self.assertEqual(Plain([1]), [])
+        list.__init__(target, 'ab')
+        self.assertEqual(target, ['a', 'b'])
+        dict.__init__(mapping, {3: 4}, y=5)
+        self.assertEqual(mapping, {1: 2, 3: 4, 'y': 5})
+        bytearray.__init__(array, 'cd')
+        self.assertEqual(array, bytearray('cd'))
+        self.assertEqual(_error(lambda: list.__init__({})), ('TypeError', "descriptor '__init__' requires a 'list' object but received a 'dict'"))
+        class Crossed(list):
+            __init__ = dict.__init__
+        self.assertEqual(_error(Crossed), ('TypeError', "descriptor '__init__' for 'dict' objects doesn't apply to 'Crossed' object"))
+
+    def test_tuple_equality_compares_common_items_before_sizes(self):
+        class Raising(object):
+            def __eq__(self, other):
+                raise ValueError('item compared')
+        events = []
+        class Recording(object):
+            def __eq__(self, other):
+                events.append('eq')
+                return True
+        self.assertEqual(_error(lambda: (Raising(), 1) == (1,)), ('ValueError', 'item compared'))
+        self.assertEqual(_error(lambda: (Raising(),) != (1, 2)), ('ValueError', 'item compared'))
+        self.assertFalse((Recording(), 1) == (1,))
+        self.assertTrue((Recording(),) != (1, 2))
+        self.assertEqual(events, ['eq', 'eq'])
+        self.assertFalse([Raising(), 1] == [1])
+        self.assertTrue([Raising()] != [1, 2])
+        self.assertFalse((1, 2) == (1,))
+        self.assertTrue(() != (1,))
+
+    def test_dict_ordering_compares_the_entries_once(self):
+        events = []
+        class Key(object):
+            def __init__(self, value):
+                self.value = value
+            def __hash__(self):
+                events.append('hash')
+                return hash(self.value)
+            def __eq__(self, other):
+                events.append('eq')
+                return self.value == other
+        left = {Key(1): 1, 2: 2}
+        cases = (
+            (lambda: left < {0: 2, 3: 4}, False, ['hash']),
+            (lambda: left >= {0: 2, 3: 4}, True, ['hash']),
+            (lambda: left <= {1: 2, 3: 5}, False, ['hash', 'eq', 'eq']),
+            (lambda: left > {1: 2, 3: 5}, True, ['hash', 'eq', 'eq']),
+            (lambda: cmp(left, {1: 2, 3: 5}), 1, ['hash', 'eq', 'eq']),
+            (lambda: left == {1: 2, 3: 5}, False, ['hash', 'eq']),
+        )
+        for operation, result, expected in cases:
+            del events[:]
+            self.assertEqual(operation(), result)
+            self.assertEqual(events, expected)
+        class Clearing(object):
+            def __hash__(self):
+                return 1
+            def __eq__(self, other):
+                target.clear()
+                return True
+        target = {Clearing(): 'v'}
+        self.assertFalse(target < {1: 2})
+        target = {Clearing(): 'v'}
+        self.assertTrue(target > {1: 2})
+
+    def test_dict_view_comparisons_use_the_set_subclass_protocol(self):
+        events = []
+        class Overriding(set):
+            def __len__(self):
+                events.append('len')
+                return 1
+            def __contains__(self, item):
+                events.append(('contains', item))
+                return True
+            def __iter__(self):
+                events.append('iter')
+                return iter([1])
+        keys = {1: 0}.viewkeys()
+        items = {1: 0}.viewitems()
+        other = Overriding([5, 6])
+        cases = (
+            (lambda: keys == other, True, ['len', ('contains', 1)]),
+            (lambda: other == keys, True, ['len', ('contains', 1)]),
+            (lambda: items == other, True, ['len', ('contains', (1, 0))]),
+            (lambda: keys != other, False, ['len', ('contains', 1)]),
+            (lambda: keys < other, False, ['len']),
+            (lambda: keys <= other, True, ['len', ('contains', 1)]),
+            (lambda: other <= keys, True, ['len', 'iter']),
+            (lambda: keys >= other, True, ['len', 'iter']),
+            (lambda: other >= keys, True, ['len', ('contains', 1)]),
+            (lambda: items >= other, False, ['len', 'iter']),
+            (lambda: keys.__eq__(other), True, ['len', ('contains', 1)]),
+        )
+        for operation, result, expected in cases:
+            del events[:]
+            self.assertIs(operation(), result)
+            self.assertEqual(events, expected)
+        class Negative(set):
+            def __len__(self):
+                return -1
+        self.assertEqual(_error(lambda: keys == Negative()), ('ValueError', '__len__() should return >= 0'))
+        self.assertTrue(keys == set([1]) and set([1]) == keys and frozenset() < keys)
+
+    def test_base_repr_represents_nested_self_through_the_subclass(self):
+        class Listing(list):
+            def __repr__(self):
+                return 'R' + list.__repr__(self)
+        class Mapping(dict):
+            def __repr__(self):
+                return 'D' + dict.__repr__(self)
+        class Pair(tuple):
+            def __repr__(self):
+                return 'T' + tuple.__repr__(self)
+        listing = Listing()
+        listing.append(listing)
+        mapping = Mapping()
+        mapping[1] = mapping
+        inner = []
+        pair = Pair((inner,))
+        inner.append(pair)
+        try:
+            self.assertEqual(repr(listing), 'R[R[...]]')
+            self.assertEqual(repr(mapping), 'D{1: D{...}}')
+            self.assertEqual(repr(pair), 'T([T(...)],)')
+            self.assertEqual(list.__repr__(listing), '[R[...]]')
+        finally:
+            del listing[:], inner[:]
+            mapping.clear()
+
+    def test_xrange_getitem_method_converts_like_sq_item(self):
+        target = xrange(5)
+        class Integral(object):
+            def __int__(self):
+                return 1
+        self.assertEqual(_error(lambda: target.__getitem__(2 ** 64)), ('OverflowError', "cannot fit 'long' into an index-sized integer"))
+        self.assertEqual(_error(lambda: target.__getitem__(-2 ** 64)), ('OverflowError', "cannot fit 'long' into an index-sized integer"))
+        self.assertEqual(_error(lambda: target.__getitem__(1.5)), ('TypeError', "'float' object cannot be interpreted as an index"))
+        self.assertEqual(_error(lambda: target.__getitem__(Integral())), ('TypeError', "'Integral' object cannot be interpreted as an index"))
+        self.assertEqual(_error(lambda: target.__getitem__(5)), ('IndexError', 'xrange object index out of range'))
+        self.assertEqual(target.__getitem__(-1), 4)
+        self.assertEqual(target.__getitem__(True), 1)
+        self.assertEqual(_error(lambda: target[1.5]), ('TypeError', "sequence index must be integer, not 'float'"))
+        # Only the method converts a slice; a subscript refuses it as sq_item.
+        self.assertEqual(_error(lambda: target.__getitem__(slice(1, 2))), ('TypeError', "'slice' object cannot be interpreted as an index"))
+        for subscript in (lambda: target[1:3], lambda: target[::2], lambda: target[slice(1, 2)]):
+            self.assertEqual(_error(subscript), ('TypeError', "sequence index must be integer, not 'slice'"))
+
+    def test_container_constructor_and_wrapper_messages(self):
+        class HintMinusOne(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                raise StopIteration
+            def __length_hint__(self):
+                return -1
+        values = type({}.viewvalues())
+        cases = (
+            (lambda: frozenset.__new__(set), ('TypeError', 'frozenset.__new__(set): set is not a subtype of frozenset')),
+            (lambda: set.__new__(frozenset), ('TypeError', 'set.__new__(frozenset): frozenset is not a subtype of set')),
+            (lambda: set.__new__(1), ('TypeError', 'set.__new__(X): X is not a type object (int)')),
+            (lambda: frozenset.__new__(), ('TypeError', 'frozenset.__new__(): not enough arguments')),
+            (lambda: slice(stop=1), ('TypeError', 'slice() does not take keyword arguments')),
+            (lambda: map(None, HintMinusOne()), ('SystemError', 'error return without exception set')),
+            (lambda: values.__eq__({}.viewvalues(), 1, 2), ('TypeError', 'expected 1 arguments, got 3')),
+            (lambda: type.__eq__(values), ('TypeError', 'expected 1 arguments, got 0')),
+            (lambda: type.__lt__(values, 1, 2), ('TypeError', 'expected 1 arguments, got 2')),
+        )
+        for operation, expected in cases:
+            self.assertEqual(_error(operation), expected)
+        self.assertEqual(map(None, 'ab'), ['a', 'b'])
+        self.assertEqual(_error(lambda: map(None, 5)), ('TypeError', "'int' object is not iterable"))

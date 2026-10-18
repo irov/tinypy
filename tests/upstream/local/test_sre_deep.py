@@ -15,6 +15,11 @@ def _optional():
                         1, {'word': 1}, [None, 'word'])
 
 
+def _pair(groups, *names):
+    return _sre.compile('(a)(b)', 0, [17, 10, 1, 2, 2, 2, 0, 97, 98, 0, 0, 21, 0, 19, 97, 21, 1, 21, 2, 19, 98, 21, 3, 1],
+                        groups, *names)
+
+
 class SREDeep(unittest.TestCase):
     def test_match_search_findall_accept_named_bounds_and_string_alias(self):
         pattern = _letter()
@@ -495,3 +500,74 @@ class SREDeep(unittest.TestCase):
             with self.assertRaises(TypeError) as context:
                 owner()
             self.assertEqual(str(context.exception), "cannot create '%s' instances" % name)
+
+    def test_programs_run_with_the_marks_validation_accepts(self):
+        # _validate lets MARK reach 2 * groups + 1, of 100 groups for a
+        # program compiled without groups, and a match keeps the groups' own.
+        for groups, values, regs in ((0, (), ((0, 2),)), (1, ('a',), ((0, 2), (0, 1))),
+                                     (2, ('a', 'b'), ((0, 2), (0, 1), (1, 2)))):
+            found = _pair(groups).match('ab')
+            self.assertEqual((found.span(), found.groups(), found.lastindex, found.regs), ((0, 2), values, 2, regs))
+        for groups in (0, 1):
+            pattern = _sre.compile('(a)\\1', 0, [21, 0, 19, 97, 21, 1, 12, 0, 1], groups)
+            self.assertEqual((pattern.match('aa').span(), pattern.match('ab')), ((0, 2), None))
+
+    def test_lastgroup_reads_indexgroup_as_a_sequence(self):
+        # match_lastgroup_get uses PySequence_GetItem: a dict has no sq_item,
+        # a class defined in Python has one with any __getitem__, and a
+        # failure reads as no name.
+        class Names(dict):
+            pass
+        class Lookup(object):
+            def __getitem__(self, index):
+                return 'item%d' % index
+        class Classic:
+            def __getitem__(self, index):
+                return 'classic%d' % index
+        class Failing(object):
+            def __getitem__(self, index):
+                raise KeyError(index)
+        for indexgroup, name in (({2: 'second'}, None), (Names({2: 'second'}), 'second'),
+                                 ([None, 'first', 'second'], 'second'), (('x', 'y', 'z'), 'z'), ('xyz', 'z'),
+                                 (bytearray('xyz'), 122), (Lookup(), 'item2'), (Classic(), 'classic2'),
+                                 (Failing(), None), (object(), None), ([None], None), (None, None)):
+            self.assertEqual(_pair(2, {}, indexgroup).match('ab').lastgroup, name)
+
+    def test_group_names_follow_the_mapping_protocol_of_groupindex(self):
+        # match_getindex looks a name up with PyObject_GetItem and clears a
+        # failure, and groupdict lists the names with PyMapping_Keys; only a
+        # pattern compiled without a groupindex has no names to list.
+        class Missing(dict):
+            def __missing__(self, name):
+                return 2
+        class Names(object):
+            def keys(self):
+                return ['first', 'second']
+            def __getitem__(self, name):
+                return {'first': 1, 'second': 2}[name]
+        class FailingKeys(dict):
+            def keys(self):
+                raise ValueError('keys failed')
+        class FailingItem(dict):
+            def __getitem__(self, name):
+                raise ValueError('item failed')
+        absent = _pair(2)
+        self.assertIs(absent.groupindex, None)
+        self.assertEqual(absent.match('ab').groupdict(), {})
+        for groupindex in (None, [1]):
+            found = _pair(2, groupindex).match('ab')
+            with self.assertRaises(AttributeError) as context:
+                found.groupdict()
+            self.assertEqual(str(context.exception), "'%s' object has no attribute 'keys'" % type(groupindex).__name__)
+            with self.assertRaisesRegexp(IndexError, 'no such group'):
+                found.group('first')
+        found = _pair(2, Missing(first=1)).match('ab')
+        self.assertEqual((found.group('first'), found.span('other'), found.groupdict()), ('a', (1, 2), {'first': 'a'}))
+        found = _pair(2, Names()).match('ab')
+        self.assertEqual((found.group('second'), found.groupdict()), ('b', {'first': 'a', 'second': 'b'}))
+        with self.assertRaisesRegexp(ValueError, 'keys failed'):
+            _pair(2, FailingKeys(first=1)).match('ab').groupdict()
+        found = _pair(2, FailingItem(first=1)).match('ab')
+        for call in (lambda: found.group('first'), found.groupdict):
+            with self.assertRaisesRegexp(IndexError, 'no such group'):
+                call()

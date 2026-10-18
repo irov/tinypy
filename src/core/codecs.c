@@ -878,7 +878,8 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
     }
     tinypy_value_t *item = TINYPY_TUPLE_GET(args, 0U);
     if (mode == 0) {
-        if (tinypy_type_is_subtype(item->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) == 0) {
+        /* PyExceptionInstance_Check accepts any classic instance. */
+        if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_OLD_INSTANCE && tinypy_type_is_subtype(item->type, vm->exception_types[TINYPY_EXCEPTION_BASE]) == 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "codec must pass exception instance", out_error);
             return NULL;
         }

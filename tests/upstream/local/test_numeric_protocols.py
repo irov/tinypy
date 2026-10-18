@@ -156,6 +156,26 @@ class NumericDispatch(unittest.TestCase):
             self.assertIs(type(divmod(Long(value), divisor)[1]) is Long, kept)
             self.assertEqual(divmod(Long(value), divisor), divmod(value, divisor))
 
+    def test_complex_power_converts_before_the_modulus(self):
+        class Classic:
+            pass
+        overflow = ('OverflowError', ('long int too large to convert to float',))
+        for arguments in ((1j, 2 ** 1100, 5), (2 ** 1100, 1j, 5), (2 ** 1100, 2, 1j), (2 ** 1100, 0, 1e300 + 1e300j), (2 ** 1100, Classic(), 1j)):
+            self.assertEqual(_error(pow, *arguments), overflow)
+        self.assertEqual((_error(complex.__pow__, 1j, 2 ** 1100, 5), _error(complex.__rpow__, 1j, 2 ** 1100, 5)), (overflow, overflow))
+        self.assertIs(complex.__pow__(1j, Classic(), 5), NotImplemented)
+        self.assertEqual(_error(pow, 1j, 2L, 5), ('ValueError', ('complex modulo',)))
+        self.assertEqual(_error(pow, 2, Classic(), 1j), ('TypeError', ("unsupported operand type(s) for pow(): 'int', 'instance', 'complex'",)))
+        self.assertEqual(_error(pow, 2.5, 2 ** 1100, 5), ('TypeError', ('pow() 3rd argument not allowed unless all arguments are integers',)))
+
+    def test_fromhex_reports_overflow_before_the_rest(self):
+        overflow = ('OverflowError', ('hexadecimal value too large to represent as a float',))
+        invalid = ('ValueError', ('invalid hexadecimal floating-point string',))
+        for text in ('1' * 300 + 'x', '1' * 300 + '_1', '0x1p5000 junk', u'0x1p5000z', '-0x1.fffffffffffff8p1023x', '1p99999999999999999999 x'):
+            self.assertEqual(_error(float.fromhex, text), overflow)
+        for text in ('0x1p-5000x', '0x0p5000x', '1' * 10 + 'x', '1px', '1.2.3', 'x'):
+            self.assertEqual(_error(float.fromhex, text), invalid)
+
     def test_fromhex_rounding_tie_at_the_leading_digit(self):
         for text, expected in (('8p-1078', 5e-324), ('0x8p-1078', 5e-324), ('.8p-1074', 5e-324), ('08p-1078', 0.0),
                                ('0.8p-1074', 0.0), ('1p-1075', 0.0), ('80p-1082', 5e-324), ('18p-1078', 1e-323)):
@@ -364,6 +384,19 @@ class NumericConversions(unittest.TestCase):
         self.assertEqual(_error(complex, Complex(None)), ('TypeError', ('complex() argument must be a string or a number',)))
         self.assertEqual(_error(long, type('Long', (object,), {'__long__': lambda self: 1.5})()), ('TypeError', ('__long__ returned non-long (type float)',)))
         self.assertEqual((repr(complex(1, -0.0)), repr(complex(1j, -0.0)), repr(complex(-0.0, 1j))), ('(1-0j)', '1j', '(-1+0j)'))
+
+    def test_classic_conversion_to_long_names_long(self):
+        class Classic:
+            def __init__(self, value):
+                self.value = value
+
+            def __int__(self):
+                return self.value
+        for value in (None, 2.5, '7', 1j):
+            name = type(value).__name__
+            self.assertEqual(_error(long, Classic(value)), ('TypeError', ('__long__ returned non-long (type %s)' % name,)))
+            self.assertEqual(_error(int, Classic(value)), ('TypeError', ('__int__ returned non-int (type %s)' % name,)))
+        self.assertEqual((long(Classic(True)), long(Classic(7))), (1L, 7L))
 
     def test_unicode_literals_turn_spaces_into_blanks(self):
         self.assertEqual(_error(int, u'\r\n\x1c\x85'), ('ValueError', ("invalid literal for int() with base 10: ''",)))

@@ -200,6 +200,9 @@ VM хранит собственные постоянные значения:
 
 Python `frozenset()` и construction из пустого iterable переиспользуют этот
 объект; subtypes и C API `tinypy_frozenset_new` создают отдельные значения.
+C API `tinypy_set_add`, `tinypy_set_discard` и `tinypy_set_clear` меняют
+frozenset только как embedding-only builder: свежий результат
+`tinypy_frozenset_new` до первого hash и до передачи Python-коду.
 
 Они имеют обычный refcount и базовую owned reference самой VM; специального
 immortal refcount sentinel нет.
@@ -250,6 +253,19 @@ finalizer, как экземпляры классов, добавивших weak
 `_struct.Struct` это отличие от CPython. Объекты,
 которые финализатор освобождает напрямую, не откладываются очередью
 освобождения, поэтому глубокая цепочка вызывает каждый `__del__` один раз.
+Как trashcan в CPython, объект с незавершённым generator или `__del__`,
+который освобождается внутри восьми вложенных финализаторов, ждёт внешнего
+финализатора: тот освобождает такие объекты по очереди, прежде чем отпустить
+свой объект, поэтому длинная цепочка, где каждый финализатор освобождает
+следующий объект, выполняет все финализаторы, не исчерпывая native stack.
+Есть ли у типа `__del__`, решает его последний поиск при создании класса,
+замене баз или финализации, поэтому `__del__`, который меняет атрибут класса,
+цепочку не прерывает. Объект типа, последний поиск которого не нашёл
+`__del__`, и объект, на который ещё ссылаются weak references его weak list,
+финализируются сразу. Native value с финализатором не ждёт никогда: финализатор
+host выполняется, когда освобождается последняя ссылка, до возврата из этого
+освобождения, поэтому host может отдавать Python instance, borrowed pointer на
+который он сбрасывает в финализаторе.
 Уничтожаемая weak reference отсоединяется от referent до освобождения своих
 `__dict__` и slots, поэтому её собственный callback не вызывается, даже если
 только они удерживали referent.
@@ -257,11 +273,13 @@ finalizer, как экземпляры классов, добавивших weak
 Legacy `buffer` хранит запрошенные offset и size, а доступ ограничивает их
 текущей длиной owner. Уменьшение и последующее увеличение bytearray owner не
 теряют исходные bounds; nested views удерживают общий root owner. Первый hash
-кешируется. Raw Unicode buffer содержит native code units; character-buffer
-conversion использует default encoding и отдельно применяет bounds к этим
-байтам, удерживая owner во время codec callbacks. Offset и size больше
-`PTRDIFF_MAX` (возможны только на 32-битных hosts) хранятся как `PTRDIFF_MAX`:
-owner не бывает длиннее, поэтому выбранные bytes не меняются.
+кешируется. Raw Unicode buffer содержит native code units, которые первый
+buffer кеширует на unicode owner; если память под них отклонена,
+`tinypy_buffer_from_object` возвращает NULL с поднятым `MemoryError`.
+Character-buffer conversion использует default encoding и отдельно применяет
+bounds к этим байтам, удерживая owner во время codec callbacks. Offset и size
+больше `PTRDIFF_MAX` (возможны только на 32-битных hosts) хранятся как
+`PTRDIFF_MAX`: owner не бывает длиннее, поэтому выбранные bytes не меняются.
 
 Type slots возвращают прямой semantic result. Неверный slot input нарушает C
 precondition и имеет undefined behavior. Python exceptions используются только
@@ -524,10 +542,15 @@ Python-visible bundled surface намеренно ограничен memory-only
   как `_validate` Python 2.7 и отклоняет любую другую с
   `RuntimeError("invalid SRE code")`; разбор replacement templates и
   `Match.expand` используют `re._subx` и `re._expand`, предоставленные host.
+  `groupindex` и `indexgroup` могут быть любыми объектами: имя группы ищется
+  subscription `groupindex`, `groupdict` перечисляет имена через его `keys()`,
+  а `lastgroup` читает `indexgroup` как sequence.
   Длина subclass `str` из `__len__` не превышает длину самой строки, а subject,
   укоротившийся во время `sub`, `findall`, `split`, `finditer` или scanner,
   завершает поиск на своём текущем конце; CPython 2.7 в обоих случаях читает за
-  концом буфера;
+  концом буфера. Program из 100 групп может ставить marks 200 и 201, а `keys()`
+  `groupindex` может вернуть любой iterable; CPython 2.7 пишет такие marks за
+  своим массивом и читает результат `keys()` как list;
 - filesystem-backed standard library, source-encoding discovery, process
   metadata, environment-dependent `sys` paths и standard I/O input не
   эмулируются. Их предоставляет host либо импортированный memory artifact.
@@ -652,7 +675,11 @@ traceback удаляют имена, `sys.exc_info()` возвращает вм�
 frame -> locals -> frame. Вместе с ними function frame отпускает и mapping,
 который из них построили `f_locals` или `locals()`, а frame generator — когда
 generator завершается: тот, кто ещё держит mapping, получает его неизменным, а
-последующее чтение `f_locals` строит новый из освобождённых locals. Это
+последующее чтение `f_locals` строит новый из освобождённых locals. Если
+generator завершает финализатор значения, которое заменяет само чтение
+`f_locals`, синхронизация останавливается: ещё не перенесённые имена сохраняют
+прежние значения, а frame оставляет mapping себе; `tinypy_frame_locals`
+возвращает `NULL`, если frame к тому времени больше никто не держит. Это
 намеренное отличие от CPython.
 
 `enumerate`, как `enum_next`, заполняет свою пару результата заново, пока
@@ -717,6 +744,15 @@ Cookie нормализуется как `get_normal_name`: написания `
 в codec registry по правилам `encodings.aliases` и декодируют источник через
 codec: для строки — целиком («'utf8' codec can't decode byte ... in position
 N», lineno 0), для файла — построчно после строки cookie, как StreamReader.
+Файл читается моделью `readline` StreamReader, как её вызывает
+`decoding_fgets`: чтения по 72 байта, удваиваемые до 8000, пока строка не
+закончится, UTF-8 codec Python 2 принимает surrogates, ошибка декодирования
+приходится на строку, которую tokenizer читает в момент неудачного чтения, с
+позицией в данных этого чтения, а последовательность, обрезанная концом
+файла, отбрасывается. Строки, прочитанные через codec, сохраняют одиночный
+`\r` (tokenizer заменяет на `\n` только `\r\n` в конце строки), соединяют
+surrogate pair в один code point, как `PyUnicode_AsUTF8String` в `fp_readl`,
+и открытый token в конце такого файла не получает ещё одного перевода строки.
 `text` и `offset` SyntaxError восстанавливаются в объявленную кодировку как
 `PyTokenizer_RestoreEncoding`, `text` покрывает всю логическую строку
 многострочного token, а «expected an indented block» предшествует
@@ -775,20 +811,32 @@ feature flags, limits, optional immutable build profile и флаги источ
 
 Source host API в режиме exec считается текстом файла с logical filename:
 semantic SyntaxError из AST, future scanner и symbol table получает в `text`
-свою строку без начальных пробелов, как `PyErr_ProgramText`, а SyntaxWarning
-дописывает её в `sys.stderr`, как `_Py_DisplaySourceLine`. Строки `compile`,
-`exec` и `eval`, host source с `TINYPY_COMPILE_FLAG_STRING_SOURCE` и режимы
-eval и single не являются файлами, и `text` таких ошибок равен `None`.
+свою строку без начальных пробелов, как `PyErr_ProgramText`: строка файла
+читается заново с universal newlines через буфер в 1000 байт, поэтому от более
+длинной строки остаётся её последняя часть. SyntaxWarning пишется в
+`sys.stderr` одним вызовом `write`, как `warnings.showwarning`, вместе со
+строкой файла без окружающих пробелов, как её читает `linecache`: при
+`sys.stderr`, равном `None`, или `write`, бросающем `IOError` или
+`UnicodeError`, предупреждение теряется, а отсутствие `sys.stderr` и любая
+другая ошибка проваливают компиляцию. Предупреждение `-t` пишется, как
+`PySys_WriteStderr`: без `sys.stderr` или при ошибке записи — в host stderr.
+Строки `compile`, `exec` и `eval`, host source с
+`TINYPY_COMPILE_FLAG_STRING_SOURCE` и режимы eval и single не являются
+файлами, и `text` таких ошибок равен `None`. Unicode source `compile`, `exec`
+и `eval` кодируется в UTF-8, как `PyUnicode_AsUTF8String`, которая соединяет
+surrogate pair в один code point.
 
 Compiler limits охватывают:
 
 - source bytes;
 - tokens;
 - CST и AST nodes;
-- nesting: глубина parser stack и глубина AST выражения, включая плоские
-  цепочки attribute, call и subscript trailers; symbol table и code generator
-  обходят плоские цепочки бинарных операторов без рекурсии, поэтому они
-  учитываются только с preprocessor или meta features;
+- nesting: глубина parser stack и глубина AST операторов и выражений,
+  включая цепочки elif и элементы with, каждый из которых вкладывает
+  следующий оператор, и плоские цепочки attribute, call и subscript
+  trailers; symbol table и code generator обходят плоские цепочки бинарных
+  операторов без рекурсии, поэтому они учитываются только с preprocessor
+  или meta features;
 - symbols;
 - basic blocks;
 - instructions;

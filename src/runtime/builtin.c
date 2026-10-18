@@ -1725,10 +1725,16 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
             result = tinypy_internal_list_from_items_checked(vm, tinypy_internal_tuple_items(input), TINYPY_TUPLE_SIZE(input), out_error);
             return result;
         }
-        tinypy_value_t *list_arguments = tinypy_tuple_from_items(vm, &input, 1U);
-
-        result = tinypy_internal_list_create(&vm->types[TINYPY_VALUE_LIST], list_arguments, NULL, out_error);
-        TINYPY_DECREF(list_arguments);
+        /* PySequence_List: a NULL result without an error, as for a
+           __length_hint__ of -1, is reported for the call of map. */
+        result = tinypy_internal_list_from_items_checked(vm, NULL, 0U, out_error);
+        if (result == NULL) {
+            return NULL;
+        }
+        if (tinypy_internal_list_extend_iterable(result, input, "error return without exception set", out_error) == 0) {
+            TINYPY_DECREF(result);
+            return NULL;
+        }
         return result;
     }
     if (iterable_count > SIZE_MAX / (2U * sizeof(tinypy_value_t *) + 2U * sizeof(uint8_t))) {

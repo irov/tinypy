@@ -43,7 +43,7 @@ tinypy_value_t *tinypy_internal_slice_create(tinypy_type_t *type, tinypy_value_t
 
     TINYPY_CLEAR_ERROR(out_error);
     if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice does not accept keyword arguments", out_error);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "slice() does not take keyword arguments", out_error);
         return NULL;
     }
     if (argument_count == 1U) {

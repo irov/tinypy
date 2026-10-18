@@ -180,19 +180,22 @@ static tinypy_value_t *__tinypy_eval_get_item(tinypy_vm_t *vm, tinypy_value_t *c
     tinypy_value_t *item;
     size_t index;
 
+    /* dict_subscript: an exact dict has no __missing__ to try on a miss. */
     if (container->type == &vm->types[TINYPY_VALUE_DICT]) {
         if (tinypy_internal_dict_get_optional_checked(vm, container, key, &item, out_error) == 0) {
             return NULL;
         }
-        if (item != NULL) {
-            return TINYPY_RET(item);
+        if (item == NULL) {
+            tinypy_internal_exception_raise_key_error(vm, key, out_error);
+            return NULL;
         }
+        return TINYPY_RET(item);
     }
-    else if (container->type == &vm->types[TINYPY_VALUE_LIST] && __tinypy_eval_sequence_index(vm, key, TINYPY_LIST_SIZE(container), &index) != 0) {
+    if (container->type == &vm->types[TINYPY_VALUE_LIST] && __tinypy_eval_sequence_index(vm, key, TINYPY_LIST_SIZE(container), &index) != 0) {
         item = TINYPY_RET(TINYPY_LIST_GET(container, index));
         return item;
     }
-    else if (container->type == &vm->types[TINYPY_VALUE_TUPLE] && __tinypy_eval_sequence_index(vm, key, TINYPY_TUPLE_SIZE(container), &index) != 0) {
+    if (container->type == &vm->types[TINYPY_VALUE_TUPLE] && __tinypy_eval_sequence_index(vm, key, TINYPY_TUPLE_SIZE(container), &index) != 0) {
         item = TINYPY_RET(TINYPY_TUPLE_GET(container, index));
         return item;
     }
@@ -1774,11 +1777,11 @@ static inline tinypy_bool_t __tinypy_eval_binary(tinypy_vm_t *vm, tinypy_frame_o
         result = operation(left, right, out_error);
     }
 
-    if (reused == 0 || result != right) {
-        TINYPY_DECREF(right);
-    }
     if (reused == 0 || result != left) {
         TINYPY_DECREF(left);
+    }
+    if (reused == 0 || result != right) {
+        TINYPY_DECREF(right);
     }
     if (result == NULL) {
         return TINYPY_FALSE;
@@ -2194,15 +2197,24 @@ static tinypy_bool_t __tinypy_eval_binds_python_function(tinypy_vm_t *vm, tinypy
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* call_function pops the arguments left on the stack from the last one;
+   the containers they were collected into go next and the callable last,
+   so that the arguments die in the order of CPython. */
+static inline void __tinypy_eval_release_arguments(tinypy_value_t **items, size_t count) {
+    for (size_t index = count; index != 0U; --index) {
+        TINYPY_DECREF(items[index - 1U]);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_object_t *frame, size_t argument, tinypy_bool_t has_varargs, tinypy_bool_t has_var_keywords, tinypy_error_t **out_error) {
     size_t positional_count = argument & 0xffU;
     size_t keyword_count = (argument >> 8U) & 0xffU;
-    size_t consumed = 1U + positional_count + keyword_count * 2U + (has_varargs != 0 ? 1U : 0U) + (has_var_keywords != 0 ? 1U : 0U);
+    size_t argument_slots = positional_count + keyword_count * 2U;
+    size_t consumed = 1U + argument_slots + (has_varargs != 0 ? 1U : 0U) + (has_var_keywords != 0 ? 1U : 0U);
     tinypy_value_t *args = NULL;
     tinypy_value_t *kwargs = NULL;
     tinypy_value_t *result;
     tinypy_bool_t direct_bound_function = TINYPY_FALSE;
-    size_t index;
 
     tinypy_value_t **first = frame->stack_top - consumed;
     tinypy_bool_t direct_function = has_varargs == 0 && first[0]->type == &vm->types[TINYPY_VALUE_FUNCTION];
@@ -2325,20 +2337,19 @@ static tinypy_value_t *__tinypy_eval_call_stack(tinypy_vm_t *vm, tinypy_frame_ob
         result = tinypy_call(first[0], args, kwargs, out_error);
     }
 cleanup:
-    if (kwargs != NULL) {
-        TINYPY_DECREF(kwargs);
-    }
+    __tinypy_eval_release_arguments(first + 1U, argument_slots);
     if (args != NULL) {
         TINYPY_DECREF(args);
     }
+    if (kwargs != NULL) {
+        TINYPY_DECREF(kwargs);
+    }
+    __tinypy_eval_release_arguments(first + 1U + argument_slots, consumed - 1U - argument_slots);
     if (direct_bound_function != 0) {
         tinypy_internal_method_release(first[0]);
     }
     else {
         TINYPY_DECREF(first[0]);
-    }
-    for (index = 1U; index < consumed; ++index) {
-        TINYPY_DECREF(first[index]);
     }
     frame->stack_top = first;
     return result;
@@ -2352,6 +2363,7 @@ static tinypy_value_t *__tinypy_eval_call_method(tinypy_vm_t *vm, tinypy_frame_o
     size_t consumed = 2U + positional_count + keyword_count * 2U;
     tinypy_value_t **first = frame->stack_top - consumed;
     tinypy_value_t *const *keyword_items = first + 2U + positional_count;
+    tinypy_value_t *kwargs = NULL;
     tinypy_value_t *result = NULL;
 
     if (first[0]->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
@@ -2361,16 +2373,17 @@ static tinypy_value_t *__tinypy_eval_call_method(tinypy_vm_t *vm, tinypy_frame_o
         result = tinypy_internal_native_function_call_method(first[0], first[1], first + 2U, positional_count, NULL, out_error);
     }
     else {
-        tinypy_value_t *kwargs = tinypy_dict_new(vm);
-
+        kwargs = tinypy_dict_new(vm);
         if (__tinypy_eval_add_keywords(vm, first[0], kwargs, keyword_items, keyword_count, out_error) != 0) {
             result = tinypy_internal_native_function_call_method(first[0], first[1], first + 2U, positional_count, kwargs, out_error);
         }
+    }
+    __tinypy_eval_release_arguments(first + 2U, consumed - 2U);
+    if (kwargs != NULL) {
         TINYPY_DECREF(kwargs);
     }
-    for (size_t index = 0U; index < consumed; ++index) {
-        TINYPY_DECREF(first[index]);
-    }
+    TINYPY_DECREF(first[1]);
+    TINYPY_DECREF(first[0]);
     frame->stack_top = first;
     return result;
 }
@@ -3122,8 +3135,8 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *container = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *item = __tinypy_eval_get_item(vm, container, key, out_error);
 
-            TINYPY_DECREF(key);
             TINYPY_DECREF(container);
+            TINYPY_DECREF(key);
             if (item == NULL) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
                 break;
@@ -3143,8 +3156,8 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *container = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *item = tinypy_internal_get_slice(container, start, stop, out_error);
 
-            __tinypy_eval_release_slice_bounds(start, stop);
             TINYPY_DECREF(container);
+            __tinypy_eval_release_slice_bounds(start, stop);
             if (item == NULL) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
                 break;
@@ -3165,9 +3178,9 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
             tinypy_bool_t stored = tinypy_internal_set_slice(container, start, stop, value, out_error);
 
-            __tinypy_eval_release_slice_bounds(start, stop);
-            TINYPY_DECREF(container);
             TINYPY_DECREF(value);
+            TINYPY_DECREF(container);
+            __tinypy_eval_release_slice_bounds(start, stop);
             if (stored == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
@@ -3185,8 +3198,8 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *container = __tinypy_eval_pop_owned(frame);
             tinypy_bool_t deleted = tinypy_internal_delete_slice(container, start, stop, out_error);
 
-            __tinypy_eval_release_slice_bounds(start, stop);
             TINYPY_DECREF(container);
+            __tinypy_eval_release_slice_bounds(start, stop);
             if (deleted == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
@@ -3198,9 +3211,9 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *value = __tinypy_eval_pop_owned(frame);
             tinypy_bool_t stored = __tinypy_eval_set_item(vm, container, key, value, out_error);
 
-            TINYPY_DECREF(key);
-            TINYPY_DECREF(container);
             TINYPY_DECREF(value);
+            TINYPY_DECREF(container);
+            TINYPY_DECREF(key);
             if (stored == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
@@ -3211,8 +3224,8 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *container = __tinypy_eval_pop_owned(frame);
             tinypy_bool_t deleted = tinypy_delete_item(container, key, out_error);
 
-            TINYPY_DECREF(key);
             TINYPY_DECREF(container);
+            TINYPY_DECREF(key);
             if (deleted == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
@@ -3755,8 +3768,8 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             tinypy_value_t *right = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *left = __tinypy_eval_pop_owned(frame);
             tinypy_value_t *comparison = __tinypy_eval_compare(vm, left, right, argument, out_error);
-            TINYPY_DECREF(right);
             TINYPY_DECREF(left);
+            TINYPY_DECREF(right);
             if (comparison == NULL) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
                 break;

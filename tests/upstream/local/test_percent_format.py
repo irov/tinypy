@@ -73,6 +73,37 @@ class PercentFormat(unittest.TestCase):
         self.assertEqual("<%-14s|%d>" % (Both(), 7), u"<from-unicode  |7>")
         self.assertRaises(UnicodeDecodeError, lambda: "\xe9%s" % (Both(),))
 
+    def test_integer_conversion_is_int_then_long(self):
+        calls = []
+
+        class ClassicInt:
+            def __int__(self):
+                calls.append("__int__")
+                return None
+
+        class ClassicTrunc:
+            def __trunc__(self):
+                calls.append("__trunc__")
+                return "x"
+
+        class ClassicLong:
+            def __int__(self):
+                calls.append("__int__")
+                return 2.5
+
+            def __long__(self):
+                calls.append("__long__")
+                return 6L
+        for value, name in ((ClassicInt(), "__int__"), (ClassicTrunc(), "__trunc__")):
+            for pattern in ("%d", "%x", u"%o"):
+                del calls[:]
+                with self.assertRaises(TypeError) as context:
+                    pattern % value
+                self.assertEqual(str(context.exception), pattern + " format: a number is required, not instance")
+                self.assertEqual(calls, [name, name])
+        del calls[:]
+        self.assertEqual(("%d" % ClassicLong(), calls), ("6", ["__int__", "__long__"]))
+
 
 def vector_check(pattern, operand, expected):
     def check(self):

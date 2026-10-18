@@ -2,8 +2,12 @@
 
 #include <string.h>
 
-/* The bytes a codec StreamReader reads from a file at a time. */
+/* The bytes a codec StreamReader reads from a file at a time for a line,
+   doubled while the line does not end until the reads reach the limit. */
 #define TINYPY_COMPILER_STREAM_READ_SIZE ((size_t)72U)
+#define TINYPY_COMPILER_STREAM_READ_LIMIT ((size_t)8000U)
+/* The characters PyErr_ProgramText reads into its line buffer at a time. */
+#define TINYPY_COMPILER_PROGRAM_TEXT_READ_SIZE ((size_t)999U)
 
 //////////////////////////////////////////////////////////////////////////
 /* get_normal_name: the first twelve characters of a cookie, lowered with
@@ -110,55 +114,6 @@ static tinypy_bool_t __tinypy_compiler_encoding_cookie(const uint8_t *source, si
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_compiler_utf8_valid(const uint8_t *bytes, size_t size, size_t *out_invalid_offset) {
-    size_t index = 0U;
-
-    *out_invalid_offset = 0U;
-    while (index < size) {
-        uint8_t first = bytes[index];
-        size_t length;
-        uint32_t code_point;
-        size_t continuation;
-
-        if (first < 0x80U) {
-            index += 1U;
-            continue;
-        }
-        *out_invalid_offset = index;
-        if (first >= 0xc2U && first <= 0xdfU) {
-            length = 2U;
-            code_point = (uint32_t)(first & 0x1fU);
-        }
-        else if (first >= 0xe0U && first <= 0xefU) {
-            length = 3U;
-            code_point = (uint32_t)(first & 0x0fU);
-        }
-        else if (first >= 0xf0U && first <= 0xf4U) {
-            length = 4U;
-            code_point = (uint32_t)(first & 0x07U);
-        }
-        else {
-            return TINYPY_FALSE;
-        }
-        if (length > size - index) {
-            return TINYPY_FALSE;
-        }
-        for (continuation = 1U; continuation < length; ++continuation) {
-            uint8_t byte = bytes[index + continuation];
-
-            if ((byte & 0xc0U) != 0x80U) {
-                return TINYPY_FALSE;
-            }
-            code_point = (code_point << 6U) | (uint32_t)(byte & 0x3fU);
-        }
-        if ((length == 3U && code_point < 0x800U) || (length == 4U && code_point < 0x10000U) || code_point > 0x10ffffU || (code_point >= 0xd800U && code_point <= 0xdfffU)) {
-            return TINYPY_FALSE;
-        }
-        index += length;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static void __tinypy_compiler_byte_position(const uint8_t *bytes, size_t offset, int32_t *out_line, int32_t *out_column) {
     size_t index;
     size_t line_start = 0U;
@@ -200,6 +155,35 @@ static void __tinypy_compiler_source_line(const tinypy_source_view_t *source, in
     }
     *out_bytes = (const char *)(source->bytes + position);
     *out_size = end - position + (end < source->size ? 1U : 0U);
+}
+//////////////////////////////////////////////////////////////////////////
+/* Locates a line of the host file read with universal newlines, as Python
+   reads a file again for its diagnostics: the bounds of its characters and
+   whether a newline ends it. A line past the end of the file is empty. */
+static tinypy_bool_t __tinypy_compiler_program_line(const tinypy_source_view_t *source, int32_t line_number, size_t *out_start, size_t *out_end, tinypy_bool_t *out_newline) {
+    size_t position = 0U;
+    int32_t line = 1;
+
+    *out_start = 0U;
+    *out_end = 0U;
+    *out_newline = TINYPY_FALSE;
+    if (line_number <= 0 || source->bytes == NULL) {
+        return TINYPY_FALSE;
+    }
+    for (;;) {
+        size_t end = position;
+        while (end < source->size && source->bytes[end] != '\n' && source->bytes[end] != '\r') {
+            end += 1U;
+        }
+        if (line == line_number || end == source->size) {
+            *out_start = line == line_number ? position : end;
+            *out_end = end;
+            *out_newline = end < source->size ? TINYPY_TRUE : TINYPY_FALSE;
+            return TINYPY_TRUE;
+        }
+        position = end + (source->bytes[end] == '\r' && end + 1U < source->size && source->bytes[end + 1U] == '\n' ? 2U : 1U);
+        line += 1;
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 static char *__tinypy_compiler_join_parts(tinypy_compile_ctx_t *ctx, const char *const *parts, const size_t *part_sizes, size_t part_count) {
@@ -391,19 +375,40 @@ void tinypy_internal_compiler_plain_error(tinypy_compile_ctx_t *ctx, const char 
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_semantic_error(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number, tinypy_bool_t include_location) {
+    const char *text = NULL;
+    size_t text_size = 0U;
+
     if (ctx->failed != 0) {
         return;
     }
-    ctx->failed = 1;
-    const char *line_bytes;
-    size_t line_size;
-    __tinypy_compiler_source_line(&ctx->program_text, line_number, &line_bytes, &line_size);
-    /* PyErr_ProgramText quotes the line without its indentation. */
-    while (line_size != 0U && (*line_bytes == ' ' || *line_bytes == '\t' || *line_bytes == '\f')) {
-        line_bytes += 1;
-        line_size -= 1U;
+    size_t start;
+    size_t end;
+    tinypy_bool_t newline;
+    if (__tinypy_compiler_program_line(&ctx->program_text, line_number, &start, &end, &newline) != 0) {
+        /* PyErr_ProgramText reads the line through a 1000-byte buffer until
+           a read ends the line: a longer line leaves its last part, and one
+           that fills the buffer up to the end of the file nothing. */
+        size_t count = end - start + (newline != 0 ? 1U : 0U);
+        size_t offset = 0U;
+        while (count - offset > TINYPY_COMPILER_PROGRAM_TEXT_READ_SIZE || (count - offset == TINYPY_COMPILER_PROGRAM_TEXT_READ_SIZE && newline == 0)) {
+            offset += TINYPY_COMPILER_PROGRAM_TEXT_READ_SIZE;
+        }
+        start += offset < end - start ? offset : end - start;
+        /* It quotes the line without its indentation. */
+        while (start != end && (ctx->program_text.bytes[start] == ' ' || ctx->program_text.bytes[start] == '\t' || ctx->program_text.bytes[start] == '\f')) {
+            start += 1U;
+        }
+        const char *parts[] = {(const char *)ctx->program_text.bytes + start, "\n"};
+        size_t sizes[] = {end - start, offset != count && newline != 0 ? 1U : 0U};
+        text = __tinypy_compiler_join_parts(ctx, parts, sizes, 2U);
+        if (text == NULL) {
+            tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", line_number, 0, ctx->out_error);
+            return;
+        }
+        text_size = sizes[0] + sizes[1];
     }
-    tinypy_internal_make_vm_error_location(ctx->vm, TINYPY_ERROR_SYNTAX, message, ctx->logical_filename, ctx->filename_size, line_number, -1, line_bytes, line_size, include_location, ctx->out_error);
+    ctx->failed = 1;
+    tinypy_internal_make_vm_error_location(ctx->vm, TINYPY_ERROR_SYNTAX, message, ctx->logical_filename, ctx->filename_size, line_number, -1, text, text_size, include_location, ctx->out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, const char *const *parts, const size_t *part_sizes, size_t part_count, int32_t line_number, tinypy_bool_t include_location) {
@@ -416,14 +421,20 @@ void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, co
     tinypy_internal_compiler_semantic_error(ctx, message, line_number, include_location);
 }
 //////////////////////////////////////////////////////////////////////////
-/* The str() of an exception, copied into the arena. */
+/* The str() of an exception, copied into the arena; no message once an
+   error was reported, which the compile keeps. */
 static const char *__tinypy_compiler_exception_message(tinypy_compile_ctx_t *ctx, tinypy_value_t *exception, size_t *out_size) {
     TINYPY_INCREF(exception);
     tinypy_vm_clear_error(ctx->vm);
-    tinypy_value_t *rendered = tinypy_object_str(exception, ctx->out_error);
+    if (ctx->failed != 0) {
+        TINYPY_DECREF(exception);
+        return NULL;
+    }
+    tinypy_error_t *render_error = NULL;
+    tinypy_value_t *rendered = tinypy_object_str(exception, &render_error);
     TINYPY_DECREF(exception);
     if (rendered == NULL) {
-        ctx->failed = TINYPY_TRUE;
+        tinypy_internal_compiler_operation_error(ctx, TINYPY_ERROR_MEMORY, render_error, "memory allocation failed", 0, 0);
         return NULL;
     }
     size_t message_size;
@@ -491,158 +502,310 @@ static tinypy_bool_t __tinypy_compiler_decode(tinypy_compile_ctx_t *ctx, const u
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_compiler_is_line_break(uint8_t byte) {
-    tinypy_bool_t result = byte == '\n' || byte == '\r' || byte == 0x0bU || byte == 0x0cU || byte == 0x1cU || byte == 0x1dU || byte == 0x1eU ? TINYPY_TRUE : TINYPY_FALSE;
-    return result;
+/* The StreamReader of the UTF-8 or ASCII codec of Python 2, which reads a
+   file after its cookie line when the cookie names the codec without a fast
+   path. Its buffers are ranges of the bytes it reads: stream.read consumed
+   those before position, the ones from decoded on wait in bytebuffer for
+   the rest of their sequence, and the characters from buffered to decoded
+   are charbuffer, or linebuffer while lines of them are cached. */
+typedef struct tinypy_compiler_stream_reader_t {
+    const uint8_t *bytes;
+    size_t size;
+    tinypy_bool_t utf8;
+    size_t position;
+    size_t decoded;
+    size_t buffered;
+    size_t buffered_characters;
+    size_t cached_lines;
+    /* The data of the read that raised. */
+    size_t error_begin;
+    size_t error_end;
+} tinypy_compiler_stream_reader_t;
+//////////////////////////////////////////////////////////////////////////
+/* The stateful decoder: the end of the characters the bytes from begin to
+   end decode to, which stops before a sequence the data cuts and at the
+   first invalid one. The UTF-8 codec of Python 2 accepts surrogates. */
+static size_t __tinypy_compiler_stream_decode(const tinypy_compiler_stream_reader_t *reader, size_t begin, size_t end, tinypy_bool_t *out_invalid) {
+    const uint8_t *bytes = reader->bytes;
+    size_t offset = begin;
+
+    *out_invalid = TINYPY_FALSE;
+    while (offset < end) {
+        uint8_t first = bytes[offset];
+
+        if (first < 0x80U) {
+            offset += 1U;
+            continue;
+        }
+        size_t length = reader->utf8 == 0 ? 0U : (first >= 0xc2U && first <= 0xdfU ? 2U : (first >= 0xe0U && first <= 0xefU ? 3U : (first >= 0xf0U && first <= 0xf4U ? 4U : 0U)));
+        if (length > end - offset) {
+            return offset;
+        }
+        tinypy_bool_t valid = length != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+        for (size_t index = 1U; index < length; ++index) {
+            if ((bytes[offset + index] & 0xc0U) != 0x80U) {
+                valid = TINYPY_FALSE;
+            }
+        }
+        if (valid == 0 || (first == 0xe0U && bytes[offset + 1U] < 0xa0U) || (first == 0xf0U && bytes[offset + 1U] < 0x90U) || (first == 0xf4U && bytes[offset + 1U] > 0x8fU)) {
+            *out_invalid = TINYPY_TRUE;
+            return offset;
+        }
+        offset += length;
+    }
+    return offset;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The number of lines the tokenizer counts in bytes: newlines and lone
-   carriage returns. */
-static size_t __tinypy_compiler_count_lines(const uint8_t *bytes, size_t size) {
+static size_t __tinypy_compiler_stream_characters(const tinypy_compiler_stream_reader_t *reader, size_t begin, size_t end) {
     size_t count = 0U;
-    size_t index;
 
-    for (index = 0U; index < size; ++index) {
-        if (bytes[index] == '\n' || (bytes[index] == '\r' && (index + 1U == size || bytes[index + 1U] != '\n'))) {
+    for (size_t offset = begin; offset < end; ++offset) {
+        if ((reader->bytes[offset] & 0xc0U) != 0x80U) {
             count += 1U;
         }
     }
     return count;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The lines of a decoded prefix as unicode.splitlines counts them. */
-static size_t __tinypy_compiler_count_split_lines(const uint8_t *bytes, size_t size) {
-    size_t count = 0U;
-    size_t index;
+/* The end of the first line unicode.splitlines finds in the characters from
+   begin to end, after its line break; zero when they hold no line break. */
+static size_t __tinypy_compiler_stream_line_end(const tinypy_compiler_stream_reader_t *reader, size_t begin, size_t end) {
+    const uint8_t *bytes = reader->bytes;
 
-    for (index = 0U; index < size; ++index) {
-        if (__tinypy_compiler_is_line_break(bytes[index]) != 0 && (bytes[index] != '\r' || index + 1U == size || bytes[index + 1U] != '\n')) {
-            count += 1U;
+    for (size_t offset = begin; offset < end; ++offset) {
+        uint8_t byte = bytes[offset];
+
+        if (byte == '\r') {
+            size_t line_end = offset + 1U < end && bytes[offset + 1U] == '\n' ? offset + 2U : offset + 1U;
+            return line_end;
+        }
+        if (byte == '\n' || byte == 0x0bU || byte == 0x0cU || (byte >= 0x1cU && byte <= 0x1eU)) {
+            return offset + 1U;
+        }
+        if (byte == 0xc2U && offset + 1U < end && bytes[offset + 1U] == 0x85U) {
+            return offset + 2U;
+        }
+        if (byte == 0xe2U && offset + 2U < end && bytes[offset + 1U] == 0x80U && (bytes[offset + 2U] == 0xa8U || bytes[offset + 2U] == 0xa9U)) {
+            return offset + 3U;
         }
     }
-    if (size != 0U && __tinypy_compiler_is_line_break(bytes[size - 1U]) == 0) {
+    return 0U;
+}
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_compiler_stream_line_count(const tinypy_compiler_stream_reader_t *reader, size_t begin, size_t end) {
+    size_t count = 0U;
+
+    while (begin != end) {
+        size_t line_end = __tinypy_compiler_stream_line_end(reader, begin, end);
+
         count += 1U;
+        if (line_end == 0U) {
+            break;
+        }
+        begin = line_end;
     }
     return count;
 }
 //////////////////////////////////////////////////////////////////////////
-/* A file whose cookie names a codec other than the fast paths is read after
-   the cookie line through the codec's StreamReader: 72-byte reads decoded
-   together with the undecoded tail of the previous read. A read that fails
-   returns the lines decoded before the failing byte when there are at least
-   two of them and raises on the next read, at position 0; otherwise it
-   raises at once with the position in its data. The tokenizer sees the
-   failure on the line whose read raised. */
-static tinypy_bool_t __tinypy_compiler_file_decoding(tinypy_compile_ctx_t *ctx, const uint8_t *rest, size_t size, int32_t cookie_line, tinypy_bool_t utf8, tinypy_value_t *encoding) {
-    size_t failure;
+static void __tinypy_compiler_stream_take(tinypy_compiler_stream_reader_t *reader, size_t end) {
+    reader->buffered_characters -= __tinypy_compiler_stream_characters(reader, reader->buffered, end);
+    reader->buffered = end;
+}
+//////////////////////////////////////////////////////////////////////////
+/* StreamReader.read(size, chars=size): stream reads of read_size bytes
+   until that many characters are buffered, then the first read_size of
+   them. A read whose data holds an invalid sequence raises unless, read for
+   a first line, the characters before the sequence make more than one line;
+   those are buffered, the rest is left for the next read. FALSE when a read
+   raises. */
+static tinypy_bool_t __tinypy_compiler_stream_read(tinypy_compiler_stream_reader_t *reader, size_t read_size, tinypy_bool_t first_line, size_t *out_end) {
+    reader->cached_lines = 0U;
+    while (reader->buffered_characters < read_size) {
+        size_t data_begin = reader->decoded;
+        size_t read_end = read_size < reader->size - reader->position ? reader->position + read_size : reader->size;
+        tinypy_bool_t eof = read_end == reader->position ? TINYPY_TRUE : TINYPY_FALSE;
 
-    if (utf8 != 0) {
-        if (__tinypy_compiler_utf8_valid(rest, size, &failure) != 0) {
-            return TINYPY_TRUE;
+        reader->position = read_end;
+        tinypy_bool_t invalid;
+        size_t decoded = __tinypy_compiler_stream_decode(reader, data_begin, read_end, &invalid);
+        if (invalid != 0 && (first_line == 0 || __tinypy_compiler_stream_line_count(reader, data_begin, decoded) <= 1U)) {
+            reader->error_begin = data_begin;
+            reader->error_end = read_end;
+            return TINYPY_FALSE;
         }
-    }
-    else {
-        failure = 0U;
-        while (failure < size && rest[failure] < 0x80U) {
-            failure += 1U;
-        }
-        if (failure == size) {
-            return TINYPY_TRUE;
-        }
-    }
-    size_t chunk = failure - failure % TINYPY_COMPILER_STREAM_READ_SIZE;
-    size_t carry = 0U;
-
-    if (utf8 != 0) {
-        /* A sequence cut by the previous read waits for this one. */
-        size_t lead;
-
-        for (lead = 1U; lead <= 3U && lead <= chunk; ++lead) {
-            uint8_t byte = rest[chunk - lead];
-
-            if ((byte & 0xc0U) == 0x80U) {
-                continue;
-            }
-            if (byte >= 0xc2U && byte <= 0xf4U && (byte < 0xe0U ? 2U : (byte < 0xf0U ? 3U : 4U)) > lead) {
-                carry = lead;
-            }
+        reader->buffered_characters += __tinypy_compiler_stream_characters(reader, data_begin, decoded);
+        reader->decoded = decoded;
+        if (eof != 0) {
             break;
         }
     }
-    size_t data_begin = chunk - carry;
-    size_t data_end = chunk + TINYPY_COMPILER_STREAM_READ_SIZE < size ? chunk + TINYPY_COMPILER_STREAM_READ_SIZE : size;
-    size_t prefix_lines = __tinypy_compiler_count_split_lines(rest + data_begin, failure - data_begin);
-    size_t returned_end = data_begin;
-    const uint8_t *data = rest + data_begin;
-    size_t data_size = data_end - data_begin;
-
-    if (prefix_lines > 1U) {
-        size_t pending = failure - data_begin;
-        size_t line_start = data_begin;
-
-        while (line_start != 0U && rest[line_start - 1U] != '\n' && rest[line_start - 1U] != '\r') {
-            line_start -= 1U;
+    size_t end = reader->buffered;
+    for (size_t count = 0U; count != read_size && end != reader->decoded; ++count) {
+        end += 1U;
+        while (end != reader->decoded && (reader->bytes[end] & 0xc0U) == 0x80U) {
+            end += 1U;
         }
-        pending += data_begin - line_start;
-        if (pending >= TINYPY_COMPILER_STREAM_READ_SIZE) {
-            returned_end = failure;
-        }
-        data = rest + failure;
-        data_size = (chunk + 2U * TINYPY_COMPILER_STREAM_READ_SIZE < size ? chunk + 2U * TINYPY_COMPILER_STREAM_READ_SIZE : size) - failure;
     }
+    __tinypy_compiler_stream_take(reader, end);
+    *out_end = end;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* StreamReader.readline: the first cached line, or the first line of reads
+   of 72 bytes, doubled while no line ends, which caches the further lines
+   when there are at least two of them. FALSE when a read raises. */
+static tinypy_bool_t __tinypy_compiler_stream_readline(tinypy_compiler_stream_reader_t *reader, size_t *out_begin, size_t *out_end) {
+    size_t line_begin = reader->buffered;
+    size_t scanned = line_begin;
+    size_t read_size = TINYPY_COMPILER_STREAM_READ_SIZE;
+
+    *out_begin = line_begin;
+    if (reader->cached_lines != 0U) {
+        size_t line_end = __tinypy_compiler_stream_line_end(reader, line_begin, reader->decoded);
+
+        reader->cached_lines = reader->cached_lines > 2U ? reader->cached_lines - 1U : 0U;
+        __tinypy_compiler_stream_take(reader, line_end);
+        *out_end = line_end;
+        return TINYPY_TRUE;
+    }
+    for (;;) {
+        size_t data_begin = reader->buffered;
+        size_t data_end;
+        if (__tinypy_compiler_stream_read(reader, read_size, TINYPY_TRUE, &data_end) == 0) {
+            return TINYPY_FALSE;
+        }
+        /* A line that may end with "\r\n" reads one more character. */
+        if (data_end != data_begin && reader->bytes[data_end - 1U] == '\r') {
+            if (__tinypy_compiler_stream_read(reader, 1U, TINYPY_FALSE, &data_end) == 0) {
+                return TINYPY_FALSE;
+            }
+        }
+        size_t line_end = __tinypy_compiler_stream_line_end(reader, scanned, data_end);
+        if (line_end != 0U) {
+            size_t further_lines = __tinypy_compiler_stream_line_count(reader, line_end, data_end);
+
+            reader->cached_lines = further_lines > 1U ? further_lines : 0U;
+            reader->buffered_characters += __tinypy_compiler_stream_characters(reader, line_end, data_end);
+            reader->buffered = line_end;
+            *out_end = line_end;
+            return TINYPY_TRUE;
+        }
+        if (data_end == data_begin) {
+            *out_end = data_end;
+            return TINYPY_TRUE;
+        }
+        scanned = data_end;
+        if (read_size < TINYPY_COMPILER_STREAM_READ_LIMIT) {
+            read_size *= 2U;
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* decoding_fgets reads a line of the tokenizer through readline calls until
+   one returns a newline or nothing, the first as decoding_feof checks for
+   the end of the file, and the line count tells the line a read that
+   raises fails. At the end of the file a sequence the file cuts is left in
+   bytebuffer, unread. */
+static tinypy_bool_t __tinypy_compiler_stream_lines(tinypy_compiler_stream_reader_t *reader, size_t *out_line_count) {
+    size_t line_count = 0U;
+
+    for (;;) {
+        *out_line_count = line_count;
+        size_t begin;
+        size_t end;
+        if (__tinypy_compiler_stream_readline(reader, &begin, &end) == 0) {
+            return TINYPY_FALSE;
+        }
+        if (begin == end) {
+            return TINYPY_TRUE;
+        }
+        while (reader->bytes[end - 1U] != '\n') {
+            if (__tinypy_compiler_stream_readline(reader, &begin, &end) == 0) {
+                return TINYPY_FALSE;
+            }
+            if (begin == end) {
+                break;
+            }
+        }
+        line_count += 1U;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* A file whose cookie names the UTF-8 or ASCII codec without a fast path is
+   read after the cookie line through the codec's StreamReader. The
+   tokenizer sees a read that raises on the line it reads then; without
+   one, the size of the text the reads decode, which leaves out a sequence
+   the end of the file cuts. */
+static tinypy_bool_t __tinypy_compiler_file_decoding(tinypy_compile_ctx_t *ctx, const uint8_t *rest, size_t size, int32_t cookie_line, tinypy_bool_t utf8, size_t *out_decoded_size) {
+    tinypy_compiler_stream_reader_t reader = {rest, size, utf8, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+
+    *out_decoded_size = size;
+    tinypy_bool_t invalid;
+    if (__tinypy_compiler_stream_decode(&reader, 0U, size, &invalid) == size) {
+        return TINYPY_TRUE;
+    }
+    size_t line_count;
+    if (__tinypy_compiler_stream_lines(&reader, &line_count) != 0) {
+        *out_decoded_size = reader.decoded;
+        return TINYPY_TRUE;
+    }
+    tinypy_value_t *encoding = TINYPY_RET(utf8 != 0 ? ctx->vm->internal_codec_utf8_name : ctx->vm->internal_codec_ascii_name);
     const char *message;
     size_t message_size;
-    if (__tinypy_compiler_decode(ctx, data, data_size, encoding, &message, &message_size) != 0) {
+    tinypy_bool_t decoded = __tinypy_compiler_decode(ctx, rest + reader.error_begin, reader.error_end - reader.error_begin, encoding, &message, &message_size);
+    TINYPY_DECREF(encoding);
+    if (decoded != 0) {
         return TINYPY_TRUE;
     }
     if (message == NULL) {
         return TINYPY_FALSE;
     }
-    ctx->source_decode_line = cookie_line + 1 + (int32_t)__tinypy_compiler_count_lines(rest, returned_end);
+    ctx->source_decode_line = cookie_line + 1 + (int32_t)line_count;
     ctx->source_decode_message = message;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_compiler_stderr(tinypy_compile_ctx_t *ctx) {
-    tinypy_vm_t *vm = ctx->vm;
-    tinypy_value_t *sys_module = tinypy_dict_get_optional(vm->modules, vm->internal_sys_key);
-
-    if (sys_module == NULL) {
-        return NULL;
-    }
-    tinypy_value_t *stderr_value = tinypy_module_get_value_key(sys_module, vm->internal_stderr_key);
-    return stderr_value;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_compiler_write_stderr(tinypy_compile_ctx_t *ctx, tinypy_value_t *stderr_value, const char *const *parts, const size_t *part_sizes, size_t part_count) {
-    tinypy_error_t *write_error = NULL;
-    size_t index;
-
-    for (index = 0U; index < part_count; ++index) {
-        if (tinypy_internal_output_write(stderr_value, parts[index], part_sizes[index], &write_error) == 0) {
-            ctx->failed = 1;
-            if (ctx->out_error != NULL) {
-                *ctx->out_error = write_error;
-            }
-            else if (write_error != NULL) {
-                tinypy_error_release(write_error);
-            }
-            return TINYPY_FALSE;
+/* Fails the compile with the error of a warning that could not be shown. */
+static tinypy_bool_t __tinypy_compiler_warning_error(tinypy_compile_ctx_t *ctx, tinypy_error_t *error) {
+    if (ctx->failed != 0 || ctx->out_error == NULL) {
+        if (error != NULL) {
+            tinypy_error_release(error);
         }
+        ctx->failed = 1;
+        return TINYPY_FALSE;
     }
-    return TINYPY_TRUE;
+    ctx->failed = 1;
+    *ctx->out_error = error;
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_compiler_is_space(uint8_t byte) {
+    tinypy_bool_t result = byte == ' ' || byte == '\t' || byte == 0x0bU || byte == 0x0cU ? TINYPY_TRUE : TINYPY_FALSE;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* warnings.showwarning writes the warning and the stripped line linecache
+   reads from the file to sys.stderr in one call. A None sys.stderr or a
+   write raising IOError or UnicodeError loses the warning; a missing
+   sys.stderr or any other failure fails the compile. */
 tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number) {
     static const char label[] = ": SyntaxWarning: ";
-    tinypy_value_t *stderr_value = __tinypy_compiler_stderr(ctx);
+    tinypy_vm_t *vm = ctx->vm;
     char line_buffer[16];
     size_t line_size = 0U;
     uint32_t line = line_number > 0 ? (uint32_t)line_number : UINT32_C(1);
-    const char *source_bytes;
-    size_t source_size;
 
+    if (vm->sys_module == NULL) {
+        return TINYPY_TRUE;
+    }
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *stderr_value = tinypy_object_get_attr_value(vm->sys_module, vm->internal_stderr_key, &error);
     if (stderr_value == NULL) {
+        tinypy_bool_t reported = __tinypy_compiler_warning_error(ctx, error);
+        return reported;
+    }
+    if (TINYPY_VALUE_KIND(stderr_value) == TINYPY_VALUE_NONE) {
+        TINYPY_DECREF(stderr_value);
         return TINYPY_TRUE;
     }
     do {
@@ -650,51 +813,77 @@ tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx,
         line /= UINT32_C(10);
         line_size += 1U;
     } while (line != 0U);
-    const char *parts[] = {ctx->logical_filename, ":", line_buffer + sizeof(line_buffer) - line_size, label, message, "\n"};
-    size_t sizes[] = {ctx->filename_size, 1U, line_size, sizeof(label) - 1U, strlen(message), 1U};
-    if (__tinypy_compiler_write_stderr(ctx, stderr_value, parts, sizes, 6U) == 0) {
+    const char *parts[] = {ctx->logical_filename, ":", line_buffer + sizeof(line_buffer) - line_size, label, message, "\n", "  ", NULL, "\n"};
+    size_t sizes[] = {ctx->filename_size, 1U, line_size, sizeof(label) - 1U, strlen(message), 1U, 2U, 0U, 1U};
+    size_t part_count = 6U;
+    size_t start;
+    size_t end;
+    tinypy_bool_t newline;
+    tinypy_bool_t found = __tinypy_compiler_program_line(&ctx->program_text, line_number, &start, &end, &newline);
+    if (found != 0 && (start != end || newline != 0)) {
+        while (start != end && __tinypy_compiler_is_space(ctx->program_text.bytes[start]) != 0) {
+            start += 1U;
+        }
+        while (end != start && __tinypy_compiler_is_space(ctx->program_text.bytes[end - 1U]) != 0) {
+            end -= 1U;
+        }
+        parts[7] = (const char *)ctx->program_text.bytes + start;
+        sizes[7] = end - start;
+        part_count = 9U;
+    }
+    char *text = __tinypy_compiler_join_parts(ctx, parts, sizes, part_count);
+    if (text == NULL) {
+        TINYPY_DECREF(stderr_value);
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", 0, 0, ctx->out_error);
         return TINYPY_FALSE;
     }
-    /* _Py_DisplaySourceLine: the line of the file without its indentation. */
-    __tinypy_compiler_source_line(&ctx->program_text, line_number, &source_bytes, &source_size);
-    if (source_bytes == NULL) {
+    size_t text_size = strlen(text);
+    tinypy_bool_t written = tinypy_internal_output_write(stderr_value, text, text_size, &error);
+    TINYPY_DECREF(stderr_value);
+    if (written != 0) {
         return TINYPY_TRUE;
     }
-    while (source_size != 0U && (*source_bytes == ' ' || *source_bytes == '\t' || *source_bytes == '\f')) {
-        source_bytes += 1;
-        source_size -= 1U;
+    if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_IO_ERROR, &error) != 0) {
+        return TINYPY_TRUE;
     }
-    if (source_size >= 2U && source_bytes[source_size - 2U] == '\r' && source_bytes[source_size - 1U] == '\n') {
-        source_size -= 2U;
+    if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_UNICODE_ERROR, &error) != 0) {
+        return TINYPY_TRUE;
     }
-    else if (source_size != 0U && (source_bytes[source_size - 1U] == '\n' || source_bytes[source_size - 1U] == '\r')) {
-        source_size -= 1U;
-    }
-    const char *line_parts[] = {"  ", source_bytes, "\n"};
-    size_t line_sizes[] = {2U, source_size, 1U};
-    tinypy_bool_t written = __tinypy_compiler_write_stderr(ctx, stderr_value, line_parts, line_sizes, 3U);
-    return written;
+    tinypy_bool_t reported = __tinypy_compiler_warning_error(ctx, error);
+    return reported;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The -t warning of the tokenizer, written once per file. */
+/* The -t warning of the tokenizer, written once per file like
+   PySys_WriteStderr: to the host stderr when sys.stderr is missing or its
+   write fails. */
 tinypy_bool_t tinypy_internal_compiler_tab_warning(tinypy_compile_ctx_t *ctx) {
     static const char label[] = ": inconsistent use of tabs and spaces in indentation\n";
-    tinypy_value_t *stderr_value = __tinypy_compiler_stderr(ctx);
+    tinypy_vm_t *vm = ctx->vm;
     const char *parts[] = {ctx->logical_filename, label};
     size_t sizes[] = {ctx->filename_size, sizeof(label) - 1U};
-
-    if (stderr_value == NULL) {
-        return TINYPY_TRUE;
-    }
     char *message = __tinypy_compiler_join_parts(ctx, parts, sizes, 2U);
+
     if (message == NULL) {
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "compiler diagnostic exceeds arena limit", 0, 0, ctx->out_error);
         return TINYPY_FALSE;
     }
-    size_t message_size = ctx->filename_size + sizeof(label) - 1U;
-    const char *message_parts[] = {message};
-    tinypy_bool_t written = __tinypy_compiler_write_stderr(ctx, stderr_value, message_parts, &message_size, 1U);
-    return written;
+    size_t message_size = sizes[0] + sizes[1];
+    tinypy_value_t *stderr_value = vm->sys_module != NULL ? tinypy_module_get_value_key(vm->sys_module, vm->internal_stderr_key) : NULL;
+    if (stderr_value != NULL) {
+        TINYPY_INCREF(stderr_value);
+        tinypy_error_t *error = NULL;
+        tinypy_bool_t written = tinypy_internal_output_write(stderr_value, message, message_size, &error);
+        TINYPY_DECREF(stderr_value);
+        if (written != 0) {
+            return TINYPY_TRUE;
+        }
+        if (error != NULL) {
+            tinypy_error_release(error);
+        }
+        tinypy_internal_exception_clear_raised(vm);
+    }
+    tinypy_output_emit(vm, TINYPY_OUTPUT_STDERR, message, message_size);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* A cookie the compiler cannot honour: the file tokenizer fails when it
@@ -778,6 +967,51 @@ static tinypy_bool_t __tinypy_compiler_apply_cookie(tinypy_compile_ctx_t *ctx, c
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The code point of a surrogate pair, which the UTF-8 of a unicode object
+   holds as two three-byte sequences, at bytes; zero when none starts there. */
+static uint32_t __tinypy_compiler_surrogate_pair(const uint8_t *bytes, size_t size) {
+    if (size < 6U || bytes[0] != 0xedU || (bytes[1] & 0xf0U) != 0xa0U || bytes[3] != 0xedU || (bytes[4] & 0xf0U) != 0xb0U) {
+        return 0U;
+    }
+    uint32_t high = ((uint32_t)(bytes[1] & 0x0fU) << 6U) | (uint32_t)(bytes[2] & 0x3fU);
+    uint32_t low = ((uint32_t)(bytes[4] & 0x0fU) << 6U) | (uint32_t)(bytes[5] & 0x3fU);
+    uint32_t code_point = UINT32_C(0x10000) + (high << 10U) + low;
+    return code_point;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyUnicode_AsUTF8String encodes a surrogate pair as the code point it
+   stands for: in the source of a unicode object, and in the lines the codec
+   of a cookie decodes, from begin on. */
+static const uint8_t *__tinypy_compiler_join_surrogates(tinypy_compile_ctx_t *ctx, const uint8_t *source, size_t size, size_t begin, size_t *out_size) {
+    size_t index = begin;
+
+    *out_size = size;
+    while (index < size && __tinypy_compiler_surrogate_pair(source + index, size - index) == 0U) {
+        index += 1U;
+    }
+    if (index == size) {
+        return source;
+    }
+    uint8_t *joined = (uint8_t *)tinypy_internal_compiler_arena_allocate_uninitialized(ctx, size);
+    if (joined == NULL) {
+        return NULL;
+    }
+    (void)memcpy(joined, source, index);
+    size_t joined_size = index;
+    while (index < size) {
+        uint32_t code_point = __tinypy_compiler_surrogate_pair(source + index, size - index);
+
+        if (code_point != 0U) {
+            joined_size += tinypy_internal_utf8_encode(code_point, joined + joined_size);
+            index += 6U;
+            continue;
+        }
+        joined[joined_size++] = source[index++];
+    }
+    *out_size = joined_size;
+    return joined;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx, const void *source, size_t source_size, tinypy_error_t **out_error) {
     const uint8_t *input = (const uint8_t *)source;
     const uint8_t *cookie = NULL;
@@ -794,6 +1028,7 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     size_t input_index;
     size_t output_size = 0U;
     tinypy_bool_t trailing_crlf = TINYPY_FALSE;
+    size_t universal_newlines_end = source_size;
 
     ctx->source.bytes = input;
     ctx->source.size = source_size;
@@ -804,6 +1039,12 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     if (source_size != 0U && memchr(source, '\0', source_size) != NULL) {
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_SYNTAX, "source code string cannot contain null bytes", 1, 1, out_error);
         return TINYPY_FALSE;
+    }
+    if (ctx->source_is_unicode != 0) {
+        input = __tinypy_compiler_join_surrogates(ctx, input, source_size, 0U, &source_size);
+        if (input == NULL) {
+            return TINYPY_FALSE;
+        }
     }
     if (source_size >= 3U && input[0] == 0xefU && input[1] == 0xbbU && input[2] == 0xbfU) {
         input_offset = 3U;
@@ -822,6 +1063,28 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         ctx->source_ascii_lines = INT32_MAX;
     }
     ctx->source_is_latin1 = latin1 != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    if (ctx->source_is_file != 0 && cookie != NULL && fast_path == 0) {
+        size_t rest_offset = input_offset + cookie_line_end;
+
+        /* decoding_feof asks the StreamReader for the next line, which ends
+           the file at once: an open token reads no further newline. The
+           tokenizer turns only the "\r\n" ending a line it reads, a newline
+           supplied at the end of the file included, to "\n". */
+        ctx->source_final_newline_added = TINYPY_TRUE;
+        universal_newlines_end = rest_offset;
+        if (codec == TINYPY_INTERNAL_BUILTIN_CODEC_ASCII || codec == TINYPY_INTERNAL_BUILTIN_CODEC_UTF8) {
+            size_t decoded_size;
+
+            if (__tinypy_compiler_file_decoding(ctx, input + rest_offset, source_size - rest_offset, cookie_line, codec == TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 ? TINYPY_TRUE : TINYPY_FALSE, &decoded_size) == 0) {
+                return TINYPY_FALSE;
+            }
+            source_size = rest_offset + decoded_size;
+            input = __tinypy_compiler_join_surrogates(ctx, input, source_size, rest_offset, &source_size);
+            if (input == NULL) {
+                return TINYPY_FALSE;
+            }
+        }
+    }
     /* Latin-1 bytes transcode to two UTF-8 bytes; a newline and the
        terminator may follow. */
     size_t expansion = latin1 != 0 ? 2U : 1U;
@@ -838,7 +1101,7 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     for (input_index = input_offset; input_index < source_size; ++input_index) {
         uint8_t byte = input[input_index];
 
-        if (byte == '\r') {
+        if (byte == '\r' && (input_index < universal_newlines_end || input_index + 1U == source_size || input[input_index + 1U] == '\n')) {
             if (input_index + 1U < source_size && input[input_index + 1U] == '\n') {
                 ++input_index;
                 trailing_crlf = input_index + 1U == source_size ? TINYPY_TRUE : TINYPY_FALSE;
@@ -872,35 +1135,23 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     output[output_size] = '\0';
     ctx->source.bytes = output;
     ctx->source.size = output_size;
-    if (codec != TINYPY_INTERNAL_BUILTIN_CODEC_ASCII && (codec != TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 || fast_path != 0)) {
+    if (ctx->source_is_file != 0 || (codec != TINYPY_INTERNAL_BUILTIN_CODEC_ASCII && (codec != TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 || fast_path != 0))) {
         return TINYPY_TRUE;
     }
     tinypy_bool_t utf8 = codec == TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *encoding = TINYPY_RET(utf8 != 0 ? ctx->vm->internal_codec_utf8_name : ctx->vm->internal_codec_ascii_name);
-    tinypy_bool_t prepared;
-    if (ctx->source_is_file != 0) {
-        prepared = __tinypy_compiler_file_decoding(ctx, input + cookie_line_end, source_size - cookie_line_end, cookie_line, utf8, encoding);
-    }
-    else {
-        /* translate_into_utf8 decodes the whole string before tokenizing. */
-        const char *message;
-        size_t message_size;
-        size_t decode_offset = 0U;
+    /* translate_into_utf8 decodes the whole string before tokenizing. */
+    const char *message;
+    size_t message_size;
+    tinypy_bool_t prepared = __tinypy_compiler_decode(ctx, output, output_size, encoding, &message, &message_size);
+    if (prepared == 0 && message != NULL) {
+        tinypy_compiler_stream_reader_t reader = {output, output_size, utf8, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+        tinypy_bool_t invalid;
+        size_t decode_offset = __tinypy_compiler_stream_decode(&reader, 0U, output_size, &invalid);
 
-        prepared = __tinypy_compiler_decode(ctx, output, output_size, encoding, &message, &message_size);
-        if (prepared == 0 && message != NULL) {
-            tinypy_internal_compiler_error_text(ctx, TINYPY_ERROR_SOURCE_DECODING, message, 0, 0, NULL, 0U, out_error);
-            if (utf8 != 0) {
-                (void)__tinypy_compiler_utf8_valid(output, output_size, &decode_offset);
-            }
-            else {
-                while (decode_offset < output_size && output[decode_offset] < 0x80U) {
-                    decode_offset += 1U;
-                }
-            }
-            if (out_error != NULL && *out_error != NULL) {
-                __tinypy_compiler_byte_position(output, decode_offset, &(*out_error)->line_number, &(*out_error)->column_offset);
-            }
+        tinypy_internal_compiler_error_text(ctx, TINYPY_ERROR_SOURCE_DECODING, message, 0, 0, NULL, 0U, out_error);
+        if (out_error != NULL && *out_error != NULL) {
+            __tinypy_compiler_byte_position(output, decode_offset, &(*out_error)->line_number, &(*out_error)->column_offset);
         }
     }
     TINYPY_DECREF(encoding);

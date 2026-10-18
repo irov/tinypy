@@ -58,6 +58,7 @@ tinypy_value_t *tinypy_generator_send(tinypy_value_t *generator_value, tinypy_va
 
     tinypy_vm_t *vm = TINYPY_VALUE_VM(generator_value);
     tinypy_generator_object_t *generator = TINYPY_GENERATOR_OBJECT(generator_value);
+    tinypy_value_t *sent = value != NULL ? value : &vm->none_object.base;
     TINYPY_CLEAR_ERROR(out_error);
     if (generator->running != 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "generator already executing", out_error);
@@ -66,12 +67,12 @@ tinypy_value_t *tinypy_generator_send(tinypy_value_t *generator_value, tinypy_va
     if (generator->finished != 0) {
         return NULL;
     }
-    if (generator->started == 0 && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_NONE) {
+    if (generator->started == 0 && TINYPY_VALUE_KIND(sent) != TINYPY_VALUE_NONE) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can't send non-None value to a just-started generator", out_error);
         return NULL;
     }
     generator->running = 1;
-    tinypy_value_t *result = tinypy_internal_eval_generator_resume(generator, value, NULL, NULL, NULL, &yielded, out_error);
+    tinypy_value_t *result = tinypy_internal_eval_generator_resume(generator, sent, NULL, NULL, NULL, &yielded, out_error);
     generator->running = 0;
     generator->started = 1;
     if (yielded != 0) {
@@ -124,7 +125,14 @@ static tinypy_value_t *__tinypy_generator_throw(tinypy_value_t *generator_value,
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_generator_throw(tinypy_value_t *generator_value, tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error) {
-    tinypy_value_t *result = __tinypy_generator_throw(generator_value, NULL, exception, traceback, out_error);
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_value_t *raised_traceback = NULL;
+    tinypy_value_t *value = tinypy_internal_exception_raise_arguments(exception, traceback, &raised_traceback, out_error);
+    if (value == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *result = __tinypy_generator_throw(generator_value, NULL, value, raised_traceback, out_error);
+    TINYPY_DECREF(value);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -152,7 +160,7 @@ tinypy_bool_t tinypy_generator_close(tinypy_value_t *generator_value, tinypy_err
     if (exception == NULL) {
         return TINYPY_FALSE;
     }
-    result = tinypy_generator_throw(generator_value, exception, NULL, out_error);
+    result = __tinypy_generator_throw(generator_value, NULL, exception, NULL, out_error);
     TINYPY_DECREF(exception);
     if (result != NULL) {
         TINYPY_DECREF(result);

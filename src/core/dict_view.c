@@ -77,28 +77,64 @@ static tinypy_bool_t __tinypy_dict_view_is_set_like(const tinypy_value_t *value)
     return kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET || kind == TINYPY_VALUE_DICT_KEYS || kind == TINYPY_VALUE_DICT_ITEMS ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_dict_view_set_like_size(const tinypy_value_t *value) {
+/* PyObject_Size of the other operand of a view comparison: a set subclass
+   may override __len__, whose result slot_sq_length converts with
+   PyInt_AsSsize_t. */
+static tinypy_bool_t __tinypy_dict_view_set_like_size(tinypy_value_t *value, int64_t *out_size, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
-    if (kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
-        size_t return_value_1 = tinypy_set_size(value);
-        return return_value_1;
+    if (kind != TINYPY_VALUE_SET && kind != TINYPY_VALUE_FROZENSET) {
+        *out_size = (int64_t)TINYPY_DICT_SIZE(TINYPY_DICT_VIEW_OBJECT(value)->dict);
+        return TINYPY_TRUE;
     }
-    size_t return_value_2 = TINYPY_DICT_SIZE(TINYPY_DICT_VIEW_OBJECT((tinypy_value_t *)value)->dict);
-    return return_value_2;
+    if (__tinypy_internal_object_overrides_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(LENGTH)) == 0) {
+        *out_size = (int64_t)tinypy_set_size(value);
+        return TINYPY_TRUE;
+    }
+    tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_length_key, out_error);
+    if (method == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
+    tinypy_value_t *result = tinypy_call(method, empty, NULL, out_error);
+    TINYPY_DECREF(empty);
+    TINYPY_DECREF(method);
+    if (result == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t converted = tinypy_internal_number_as_ssize(result, out_size, out_error);
+    TINYPY_DECREF(result);
+    if (converted == 0) {
+        return TINYPY_FALSE;
+    }
+    if (*out_size < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__() should return >= 0", out_error);
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PySequence_Contains of an operand of a view comparison: a view or an exact
+   set cannot override __contains__, a set subclass may. */
 static int32_t __tinypy_dict_view_set_like_contains(tinypy_value_t *value, tinypy_value_t *item, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
-    if (kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
-        int32_t return_value_1 = tinypy_set_contains(value, item, out_error);
-        return return_value_1;
+    if (kind == TINYPY_VALUE_DICT_KEYS || kind == TINYPY_VALUE_DICT_ITEMS) {
+        int32_t view_contains = tinypy_internal_dict_view_contains(value, item, out_error);
+        return view_contains;
     }
-    int32_t return_value_2 = tinypy_internal_dict_view_contains(value, item, out_error);
-    return return_value_2;
+    if (value->type == &vm->types[TINYPY_VALUE_SET] || value->type == &vm->types[TINYPY_VALUE_FROZENSET]) {
+        int32_t set_contains = tinypy_set_contains(value, item, out_error);
+        return set_contains;
+    }
+    int32_t contains = tinypy_contains(value, item, out_error);
+    return contains;
 }
 //////////////////////////////////////////////////////////////////////////
+/* all_contained_in: every item the iteration of left gives is in right, as
+   PySequence_Contains finds it. */
 static tinypy_bool_t __tinypy_dict_view_subset_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_subset, tinypy_error_t **out_error) {
     tinypy_value_t *iterator = tinypy_iter(left, out_error);
     tinypy_error_t *iteration_error = NULL;
@@ -134,20 +170,33 @@ static tinypy_bool_t __tinypy_dict_view_subset_checked(tinypy_value_t *left, tin
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* dictview_richcompare of a view and a set-like operand, which a set on the
+   left reaches reflected: the view is measured first, and the other operand
+   is measured, searched and iterated through its own protocol. */
 tinypy_bool_t tinypy_internal_set_like_compare_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_bool_t *out_result, tinypy_error_t **out_error) {
-    size_t left_size;
-    size_t right_size;
+    static const tinypy_compare_operation_e reflected[] = {TINYPY_COMPARE_GREATER, TINYPY_COMPARE_GREATER_EQUAL, TINYPY_COMPARE_EQUAL, TINYPY_COMPARE_NOT_EQUAL, TINYPY_COMPARE_LESS, TINYPY_COMPARE_LESS_EQUAL};
+    int64_t left_size;
+    int64_t right_size;
     tinypy_bool_t subset;
 
     TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_dict_view_is_set_like(left) == 0 || __tinypy_dict_view_is_set_like(right) == 0 || operation > TINYPY_COMPARE_GREATER_EQUAL) {
         return TINYPY_FALSE;
     }
-    left_size = __tinypy_dict_view_set_like_size(left);
-    right_size = __tinypy_dict_view_set_like_size(right);
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_SET || TINYPY_VALUE_KIND(left) == TINYPY_VALUE_FROZENSET) {
+        tinypy_value_t *view = right;
+
+        right = left;
+        left = view;
+        operation = reflected[(size_t)operation];
+    }
+    left_size = (int64_t)TINYPY_DICT_SIZE(TINYPY_DICT_VIEW_OBJECT(left)->dict);
+    if (__tinypy_dict_view_set_like_size(right, &right_size, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
     if (operation == TINYPY_COMPARE_GREATER || operation == TINYPY_COMPARE_GREATER_EQUAL) {
         tinypy_value_t *temporary_value = left;
-        size_t temporary_size = left_size;
+        int64_t temporary_size = left_size;
 
         left = right;
         right = temporary_value;

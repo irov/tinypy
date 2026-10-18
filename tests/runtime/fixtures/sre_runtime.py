@@ -189,3 +189,20 @@ scanner = repeated.scanner(shrinking)
 assert scanner.match().span() == (0, 0)
 del shrinking[2:]
 assert [scanner.match().span(), scanner.match().span(), scanner.match()] == [(1, 1), (2, 2), None]
+
+# A program of 100 groups may set marks 200 and 201, which CPython 2.7 writes
+# past its array of marks.
+last_marks = _sre.compile("(a)", 0, [21, 200, 19, 97, 21, 201, 1], 100)
+found = last_marks.match("a")
+assert (found.span(), found.lastindex, found.group(100)) == ((0, 1), 101, None)
+
+
+# groupdict lists the names keys() gives in any iterable; CPython 2.7 reads
+# them as a list.
+class IteratedNames(dict):
+    def keys(self):
+        return (name for name in ("second", "first"))
+
+
+pair = _sre.compile("(a)(b)", 0, [21, 0, 19, 97, 21, 1, 21, 2, 19, 98, 21, 3, 1], 2, IteratedNames(first=1, second=2))
+assert pair.match("ab").groupdict() == {"first": "a", "second": "b"}

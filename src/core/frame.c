@@ -367,6 +367,24 @@ void tinypy_internal_frame_locals_to_fast(tinypy_frame_object_t *frame) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* map_to_dict: the names of a group go from the last to the first, until
+   the frame drops the snapshot. */
+static void __tinypy_internal_frame_sync_group(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *locals, tinypy_value_t *names, size_t first_slot, tinypy_bool_t cells) {
+    for (size_t index = TINYPY_TUPLE_SIZE(names); index != 0U && frame->locals == locals; --index) {
+        tinypy_value_t *value = frame->locals_plus[first_slot + index - 1U];
+
+        if (cells != 0 && value != NULL) {
+            value = tinypy_cell_get(value);
+        }
+        __tinypy_internal_frame_sync_local(vm, locals, TINYPY_TUPLE_GET(names, index - 1U), value);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* A stale value the sync replaces may run a finalizer that finishes the
+   generator of the frame, which then lets the frame and the snapshot go:
+   both are held meanwhile, the names left keep what the snapshot had and the
+   frame takes it back. A frame that nothing else holds by then has no
+   locals to lend. */
 tinypy_value_t *tinypy_internal_frame_locals(tinypy_frame_object_t *frame) {
     tinypy_value_t *code = frame->code;
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
@@ -375,30 +393,28 @@ tinypy_value_t *tinypy_internal_frame_locals(tinypy_frame_object_t *frame) {
     tinypy_value_t *freevars = TINYPY_CODE_FREEVARS(code);
     size_t local_count = (size_t)TINYPY_CODE_LOCAL_COUNT(code);
     size_t cell_count = TINYPY_TUPLE_SIZE(cellvars);
-    size_t free_count = TINYPY_TUPLE_SIZE(freevars);
-    size_t index;
 
     if (frame->locals == NULL) {
         frame->locals = tinypy_dict_new(vm);
     }
-    for (index = 0U; index < local_count; ++index) {
-        __tinypy_internal_frame_sync_local(vm, frame->locals, TINYPY_TUPLE_GET(varnames, index), frame->locals_plus[index]);
+    tinypy_value_t *locals = TINYPY_RET(frame->locals);
+    TINYPY_INCREF(&frame->base.base);
+    __tinypy_internal_frame_sync_group(vm, frame, locals, varnames, 0U, TINYPY_FALSE);
+    if (cell_count != 0U) {
+        __tinypy_internal_frame_sync_group(vm, frame, locals, cellvars, local_count, TINYPY_TRUE);
     }
-    for (index = 0U; index < cell_count; ++index) {
-        tinypy_value_t *cell = frame->locals_plus[local_count + index];
-        tinypy_value_t *content = cell != NULL ? tinypy_cell_get(cell) : NULL;
-
-        __tinypy_internal_frame_sync_local(vm, frame->locals, TINYPY_TUPLE_GET(cellvars, index), content);
+    if ((TINYPY_CODE_FLAGS(code) & TINYPY_CODE_OPTIMIZED) != 0 && TINYPY_TUPLE_SIZE(freevars) != 0U) {
+        __tinypy_internal_frame_sync_group(vm, frame, locals, freevars, local_count + cell_count, TINYPY_TRUE);
     }
-    if ((TINYPY_CODE_FLAGS(code) & TINYPY_CODE_OPTIMIZED) != 0) {
-        for (index = 0U; index < free_count; ++index) {
-            tinypy_value_t *cell = frame->locals_plus[local_count + cell_count + index];
-            tinypy_value_t *content = cell != NULL ? tinypy_cell_get(cell) : NULL;
-
-            __tinypy_internal_frame_sync_local(vm, frame->locals, TINYPY_TUPLE_GET(freevars, index), content);
-        }
+    if (frame->locals == NULL) {
+        frame->locals = locals;
     }
-    return frame->locals;
+    else {
+        TINYPY_DECREF(locals);
+    }
+    tinypy_value_t *result = TINYPY_REFCNT(&frame->base.base) > 1 ? frame->locals : NULL;
+    TINYPY_DECREF(&frame->base.base);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_value_t *globals, tinypy_value_t *locals, int32_t function_frame) {

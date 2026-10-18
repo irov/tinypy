@@ -222,7 +222,7 @@ void tinypy_internal_unicode_destroy(tinypy_value_t *value) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, tinypy_bool_t checked, size_t *out_size, tinypy_error_t **out_error) {
+const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, size_t *out_size, tinypy_error_t **out_error) {
     tinypy_unicode_object_t *unicode = TINYPY_UNICODE_OBJECT(value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     size_t count = TINYPY_SIZED_SIZE(value);
@@ -236,9 +236,7 @@ const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, tiny
         return unicode->utf8;
     }
     if (unicode->native_buffer == NULL) {
-        uint32_t *native = checked != 0
-            ? (uint32_t *)__tinypy_internal_vm_allocate_checked(vm, *out_size, out_error)
-            : (uint32_t *)tinypy_internal_vm_allocate(vm, *out_size);
+        uint32_t *native = (uint32_t *)__tinypy_internal_vm_allocate_checked(vm, *out_size, out_error);
         if (native == NULL) {
             return NULL;
         }

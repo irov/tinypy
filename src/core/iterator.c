@@ -1462,14 +1462,24 @@ static tinypy_value_t *__tinypy_xrange_iter_method(tinypy_value_t *function, tin
     return return_value;
 }
 //////////////////////////////////////////////////////////////////////////
+/* wrap_sq_item of xrange_item: the argument is converted with
+   PyNumber_AsSsize_t and OverflowError before the item is read. */
 static tinypy_value_t *__tinypy_xrange_getitem_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *return_value = tinypy_internal_get_item_builtin(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), out_error);
-    return return_value;
+    int64_t index;
+    if (tinypy_internal_number_as_index(TINYPY_TUPLE_GET(args, 1U), TINYPY_ERROR_OVERFLOW, &index, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *position = tinypy_integer_from_i64(vm, index);
+    tinypy_value_t *result = tinypy_internal_get_item_builtin(TINYPY_TUPLE_GET(args, 0U), position, out_error);
+
+    TINYPY_DECREF(position);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_xrange_len_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {

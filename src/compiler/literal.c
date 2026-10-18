@@ -31,6 +31,10 @@ static void __tinypy_compiler_byte_escape_error(tinypy_compile_ctx_t *ctx, const
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_compiler_unicode_escape_error(tinypy_compile_ctx_t *ctx, const uint8_t *source, size_t size, size_t start, size_t end, tinypy_bool_t raw, const char *reason, int32_t line_number) {
+    /* The raw decoder reports an escape from the first backslash of its run. */
+    while (raw != 0 && start != 0U && source[start - 1U] == '\\') {
+        start -= 1U;
+    }
     tinypy_value_t *encoding = TINYPY_RET(raw != 0 ? ctx->vm->internal_codec_raw_unicode_escape_name : ctx->vm->internal_codec_unicode_escape_name);
     tinypy_value_t *input = tinypy_string_from_bytes(ctx->vm, source, size);
     tinypy_value_t *start_value = tinypy_integer_from_i64(ctx->vm, (int64_t)start);
@@ -38,14 +42,15 @@ static void __tinypy_compiler_unicode_escape_error(tinypy_compile_ctx_t *ctx, co
     tinypy_value_t *reason_value = tinypy_string_from_bytes(ctx->vm, reason, strlen(reason));
     tinypy_value_t *items[] = {encoding, input, start_value, end_value, reason_value};
     tinypy_value_t *args = tinypy_tuple_from_items(ctx->vm, items, 5U);
-    tinypy_value_t *exception = tinypy_exception_new(ctx->vm->exception_types[TINYPY_EXCEPTION_UNICODE_DECODE_ERROR], args, ctx->out_error);
+    tinypy_error_t *exception_error = NULL;
+    tinypy_value_t *exception = tinypy_exception_new(ctx->vm->exception_types[TINYPY_EXCEPTION_UNICODE_DECODE_ERROR], args, &exception_error);
 
     if (exception != NULL) {
         tinypy_internal_compiler_decode_error(ctx, exception, line_number, TINYPY_TRUE);
         TINYPY_DECREF(exception);
     }
     else {
-        ctx->failed = TINYPY_TRUE;
+        tinypy_internal_compiler_operation_error(ctx, TINYPY_ERROR_MEMORY, exception_error, "memory allocation failed", 0, 0);
     }
     TINYPY_DECREF(args);
     TINYPY_DECREF(reason_value);
@@ -56,7 +61,9 @@ static void __tinypy_compiler_unicode_escape_error(tinypy_compile_ctx_t *ctx, co
 }
 //////////////////////////////////////////////////////////////////////////
 /* Prepare the byte domain consumed by the Python 2 Unicode escape decoder.
-   UTF-8 characters occupy ten escape bytes; Latin-1 characters occupy one. */
+   UTF-8 characters occupy ten escape bytes; Latin-1 characters occupy one.
+   Like decode_unicode, a backslash takes the next character along: an ASCII
+   one unchanged, a UTF-8 one as the escape of the backslash itself. */
 static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx_t *ctx, const uint8_t *source, size_t size, size_t *out_size, int32_t line_number, int32_t column_offset) {
     static const char hex[] = "0123456789abcdef";
     size_t first_non_ascii = 0U;
@@ -85,10 +92,16 @@ static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx
         if (byte < 0x80U) {
             prepared[output_size++] = byte;
             offset += 1U;
-            if (ctx->source_is_latin1 == 0 && byte == '\\' && offset < size && source[offset] >= 0x80U) {
-                (void)memcpy(prepared + output_size, "u005c", 5U);
-                output_size += 5U;
+            if (ctx->source_is_latin1 != 0 || byte != '\\' || offset == size) {
+                continue;
             }
+            if (source[offset] < 0x80U) {
+                prepared[output_size++] = source[offset];
+                offset += 1U;
+                continue;
+            }
+            (void)memcpy(prepared + output_size, "u005c", 5U);
+            output_size += 5U;
             continue;
         }
         uint32_t code_point;
@@ -110,6 +123,9 @@ static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx
 
             if (decoded == NULL && ctx->vm->raised_value != NULL) {
                 tinypy_internal_compiler_decode_error(ctx, ctx->vm->raised_value, line_number, TINYPY_TRUE);
+            }
+            else if (decoded == NULL) {
+                tinypy_internal_compiler_memory_error(ctx);
             }
             if (decode_error != NULL) {
                 tinypy_error_release(decode_error);
@@ -632,10 +648,15 @@ static tinypy_bool_t __tinypy_compiler_concat_ascii(tinypy_compile_ctx_t *ctx, t
     }
     tinypy_bool_t ascii = tinypy_internal_text_ascii_compatible(ctx->vm, operand, NULL);
     TINYPY_DECREF(operand);
-    if (ascii == 0 && ctx->vm->raised_value != NULL) {
-        tinypy_internal_compiler_decode_error(ctx, ctx->vm->raised_value, line_number, TINYPY_TRUE);
+    if (ascii != 0) {
+        return TINYPY_TRUE;
     }
-    return ascii;
+    if (ctx->vm->raised_value == NULL) {
+        tinypy_internal_compiler_memory_error(ctx);
+        return TINYPY_FALSE;
+    }
+    tinypy_internal_compiler_decode_error(ctx, ctx->vm->raised_value, line_number, TINYPY_TRUE);
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Adjacent literals, which parsestrplus folds pairwise, joined at once with
@@ -656,18 +677,18 @@ tinypy_value_t *tinypy_internal_compiler_parse_strings(tinypy_compile_ctx_t *ctx
         if (part == NULL) {
             break;
         }
-        parts[parsed++] = part;
         tinypy_bool_t part_unicode = TINYPY_VALUE_KIND(part) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
-        if (parsed == 1U) {
-            unicode = part_unicode;
-        }
-        else if (part_unicode != unicode) {
+        if (parsed != 0U && part_unicode != unicode) {
             tinypy_bool_t ascii = part_unicode != 0
-                ? __tinypy_compiler_concat_ascii(ctx, parts, parsed - 1U, line_number)
+                ? __tinypy_compiler_concat_ascii(ctx, parts, parsed, line_number)
                 : __tinypy_compiler_concat_ascii(ctx, &part, 1U, line_number);
             if (ascii == 0) {
+                TINYPY_DECREF(part);
                 break;
             }
+        }
+        parts[parsed++] = part;
+        if (part_unicode != 0) {
             unicode = TINYPY_TRUE;
         }
         if (TINYPY_TEXT_BYTE_SIZE(part) != 0U) {

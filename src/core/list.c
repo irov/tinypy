@@ -25,21 +25,6 @@ void tinypy_internal_list_destroy(tinypy_value_t *value) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_list_swap_contents(tinypy_value_t *left, tinypy_value_t *right) {
-    tinypy_value_t **items = TINYPY_LIST_OBJECT(left)->items;
-    size_t size = TINYPY_SIZED_SIZE(left);
-    size_t allocated = TINYPY_LIST_OBJECT(left)->allocated;
-
-    TINYPY_LIST_OBJECT(left)->items = TINYPY_LIST_OBJECT(right)->items;
-    TINYPY_SIZED_SIZE(left) = TINYPY_SIZED_SIZE(right);
-    TINYPY_LIST_OBJECT(left)->allocated = TINYPY_LIST_OBJECT(right)->allocated;
-    TINYPY_LIST_OBJECT(left)->mutation_version += UINT64_C(1);
-    TINYPY_LIST_OBJECT(right)->items = items;
-    TINYPY_SIZED_SIZE(right) = size;
-    TINYPY_LIST_OBJECT(right)->allocated = allocated;
-    TINYPY_LIST_OBJECT(right)->mutation_version += UINT64_C(1);
-}
-//////////////////////////////////////////////////////////////////////////
 static inline size_t __tinypy_internal_list_storage_size(size_t capacity) {
     return capacity * sizeof(tinypy_value_t *);
 }

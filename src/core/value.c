@@ -263,6 +263,31 @@ tinypy_bool_t tinypy_internal_value_is_vm_embedded(const tinypy_vm_t *vm, const 
     return embedded;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A finalizer counts towards the trashcan of the releases it runs. */
+static void __tinypy_internal_value_finalizer_enter(tinypy_vm_t *vm) {
+    vm->finalizer_depth += 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Py_TRASHCAN_SAFE_END: the outermost finalizer, before it lets its object
+   go, releases the objects that nested ones left. Those count as nested in
+   turn, so that what their releases leave joins the loop. */
+static TINYPY_NOINLINE void __tinypy_internal_value_release_pending_finalizations(tinypy_vm_t *vm) {
+    while (vm->pending_finalizations != NULL) {
+        tinypy_value_t *pending = vm->pending_finalizations;
+
+        vm->pending_finalizations = (tinypy_value_t *)(uintptr_t)pending->ref;
+        pending->ref = 0;
+        tinypy_internal_value_release_zero(pending);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_internal_value_finalizer_leave(tinypy_vm_t *vm) {
+    if (vm->finalizer_depth == 1U && vm->pending_finalizations != NULL) {
+        __tinypy_internal_value_release_pending_finalizations(vm);
+    }
+    vm->finalizer_depth -= 1U;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_internal_exception_state_t exception_state;
@@ -293,6 +318,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
         value->ref -= 1U;
         return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
     }
+    __tinypy_internal_value_finalizer_enter(vm);
     tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_del_key, &error);
     if (method != NULL) {
         args = TINYPY_RET_EMPTY_TUPLE(vm);
@@ -310,6 +336,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
         tinypy_internal_output_unraisable(vm, value);
         tinypy_error_release(error);
     }
+    __tinypy_internal_value_finalizer_leave(vm);
     tinypy_internal_exception_preserve_end(vm, &exception_state);
     value->ref -= 1U;
     return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
@@ -317,22 +344,31 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
 //////////////////////////////////////////////////////////////////////////
 /* A generator abandoned while suspended is closed first, so that try/finally
    and with blocks in its body still run, as gen_dealloc does in Python 2.7. */
-static tinypy_bool_t __tinypy_internal_value_finalize_generator(tinypy_value_t *value) {
+static tinypy_bool_t __tinypy_internal_value_generator_suspended(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_generator_object_t *generator = TINYPY_GENERATOR_OBJECT(value);
+
+    tinypy_bool_t suspended = vm->state == TINYPY_VM_STATE_LIVE && generator->running == 0 && generator->finished == 0 && generator->frame != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    return suspended;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_value_finalize_generator(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_internal_exception_state_t exception_state;
     tinypy_error_t *error = NULL;
 
-    if (vm->state != TINYPY_VM_STATE_LIVE || generator->running != 0 || generator->finished != 0 || generator->frame == NULL) {
+    if (__tinypy_internal_value_generator_suspended(value) == 0) {
         return TINYPY_FALSE;
     }
     value->ref = 1;
     tinypy_internal_exception_preserve_begin(vm, &exception_state);
+    __tinypy_internal_value_finalizer_enter(vm);
     (void)tinypy_generator_close(value, &error);
     if (error != NULL) {
         tinypy_internal_output_unraisable(vm, value);
         tinypy_error_release(error);
     }
+    __tinypy_internal_value_finalizer_leave(vm);
     tinypy_internal_exception_preserve_end(vm, &exception_state);
     value->ref -= 1U;
     return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
@@ -383,34 +419,91 @@ static tinypy_bool_t __tinypy_internal_value_native_finalized(const tinypy_value
     return finalized;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Runs the generator close, __del__ and native finalizers of a dying object;
-   returns TRUE when one of them resurrected it. */
-static tinypy_bool_t __tinypy_internal_value_run_finalizers(tinypy_value_t *value) {
+/* Whether the __del__ of a dying object may have to run: the memo of its
+   type says so or is out of date. */
+static tinypy_bool_t __tinypy_internal_value_may_have_del(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = value->type;
 
+    tinypy_bool_t may_have_del = vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_version != type->version || type->version == 0U || type->has_finalizer != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) && __tinypy_internal_value_native_finalized(value) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return may_have_del;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_internal_value_has_native_finalizer(tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    tinypy_bool_t has_finalizer = (kind == TINYPY_VALUE_NATIVE_INSTANCE && value->type->native_spec.finalize != NULL)
+        || (kind == TINYPY_VALUE_NATIVE_FUNCTION && TINYPY_NATIVE_FUNCTION_OBJECT(value)->finalize != NULL) ? TINYPY_TRUE : TINYPY_FALSE;
+    return has_finalizer;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Py_TRASHCAN_SAFE_BEGIN: a finalizer nested too deep leaves a dying object
+   whose generator close or __del__ is known to run, once no weak reference
+   reaches it, to the outermost finalizer, linked through its ref word, so
+   that a long chain of them does not exhaust the native stack. Whether a type
+   has __del__ is taken from its last lookup, made by class creation, rebases
+   and finalizers, rather than from a current memo, which a __del__ assigning
+   a class attribute withdraws. A value with a native finalizer runs it at
+   once: until then the host may hand the value back to Python. */
+static TINYPY_NOINLINE tinypy_bool_t __tinypy_internal_value_defer_finalizers(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    tinypy_value_t **weakrefs = tinypy_internal_weakref_head_slot(value);
+    tinypy_bool_t known;
+
+    if ((weakrefs != NULL && *weakrefs != NULL) || __tinypy_internal_value_has_native_finalizer(value) != 0) {
+        return TINYPY_FALSE;
+    }
+    if (kind == TINYPY_VALUE_GENERATOR) {
+        known = __tinypy_internal_value_generator_suspended(value);
+    }
+    else if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+        known = tinypy_internal_old_instance_has_special_key(value, vm->internal_special_del_key);
+    }
+    else {
+        known = value->type->has_finalizer;
+    }
+    if (known == 0) {
+        return TINYPY_FALSE;
+    }
+    value->ref = (tinypy_ref_t)(uintptr_t)vm->pending_finalizations;
+    vm->pending_finalizations = value;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Runs the generator close, __del__ and native finalizers of a dying object;
+   returns TRUE when one of them resurrected it or the object waits for
+   them. */
+static tinypy_bool_t __tinypy_internal_value_run_finalizers(tinypy_value_t *value) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_GENERATOR && __tinypy_internal_value_may_have_del(value) == 0 && __tinypy_internal_value_has_native_finalizer(value) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (vm->finalizer_depth >= TINYPY_FINALIZER_DEFER_DEPTH && __tinypy_internal_value_defer_finalizers(value) != 0) {
+        return TINYPY_TRUE;
+    }
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_GENERATOR && __tinypy_internal_value_finalize_generator(value) != 0) {
         return TINYPY_TRUE;
     }
-    if (vm->internal_special_del_key != NULL && type->dict != NULL && vm->exception_types[TINYPY_EXCEPTION_BASE] != NULL && (type->finalizer_version != type->version || type->version == 0U || type->has_finalizer != 0 || TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) && __tinypy_internal_value_native_finalized(value) == 0) {
-        if (__tinypy_internal_value_finalize(value) != 0) {
-            /* A native instance resurrected before its finalizer still
-               needs one, as a new instance does. */
-            if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && value->type->native_spec.finalize != NULL) {
-                vm->native_finalizable_created += 1U;
-            }
-            return TINYPY_TRUE;
+    if (__tinypy_internal_value_may_have_del(value) != 0 && __tinypy_internal_value_finalize(value) != 0) {
+        /* A native instance resurrected before its finalizer still needs
+           one, as a new instance does. */
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && value->type->native_spec.finalize != NULL) {
+            vm->native_finalizable_created += 1U;
         }
+        return TINYPY_TRUE;
     }
-    if ((TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE && value->type->native_spec.finalize != NULL)
-        || (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_FUNCTION && TINYPY_NATIVE_FUNCTION_OBJECT(value)->finalize != NULL)) {
+    if (__tinypy_internal_value_has_native_finalizer(value) != 0) {
         value->ref = 1;
+        __tinypy_internal_value_finalizer_enter(vm);
         if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE) {
             tinypy_internal_native_instance_finalize(value);
         }
         else {
             tinypy_internal_native_function_finalize(value);
         }
+        __tinypy_internal_value_finalizer_leave(vm);
         value->ref -= 1U;
         if (value->ref != 0U) {
             return TINYPY_TRUE;
@@ -420,7 +513,8 @@ static tinypy_bool_t __tinypy_internal_value_run_finalizers(tinypy_value_t *valu
 }
 //////////////////////////////////////////////////////////////////////////
 /* Clears the weak references of a dying object and runs its finalizers;
-   returns TRUE when one of them resurrected it. */
+   returns TRUE when one of them resurrected it or the object waits for
+   them. */
 static tinypy_bool_t __tinypy_internal_value_release_finalize(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = value->type;

@@ -110,6 +110,18 @@ class NumericSemantics(unittest.TestCase):
         self.assertEqual(cmp(nan, Compared(5)), -1)
         self.assertEqual(cmp(Compared(5), big), 1)
 
+    def test_division_by_two_digit_divisors(self):
+        for divisor in (2 ** 15, 2 ** 15 + 1, 1000003, 10 ** 9 + 7, 2 ** 30 - 1, -(2 ** 15), -(10 ** 9 + 7)):
+            for value in (3 ** 130, -(3 ** 130), 2 ** 64 - 1, -(2 ** 45), 10 ** 30 + 7, 2 ** 30 - 1, 2 ** 30, 1L, 0L):
+                quotient, remainder = divmod(value, divisor)
+                self.assertEqual((quotient * divisor + remainder, abs(remainder) < abs(divisor), remainder * divisor >= 0), (value, True, True))
+                self.assertEqual((value // divisor, value % divisor), (quotient, remainder))
+
+    def test_integral_float_hashes_as_the_integer(self):
+        for value in (0, 1, -1, -2, 2 ** 52 + 1, 2 ** 53, 2 ** 62, -(2 ** 62), 2 ** 63 - 1024, -(2 ** 63), 2 ** 63,
+                      -(2 ** 63) - 2048, 2 ** 64, 2 ** 70 + 2 ** 20, -(2 ** 100), 2 ** 1023):
+            self.assertEqual((hash(float(value)), hash(-float(value))), (hash(value), hash(-value)))
+
     def test_float_str_keeps_the_zeros_of_a_tie_rounded_down(self):
         for value, text in ((1000000000005.0, '1.00000000000e+12'), (1039816169405.0, '1.03981616940e+12'),
                             (10000000000050.0, '1.00000000000e+13'), (100000000000500.0, '1.00000000000e+14'),

@@ -746,8 +746,10 @@ static inline void __tinypy_internal_dict_replace_value(tinypy_vm_t *vm, tinypy_
    examined as it is now: a key comparison of the lookup may have filled the
    free slot, and a live entry there only takes the new value. A growing table
    is allocated before anything is stored, so running out of memory leaves the
-   dictionary as it was; an unchecked table ignores the heap budget. Takes the
-   reference to the value. */
+   dictionary as it was; an unchecked table ignores the heap budget. Without
+   grow the table still grows rather than lose its last empty slot, which
+   ends every probe: a key comparison may have shrunk the table that the
+   caller sized for its entries. Takes the reference to the value. */
 static tinypy_bool_t __tinypy_internal_dict_store(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, size_t index, size_t used, tinypy_bool_t grow, tinypy_bool_t checked, tinypy_error_t **out_error) {
     tinypy_dict_object_t *object = TINYPY_DICT_OBJECT(dict);
     tinypy_dict_entry_t *entry = &object->table[index];
@@ -758,7 +760,7 @@ static tinypy_bool_t __tinypy_internal_dict_store(tinypy_vm_t *vm, tinypy_value_
     size_t capacity = 0U;
     tinypy_value_t *previous = NULL;
 
-    if (grow != 0 && used_after > used && fill_after * 3U >= (object->mask + 1U) * 2U) {
+    if (grow != 0 ? used_after > used && fill_after * 3U >= (object->mask + 1U) * 2U : fill_after > object->mask) {
         size_t growth = used_after > 50000U ? 2U : 4U;
 
         if (__tinypy_internal_dict_capacity(vm, used_after * growth, &capacity, out_error) == 0) {
@@ -836,7 +838,7 @@ tinypy_bool_t tinypy_internal_dict_set_hash_checked(tinypy_vm_t *vm, tinypy_valu
 }
 //////////////////////////////////////////////////////////////////////////
 /* insertdict stores without growing the table, for callers that sized it
-   for all their entries beforehand. */
+   for all their entries beforehand, unless the store would fill it. */
 tinypy_bool_t tinypy_internal_dict_insert_checked(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_value_t *value, tinypy_hash_t hash, tinypy_error_t **out_error) {
     tinypy_bool_t stored = __tinypy_internal_dict_insert(vm, dict, key, value, hash, TINYPY_FALSE, TINYPY_TRUE, out_error);
 

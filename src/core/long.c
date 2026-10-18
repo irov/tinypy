@@ -46,28 +46,44 @@ tinypy_value_t *tinypy_internal_long_from_base15_digits_checked(tinypy_vm_t *vm,
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int32_t sign, const uint16_t *digits, size_t digit_count) {
-    size_t allocation_size;
+/* digit_count must be representable by the allocation. */
+static tinypy_value_t *__tinypy_internal_long_from_canonical_digits(tinypy_vm_t *vm, int32_t sign, const uint16_t *digits, size_t digit_count) {
+    size_t allocation_size = __tinypy_internal_long_allocation_size(digit_count);
+    tinypy_value_t *result = tinypy_internal_value_allocate(vm, TINYPY_VALUE_LONG, allocation_size);
 
-    allocation_size = __tinypy_internal_long_allocation_size(digit_count);
+    TINYPY_LONG_OBJECT(result)->digit_count = digit_count;
+    TINYPY_LONG_OBJECT(result)->digit_capacity = digit_count;
+    TINYPY_LONG_OBJECT(result)->sign = sign;
+    if (digit_count != 0U) {
+        (void)memcpy(TINYPY_LONG_OBJECT(result)->digits, digits, digit_count * sizeof(*digits));
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_long_from_base15_digits(tinypy_vm_t *vm, int32_t sign, const uint16_t *digits, size_t digit_count) {
+    size_t allocation_size = __tinypy_internal_long_allocation_size(digit_count);
+
     if (allocation_size == 0U) {
         return NULL;
     }
-
-    tinypy_value_t *result = tinypy_internal_value_allocate(
-        vm,
-        TINYPY_VALUE_LONG,
-        allocation_size);
-    TINYPY_LONG_OBJECT(result)->digit_count = digit_count;
-    TINYPY_LONG_OBJECT(result)->digit_capacity = digit_count;
-    TINYPY_LONG_OBJECT(result)->sign = (int32_t)sign;
-    if (digit_count != 0U) {
-        (void)memcpy(
-            TINYPY_LONG_OBJECT(result)->digits,
-            digits,
-            digit_count * sizeof(*digits));
+    if (sign < -1 || sign > 1) {
+        return NULL;
     }
-
+    for (size_t index = 0U; index != digit_count; ++index) {
+        if (digits[index] > TINYPY_LONG_BASE15_MASK) {
+            return NULL;
+        }
+    }
+    while (digit_count != 0U && digits[digit_count - 1U] == 0U) {
+        digit_count -= 1U;
+    }
+    if (digit_count == 0U) {
+        sign = 0;
+    }
+    else if (sign == 0) {
+        return NULL;
+    }
+    tinypy_value_t *result = __tinypy_internal_long_from_canonical_digits(vm, sign, digits, digit_count);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -78,7 +94,7 @@ tinypy_value_t *tinypy_long_from_i64(tinypy_vm_t *vm, int64_t value) {
     int32_t sign;
 
     if (value == INT64_C(0)) {
-        tinypy_value_t *return_value_1 = tinypy_long_from_base15_digits(vm, 0, NULL, 0U);
+        tinypy_value_t *return_value_1 = __tinypy_internal_long_from_canonical_digits(vm, 0, NULL, 0U);
         return return_value_1;
     }
 
@@ -98,11 +114,7 @@ tinypy_value_t *tinypy_long_from_i64(tinypy_vm_t *vm, int64_t value) {
         magnitude >>= 15U;
     }
 
-    tinypy_value_t *return_value_2 = tinypy_long_from_base15_digits(
-        vm,
-        sign,
-        digits,
-        digit_count);
+    tinypy_value_t *return_value_2 = __tinypy_internal_long_from_canonical_digits(vm, sign, digits, digit_count);
     return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////

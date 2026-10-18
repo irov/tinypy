@@ -4,7 +4,10 @@
 
 #define TINYPY_SRE_MAGIC UINT32_C(20031017)
 #define TINYPY_SRE_MAXREPEAT UINT32_MAX
-#define TINYPY_SRE_MAX_MARKS 200U
+/* _validate_outer accepts up to 100 groups, and MARK up to 2 * groups + 1;
+   CPython 2.7 keeps 200 marks and writes the last two past them. */
+#define TINYPY_SRE_MAX_GROUPS 100U
+#define TINYPY_SRE_MAX_MARKS (2U * TINYPY_SRE_MAX_GROUPS + 2U)
 #define TINYPY_SRE_FLAG_LOCALE INT64_C(4)
 #define TINYPY_SRE_FLAG_UNICODE INT64_C(32)
 #define TINYPY_SRE_INFO_PREFIX UINT32_C(1)
@@ -378,6 +381,14 @@ static tinypy_bool_t __tinypy_sre_charset(const tinypy_sre_pattern_object_t *pat
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The groups whose marks a program may set: one compiled without groups
+   may use the marks of 100 (simplejson). */
+static size_t __tinypy_sre_mark_groups(size_t groups) {
+    size_t mark_groups = groups != 0U ? groups : TINYPY_SRE_MAX_GROUPS;
+
+    return mark_groups;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_sre_copy_marks(size_t *target, const size_t *source, size_t count) {
     if (count != 0U) {
         (void)memcpy(target, source, count * sizeof(*target));
@@ -613,7 +624,7 @@ static tinypy_bool_t __tinypy_sre_match(tinypy_sre_state_t *state, size_t start_
     tinypy_sre_pattern_object_t *pattern = state->pattern;
     const uint32_t *code = pattern->code;
     size_t code_size = pattern->code_size;
-    size_t mark_count = pattern->groups * 2U;
+    size_t mark_limit = 2U * __tinypy_sre_mark_groups(pattern->groups) + 2U;
     tinypy_sre_context_t *ctx;
     tinypy_sre_repeat_t *rep;
     tinypy_bool_t ret = TINYPY_FALSE;
@@ -677,7 +688,7 @@ dispatch:
             goto invalid;
         }
         mark = code[pc + 1U];
-        if (mark >= mark_count) {
+        if (mark >= mark_limit) {
             goto invalid;
         }
         if ((mark & 1U) != 0U) {
@@ -739,7 +750,7 @@ dispatch:
             goto invalid;
         }
         mark = code[pc + 1U] * 2U;
-        if (mark + 1U >= mark_count || (ptrdiff_t)(mark + 1U) > state->lastmark || marks[mark] == SIZE_MAX || marks[mark + 1U] == SIZE_MAX) {
+        if (mark + 1U >= mark_limit || (ptrdiff_t)(mark + 1U) > state->lastmark || marks[mark] == SIZE_MAX || marks[mark + 1U] == SIZE_MAX) {
             ret = TINYPY_FALSE;
             goto exit;
         }
@@ -780,7 +791,7 @@ dispatch:
             goto invalid;
         }
         mark = code[pc + 1U] * 2U;
-        if (mark + 1U >= mark_count || (ptrdiff_t)(mark + 1U) > state->lastmark || marks[mark] == SIZE_MAX || marks[mark + 1U] == SIZE_MAX || marks[mark + 1U] < marks[mark]) {
+        if (mark + 1U >= mark_limit || (ptrdiff_t)(mark + 1U) > state->lastmark || marks[mark] == SIZE_MAX || marks[mark + 1U] == SIZE_MAX || marks[mark + 1U] < marks[mark]) {
             if (code[pc + 2U] > code_size - pc - 1U) {
                 goto invalid;
             }
@@ -1183,7 +1194,7 @@ finished:
     *inout_lastindex = state->lastindex;
     if (ret != 0) {
         *inout_position = state->position;
-        for (index = (size_t)(state->lastmark + 1); index < mark_count; ++index) {
+        for (index = (size_t)(state->lastmark + 1); index < pattern->groups * 2U; ++index) {
             marks[index] = SIZE_MAX;
         }
     }
@@ -1341,7 +1352,9 @@ void tinypy_internal_sre_pattern_release_references(tinypy_value_t *value, tinyp
     tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(value);
 
     visit(pattern->pattern, user_data);
-    visit(pattern->groupindex, user_data);
+    if (pattern->groupindex != NULL) {
+        visit(pattern->groupindex, user_data);
+    }
     visit(pattern->indexgroup, user_data);
     if (pattern->cache_string != NULL) {
         visit(pattern->cache_string, user_data);
@@ -1743,19 +1756,59 @@ static tinypy_value_t *__tinypy_sre_pattern_match_or_search(tinypy_value_t *func
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The item a lookup gives, or NULL with its failure cleared as PyErr_Clear
+   does. */
+static tinypy_value_t *__tinypy_sre_lookup_cleared(tinypy_get_item_slot_t get_item, tinypy_value_t *container, tinypy_value_t *key) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *item = get_item(container, key, &error);
+
+    if (item == NULL) {
+        if (error != NULL) {
+            tinypy_error_release(error);
+        }
+        tinypy_vm_clear_error(vm);
+    }
+    return item;
+}
+//////////////////////////////////////////////////////////////////////////
+/* match_getindex maps a name to its group with PyObject_GetItem on the
+   groupindex, which for a dict is its lookup; a failed lookup or a group
+   that is not an integer names no group. */
+static tinypy_bool_t __tinypy_sre_group_name_index(tinypy_sre_pattern_object_t *pattern, tinypy_value_t *name, int64_t *out_index) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(&pattern->base);
+    tinypy_value_t *groupindex = pattern->groupindex;
+
+    if (groupindex == NULL) {
+        return TINYPY_FALSE;
+    }
+    if (groupindex->type == &vm->types[TINYPY_VALUE_DICT]) {
+        /* A name whose hashing or comparison fails leaves its exception
+           raised. */
+        tinypy_value_t *group = tinypy_internal_dict_get_optional(vm, groupindex, name);
+        if (group == NULL) {
+            tinypy_vm_clear_error(vm);
+            return TINYPY_FALSE;
+        }
+        tinypy_bool_t named = __tinypy_sre_integer(group, out_index);
+        return named;
+    }
+    tinypy_value_t *group = __tinypy_sre_lookup_cleared(tinypy_get_item, groupindex, name);
+    if (group == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t named = __tinypy_sre_integer(group, out_index);
+    TINYPY_DECREF(group);
+    return named;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_sre_match_group_index(tinypy_sre_match_object_t *match, tinypy_value_t *index_value, size_t *out_index, tinypy_error_t **out_error) {
     tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(match->pattern);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(&match->base);
     int64_t index;
 
     if (__tinypy_sre_integer(index_value, &index) == 0) {
-        tinypy_value_t *value = TINYPY_VALUE_KIND(pattern->groupindex) == TINYPY_VALUE_DICT ? tinypy_dict_get_optional(pattern->groupindex, index_value) : NULL;
-        tinypy_bool_t condition_2 = value == NULL;
-
-        if (condition_2 == 0) {
-            condition_2 = __tinypy_sre_integer(value, &index) == 0;
-        }
-        if (condition_2) {
+        if (__tinypy_sre_group_name_index(pattern, index_value, &index) == 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INDEX, "no such group", out_error);
             return TINYPY_FALSE;
         }
@@ -2472,14 +2525,15 @@ static tinypy_bool_t __tinypy_sre_validate_region(tinypy_vm_t *vm, const uint32_
     return valid;
 }
 //////////////////////////////////////////////////////////////////////////
-/* _validate_outer: up to 100 groups and a program ending with SUCCESS; one
-   compiled without groups may still use the marks of 100 (simplejson). A
+/* _validate_outer: up to 100 groups and a program ending with SUCCESS. A
    rejected program raises RuntimeError unless it nests too deep. */
 static tinypy_bool_t __tinypy_sre_validate(tinypy_vm_t *vm, const uint32_t *code, size_t code_size, int64_t groups, tinypy_error_t **out_error) {
-    tinypy_bool_t valid = groups >= 0 && groups <= 100 && code[code_size - 1U] == TINYPY_SRE_OP_SUCCESS ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t valid = groups >= 0 && groups <= (int64_t)TINYPY_SRE_MAX_GROUPS && code[code_size - 1U] == TINYPY_SRE_OP_SUCCESS ? TINYPY_TRUE : TINYPY_FALSE;
 
     if (valid != 0) {
-        valid = __tinypy_sre_validate_region(vm, code, 0U, code_size - 1U, groups != 0 ? (size_t)groups : 100U, out_error);
+        size_t mark_groups = __tinypy_sre_mark_groups((size_t)groups);
+
+        valid = __tinypy_sre_validate_region(vm, code, 0U, code_size - 1U, mark_groups, out_error);
     }
     if (valid == 0 && tinypy_vm_has_error(vm) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "invalid SRE code", out_error);
@@ -2505,7 +2559,7 @@ static tinypy_value_t *__tinypy_sre_compile(tinypy_value_t *function, tinypy_val
     tinypy_value_t *source = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *flags_value = TINYPY_TUPLE_GET(args, 1U);
     tinypy_value_t *code_value = TINYPY_TUPLE_GET(args, 2U);
-    tinypy_value_t *groupindex = argument_count > 4U ? TINYPY_TUPLE_GET(args, 4U) : &vm->none_object.base;
+    tinypy_value_t *groupindex = argument_count > 4U ? TINYPY_TUPLE_GET(args, 4U) : NULL;
     tinypy_value_t *indexgroup = argument_count > 5U ? TINYPY_TUPLE_GET(args, 5U) : NULL;
     if (__tinypy_sre_argument_int(flags_value, &flags, out_error) == 0) {
         return NULL;
@@ -2544,7 +2598,9 @@ static tinypy_value_t *__tinypy_sre_compile(tinypy_value_t *function, tinypy_val
     pattern->groups = (size_t)groups;
     pattern->flags = flags;
     TINYPY_INCREF(source);
-    TINYPY_INCREF(groupindex);
+    if (groupindex != NULL) {
+        TINYPY_INCREF(groupindex);
+    }
     if (indexgroup != NULL) {
         TINYPY_INCREF(indexgroup);
     }
@@ -2683,6 +2739,25 @@ static tinypy_value_t *__tinypy_sre_match_regs(tinypy_sre_match_object_t *match,
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The item access of PySequence_GetItem: sq_item, which a class defined in
+   Python gets from any __getitem__ it has, and which a built-in mapping such
+   as dict lacks. */
+static tinypy_get_item_slot_t __tinypy_sre_sequence_get_item(tinypy_value_t *sequence) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(sequence);
+
+    if (kind == TINYPY_VALUE_OLD_INSTANCE || (sequence->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U || __tinypy_internal_object_overrides_dispatch(sequence, TINYPY_INTERNAL_DISPATCH_BIT(GETITEM)) != 0) {
+        return tinypy_get_item;
+    }
+    tinypy_sequence_slots_t *slots = sequence->type->sequence_slots;
+    if (slots != NULL && slots->get_item != NULL) {
+        return slots->get_item;
+    }
+    if (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_XRANGE || kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_BUFFER) {
+        return tinypy_get_item;
+    }
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 /* match_lastgroup_get reads the name with PySequence_GetItem and takes a
    failure for no name. */
 static tinypy_value_t *__tinypy_sre_match_lastgroup(tinypy_sre_match_object_t *match) {
@@ -2697,26 +2772,101 @@ static tinypy_value_t *__tinypy_sre_match_lastgroup(tinypy_sre_match_object_t *m
         tinypy_value_t *item = TINYPY_LIST_GET(indexgroup, (size_t)match->lastindex);
         return TINYPY_RET(item);
     }
+    tinypy_get_item_slot_t get_item = __tinypy_sre_sequence_get_item(indexgroup);
+    if (get_item == NULL) {
+        tinypy_value_t *unindexed = TINYPY_RET_NONE(vm);
+        return unindexed;
+    }
     tinypy_value_t *key = tinypy_integer_from_i64(vm, (int64_t)match->lastindex);
-    tinypy_error_t *error = NULL;
-    tinypy_value_t *name = tinypy_get_item(indexgroup, key, &error);
+    tinypy_value_t *name = __tinypy_sre_lookup_cleared(get_item, indexgroup, key);
     TINYPY_DECREF(key);
-    if (name != NULL) {
-        return name;
+    if (name == NULL) {
+        tinypy_value_t *none = TINYPY_RET_NONE(vm);
+        return none;
     }
-    if (error != NULL) {
-        tinypy_error_release(error);
+    return name;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_sre_match_groupdict_store(tinypy_sre_match_object_t *match, tinypy_value_t *result, tinypy_value_t *name, tinypy_value_t *default_value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(&match->base);
+    size_t index;
+
+    if (__tinypy_sre_match_group_index(match, name, &index, out_error) == 0) {
+        return TINYPY_FALSE;
     }
-    tinypy_vm_clear_error(vm);
-    tinypy_value_t *none = TINYPY_RET_NONE(vm);
-    return none;
+    tinypy_value_t *value = __tinypy_sre_match_group_value(match, index, default_value, out_error);
+    if (value == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, result, name, value, out_error);
+    TINYPY_DECREF(value);
+    return stored;
+}
+//////////////////////////////////////////////////////////////////////////
+/* match_groupdict lists the names with PyMapping_Keys, whose list keeps
+   them alive while their lookups run Python code; for a dict a snapshot
+   stands for the list. */
+static tinypy_bool_t __tinypy_sre_match_groupdict_fill(tinypy_sre_match_object_t *match, tinypy_value_t *result, tinypy_value_t *default_value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(&match->base);
+    tinypy_value_t *groupindex = TINYPY_SRE_PATTERN_OBJECT(match->pattern)->groupindex;
+
+    if (groupindex->type == &vm->types[TINYPY_VALUE_DICT]) {
+        tinypy_value_t *snapshot = tinypy_internal_dict_snapshot(groupindex, out_error);
+        if (snapshot == NULL) {
+            return TINYPY_FALSE;
+        }
+        size_t position = 0U;
+        tinypy_value_t *name;
+        tinypy_value_t *group;
+        while (tinypy_dict_next(snapshot, &position, &name, &group) != 0) {
+            if (__tinypy_sre_match_groupdict_store(match, result, name, default_value, out_error) == 0) {
+                TINYPY_DECREF(snapshot);
+                return TINYPY_FALSE;
+            }
+        }
+        TINYPY_DECREF(snapshot);
+        return TINYPY_TRUE;
+    }
+    tinypy_value_t *keys = tinypy_object_get_attr_value(groupindex, vm->internal_keys_key, out_error);
+    if (keys == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
+    tinypy_value_t *names = tinypy_call(keys, empty, NULL, out_error);
+    TINYPY_DECREF(empty);
+    TINYPY_DECREF(keys);
+    if (names == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_t *iterator = tinypy_iter(names, out_error);
+    TINYPY_DECREF(names);
+    if (iterator == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_error_t *iteration_error = NULL;
+    for (;;) {
+        tinypy_value_t *name = tinypy_next(iterator, &iteration_error);
+
+        if (name == NULL) {
+            break;
+        }
+        tinypy_bool_t stored = __tinypy_sre_match_groupdict_store(match, result, name, default_value, out_error);
+
+        TINYPY_DECREF(name);
+        if (stored == 0) {
+            TINYPY_DECREF(iterator);
+            return TINYPY_FALSE;
+        }
+    }
+    TINYPY_DECREF(iterator);
+    if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_sre_match_groupdict(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    size_t position = 0U;
-    tinypy_value_t *name;
-    tinypy_value_t *index_value;
 
     (void)user_data;
     tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 0U, 1U, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_MATCH], out_error);
@@ -2726,43 +2876,14 @@ static tinypy_value_t *__tinypy_sre_match_groupdict(tinypy_value_t *function, ti
     tinypy_sre_match_object_t *match = TINYPY_SRE_MATCH_OBJECT(receiver);
     tinypy_sre_pattern_object_t *pattern = TINYPY_SRE_PATTERN_OBJECT(match->pattern);
     tinypy_value_t *result = tinypy_dict_new(vm);
-    if (TINYPY_VALUE_KIND(pattern->groupindex) != TINYPY_VALUE_DICT) {
+    if (pattern->groupindex == NULL) {
         return result;
     }
-    /* Like the keys list match_groupdict takes, a snapshot keeps the names
-       alive while their hashing runs Python code that may change the
-       pattern's groupindex. */
-    tinypy_value_t *names = tinypy_internal_dict_snapshot(pattern->groupindex, out_error);
-    if (names == NULL) {
+    tinypy_value_t *default_value = TINYPY_TUPLE_SIZE(args) == 2U ? TINYPY_TUPLE_GET(args, 1U) : &vm->none_object.base;
+    if (__tinypy_sre_match_groupdict_fill(match, result, default_value, out_error) == 0) {
         TINYPY_DECREF(result);
         return NULL;
     }
-    tinypy_value_t *default_value = TINYPY_TUPLE_SIZE(args) == 2U ? TINYPY_TUPLE_GET(args, 1U) : &vm->none_object.base;
-    while (tinypy_dict_next(names, &position, &name, &index_value) != 0) {
-        size_t index;
-        tinypy_value_t *value;
-
-        if (__tinypy_sre_match_group_index(match, name, &index, out_error) == 0) {
-            TINYPY_DECREF(names);
-            TINYPY_DECREF(result);
-            return NULL;
-        }
-        value = __tinypy_sre_match_group_value(match, index, default_value, out_error);
-        if (value == NULL) {
-            TINYPY_DECREF(names);
-            TINYPY_DECREF(result);
-            return NULL;
-        }
-        tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, result, name, value, out_error);
-
-        TINYPY_DECREF(value);
-        if (stored == 0) {
-            TINYPY_DECREF(names);
-            TINYPY_DECREF(result);
-            return NULL;
-        }
-    }
-    TINYPY_DECREF(names);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2981,7 +3102,7 @@ tinypy_value_t *tinypy_internal_sre_field(tinypy_value_t *instance, size_t field
         result = tinypy_integer_from_i64(vm, (int64_t)pattern->groups);
         break;
     case TINYPY_INTERNAL_SRE_FIELD_GROUPINDEX:
-        result = TINYPY_RET(pattern->groupindex);
+        result = pattern->groupindex != NULL ? TINYPY_RET(pattern->groupindex) : TINYPY_RET_NONE(vm);
         break;
     case TINYPY_INTERNAL_SRE_FIELD_STRING:
         result = TINYPY_RET(match->string);

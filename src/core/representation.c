@@ -16,6 +16,9 @@ typedef struct tinypy_representation_builder_t {
     size_t capacity;
     tinypy_bool_t failed;
     tinypy_bool_t memory_failed;
+    /* Whether the root is represented for a method of a built-in type, such
+       as list.__repr__, without the special method of its class; an
+       occurrence nested inside it is represented as usual. */
     tinypy_bool_t skip_root_special;
     uint8_t inline_bytes[128];
 } tinypy_representation_builder_t;
@@ -972,8 +975,10 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_value_t *special_name = raw != 0 ? vm->internal_special_str_key : vm->internal_special_repr_key;
     uint64_t special = raw != 0 ? TINYPY_INTERNAL_DISPATCH_BIT(STR) : TINYPY_INTERNAL_DISPATCH_BIT(REPR);
+    tinypy_bool_t skip_special = builder->skip_root_special;
 
-    if ((builder->skip_root_special == 0 || value != builder->root) && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
+    builder->skip_root_special = TINYPY_FALSE;
+    if (skip_special == 0 && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
         if (__tinypy_internal_object_overrides_dispatch(value, special) != 0) {
             function_result = __tinypy_representation_special(builder, value, special_name, raw, out_error);
             return function_result;
@@ -1249,7 +1254,7 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
         return TINYPY_TRUE;
     }
     default:
-        if (builder->skip_root_special != 0 && value == builder->root) {
+        if (skip_special != 0) {
             __tinypy_representation_default_text(builder, value, TINYPY_FALSE);
             return TINYPY_TRUE;
         }

@@ -14,6 +14,9 @@ tinypy_value_t *tinypy_frame_back(const tinypy_value_t *frame);
 tinypy_value_t *tinypy_frame_code(const tinypy_value_t *frame);
 tinypy_value_t *tinypy_frame_builtins(const tinypy_value_t *frame);
 tinypy_value_t *tinypy_frame_globals(const tinypy_value_t *frame);
+/* Materializing function locals releases the values they replace, whose
+ * finalizers may finish the generator that holds the frame: the result is
+ * NULL when nothing else holds the frame by then. */
 tinypy_value_t *tinypy_frame_locals(const tinypy_value_t *frame);
 int32_t tinypy_frame_last_instruction(const tinypy_value_t *frame);
 int32_t tinypy_frame_line_number(const tinypy_value_t *frame);

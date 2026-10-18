@@ -508,6 +508,7 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
     size_t cursor;
     size_t coefficient_begin;
     size_t coefficient_end;
+    size_t number_end;
     size_t fraction_digits = 0U;
     size_t significant_digits = 0U;
     size_t leading_zeros = 0U;
@@ -525,6 +526,7 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
     tinypy_bool_t guard = TINYPY_FALSE;
     tinypy_bool_t sticky = TINYPY_FALSE;
     tinypy_bool_t started = TINYPY_FALSE;
+    double number;
 
     while (begin < end && __tinypy_float_hex_space(bytes[begin]) != 0) {
         begin += 1U;
@@ -622,9 +624,7 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
             exponent = -exponent;
         }
     }
-    if (cursor != end) {
-        goto invalid;
-    }
+    number_end = cursor;
 #if SIZE_MAX > INT64_MAX / 8
     if (digit_count > (size_t)(INT64_MAX / 8)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "hexadecimal string too long to convert", out_error);
@@ -632,8 +632,8 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
     }
 #endif
     if (significant_digits == 0U) {
-        *out_number = negative != 0 ? -0.0 : 0.0;
-        return TINYPY_TRUE;
+        number = 0.0;
+        goto finished;
     }
     for (int32_t digit = first_digit; digit != 0; digit >>= 1) {
         leading_bits += 1;
@@ -644,8 +644,8 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
         goto overflow;
     }
     if (top < DBL_MIN_EXP - DBL_MANT_DIG) {
-        *out_number = negative != 0 ? -0.0 : 0.0;
-        return TINYPY_TRUE;
+        number = 0.0;
+        goto finished;
     }
     least = (top > DBL_MIN_EXP ? top : DBL_MIN_EXP) - DBL_MANT_DIG;
     precision = (size_t)(top - least);
@@ -684,11 +684,18 @@ static tinypy_bool_t __tinypy_float_parse_hex(tinypy_vm_t *vm, const uint8_t *by
     if (guard != 0 && (sticky != 0 || odd != 0)) {
         significand += 1U;
     }
-    *out_number = ldexp((double)significand, (int)least);
-    if (isinf(*out_number)) {
+    number = ldexp((double)significand, (int)least);
+    if (isinf(number)) {
         goto overflow;
     }
-    *out_number = copysign(*out_number, negative != 0 ? -1.0 : 1.0);
+
+finished:
+    /* float_fromhex reports an overflow before it looks at the rest of the
+       string. */
+    if (number_end != end) {
+        goto invalid;
+    }
+    *out_number = copysign(number, negative != 0 ? -1.0 : 1.0);
     return TINYPY_TRUE;
 
 invalid:

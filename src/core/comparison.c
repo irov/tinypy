@@ -434,19 +434,13 @@ int32_t tinypy_internal_comparison_fallback_order(tinypy_value_t *left, tinypy_v
     return (uintptr_t)left->type < (uintptr_t)right->type ? -1 : 1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* list_richcompare answers == and != for lists of different sizes at once;
+   tuplerichcompare compares the common items first. */
 static tinypy_bool_t __tinypy_comparison_sequence_equal_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
-    size_t left_size;
-    size_t right_size;
     size_t index = 0U;
 
-    if (kind != TINYPY_VALUE_KIND(right)) {
-        *out_equal = TINYPY_FALSE;
-        return TINYPY_TRUE;
-    }
-    left_size = TINYPY_SIZED_SIZE(left);
-    right_size = TINYPY_SIZED_SIZE(right);
-    if (left_size != right_size) {
+    if (kind != TINYPY_VALUE_KIND(right) || (kind == TINYPY_VALUE_LIST && TINYPY_SIZED_SIZE(left) != TINYPY_SIZED_SIZE(right))) {
         *out_equal = TINYPY_FALSE;
         return TINYPY_TRUE;
     }
@@ -814,15 +808,6 @@ static tinypy_bool_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_valu
         return TINYPY_TRUE;
     }
     if (left_kind == TINYPY_VALUE_DICT && right_kind == TINYPY_VALUE_DICT) {
-        tinypy_bool_t equal;
-
-        if (tinypy_internal_dict_equal_checked(left, right, &equal, out_error) == 0) {
-            return TINYPY_FALSE;
-        }
-        if (equal != 0) {
-            *out_order = 0;
-            return TINYPY_TRUE;
-        }
         tinypy_bool_t return_value_1 = __tinypy_comparison_dict_order(left, right, out_order, out_error);
         return return_value_1;
     }

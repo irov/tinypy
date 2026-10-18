@@ -617,6 +617,24 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
             remainder_count = 1U;
         }
     }
+    else if (right->count == 2U) {
+        /* A divisor below 2^30, one digit of CPython's, keeps every partial
+           dividend below 2^45. */
+        uint64_t divisor = (uint64_t)right->digits[0] | ((uint64_t)right->digits[1] << 15U);
+        uint64_t remainder = 0U;
+        size_t index;
+
+        for (index = left->count; index != 0U; --index) {
+            uint64_t current = (remainder << 15U) | (uint64_t)left->digits[index - 1U];
+
+            quotient[index - 1U] = (uint16_t)(current / divisor);
+            remainder = current % divisor;
+        }
+        quotient_count = __tinypy_operator_trim_digits(quotient, left->count);
+        remainder_digits[0] = (uint16_t)(remainder & TINYPY_LONG_MASK);
+        remainder_digits[1] = (uint16_t)(remainder >> 15U);
+        remainder_count = __tinypy_operator_trim_digits(remainder_digits, 2U);
+    }
     else {
         size_t divisor_count = right->count;
         size_t dividend_count = left->count;
@@ -3389,10 +3407,6 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
     tinypy_bool_t prefer_long;
 
     TINYPY_CLEAR_ERROR(out_error);
-    if (base_kind == TINYPY_VALUE_COMPLEX || exponent_kind == TINYPY_VALUE_COMPLEX) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "complex modulo", out_error);
-        return NULL;
-    }
     if (__tinypy_operator_is_integer(base_kind) == 0 || __tinypy_operator_is_integer(exponent_kind) == 0 || __tinypy_operator_is_integer(modulus_kind) == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "pow() 3rd argument not allowed unless all arguments are integers", out_error);
         return NULL;
@@ -3548,7 +3562,7 @@ static tinypy_bool_t __tinypy_operator_same_power_slot(tinypy_value_t *value, ti
    exponent up to their own rank. float_pow rejects a modulus before looking
    at its operands, int_pow a negative exponent before the modulus, and the
    integers take a modulus of their own rank only. */
-static tinypy_bool_t __tinypy_operator_power_accepts(tinypy_value_type_e owner_kind, tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus) {
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_operator_power_accepts(tinypy_value_type_e owner_kind, tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus) {
     int32_t rank = __tinypy_operator_number_rank(owner_kind);
     int32_t base_rank = __tinypy_operator_number_rank(TINYPY_VALUE_KIND(base));
     int32_t exponent_rank = __tinypy_operator_number_rank(TINYPY_VALUE_KIND(exponent));
@@ -3581,10 +3595,6 @@ static tinypy_value_t *__tinypy_operator_builtin_power(tinypy_value_type_e owner
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "pow() 3rd argument not allowed unless all arguments are integers", out_error);
         return NULL;
     }
-    if (rank == 4) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "complex modulo", out_error);
-        return NULL;
-    }
     if (__tinypy_operator_integer_sign(exponent) < 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "pow() 2nd argument cannot be negative when 3rd argument specified", out_error);
         return NULL;
@@ -3593,10 +3603,37 @@ static tinypy_value_t *__tinypy_operator_builtin_power(tinypy_value_type_e owner
     return power;
 }
 //////////////////////////////////////////////////////////////////////////
+/* complex_pow converts both operands (TO_COMPLEX) before it rejects a
+   modulus: an operand it cannot convert declines the call, a long too large
+   for a float raises OverflowError. */
+static tinypy_value_t *__tinypy_operator_complex_power_modulo(tinypy_value_t *base, tinypy_value_t *exponent, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(base);
+    tinypy_value_t *operands[2] = {base, exponent};
+
+    for (size_t index = 0U; index != 2U; ++index) {
+        double real;
+        double imaginary;
+
+        if (__tinypy_operator_number_rank(TINYPY_VALUE_KIND(operands[index])) == 0) {
+            tinypy_value_t *declined = TINYPY_RET_NOT_IMPLEMENTED(vm);
+            return declined;
+        }
+        if (__tinypy_operator_as_complex(operands[index], &real, &imaginary, out_error) == 0) {
+            return NULL;
+        }
+    }
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "complex modulo", out_error);
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
 /* The nb_power of int, long, float or complex, which declines operands it
    does not convert. */
 tinypy_value_t *tinypy_internal_builtin_power_slot(tinypy_value_type_e owner_kind, tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error) {
     TINYPY_CLEAR_ERROR(out_error);
+    if (owner_kind == TINYPY_VALUE_COMPLEX && TINYPY_VALUE_KIND(modulus) != TINYPY_VALUE_NONE) {
+        tinypy_value_t *complex_power = __tinypy_operator_complex_power_modulo(base, exponent, out_error);
+        return complex_power;
+    }
     if (__tinypy_operator_power_accepts(owner_kind, base, exponent, modulus) == 0) {
         tinypy_value_t *declined = TINYPY_RET_NOT_IMPLEMENTED(TINYPY_VALUE_VM(base));
         return declined;

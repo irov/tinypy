@@ -312,6 +312,71 @@ class ReleaseOrderParity(unittest.TestCase):
         self.assertEqual(removed(lambda mapping, key: mapping.clear()), ['key', 'value'])
         self.assertEqual(removed(lambda mapping, key: mapping.__setitem__(key, 0)), ['value'])
 
+    def test_operands_and_arguments_release_in_cpython_order(self):
+        class Operand(Released):
+            def __eq__(self, other):
+                return False
+
+            def __add__(self, other):
+                return 0
+
+            def __getitem__(self, key):
+                return 0
+
+            def __setitem__(self, key, value):
+                pass
+
+            def __delitem__(self, key):
+                pass
+
+            def __getslice__(self, start, stop):
+                return 0
+
+            def __setslice__(self, start, stop, value):
+                pass
+
+            def __delslice__(self, start, stop):
+                pass
+
+            def method(self, *args, **kwargs):
+                pass
+
+        def function(*args, **kwargs):
+            pass
+
+        def store(make):
+            make('container')[make('key')] = make('value')
+
+        def delete(make):
+            del make('container')[make('key')]
+
+        def store_slice(make):
+            make('container')[make('start'):make('stop')] = make('value')
+
+        def delete_slice(make):
+            del make('container')[make('start'):make('stop')]
+
+        def released(operation):
+            log = []
+            operation(lambda name: Operand(log, name))
+            return log
+        self.assertEqual(released(lambda make: make('left') == make('right')), ['left', 'right'])
+        self.assertEqual(released(lambda make: make('left') + make('right')), ['left', 'right'])
+        self.assertEqual(released(lambda make: (make('left'),) < (make('right'),)), ['left', 'right'])
+        self.assertEqual(released(lambda make: make('container')[make('key')]), ['container', 'key'])
+        self.assertEqual(released(lambda make: make('container')[make('start'):make('stop')]), ['container', 'start', 'stop'])
+        self.assertEqual(released(store), ['value', 'container', 'key'])
+        self.assertEqual(released(delete), ['container', 'key'])
+        self.assertEqual(released(store_slice), ['value', 'container', 'start', 'stop'])
+        self.assertEqual(released(delete_slice), ['container', 'start', 'stop'])
+        self.assertEqual(released(lambda make: function(make('a'), make('b'))), ['b', 'a'])
+        self.assertEqual(released(lambda make: function(make('a'), make('b'), key=make('c'))), ['c', 'b', 'a'])
+        self.assertEqual(released(lambda make: function(make('a'), *[make('b'), make('c')])), ['a', 'c', 'b'])
+        self.assertEqual(released(lambda make: function(make('a'), *[make('b')], **{'c': make('c')})), ['a', 'c', 'b'])
+        self.assertEqual(released(lambda make: make('self').method(make('a'), make('b'))), ['b', 'a', 'self'])
+        self.assertEqual(released(lambda make: cmp(make('a'), make('b'))), ['b', 'a'])
+        self.assertEqual(released(lambda make: sorted([], key=make('key'), cmp=make('cmp'))), ['key', 'cmp'])
+
 
 class MessagePrecisionParity(unittest.TestCase):
     def test_attribute_messages(self):

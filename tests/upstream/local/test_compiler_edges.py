@@ -124,6 +124,28 @@ class CompilerEdges(unittest.TestCase):
             else:
                 self.fail('expected SyntaxError')
 
+    def test_escaped_backslash_takes_its_character_before_non_ascii(self):
+        # decode_unicode escapes a backslash only when it starts an escape:
+        # an escaped backslash keeps the UTF-8 character after it intact.
+        for source, value in [('# coding: utf-8\nu"\\\\\xc3\xa9"', u'\\\xe9'),
+                              ('# coding: utf-8\nur"\\\\\xc3\xa9"', u'\\\\\xe9'),
+                              ('# coding: utf-8\nu"\\\xc3\xa9"', u'\\\xe9'),
+                              ('\xef\xbb\xbfu"C:\\\\\xc3\x89lise\\\\\xc3\xa9t\xc3\xa9"', u'C:\\\xc9lise\\\xe9t\xe9'),
+                              (u'u"\\\\\\\\\u20ac"', u'\\\\\u20ac')]:
+            self.assertEqual(eval(source), value)
+
+    def test_unicode_source_joins_surrogate_pairs(self):
+        # compile, exec and eval encode a unicode source like
+        # PyUnicode_AsUTF8String, which joins a surrogate pair. The pair is
+        # built at run time, as marshal joins one in a constant too.
+        pair = unichr(0xd83d) + unichr(0xde00)
+        self.assertEqual(eval(u"u'" + pair + u"'"), u'\U0001f600')
+        namespace = {}
+        exec compile(u"x = '" + pair + u"'\ny = u'\ud83d'", 'file', 'exec') in namespace
+        self.assertEqual((namespace['x'], namespace['y']), ('\xf0\x9f\x98\x80', u'\ud83d'))
+        exec u"z = u'" + pair[::-1] + u"'" in namespace
+        self.assertEqual(namespace['z'], pair[::-1])
+
     def test_unknown_encoding_has_decoder_diagnostic(self):
         try:
             compile('# coding: made_up\nx=1', 'file', 'exec')

@@ -125,6 +125,7 @@ typedef struct tinypy_intern_entry_t {
 #define TINYPY_NATIVE_METHOD_FREE_LIST_MAX 64U
 #define TINYPY_NATIVE_ARGUMENT_CACHE_SIZE 4U
 #define TINYPY_RELEASE_DEFER_DEPTH 32U
+#define TINYPY_FINALIZER_DEFER_DEPTH 8U
 #define TINYPY_INTERNAL_KEY_TABLE_SIZE 2048U
 #define TINYPY_TYPE_LOOKUP_CACHE_SIZE 1024U
 //////////////////////////////////////////////////////////////////////////
@@ -2056,6 +2057,10 @@ struct tinypy_vm_t {
        the instances resurrected before it ran, so tinypy_vm_destroy repeats
        its finalizer pass only for them. */
     size_t native_finalizable_created;
+    /* The finalizers running nested and the objects they left to the
+       outermost one. */
+    size_t finalizer_depth;
+    tinypy_value_t *pending_finalizations;
     uint64_t dict_cache_epoch;
     tinypy_bool_t dict_cache_exhausted;
     /* The next type version, zero once they are exhausted. */
@@ -2088,6 +2093,7 @@ struct tinypy_vm_t {
     tinypy_value_t *raised_value;
     tinypy_value_t *emergency_memory_error;
     tinypy_error_t *errors;
+    tinypy_error_t *pending_diagnostics;
     tinypy_value_t *raised_traceback;
     tinypy_value_t *handled_type;
     tinypy_value_t *handled_value;
@@ -2170,7 +2176,9 @@ struct tinypy_error_t {
     /* The VM links the error, which counts against its heap budget, until
        the host releases it or the VM is destroyed. A diagnostic of a raised
        Python exception keeps the exception until the message is first read,
-       and the class it was raised with until the kind is. */
+       and the class it was raised with until the kind is; while it keeps
+       the exception, it is linked on the pending diagnostics rather than
+       the errors of the VM. */
     tinypy_vm_t *vm;
     tinypy_value_t *exception;
     tinypy_type_t *exception_type;
@@ -2292,7 +2300,7 @@ size_t tinypy_internal_utf8_invalid_span(const uint8_t *bytes, size_t size);
 size_t tinypy_internal_utf8_encode(uint32_t code_point, uint8_t bytes[4]);
 size_t tinypy_internal_unicode_byte_offset(tinypy_value_t *value, size_t character_index);
 size_t tinypy_internal_unicode_character_index(tinypy_value_t *value, size_t byte_offset);
-const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, tinypy_bool_t checked, size_t *out_size, tinypy_error_t **out_error);
+const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, size_t *out_size, tinypy_error_t **out_error);
 void tinypy_internal_unicode_destroy(tinypy_value_t *value);
 uint32_t tinypy_internal_unicode_lower(uint32_t code_point);
 uint32_t tinypy_internal_unicode_upper(uint32_t code_point);
@@ -2446,7 +2454,6 @@ tinypy_value_t *tinypy_internal_tuple_subclass_from_items(tinypy_type_t *type, t
 tinypy_value_t *const *tinypy_internal_tuple_items(const tinypy_value_t *value);
 void tinypy_internal_list_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_list_destroy(tinypy_value_t *value);
-void tinypy_internal_list_swap_contents(tinypy_value_t *left, tinypy_value_t *right);
 void tinypy_internal_list_reserve(tinypy_vm_t *vm, tinypy_value_t *list, size_t minimum_capacity);
 tinypy_value_t *tinypy_internal_list_from_items_checked(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size, tinypy_error_t **out_error);
 /* Exactly size items of storage, as BUILD_LIST makes; the variant above grows
@@ -2565,7 +2572,6 @@ tinypy_value_t *tinypy_internal_object_unicode(tinypy_value_t *value, tinypy_err
 tinypy_value_t *tinypy_internal_bytearray_from_bytes_checked(tinypy_vm_t *vm, const void *bytes, size_t size, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_bytearray_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 void tinypy_internal_bytearray_destroy(tinypy_value_t *value);
-void tinypy_internal_bytearray_swap_contents(tinypy_value_t *left, tinypy_value_t *right);
 tinypy_bool_t tinypy_internal_bytearray_resize_allowed(tinypy_value_t *value, size_t size, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_bytearray_initialize(tinypy_value_t *value, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 ptrdiff_t tinypy_internal_bytearray_length(tinypy_value_t *value, tinypy_error_t **out_error);
@@ -2819,6 +2825,8 @@ tinypy_value_t *tinypy_internal_object_special_operator_key(tinypy_vm_t *vm, siz
 tinypy_value_t *tinypy_internal_type_mro_tuple(tinypy_type_t *type);
 tinypy_value_t *tinypy_internal_call_conversion(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t *out_handled, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_call_int_conversion(tinypy_value_t *value, tinypy_bool_t *out_handled, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_call_long_conversion(tinypy_value_t *value, tinypy_bool_t *out_handled, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_call_classic_conversion(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_get_special_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
 int32_t tinypy_internal_object_lookup_special_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t **out_method, tinypy_error_t **out_error);
 /* The Python function a new-style value's type holds under key, borrowed;
@@ -2981,6 +2989,7 @@ void tinypy_internal_exception_set_handled_from_raised(tinypy_vm_t *vm);
 void tinypy_internal_exception_restore_handled(tinypy_vm_t *vm, tinypy_value_t *type, tinypy_value_t *value, tinypy_value_t *traceback);
 void tinypy_internal_exception_make_diagnostic(tinypy_vm_t *vm, tinypy_error_t **out_error);
 tinypy_error_kind_e tinypy_internal_exception_error_kind(tinypy_vm_t *vm, const tinypy_type_t *type);
+tinypy_value_t *tinypy_internal_exception_raise_arguments(tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_value_t **out_traceback, tinypy_error_t **out_error);
 void tinypy_internal_exception_raise_key_error(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error);
 void tinypy_internal_exception_raise_stop_iteration(tinypy_vm_t *vm, tinypy_error_t **out_error);
 void tinypy_internal_exception_raise_system_error(tinypy_vm_t *vm, const char *message, tinypy_error_t **out_error);

@@ -82,6 +82,95 @@ class CompilerDiagnostics(unittest.TestCase):
             self.assertEqual(error.text, text)
             self.assertEqual(error.offset, 2)
 
+    def test_failed_adjacent_literal_keeps_its_error(self):
+        # A str part after a unicode one that fails the ASCII check fails the
+        # literal; a later decoding error does not replace that error.
+        message = "(unicode error) 'ascii' codec can't decode byte 0xc2 in position 0: ordinal not in range(128)"
+        for source, mode in [("'\xc2' u''", 'eval'), ("x = ('\xc2' u'', '\xc3' u'')\n", 'exec'),
+                             ("x = '\xc2' u''\nx = u'\\U00110000'\n", 'exec'), ("'\xc2' u'' + u'\\x'", 'eval')]:
+            error = self.syntax_error(source, mode)
+            self.assertEqual((error.msg, error.lineno), (message, 1))
+
+    def test_raw_unicode_escape_error_starts_at_backslash_run(self):
+        for source, span in [(r"ur'\\\U00110000'", '0-11'), (r"ur'ab\\\U00110000'", '2-13'),
+                             (r"ur'\\\u12x'", '0-5'), (r"ur'ab\\\\\u12x'", '2-9'), (r"ur'\u12x'", '0-3')]:
+            error = self.syntax_error(source)
+            self.assertTrue(error.msg.startswith("(unicode error) 'rawunicodeescape' codec can't decode bytes in position " + span + ':'), error.msg)
+
+    def test_late_future_import_after_statement_on_its_line(self):
+        # The future scanner reports it like PyErr_SyntaxLocation, the
+        # compiler of a later line with the location tuple.
+        message = 'from __future__ imports must occur at the beginning of the file'
+        error = self.syntax_error('x = 1; from __future__ import division\n', 'exec')
+        self.assertEqual((error.args, error.lineno), ((message,), 1))
+        error = self.syntax_error('x = 1\nfrom __future__ import division\n', 'exec')
+        self.assertEqual(error.args, (message, ('<diagnostic>', 2, None, None)))
+
+    def test_syntax_warning_is_shown_like_showwarning(self):
+        import sys
+
+        class Refused(UnicodeError):
+            pass
+
+        class Stream(object):
+            def __init__(self, error):
+                self.error = error
+                self.data = []
+
+            def write(self, text):
+                if self.error is not None:
+                    raise self.error('refused')
+                self.data.append(text)
+
+        source = 'def f():\n    from os import *\n'
+        saved = sys.stderr
+        try:
+            stream = Stream(None)
+            sys.stderr = stream
+            compile(source, '<diagnostic>', 'exec')
+            self.assertEqual(stream.data, ['<diagnostic>:1: SyntaxWarning: import * only allowed at module level\n'])
+            for error in [IOError, Refused]:
+                sys.stderr = Stream(error)
+                compile(source, '<diagnostic>', 'exec')
+            sys.stderr = Stream(ValueError)
+            self.assertRaises(ValueError, compile, source, '<diagnostic>', 'exec')
+            sys.stderr = None
+            compile(source, '<diagnostic>', 'exec')
+            del sys.stderr
+            self.assertRaises(AttributeError, compile, source, '<diagnostic>', 'exec')
+        finally:
+            sys.stderr = saved
+
+    def import_error(self, name):
+        try:
+            __import__('compiler_files.' + name)
+        except SyntaxError as error:
+            return error
+        self.fail('expected SyntaxError')
+
+    def test_semantic_error_text_reads_the_file_again(self):
+        # PyErr_ProgramText reads the line with universal newlines through a
+        # 1000-byte buffer, which keeps the last part of a longer line.
+        for name in ['crlf', 'cr']:
+            error = self.import_error(name)
+            self.assertEqual((error.msg, error.lineno, error.offset, error.text), ('cannot assign to None', 3, None, 'None = 3\n'))
+        error = self.import_error('long_line')
+        self.assertEqual((error.msg, error.lineno, len(error.text), error.text[:8]), ("can't assign to operator", 2, 612, '1 + 1 + '))
+
+    def test_codec_cookie_file_reads_like_stream_reader(self):
+        # The UTF-8 codec accepts surrogates; the read that raises fails the
+        # line the tokenizer reads then, and the end of the file adds no line.
+        error = self.import_error('codec_error')
+        self.assertEqual((error.msg, error.lineno, error.offset, error.text),
+                         ("'utf8' codec can't decode byte 0xe9 in position 0: invalid continuation byte", 3, 0, None))
+        error = self.import_error('codec_string')
+        self.assertEqual((error.msg, error.lineno, error.offset, error.text),
+                         ('EOF while scanning triple-quoted string literal', 3, 11, 'v0 = """aa\n'))
+        # A lone carriage return stays in its line, a surrogate pair is joined
+        # and a sequence the end of the file cuts is dropped.
+        module = __import__('compiler_files.codec_lines', {}, {}, ['x'])
+        self.assertEqual((module.x, module.z, hasattr(module, 'y')), (u'\U0001f600', 1, False))
+
     def test_byte_escape_message(self):
         for contents in ['\\x', '\\x0', '\\xg0', 'a\\x0q']:
             try:

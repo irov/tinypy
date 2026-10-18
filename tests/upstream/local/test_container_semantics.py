@@ -1632,3 +1632,20 @@ class ContainerSemantics(unittest.TestCase):
         with self.assertRaises(TypeError) as failure:
             apply(emit, (), {'sep': 1, 'end': 2, 'file': 3, 'flush': 4})
         self.assertEqual(str(failure.exception), 'print() takes at most 3 arguments (4 given)')
+
+    def test_exact_dict_subscript_miss_looks_the_key_up_once(self):
+        # dict_subscript hashes the key once and raises KeyError on a miss:
+        # only a subclass can define __missing__.
+        calls = []
+
+        class Key(object):
+            def __hash__(self):
+                calls.append('hash')
+                return 1 if len(calls) == 1 else 2
+
+            def __eq__(self, other):
+                calls.append('eq')
+                return True
+        with self.assertRaises(KeyError) as failure:
+            {2: 'second lookup'}[Key()]
+        self.assertEqual((type(failure.exception.args[0]), calls), (Key, ['hash']))

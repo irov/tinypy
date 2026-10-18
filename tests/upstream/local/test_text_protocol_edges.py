@@ -818,3 +818,145 @@ class TextProtocolEdges(unittest.TestCase):
                 u'abc'.translate(table)
             self.assertEqual(str(caught.exception), message)
         self.assertEqual(u''.translate(set()), u'')
+
+    def test_subclass_text_equality_non_ascii(self):
+        class String(str):
+            pass
+        class OtherString(str):
+            pass
+        class Unicode(unicode):
+            pass
+        class OtherUnicode(unicode):
+            pass
+        data, text = 'caf\xe9', u'caf\xe9'
+        for left, right in ((String(data), data), (String(data), OtherString(data)), (Unicode(text), text), (Unicode(text), OtherUnicode(text))):
+            self.assertTrue(left == right and right == left)
+            self.assertFalse(left != right or right != left)
+            self.assertEqual((cmp(left, right), left < right, left >= right), (0, False, True))
+            self.assertEqual(hash(left), hash(right))
+            self.assertEqual(({right: 1}.get(left), {left: 2}.get(right)), (1, 2))
+            self.assertTrue(left in set([right]) and left in [right] and left in (right,))
+            self.assertEqual(([right].count(left), [right].index(left)), (1, 0))
+        self.assertTrue(String('abc') == Unicode(u'abc') and Unicode(u'abc') == 'abc')
+        self.assertEqual(u'x\xe9y'.count(Unicode(u'\xe9')), 1)
+        self.assertEqual(Unicode(u'a\xe9b').replace(OtherUnicode(u'\xe9'), u'-'), u'a-b')
+
+    def test_unicode_error_object_is_exact_text(self):
+        import _codecs
+        class Unicode(unicode):
+            def __getitem__(self, index):
+                return u'OVERRIDE'
+            def __getslice__(self, start, stop):
+                return u'OVERRIDE'
+        class String(str):
+            def __getslice__(self, start, stop):
+                return 'OVERRIDE'
+        seen = []
+        def handler(error):
+            seen.append((type(error.object), error.object[error.start:error.end]))
+            return (u'?', error.end)
+        _codecs.register_error('test_text_protocol_edges.exact', handler)
+        self.assertEqual(Unicode(u'a\xe9b').encode('ascii', 'test_text_protocol_edges.exact'), 'a?b')
+        self.assertEqual(String('a\xffb').decode('utf-8', 'test_text_protocol_edges.exact'), u'a?b')
+        self.assertEqual(_codecs.utf_8_decode(String('a\xff'), 'test_text_protocol_edges.exact'), (u'a?', 2))
+        self.assertEqual(seen, [(unicode, u'\xe9'), (str, '\xff'), (str, '\xff')])
+        for call, kind, data in ((lambda: Unicode(u'a\xe9').encode('ascii'), unicode, u'a\xe9'),
+                                 (lambda: String('a\xe9').decode('ascii'), str, 'a\xe9'),
+                                 (lambda: 'x'.decode(Unicode(u'utf\xe9')), unicode, u'utf\xe9'),
+                                 (lambda: unicode(String('a\xe9')), str, 'a\xe9')):
+            with self.assertRaises(UnicodeError) as caught:
+                call()
+            self.assertIs(type(caught.exception.object), kind)
+            self.assertEqual(caught.exception.object[:], data)
+
+    def test_int_slots_treat_bool_as_int(self):
+        class Integer(int):
+            __str__ = int.__str__
+            __repr__ = int.__repr__
+        self.assertEqual((int.__str__(True), int.__repr__(False)), ('1', '0'))
+        self.assertEqual((bool.__str__(True), bool.__repr__(False), str(True), repr(False)), ('True', 'False', 'True', 'False'))
+        self.assertEqual((str(Integer(5)), repr(Integer(-6)), int.__str__(Integer(7))), ('5', '-6', '7'))
+        self.assertEqual((long.__repr__(5L), tuple.__repr__((1,)), str.__repr__('a')), ('5L', '(1,)', "'a'"))
+        results = (int.__and__(True, True), int.__or__(True, False), int.__xor__(True, False), int.__rand__(True, True), int.__ror__(False, False))
+        self.assertEqual([(type(result), result) for result in results], [(int, 1), (int, 1), (int, 1), (int, 1), (int, 0)])
+        self.assertEqual((bool.__and__(True, True), True | False, True ^ True), (True, True, False))
+
+    def test_strict_error_handler_raises_classic_instance(self):
+        import _codecs
+        class Classic:
+            pass
+        strict = _codecs.lookup_error('strict')
+        instance = Classic()
+        with self.assertRaises(Classic) as caught:
+            strict(instance)
+        self.assertIs(caught.exception, instance)
+        for value in (Classic, ValueError, object(), 1):
+            with self.assertRaises(TypeError) as caught:
+                strict(value)
+            self.assertEqual(str(caught.exception), 'codec must pass exception instance')
+
+    def test_unicode_percent_float_classic_conversion_errors(self):
+        class Missing:
+            pass
+        class Lookup:
+            def __getattr__(self, name):
+                raise KeyError(name)
+        class Integer:
+            def __float__(self):
+                return 3
+        class Converted:
+            def __float__(self):
+                return 2.5
+        for spec in (u'%f', u'%.2e', u'%g', u'%F'):
+            with self.assertRaises(AttributeError) as caught:
+                spec % Missing()
+            self.assertEqual(str(caught.exception), "Missing instance has no attribute '__float__'")
+            self.assertRaises(KeyError, spec.__mod__, Lookup())
+            with self.assertRaises(TypeError) as caught:
+                spec % Integer()
+            self.assertEqual(str(caught.exception), 'nb_float should return float object')
+        self.assertEqual(u'%.1f' % Converted(), u'2.5')
+        for value in (Missing(), Integer()):
+            with self.assertRaises(TypeError) as caught:
+                '%f' % value
+            self.assertEqual(str(caught.exception), 'float argument required, not instance')
+
+    def test_int_nul_literal_reports_argument_repr(self):
+        class String(str):
+            def __repr__(self):
+                return 'String-repr'
+        class Failing(str):
+            def __repr__(self):
+                raise KeyError('repr')
+        for call, message in ((lambda: int(String('12\x00'), 16), 'invalid literal for int() with base 16: String-repr'),
+                              (lambda: long(String('7\x00'), 8), 'invalid literal for long() with base 8: String-repr'),
+                              (lambda: int('12\x00', 16), "invalid literal for int() with base 16: '12\\x00'"),
+                              (lambda: int(String('1\x002')), 'null byte in argument for int()'),
+                              (lambda: int(String('zz'), 16), "invalid literal for int() with base 16: 'zz'")):
+            with self.assertRaises(ValueError) as caught:
+                call()
+            self.assertEqual(str(caught.exception), message)
+        self.assertRaises(KeyError, int, Failing('1\x00'), 10)
+
+    def test_unsupported_format_character_messages(self):
+        for spec, argument, message in (('%\x00', 1, "'\x00' (0x0) at index 1"),
+                                        ('a%(x)\x00', {'x': 1}, "'\x00' (0x0) at index 5"),
+                                        ('%5\x00', 1, "'\x00' (0x0) at index 2"),
+                                        ('%9\xc2', 1, "'\xc2' (0xc2) at index 2"),
+                                        ('%.3\xe9', 1, "'\xe9' (0xe9) at index 3"),
+                                        ('%\xe9', 1, "'\xe9' (0xffffffe9) at index 1"),
+                                        ('%05\xc2', 1, "'\xc2' (0xc2) at index 3"),
+                                        ('%0\xc2', 1, "'\xc2' (0xffffffc2) at index 2"),
+                                        ('%5.\xc2', 1, "'\xc2' (0xffffffc2) at index 3"),
+                                        ('%5l\xc2', 1, "'\xc2' (0xffffffc2) at index 3"),
+                                        ('%*\xc2', (1, 2), "'\xc2' (0xffffffc2) at index 2"),
+                                        ('%9\xc2', (u'x',), "'\xc2' (0xc2) at index 2"),
+                                        (u'%5\xe9', 1, "'?' (0xe9) at index 2"),
+                                        (u'%\x00', 1, "'?' (0x0) at index 1")):
+            with self.assertRaises(ValueError) as caught:
+                spec % argument
+            self.assertEqual(caught.exception.args[0], 'unsupported format character ' + message)
+        for spec, message in (('{0!\xc2}', '\\xffffffc2'), (u'{0!\xc2}', '\\xc2'), ('{0!\x01}', '\\x1')):
+            with self.assertRaises(ValueError) as caught:
+                spec.format(1)
+            self.assertEqual(caught.exception.args[0], 'Unknown conversion specifier ' + message)

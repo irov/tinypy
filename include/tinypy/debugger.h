@@ -40,7 +40,12 @@ typedef struct tinypy_debugger_t {
 tinypy_bool_t tinypy_debugger_set(tinypy_vm_t *vm, const tinypy_debugger_t *debugger);
 
 /* Returned variables are borrowed. Mutations synchronize optimized fast
- * locals and cell/free slots, so the next bytecode instruction sees them. */
+ * locals and cell/free slots, so the next bytecode instruction sees them.
+ * A name outside them is looked up in the locals tinypy_frame_locals
+ * materializes, and is missing when that releases the frame. Locals that
+ * exec or eval gave as a mapping other than a dict are left to its item
+ * protocol: for a name outside the slots get returns NULL and set and delete
+ * return FALSE. */
 tinypy_value_t *tinypy_debugger_frame_get(const tinypy_value_t *frame, tinypy_debugger_scope_e scope, const char *name, size_t name_size);
 tinypy_bool_t tinypy_debugger_frame_set(tinypy_value_t *frame, tinypy_debugger_scope_e scope, const char *name, size_t name_size, tinypy_value_t *value);
 tinypy_bool_t tinypy_debugger_frame_delete(tinypy_value_t *frame, tinypy_debugger_scope_e scope, const char *name, size_t name_size);

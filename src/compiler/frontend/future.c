@@ -95,7 +95,7 @@ static tinypy_bool_t __tinypy_frontend_future_parse(tinypy_compile_ctx_t *arena,
             tinypy_bool_t condition = modname != NULL && TINYPY_NAME_EQ(modname, arena->vm->internal_future_module_name) != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
             if (condition) {
                 if (done) {
-                    tinypy_internal_compiler_semantic_error(arena, TINYPY_FUTURE_LATE_IMPORT_MESSAGE, s->lineno, TINYPY_TRUE);
+                    tinypy_internal_compiler_semantic_error(arena, TINYPY_FUTURE_LATE_IMPORT_MESSAGE, s->lineno, TINYPY_FALSE);
                     return TINYPY_FALSE;
                 }
                 if (!__tinypy_frontend_future_check_features(arena, ff, s, filename)) {
