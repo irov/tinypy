@@ -134,7 +134,13 @@ allocations; запрос, в котором host отказал, не учит�
 allocation VM: он учитывается, пока host его не освободит или VM не будет
 уничтожена, но budget его не отклоняет, поэтому raise не зависит от остатка
 budget. Вычисляемые результаты `long`, text, buffer, list и tuple отклоняются с
-`MemoryError`, если они не помещаются в остаток budget.
+`MemoryError`, если они не помещаются в остаток budget. Удаление элементов list
+от budget не зависит: list, теряющий все элементы, освобождает память, как
+`list_clear`, сокращающийся list переходит в меньшую память, а прежняя держит
+удалённые элементы до их освобождения, остальные удалённые элементы ждут на
+стеке или во временном массиве, который budget учитывает, но не отклоняет.
+`list.sort` сортирует память самого list: массив ключей нужен только с
+key-функцией, а слиянию, как в listsort, — не больше половины элементов.
 
 Bootstrap VM выполняется целиком и только затем сверяется с budget: если
 занятая им память больше `max_heap_bytes`, `tinypy_vm_create` освобождает всё
@@ -145,11 +151,18 @@ Bootstrap VM выполняется целиком и только затем с
 являются fallible: их рост игнорирует budget и всегда завершается. Compiler
 и runtime при исчерпании budget сообщают `MemoryError`, не теряя данных.
 Length hint, который не помещается в адресное пространство 32-bit host, тоже
-даёт `MemoryError`, как невыделяемый размер на 64-bit host.
+даёт `MemoryError`, как невыделяемый размер на 64-bit host. Счётчик сдвига,
+как `Py_ssize_t` 64-bit CPython, на любом host является int64: сдвиг вправо
+за все разряды даёт 0 или -1, а сдвиг влево и степень, результат которых не
+помещается в адресное пространство host, дают `MemoryError`.
 
 Как `list_resize` и `PyByteArray_Resize`, list и bytearray, у которых после
 удаления занято меньше половины памяти, отдают её: list сокращается до размера
-с запасом `list_resize`, bytearray — до размера. Опустевший list сохраняет
+с запасом `list_resize`, bytearray — до размера. Так же, как `listextend`, list
+сокращает память, которую length hint зарезервировал сверх добавленных
+элементов. Память host allocator переходит в pool только для ёмкости не больше
+половины наибольшего блока pool, чтобы list, колеблющийся около этого размера,
+не перевыделял её при каждом колебании. Опустевший list сохраняет
 память одного append, а bytearray — один байт, чтобы стек из одного элемента
 не перевыделял её. Bytearray без памяти получает ровно нужный размер, а с
 памятью растёт в полтора раза, тогда как CPython добавляет восьмую часть и
@@ -246,8 +259,10 @@ Runtime реализует:
 - weak references и explicit finalization behavior.
 
 Dict и set воспроизводят таблицы CPython 2.7: рост после вставки,
-предварительный размер при merge, copy и dict displays, finger в слоте 0 для
-`popitem` и `set.pop`, поэтому порядок итерации совпадает с CPython 2.7.
+предварительный размер при merge, copy и dict displays, после которого merge
+dict в dict и set в set таблицу не растит, поиск, находящий слот с самим
+ключом при любом сохранённом hash, finger в слоте 0 для `popitem` и `set.pop`,
+поэтому порядок итерации совпадает с CPython 2.7.
 Вставка, после которой таблице не хватает памяти для роста, завершается
 `MemoryError` и оставляет контейнер прежним. `list.sort` повторяет listsort
 CPython 2.7, включая число сравнений и частично отсортированный порядок после
@@ -369,12 +384,26 @@ CPython 2.7 может вернуть прежнее значение. Поис�
 повторяет сравнения ключей словарей MRO; CPython 2.7 такие типы не кеширует.
 
 `hash()` вложенных друг в друга tuples, в том числе экземпляров подклассов
-tuple, сохранивших его `__hash__`, вычисляется без native рекурсии при любой
-глубине вложенности. Значения, hash которых хеширует другие значения, — bound
-methods, built-in методы с receiver и типы со slot hash, включая native types,
-— проверяют native stack budget (`max_stack_bytes`) и при его исчерпании
-поднимают RuntimeError, не занимая уровней рекурсии; CPython в этом случае
+tuple, сохранивших его `__hash__`, и bound methods вычисляется без native
+рекурсии при любой глубине вложенности; как `instancemethod_hash`, bound method
+хеширует сначала receiver, затем функцию. Другие значения, hash которых
+хеширует другие значения, — built-in методы с receiver и типы со slot hash,
+включая native types, — проверяют native stack budget (`max_stack_bytes`) и
+при его исчерпании поднимают RuntimeError, не занимая уровней рекурсии, в том
+числе когда hash вычисляет host вне любого вызова; CPython в этом случае
 исчерпывает C stack.
+
+Как в CPython, поиск атрибута classic класса по базам, разрешение его hooks
+`__getattr__`, `__setattr__` и `__delattr__` и `PyClass_IsSubclass` (в
+`isinstance`, `issubclass`, `except` и `tinypy_class_is_subclass`) не
+занимают уровней рекурсии, поэтому сравнения ключей словарей классов
+выполняются на глубине вызывающего кода. Их ограничивает только native stack
+budget: проверка подкласса проходит последнюю базу циклом и рекурсирует
+только в остальные, а иерархия глубже бюджета поднимает RuntimeError — при
+поиске, при проверке подкласса (в `except` это unraisable report и
+несовпадение, как ошибка `PyErr_GivenExceptionMatches`) и при создании класса
+или присваивании `__bases__` и `__dict__`, которые разрешают hooks; присвоенное
+значение при этом остаётся.
 
 Runtime `intern()`, имена compiler и interned строки marshal используют общую
 VM-local таблицу без владеющих ссылок. Строка удаляется из таблицы при переходе
@@ -456,10 +485,15 @@ Host использует ту же конвенцию через `tinypy_native
 вызывающий код проверяет `minimum <= count <= maximum` и отклоняет keywords
 диагностиками `PyArg_ParseTuple`; у `tinypy_native_function_new_items_keywords`
 callback получает kwargs и сам проверяет все аргументы. user_data читается
-через `tinypy_native_function_user_data(function)`. Функция, установленная в тип
-через `tinypy_type_set_attr`, становится method descriptor: при вызове через
-экземпляр, bound method или тип с проверенным получателем callback получает его
-как self, а method call вызывает descriptor без bound method. В остальных
+через `tinypy_native_function_user_data(function)`. Свежая функция, которую
+держит только ссылка вызывающего кода и которую не опубликовал ни один модуль,
+установленная в тип через `tinypy_type_set_attr`, становится method descriptor:
+при вызове через экземпляр, bound method или тип с проверенным получателем
+callback получает его как self, а method call вызывает descriptor без bound
+method. Native function, которую держит кто-то ещё, например builtin `len` или
+функция модуля, сохраняется без изменений, как её сохраняет
+`PyObject_SetAttrString` CPython: для всех владельцев она остаётся обычной
+функцией и получателя не связывает. В остальных
 случаях, например как getter property, self равен NULL, а все аргументы лежат
 в items. Callback, которому нужен argument tuple, получает его через
 `tinypy_native_arguments_acquire`: self, если он не NULL, и items, как у
@@ -669,7 +703,10 @@ spec и даёт «object layout differs». Callback `construct` служит с
 итерацию, а `reversed()` принимает тип с `sequence_get` и `sequence_length`.
 Результат `hash`, равный -1, читается как -2, как у `__hash__`; ошибку
 callback сообщает через `out_error` или только через ошибку VM, и slot тогда
-передаёт её через `out_error`, так что итерация не принимает её за конец.
+передаёт её через `out_error`. Итерация по индексам, как `PySequence_GetItem`,
+вызывает `sequence_get` без `out_error` и читает ошибку VM: `IndexError` или
+`StopIteration` завершают её без diagnostic, а иную ошибку она не принимает за
+конец.
 Вызов, уже направленный в callback, который Python-код удалил через
 `tinypy_native_type_update_spec`, даёт TypeError, а number и comparison slots —
 `NotImplemented`. Базы `tinypy_native_type_new` принадлежат той же VM.
@@ -772,7 +809,9 @@ cookie с неизвестной кодировкой или cookie, проти�
 режимы eval и single, а также `compile`, `exec` и `eval` из Python компилируют
 строку как string tokenizer CPython: bytes принимаются как есть, конец строки —
 «unexpected EOF while parsing», а завершающий CRLF в режиме exec добавляет
-пустую строку, как `translate_newlines`.
+пустую строку, как `translate_newlines`. Cookie строки читается только на
+строке, которую завершает перевод строки, как в `decode_str`: строка режима
+exec получает его в конце, строки режимов eval и single — нет.
 
 Cookie нормализуется как `get_normal_name`: написания `utf-8`, `latin-1`,
 `iso-8859-1`, `iso-latin-1` и их суффиксы идут по fast path, остальные ищутся
@@ -1131,9 +1170,14 @@ false, а pending остаётся exception, которую он поднял, 
 если у неё нет своего; как `PyErr_NormalizeException`, она в свою очередь
 нормализуется, каждый раз на уровень рекурсии глубже, до recursion limit; за
 ним, как `PyExc_RecursionErrorInst`, pending становится RuntimeError
-«maximum recursion depth exceeded» с тем же traceback. RuntimeError recursion
-guard, как после `PyErr_Format`, остаётся ненормализованной до первого
-handler: нормализация на recursion limit заменяет и её. Host, как `PyErr_PrintEx`, нормализует uncaught
+«maximum recursion depth exceeded» с тем же traceback. Исключения, которые
+runtime поднимает классом и аргументами, как `PyErr_SetString`,
+`PyErr_SetObject` и `PyErr_Format` (KeyError, IndexError, ZeroDivisionError,
+NameError, AttributeError, RuntimeError recursion guard и другие ошибки VM),
+остаются ненормализованными до первого handler: нормализация на recursion
+limit заменяет их, поэтому `except` в самом глубоком frame, как в CPython,
+видит RuntimeError. Исключение, которое runtime отложил и восстановил, пока
+выполнялся другой код, считается нормализованным. Host, как `PyErr_PrintEx`, нормализует uncaught
 exception после проверки SystemExit, до `sys.excepthook` и отчёта.
 Как `PyErr_GivenExceptionMatches`,
 `tinypy_exception_matches` сопоставляет класс экземпляра exception, а
@@ -1186,8 +1230,9 @@ UnicodeDecodeError и UnicodeEncodeError принимают пять полей 
 которые им даёт `tinypy_exception_new`.
 
 Pending exception при входе в C API сбрасывают только точки входа верхнего
-уровня: `tinypy_compile_source`, `tinypy_eval_source`, `tinypy_exec_source`,
-`tinypy_eval_code` и `tinypy_exec_code`. Остальные функции, как C API
+уровня: `tinypy_compile_source`, `tinypy_preprocess_source`,
+`tinypy_eval_source`, `tinypy_exec_source`, `tinypy_eval_code` и
+`tinypy_exec_code`. Остальные функции, как C API
 CPython, ожидают, что exception не pending: успешный вызов оставляет его
 pending, а неудачный заменяет своим. `tinypy_object_get_attr`,
 `tinypy_object_get_attr_value` и `tinypy_object_has_attr*` ищут атрибут, отложив

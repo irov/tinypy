@@ -964,6 +964,49 @@ static int32_t __test_float_complex_bits(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Released exact floats stay on the VM's free list up to its bound and are
+   taken back before the allocator, also once the heap budget is spent; the
+   shared positive zero never enters it, and VM destroy returns the list to
+   the host. */
+static int32_t __test_float_free_list(void) {
+    tinypy_value_t *values[TINYPY_FLOAT_FREE_LIST_MAX + 8U];
+    size_t count = sizeof(values) / sizeof(values[0]);
+    test_allocator_state_t state;
+    tinypy_error_t *error = NULL;
+    size_t index;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    for (index = 0U; index < count; ++index) {
+        values[index] = tinypy_float_from_double(vm, 0.5 + (double)index);
+    }
+    for (index = 0U; index < count; ++index) {
+        tinypy_release(values[index]);
+    }
+    TEST_CHECK(vm->float_free_count == TINYPY_FLOAT_FREE_LIST_MAX);
+    tinypy_value_t *zero = tinypy_float_from_double(vm, 0.0);
+    TEST_CHECK(zero == &vm->float_zero_object.base);
+    tinypy_release(zero);
+    TEST_CHECK(vm->float_free_count == TINYPY_FLOAT_FREE_LIST_MAX);
+
+    vm->max_heap_bytes = vm->allocated_bytes;
+    tinypy_value_t *reused = tinypy_internal_float_from_double_checked(vm, -2.5, &error);
+    TEST_CHECK(reused != NULL);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(tinypy_float_as_double(reused) == -2.5);
+    TEST_CHECK(vm->float_free_count == TINYPY_FLOAT_FREE_LIST_MAX - 1U);
+    tinypy_release(reused);
+    TEST_CHECK(vm->float_free_count == TINYPY_FLOAT_FREE_LIST_MAX);
+
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_long_canonical(void) {
     //////////////////////////////////////////////////////////////////////////
     static const int64_t values[] = {
@@ -4122,6 +4165,60 @@ static int32_t __test_container_failed_growth(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Under a heap budget that a second copy of a list's storage would exceed,
+   removing its items and sorting it without a key function or merges still
+   succeed: removal does not depend on the budget, and such a sort needs no
+   memory beyond the list. */
+static int32_t __test_container_removal_heap_budget(void) {
+    static const char source[] =
+        "items = [None] * 100000\n"
+        "del items[10:]\n"
+        "assert len(items) == 10\n"
+        "items = None\n"
+        "items = [None] * 100000\n"
+        "items[:] = [1]\n"
+        "assert items == [1]\n"
+        "items = None\n"
+        "items = [None] * 100000\n"
+        "del items[::2]\n"
+        "assert len(items) == 50000\n"
+        "items = None\n"
+        "items = [None] * 100000\n"
+        "del items[:]\n"
+        "assert items == []\n"
+        "items = None\n"
+        "items = [None] * 100000\n"
+        "items.sort()\n"
+        "items.sort(reverse=True)\n"
+        "assert len(items) == 100000\n";
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *probe = tinypy_vm_create(&config);
+    TEST_CHECK(probe != NULL);
+    size_t bootstrap_bytes = probe->allocated_bytes;
+    tinypy_vm_destroy(probe);
+    size_t storage_bytes = 100000U * sizeof(tinypy_value_t *);
+    config.max_heap_bytes = bootstrap_bytes + storage_bytes + storage_bytes / 2U;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "removal.py", 10U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_container_heap_limits(void) {
     static const char source[] =
         "list_failed = False\n"
@@ -4153,7 +4250,7 @@ static int32_t __test_container_heap_limits(void) {
     tinypy_value_t *code;
     tinypy_value_t *globals;
     tinypy_value_t *result;
-    tinypy_value_t *sort_items[128];
+    tinypy_value_t *sort_items[1024];
     tinypy_value_t *sort_list;
     tinypy_value_t *sort_method;
     tinypy_value_t *sort_args;
@@ -4176,13 +4273,13 @@ static int32_t __test_container_heap_limits(void) {
     TEST_CHECK(result != NULL);
     TEST_CHECK(error == NULL);
 
-    for (index = 0U; index < sizeof(sort_items) / sizeof(sort_items[0]); ++index) {
-        sort_items[index] = tinypy_integer_from_i64(vm, (int64_t)index);
+    /* Two ascending runs: sorting them merges half the items through
+       temporary storage, and sorting the result needs none. */
+    size_t sort_size = sizeof(sort_items) / sizeof(sort_items[0]);
+    for (index = 0U; index < sort_size; ++index) {
+        sort_items[index] = tinypy_integer_from_i64(vm, (int64_t)((index + sort_size / 2U) % sort_size));
     }
-    sort_list = tinypy_list_from_items(vm, sort_items, sizeof(sort_items) / sizeof(sort_items[0]));
-    for (index = 0U; index < sizeof(sort_items) / sizeof(sort_items[0]); ++index) {
-        tinypy_release(sort_items[index]);
-    }
+    sort_list = tinypy_list_from_items(vm, sort_items, sort_size);
     sort_method = tinypy_object_get_attr(sort_list, "sort", 4U, &error);
     sort_args = tinypy_tuple_new(vm, 0U);
     TEST_CHECK(sort_method != NULL);
@@ -4193,16 +4290,35 @@ static int32_t __test_container_heap_limits(void) {
     TEST_CHECK(error == NULL);
     TEST_CHECK(state.allocation_calls == allocation_calls + 1U);
     tinypy_release(sort_result);
+    allocation_calls = state.allocation_calls;
+    sort_result = tinypy_call(sort_method, sort_args, NULL, &error);
+    TEST_CHECK(sort_result != NULL);
+    TEST_CHECK(error == NULL);
+    TEST_CHECK(state.allocation_calls == allocation_calls);
+    tinypy_release(sort_result);
+    tinypy_release(sort_method);
+    tinypy_release(sort_list);
 
+    /* A refused merge leaves the runs as they were. */
+    sort_list = tinypy_list_from_items(vm, sort_items, sort_size);
+    sort_method = tinypy_object_get_attr(sort_list, "sort", 4U, &error);
+    TEST_CHECK(sort_method != NULL);
+    TEST_CHECK(error == NULL);
     state.fail_allocation_above = 512U;
     sort_result = tinypy_call(sort_method, sort_args, NULL, &error);
     TEST_CHECK(sort_result == NULL);
     TEST_CHECK(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
-    TEST_CHECK(tinypy_list_size(sort_list) == sizeof(sort_items) / sizeof(sort_items[0]));
+    TEST_CHECK(tinypy_list_size(sort_list) == sort_size);
+    for (index = 0U; index < sort_size; ++index) {
+        TEST_CHECK(tinypy_list_get(sort_list, index) == sort_items[index]);
+    }
     tinypy_error_release(error);
     error = NULL;
     tinypy_vm_clear_error(vm);
     state.fail_allocation_above = 0U;
+    for (index = 0U; index < sort_size; ++index) {
+        tinypy_release(sort_items[index]);
+    }
     tinypy_release(sort_args);
     tinypy_release(sort_method);
     tinypy_release(sort_list);
@@ -4526,6 +4642,20 @@ static int32_t __test_computed_heap_budget(void) {
         "    del victim\n"
         "    del fill\n"
         "text = 'y' * 400000\n";
+    /* A shift count or an exponent that fits an int64 but not the host's
+       size_t asks for more digits than the host can address, a MemoryError
+       on every host as with 64-bit sizes. */
+    static const char huge_source[] =
+        "def outcome(operation):\n"
+        "    try:\n"
+        "        operation()\n"
+        "    except MemoryError:\n"
+        "        return 'MemoryError'\n"
+        "    return 'kept'\n"
+        "cases = (lambda: 1 << 2 ** 40, lambda: -3L << 2 ** 62, lambda: 7 ** 2 ** 64, lambda: (-2L) ** (2 ** 64 + 1))\n"
+        "results = [outcome(operation) for operation in cases]\n"
+        "assert results == ['MemoryError'] * len(cases), results\n"
+        "assert (1 >> 2 ** 40, -1 >> 2 ** 62, 0 << 2 ** 62, 5L >> 2 ** 40, -5L >> 2 ** 62) == (0, -1, 0, 0, -1)\n";
     test_allocator_state_t state;
     tinypy_module_artifact_t artifacts[2];
     test_heap_budget_outcome_e outcome;
@@ -4544,6 +4674,10 @@ static int32_t __test_computed_heap_budget(void) {
     }
     TEST_CHECK(outcome == TEST_HEAP_BUDGET_SUCCEEDED);
     if (__test_heap_budget_run(artifacts, module_source, bootstrap_bytes + 1000000U, &outcome) != 0) {
+        return 1;
+    }
+    TEST_CHECK(outcome == TEST_HEAP_BUDGET_SUCCEEDED);
+    if (__test_heap_budget_run(artifacts, huge_source, bootstrap_bytes + 1024U * 1024U, &outcome) != 0) {
         return 1;
     }
     TEST_CHECK(outcome == TEST_HEAP_BUDGET_SUCCEEDED);
@@ -6828,6 +6962,164 @@ static tinypy_bool_t __test_text_is(tinypy_value_t *text, const char *expected) 
     return equal;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Whether RuntimeError with message is raised, which it then clears, and no
+   native recursion level is left behind. */
+static tinypy_bool_t __test_raised_recursion_error(tinypy_vm_t *vm, const char *message) {
+    tinypy_value_t *runtime_error = &vm->exception_types[TINYPY_EXCEPTION_RUNTIME_ERROR]->base.base;
+    tinypy_value_t *raised = tinypy_vm_raised_exception(vm);
+
+    if (raised == NULL || tinypy_vm_raised_exception_type(vm) != runtime_error || vm->native_recursion_depth != 0U) {
+        return TINYPY_FALSE;
+    }
+    tinypy_retain(raised);
+    tinypy_vm_clear_error(vm);
+    tinypy_value_t *text = tinypy_object_str(raised, NULL);
+    tinypy_bool_t matched = __test_text_is(text, message);
+
+    tinypy_release(raised);
+    return matched;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A host that hashes nested values outside any call meets the native stack
+   guard as Python code does: bound methods and tuples nested at any depth
+   hash on the explicit stack of tuplehash, and the hash slot of built-in
+   methods and the __hash__ of struct sequences, which recurse natively,
+   raise RuntimeError past the native stack budget rather than exhausting
+   the stack. */
+static int32_t __test_host_hash_native_guard(void) {
+    static const char source[] =
+        "import sys\n"
+        "class Holder(object):\n"
+        "    def method(self):\n"
+        "        pass\n"
+        "method_type = type(Holder().method)\n"
+        "sequence_type = type(sys.float_info)\n"
+        "bound = Holder()\n"
+        "for index in xrange(50000):\n"
+        "    bound = method_type(Holder.method.im_func, (bound, index), Holder)\n"
+        "builtin = len\n"
+        "for index in xrange(100000):\n"
+        "    builtin = builtin.__reduce_ex__\n"
+        "sequence = 0\n"
+        "for index in xrange(20000):\n"
+        "    sequence = sequence_type((sequence,) + tuple(range(10)))\n"
+        "bound_hash = hash(bound)\n";
+    static const char unwind[] =
+        "while isinstance(bound, method_type):\n"
+        "    bound = bound.im_self[0]\n"
+        "while builtin is not len:\n"
+        "    builtin = builtin.__self__\n"
+        "while isinstance(sequence, sequence_type):\n"
+        "    sequence = sequence[0]\n";
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "nested.py", 9U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+
+    tinypy_value_t *bound = __test_global(globals, "bound");
+    tinypy_value_t *bound_hash = __test_global(globals, "bound_hash");
+    tinypy_hash_t hash = tinypy_hash(bound);
+    TEST_CHECK(tinypy_vm_has_error(vm) == 0 && hash == (tinypy_hash_t)tinypy_integer_as_i64(bound_hash));
+    tinypy_value_t *builtin = __test_global(globals, "builtin");
+    (void)tinypy_hash(builtin);
+    TEST_CHECK(__test_raised_recursion_error(vm, "maximum recursion depth exceeded") != 0);
+    tinypy_value_t *sequence = __test_global(globals, "sequence");
+    tinypy_value_t *dict = tinypy_dict_new(vm);
+    tinypy_dict_set(dict, sequence, sequence);
+    TEST_CHECK(tinypy_dict_size(dict) == 0U);
+    TEST_CHECK(__test_raised_recursion_error(vm, "maximum recursion depth exceeded while calling a Python object") != 0);
+    tinypy_dict_set(dict, bound, bound);
+    TEST_CHECK(tinypy_vm_has_error(vm) == 0 && tinypy_dict_size(dict) == 1U);
+    tinypy_release(dict);
+
+    result = tinypy_exec_source(vm, unwind, sizeof(unwind) - 1U, "unwind.py", 9U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U && state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* tinypy_class_is_subclass, as PyClass_IsSubclass, takes no recursion
+   level: it follows the last base in a loop, so a single inheritance chain
+   of any depth is walked, and recurses into the other bases under the native
+   stack guard alone, past the recursion limit, until the native stack budget
+   reports false and leaves RuntimeError raised. The chains are linked from
+   the top down, so that no assignment walks one. */
+static int32_t __test_class_subclass_native_guard(void) {
+    static const char source[] =
+        "import sys\n"
+        "sys.setrecursionlimit(100)\n"
+        "class Root:\n"
+        "    pass\n"
+        "class Other:\n"
+        "    pass\n"
+        "def chain(count, extra):\n"
+        "    classes = [type(Root)('Level%d' % index, (), {}) for index in range(count)]\n"
+        "    for index in range(count - 1, 0, -1):\n"
+        "        classes[index].__bases__ = (classes[index - 1],) + extra\n"
+        "    classes[0].__bases__ = (Root,) + extra\n"
+        "    return classes\n"
+        "single = chain(50000, ())\n"
+        "moderate = chain(300, (Other,))\n"
+        "deep = chain(50000, (Other,))\n";
+    static const char unwind[] =
+        "for classes in (single, moderate, deep):\n"
+        "    for level in classes:\n"
+        "        level.__bases__ = ()\n";
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "chains.py", 9U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+
+    tinypy_value_t *root = __test_global(globals, "Root");
+    tinypy_value_t *single = __test_global(globals, "single");
+    tinypy_value_t *moderate = __test_global(globals, "moderate");
+    tinypy_value_t *deep = __test_global(globals, "deep");
+    tinypy_value_t *single_top = tinypy_list_get(single, tinypy_list_size(single) - 1U);
+    tinypy_value_t *moderate_top = tinypy_list_get(moderate, tinypy_list_size(moderate) - 1U);
+    tinypy_value_t *deep_top = tinypy_list_get(deep, tinypy_list_size(deep) - 1U);
+    TEST_CHECK(tinypy_class_is_subclass(single_top, root) != 0 && tinypy_vm_has_error(vm) == 0);
+    TEST_CHECK(tinypy_class_is_subclass(root, single_top) == 0 && tinypy_vm_has_error(vm) == 0);
+    TEST_CHECK(tinypy_class_is_subclass(moderate_top, root) != 0 && tinypy_vm_has_error(vm) == 0);
+    TEST_CHECK(tinypy_class_is_subclass(deep_top, root) == 0);
+    TEST_CHECK(__test_raised_recursion_error(vm, "maximum recursion depth exceeded in subclass check") != 0);
+    /* As PyErr_GivenExceptionMatches, matching reports the failure as
+       unraisable and answers no match. */
+    TEST_CHECK(tinypy_exception_matches(deep_top, root, &error) == 0 && error == NULL && tinypy_vm_has_error(vm) == 0 && vm->native_recursion_depth == 0U);
+
+    result = tinypy_exec_source(vm, unwind, sizeof(unwind) - 1U, "unwind.py", 9U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U && state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 /* tinypy_vm_raise_error raises a complete instance of the class of every
    kind, UnicodeError for the kinds of the codec errors, whose fields
    tinypy_exception_new gives. The str and the repr of a nested exception
@@ -9086,6 +9378,76 @@ static int32_t __test_error_pending_diagnostics(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct test_compile_pending_state_t {
+    tinypy_vm_t *vm;
+    size_t writes;
+    size_t pending_writes;
+} test_compile_pending_state_t;
+//////////////////////////////////////////////////////////////////////////
+static void __test_compile_pending_output(void *user_data, tinypy_output_channel_e channel, const void *bytes, size_t size) {
+    test_compile_pending_state_t *state = (test_compile_pending_state_t *)user_data;
+
+    (void)channel;
+    (void)bytes;
+    (void)size;
+    state->writes += 1U;
+    if (tinypy_vm_has_error(state->vm) != 0) {
+        state->pending_writes += 1U;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* tinypy_compile_source and tinypy_preprocess_source reset the exception the
+   host left pending, as the other top-level entry points do: a compile writes
+   its SyntaxWarning without it and a success leaves none pending. */
+static int32_t __test_compile_pending_reset(void) {
+    static const char source[] = "def f():\n    x = 1\n    global x\n";
+    test_allocator_state_t allocator_state;
+    test_compile_pending_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_host_t host;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    (void)memset(&state, 0, sizeof(state));
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &state;
+    host.emit_output = __test_compile_pending_output;
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    config.host = &host;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    state.vm = vm;
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+
+    tinypy_vm_raise_error(vm, TINYPY_ERROR_VALUE, "stale");
+    tinypy_value_t *code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "warn.py", 7U, &options, &error);
+    TEST_CHECK(code != NULL && error == NULL && tinypy_vm_has_error(vm) == 0);
+    TEST_CHECK(state.writes != 0U && state.pending_writes == 0U);
+    tinypy_release(code);
+
+    tinypy_vm_raise_error(vm, TINYPY_ERROR_VALUE, "stale");
+    tinypy_preprocess_result_t *preprocessed = tinypy_preprocess_source(vm, source, sizeof(source) - 1U, "warn.py", 7U, &options, &error);
+    TEST_CHECK(preprocessed != NULL && error == NULL && tinypy_vm_has_error(vm) == 0);
+    tinypy_preprocess_result_destroy(preprocessed);
+
+    state.writes = 0U;
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_vm_raise_error(vm, TINYPY_ERROR_VALUE, "stale");
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "warn.py", 7U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL && tinypy_vm_has_error(vm) == 0);
+    TEST_CHECK(state.writes != 0U && state.pending_writes == 0U);
+    tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 typedef struct test_native_slot_state_t {
     tinypy_vm_t *vm;
     tinypy_native_type_spec_t reset_spec;
@@ -9483,6 +9845,80 @@ static int32_t __test_type_new_metaclass(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_set_attr_probe(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    (void)items;
+    (void)kwargs;
+    (void)out_error;
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+    int64_t bound = self != NULL ? INT64_C(100) : INT64_C(0);
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, bound + (int64_t)count);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* tinypy_type_set_attr turns a fresh native function, as pybind registers
+   its methods, into a method descriptor of the type, and stores one held
+   elsewhere too, as the builtin len, a function of a module or a function the
+   host keeps in a dictionary, as it is, as PyObject_SetAttrString does: it
+   stays a plain function for every holder. */
+static int32_t __test_type_set_attr_sharing(void) {
+    static const char source[] =
+        "class T(object):\n"
+        "    pass\n";
+    static const char check_source[] =
+        "check(type(T.__dict__['fresh']).__name__, 'method_descriptor')\n"
+        "check(T().fresh(1), 101)\n"
+        "check((T.size is len, len('abc'), T().size('ab')), (True, 3, 2))\n"
+        "check((T.helper is host.helper, host.helper(), T().helper(1)), (True, 0, 1))\n"
+        "check((T.shared is kept, kept(1, 2), T().shared(1, 2)), (True, 2, 2))\n";
+    test_allocator_state_t allocator_state;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    TEST_CHECK(__test_native_contract_run(vm, globals, source) == 0);
+    tinypy_value_t *type_value = __test_global(globals, "T");
+    tinypy_type_t *type = tinypy_value_as_type(type_value);
+
+    tinypy_value_t *fresh = tinypy_native_function_new_items_keywords(vm, "fresh", 5U, __test_set_attr_probe, NULL, NULL);
+    tinypy_type_set_attr(type, "fresh", 5U, fresh);
+    tinypy_release(fresh);
+
+    tinypy_value_t *builtins = tinypy_vm_builtins(vm);
+    tinypy_value_t *len_key = tinypy_string_from_bytes(vm, "len", 3U);
+    tinypy_value_t *len_function = tinypy_dict_get(builtins, len_key);
+    tinypy_type_set_attr(type, "size", 4U, len_function);
+    tinypy_release(len_key);
+
+    tinypy_value_t *module = tinypy_module_new(vm, "host", 4U);
+    tinypy_value_t *helper = tinypy_native_function_new_items_keywords(vm, "helper", 6U, __test_set_attr_probe, NULL, NULL);
+    tinypy_module_add_value(module, "helper", 6U, helper);
+    tinypy_release(helper);
+    tinypy_value_t *published = tinypy_module_get_value(module, "helper", 6U);
+    tinypy_type_set_attr(type, "helper", 6U, published);
+    tinypy_value_t *module_key = tinypy_string_from_bytes(vm, "host", 4U);
+    tinypy_dict_set(globals, module_key, module);
+    tinypy_release(module_key);
+    tinypy_release(module);
+
+    tinypy_value_t *shared = tinypy_native_function_new_items_keywords(vm, "shared", 6U, __test_set_attr_probe, NULL, NULL);
+    tinypy_value_t *kept_key = tinypy_string_from_bytes(vm, "kept", 4U);
+    tinypy_dict_set(globals, kept_key, shared);
+    tinypy_type_set_attr(type, "shared", 6U, shared);
+    tinypy_release(kept_key);
+    tinypy_release(shared);
+
+    TEST_CHECK(__test_native_contract_run(vm, globals, check_source) == 0);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_error_message_is(const tinypy_error_t *error, const char *expected) {
     size_t size = 0U;
     const char *message = error != NULL ? tinypy_error_message(error, &size) : "";
@@ -9724,6 +10160,88 @@ static int32_t __test_debugger_mapping_locals(void) {
     TEST_CHECK(allocator_state.outstanding_bytes == 0U);
     return 0;
 }
+//////////////////////////////////////////////////////////////////////////
+typedef struct test_debugger_events_state_t {
+    char events[128];
+    size_t size;
+} test_debugger_events_state_t;
+//////////////////////////////////////////////////////////////////////////
+/* Records each event but LINE of the functions of the traced source as its
+   kind and the initial of the function. */
+static void __test_debugger_events_record(void *user_data, const tinypy_debugger_event_t *event) {
+    static const char kinds[] = "LCRE";
+    test_debugger_events_state_t *state = (test_debugger_events_state_t *)user_data;
+
+    if (event->event == TINYPY_DEBUGGER_EVENT_LINE || state->size + 2U >= sizeof(state->events)) {
+        return;
+    }
+    tinypy_value_t *code = tinypy_frame_code(event->frame);
+    tinypy_value_t *name = tinypy_code_name(code);
+    size_t name_size = 0U;
+    const char *name_bytes = (const char *)tinypy_string_view(name, &name_size);
+    if (name_size == 0U || name_bytes[0] == '<') {
+        return;
+    }
+    state->events[state->size] = kinds[(size_t)event->event - 1U];
+    state->events[state->size + 1U] = name_bytes[0];
+    state->size += 2U;
+}
+//////////////////////////////////////////////////////////////////////////
+/* As the trace function of CPython, the debugger reports a RETURN for every
+   CALL, also for a frame left by yield or by an exception, and an EXCEPTION
+   for an exception thrown into a generator. */
+static int32_t __test_debugger_return_events(void) {
+    static const char source[] =
+        "def gen():\n"
+        "    yield 1\n"
+        "    yield 2\n"
+        "def raiser():\n"
+        "    raise KeyError('k')\n"
+        "def caller():\n"
+        "    try:\n"
+        "        raiser()\n"
+        "    except KeyError:\n"
+        "        pass\n"
+        "    for item in gen():\n"
+        "        pass\n"
+        "    closing = gen()\n"
+        "    next(closing)\n"
+        "    closing.close()\n"
+        "    thrown = gen()\n"
+        "    next(thrown)\n"
+        "    try:\n"
+        "        thrown.throw(ValueError('v'))\n"
+        "    except ValueError:\n"
+        "        pass\n"
+        "caller()\n";
+    static const char expected[] = "CcCrErRrEcCgRgCgRgCgRgCgRgCgEgRgCgRgCgEgRgEcRc";
+    test_allocator_state_t allocator_state;
+    test_debugger_events_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_debugger_t debugger = {TINYPY_ABI_VERSION, (uint32_t)sizeof(tinypy_debugger_t), &state, __test_debugger_events_record};
+    TEST_CHECK(tinypy_debugger_set(vm, &debugger) != 0);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "traced.py", 9U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    TEST_CHECK(tinypy_debugger_set(vm, NULL) != 0);
+    TEST_CHECK(state.size == sizeof(expected) - 1U && memcmp(state.events, expected, state.size) == 0);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
 #endif
 //////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
@@ -9775,6 +10293,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "numeric_bits") == 0) {
         int return_value_9 = __test_float_complex_bits();
         return return_value_9;
+    }
+    if (strcmp(argv[1], "float_free_list") == 0) {
+        int float_free_list = __test_float_free_list();
+        return float_free_list;
     }
     if (strcmp(argv[1], "long_canonical") == 0) {
         int return_value_10 = __test_long_canonical();
@@ -9852,6 +10374,14 @@ int main(int argc, char **argv) {
         int result = __test_stack_budget();
         return result;
     }
+    if (strcmp(argv[1], "host_hash_native_guard") == 0) {
+        int result = __test_host_hash_native_guard();
+        return result;
+    }
+    if (strcmp(argv[1], "class_subclass_native_guard") == 0) {
+        int result = __test_class_subclass_native_guard();
+        return result;
+    }
     if (strcmp(argv[1], "intern_lifetime") == 0) {
         int result = __test_intern_lifetime();
         return result;
@@ -9870,7 +10400,11 @@ int main(int argc, char **argv) {
             return return_value_20;
         }
         int failed_growth = __test_container_failed_growth();
-        return failed_growth;
+        if (failed_growth != 0) {
+            return failed_growth;
+        }
+        int removal_heap_budget = __test_container_removal_heap_budget();
+        return removal_heap_budget;
     }
     if (strcmp(argv[1], "heap_budget_sweep") == 0) {
         int heap_budget = __test_heap_budget_sweep();
@@ -10004,6 +10538,14 @@ int main(int argc, char **argv) {
         int result = __test_type_new_metaclass();
         return result;
     }
+    if (strcmp(argv[1], "type_set_attr_sharing") == 0) {
+        int result = __test_type_set_attr_sharing();
+        return result;
+    }
+    if (strcmp(argv[1], "compile_pending_reset") == 0) {
+        int result = __test_compile_pending_reset();
+        return result;
+    }
     if (strcmp(argv[1], "generator_embedding") == 0) {
         int result = __test_generator_embedding();
         return result;
@@ -10039,6 +10581,14 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "debugger_mapping_locals") == 0) {
 #if defined(TINYPY_DEBUGGER)
         int result = __test_debugger_mapping_locals();
+        return result;
+#else
+        return 0;
+#endif
+    }
+    if (strcmp(argv[1], "debugger_return_events") == 0) {
+#if defined(TINYPY_DEBUGGER)
+        int result = __test_debugger_return_events();
         return result;
 #else
         return 0;

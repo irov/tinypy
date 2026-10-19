@@ -364,16 +364,11 @@ static tinypy_value_t *__tinypy_import_find_loader(tinypy_vm_t *vm, tinypy_value
     tinypy_value_t *find_items[2];
 
     *out_declined = TINYPY_FALSE;
-    tinypy_value_t *find_method = tinypy_object_get_attr_value(finder, vm->internal_find_module_key, out_error);
-    if (find_method == NULL) {
-        return NULL;
-    }
     find_items[0] = name;
     find_items[1] = path;
     tinypy_value_t *find_args = tinypy_tuple_from_items(vm, find_items, 2U);
-    tinypy_value_t *loader = tinypy_call(find_method, find_args, NULL, out_error);
+    tinypy_value_t *loader = tinypy_internal_call_method(finder, vm->internal_find_module_key, find_args, out_error);
     TINYPY_DECREF(find_args);
-    TINYPY_DECREF(find_method);
     if (loader == NULL) {
         if (reload == TINYPY_FALSE && tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_IMPORT_ERROR, out_error) != TINYPY_FALSE) {
             *out_not_found = TINYPY_TRUE;
@@ -394,15 +389,10 @@ static tinypy_value_t *__tinypy_import_find_loader(tinypy_vm_t *vm, tinypy_value
    entry of a loader that failed or returned None, which reports the module
    as not found. A reload keeps sys.modules as the loader left it. */
 static tinypy_value_t *__tinypy_import_load_loader(tinypy_vm_t *vm, tinypy_value_t *loader, tinypy_value_t *key, tinypy_bool_t reload, tinypy_bool_t *out_not_found, tinypy_error_t **out_error) {
-    tinypy_value_t *load_method = tinypy_object_get_attr_value(loader, vm->internal_load_module_key, out_error);
-
-    if (load_method == NULL) {
-        return NULL;
-    }
     tinypy_value_t *load_args = tinypy_tuple_from_items(vm, &key, 1U);
-    tinypy_value_t *module = tinypy_call(load_method, load_args, NULL, out_error);
+    tinypy_value_t *module = tinypy_internal_call_method(loader, vm->internal_load_module_key, load_args, out_error);
+
     TINYPY_DECREF(load_args);
-    TINYPY_DECREF(load_method);
     if (reload != TINYPY_FALSE) {
         if (module != NULL && TINYPY_VALUE_KIND(module) == TINYPY_VALUE_NONE) {
             TINYPY_DECREF(module);

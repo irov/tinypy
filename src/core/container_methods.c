@@ -183,6 +183,7 @@ tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_
     if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         return TINYPY_FALSE;
     }
+    tinypy_internal_list_shrink(list);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -488,27 +489,31 @@ static tinypy_value_t *__tinypy_list_reverse_method(tinypy_value_t *function, ti
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-typedef struct tinypy_list_sort_item_t {
-    tinypy_value_t *value;
-    tinypy_value_t *key;
-} tinypy_list_sort_item_t;
+/* sortslice of listsort: the keys the sort compares and, with a key
+   function, the values that move with them; without one the keys are the
+   values and values is NULL. */
+typedef struct tinypy_list_sort_slice_t {
+    tinypy_value_t **keys;
+    tinypy_value_t **values;
+} tinypy_list_sort_slice_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_list_sort_run_t {
-    tinypy_list_sort_item_t *base;
+    tinypy_list_sort_slice_t base;
     size_t length;
 } tinypy_list_sort_run_t;
 //////////////////////////////////////////////////////////////////////////
 /* MergeState of listsort: the pending runs, the galloping threshold and the
-   temporary storage, which spills to the heap only for long merges. */
+   temporary storage, which spills to the heap only for long merges and holds
+   as many values as keys when there are values. */
 typedef struct tinypy_list_sort_state_t {
     tinypy_vm_t *vm;
     tinypy_value_t *compare;
     size_t min_gallop;
-    tinypy_list_sort_item_t *temporary;
+    tinypy_list_sort_slice_t temporary;
     size_t temporary_capacity;
     size_t run_count;
     tinypy_list_sort_run_t runs[TINYPY_LIST_SORT_MAX_PENDING];
-    tinypy_list_sort_item_t inline_temporary[TINYPY_LIST_SORT_TEMPORARY_SIZE];
+    tinypy_value_t *inline_temporary[TINYPY_LIST_SORT_TEMPORARY_SIZE];
 } tinypy_list_sort_state_t;
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_container_call_items(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
@@ -587,56 +592,104 @@ static tinypy_bool_t __tinypy_list_sort_compare(tinypy_vm_t *vm, tinypy_value_t 
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_list_sort_reverse_items(tinypy_list_sort_item_t *items, size_t begin, size_t end) {
-    while (begin < end && begin < --end) {
-        tinypy_list_sort_item_t item = items[begin];
+static void __tinypy_list_sort_reverse_values(tinypy_value_t **values, size_t size) {
+    size_t begin = 0U;
+    size_t end = size;
 
-        items[begin] = items[end];
-        items[end] = item;
+    while (begin < end && begin < --end) {
+        tinypy_value_t *value = values[begin];
+
+        values[begin] = values[end];
+        values[end] = value;
         begin += 1U;
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_list_sort_less(tinypy_list_sort_state_t *state, const tinypy_list_sort_item_t *left, const tinypy_list_sort_item_t *right, tinypy_bool_t *out_less, tinypy_error_t **out_error) {
-    tinypy_bool_t compared = __tinypy_list_sort_compare(state->vm, left->key, right->key, state->compare, out_less, out_error);
+/* reverse_sortslice */
+static void __tinypy_list_sort_reverse(const tinypy_list_sort_slice_t *slice, size_t size) {
+    __tinypy_list_sort_reverse_values(slice->keys, size);
+    if (slice->values != NULL) {
+        __tinypy_list_sort_reverse_values(slice->values, size);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static inline void __tinypy_list_sort_slice_advance(tinypy_list_sort_slice_t *slice, ptrdiff_t count) {
+    slice->keys += count;
+    if (slice->values != NULL) {
+        slice->values += count;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* sortslice_memmove, which also serves the copies that cannot overlap. */
+static inline void __tinypy_list_sort_slice_move(const tinypy_list_sort_slice_t *destination, ptrdiff_t destination_index, const tinypy_list_sort_slice_t *source, ptrdiff_t source_index, ptrdiff_t count) {
+    (void)memmove(destination->keys + destination_index, source->keys + source_index, (size_t)count * sizeof(tinypy_value_t *));
+    if (destination->values != NULL) {
+        (void)memmove(destination->values + destination_index, source->values + source_index, (size_t)count * sizeof(tinypy_value_t *));
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static inline void __tinypy_list_sort_slice_copy(const tinypy_list_sort_slice_t *destination, ptrdiff_t destination_index, const tinypy_list_sort_slice_t *source, ptrdiff_t source_index) {
+    destination->keys[destination_index] = source->keys[source_index];
+    if (destination->values != NULL) {
+        destination->values[destination_index] = source->values[source_index];
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* sortslice_copy_incr and sortslice_copy_decr: one item, after which both
+   slices step in the direction. */
+static inline void __tinypy_list_sort_slice_step(tinypy_list_sort_slice_t *destination, tinypy_list_sort_slice_t *source, ptrdiff_t direction) {
+    __tinypy_list_sort_slice_copy(destination, 0, source, 0);
+    __tinypy_list_sort_slice_advance(destination, direction);
+    __tinypy_list_sort_slice_advance(source, direction);
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_list_sort_less(tinypy_list_sort_state_t *state, tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_less, tinypy_error_t **out_error) {
+    tinypy_bool_t compared = __tinypy_list_sort_compare(state->vm, left, right, state->compare, out_less, out_error);
 
     return compared;
 }
 //////////////////////////////////////////////////////////////////////////
-/* binarysort: [low, high) is sorted by binary insertion, [low, start) being
-   sorted already; a failed comparison leaves a permutation of the slice. */
-static tinypy_bool_t __tinypy_list_sort_binary(tinypy_list_sort_state_t *state, tinypy_list_sort_item_t *low, tinypy_list_sort_item_t *high, tinypy_list_sort_item_t *start, tinypy_error_t **out_error) {
-    if (low == start) {
+/* binarysort: the count items of the slice are sorted by binary insertion,
+   the first start being sorted already; a failed comparison leaves a
+   permutation of the slice. */
+static tinypy_bool_t __tinypy_list_sort_binary(tinypy_list_sort_state_t *state, tinypy_list_sort_slice_t slice, size_t count, size_t start, tinypy_error_t **out_error) {
+    if (start == 0U) {
         ++start;
     }
-    for (; start < high; ++start) {
-        tinypy_list_sort_item_t *left = low;
-        tinypy_list_sort_item_t *right = start;
-        tinypy_list_sort_item_t pivot = *right;
+    for (; start < count; ++start) {
+        size_t left = 0U;
+        size_t right = start;
+        tinypy_value_t *pivot = slice.keys[start];
 
         do {
-            tinypy_list_sort_item_t *middle = left + ((right - left) >> 1);
+            size_t middle = left + ((right - left) >> 1);
             tinypy_bool_t less;
 
-            if (__tinypy_list_sort_less(state, &pivot, middle, &less, out_error) == 0) {
+            if (__tinypy_list_sort_less(state, pivot, slice.keys[middle], &less, out_error) == 0) {
                 return TINYPY_FALSE;
             }
             if (less != 0) {
                 right = middle;
             }
             else {
-                left = middle + 1;
+                left = middle + 1U;
             }
         } while (left < right);
-        (void)memmove(left + 1, left, (size_t)(start - left) * sizeof(*left));
-        *left = pivot;
+        (void)memmove(slice.keys + left + 1U, slice.keys + left, (start - left) * sizeof(tinypy_value_t *));
+        slice.keys[left] = pivot;
+        if (slice.values != NULL) {
+            tinypy_value_t *value = slice.values[start];
+
+            (void)memmove(slice.values + left + 1U, slice.values + left, (start - left) * sizeof(tinypy_value_t *));
+            slice.values[left] = value;
+        }
     }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* count_run: the longest ascending run, or the longest strictly descending
    one, which the caller may reverse without breaking stability. */
-static tinypy_bool_t __tinypy_list_sort_count_run(tinypy_list_sort_state_t *state, tinypy_list_sort_item_t *low, tinypy_list_sort_item_t *high, size_t *out_length, tinypy_bool_t *out_descending, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_list_sort_count_run(tinypy_list_sort_state_t *state, tinypy_value_t **low, tinypy_value_t **high, size_t *out_length, tinypy_bool_t *out_descending, tinypy_error_t **out_error) {
     tinypy_bool_t less;
     size_t length = 2U;
 
@@ -646,14 +699,14 @@ static tinypy_bool_t __tinypy_list_sort_count_run(tinypy_list_sort_state_t *stat
         *out_length = 1U;
         return TINYPY_TRUE;
     }
-    if (__tinypy_list_sort_less(state, low, low - 1, &less, out_error) == 0) {
+    if (__tinypy_list_sort_less(state, low[0], low[-1], &less, out_error) == 0) {
         return TINYPY_FALSE;
     }
     *out_descending = less;
     for (low = low + 1; low < high; ++low, ++length) {
         tinypy_bool_t next_less;
 
-        if (__tinypy_list_sort_less(state, low, low - 1, &next_less, out_error) == 0) {
+        if (__tinypy_list_sort_less(state, low[0], low[-1], &next_less, out_error) == 0) {
             return TINYPY_FALSE;
         }
         if (next_less != less) {
@@ -671,22 +724,22 @@ static ptrdiff_t __tinypy_list_sort_next_offset(ptrdiff_t offset, ptrdiff_t max_
     return (offset << 1) + 1;
 }
 //////////////////////////////////////////////////////////////////////////
-/* gallop_left: the position k with items[k - 1] < key <= items[k], found by
+/* gallop_left: the position k with keys[k - 1] < key <= keys[k], found by
    galloping from hint and then searching binary. */
-static tinypy_bool_t __tinypy_list_sort_gallop_left(tinypy_list_sort_state_t *state, const tinypy_list_sort_item_t *key, const tinypy_list_sort_item_t *items, ptrdiff_t count, ptrdiff_t hint, ptrdiff_t *out_position, tinypy_error_t **out_error) {
-    const tinypy_list_sort_item_t *base = items + hint;
+static tinypy_bool_t __tinypy_list_sort_gallop_left(tinypy_list_sort_state_t *state, tinypy_value_t *key, tinypy_value_t *const *keys, ptrdiff_t count, ptrdiff_t hint, ptrdiff_t *out_position, tinypy_error_t **out_error) {
+    tinypy_value_t *const *base = keys + hint;
     ptrdiff_t last_offset = 0;
     ptrdiff_t offset = 1;
     tinypy_bool_t less;
 
-    if (__tinypy_list_sort_less(state, base, key, &less, out_error) == 0) {
+    if (__tinypy_list_sort_less(state, base[0], key, &less, out_error) == 0) {
         return TINYPY_FALSE;
     }
     if (less != 0) {
         ptrdiff_t max_offset = count - hint;
 
         while (offset < max_offset) {
-            if (__tinypy_list_sort_less(state, base + offset, key, &less, out_error) == 0) {
+            if (__tinypy_list_sort_less(state, base[offset], key, &less, out_error) == 0) {
                 return TINYPY_FALSE;
             }
             if (less == 0) {
@@ -705,7 +758,7 @@ static tinypy_bool_t __tinypy_list_sort_gallop_left(tinypy_list_sort_state_t *st
         ptrdiff_t max_offset = hint + 1;
 
         while (offset < max_offset) {
-            if (__tinypy_list_sort_less(state, base - offset, key, &less, out_error) == 0) {
+            if (__tinypy_list_sort_less(state, base[-offset], key, &less, out_error) == 0) {
                 return TINYPY_FALSE;
             }
             if (less != 0) {
@@ -725,7 +778,7 @@ static tinypy_bool_t __tinypy_list_sort_gallop_left(tinypy_list_sort_state_t *st
     while (last_offset < offset) {
         ptrdiff_t middle = last_offset + ((offset - last_offset) >> 1);
 
-        if (__tinypy_list_sort_less(state, items + middle, key, &less, out_error) == 0) {
+        if (__tinypy_list_sort_less(state, keys[middle], key, &less, out_error) == 0) {
             return TINYPY_FALSE;
         }
         if (less != 0) {
@@ -739,22 +792,22 @@ static tinypy_bool_t __tinypy_list_sort_gallop_left(tinypy_list_sort_state_t *st
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* gallop_right: like gallop_left, but after the rightmost item equal to key,
-   so items[k - 1] <= key < items[k]. */
-static tinypy_bool_t __tinypy_list_sort_gallop_right(tinypy_list_sort_state_t *state, const tinypy_list_sort_item_t *key, const tinypy_list_sort_item_t *items, ptrdiff_t count, ptrdiff_t hint, ptrdiff_t *out_position, tinypy_error_t **out_error) {
-    const tinypy_list_sort_item_t *base = items + hint;
+/* gallop_right: like gallop_left, but after the rightmost key equal to key,
+   so keys[k - 1] <= key < keys[k]. */
+static tinypy_bool_t __tinypy_list_sort_gallop_right(tinypy_list_sort_state_t *state, tinypy_value_t *key, tinypy_value_t *const *keys, ptrdiff_t count, ptrdiff_t hint, ptrdiff_t *out_position, tinypy_error_t **out_error) {
+    tinypy_value_t *const *base = keys + hint;
     ptrdiff_t last_offset = 0;
     ptrdiff_t offset = 1;
     tinypy_bool_t less;
 
-    if (__tinypy_list_sort_less(state, key, base, &less, out_error) == 0) {
+    if (__tinypy_list_sort_less(state, key, base[0], &less, out_error) == 0) {
         return TINYPY_FALSE;
     }
     if (less != 0) {
         ptrdiff_t max_offset = hint + 1;
 
         while (offset < max_offset) {
-            if (__tinypy_list_sort_less(state, key, base - offset, &less, out_error) == 0) {
+            if (__tinypy_list_sort_less(state, key, base[-offset], &less, out_error) == 0) {
                 return TINYPY_FALSE;
             }
             if (less == 0) {
@@ -774,7 +827,7 @@ static tinypy_bool_t __tinypy_list_sort_gallop_right(tinypy_list_sort_state_t *s
         ptrdiff_t max_offset = count - hint;
 
         while (offset < max_offset) {
-            if (__tinypy_list_sort_less(state, key, base + offset, &less, out_error) == 0) {
+            if (__tinypy_list_sort_less(state, key, base[offset], &less, out_error) == 0) {
                 return TINYPY_FALSE;
             }
             if (less != 0) {
@@ -793,7 +846,7 @@ static tinypy_bool_t __tinypy_list_sort_gallop_right(tinypy_list_sort_state_t *s
     while (last_offset < offset) {
         ptrdiff_t middle = last_offset + ((offset - last_offset) >> 1);
 
-        if (__tinypy_list_sort_less(state, key, items + middle, &less, out_error) == 0) {
+        if (__tinypy_list_sort_less(state, key, keys[middle], &less, out_error) == 0) {
             return TINYPY_FALSE;
         }
         if (less != 0) {
@@ -805,14 +858,32 @@ static tinypy_bool_t __tinypy_list_sort_gallop_right(tinypy_list_sort_state_t *s
     }
     *out_position = offset;
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_list_sort_temporary_size(const tinypy_list_sort_state_t *state, size_t capacity) {
+    size_t slots = state->temporary.values != NULL ? capacity * 2U : capacity;
+
+    return slots * sizeof(tinypy_value_t *);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The temporary storage inside the state: as many keys as it holds, or half
+   as many keys and their values. */
+static void __tinypy_list_sort_use_inline(tinypy_list_sort_state_t *state) {
+    state->temporary.keys = state->inline_temporary;
+    state->temporary_capacity = TINYPY_LIST_SORT_TEMPORARY_SIZE;
+    if (state->temporary.values != NULL) {
+        state->temporary_capacity = TINYPY_LIST_SORT_TEMPORARY_SIZE / 2U;
+        state->temporary.values = state->inline_temporary + state->temporary_capacity;
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_list_sort_release(tinypy_list_sort_state_t *state) {
-    if (state->temporary != state->inline_temporary) {
-        tinypy_internal_vm_deallocate(state->vm, state->temporary, state->temporary_capacity * sizeof(*state->temporary));
+    if (state->temporary.keys != state->inline_temporary) {
+        size_t temporary_size = __tinypy_list_sort_temporary_size(state, state->temporary_capacity);
+
+        tinypy_internal_vm_deallocate(state->vm, state->temporary.keys, temporary_size);
     }
-    state->temporary = state->inline_temporary;
-    state->temporary_capacity = TINYPY_LIST_SORT_TEMPORARY_SIZE;
+    __tinypy_list_sort_use_inline(state);
 }
 //////////////////////////////////////////////////////////////////////////
 /* merge_getmem replaces the temporary storage without copying it. */
@@ -821,22 +892,26 @@ static tinypy_bool_t __tinypy_list_sort_reserve(tinypy_list_sort_state_t *state,
         return TINYPY_TRUE;
     }
     __tinypy_list_sort_release(state);
-    if ((size_t)need > SIZE_MAX / sizeof(*state->temporary)) {
+    if ((size_t)need > SIZE_MAX / (2U * sizeof(tinypy_value_t *))) {
         tinypy_internal_make_vm_error(state->vm, TINYPY_ERROR_MEMORY, "sort temporary storage is too large", out_error);
         return TINYPY_FALSE;
     }
-    tinypy_list_sort_item_t *temporary = (tinypy_list_sort_item_t *)__tinypy_internal_vm_allocate_checked(state->vm, (size_t)need * sizeof(*temporary), out_error);
+    size_t temporary_size = __tinypy_list_sort_temporary_size(state, (size_t)need);
+    tinypy_value_t **temporary = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(state->vm, temporary_size, out_error);
     if (temporary == NULL) {
         return TINYPY_FALSE;
     }
-    state->temporary = temporary;
+    state->temporary.keys = temporary;
+    if (state->temporary.values != NULL) {
+        state->temporary.values = temporary + need;
+    }
     state->temporary_capacity = (size_t)need;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* merge_lo merges the shorter run a, copied aside, with the run b after it;
-   items[a] > items[b] and the last of a ends the merge. */
-static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *state, tinypy_list_sort_item_t *a, ptrdiff_t a_count, tinypy_list_sort_item_t *b, ptrdiff_t b_count, tinypy_error_t **out_error) {
+   keys[a] > keys[b] and the last of a ends the merge. */
+static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *state, tinypy_list_sort_slice_t a, ptrdiff_t a_count, tinypy_list_sort_slice_t b, ptrdiff_t b_count, tinypy_error_t **out_error) {
     size_t min_gallop = state->min_gallop;
     tinypy_bool_t merged = TINYPY_FALSE;
     tinypy_bool_t less;
@@ -845,11 +920,11 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
     if (__tinypy_list_sort_reserve(state, a_count, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    (void)memcpy(state->temporary, a, (size_t)a_count * sizeof(*a));
-    tinypy_list_sort_item_t *destination = a;
+    __tinypy_list_sort_slice_move(&state->temporary, 0, &a, 0, a_count);
+    tinypy_list_sort_slice_t destination = a;
     a = state->temporary;
 
-    *destination++ = *b++;
+    __tinypy_list_sort_slice_step(&destination, &b, 1);
     --b_count;
     if (b_count == 0) {
         goto succeed;
@@ -862,11 +937,11 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
         size_t b_wins = 0U;
 
         for (;;) {
-            if (__tinypy_list_sort_less(state, b, a, &less, out_error) == 0) {
+            if (__tinypy_list_sort_less(state, b.keys[0], a.keys[0], &less, out_error) == 0) {
                 goto fail;
             }
             if (less != 0) {
-                *destination++ = *b++;
+                __tinypy_list_sort_slice_step(&destination, &b, 1);
                 ++b_wins;
                 a_wins = 0U;
                 --b_count;
@@ -878,7 +953,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
                 }
             }
             else {
-                *destination++ = *a++;
+                __tinypy_list_sort_slice_step(&destination, &a, 1);
                 ++a_wins;
                 b_wins = 0U;
                 --a_count;
@@ -894,14 +969,14 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
         do {
             min_gallop -= min_gallop > 1U ? 1U : 0U;
             state->min_gallop = min_gallop;
-            if (__tinypy_list_sort_gallop_right(state, b, a, a_count, 0, &position, out_error) == 0) {
+            if (__tinypy_list_sort_gallop_right(state, b.keys[0], a.keys, a_count, 0, &position, out_error) == 0) {
                 goto fail;
             }
             a_wins = (size_t)position;
             if (position != 0) {
-                (void)memcpy(destination, a, (size_t)position * sizeof(*a));
-                destination += position;
-                a += position;
+                __tinypy_list_sort_slice_move(&destination, 0, &a, 0, position);
+                __tinypy_list_sort_slice_advance(&destination, position);
+                __tinypy_list_sort_slice_advance(&a, position);
                 a_count -= position;
                 if (a_count == 1) {
                     goto copy_b;
@@ -910,25 +985,25 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
                     goto succeed;
                 }
             }
-            *destination++ = *b++;
+            __tinypy_list_sort_slice_step(&destination, &b, 1);
             --b_count;
             if (b_count == 0) {
                 goto succeed;
             }
-            if (__tinypy_list_sort_gallop_left(state, a, b, b_count, 0, &position, out_error) == 0) {
+            if (__tinypy_list_sort_gallop_left(state, a.keys[0], b.keys, b_count, 0, &position, out_error) == 0) {
                 goto fail;
             }
             b_wins = (size_t)position;
             if (position != 0) {
-                (void)memmove(destination, b, (size_t)position * sizeof(*b));
-                destination += position;
-                b += position;
+                __tinypy_list_sort_slice_move(&destination, 0, &b, 0, position);
+                __tinypy_list_sort_slice_advance(&destination, position);
+                __tinypy_list_sort_slice_advance(&b, position);
                 b_count -= position;
                 if (b_count == 0) {
                     goto succeed;
                 }
             }
-            *destination++ = *a++;
+            __tinypy_list_sort_slice_step(&destination, &a, 1);
             --a_count;
             if (a_count == 1) {
                 goto copy_b;
@@ -941,18 +1016,18 @@ succeed:
     merged = TINYPY_TRUE;
 fail:
     if (a_count != 0) {
-        (void)memcpy(destination, a, (size_t)a_count * sizeof(*a));
+        __tinypy_list_sort_slice_move(&destination, 0, &a, 0, a_count);
     }
     return merged;
 copy_b:
-    (void)memmove(destination, b, (size_t)b_count * sizeof(*b));
-    destination[b_count] = *a;
+    __tinypy_list_sort_slice_move(&destination, 0, &b, 0, b_count);
+    __tinypy_list_sort_slice_copy(&destination, b_count, &a, 0);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* merge_hi merges the run a with the shorter run b after it, copied aside,
    from the right end. */
-static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *state, tinypy_list_sort_item_t *a, ptrdiff_t a_count, tinypy_list_sort_item_t *b, ptrdiff_t b_count, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *state, tinypy_list_sort_slice_t a, ptrdiff_t a_count, tinypy_list_sort_slice_t b, ptrdiff_t b_count, tinypy_error_t **out_error) {
     size_t min_gallop = state->min_gallop;
     tinypy_bool_t merged = TINYPY_FALSE;
     tinypy_bool_t less;
@@ -961,14 +1036,16 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
     if (__tinypy_list_sort_reserve(state, b_count, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    tinypy_list_sort_item_t *destination = b + b_count - 1;
-    (void)memcpy(state->temporary, b, (size_t)b_count * sizeof(*b));
-    tinypy_list_sort_item_t *a_base = a;
-    tinypy_list_sort_item_t *b_base = state->temporary;
-    b = state->temporary + b_count - 1;
-    a += a_count - 1;
+    tinypy_list_sort_slice_t destination = b;
+    __tinypy_list_sort_slice_advance(&destination, b_count - 1);
+    __tinypy_list_sort_slice_move(&state->temporary, 0, &b, 0, b_count);
+    tinypy_list_sort_slice_t a_base = a;
+    tinypy_list_sort_slice_t b_base = state->temporary;
+    b = state->temporary;
+    __tinypy_list_sort_slice_advance(&b, b_count - 1);
+    __tinypy_list_sort_slice_advance(&a, a_count - 1);
 
-    *destination-- = *a--;
+    __tinypy_list_sort_slice_step(&destination, &a, -1);
     --a_count;
     if (a_count == 0) {
         goto succeed;
@@ -981,11 +1058,11 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
         size_t b_wins = 0U;
 
         for (;;) {
-            if (__tinypy_list_sort_less(state, b, a, &less, out_error) == 0) {
+            if (__tinypy_list_sort_less(state, b.keys[0], a.keys[0], &less, out_error) == 0) {
                 goto fail;
             }
             if (less != 0) {
-                *destination-- = *a--;
+                __tinypy_list_sort_slice_step(&destination, &a, -1);
                 ++a_wins;
                 b_wins = 0U;
                 --a_count;
@@ -997,7 +1074,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
                 }
             }
             else {
-                *destination-- = *b--;
+                __tinypy_list_sort_slice_step(&destination, &b, -1);
                 ++b_wins;
                 a_wins = 0U;
                 --b_count;
@@ -1013,34 +1090,34 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
         do {
             min_gallop -= min_gallop > 1U ? 1U : 0U;
             state->min_gallop = min_gallop;
-            if (__tinypy_list_sort_gallop_right(state, b, a_base, a_count, a_count - 1, &position, out_error) == 0) {
+            if (__tinypy_list_sort_gallop_right(state, b.keys[0], a_base.keys, a_count, a_count - 1, &position, out_error) == 0) {
                 goto fail;
             }
             position = a_count - position;
             a_wins = (size_t)position;
             if (position != 0) {
-                destination -= position;
-                a -= position;
-                (void)memmove(destination + 1, a + 1, (size_t)position * sizeof(*a));
+                __tinypy_list_sort_slice_advance(&destination, -position);
+                __tinypy_list_sort_slice_advance(&a, -position);
+                __tinypy_list_sort_slice_move(&destination, 1, &a, 1, position);
                 a_count -= position;
                 if (a_count == 0) {
                     goto succeed;
                 }
             }
-            *destination-- = *b--;
+            __tinypy_list_sort_slice_step(&destination, &b, -1);
             --b_count;
             if (b_count == 1) {
                 goto copy_a;
             }
-            if (__tinypy_list_sort_gallop_left(state, a, b_base, b_count, b_count - 1, &position, out_error) == 0) {
+            if (__tinypy_list_sort_gallop_left(state, a.keys[0], b_base.keys, b_count, b_count - 1, &position, out_error) == 0) {
                 goto fail;
             }
             position = b_count - position;
             b_wins = (size_t)position;
             if (position != 0) {
-                destination -= position;
-                b -= position;
-                (void)memcpy(destination + 1, b + 1, (size_t)position * sizeof(*b));
+                __tinypy_list_sort_slice_advance(&destination, -position);
+                __tinypy_list_sort_slice_advance(&b, -position);
+                __tinypy_list_sort_slice_move(&destination, 1, &b, 1, position);
                 b_count -= position;
                 if (b_count == 1) {
                     goto copy_a;
@@ -1049,7 +1126,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
                     goto succeed;
                 }
             }
-            *destination-- = *a--;
+            __tinypy_list_sort_slice_step(&destination, &a, -1);
             --a_count;
             if (a_count == 0) {
                 goto succeed;
@@ -1062,14 +1139,14 @@ succeed:
     merged = TINYPY_TRUE;
 fail:
     if (b_count != 0) {
-        (void)memcpy(destination - (b_count - 1), b_base, (size_t)b_count * sizeof(*b_base));
+        __tinypy_list_sort_slice_move(&destination, -(b_count - 1), &b_base, 0, b_count);
     }
     return merged;
 copy_a:
-    destination -= a_count;
-    a -= a_count;
-    (void)memmove(destination + 1, a + 1, (size_t)a_count * sizeof(*a));
-    *destination = *b;
+    __tinypy_list_sort_slice_advance(&destination, -a_count);
+    __tinypy_list_sort_slice_advance(&a, -a_count);
+    __tinypy_list_sort_slice_move(&destination, 1, &a, 1, a_count);
+    __tinypy_list_sort_slice_copy(&destination, 0, &b, 0);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1077,9 +1154,9 @@ copy_a:
    items of either that are already in place. */
 static tinypy_bool_t __tinypy_list_sort_merge_at(tinypy_list_sort_state_t *state, size_t index, tinypy_error_t **out_error) {
     tinypy_list_sort_run_t *runs = state->runs;
-    tinypy_list_sort_item_t *a = runs[index].base;
+    tinypy_list_sort_slice_t a = runs[index].base;
     ptrdiff_t a_count = (ptrdiff_t)runs[index].length;
-    tinypy_list_sort_item_t *b = runs[index + 1U].base;
+    tinypy_list_sort_slice_t b = runs[index + 1U].base;
     ptrdiff_t b_count = (ptrdiff_t)runs[index + 1U].length;
     ptrdiff_t position;
 
@@ -1088,15 +1165,15 @@ static tinypy_bool_t __tinypy_list_sort_merge_at(tinypy_list_sort_state_t *state
         runs[index + 1U] = runs[index + 2U];
     }
     state->run_count -= 1U;
-    if (__tinypy_list_sort_gallop_right(state, b, a, a_count, 0, &position, out_error) == 0) {
+    if (__tinypy_list_sort_gallop_right(state, b.keys[0], a.keys, a_count, 0, &position, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    a += position;
+    __tinypy_list_sort_slice_advance(&a, position);
     a_count -= position;
     if (a_count == 0) {
         return TINYPY_TRUE;
     }
-    if (__tinypy_list_sort_gallop_left(state, a + a_count - 1, b, b_count, b_count - 1, &b_count, out_error) == 0) {
+    if (__tinypy_list_sort_gallop_left(state, a.keys[a_count - 1], b.keys, b_count, b_count - 1, &b_count, out_error) == 0) {
         return TINYPY_FALSE;
     }
     if (b_count == 0) {
@@ -1161,7 +1238,7 @@ static size_t __tinypy_list_sort_minimum_run(size_t count) {
 //////////////////////////////////////////////////////////////////////////
 /* The mergesort of listsort in Python 2.7, step for step, so comparison
    counts and the order left by a failing comparison match. */
-static tinypy_bool_t __tinypy_list_sort_items(tinypy_vm_t *vm, tinypy_list_sort_item_t *items, size_t size, tinypy_value_t *compare, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_list_sort_items(tinypy_vm_t *vm, tinypy_list_sort_slice_t items, size_t size, tinypy_value_t *compare, tinypy_error_t **out_error) {
     tinypy_list_sort_state_t state;
     tinypy_bool_t sorted = TINYPY_TRUE;
 
@@ -1171,28 +1248,27 @@ static tinypy_bool_t __tinypy_list_sort_items(tinypy_vm_t *vm, tinypy_list_sort_
     state.vm = vm;
     state.compare = compare;
     state.min_gallop = TINYPY_LIST_SORT_MIN_GALLOP;
-    state.temporary = state.inline_temporary;
-    state.temporary_capacity = TINYPY_LIST_SORT_TEMPORARY_SIZE;
+    state.temporary.values = items.values;
+    __tinypy_list_sort_use_inline(&state);
     state.run_count = 0U;
-    tinypy_list_sort_item_t *low = items;
-    tinypy_list_sort_item_t *high = items + size;
+    tinypy_list_sort_slice_t low = items;
     size_t remaining = size;
     size_t minimum_run = __tinypy_list_sort_minimum_run(size);
     while (remaining != 0U) {
         size_t length;
         tinypy_bool_t descending;
 
-        if (__tinypy_list_sort_count_run(&state, low, high, &length, &descending, out_error) == 0) {
+        if (__tinypy_list_sort_count_run(&state, low.keys, low.keys + remaining, &length, &descending, out_error) == 0) {
             sorted = TINYPY_FALSE;
             break;
         }
         if (descending != 0) {
-            __tinypy_list_sort_reverse_items(low, 0U, length);
+            __tinypy_list_sort_reverse(&low, length);
         }
         if (length < minimum_run) {
             size_t forced = remaining <= minimum_run ? remaining : minimum_run;
 
-            if (__tinypy_list_sort_binary(&state, low, low + forced, low + length, out_error) == 0) {
+            if (__tinypy_list_sort_binary(&state, low, forced, length, out_error) == 0) {
                 sorted = TINYPY_FALSE;
                 break;
             }
@@ -1205,7 +1281,7 @@ static tinypy_bool_t __tinypy_list_sort_items(tinypy_vm_t *vm, tinypy_list_sort_
             sorted = TINYPY_FALSE;
             break;
         }
-        low += length;
+        __tinypy_list_sort_slice_advance(&low, (ptrdiff_t)length);
         remaining -= length;
     }
     if (sorted != 0) {
@@ -1329,9 +1405,7 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     tinypy_value_t **saved_items;
     size_t saved_allocated;
     uint64_t saved_version;
-    tinypy_list_sort_item_t *sort_items = NULL;
-    void *sort_storage = NULL;
-    size_t sort_storage_size = 0U;
+    tinypy_value_t **keys = NULL;
     tinypy_bool_t has_keys;
     tinypy_bool_t sorted = TINYPY_TRUE;
     tinypy_bool_t modified;
@@ -1357,70 +1431,49 @@ static tinypy_value_t *__tinypy_list_sort_method(tinypy_value_t *function, tinyp
     TINYPY_LIST_OBJECT(list)->items = NULL;
     TINYPY_LIST_OBJECT(list)->allocated = 0U;
     TINYPY_SIZED_SIZE(list) = 0U;
+    /* The items sort in their own storage; a key function adds an array of
+       keys, which the sort compares while the items move with them. */
+    tinypy_list_sort_slice_t slice = {saved_items, NULL};
     has_keys = key_function != NULL && TINYPY_VALUE_KIND(key_function) != TINYPY_VALUE_NONE;
-    if (size != 0U) {
-        size_t item_storage_size;
-
-        if (size > SIZE_MAX / sizeof(*sort_items)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "sort temporary storage is too large", out_error);
-            sorted = TINYPY_FALSE;
-        }
-        else {
-            item_storage_size = size * sizeof(*sort_items);
-            sort_storage_size = item_storage_size;
-            sort_storage = __tinypy_internal_vm_allocate_checked(vm, sort_storage_size, out_error);
-            if (sort_storage == NULL) {
-                sorted = TINYPY_FALSE;
-            }
-            else {
-                sort_items = (tinypy_list_sort_item_t *)sort_storage;
-            }
-        }
+    if (has_keys != 0 && size != 0U) {
+        keys = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, size * sizeof(*keys), out_error);
+        sorted = keys != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+        slice.keys = keys;
+        slice.values = saved_items;
     }
-    for (index = 0U; sorted != 0 && index < size; ++index) {
-        sort_items[index].value = saved_items[index];
-        if (has_keys != 0) {
-            sort_items[index].key = __tinypy_container_call_items(vm, key_function, &saved_items[index], 1U, out_error);
-            if (sort_items[index].key == NULL) {
-                sorted = TINYPY_FALSE;
-                break;
-            }
-            key_count += 1U;
+    for (index = 0U; sorted != 0 && has_keys != 0 && index < size; ++index) {
+        keys[index] = __tinypy_container_call_items(vm, key_function, &saved_items[index], 1U, out_error);
+        if (keys[index] == NULL) {
+            sorted = TINYPY_FALSE;
+            break;
         }
-        else {
-            sort_items[index].key = saved_items[index];
-        }
+        key_count += 1U;
     }
     keys_ready = sorted;
     if (keys_ready != 0 && reverse != 0) {
-        __tinypy_list_sort_reverse_items(sort_items, 0U, size);
+        __tinypy_list_sort_reverse(&slice, size);
     }
     if (keys_ready != 0) {
-        sorted = __tinypy_list_sort_items(vm, sort_items, size, compare, out_error);
+        sorted = __tinypy_list_sort_items(vm, slice, size, compare, out_error);
     }
     /* listsort releases the keys in the order the sort left them, before
        the final reverse, and those computed before a key function failed
        from the last one. */
     if (has_keys != 0 && keys_ready != 0) {
         for (index = 0U; index < size; ++index) {
-            TINYPY_DECREF(sort_items[index].key);
+            TINYPY_DECREF(keys[index]);
         }
     }
     else if (has_keys != 0) {
         for (index = key_count; index != 0U; --index) {
-            TINYPY_DECREF(sort_items[index - 1U].key);
+            TINYPY_DECREF(keys[index - 1U]);
         }
     }
     if (keys_ready != 0 && reverse != 0) {
-        __tinypy_list_sort_reverse_items(sort_items, 0U, size);
+        __tinypy_list_sort_reverse_values(saved_items, size);
     }
-    if (keys_ready != 0) {
-        for (index = 0U; index < size; ++index) {
-            saved_items[index] = sort_items[index].value;
-        }
-    }
-    if (sort_storage != NULL) {
-        tinypy_internal_vm_deallocate(vm, sort_storage, sort_storage_size);
+    if (keys != NULL) {
+        tinypy_internal_vm_deallocate(vm, keys, size * sizeof(*keys));
     }
     /* listsort reports a modification once the detached list acquired
        storage: it still holds some, or a mutation (which may have released

@@ -1113,9 +1113,9 @@ done:
     return valid;
 }
 //////////////////////////////////////////////////////////////////////////
-/* A length hint of -1 that left no error fails with the SystemError message
-   of the caller. */
-static tinypy_value_t *__tinypy_constructor_sequence_to_list(tinypy_vm_t *vm, tinypy_value_t *iterable, int64_t default_hint, const char *negative_hint_message, tinypy_error_t **out_error) {
+/* The items of PySequence_Tuple, collected in a list. A length hint of -1
+   that left no error fails with the SystemError message of the caller. */
+static tinypy_value_t *__tinypy_constructor_sequence_to_list(tinypy_vm_t *vm, tinypy_value_t *iterable, const char *negative_hint_message, tinypy_error_t **out_error) {
     tinypy_value_t *result = tinypy_internal_list_from_items_checked(vm, NULL, 0U, out_error);
     if (result == NULL) {
         return NULL;
@@ -1128,18 +1128,18 @@ static tinypy_value_t *__tinypy_constructor_sequence_to_list(tinypy_vm_t *vm, ti
         return NULL;
     }
     int64_t hint;
-    if (tinypy_internal_length_hint(iterable, default_hint, &hint, out_error) == 0) {
+    if (tinypy_internal_length_hint(iterable, INT64_C(10), &hint, out_error) == 0) {
         TINYPY_DECREF(iterator);
         TINYPY_DECREF(result);
         return NULL;
     }
-    if (hint == INT64_C(-1) || (default_hint == INT64_C(10) && hint < 0)) {
+    if (hint < 0) {
         tinypy_internal_exception_raise_system_error(vm, hint == INT64_C(-1) ? negative_hint_message : "bad argument to internal function", out_error);
         TINYPY_DECREF(iterator);
         TINYPY_DECREF(result);
         return NULL;
     }
-    size_t reserve_hint = hint < 0 ? 0U : __tinypy_internal_hint_size(hint);
+    size_t reserve_hint = __tinypy_internal_hint_size(hint);
     if (tinypy_internal_list_reserve_checked(vm, result, reserve_hint, out_error) == 0) {
         TINYPY_DECREF(iterator);
         TINYPY_DECREF(result);
@@ -2058,24 +2058,28 @@ tinypy_value_t *tinypy_internal_unicode_create(tinypy_type_t *type, tinypy_value
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* list_init extends the new list as listextend does. */
 static tinypy_value_t *__tinypy_constructor_list_value(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
-    if (value == NULL) {
-        tinypy_value_t *return_value_1 = tinypy_internal_list_from_items_checked(vm, NULL, 0U, out_error);
+    if (value != NULL && value->type == &vm->types[TINYPY_VALUE_LIST]) {
+        size_t list_size = TINYPY_LIST_SIZE(value);
+        tinypy_value_t *return_value_1 = tinypy_internal_list_from_items_checked(vm, TINYPY_LIST_OBJECT(value)->items, list_size, out_error);
         return return_value_1;
     }
-    if (value->type == &vm->types[TINYPY_VALUE_LIST]) {
-        size_t list_size = TINYPY_LIST_SIZE(value);
-        tinypy_value_t *return_value_2 = tinypy_internal_list_from_items_checked(vm, TINYPY_LIST_OBJECT(value)->items, list_size, out_error);
-        return return_value_2;
-    }
-    if (value->type == &vm->types[TINYPY_VALUE_TUPLE]) {
+    if (value != NULL && value->type == &vm->types[TINYPY_VALUE_TUPLE]) {
         tinypy_value_t *const *tuple_items = tinypy_internal_tuple_items(value);
         size_t tuple_size = TINYPY_TUPLE_SIZE(value);
-        tinypy_value_t *return_value_3 = tinypy_internal_list_from_items_checked(vm, tuple_items, tuple_size, out_error);
-        return return_value_3;
+        tinypy_value_t *return_value_2 = tinypy_internal_list_from_items_checked(vm, tuple_items, tuple_size, out_error);
+        return return_value_2;
     }
-    tinypy_value_t *return_value_4 = __tinypy_constructor_sequence_to_list(vm, value, INT64_C(8), "NULL result without error in PyObject_Call", out_error);
-    return return_value_4;
+    tinypy_value_t *result = tinypy_internal_list_from_items_checked(vm, NULL, 0U, out_error);
+    if (result == NULL || value == NULL) {
+        return result;
+    }
+    if (tinypy_internal_list_extend_iterable(result, value, "NULL result without error in PyObject_Call", out_error) == 0) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_list_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -2103,7 +2107,7 @@ tinypy_value_t *tinypy_internal_sequence_tuple(tinypy_value_t *value, const char
         tinypy_value_t *result = tinypy_internal_tuple_from_items_checked(vm, TINYPY_LIST_OBJECT(value)->items, TINYPY_LIST_SIZE(value), out_error);
         return result;
     }
-    tinypy_value_t *list = __tinypy_constructor_sequence_to_list(vm, value, INT64_C(10), negative_hint_message, out_error);
+    tinypy_value_t *list = __tinypy_constructor_sequence_to_list(vm, value, negative_hint_message, out_error);
     if (list == NULL) {
         return NULL;
     }
@@ -2135,7 +2139,7 @@ static tinypy_value_t *__tinypy_constructor_tuple_value(tinypy_type_t *type, tin
         tinypy_value_t *return_value_4 = tinypy_internal_tuple_subclass_from_items(type, TINYPY_LIST_OBJECT(value)->items, list_size, out_error);
         return return_value_4;
     }
-    tinypy_value_t *list = __tinypy_constructor_sequence_to_list(vm, value, INT64_C(10), "NULL result without error in PyObject_Call", out_error);
+    tinypy_value_t *list = __tinypy_constructor_sequence_to_list(vm, value, "NULL result without error in PyObject_Call", out_error);
     if (list == NULL) {
         return NULL;
     }
@@ -2451,17 +2455,21 @@ static tinypy_value_t *__tinypy_constructor_object_init_method(tinypy_value_t *f
         const tinypy_type_t *static_base = __tinypy_constructor_static_base(type);
         tinypy_bool_t object_tp_new = static_base == &vm->types[TINYPY_VALUE_INSTANCE] || tinypy_internal_type_is_host_native(static_base) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
         /* The lookup may reassign the __class__ of the last instance of the
-           type, so the type is read first. */
+           type, so the type is read first and held. */
         tinypy_bool_t native_construct = type->native_spec.construct != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-        tinypy_value_t *type_new = tinypy_type_get_attr_key(type, type->vm->internal_special_new_key);
+        TINYPY_INCREF(&type->base.base);
+        tinypy_value_t *type_new = tinypy_internal_type_constructor_new(type);
+        tinypy_bool_t slot_new = (type->flags & TINYPY_TYPE_FLAG_SLOT_NEW) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
+        TINYPY_DECREF(&type->base.base);
         tinypy_value_t *object_new = tinypy_type_get_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_new_key);
 
         /* Symmetrically, CPython 2.7 accepts these arguments when __new__ is
-         * overridden, with the same unexposed warning when both are custom;
-         * the construct callback of a native type overrides it. The tp_new
-         * of a built-in type without a constructor of its own is NULL, not
-         * object_new, so object_init lets them through too. */
-        if (type_new == object_new && object_tp_new != 0 && native_construct == 0) {
+         * overridden, with the same unexposed warning when both are custom,
+         * which slot_tp_new keeps after the __new__ is gone; the construct
+         * callback of a native type overrides it. The tp_new of a built-in
+         * type without a constructor of its own is NULL, not object_new, so
+         * object_init lets them through too. */
+        if (slot_new == 0 && type_new == object_new && object_tp_new != 0 && native_construct == 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object.__init__() takes no parameters", out_error);
             return NULL;
         }
@@ -3447,7 +3455,9 @@ static tinypy_value_t *__tinypy_constructor_type_compare_method(tinypy_value_t *
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "type comparison requires a type", out_error);
         return NULL;
     }
-    if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_TYPE) {
+    /* type_richcompare also leaves the comparison to the __cmp__ of a
+       metaclass of either type (bug #7491). */
+    if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_TYPE || __tinypy_internal_object_overrides_dispatch(left, TINYPY_INTERNAL_DISPATCH_BIT(CMP)) != 0 || __tinypy_internal_object_overrides_dispatch(right, TINYPY_INTERNAL_DISPATCH_BIT(CMP)) != 0) {
         tinypy_value_t *result = TINYPY_RET_NOT_IMPLEMENTED(vm);
 
         return result;

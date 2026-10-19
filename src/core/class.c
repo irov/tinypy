@@ -21,15 +21,13 @@ static tinypy_value_t *__tinypy_class_dict_probe(tinypy_vm_t *vm, tinypy_value_t
 }
 //////////////////////////////////////////////////////////////////////////
 /* class_lookup recurses into a base without a recursion check, so only the
-   native stack guard fails it; the level it takes keeps the origin of that
-   guard. */
+   native stack guard fails it. */
 static tinypy_value_t *__tinypy_class_lookup_base(tinypy_vm_t *vm, tinypy_value_t *base, tinypy_value_t *key) {
-    if (__tinypy_internal_native_stack_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
+    if (__tinypy_internal_native_recursion_enter(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
         return NULL;
     }
-    vm->evaluation_depth += 1U;
     tinypy_value_t *attribute = tinypy_internal_class_lookup_key(vm, base, key);
-    vm->evaluation_depth -= 1U;
+    __tinypy_internal_native_recursion_leave(vm);
     return attribute;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -75,34 +73,40 @@ static tinypy_value_t *__tinypy_class_lookup_key_checked(tinypy_vm_t *vm, tinypy
     return attribute;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base) {
-    tinypy_value_t *const *iterator;
-    tinypy_value_t *const *iterator_end;
+/* PyClass_IsSubclass, which takes no recursion level: the walk, which runs
+   no Python code, follows the last base in a loop and recurses into the
+   others under the native stack guard alone. */
+int32_t tinypy_internal_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
 
-    tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT((tinypy_value_t *)class_value);
-    if (class_value == candidate_base) {
-        return TINYPY_TRUE;
-    }
-    iterator = TINYPY_TUPLE_ITERATOR_BEGIN(class_object->bases);
-    iterator_end = TINYPY_TUPLE_ITERATOR_END(class_object->bases);
-    for (; iterator != iterator_end; ++iterator) {
-        tinypy_value_t *item = *iterator;
-        if (tinypy_class_is_subclass(item, candidate_base) != 0) {
-            return TINYPY_TRUE;
+    while (class_value != candidate_base) {
+        tinypy_value_t *bases = TINYPY_CLASS_OBJECT((tinypy_value_t *)class_value)->bases;
+        size_t base_count = TINYPY_TUPLE_SIZE(bases);
+
+        if (base_count == 0U) {
+            return 0;
         }
+        if (base_count > 1U) {
+            if (__tinypy_internal_native_recursion_enter(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in subclass check", out_error) == 0) {
+                return -1;
+            }
+            int32_t result = 0;
+            for (size_t index = 0U; result == 0 && index + 1U < base_count; ++index) {
+                result = tinypy_internal_class_is_subclass(TINYPY_TUPLE_GET(bases, index), candidate_base, out_error);
+            }
+            __tinypy_internal_native_recursion_leave(vm);
+            if (result != 0) {
+                return result;
+            }
+        }
+        class_value = TINYPY_TUPLE_GET(bases, base_count - 1U);
     }
-    return TINYPY_FALSE;
+    return 1;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
-    if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in subclass check", NULL) == 0) {
-        return TINYPY_FALSE;
-    }
-    vm->evaluation_depth += 1U;
-    tinypy_bool_t result = __tinypy_class_is_subclass(class_value, candidate_base);
-    vm->evaluation_depth -= 1U;
-    return result;
+    int32_t subclass = tinypy_internal_class_is_subclass(class_value, candidate_base, NULL);
+    return subclass > 0 ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* class_getattr and instance_getattr2 call the tp_descr_get of whatever
@@ -161,13 +165,10 @@ static void __tinypy_class_set_hook(tinypy_value_t **slot, tinypy_value_t *hook)
 }
 //////////////////////////////////////////////////////////////////////////
 /* class_lookup of set_attr_slots for each hook not found yet; the caller
-   sets aside the exception pending before. A hook found is stored owned,
-   and the result is the number still missing. */
-static size_t __tinypy_class_find_hooks(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *const *names, tinypy_value_t **hooks, size_t count, size_t missing) {
-    if (__tinypy_internal_native_stack_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL) == 0) {
-        tinypy_internal_exception_clear_raised(vm);
-        return missing;
-    }
+   sets aside the exception pending before. A hook found is stored owned and
+   counted off the hooks still missing. The bases are walked under the
+   native stack guard of class_lookup, whose failure fails the walk. */
+static tinypy_bool_t __tinypy_class_find_hooks(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *const *names, tinypy_value_t **hooks, size_t count, size_t *in_out_missing) {
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
     tinypy_value_t *dict = TINYPY_RET(class_object->dict);
 
@@ -178,41 +179,53 @@ static size_t __tinypy_class_find_hooks(tinypy_vm_t *vm, tinypy_value_t *class_v
         tinypy_value_t *hook = __tinypy_class_dict_probe(vm, dict, names[index]);
         if (hook != NULL) {
             hooks[index] = TINYPY_RET(hook);
-            missing -= 1U;
+            *in_out_missing -= 1U;
         }
     }
     TINYPY_DECREF(dict);
     tinypy_value_t *bases = TINYPY_RET(class_object->bases);
+    tinypy_bool_t walked = TINYPY_TRUE;
 
-    vm->evaluation_depth += 1U;
-    for (size_t index = 0U; missing != 0U && index < TINYPY_TUPLE_SIZE(bases); ++index) {
-        missing = __tinypy_class_find_hooks(vm, TINYPY_TUPLE_GET(bases, index), names, hooks, count, missing);
+    for (size_t index = 0U; walked != 0 && *in_out_missing != 0U && index < TINYPY_TUPLE_SIZE(bases); ++index) {
+        walked = __tinypy_internal_native_recursion_enter(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in class lookup", NULL);
+        if (walked != 0) {
+            walked = __tinypy_class_find_hooks(vm, TINYPY_TUPLE_GET(bases, index), names, hooks, count, in_out_missing);
+            __tinypy_internal_native_recursion_leave(vm);
+        }
     }
-    vm->evaluation_depth -= 1U;
     TINYPY_DECREF(bases);
-    return missing;
+    return walked;
 }
 //////////////////////////////////////////////////////////////////////////
 /* set_attr_slots: the hooks a class resolves through its bases, found in
-   one walk. No error of their lookups outlives it. */
-static void __tinypy_class_refresh_hooks(tinypy_value_t *class_value) {
+   one walk. No error of their lookups outlives it; a hierarchy too deep for
+   the native stack guard keeps the hooks the class had and raises
+   RuntimeError instead. */
+static tinypy_bool_t __tinypy_class_refresh_hooks(tinypy_value_t *class_value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(class_value);
     tinypy_class_object_t *class_object = TINYPY_CLASS_OBJECT(class_value);
     tinypy_value_t *const names[] = {vm->internal_special_getattr_key, vm->internal_special_setattr_key, vm->internal_special_delattr_key};
     tinypy_value_t **const slots[] = {&class_object->getattr_hook, &class_object->setattr_hook, &class_object->delattr_hook};
     tinypy_value_t *hooks[] = {NULL, NULL, NULL};
     size_t count = sizeof(names) / sizeof(names[0]);
+    size_t missing = count;
     tinypy_internal_exception_state_t state;
 
     tinypy_internal_exception_preserve_begin(vm, &state);
-    (void)__tinypy_class_find_hooks(vm, class_value, names, hooks, count, count);
+    tinypy_bool_t found = __tinypy_class_find_hooks(vm, class_value, names, hooks, count, &missing);
     for (size_t index = 0U; index < count; ++index) {
-        __tinypy_class_set_hook(slots[index], hooks[index]);
+        if (found != 0) {
+            __tinypy_class_set_hook(slots[index], hooks[index]);
+        }
         if (hooks[index] != NULL) {
             TINYPY_DECREF(hooks[index]);
         }
     }
     tinypy_internal_exception_preserve_end(vm, &state);
+    if (found == 0) {
+        tinypy_internal_recursion_error(vm, "maximum recursion depth exceeded in class lookup", out_error);
+    }
+    return found;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_class_hook(tinypy_value_t *class_value, tinypy_value_t *name) {
@@ -268,7 +281,10 @@ tinypy_value_t *tinypy_class_new(const char *name, size_t name_size, tinypy_valu
     TINYPY_DICT_OBJECT(namespace_dict)->type_dictionary = TINYPY_TRUE;
     TINYPY_INCREF(bases);
     TINYPY_INCREF(namespace_dict);
-    __tinypy_class_refresh_hooks(&class_object->base);
+    if (__tinypy_class_refresh_hooks(&class_object->base, out_error) == 0) {
+        TINYPY_DECREF(&class_object->base);
+        return NULL;
+    }
     return &class_object->base;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -658,11 +674,12 @@ tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, t
                 tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__bases__ items must be classes", out_error);
                 return TINYPY_FALSE;
             }
-            if (tinypy_class_is_subclass(base, class_value) != 0) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "a __bases__ item causes an inheritance cycle", out_error);
+            int32_t cycle = tinypy_internal_class_is_subclass(base, class_value, out_error);
+            if (cycle < 0) {
                 return TINYPY_FALSE;
             }
-            if (tinypy_vm_has_error(vm) != 0) {
+            if (cycle > 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "a __bases__ item causes an inheritance cycle", out_error);
                 return TINYPY_FALSE;
             }
         }
@@ -679,11 +696,14 @@ tinypy_bool_t tinypy_internal_class_set_attribute(tinypy_value_t *class_value, t
             __tinypy_internal_type_classic_modified(vm);
         }
         TINYPY_DECREF(previous);
-        /* set_dict and set_bases resolve the hooks again. */
-        if (field != &class_object->name) {
-            __tinypy_class_refresh_hooks(class_value);
+        /* set_dict and set_bases resolve the hooks again; a hierarchy too
+           deep for the native stack guard keeps the value assigned and
+           raises. */
+        if (field == &class_object->name) {
+            return TINYPY_TRUE;
         }
-        return TINYPY_TRUE;
+        tinypy_bool_t refreshed = __tinypy_class_refresh_hooks(class_value, out_error);
+        return refreshed;
     }
     /* class_setattr replaces the hook of this class alone, and then updates
        the dictionary as well. */

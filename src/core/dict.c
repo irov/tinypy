@@ -110,9 +110,10 @@ static inline tinypy_bool_t __tinypy_internal_dict_keys_equal(const tinypy_vm_t 
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* lookdict: a key comparison that replaces the table or the compared entry
-   restarts the probe. A missing key reports the first deleted slot of the
-   probe, which a key comparison may have filled since: the entry living
+/* lookdict: the entry holding the key itself is found whatever hash it was
+   stored with, and a key comparison that replaces the table or the compared
+   entry restarts the probe. A missing key reports the first deleted slot of
+   the probe, which a key comparison may have filled since: the entry living
    there is found, as the callers of lookdict take it. */
 static tinypy_bool_t __tinypy_internal_dict_lookup(const tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_hash_t hash, tinypy_dict_lookup_t *out_lookup, tinypy_error_t **out_error) {
     const tinypy_dict_entry_t *entries;
@@ -147,15 +148,15 @@ restart:
                 first_dummy = index;
             }
         }
+        else if (entry->key == key) {
+            out_lookup->index = index;
+            out_lookup->found = 1;
+            return TINYPY_TRUE;
+        }
         else if (entry->hash == hash) {
             tinypy_value_t *stored_key = entry->key;
             tinypy_bool_t equal;
 
-            if (stored_key == key) {
-                out_lookup->index = index;
-                out_lookup->found = 1;
-                return TINYPY_TRUE;
-            }
             if (stored_key->type == key->type
                 && (stored_key->type == &vm->types[TINYPY_VALUE_INTEGER]
                     || stored_key->type == &vm->types[TINYPY_VALUE_BOOL]
@@ -958,31 +959,13 @@ static tinypy_bool_t __tinypy_internal_dict_set_pair(tinypy_value_t *target, tin
     return inserted;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyMapping_Keys calls the method through PyObject_CallMethod, which
-   requires the attribute to be callable. */
+/* PyMapping_Keys calls the method through PyObject_CallMethod. */
 tinypy_value_t *tinypy_internal_mapping_keys(tinypy_value_t *mapping, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(mapping);
-    tinypy_value_t *keys_method = tinypy_internal_object_get_attr_key(mapping, vm->internal_keys_key, out_error);
-
-    if (keys_method == NULL) {
-        return NULL;
-    }
-    if (tinypy_is_callable(keys_method) == TINYPY_FALSE) {
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("attribute of type '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(keys_method, 200U),
-            TINYPY_MESSAGE_PART_LITERAL("' is not callable"),
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        TINYPY_DECREF(keys_method);
-        return NULL;
-    }
     tinypy_value_t *empty_args = TINYPY_RET_EMPTY_TUPLE(vm);
-    tinypy_value_t *keys = tinypy_call(keys_method, empty_args, NULL, out_error);
+    tinypy_value_t *keys = tinypy_internal_call_method(mapping, vm->internal_keys_key, empty_args, out_error);
 
     TINYPY_DECREF(empty_args);
-    TINYPY_DECREF(keys_method);
     return keys;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1026,8 +1009,9 @@ tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyDict_Merge presizes for another dictionary and reuses its stored hashes;
-   mappings and sequences of pairs grow the table one key at a time. */
+/* PyDict_Merge presizes for another dictionary and stores its entries with
+   their hashes through insertdict, which does not resize again; mappings and
+   sequences of pairs grow the table one key at a time. */
 tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_value_t *source, const char *negative_hint_message, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
 
@@ -1054,7 +1038,7 @@ tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_va
             tinypy_hash_t hash = entry->hash;
             TINYPY_INCREF(key);
             TINYPY_INCREF(value);
-            tinypy_bool_t inserted = tinypy_internal_dict_set_hash_checked(vm, target, key, value, hash, out_error);
+            tinypy_bool_t inserted = tinypy_internal_dict_insert_checked(vm, target, key, value, hash, out_error);
             TINYPY_DECREF(value);
             TINYPY_DECREF(key);
             if (inserted == 0) {

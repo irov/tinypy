@@ -226,3 +226,81 @@ class NumericSemantics(unittest.TestCase):
                              [expected] * 11)
             for difference in (3L - complex(value, value), complex(value, value).__rsub__(3), complex(3, 3) - complex(value, value)):
                 self.assertEqual((bits(difference.real), bits(difference.imag)), (expected, expected))
+
+    def test_integer_power_keeps_int_until_a_step_overflows(self):
+        def kinds(values):
+            return [(type(value).__name__, value) for value in values]
+        self.assertEqual(kinds([3 ** 39, 3 ** 40, (-2) ** 63, (-2) ** 64, 2 ** 63, 0 ** 0, (-1) ** 63, 2L ** 3, True ** 2, 2 ** True,
+                                3037000500 ** 2]),
+                         [('int', 4052555153018976267), ('long', 12157665459056928801L), ('int', -9223372036854775808),
+                          ('long', 18446744073709551616L), ('long', 9223372036854775808L), ('int', 1), ('int', -1), ('long', 8L),
+                          ('int', 1), ('int', 2), ('long', 9223372037000250000L)])
+        self.assertEqual(kinds([pow(3, 1000, 1000003), pow(2 ** 32, 2, 7), pow(3037000500, 2, 10), pow(-2 ** 63, 1, -1), pow(-7, 3, 5),
+                                pow(7, 3, -5), pow(5, 0, -3), pow(3L, 4, 5), pow(3, 4, 5L), pow(True, 5, 3)]),
+                         [('int', 73216), ('long', 2L), ('long', 0L), ('long', 0L), ('int', 2), ('int', -2), ('int', -2),
+                          ('long', 1L), ('long', 1L), ('int', 1)])
+        self.assertEqual(kinds([2 ** -1, (-2) ** -3, 2L ** -2, (-2) ** -1075, 2 ** -1075]),
+                         [('float', 0.5), ('float', -0.125), ('float', 0.25), ('float', -0.0), ('float', 0.0)])
+        self.assertEqual([_error(pow, 0, -1), _error(pow, 2, -1, 5), _error(pow, 2, 3, 0), _error(pow, 10 ** 400, -1)],
+                         [('ZeroDivisionError', '0.0 cannot be raised to a negative power'),
+                          ('TypeError', 'pow() 2nd argument cannot be negative when 3rd argument specified'),
+                          ('ValueError', 'pow() 3rd argument cannot be 0'),
+                          ('OverflowError', 'long int too large to convert to float')])
+        value = 5
+        value **= 3
+        self.assertEqual(kinds([value]), [('int', 125)])
+
+        class Power(int):
+            def __pow__(self, other, modulus=None):
+                return 'pow', other, modulus
+
+            def __rpow__(self, other):
+                return 'rpow', other
+        self.assertEqual([Power(3) ** 2, 3 ** Power(2), pow(Power(3), 2, 5), pow(3, Power(2), 5), pow(3, 2, Power(5))],
+                         [('pow', 2, None), ('rpow', 3), ('pow', 2, 5), 4, 4])
+
+    def test_huge_right_shift_counts_leave_the_sign(self):
+        self.assertEqual([1 >> 2 ** 40, -1 >> 2 ** 40, 0 << 2 ** 40, 5L >> 2 ** 62, -5L >> 2 ** 62, (2 ** 100) >> (2 ** 63 - 1),
+                          -(2 ** 100) >> (2 ** 63 - 1)],
+                         [0, -1, 0, 0, -1, 0, -1])
+        self.assertEqual([_error(lambda: 1 >> 2 ** 63), _error(lambda: 1 >> -(2 ** 63))],
+                         [('OverflowError', 'long int too large to convert to int'), ('ValueError', 'negative shift count')])
+
+    def test_lopsided_products_match_single_digit_sums(self):
+        state = [7]
+
+        def number(bits):
+            value = 0
+            while value.bit_length() < bits:
+                state[0] = (state[0] * 1103515245 + 12345) & 0x7fffffff
+                value = (value << 31) | state[0] | 1
+            return value >> (value.bit_length() - bits)
+
+        def digit_product(large, small):
+            total = 0
+            shift = 0
+            while small:
+                total += (large * (small & 0x7fff)) << shift
+                small >>= 15
+                shift += 15
+            return total
+        for small_bits, large_bits in ((1920, 3840), (1935, 3870), (2400, 7300), (3000, 6001), (1950, 30000), (4500, 8999)):
+            small = number(small_bits)
+            large = number(large_bits)
+            product = digit_product(large, small)
+            self.assertEqual([small * large, -large * small, small * -large], [product, -product, -product])
+        value = number(6000)
+        self.assertEqual(value ** 3, digit_product(value * value, value))
+
+    def test_recycled_floats_hold_their_own_values(self):
+        held = [index + 0.5 for index in range(600)]
+        del held
+        held = [-(index + 0.25) for index in range(600)]
+        self.assertEqual(held[::150], [-0.25, -150.25, -300.25, -450.25])
+        x = 1.5
+        signs = [_struct.pack('>d', value)[0] for value in (-(x - x), x * -0.0, -x + x, -(-x + x), 0.0 * -x)]
+        self.assertEqual(signs, ['\x80', '\x80', '\x00', '\x80', '\x80'])
+        total = 0.0
+        for index in range(1000):
+            total += index * 0.5 - (-index) * 0.25
+        self.assertEqual(total, 374625.0)

@@ -399,8 +399,24 @@ static tinypy_bool_t __tinypy_operator_long_multiply_digits(tinypy_vm_t *vm, uin
     if (minimum_count == 0U) {
         return TINYPY_TRUE;
     }
-    if (minimum_count < TINYPY_LONG_KARATSUBA_CUTOFF || (minimum_count <= SIZE_MAX / 2U && maximum_count >= minimum_count * 2U)) {
+    if (minimum_count < TINYPY_LONG_KARATSUBA_CUTOFF) {
         __tinypy_operator_long_multiply_schoolbook(output, output_capacity, left, left_count, right, right_count);
+        return TINYPY_TRUE;
+    }
+    /* k_lopsided_mul: splitting would leave the smaller operand without a
+       high half, so the larger one is taken in slices of the smaller one's
+       size, each a balanced product added in at its own offset. */
+    if (minimum_count <= SIZE_MAX / 2U && maximum_count >= minimum_count * 2U) {
+        const uint16_t *smaller = left_count < right_count ? left : right;
+        const uint16_t *larger = left_count < right_count ? right : left;
+
+        for (size_t done = 0U; done < maximum_count; done += minimum_count) {
+            size_t slice_count = maximum_count - done < minimum_count ? maximum_count - done : minimum_count;
+
+            if (__tinypy_operator_long_multiply_digits(vm, output + done, output_capacity - done, smaller, minimum_count, larger + done, slice_count, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+        }
         return TINYPY_TRUE;
     }
 
@@ -1209,10 +1225,12 @@ static tinypy_value_t *__tinypy_operator_integer_bitwise(tinypy_vm_t *vm, tinypy
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_operator_shift_count(tinypy_vm_t *vm, tinypy_value_t *value, size_t *out_shift, tinypy_error_t **out_error) {
+/* The count converts to an int64 on every host, as to Py_ssize_t on 64-bit
+   CPython, so that the outcome of a shift does not depend on size_t. */
+static tinypy_bool_t __tinypy_operator_shift_count(tinypy_vm_t *vm, tinypy_value_t *value, uint64_t *out_shift, tinypy_error_t **out_error) {
     tinypy_integer_view_t view;
-    size_t shift = 0U;
-    size_t limit;
+    uint64_t shift = 0U;
+    uint64_t limit;
     size_t index;
 
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
@@ -1221,7 +1239,7 @@ static tinypy_bool_t __tinypy_operator_shift_count(tinypy_vm_t *vm, tinypy_value
         return TINYPY_FALSE;
     }
     __tinypy_operator_integer_view(value, &view);
-    limit = view.sign < 0 ? (size_t)PTRDIFF_MAX + 1U : (size_t)PTRDIFF_MAX;
+    limit = view.sign < 0 ? (uint64_t)INT64_MAX + 1U : (uint64_t)INT64_MAX;
     for (index = view.count; index != 0U; index -= 1U) {
         if (shift > (limit >> 15U)) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "long int too large to convert to int", out_error);
@@ -1241,10 +1259,12 @@ static tinypy_bool_t __tinypy_operator_shift_count(tinypy_vm_t *vm, tinypy_value
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tinypy_value_t *left, size_t shift, tinypy_bool_t prefer_long, tinypy_error_t **out_error) {
+/* A result with more digits than the host can address is a MemoryError, as
+   _PyLong_New reports it. */
+static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tinypy_value_t *left, uint64_t shift, tinypy_bool_t prefer_long, tinypy_error_t **out_error) {
     tinypy_integer_view_t view;
-    size_t digit_shift = shift / 15U;
-    size_t bit_shift = shift % 15U;
+    size_t bit_shift = (size_t)(shift % 15U);
+    size_t digit_shift;
     size_t capacity;
     uint16_t local_digits[5];
     uint16_t *digits;
@@ -1257,10 +1277,11 @@ static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tin
         tinypy_value_t *return_value_1 = prefer_long != 0 ? tinypy_long_from_base15_digits(vm, 0, NULL, 0U) : tinypy_integer_from_i64(vm, 0);
         return return_value_1;
     }
-    if (view.count >= (size_t)PTRDIFF_MAX || digit_shift > (size_t)PTRDIFF_MAX - view.count - 1U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "left shift result is too large", out_error);
+    if (view.count >= (size_t)PTRDIFF_MAX || shift / 15U > (uint64_t)((size_t)PTRDIFF_MAX - view.count - 1U)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "left shift result is too large", out_error);
         return NULL;
     }
+    digit_shift = (size_t)(shift / 15U);
     carry = bit_shift != 0U ? (uint32_t)view.digits[view.count - 1U] >> (15U - bit_shift) : 0U;
     capacity = view.count + digit_shift + (carry != 0U ? 1U : 0U);
     if (capacity <= sizeof(local_digits) / sizeof(local_digits[0])) {
@@ -1290,10 +1311,10 @@ static tinypy_value_t *__tinypy_operator_integer_left_shift(tinypy_vm_t *vm, tin
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, tinypy_value_t *left, size_t shift, tinypy_bool_t prefer_long, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, tinypy_value_t *left, uint64_t shift, tinypy_bool_t prefer_long, tinypy_error_t **out_error) {
     tinypy_integer_view_t view;
-    size_t digit_shift = shift / 15U;
-    size_t bit_shift = shift % 15U;
+    size_t bit_shift = (size_t)(shift % 15U);
+    size_t digit_shift;
     size_t capacity;
     uint16_t *digits;
     int32_t discarded = 0;
@@ -1303,10 +1324,11 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
         tinypy_value_t *return_value_1 = prefer_long != 0 ? tinypy_long_from_base15_digits(vm, 0, NULL, 0U) : tinypy_integer_from_i64(vm, 0);
         return return_value_1;
     }
-    if (digit_shift >= view.count) {
+    if (shift / 15U >= (uint64_t)view.count) {
         tinypy_value_t *return_value_2 = prefer_long != 0 ? tinypy_long_from_i64(vm, view.sign < 0 ? -1 : 0) : tinypy_integer_from_i64(vm, view.sign < 0 ? -1 : 0);
         return return_value_2;
     }
+    digit_shift = (size_t)(shift / 15U);
     if (view.count - digit_shift == SIZE_MAX) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "right shift temporary storage is too large", out_error);
         return NULL;
@@ -1353,6 +1375,8 @@ static tinypy_value_t *__tinypy_operator_integer_right_shift(tinypy_vm_t *vm, ti
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* An exponent beyond size_t takes a base of magnitude two or more past any
+   memory the host can address. */
 static tinypy_bool_t __tinypy_operator_integer_exponent(tinypy_vm_t *vm, tinypy_value_t *value, size_t *out_exponent, tinypy_error_t **out_error) {
     tinypy_integer_view_t view;
     size_t exponent = 0U;
@@ -1361,7 +1385,7 @@ static tinypy_bool_t __tinypy_operator_integer_exponent(tinypy_vm_t *vm, tinypy_
     __tinypy_operator_integer_view(value, &view);
     for (index = view.count; index != 0U; index -= 1U) {
         if (exponent > (SIZE_MAX >> 15U)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "exponent is too large", out_error);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "exponent is too large", out_error);
             return TINYPY_FALSE;
         }
         exponent = (exponent << 15U) | view.digits[index - 1U];
@@ -1883,6 +1907,17 @@ static tinypy_value_t *__tinypy_operator_call_type_method(tinypy_value_t *receiv
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The sequence slots of bytearray and buffer are methods of their types,
+   which a subclass keeps as its C slot whatever update_one_slot passed over
+   under their names. */
+static tinypy_value_t *__tinypy_operator_call_sequence_method(tinypy_value_t *sequence, tinypy_value_t *name, tinypy_value_t *argument, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
+    tinypy_value_t *method = tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_KIND(sequence)], name);
+    tinypy_value_t *result = tinypy_internal_native_function_call_method(method, sequence, &argument, 1U, NULL, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Calls a method found on a classic instance with the instance's own
    attribute lookup; AttributeError means NotImplemented. */
 static tinypy_value_t *__tinypy_operator_call_classic_method(tinypy_value_t *instance, tinypy_value_t *name, tinypy_value_t *const *arguments, size_t argument_count, tinypy_error_t **out_error) {
@@ -2386,7 +2421,7 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
     /* bytearray and buffer concatenation are their types' own methods. */
     if (kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_BUFFER) {
         tinypy_value_t *method_name = inplace != 0 ? vm->internal_special_iadd_key : vm->internal_special_add_key;
-        tinypy_value_t *native = __tinypy_operator_call_type_method(sequence, method_name, &other, 1U, TINYPY_TRUE, out_error);
+        tinypy_value_t *native = __tinypy_operator_call_sequence_method(sequence, method_name, other, out_error);
 
         return native;
     }
@@ -2404,17 +2439,15 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
         tinypy_value_t *bytes = tinypy_internal_bytearray_concat_bytes(vm, TINYPY_TEXT_BYTES(sequence), TINYPY_TEXT_BYTE_SIZE(sequence), other_bytes, other_size, out_error);
         return bytes;
     }
+    /* PyUnicode_FromObject decodes the character buffer of a buffer: the
+       default encoding of a unicode it views, with its bounds applied. */
     if (kind == TINYPY_VALUE_UNICODE && other_kind == TINYPY_VALUE_BUFFER) {
-        const uint8_t *other_bytes;
-        size_t other_size;
-
-        (void)tinypy_internal_bytes_view(other, &other_bytes, &other_size);
-        tinypy_value_t *decoded = tinypy_internal_string_from_bytes_checked(vm, other_bytes, other_size, out_error);
-        if (decoded == NULL) {
+        tinypy_value_t *characters = tinypy_internal_buffer_character_string(other, out_error);
+        if (characters == NULL) {
             return NULL;
         }
-        tinypy_value_t *text = __tinypy_operator_concat_text(vm, sequence, decoded, TINYPY_TRUE, out_error);
-        TINYPY_DECREF(decoded);
+        tinypy_value_t *text = __tinypy_operator_concat_text(vm, sequence, characters, TINYPY_TRUE, out_error);
+        TINYPY_DECREF(characters);
         return text;
     }
     if ((kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_LIST) && other_kind == kind) {
@@ -2528,7 +2561,7 @@ static tinypy_value_t *__tinypy_operator_sequence_repeat(tinypy_value_t *sequenc
     if (inplace != 0 || kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_BUFFER) {
         tinypy_value_t *integer = tinypy_integer_from_i64(vm, count);
         tinypy_value_t *method_name = inplace != 0 ? vm->internal_special_imul_key : vm->internal_special_mul_key;
-        tinypy_value_t *native = __tinypy_operator_call_type_method(sequence, method_name, &integer, 1U, TINYPY_TRUE, out_error);
+        tinypy_value_t *native = __tinypy_operator_call_sequence_method(sequence, method_name, integer, out_error);
 
         TINYPY_DECREF(integer);
         return native;
@@ -3191,6 +3224,53 @@ static void __tinypy_operator_raise_errno(tinypy_vm_t *vm, int error_number, tin
     TINYPY_DECREF(exception);
 }
 //////////////////////////////////////////////////////////////////////////
+/* int_pow of a non-negative exponent, reduced by the modulus unless it is
+   zero. A step that overflows hands the operands to long_pow, whose result
+   is a long even when the reduced power would fit. */
+tinypy_bool_t tinypy_internal_integer_power(int64_t base, int64_t exponent, int64_t modulus, int64_t *out_result) {
+    int64_t result = INT64_C(1);
+    int64_t factor = base;
+
+    while (exponent != 0) {
+        if ((exponent & INT64_C(1)) != 0) {
+            int64_t previous = result;
+
+            result = (int64_t)((uint64_t)result * (uint64_t)factor);
+            if (factor == 0) {
+                break;
+            }
+            if ((result == INT64_MIN && factor == -1) || result / factor != previous) {
+                return TINYPY_FALSE;
+            }
+        }
+        exponent >>= 1U;
+        if (exponent == 0) {
+            break;
+        }
+        int64_t previous = factor;
+
+        factor = (int64_t)((uint64_t)factor * (uint64_t)factor);
+        if (previous != 0 && ((factor == INT64_MIN && previous == -1) || factor / previous != previous)) {
+            return TINYPY_FALSE;
+        }
+        if (modulus != 0) {
+            if ((result == INT64_MIN || factor == INT64_MIN) && modulus == -1) {
+                return TINYPY_FALSE;
+            }
+            result %= modulus;
+            factor %= modulus;
+        }
+    }
+    if (modulus != 0) {
+        if (result == INT64_MIN && modulus == -1) {
+            return TINYPY_FALSE;
+        }
+        result = __tinypy_internal_integer_floor_division(result, modulus, TINYPY_TRUE);
+    }
+    *out_result = result;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_value_type_e left_kind;
     tinypy_value_type_e right_kind;
@@ -3227,7 +3307,8 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
         tinypy_value_t *return_value_4 = tinypy_complex_from_doubles(vm, real, imaginary);
         return return_value_4;
     }
-    if (left_kind == TINYPY_VALUE_FLOAT || right_kind == TINYPY_VALUE_FLOAT) {
+    /* int_pow and long_pow leave a negative exponent to float_pow. */
+    if (left_kind == TINYPY_VALUE_FLOAT || right_kind == TINYPY_VALUE_FLOAT || __tinypy_operator_integer_sign(right) < 0) {
         double base;
         double exponent;
         double result;
@@ -3310,23 +3391,14 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
     tinypy_value_t *result;
     tinypy_value_t *base;
 
-    __tinypy_operator_integer_view(right, &exponent_view);
-    if (exponent_view.sign < 0) {
-        double base_value;
-        double exponent_value;
-
-        if (__tinypy_operator_as_double(left, &base_value, out_error) == 0 || __tinypy_operator_as_double(right, &exponent_value, out_error) == 0) {
-            return NULL;
+    if (prefer_long == 0) {
+        int64_t power = 0;
+        if (tinypy_internal_integer_power(TINYPY_INTEGER_VALUE(left), TINYPY_INTEGER_VALUE(right), INT64_C(0), &power) != 0) {
+            tinypy_value_t *integer = tinypy_integer_from_i64(vm, power);
+            return integer;
         }
-
-        if (base_value == 0.0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "0.0 cannot be raised to a negative power", out_error);
-            return NULL;
-        }
-        double power = pow(base_value, exponent_value);
-        tinypy_value_t *return_value_5 = tinypy_float_from_double(vm, power);
-        return return_value_5;
     }
+    __tinypy_operator_integer_view(right, &exponent_view);
     __tinypy_operator_integer_view(left, &base_view);
     if (base_view.count == 0U || (base_view.count == 1U && base_view.digits[0] == 1U)) {
         int64_t trivial = base_view.sign == 0 ? (exponent_view.sign == 0 ? 1 : 0) : (base_view.sign > 0 ? 1 : ((exponent_view.count != 0U && (exponent_view.digits[0] & 1U) != 0U) ? -1 : 1));
@@ -3365,43 +3437,6 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_operator_power_modulo_promotes_i64(int64_t base, int64_t exponent, int64_t modulus) {
-    int64_t result = INT64_C(1);
-    int64_t factor = base;
-
-    while (exponent != 0) {
-        if ((exponent & INT64_C(1)) != 0) {
-            int64_t previous = result;
-
-            result = (int64_t)((uint64_t)result * (uint64_t)factor);
-            if (factor == 0) {
-                break;
-            }
-            if ((result == INT64_MIN && factor == -1) || result / factor != previous) {
-                return TINYPY_TRUE;
-            }
-        }
-        exponent >>= 1U;
-        if (exponent == 0) {
-            break;
-        }
-        int64_t previous = factor;
-
-        factor = (int64_t)((uint64_t)factor * (uint64_t)factor);
-        if (previous != 0 && ((factor == INT64_MIN && previous == -1) || factor / previous != previous)) {
-            return TINYPY_TRUE;
-        }
-        if (modulus != 0) {
-            if ((result == INT64_MIN || factor == INT64_MIN) && modulus == -1) {
-                return TINYPY_TRUE;
-            }
-            result %= modulus;
-            factor %= modulus;
-        }
-    }
-    return result == INT64_MIN && modulus == -1 ? TINYPY_TRUE : TINYPY_FALSE;
-}
-//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value, tinypy_value_t *exponent_value, tinypy_value_t *modulus_value, tinypy_error_t **out_error) {
     tinypy_value_type_e base_kind = TINYPY_VALUE_KIND(base_value);
     tinypy_value_type_e exponent_kind = TINYPY_VALUE_KIND(exponent_value);
@@ -3413,7 +3448,6 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
     tinypy_value_t *base;
     size_t digit_index;
     size_t bit_index;
-    tinypy_bool_t prefer_long;
 
     TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_operator_is_integer(base_kind) == 0 || __tinypy_operator_is_integer(exponent_kind) == 0 || __tinypy_operator_is_integer(modulus_kind) == 0) {
@@ -3430,14 +3464,14 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "pow() 3rd argument cannot be 0", out_error);
         return NULL;
     }
-    prefer_long = base_kind == TINYPY_VALUE_LONG || exponent_kind == TINYPY_VALUE_LONG || modulus_kind == TINYPY_VALUE_LONG;
-    if (prefer_long == 0) {
-        prefer_long = __tinypy_operator_power_modulo_promotes_i64(
-            TINYPY_INTEGER_VALUE(base_value),
-            TINYPY_INTEGER_VALUE(exponent_value),
-            TINYPY_INTEGER_VALUE(modulus_value));
+    if (base_kind != TINYPY_VALUE_LONG && exponent_kind != TINYPY_VALUE_LONG && modulus_kind != TINYPY_VALUE_LONG) {
+        int64_t power = 0;
+        if (tinypy_internal_integer_power(TINYPY_INTEGER_VALUE(base_value), TINYPY_INTEGER_VALUE(exponent_value), TINYPY_INTEGER_VALUE(modulus_value), &power) != 0) {
+            tinypy_value_t *integer = tinypy_integer_from_i64(vm, power);
+            return integer;
+        }
     }
-    result = prefer_long != 0 ? tinypy_long_from_i64(vm, INT64_C(1)) : tinypy_integer_from_i64(vm, INT64_C(1));
+    result = tinypy_long_from_i64(vm, INT64_C(1));
     {
         tinypy_value_t *reduced = tinypy_internal_operator_builtin(result, modulus_value, 6, out_error);
 
@@ -3507,17 +3541,11 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
         }
     }
     TINYPY_DECREF(base);
-    if (prefer_long != 0 && TINYPY_VALUE_KIND(result) != TINYPY_VALUE_LONG) {
+    if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_LONG) {
         tinypy_value_t *promoted = tinypy_long_from_i64(vm, TINYPY_INTEGER_VALUE(result));
 
         TINYPY_DECREF(result);
         result = promoted;
-    }
-    else if (prefer_long == 0 && TINYPY_VALUE_KIND(result) == TINYPY_VALUE_LONG) {
-        tinypy_value_t *demoted = tinypy_integer_from_i64(vm, tinypy_long_as_i64(result));
-
-        TINYPY_DECREF(result);
-        result = demoted;
     }
     return result;
 }
@@ -3820,6 +3848,22 @@ static tinypy_value_t *__tinypy_operator_ternary(tinypy_value_t *base, tinypy_va
     tinypy_value_t *result;
 
     TINYPY_CLEAR_ERROR(out_error);
+    /* Exact built-in numbers end in the built-in power of the higher ranked
+       type whichever slot is tried first, so the slot search is skipped. */
+    if (__tinypy_operator_is_exact_builtin(base) != 0 && __tinypy_operator_is_exact_builtin(exponent) != 0) {
+        tinypy_value_type_e base_kind = TINYPY_VALUE_KIND(base);
+        tinypy_value_type_e exponent_kind = TINYPY_VALUE_KIND(exponent);
+        tinypy_value_type_e modulus_kind = TINYPY_VALUE_KIND(modulus);
+
+        if (modulus_kind == TINYPY_VALUE_NONE && __tinypy_operator_number_rank(base_kind) != 0 && __tinypy_operator_number_rank(exponent_kind) != 0) {
+            result = __tinypy_operator_power_builtin(base, exponent, out_error);
+            return result;
+        }
+        if (__tinypy_operator_is_integer(base_kind) != 0 && __tinypy_operator_is_integer(exponent_kind) != 0 && __tinypy_operator_is_integer(modulus_kind) != 0 && __tinypy_operator_is_exact_builtin(modulus) != 0) {
+            result = tinypy_internal_power_modulo_builtin(base, exponent, modulus, out_error);
+            return result;
+        }
+    }
     tinypy_operator_slot_e base_slot = __tinypy_operator_power_slot(base, inplace);
     tinypy_operator_slot_e exponent_slot = exponent->type != base->type ? __tinypy_operator_power_slot(exponent, inplace) : TINYPY_OPERATOR_SLOT_NONE;
 
@@ -4049,7 +4093,7 @@ tinypy_value_t *tinypy_internal_operator_builtin(tinypy_value_t *left, tinypy_va
         return shared_result;
     case 9:
     case 10: {
-        size_t shift;
+        uint64_t shift;
 
         if (__tinypy_operator_is_integer(left_kind) == 0 || __tinypy_operator_is_integer(right_kind) == 0) {
             tinypy_value_t *unsupported = __tinypy_operator_unsupported(vm, left, right, mode == 9 ? "<<" : ">>", out_error);

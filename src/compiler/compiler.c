@@ -363,6 +363,7 @@ tinypy_value_t *tinypy_compile_source(tinypy_vm_t *vm, const void *source, size_
     tinypy_compile_limits_t effective_limits;
 
     TINYPY_CLEAR_ERROR(out_error);
+    tinypy_internal_exception_clear_raised(vm);
     if (__tinypy_compiler_read_options(vm, options, &effective_options, &effective_limits, out_error) == 0) {
         return NULL;
     }
@@ -377,6 +378,7 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     tinypy_preprocess_result_t *result = NULL;
 
     TINYPY_CLEAR_ERROR(out_error);
+    tinypy_internal_exception_clear_raised(vm);
     (void)memset(&ctx, 0, sizeof(ctx));
     if (__tinypy_compiler_read_options(vm, options, &ctx.options, &ctx.limits, out_error) == 0) {
         return NULL;

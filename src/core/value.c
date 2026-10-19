@@ -254,6 +254,20 @@ void tinypy_internal_integer_free_list_finalize(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_float_free_list_finalize(tinypy_vm_t *vm) {
+    while (vm->float_free_list != NULL) {
+        tinypy_float_object_t *value = vm->float_free_list;
+
+        vm->float_free_list = __tinypy_internal_float_free_next(value);
+        vm->float_free_count -= 1U;
+        vm->types[TINYPY_VALUE_FLOAT].base.base.ref -= 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_value_unregister(vm, &value->base);
+#endif
+        tinypy_internal_vm_deallocate(vm, value, sizeof(*value));
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_value_is_vm_embedded(const tinypy_vm_t *vm, const tinypy_value_t *value) {
     /* Singletons, cached integers, builtin types and their dictionaries all
        live inside the VM allocation, so one address-range test covers them. */
@@ -557,12 +571,14 @@ void tinypy_internal_value_release_zero(tinypy_value_t *value) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_type_t *type = value->type;
 
-    if (type == &vm->types[TINYPY_VALUE_INTEGER] && vm->state == TINYPY_VM_STATE_LIVE && vm->integer_free_count < TINYPY_INTEGER_FREE_LIST_MAX) {
-        tinypy_integer_object_t *integer = TINYPY_INTEGER_OBJECT(value);
+    /* Every release passes __tinypy_internal_value_release_zero_fast, which
+       keeps the ints that their free list takes, before it comes here. */
+    if (type == &vm->types[TINYPY_VALUE_FLOAT] && vm->state == TINYPY_VM_STATE_LIVE && vm->float_free_count < TINYPY_FLOAT_FREE_LIST_MAX) {
+        tinypy_float_object_t *number = TINYPY_FLOAT_OBJECT(value);
 
-        __tinypy_internal_integer_set_free_next(integer, vm->integer_free_list);
-        vm->integer_free_list = integer;
-        vm->integer_free_count += 1U;
+        __tinypy_internal_float_set_free_next(number, vm->float_free_list);
+        vm->float_free_list = number;
+        vm->float_free_count += 1U;
         return;
     }
     /* tupledealloc, list_dealloc and the like release the contents at once. */

@@ -208,6 +208,46 @@ class RuntimeParityAudit(unittest.TestCase):
         self.assertEqual(_error(assign, 'x'), ('ValueError', 'lineno must be an integer'))
         self.assertEqual(_error(assign, 1L), ('ValueError', 'lineno must be an integer'))
 
+    def test_bound_method_hashes_its_receiver_first_at_any_depth(self):
+        events = []
+
+        class Hashed(object):
+            def __init__(self, name, value):
+                self.name = name
+                self.value = value
+
+            def __hash__(self):
+                events.append(self.name)
+                return self.value
+
+            def __call__(self):
+                pass
+
+        method_type = type(Hashed('bound', 0).__call__)
+        inner = method_type(Hashed('function', 1), Hashed('receiver', 2), Hashed)
+        outer = method_type(Hashed('outer', 4), inner, Hashed)
+        unbound = method_type(Hashed('unbound', 8), None, Hashed)
+        self.assertEqual((hash(outer), hash(unbound)), (4 ^ 1 ^ 2, 8 ^ hash(None)))
+        self.assertEqual(events, ['receiver', 'function', 'outer', 'unbound'])
+
+        def function(self):
+            pass
+
+        class Record(tuple):
+            pass
+
+        empty = function.__get__((Record(), Record((1,))))
+        self.assertEqual(hash(empty), hash(function.__get__(((), (1,)))))
+        self.assertEqual(hash((Record(), (Record(),))), hash(((), ((),))))
+        chain = 1
+        nested = 1
+        twin = 1
+        for index in range(3000):
+            chain = function.__get__(chain)
+            nested = function.__get__((nested, index))
+            twin = function.__get__((twin, index))
+        self.assertEqual((hash(chain), hash(nested)), (hash(1), hash(twin)))
+
     def test_recursion_error_normalized_at_the_limit_is_the_shared_instance_message(self):
         # A limit a few frames above the current depth is reached before the
         # native stack guard, which a sanitized build trips within a few
@@ -285,6 +325,67 @@ class RuntimeParityAudit(unittest.TestCase):
         self.assertEqual(2 in Indexed(), True)
         self.assertEqual(_error(lambda: 1 in Raising()), ('ValueError', 'failing'))
         self.assertEqual(_error(lambda: 1 in Plain()), ('TypeError', "argument of type 'instance' is not iterable"))
+
+
+    def test_frame_line_number_refuses_a_frame_that_has_not_started(self):
+        def generate():
+            yield 1
+
+        new_frame = "can't jump from the 'call' trace event of a new frame"
+        for generator in ((item for item in [1]), generate()):
+            def assign(value):
+                generator.gi_frame.f_lineno = value
+
+            self.assertEqual(_error(assign, 5), ('ValueError', new_frame))
+            self.assertEqual(_error(assign, True), ('ValueError', new_frame))
+            self.assertEqual(_error(assign, 'x'), ('ValueError', 'lineno must be an integer'))
+            next(generator)
+            self.assertEqual(_error(assign, 5), ('ValueError', 'f_lineno can only be set by a trace function'))
+
+    def test_unraisable_report_writes_names_up_to_their_first_nul(self):
+        class Sink(object):
+            def __init__(self):
+                self.parts = []
+
+            def write(self, text):
+                self.parts.append(text)
+
+        class Dying(object):
+            def __init__(self, error):
+                self.error = error
+
+            def __del__(self):
+                raise self.error
+
+            def __repr__(self):
+                return '<dying>'
+
+        class Named(Exception):
+            pass
+
+        class Builtin(Exception):
+            pass
+
+        class Classic:
+            pass
+
+        Named.__module__ = 'mo\0dule'
+        Builtin.__module__ = 'exceptions\0tail'
+        ClassicError = type(Classic)('Cl\0assic.Name', (), {'__module__': 'cm\0od', '__str__': lambda self: 'text'})
+        sink = Sink()
+        saved = sys.stderr
+        sys.stderr = sink
+        try:
+            Dying(Named('x'))
+            Dying(Builtin('y'))
+            Dying(ClassicError())
+        finally:
+            sys.stderr = saved
+        lines = ''.join(sink.parts).split('\n')
+        self.assertEqual(lines[:2], [
+            "Exception mo.Named: Named('x',) in <bound method Dying.__del__ of <dying>> ignored",
+            "Exception Builtin: Builtin('y',) in <bound method Dying.__del__ of <dying>> ignored"])
+        self.assertTrue(lines[2].startswith('Exception cm.Cl: <cm.Cl instance at '), lines[2])
 
 
 if __name__ == '__main__':

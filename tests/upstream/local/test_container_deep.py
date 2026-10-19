@@ -843,3 +843,297 @@ class ContainerDeep(unittest.TestCase):
         ]
         for operation, container, expected in cases:
             self.assertEqual(run(operation, container), expected)
+
+    def test_lookup_finds_the_stored_key_whatever_its_hash(self):
+        class Key(object):
+            def __init__(self, value):
+                self.value = value
+            def __hash__(self):
+                return self.value
+            def __eq__(self, other):
+                return False
+            def __ne__(self, other):
+                return True
+        key = Key(1)
+        mapping = {key: 'v'}
+        key.value = 9
+        self.assertEqual((key in mapping, mapping.get(key), len(mapping)), (True, 'v', 1))
+        mapping[key] = 'w'
+        self.assertEqual(mapping.values(), ['w'])
+        members = set([key])
+        key.value = 17
+        self.assertTrue(key in members)
+        members.add(key)
+        self.assertEqual(len(members), 1)
+        other = Key(3)
+        mapping = {other: 1}
+        other.value = 3 + 8 * 5
+        self.assertEqual((mapping.pop(other, 'missing'), len(mapping)), (1, 0))
+
+    def test_merge_does_not_resize_a_target_emptied_midway(self):
+        class Key(object):
+            def __init__(self, value, hash_value, action=None):
+                self.value = value
+                self.hash_value = hash_value
+                self.action = action
+            def __hash__(self):
+                return self.hash_value
+            def __eq__(self, other):
+                action = self.action
+                if action is not None:
+                    self.action = None
+                    action()
+                return isinstance(other, Key) and other.value == self.value
+            def __ne__(self, other):
+                return not self.__eq__(other)
+            def __repr__(self):
+                return 'K%d' % self.value
+        source = dict((Key(index, index % 4), index) for index in range(9))
+        target = {}
+        target[Key(11, 3, lambda: target.clear())] = 3
+        target.update(source)
+        self.assertEqual(repr(target.items()), '[(K4, 4), (K5, 5), (K6, 6), (K3, 3), (K7, 7), (K8, 8)]')
+        members = set([Key(11, 3, lambda: members.clear())])
+        members.update(set(source))
+        self.assertEqual(repr(list(members)), '[K4, K5, K6, K3, K7, K8]')
+        members = set([Key(11, 3, lambda: members.clear())])
+        members |= set(source)
+        self.assertEqual(repr(list(members)), '[K4, K5, K6, K3, K7, K8]')
+        members = set([Key(11, 3, lambda: members.clear())])
+        members.update(source)
+        self.assertEqual(repr(list(members)), '[K4, K5, K6, K3, K8, K7]')
+
+    def test_building_cuts_an_unfilled_reservation_back(self):
+        class Few(object):
+            def __init__(self, hint):
+                self.hint = hint
+            def __len__(self):
+                return self.hint
+            def __iter__(self):
+                return iter([1, 2, 3])
+        class Hinted(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                raise StopIteration
+            def __length_hint__(self):
+                return 1000
+        def extended(items):
+            items.extend(Few(1000))
+            return items
+        def added(items):
+            items += Few(1000)
+            return items
+        empty_size = [].__sizeof__()
+        cases = [
+            (lambda: list(Few(1000)), 48),
+            (lambda: list(Few(5)), 48),
+            (lambda: extended([1]), 56),
+            (lambda: added([1]), 56),
+            (lambda: sorted(Few(1000)), 48),
+            (lambda: list(Hinted()), 0),
+            (lambda: map(None, Few(1000)), 48),
+            (lambda: map(abs, Few(1000)), 48),
+            (lambda: map(None, Few(1000), Few(500)), 48),
+            (lambda: zip(Few(1000), Few(1000)), 48),
+            (lambda: filter(None, Few(1000)), 48),
+            (lambda: filter(lambda item: False, Few(1000)), 0),
+        ]
+        for build, slots_size in cases:
+            items = build()
+            self.assertEqual(items.__sizeof__() - empty_size, slots_size)
+
+    def test_slice_removal_releases_items_once_the_list_is_consistent(self):
+        events = []
+        class Item(object):
+            def __init__(self, name, holder):
+                self.name = name
+                self.holder = holder
+            def __del__(self):
+                events.append((self.name, len(self.holder[0])))
+        def delete_range(items):
+            del items[1:-1]
+        def assign_range(items):
+            items[1:-1] = ['x']
+        def delete_stride(items):
+            del items[::2]
+        def assign_stride(items):
+            items[::2] = ['y'] * len(items[::2])
+        def assign_empty(items):
+            items[:] = []
+        def delete_reversed(items):
+            del items[::-1]
+        for count in (3, 20):
+            for operation in (delete_range, assign_range, delete_stride, assign_stride, assign_empty, delete_reversed):
+                holder = [None]
+                items = []
+                for index in range(count):
+                    items.append(Item(index, holder))
+                holder[0] = items
+                del events[:]
+                operation(items)
+                released = events[:]
+                kept = len(items)
+                if operation in (delete_range, assign_range):
+                    expected = [(index, kept) for index in range(count - 2, 0, -1)]
+                elif operation in (delete_stride, assign_stride):
+                    expected = [(index, kept) for index in range(0, count, 2)]
+                else:
+                    expected = [(index, 0) for index in (range(count - 1, -1, -1) if operation is assign_empty else range(count))]
+                self.assertEqual(released, expected, (count, operation.__name__))
+                del items[:]
+                holder[0] = None
+
+    def test_bytearray_in_place_results_that_fit_ignore_exports(self):
+        data = bytearray('abcdef')
+        view = memoryview(data)
+        data.__imul__(0)
+        self.assertEqual(data, bytearray())
+        data.__imul__(-1)
+        del view
+        data = bytearray('x' * 100)
+        data *= 0
+        data += 'abc'
+        view = memoryview(data)
+        self.assertEqual(data.__iadd__('def'), bytearray('abcdef'))
+        self.assertEqual(data.__imul__(2), bytearray('abcdefabcdef'))
+        self.assertEqual(_error(lambda: data.__imul__(20)), ('BufferError', 'Existing exports of data: object cannot be re-sized'))
+        self.assertEqual(_error(lambda: data.__iadd__('z' * 100)), ('BufferError', 'Existing exports of data: object cannot be re-sized'))
+        del view
+        data = bytearray('x' * 100)
+        data *= 0
+        data += 'abc'
+        self.assertEqual(data.__iadd__(data), bytearray('abcabc'))
+        data = bytearray('abc')
+        self.assertEqual(_error(lambda: data.__iadd__(data)), ('BufferError', 'Existing exports of data: object cannot be re-sized'))
+
+    def test_bytearray_decoding_holds_an_export(self):
+        import _codecs
+        data = bytearray()
+        outcomes = []
+        def handler(error):
+            try:
+                del data[:]
+                outcomes.append('resized')
+            except BufferError:
+                outcomes.append('BufferError')
+            return (u'?', error.end)
+        _codecs.register_error('test_container_deep_resize', handler)
+        decoders = [
+            lambda: data.decode('utf-8', 'test_container_deep_resize'),
+            lambda: data.decode('ascii', 'test_container_deep_resize'),
+            lambda: _codecs.decode(data, 'utf-8', 'test_container_deep_resize'),
+            lambda: _codecs.utf_8_decode(data, 'test_container_deep_resize'),
+        ]
+        results = []
+        for decode in decoders:
+            data[:] = 'a\xffb'
+            results.append((decode(), len(data)))
+        self.assertEqual(outcomes, ['BufferError'] * 4)
+        self.assertEqual(results, [(u'a?b', 3), (u'a?b', 3), (u'a?b', 3), ((u'a?b', 3), 3)])
+        data[:] = 'abc'
+        self.assertEqual(data.decode('utf-8'), u'abc')
+        data.append(100)
+        self.assertEqual(data, bytearray('abcd'))
+
+    def test_unicode_concatenation_reads_the_buffer_characters(self):
+        self.assertEqual(u'x' + buffer(u'abc', 1), u'xbc')
+        self.assertEqual(u'x' + buffer(u'abcd', 1, 2), u'xbc')
+        self.assertEqual(u'x'.__add__(buffer(u'ab')), u'xab')
+        self.assertEqual(u'x' + buffer('abc', 1), u'xbc')
+        text = u'x'
+        text += buffer(u'ab')
+        self.assertEqual(text, u'xab')
+        self.assertEqual(_error(lambda: u'x' + buffer(u'a\xe9'))[0], 'UnicodeEncodeError')
+        self.assertEqual(_error(lambda: u'x' + buffer('a\xe9'))[0], 'UnicodeDecodeError')
+
+    def test_bytearray_count_searches_the_bounded_range(self):
+        data = bytearray('abcabcab')
+        cases = [
+            (lambda: data.count('ab'), 3),
+            (lambda: data.count('ab', 1), 2),
+            (lambda: data.count('ab', -5, -1), 1),
+            (lambda: data.count('', 3), 6),
+            (lambda: data.count('', 9), 0),
+            (lambda: data.count('', 5, 2), 0),
+            (lambda: data.count(bytearray('b'), None, None), 3),
+            (lambda: data.count(memoryview('c')), 2),
+            (lambda: data.count(buffer('abc', 1)), 2),
+            (lambda: data.count('a', 2 ** 70), 0),
+            (lambda: data.count('a', -2 ** 70), 3),
+            (lambda: bytearray('aaaa').count('aa'), 2),
+            (lambda: bytearray().count(''), 1),
+            (lambda: bytearray().count('a'), 0),
+        ]
+        for count, expected in cases:
+            self.assertEqual(count(), expected)
+        self.assertEqual(_error(lambda: data.count()), ('TypeError', 'count() takes at least 1 argument (0 given)'))
+        self.assertEqual(_error(lambda: data.count('a', 1, 2, 3)), ('TypeError', 'count() takes at most 3 arguments (4 given)'))
+        self.assertEqual(_error(lambda: data.count(5)), ('TypeError', "Type int doesn't support the buffer API"))
+        class Index(object):
+            def __index__(self):
+                data[:] = 'zz'
+                return 1
+        self.assertEqual(data.count('a', Index()), 0)
+
+    def test_keyed_sort_moves_items_with_their_keys(self):
+        class Stop(Exception):
+            pass
+        budget = [0]
+        class Key(object):
+            def __init__(self, value):
+                self.value = value
+            def __lt__(self, other):
+                budget[0] -= 1
+                if budget[0] == 0:
+                    raise Stop()
+                return self.value < other.value
+        shapes = [range(1000, 2000) + range(1000), range(0, 4000, 2) + range(1, 400, 2),
+                  range(1, 400, 2) + range(0, 4000, 2), [(index * 7919) % 501 for index in range(1500)]]
+        results = []
+        for shape in shapes:
+            for reverse in (False, True):
+                for limit in (-1, 50, 1500, 4000):
+                    items = [(value, index) for index, value in enumerate(shape)]
+                    budget[0] = limit
+                    try:
+                        items.sort(key=lambda item: Key(item[0] // 3), reverse=reverse)
+                    except Stop:
+                        pass
+                    results.append(sum(position * item[1] for position, item in enumerate(items)) % 1000003)
+        self.assertEqual(results, [666005, 659008, 659008, 666005, 329669, 658348, 978090, 652453,
+                                   705422, 903062, 903062, 705422, 974323, 902387, 477355, 134553,
+                                   242968, 903062, 903062, 242968, 956445, 902507, 237055, 972989,
+                                   812048, 871561, 319764, 882635, 541149, 871449, 316885, 945216])
+
+    def test_slice_removal_finalizers_may_extend_the_list(self):
+        class Item(object):
+            def __init__(self, name, holder):
+                self.name = name
+                self.holder = holder
+            def __del__(self):
+                if self.holder[0] is not None:
+                    self.holder[0].append(self.name)
+        results = []
+        for count in (4, 30):
+            for operation in ('delete', 'assign', 'stride'):
+                holder = [None]
+                items = []
+                for index in range(count):
+                    items.append(Item(index, holder))
+                holder[0] = items
+                if operation == 'delete':
+                    del items[1:-1]
+                elif operation == 'assign':
+                    items[1:-1] = ['x', 'y']
+                else:
+                    del items[1::2]
+                results.append([item if isinstance(item, (int, str)) else 'item' for item in items])
+                holder[0] = None
+                del items[:]
+        self.assertEqual(results[0], ['item', 'item', 2, 1])
+        self.assertEqual(results[1], ['item', 'x', 'y', 'item', 2, 1])
+        self.assertEqual(results[2], ['item', 'item', 1, 3])
+        self.assertEqual(results[3], ['item', 'item'] + range(28, 0, -1))
+        self.assertEqual(results[4], ['item', 'x', 'y', 'item'] + range(28, 0, -1))
+        self.assertEqual(results[5], ['item'] * 15 + range(1, 30, 2))

@@ -1469,15 +1469,18 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         return TINYPY_FALSE;
     }
     if (descriptor->writable == 0) {
-        /* frame_setlineno refuses a deletion, a value other than an int and
-           the assignment outside a trace function; the getset descriptors
-           of Python 2.7 without a setter name the attribute, and its
-           read-only members do not. */
+        /* frame_setlineno refuses a deletion, a value other than an int, a
+           frame that has not started and the assignment outside a trace
+           function; the getset descriptors of Python 2.7 without a setter
+           name the attribute, and its read-only members do not. */
         if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER && value == NULL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "cannot delete attribute", out_error);
         }
         else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_INTEGER && TINYPY_VALUE_KIND(value) != TINYPY_VALUE_BOOL) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "lineno must be an integer", out_error);
+        }
+        else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER && TINYPY_FRAME_OBJECT(instance)->last_instruction == -1) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "can't jump from the 'call' trace event of a new frame", out_error);
         }
         else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "f_lineno can only be set by a trace function", out_error);

@@ -451,7 +451,16 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
     if (text_input == NULL) {
         goto cleanup_input;
     }
+    /* The s* argument holds an export of a bytearray while it is decoded, so
+       an error handler cannot resize it. */
+    tinypy_bool_t exported = TINYPY_VALUE_KIND(input) == TINYPY_VALUE_BYTEARRAY ? TINYPY_TRUE : TINYPY_FALSE;
+    if (exported != 0) {
+        TINYPY_BYTEARRAY_OBJECT(input)->exports += 1U;
+    }
     converted = tinypy_internal_text_codec(vm, text_input, encoding, errors, decode, operation == (intptr_t)1 ? final : TINYPY_TRUE, &consumed, out_error);
+    if (exported != 0) {
+        TINYPY_BYTEARRAY_OBJECT(input)->exports -= 1U;
+    }
     TINYPY_DECREF(text_input);
     TINYPY_DECREF(input);
     if (converted == NULL) {

@@ -438,3 +438,28 @@ except AttributeError:
 else:
     raise AssertionError("a missing class attribute must not be deleted")
 del keyed, replaced_owner[:]
+
+# The hooks of a classic class resolve through its bases under the native
+# stack guard of its lookups: a hierarchy too deep for that guard fails the
+# __bases__ assignment with RuntimeError instead of leaving the class without
+# them. Linked from the top down, each class resolves its hooks over one
+# level, as a classic class resolves only its own.
+class HookedRoot:
+    def __setattr__(self, name, value):
+        self.__dict__[name] = "hooked"
+
+
+deep_classes = [type(HookedRoot)("Deep%d" % index, (), {}) for index in range(50000)]
+for index in range(len(deep_classes) - 1, 0, -1):
+    deep_classes[index].__bases__ = (deep_classes[index - 1],)
+deep_classes[0].__bases__ = (HookedRoot,)
+try:
+    deep_classes[-1].__bases__ = (deep_classes[-2],)
+except RuntimeError as error:
+    assert str(error) == "maximum recursion depth exceeded in class lookup", error
+else:
+    raise AssertionError("hooks resolved past the native stack guard")
+hooked = type(HookedRoot)("Hooked", (deep_classes[100],), {})()
+hooked.value = 1
+assert hooked.value == "hooked", hooked.value
+del deep_classes, hooked

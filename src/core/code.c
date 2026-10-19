@@ -280,6 +280,12 @@ void tinypy_internal_code_destroy(tinypy_value_t *value) {
         code->attribute_cache = NULL;
         code->attribute_store_cache = NULL;
     }
+    if (code->attribute_victims != NULL) {
+        size_t victims_size = code->cache_slot_count * TINYPY_ATTRIBUTE_LOOKUP_VICTIM_WAYS * sizeof(tinypy_attribute_lookup_cache_entry_t);
+
+        tinypy_internal_vm_deallocate(vm, code->attribute_victims, victims_size);
+        code->attribute_victims = NULL;
+    }
     if (code->method_bytecode != NULL) {
         tinypy_internal_vm_deallocate(vm, code->method_bytecode, code->method_bytecode_size);
         code->method_bytecode = NULL;

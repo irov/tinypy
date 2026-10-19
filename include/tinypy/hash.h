@@ -9,7 +9,9 @@
  * built-in equality of ==: containers compare their items and values with ==,
  * which may run Python code; other values compare structurally, instances by
  * identity. A comparison that raises reports false and leaves the exception
- * raised in the VM. */
+ * raised in the VM. A hash that raises, such as one of an unhashable value or
+ * of values nested past the native stack budget, returns 0 and leaves the
+ * exception raised as well. */
 tinypy_hash_t tinypy_hash(const tinypy_value_t *value);
 tinypy_bool_t tinypy_equal(const tinypy_value_t *left, const tinypy_value_t *right);
 

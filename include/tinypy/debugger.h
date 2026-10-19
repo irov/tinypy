@@ -5,6 +5,14 @@
 
 #if defined(TINYPY_DEBUGGER)
 
+/* The events follow the trace function that PyEval_SetTrace installs in
+ * CPython. CALL: a frame starts to run, which a generator does at every
+ * resumption. LINE: the frame reaches another source line. EXCEPTION: an
+ * exception is raised in the frame, propagates into it from a call, or is
+ * thrown into its generator. RETURN: the frame stops running, by return, by
+ * yield or by an exception, so every CALL has its RETURN. Only EXCEPTION
+ * carries the exception and its traceback; the other events pass NULL. The
+ * callback runs with the pending exception set aside. */
 typedef enum tinypy_debugger_event_e {
     TINYPY_DEBUGGER_EVENT_LINE = 1,
     TINYPY_DEBUGGER_EVENT_CALL = 2,

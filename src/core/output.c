@@ -28,6 +28,28 @@ static void __tinypy_output_unraisable_text(tinypy_value_t *stream, const void *
     __tinypy_output_unraisable_clear(TINYPY_VALUE_VM(stream), error);
 }
 //////////////////////////////////////////////////////////////////////////
+/* The size of the C string that PyString_AsString and tp_name give for a
+   name, up to its first NUL. */
+static size_t __tinypy_output_c_string_size(const void *bytes, size_t size) {
+    const char *terminator = (const char *)memchr(bytes, 0, size);
+    size_t length = terminator != NULL ? (size_t)(terminator - (const char *)bytes) : size;
+
+    return length;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyExceptionClass_Name: the C string of a class name from its last dot. */
+static void __tinypy_output_unraisable_class_name(tinypy_value_t *stream, const char *name, size_t size) {
+    size_t length = __tinypy_output_c_string_size(name, size);
+    size_t offset = 0U;
+
+    for (size_t index = 0U; index < length; ++index) {
+        if (name[index] == '.') {
+            offset = index + 1U;
+        }
+    }
+    __tinypy_output_unraisable_text(stream, name + offset, length - offset);
+}
+//////////////////////////////////////////////////////////////////////////
 /* A native instance whose finalizer ran, the object of the report of an
    error its finalizer left, has no host object left for the repr slot of its
    type, so it is named as object.__repr__ names it. */
@@ -92,22 +114,26 @@ void tinypy_internal_output_unraisable(tinypy_vm_t *vm, tinypy_value_t *object) 
             __tinypy_output_unraisable_text(stream, "<unknown>", 9U);
         }
         else {
-            if (TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING && TINYPY_NAME_EQ(module, vm->internal_exception_module_name) == TINYPY_FALSE) {
-                __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
-                __tinypy_output_unraisable_text(stream, ".", 1U);
+            if (TINYPY_VALUE_KIND(module) == TINYPY_VALUE_STRING) {
+                size_t module_size = __tinypy_output_c_string_size(TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTE_SIZE(module));
+                tinypy_value_t *exceptions = vm->internal_exception_module_name;
+
+                if (module_size != TINYPY_TEXT_BYTE_SIZE(exceptions) || memcmp(TINYPY_TEXT_BYTES(module), TINYPY_TEXT_BYTES(exceptions), module_size) != 0) {
+                    __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(module), module_size);
+                    __tinypy_output_unraisable_text(stream, ".", 1U);
+                }
             }
             TINYPY_DECREF(module);
         }
         if (TINYPY_VALUE_KIND(state.type) == TINYPY_VALUE_TYPE) {
-            size_t name_size;
-            const char *name = tinypy_internal_type_short_name((tinypy_type_t *)state.type, &name_size);
+            const tinypy_type_t *type = (const tinypy_type_t *)state.type;
 
-            __tinypy_output_unraisable_text(stream, name, name_size);
+            __tinypy_output_unraisable_class_name(stream, type->name, type->name_size);
         }
         else if (TINYPY_VALUE_KIND(state.type) == TINYPY_VALUE_CLASS) {
             tinypy_value_t *name = TINYPY_CLASS_OBJECT(state.type)->name;
 
-            __tinypy_output_unraisable_text(stream, TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name));
+            __tinypy_output_unraisable_class_name(stream, (const char *)TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name));
         }
         if (state.value != NULL && TINYPY_VALUE_KIND(state.value) != TINYPY_VALUE_NONE) {
             __tinypy_output_unraisable_text(stream, ": ", 2U);

@@ -7,7 +7,7 @@
 
 #define TINYPY_LONG_DIGIT_MASK UINT16_C(0x7fff)
 #define TINYPY_DOUBLE_LONG_DIGITS ((size_t)70U)
-#define TINYPY_INTERNAL_HASH_TUPLE_INLINE_FRAMES 16U
+#define TINYPY_INTERNAL_HASH_INLINE_FRAMES 16U
 
 //////////////////////////////////////////////////////////////////////////
 static inline tinypy_hash_t __tinypy_internal_hash_fix(uint64_t value) {
@@ -269,32 +269,84 @@ static tinypy_hash_t __tinypy_internal_hash_unicode(const tinypy_vm_t *vm, const
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-typedef struct tinypy_internal_hash_tuple_frame_t {
-    const tinypy_value_t *tuple;
+/* A tuple, by its items, or a bound method that the explicit stack
+   hashes. */
+typedef struct tinypy_internal_hash_frame_t {
+    const tinypy_value_t *method;
+    tinypy_value_t *const *items;
     size_t index;
+    size_t size;
     uint64_t hash;
     uint64_t multiplier;
-} tinypy_internal_hash_tuple_frame_t;
+} tinypy_internal_hash_frame_t;
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_hash_tuple_begin(tinypy_internal_hash_tuple_frame_t *frame, const tinypy_value_t *tuple) {
-    frame->tuple = tuple;
-    frame->index = 0U;
-    frame->hash = UINT64_C(0x345678);
-    frame->multiplier = UINT64_C(1000003);
+/* The receiver of a method, None when it has none. */
+static const tinypy_value_t *__tinypy_internal_hash_method_self(const tinypy_value_t *value) {
+    const tinypy_method_object_t *method = TINYPY_METHOD_OBJECT((tinypy_value_t *)value);
+    const tinypy_value_t *self = method->self != NULL ? method->self : &TINYPY_VALUE_VM(value)->none_object.base;
+
+    return self;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_internal_hash_tuple_fold(tinypy_internal_hash_tuple_frame_t *frame, tinypy_hash_t item_hash) {
-    size_t remaining = TINYPY_SIZED_SIZE(frame->tuple) - frame->index - 1U;
+static void __tinypy_internal_hash_frame_begin(tinypy_internal_hash_frame_t *frame, const tinypy_value_t *value) {
+    frame->index = 0U;
+    frame->multiplier = UINT64_C(1000003);
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_METHOD) {
+        frame->method = value;
+        frame->items = NULL;
+        frame->size = 2U;
+        frame->hash = UINT64_C(0);
+        return;
+    }
+    frame->method = NULL;
+    frame->items = TINYPY_TUPLE_ITEMS(value);
+    frame->size = TINYPY_SIZED_SIZE(value);
+    frame->hash = UINT64_C(0x345678);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The next value whose hash a frame folds: an item of a tuple, or the
+   receiver of a method, None when it has none, and then its function, as
+   instancemethod_hash hashes them. */
+static const tinypy_value_t *__tinypy_internal_hash_frame_item(const tinypy_internal_hash_frame_t *frame) {
+    if (frame->method == NULL) {
+        return frame->items[frame->index];
+    }
+    if (frame->index != 0U) {
+        const tinypy_value_t *function = TINYPY_METHOD_OBJECT((tinypy_value_t *)frame->method)->function;
+        return function;
+    }
+    const tinypy_value_t *self = __tinypy_internal_hash_method_self(frame->method);
+    return self;
+}
+//////////////////////////////////////////////////////////////////////////
+/* tuplehash folds an item with a multiplier that the items left change,
+   and instancemethod_hash its two values with exclusive or. */
+static void __tinypy_internal_hash_frame_fold(tinypy_internal_hash_frame_t *frame, tinypy_hash_t item_hash) {
+    size_t remaining = frame->size - frame->index - 1U;
 
+    frame->index += 1U;
+    if (frame->method != NULL) {
+        frame->hash ^= (uint64_t)item_hash;
+        return;
+    }
     frame->hash = (frame->hash ^ (uint64_t)item_hash) * frame->multiplier;
     frame->multiplier += UINT64_C(82520) + (uint64_t)remaining + (uint64_t)remaining;
-    frame->index += 1U;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Whether tinypy_internal_hash_value runs tuplehash on the item: a tuple
-   of a type that keeps the hash of tuple. */
-static tinypy_bool_t __tinypy_internal_hash_tuple_nested(const tinypy_value_t *item) {
-    if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_TUPLE || item->type->hash != NULL) {
+static tinypy_hash_t __tinypy_internal_hash_frame_end(const tinypy_internal_hash_frame_t *frame) {
+    uint64_t hash = frame->method != NULL ? frame->hash : frame->hash + UINT64_C(97531);
+    tinypy_hash_t result = __tinypy_internal_hash_fix(hash);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Whether tinypy_internal_hash_value hashes the item with the explicit
+   stack: a tuple of a type that keeps the hash of tuple, or a bound
+   method. */
+static tinypy_bool_t __tinypy_internal_hash_nested(const tinypy_value_t *item) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(item);
+
+    if ((kind != TINYPY_VALUE_TUPLE && kind != TINYPY_VALUE_METHOD) || item->type->hash != NULL) {
         return TINYPY_FALSE;
     }
     if ((item->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) {
@@ -304,30 +356,32 @@ static tinypy_bool_t __tinypy_internal_hash_tuple_nested(const tinypy_value_t *i
     return overrides == 0 ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* tuplehash; the tuples nested in a tuple are hashed with an explicit stack
-   rather than C recursion, so deep nesting cannot exhaust the native stack. */
-static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, tinypy_error_t **out_error) {
+/* tuplehash and instancemethod_hash; the tuples and bound methods nested in
+   them are hashed with an explicit stack rather than C recursion, so deep
+   nesting cannot exhaust the native stack. Inlined, as the hash of every
+   tuple runs it. */
+static TINYPY_ALWAYS_INLINE tinypy_hash_t __tinypy_internal_hash_nested_value(const tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_internal_hash_tuple_frame_t inline_frames[TINYPY_INTERNAL_HASH_TUPLE_INLINE_FRAMES];
-    tinypy_internal_hash_tuple_frame_t *frames = inline_frames;
-    size_t capacity = TINYPY_INTERNAL_HASH_TUPLE_INLINE_FRAMES;
+    tinypy_internal_hash_frame_t inline_frames[TINYPY_INTERNAL_HASH_INLINE_FRAMES];
+    tinypy_internal_hash_frame_t *frames = inline_frames;
+    size_t capacity = TINYPY_INTERNAL_HASH_INLINE_FRAMES;
     size_t depth = 1U;
     tinypy_hash_t hash = (tinypy_hash_t)0;
 
-    __tinypy_internal_hash_tuple_begin(&frames[0], value);
+    __tinypy_internal_hash_frame_begin(&frames[0], value);
     while (depth != 0U) {
-        tinypy_internal_hash_tuple_frame_t *frame = &frames[depth - 1U];
+        tinypy_internal_hash_frame_t *frame = &frames[depth - 1U];
 
-        if (frame->index == TINYPY_SIZED_SIZE(frame->tuple)) {
-            hash = __tinypy_internal_hash_fix(frame->hash + UINT64_C(97531));
+        if (frame->index == frame->size) {
+            hash = __tinypy_internal_hash_frame_end(frame);
             depth -= 1U;
             if (depth != 0U) {
-                __tinypy_internal_hash_tuple_fold(&frames[depth - 1U], hash);
+                __tinypy_internal_hash_frame_fold(&frames[depth - 1U], hash);
             }
             continue;
         }
-        const tinypy_value_t *item = tinypy_internal_tuple_items(frame->tuple)[frame->index];
-        if (__tinypy_internal_hash_tuple_nested(item) == 0) {
+        const tinypy_value_t *item = __tinypy_internal_hash_frame_item(frame);
+        if (__tinypy_internal_hash_nested(item) == 0) {
             tinypy_value_t *previous_raised = vm->raised_value;
             tinypy_hash_t item_hash = tinypy_internal_hash_value(item, out_error);
 
@@ -335,14 +389,14 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, t
                 hash = (tinypy_hash_t)0;
                 break;
             }
-            __tinypy_internal_hash_tuple_fold(frame, item_hash);
+            __tinypy_internal_hash_frame_fold(frame, item_hash);
             continue;
         }
         if (depth == capacity) {
             size_t size = capacity * sizeof(*frames);
-            tinypy_internal_hash_tuple_frame_t *grown = frames == inline_frames
-                                                            ? (tinypy_internal_hash_tuple_frame_t *)__tinypy_internal_vm_allocate_checked(vm, size * 2U, out_error)
-                                                            : (tinypy_internal_hash_tuple_frame_t *)__tinypy_internal_vm_reallocate_checked(vm, frames, size, size * 2U, out_error);
+            tinypy_internal_hash_frame_t *grown = frames == inline_frames
+                                                      ? (tinypy_internal_hash_frame_t *)__tinypy_internal_vm_allocate_checked(vm, size * 2U, out_error)
+                                                      : (tinypy_internal_hash_frame_t *)__tinypy_internal_vm_reallocate_checked(vm, frames, size, size * 2U, out_error);
 
             if (grown == NULL) {
                 hash = (tinypy_hash_t)0;
@@ -354,12 +408,43 @@ static tinypy_hash_t __tinypy_internal_hash_tuple(const tinypy_value_t *value, t
             frames = grown;
             capacity *= 2U;
         }
-        __tinypy_internal_hash_tuple_begin(&frames[depth], item);
+        __tinypy_internal_hash_frame_begin(&frames[depth], item);
         depth += 1U;
     }
     if (frames != inline_frames) {
         tinypy_internal_vm_deallocate(vm, frames, capacity * sizeof(*frames));
     }
+    return hash;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Whether a method has a receiver or function that the explicit stack
+   hashes, as a method bound to a method has. */
+static tinypy_bool_t __tinypy_internal_hash_method_nests(const tinypy_value_t *value) {
+    const tinypy_value_t *self = __tinypy_internal_hash_method_self(value);
+
+    if (__tinypy_internal_hash_nested(self) != 0) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t nests = __tinypy_internal_hash_nested(TINYPY_METHOD_OBJECT((tinypy_value_t *)value)->function);
+    return nests;
+}
+//////////////////////////////////////////////////////////////////////////
+/* instancemethod_hash of a method that nests nothing further. */
+static tinypy_hash_t __tinypy_internal_hash_method(const tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *previous_raised = vm->raised_value;
+    const tinypy_value_t *self = __tinypy_internal_hash_method_self(value);
+    tinypy_hash_t self_hash = tinypy_internal_hash_value(self, out_error);
+
+    if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
+        return (tinypy_hash_t)0;
+    }
+    tinypy_hash_t function_hash = tinypy_internal_hash_value(TINYPY_METHOD_OBJECT((tinypy_value_t *)value)->function, out_error);
+
+    if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
+        return (tinypy_hash_t)0;
+    }
+    tinypy_hash_t hash = __tinypy_internal_hash_fix((uint64_t)self_hash ^ (uint64_t)function_hash);
     return hash;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -518,13 +603,17 @@ static int32_t __tinypy_internal_hash_classic_comparable(tinypy_value_t *value, 
 }
 //////////////////////////////////////////////////////////////////////////
 /* A hash slot may hash other values, which may hash a tuple again: the
-   values nested that way meet the stack budget here. Out of line, so that
-   the hash of the other values stays small. */
+   values nested that way meet the stack budget here, also when a host
+   hashes them. Out of line, so that the hash of the other values stays
+   small. */
 static TINYPY_NOINLINE tinypy_hash_t __tinypy_internal_hash_slot(const tinypy_value_t *value, tinypy_error_t **out_error) {
-    if (__tinypy_internal_native_stack_check(TINYPY_VALUE_VM(value), TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded", out_error) == 0) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+    if (__tinypy_internal_native_recursion_enter(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded", out_error) == 0) {
         return (tinypy_hash_t)0;
     }
     tinypy_hash_t hash = value->type->hash((tinypy_value_t *)value, out_error);
+    __tinypy_internal_native_recursion_leave(vm);
     return hash;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -616,7 +705,14 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
         return buffer->hash;
     }
     case TINYPY_VALUE_TUPLE:
-        function_result = __tinypy_internal_hash_tuple(value, out_error);
+        function_result = __tinypy_internal_hash_nested_value(value, out_error);
+        return function_result;
+    case TINYPY_VALUE_METHOD:
+        if (__tinypy_internal_hash_method_nests(value) == 0) {
+            function_result = __tinypy_internal_hash_method(value, out_error);
+            return function_result;
+        }
+        function_result = __tinypy_internal_hash_nested_value(value, out_error);
         return function_result;
     case TINYPY_VALUE_FROZENSET:
         function_result = tinypy_internal_frozenset_hash(value);
@@ -624,30 +720,6 @@ tinypy_hash_t tinypy_internal_hash_builtin_value(const tinypy_value_t *value, ti
     case TINYPY_VALUE_WEAKREF: {
         tinypy_hash_t return_value_5 = tinypy_internal_weakref_hash((tinypy_value_t *)value, out_error);
         return return_value_5;
-    }
-    case TINYPY_VALUE_METHOD: {
-        tinypy_method_object_t *method = TINYPY_METHOD_OBJECT((tinypy_value_t *)value);
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-
-        /* instancemethod_hash hashes the receiver, which may be another
-           method. */
-        if (__tinypy_internal_native_stack_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded", out_error) == 0) {
-            return (tinypy_hash_t)0;
-        }
-        tinypy_value_t *previous_raised = vm->raised_value;
-        tinypy_hash_t function_hash = tinypy_internal_hash_value(method->function, out_error);
-
-        if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
-            return (tinypy_hash_t)0;
-        }
-        tinypy_value_t *self = method->self != NULL ? method->self : &vm->none_object.base;
-        tinypy_hash_t self_hash = tinypy_internal_hash_value(self, out_error);
-
-        if ((out_error != NULL && *out_error != NULL) || vm->raised_value != previous_raised) {
-            return (tinypy_hash_t)0;
-        }
-        tinypy_hash_t return_value_6 = __tinypy_internal_hash_fix((uint64_t)function_hash ^ (uint64_t)self_hash);
-        return return_value_6;
     }
     case TINYPY_VALUE_LIST:
     case TINYPY_VALUE_DICT:

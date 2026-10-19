@@ -450,3 +450,52 @@ class ComparisonDeep(unittest.TestCase):
                 except RuntimeError as error:
                     messages.append(str(error))
         self.assertEqual(messages, ['maximum recursion depth exceeded in cmp'] * 6)
+
+    def test_metaclass_cmp_decides_class_comparisons(self):
+        class Ordered(type):
+            def __cmp__(cls, other):
+                return cmp(getattr(cls, 'rank', 0), getattr(other, 'rank', 0))
+        first = Ordered('First', (object,), {'rank': 2})
+        second = Ordered('Second', (object,), {'rank': 1})
+        third = Ordered('Third', (object,), {'rank': 2})
+        self.assertTrue(first == third)
+        self.assertFalse(first != third)
+        self.assertTrue(second < first)
+        self.assertTrue(first >= third)
+        self.assertTrue(third in [first])
+        self.assertEqual([item.__name__ for item in sorted([first, second])], ['Second', 'First'])
+        self.assertEqual(cmp(first, second), 1)
+        self.assertIs(type.__eq__(first, third), NotImplemented)
+        self.assertFalse(first == int)
+        self.assertTrue(first > int)
+        self.assertTrue(int < first)
+        class Plain(type):
+            pass
+        alpha = Plain('Alpha', (object,), {})
+        beta = Plain('Alpha', (object,), {})
+        self.assertFalse(alpha == beta)
+        self.assertTrue(alpha != beta)
+        self.assertIs(type.__eq__(alpha, alpha), True)
+
+    def test_foreign_rich_comparison_wrapper_keeps_the_inherited_comparison(self):
+        class Items(list):
+            __eq__ = str.__eq__
+        left, right = Items([1, 2]), Items([1, 2])
+        self.assertTrue(left == right)
+        self.assertFalse(left != right)
+        self.assertTrue(left in [right])
+        self.assertEqual(cmp(left, right), 0)
+        self.assertTrue(Items([1]) < Items([2]))
+        class Pair(tuple):
+            __eq__ = str.__eq__
+        self.assertTrue(Pair((1,)) == Pair((1,)))
+        class Values(set):
+            __eq__ = float.__eq__
+        values = Values([1])
+        self.assertTrue(values == values)
+        self.assertTrue(values == Values([1]))
+        self.assertTrue(values == set([1]))
+        class Frozen(frozenset):
+            __ne__ = set.__ne__
+        self.assertFalse(Frozen([1]) != Frozen([1]))
+        self.assertRaises(TypeError, lambda: Items([1]).__eq__(Items([1])))

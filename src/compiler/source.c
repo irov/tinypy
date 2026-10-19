@@ -49,7 +49,10 @@ static tinypy_internal_builtin_codec_e __tinypy_compiler_cookie_codec(tinypy_com
     return codec;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_compiler_encoding_cookie(const uint8_t *source, size_t size, const uint8_t **out_name, size_t *out_size, int32_t *out_line, size_t *out_line_end) {
+/* get_coding_spec over the first two lines. decode_str reads a string only
+   in the lines a newline ends, which the string of an expression or an
+   interactive statement does not get at its end. */
+static tinypy_bool_t __tinypy_compiler_encoding_cookie(const uint8_t *source, size_t size, tinypy_bool_t newline_required, const uint8_t **out_name, size_t *out_size, int32_t *out_line, size_t *out_line_end) {
     size_t line = 0U;
     size_t position = 0U;
 
@@ -59,6 +62,9 @@ static tinypy_bool_t __tinypy_compiler_encoding_cookie(const uint8_t *source, si
 
         while (line_end < size && source[line_end] != '\n' && source[line_end] != '\r') {
             line_end += 1U;
+        }
+        if (line_end == size && newline_required != 0) {
+            return TINYPY_FALSE;
         }
         marker = position;
         while (marker < line_end && (source[marker] == ' ' || source[marker] == '\t' || source[marker] == '\f')) {
@@ -1070,7 +1076,8 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         ctx->source_encoding_declared = TINYPY_TRUE;
         ctx->source_diagnostic_utf8 = TINYPY_TRUE;
     }
-    if (__tinypy_compiler_encoding_cookie(input + input_offset, source_size - input_offset, &cookie, &cookie_size, &cookie_line, &cookie_line_end) != 0) {
+    tinypy_bool_t newline_required = ctx->source_is_file == 0 && ctx->options.mode != TINYPY_COMPILE_EXEC ? TINYPY_TRUE : TINYPY_FALSE;
+    if (__tinypy_compiler_encoding_cookie(input + input_offset, source_size - input_offset, newline_required, &cookie, &cookie_size, &cookie_line, &cookie_line_end) != 0) {
         if (__tinypy_compiler_apply_cookie(ctx, cookie, cookie_size, cookie_line, bom, &codec, &fast_path, &latin1, out_error) == 0) {
             return TINYPY_FALSE;
         }

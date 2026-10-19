@@ -78,6 +78,15 @@ static tinypy_bool_t __tinypy_set_add_entry(tinypy_value_t *set, tinypy_value_t 
     return added;
 }
 //////////////////////////////////////////////////////////////////////////
+/* set_insert_key, which stores without resizing the table. */
+static tinypy_bool_t __tinypy_set_insert_entry(tinypy_value_t *set, tinypy_value_t *key, tinypy_hash_t hash, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
+    tinypy_bool_t added = tinypy_internal_dict_insert_checked(vm, TINYPY_SET_OBJECT(set)->dict, key, &vm->none_object.base, hash, out_error);
+
+    TINYPY_SET_OBJECT(set)->hash_computed = TINYPY_FALSE;
+    return added;
+}
+//////////////////////////////////////////////////////////////////////////
 /* set_add_key */
 static tinypy_bool_t __tinypy_set_add_key(tinypy_value_t *set, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
@@ -116,8 +125,10 @@ static int32_t __tinypy_set_discard_entry(tinypy_value_t *set, tinypy_value_t *k
 }
 //////////////////////////////////////////////////////////////////////////
 /* set_merge and the dictionary branch of set_update_internal resize once,
-   then add the stored entries with their hashes. */
-static tinypy_bool_t __tinypy_set_merge_table(tinypy_value_t *set, tinypy_value_t *dict, tinypy_error_t **out_error) {
+   then add the stored entries with their hashes: set_merge inserts them
+   without resizing again, the dictionary branch adds them as set_add_entry
+   does. */
+static tinypy_bool_t __tinypy_set_merge_table(tinypy_value_t *set, tinypy_value_t *dict, tinypy_bool_t grow, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(set);
     size_t position = 0U;
 
@@ -133,7 +144,7 @@ static tinypy_bool_t __tinypy_set_merge_table(tinypy_value_t *set, tinypy_value_
         tinypy_value_t *key = entry->key;
         tinypy_hash_t hash = entry->hash;
         TINYPY_INCREF(key);
-        tinypy_bool_t added = __tinypy_set_add_entry(set, key, hash, out_error);
+        tinypy_bool_t added = grow != 0 ? __tinypy_set_add_entry(set, key, hash, out_error) : __tinypy_set_insert_entry(set, key, hash, out_error);
         TINYPY_DECREF(key);
         if (added == 0) {
             return TINYPY_FALSE;
@@ -150,11 +161,11 @@ tinypy_bool_t tinypy_internal_set_update_iterable(tinypy_value_t *set, tinypy_va
         if (iterable == set || tinypy_set_size(iterable) == 0U) {
             return TINYPY_TRUE;
         }
-        tinypy_bool_t merged = __tinypy_set_merge_table(set, TINYPY_SET_OBJECT(iterable)->dict, out_error);
+        tinypy_bool_t merged = __tinypy_set_merge_table(set, TINYPY_SET_OBJECT(iterable)->dict, TINYPY_FALSE, out_error);
         return merged;
     }
     if (iterable->type == &vm->types[TINYPY_VALUE_DICT]) {
-        tinypy_bool_t merged = __tinypy_set_merge_table(set, iterable, out_error);
+        tinypy_bool_t merged = __tinypy_set_merge_table(set, iterable, TINYPY_TRUE, out_error);
         return merged;
     }
     tinypy_value_t *iterator = tinypy_iter(iterable, out_error);

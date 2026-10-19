@@ -301,6 +301,24 @@ class CompilerDiagnostics(unittest.TestCase):
             self.assertEqual((error.msg, error.lineno, error.offset, error.text), ('encoding problem: %s with BOM' % name, 0, 0, None))
         compile('\xef\xbb\xbf# coding: UTF-8\nx = 1\n', '<diagnostic>', 'exec')
 
+    def test_expression_string_cookie_needs_a_newline(self):
+        # decode_str reads a cookie only on a line a newline ends; exec strings
+        # get one at their end, expression and interactive strings do not.
+        for mode in ['eval', 'single']:
+            for source, location in [('# coding: bogus', ('unexpected EOF while parsing', 1, 15)),
+                                     ('#!x\n# coding: bogus', ('invalid syntax', 2, 15)),
+                                     ('#!x\r# coding: bogus', ('invalid syntax', 2, 15)),
+                                     ('\xef\xbb\xbf# coding: latin-1', ('unexpected EOF while parsing', 1, 17)),
+                                     (u'#\n# coding: bogus', ('invalid syntax', 2, 15))]:
+                error = self.syntax_error(source, mode)
+                self.assertEqual((error.msg, error.lineno, error.offset), location)
+            for source in ['# coding: bogus\n', '# coding: bogus\r', '#!x\n# coding: bogus\n']:
+                error = self.syntax_error(source, mode)
+                self.assertEqual((error.msg, error.lineno, error.offset, error.text), ('unknown encoding: bogus', 0, 0, None))
+        for source in ['# coding: bogus', '#!x\r# coding: bogus', u'# coding: bogus']:
+            error = self.syntax_error(source, 'exec')
+            self.assertEqual((error.msg, error.lineno, error.offset, error.text), ('unknown encoding: bogus', 0, 0, None))
+
     def test_unicode_source_bom_is_an_encoding_declaration(self):
         for source, mode in [(u'\ufeffx = 1\n', 'exec'), (u'\ufeff1', 'eval')]:
             error = self.syntax_error(source, mode)

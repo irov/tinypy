@@ -240,3 +240,54 @@ class UnicodeMethodsAudit(unittest.TestCase):
         error = Decode('ascii', 'abc', 2, 1, 'bad')
         self.assertEqual(_codecs.lookup_error('ignore')(error), (u'', 1))
         self.assertEqual(_codecs.lookup_error('replace')(error), (u'\ufffd', 1))
+
+    def test_builtin_codecs_convert_runs_around_errors(self):
+        replacement = unichr(0xfffd)
+        data = 'x' * 21 + '\xff' + 'y' * 9 + '\xd0\xbf' + 'z' * 17 + '\xe2\x82'
+        tail = u'y' * 9 + unichr(0x43f) + u'z' * 17
+        self.assertEqual(data.decode('utf-8', 'replace'), u'x' * 21 + replacement + tail + replacement)
+        self.assertEqual(data.decode('utf-8', 'ignore'), u'x' * 21 + tail)
+        self.assertEqual(_message(data.decode, 'utf-8'),
+                         ('UnicodeDecodeError', "'utf8' codec can't decode byte 0xff in position 21: invalid start byte"))
+        self.assertEqual(_codecs.utf_8_decode(data[22:], 'strict', False), (tail, 28))
+        self.assertEqual(_codecs.utf_8_decode(data, 'replace', False), (u'x' * 21 + replacement + tail, 50))
+        self.assertEqual(data.decode('ascii', 'replace'), u'x' * 21 + replacement + u'y' * 9 + replacement * 2 + u'z' * 17 + replacement * 2)
+        self.assertEqual(data.decode('ascii', 'ignore'), u'x' * 21 + u'y' * 9 + u'z' * 17)
+        latin1 = data.decode('latin-1')
+        self.assertEqual((len(latin1), latin1[21], latin1[-1], latin1.encode('latin-1')), (len(data), unichr(0xff), unichr(0x82), data))
+        self.assertEqual(_message(('a' * 20 + '\xe9').encode, 'utf-8'),
+                         ('UnicodeDecodeError', "'ascii' codec can't decode byte 0xe9 in position 20: ordinal not in range(128)"))
+        self.assertEqual(_message((u'a' * 20 + unichr(0xe9) * 2 + u'b').decode, 'utf-8'),
+                         ('UnicodeEncodeError', "'ascii' codec can't encode characters in position 20-21: ordinal not in range(128)"))
+
+    def test_builtin_codecs_resume_where_handlers_point(self):
+        def middle(error):
+            return (u'<%d:%d>' % (error.start, error.end), error.end + 1)
+        _codecs.register_error('unicode_methods_audit_middle', middle)
+        data = 'a' * 10 + '\xff' + '\xd0\xbf' * 3 + 'b' * 10
+        self.assertEqual(data.decode('utf-8', 'unicode_methods_audit_middle'), u'a' * 10 + u'<10:11><12:13><14:15><16:17>' + u'b' * 9)
+        data = 'a' * 10 + '\xff' + 'b' + '\xd0\xbf' * 3 + 'c' * 10
+        self.assertEqual(data.decode('utf-8', 'unicode_methods_audit_middle'), u'a' * 10 + u'<10:11>' + unichr(0x43f) * 3 + u'c' * 10)
+        text = u'a' * 10 + unichr(0x20ac) + unichr(0xe9) * 3 + u'b' * 10
+        self.assertEqual(text.encode('latin-1', 'unicode_methods_audit_middle'), 'a' * 10 + '<10:11>' + '\xe9' * 2 + 'b' * 10)
+        self.assertEqual(text.encode('ascii', 'unicode_methods_audit_middle'), 'a' * 10 + '<10:14>' + 'b' * 9)
+        self.assertEqual(text.encode('latin-1', 'xmlcharrefreplace'), 'a' * 10 + '&#8364;' + '\xe9' * 3 + 'b' * 10)
+        self.assertEqual(text.encode('ascii', 'backslashreplace'), 'a' * 10 + '\\u20ac' + '\\xe9' * 3 + 'b' * 10)
+        self.assertEqual(text.encode('ascii', 'replace'), 'a' * 10 + '?' * 4 + 'b' * 10)
+        error = None
+        try:
+            text.encode('latin-1')
+        except UnicodeEncodeError as caught:
+            error = caught
+        self.assertEqual((error.start, error.end, error.reason), (10, 11, 'ordinal not in range(256)'))
+
+    def test_utf8_encoder_joins_pairs_between_runs(self):
+        high = unichr(0xd83d)
+        low = unichr(0xde00)
+        text = u'a' * 20 + high + low + unichr(0xe9) + high + u'b' + low + u'c' * 9 + high
+        self.assertEqual(text.encode('utf-8'),
+                         'a' * 20 + '\xf0\x9f\x98\x80' + '\xc3\xa9' + '\xed\xa0\xbd' + 'b' + '\xed\xb8\x80' + 'c' * 9 + '\xed\xa0\xbd')
+        self.assertEqual(Wide(text).encode('utf-8'), text.encode('utf-8'))
+        decoded = ('\xd0\xbf' * 40 + '\xed\xa0\xbd\xed\xb8\x80').decode('utf-8')
+        self.assertEqual((type(decoded), len(decoded), decoded[39], decoded[40], decoded[-1]), (unicode, 42, unichr(0x43f), high, low))
+        self.assertEqual((type(Wide(u'abc').encode('utf-8')), type(bytearray('abc').decode('latin-1'))), (str, unicode))

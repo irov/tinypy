@@ -843,7 +843,6 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
     const uint8_t *item_bytes;
     size_t container_size;
     size_t item_size;
-    size_t index;
 
     /* string_contains names the operand; PyUnicode_Contains coerces it the
        way unicode() does. */
@@ -897,12 +896,12 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
     if (item_size > container_size) {
         return 0;
     }
-    for (index = 0U; index <= container_size - item_size; ++index) {
-        if (memcmp(container_bytes + index, item_bytes, item_size) == 0) {
-            return 1;
-        }
+    if (item_size == container_size) {
+        int32_t equal = memcmp(container_bytes, item_bytes, item_size) == 0 ? 1 : 0;
+        return equal;
     }
-    return 0;
+    ptrdiff_t found = tinypy_internal_find_bytes(container_bytes, container_size, item_bytes, item_size, TINYPY_FALSE);
+    return found >= 0 ? 1 : 0;
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_contains(tinypy_value_t *container, tinypy_value_t *item, tinypy_bool_t dispatch_special, tinypy_error_t **out_error) {

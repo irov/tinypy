@@ -45,14 +45,14 @@ typedef struct tinypy_verify_block_t {
 } tinypy_verify_block_t;
 
 /* Markers are shared: one per handler and pending context, the reasons it
-   was entered with gathered as bits of tinypy_verify_reason_e. */
+   was entered with gathered as bits of tinypy_verify_reason_e. The markers
+   of one handler are chained from the newest. */
 typedef struct tinypy_verify_marker_t {
     size_t parent;
     size_t handler;
     size_t resume_depth;
     size_t continue_target;
-    size_t first_child;
-    size_t next_sibling;
+    size_t next_of_handler;
     size_t first_consumer;
     uint8_t reasons;
     uint8_t needs_with_cleanup;
@@ -100,7 +100,7 @@ typedef struct tinypy_verify_context_t {
     tinypy_verify_marker_t *markers;
     size_t marker_capacity;
     size_t marker_count;
-    size_t first_root_marker;
+    size_t *marker_heads;
     tinypy_bytecode_verify_result_t *result;
 } tinypy_verify_context_t;
 
@@ -175,6 +175,7 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify_scratch_size(size_t bytec
     size_t worklist_size;
     size_t blocks_size;
     size_t markers_size;
+    size_t marker_heads_size;
     size_t total;
 
     *out_size = 0U;
@@ -197,7 +198,10 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify_scratch_size(size_t bytec
             &blocks_size) || !__tinypy_verify_multiply_size(
             bytecode_size,
             sizeof(tinypy_verify_marker_t),
-            &markers_size)) {
+            &markers_size) || !__tinypy_verify_multiply_size(
+            bytecode_size,
+            sizeof(size_t),
+            &marker_heads_size)) {
         return TINYPY_BYTECODE_VERIFY_SIZE_OVERFLOW;
     }
 
@@ -205,7 +209,7 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify_scratch_size(size_t bytec
     if (!__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, state_heads_size, &total)) {
         return TINYPY_BYTECODE_VERIFY_SIZE_OVERFLOW;
     }
-    if (!__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, states_size, &total) || !__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, worklist_size, &total) || !__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, blocks_size, &total) || !__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, markers_size, &total)) {
+    if (!__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, states_size, &total) || !__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, worklist_size, &total) || !__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, blocks_size, &total) || !__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, markers_size, &total) || !__tinypy_verify_align_size(total, &total) || !__tinypy_verify_add_size(total, marker_heads_size, &total)) {
         return TINYPY_BYTECODE_VERIFY_SIZE_OVERFLOW;
     }
 
@@ -248,10 +252,12 @@ static void __tinypy_verify_bind_scratch(tinypy_verify_context_t *context, void 
     offset += state_count * sizeof(tinypy_verify_block_t);
     (void)__tinypy_verify_align_size(offset, &offset);
     context->markers = (tinypy_verify_marker_t *)(void *)(base + offset);
+    offset += context->bytecode_size * sizeof(tinypy_verify_marker_t);
+    (void)__tinypy_verify_align_size(offset, &offset);
+    context->marker_heads = (size_t *)(void *)(base + offset);
     context->state_capacity = state_count;
     context->block_capacity = state_count;
     context->marker_capacity = context->bytecode_size;
-    context->first_root_marker = TINYPY_VERIFY_NO_MARKER;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_verify_argument_to_size(uint64_t argument, size_t *out_value) {
@@ -629,21 +635,23 @@ static void __tinypy_verify_consume_reasons(tinypy_verify_context_t *context, si
 /* Finds the marker of a handler entered under parent, or makes it, and adds
    reasons to it. Every way into a finally clause from one context shares a
    marker, so nested clauses take one state per instruction instead of one
-   per combination of reasons. A marker continues to one loop target only. */
+   per combination of reasons. A marker continues to one loop target only.
+   The search walks the markers of the handler, an instruction offset, so a
+   code object with many handlers is verified in linear time. */
 static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify_context_t *context, const tinypy_decoded_instruction_t *instruction, size_t parent, uint8_t reasons, size_t handler, size_t resume_depth, size_t continue_target, uint8_t needs_with_cleanup, size_t *out_index) {
     uint8_t catchable = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_EXCEPTION_CATCHABLE);
     uint8_t continues = __tinypy_verify_reason_bit(TINYPY_VERIFY_REASON_CONTINUE);
-    size_t *link = parent != TINYPY_VERIFY_NO_MARKER ? &context->markers[parent].first_child : &context->first_root_marker;
+    size_t *link = &context->marker_heads[handler];
     size_t index = *link;
 
     while (index != TINYPY_VERIFY_NO_MARKER) {
         const tinypy_verify_marker_t *candidate = &context->markers[index];
 
-        if (candidate->handler == handler && candidate->resume_depth == resume_depth && candidate->needs_with_cleanup == needs_with_cleanup && (candidate->reasons == catchable) == (reasons == catchable)
+        if (candidate->parent == parent && candidate->resume_depth == resume_depth && candidate->needs_with_cleanup == needs_with_cleanup && (candidate->reasons == catchable) == (reasons == catchable)
             && ((reasons & continues) == 0U || (candidate->reasons & continues) == 0U || candidate->continue_target == continue_target)) {
             break;
         }
-        index = candidate->next_sibling;
+        index = candidate->next_of_handler;
     }
     if (index == TINYPY_VERIFY_NO_MARKER) {
         if (context->marker_count == context->marker_capacity) {
@@ -664,8 +672,7 @@ static tinypy_bytecode_verify_status_e __tinypy_verify_push_marker(tinypy_verify
         created->handler = handler;
         created->resume_depth = resume_depth;
         created->continue_target = TINYPY_VERIFY_NO_TARGET;
-        created->first_child = TINYPY_VERIFY_NO_MARKER;
-        created->next_sibling = *link;
+        created->next_of_handler = *link;
         created->first_consumer = TINYPY_VERIFY_NO_STATE;
         created->reasons = 0U;
         created->needs_with_cleanup = needs_with_cleanup;
@@ -2134,6 +2141,7 @@ tinypy_bytecode_verify_status_e tinypy_bytecode_verify(const uint8_t *bytecode, 
 
     for (index = 0U; index != bytecode_size; ++index) {
         context.state_heads[index] = TINYPY_VERIFY_NO_STATE;
+        context.marker_heads[index] = TINYPY_VERIFY_NO_MARKER;
     }
 
     status = __tinypy_verify_first_pass(&context);

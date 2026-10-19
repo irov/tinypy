@@ -1897,13 +1897,23 @@ typedef struct tinypy_string_search_plan_t {
     size_t shifts[256];
 } tinypy_string_search_plan_t;
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_string_search_plan_initialize(tinypy_string_search_plan_t *plan, const uint8_t *needle, size_t needle_size, tinypy_bool_t reverse) {
+/* Horspool's shifts pay off for a needle of more than three bytes in a
+   haystack of 64 bytes or more; any other search scans directly. */
+static tinypy_bool_t __tinypy_string_search_uses_shifts(size_t needle_size, size_t haystack_size) {
+    tinypy_bool_t uses_shifts = needle_size > 3U && haystack_size >= 64U ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return uses_shifts;
+}
+//////////////////////////////////////////////////////////////////////////
+/* haystack_size bounds the haystacks the plan searches: the shifts are
+   computed only when one of them may use them. */
+static void __tinypy_string_search_plan_initialize(tinypy_string_search_plan_t *plan, const uint8_t *needle, size_t needle_size, tinypy_bool_t reverse, size_t haystack_size) {
     size_t index;
 
     plan->needle = needle;
     plan->needle_size = needle_size;
     plan->reverse = reverse;
-    if (needle_size <= 3U) {
+    if (__tinypy_string_search_uses_shifts(needle_size, haystack_size) == 0) {
         return;
     }
     for (index = 0U; index < 256U; ++index) {
@@ -1925,10 +1935,9 @@ static void __tinypy_string_search_plan_initialize(tinypy_string_search_plan_t *
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static ptrdiff_t __tinypy_string_search_plan_find(const tinypy_string_search_plan_t *plan, const uint8_t *haystack, size_t haystack_size) {
-    const uint8_t *needle = plan->needle;
-    size_t needle_size = plan->needle_size;
-    tinypy_bool_t reverse = plan->reverse;
+/* The search without shifts, inline in its two callers. memchr finds a
+   single byte faster once the haystack has a few bytes. */
+static TINYPY_ALWAYS_INLINE ptrdiff_t __tinypy_string_search_scan(const uint8_t *haystack, size_t haystack_size, const uint8_t *needle, size_t needle_size, tinypy_bool_t reverse) {
     size_t offset;
 
     if (needle_size == 0U) {
@@ -1938,40 +1947,57 @@ static ptrdiff_t __tinypy_string_search_plan_find(const tinypy_string_search_pla
         return -1;
     }
     if (needle_size == 1U) {
-        if (reverse == 0) {
+        if (reverse != 0) {
+            offset = haystack_size;
+            while (offset != 0U) {
+                offset -= 1U;
+                if (haystack[offset] == needle[0]) {
+                    return (ptrdiff_t)offset;
+                }
+            }
+            return -1;
+        }
+        if (haystack_size >= 16U) {
             const uint8_t *found = (const uint8_t *)memchr(haystack, needle[0], haystack_size);
 
             return found != NULL ? (ptrdiff_t)(found - haystack) : -1;
         }
-        offset = haystack_size;
-        while (offset != 0U) {
-            offset -= 1U;
+        for (offset = 0U; offset != haystack_size; ++offset) {
             if (haystack[offset] == needle[0]) {
                 return (ptrdiff_t)offset;
             }
         }
         return -1;
     }
-    if (needle_size <= 3U || haystack_size < 64U) {
-        if (reverse == 0) {
-            size_t end = haystack_size - needle_size;
+    if (reverse == 0) {
+        size_t end = haystack_size - needle_size;
 
-            for (offset = 0U; offset <= end; ++offset) {
-                if (haystack[offset] == needle[0] && memcmp(haystack + offset + 1U, needle + 1U, needle_size - 1U) == 0) {
-                    return (ptrdiff_t)offset;
-                }
-            }
-        }
-        else {
-            offset = haystack_size - needle_size + 1U;
-            while (offset != 0U) {
-                offset -= 1U;
-                if (haystack[offset] == needle[0] && memcmp(haystack + offset + 1U, needle + 1U, needle_size - 1U) == 0) {
-                    return (ptrdiff_t)offset;
-                }
+        for (offset = 0U; offset <= end; ++offset) {
+            if (haystack[offset] == needle[0] && memcmp(haystack + offset + 1U, needle + 1U, needle_size - 1U) == 0) {
+                return (ptrdiff_t)offset;
             }
         }
         return -1;
+    }
+    offset = haystack_size - needle_size + 1U;
+    while (offset != 0U) {
+        offset -= 1U;
+        if (haystack[offset] == needle[0] && memcmp(haystack + offset + 1U, needle + 1U, needle_size - 1U) == 0) {
+            return (ptrdiff_t)offset;
+        }
+    }
+    return -1;
+}
+//////////////////////////////////////////////////////////////////////////
+static ptrdiff_t __tinypy_string_search_plan_find(const tinypy_string_search_plan_t *plan, const uint8_t *haystack, size_t haystack_size) {
+    const uint8_t *needle = plan->needle;
+    size_t needle_size = plan->needle_size;
+    tinypy_bool_t reverse = plan->reverse;
+    size_t offset;
+
+    if (needle_size > haystack_size || __tinypy_string_search_uses_shifts(needle_size, haystack_size) == 0) {
+        ptrdiff_t scanned = __tinypy_string_search_scan(haystack, haystack_size, needle, needle_size, reverse);
+        return scanned;
     }
     if (reverse == 0) {
         size_t last = needle_size - 1U;
@@ -2002,12 +2028,46 @@ static ptrdiff_t __tinypy_string_search_plan_find(const tinypy_string_search_pla
     return -1;
 }
 //////////////////////////////////////////////////////////////////////////
-ptrdiff_t tinypy_internal_find_bytes(const uint8_t *haystack, size_t haystack_size, const uint8_t *needle, size_t needle_size, tinypy_bool_t reverse) {
+/* Out of line, so that a search without shifts takes no frame for a plan. */
+static TINYPY_NOINLINE ptrdiff_t __tinypy_string_search_shifted(const uint8_t *haystack, size_t haystack_size, const uint8_t *needle, size_t needle_size, tinypy_bool_t reverse) {
     tinypy_string_search_plan_t plan;
 
-    __tinypy_string_search_plan_initialize(&plan, needle, needle_size, reverse);
-    ptrdiff_t return_value_1 = __tinypy_string_search_plan_find(&plan, haystack, haystack_size);
-    return return_value_1;
+    __tinypy_string_search_plan_initialize(&plan, needle, needle_size, reverse, haystack_size);
+    ptrdiff_t found = __tinypy_string_search_plan_find(&plan, haystack, haystack_size);
+    return found;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A search builds a plan only to use its shifts. */
+ptrdiff_t tinypy_internal_find_bytes(const uint8_t *haystack, size_t haystack_size, const uint8_t *needle, size_t needle_size, tinypy_bool_t reverse) {
+    if (__tinypy_string_search_uses_shifts(needle_size, haystack_size) != 0) {
+        ptrdiff_t shifted = __tinypy_string_search_shifted(haystack, haystack_size, needle, needle_size, reverse);
+        return shifted;
+    }
+    ptrdiff_t scanned = __tinypy_string_search_scan(haystack, haystack_size, needle, needle_size, reverse);
+    return scanned;
+}
+//////////////////////////////////////////////////////////////////////////
+/* stringlib_count: the occurrences that do not overlap, and one more than
+   the size for an empty needle. */
+size_t tinypy_internal_count_bytes(const uint8_t *haystack, size_t haystack_size, const uint8_t *needle, size_t needle_size) {
+    tinypy_string_search_plan_t plan;
+    size_t occurrences = 0U;
+    size_t offset = 0U;
+
+    if (needle_size == 0U) {
+        return haystack_size + 1U;
+    }
+    __tinypy_string_search_plan_initialize(&plan, needle, needle_size, TINYPY_FALSE, haystack_size);
+    while (needle_size <= haystack_size - offset) {
+        ptrdiff_t found = __tinypy_string_search_plan_find(&plan, haystack + offset, haystack_size - offset);
+
+        if (found < 0) {
+            break;
+        }
+        occurrences += 1U;
+        offset += (size_t)found + needle_size;
+    }
+    return occurrences;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_string_search_method(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -2176,8 +2236,6 @@ static tinypy_value_t *__tinypy_string_count_method(tinypy_value_t *function, ti
     size_t begin;
     size_t finish;
     size_t needle_size;
-    size_t offset;
-    size_t occurrences = 0U;
 
     (void)kwargs;
     tinypy_value_t *text = self;
@@ -2211,20 +2269,9 @@ static tinypy_value_t *__tinypy_string_count_method(tinypy_value_t *function, ti
         TINYPY_DECREF(needle);
         return return_value_2;
     }
-    tinypy_string_search_plan_t count_plan;
-
-    __tinypy_string_search_plan_initialize(&count_plan, TINYPY_TEXT_BYTES(needle), needle_size, TINYPY_FALSE);
-    offset = begin;
-    while (offset + needle_size <= finish) {
-        const uint8_t *bytes = TINYPY_TEXT_BYTES(text);
-        ptrdiff_t found = __tinypy_string_search_plan_find(&count_plan, bytes + offset, finish - offset);
-
-        if (found < 0) {
-            break;
-        }
-        occurrences += 1U;
-        offset += (size_t)found + needle_size;
-    }
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(text);
+    const uint8_t *needle_bytes = TINYPY_TEXT_BYTES(needle);
+    size_t occurrences = tinypy_internal_count_bytes(bytes + begin, finish - begin, needle_bytes, needle_size);
     tinypy_value_t *return_value_3 = tinypy_integer_from_i64(vm, (int64_t)occurrences);
     TINYPY_DECREF(needle);
     return return_value_3;
@@ -2344,7 +2391,7 @@ static tinypy_value_t *__tinypy_string_replace_text(tinypy_vm_t *vm, tinypy_valu
     size = TINYPY_TEXT_BYTE_SIZE(text);
     old_size = TINYPY_TEXT_BYTE_SIZE(old_value);
     new_size = TINYPY_TEXT_BYTE_SIZE(new_value);
-    __tinypy_string_search_plan_initialize(&search_plan, TINYPY_TEXT_BYTES(old_value), old_size, TINYPY_FALSE);
+    __tinypy_string_search_plan_initialize(&search_plan, TINYPY_TEXT_BYTES(old_value), old_size, TINYPY_FALSE, size);
     unicode = TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE || TINYPY_VALUE_KIND(old_value) == TINYPY_VALUE_UNICODE || TINYPY_VALUE_KIND(new_value) == TINYPY_VALUE_UNICODE;
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
@@ -2577,7 +2624,7 @@ static tinypy_value_t *__tinypy_string_split_text(tinypy_vm_t *vm, tinypy_value_
     bytes = TINYPY_TEXT_BYTES(text);
     size = TINYPY_TEXT_BYTE_SIZE(text);
     if (separator != NULL) {
-        __tinypy_string_search_plan_initialize(&search_plan, TINYPY_TEXT_BYTES(separator), separator_size, reverse);
+        __tinypy_string_search_plan_initialize(&search_plan, TINYPY_TEXT_BYTES(separator), separator_size, reverse, size);
     }
     if (separator == NULL) {
         if (reverse == 0) {
@@ -3836,140 +3883,198 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The bytes from the start of the input that a builtin codec converts
+   without an error, with the size of their output and the characters they
+   hold. The UTF-8 encoder stops before a high surrogate too, which it joins
+   with a low surrogate that follows. */
+static size_t __tinypy_codec_run(const uint8_t *bytes, size_t size, int32_t codec, tinypy_bool_t decode, size_t *out_output_size, size_t *out_characters) {
+    size_t offset = tinypy_internal_ascii_prefix(bytes, size);
+    size_t output_size = offset;
+    size_t characters = offset;
+
+    if (codec == 2 && decode != 0) {
+        /* Latin-1 decodes every byte, one above ASCII to two UTF-8 bytes. */
+        for (; offset < size; ++offset) {
+            output_size += bytes[offset] < 0x80U ? 1U : 2U;
+        }
+        characters = size;
+    }
+    else if (codec != 0) {
+        while (offset < size) {
+            uint32_t code_point = bytes[offset];
+            size_t width = 2U;
+
+            if (code_point < 0x80U) {
+                offset += 1U;
+                output_size += 1U;
+                characters += 1U;
+                continue;
+            }
+            /* Two-byte sequences, the most common ones, decode in place. */
+            if (code_point >= 0xc2U && code_point < 0xe0U && size - offset >= 2U && (bytes[offset + 1U] & 0xc0U) == 0x80U) {
+                code_point = ((code_point & 0x1fU) << 6U) | (bytes[offset + 1U] & 0x3fU);
+            }
+            else {
+                width = tinypy_internal_utf8_decode(bytes + offset, size - offset, &code_point);
+            }
+            if (width == 0U) {
+                break;
+            }
+            if (decode == 0 && codec == 2 && code_point > UINT32_C(0xff)) {
+                break;
+            }
+            if (decode == 0 && codec == 1 && code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdbff)) {
+                break;
+            }
+            offset += width;
+            output_size += decode == 0 && codec == 2 ? 1U : width;
+            characters += 1U;
+        }
+    }
+    *out_output_size = output_size;
+    *out_characters = characters;
+    return offset;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Writes the output of a run __tinypy_codec_run measured. */
+static void __tinypy_codec_convert_run(uint8_t *output, const uint8_t *bytes, size_t size, int32_t codec, tinypy_bool_t decode) {
+    /* The run is its output up to the first Latin-1 character above ASCII. */
+    size_t offset = codec == 2 ? tinypy_internal_ascii_prefix(bytes, size) : size;
+
+    (void)memcpy(output, bytes, offset);
+    output += offset;
+    while (offset < size) {
+        uint8_t byte = bytes[offset];
+
+        if (byte < 0x80U) {
+            *output++ = byte;
+            offset += 1U;
+        }
+        else if (decode != 0) {
+            output[0] = (uint8_t)(0xc0U | (byte >> 6U));
+            output[1] = (uint8_t)(0x80U | (byte & 0x3fU));
+            output += 2;
+            offset += 1U;
+        }
+        else {
+            /* A code point below 256 takes a lead byte and one continuation byte. */
+            *output++ = (uint8_t)(((byte & 0x1fU) << 6U) | (bytes[offset + 1U] & 0x3fU));
+            offset += 2U;
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_codec_append_run(tinypy_string_builder_t *builder, const uint8_t *bytes, size_t size, size_t output_size, int32_t codec, tinypy_bool_t decode) {
+    if (size == 0U) {
+        return;
+    }
+    __tinypy_string_builder_reserve(builder, output_size);
+    if (builder->failed != 0) {
+        return;
+    }
+    __tinypy_codec_convert_run(builder->bytes + builder->size, bytes, size, codec, decode);
+    builder->size += output_size;
+}
+//////////////////////////////////////////////////////////////////////////
 static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_text_codec_builtin(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_internal_builtin_codec_e builtin, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t *out_consumed, tinypy_error_t **out_error) {
     int32_t codec = (int32_t)builtin;
     int32_t error_mode = errors == NULL ? 0 : -2;
     tinypy_string_builder_t builder;
-    const uint8_t *bytes;
-    size_t size;
-    size_t offset = 0U;
+    const uint8_t *bytes = TINYPY_TEXT_BYTES(text);
+    size_t size = TINYPY_TEXT_BYTE_SIZE(text);
+    size_t offset;
+    size_t output_size;
+    size_t characters;
     tinypy_codec_error_state_t error_state = {NULL, NULL};
 
+    if (decode != 0 && TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
+        offset = tinypy_internal_ascii_prefix(bytes, size);
+        if (offset != size) {
+            size_t character = tinypy_internal_unicode_character_index(text, offset);
+            size_t error_end = character;
+
+            /* The ASCII encoder reports the whole run of characters it
+               cannot encode. */
+            while (offset < size && bytes[offset] >= 0x80U) {
+                offset += __tinypy_string_utf8_width(bytes[offset]);
+                error_end += 1U;
+            }
+            (void)__tinypy_codec_raise_unicode_error(vm, text, NULL, 0, TINYPY_FALSE, character, error_end, out_error);
+            return NULL;
+        }
+    }
+    if (decode == 0 && TINYPY_VALUE_KIND(text) == TINYPY_VALUE_STRING) {
+        offset = tinypy_internal_ascii_prefix(bytes, size);
+        if (offset != size) {
+            (void)__tinypy_codec_raise_unicode_error(vm, text, NULL, 0, TINYPY_TRUE, offset, offset + 1U, out_error);
+            return NULL;
+        }
+    }
+    offset = __tinypy_codec_run(bytes, size, codec, decode, &output_size, &characters);
+    if (offset == size && size != 0U) {
+        uint8_t *output;
+        tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, decode != 0 ? TINYPY_VALUE_UNICODE : TINYPY_VALUE_STRING, output_size, characters, &output, out_error);
+
+        if (result != NULL) {
+            __tinypy_codec_convert_run(output, bytes, size, codec, decode);
+        }
+        return result;
+    }
     (void)memset(&builder, 0, sizeof(builder));
     builder.vm = vm;
-    bytes = TINYPY_TEXT_BYTES(text);
-    size = TINYPY_TEXT_BYTE_SIZE(text);
-    if (decode != 0) {
-        if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
-            while (offset < size) {
-                if (bytes[offset] >= 0x80U) {
-                    size_t character = tinypy_internal_unicode_character_index(text, offset);
-                    size_t error_end = character;
+    __tinypy_string_builder_reserve(&builder, output_size + (size - offset));
+    __tinypy_codec_append_run(&builder, bytes, offset, output_size, codec, decode);
+    while (offset < size) {
+        size_t run = __tinypy_codec_run(bytes + offset, size - offset, codec, decode, &output_size, &characters);
 
-                    /* The ASCII encoder reports the whole run of characters
-                       it cannot encode. */
-                    while (offset < size && bytes[offset] >= 0x80U) {
-                        offset += __tinypy_string_utf8_width(bytes[offset]);
-                        error_end += 1U;
+        if (run != 0U) {
+            __tinypy_codec_append_run(&builder, bytes + offset, run, output_size, codec, decode);
+            offset += run;
+            continue;
+        }
+        if (decode != 0) {
+            /* Latin-1 decodes any byte: the error is the byte ASCII cannot
+               decode or a sequence UTF-8 cannot. */
+            size_t error_end = offset + 1U;
+
+            if (codec == 1) {
+                uint8_t first = bytes[offset];
+                size_t expected = first < 0xe0U ? 2U : (first < 0xf0U ? 3U : 4U);
+
+                /* PyUnicode_DecodeUTF8Stateful defers a sequence whose
+                   length exceeds the remaining input before it looks at
+                   the continuation bytes. */
+                if (final == 0 && first >= 0xc2U && first <= 0xf4U && size - offset < expected) {
+                    if (out_consumed != NULL) {
+                        *out_consumed = offset;
                     }
-                    (void)__tinypy_codec_raise_unicode_error(vm, text, NULL, 0, TINYPY_FALSE, character, error_end, out_error);
+                    break;
+                }
+                error_end = offset + tinypy_internal_utf8_invalid_span(bytes + offset, size - offset);
+            }
+            if (error_mode < 0) {
+                error_mode = __tinypy_codec_error_mode(vm, errors);
+            }
+            if (error_mode == 2) {
+                __tinypy_utf8_append(&builder, UINT32_C(0xfffd));
+            }
+            else if (error_mode == 5) {
+                if (__tinypy_codec_call_error_handler(vm, &builder, &error_state, text, encoding, errors, codec, TINYPY_TRUE, offset, error_end, &offset, out_error) == 0) {
                     goto codec_error;
                 }
-                offset += 1U;
+                continue;
             }
-            offset = 0U;
-        }
-        if (codec == 2) {
-            while (offset < size) {
-                __tinypy_utf8_append(&builder, bytes[offset++]);
-            }
-        }
-        else if (codec == 0) {
-            while (offset < size) {
-                if (bytes[offset] < 0x80U) {
-                    __tinypy_string_builder_character(&builder, bytes[offset]);
-                }
-                else {
-                    size_t error_end = offset + 1U;
-
-                    if (error_mode < 0) {
-                        error_mode = __tinypy_codec_error_mode(vm, errors);
-                    }
-                    if (error_mode == 2) {
-                        __tinypy_utf8_append(&builder, UINT32_C(0xfffd));
-                    }
-                    else if (error_mode == 5) {
-                        if (__tinypy_codec_call_error_handler(vm, &builder, &error_state, text, encoding, errors, codec, TINYPY_TRUE, offset, error_end, &offset, out_error) == 0) {
-                            goto codec_error;
-                        }
-                        continue;
-                    }
-                    else if (error_mode == 3 || error_mode == 4) {
-                        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "don't know how to handle UnicodeDecodeError in error callback", out_error);
-                        goto codec_error;
-                    }
-                    else if (error_mode == 0) {
-                        (void)__tinypy_codec_raise_unicode_error(vm, text, encoding, codec, TINYPY_TRUE, offset, error_end, out_error);
-                        goto codec_error;
-                    }
-                }
-                offset += 1U;
-            }
-        }
-        else {
-            while (offset < size) {
-                uint32_t code_point;
-                size_t width = tinypy_internal_utf8_decode(bytes + offset, size - offset, &code_point);
-
-                if (width != 0U) {
-                    __tinypy_string_builder_append(&builder, bytes + offset, width);
-                }
-                else {
-                    size_t invalid_size = tinypy_internal_utf8_invalid_span(bytes + offset, size - offset);
-                    size_t error_end = offset + invalid_size;
-                    size_t remaining = size - offset;
-                    uint8_t first = bytes[offset];
-                    size_t expected = first < 0xe0U ? 2U : (first < 0xf0U ? 3U : 4U);
-
-                    /* PyUnicode_DecodeUTF8Stateful defers a sequence whose
-                       length exceeds the remaining input before it looks at
-                       the continuation bytes. */
-                    if (final == 0 && first >= 0xc2U && first <= 0xf4U && remaining < expected) {
-                        if (out_consumed != NULL) {
-                            *out_consumed = offset;
-                        }
-                        break;
-                    }
-
-                    if (error_mode < 0) {
-                        error_mode = __tinypy_codec_error_mode(vm, errors);
-                    }
-                    if (error_mode == 2) {
-                        __tinypy_utf8_append(&builder, UINT32_C(0xfffd));
-                    }
-                    else if (error_mode == 5) {
-                        if (__tinypy_codec_call_error_handler(vm, &builder, &error_state, text, encoding, errors, codec, TINYPY_TRUE, offset, error_end, &offset, out_error) == 0) {
-                            goto codec_error;
-                        }
-                        continue;
-                    }
-                    else if (error_mode == 3 || error_mode == 4) {
-                        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "don't know how to handle UnicodeDecodeError in error callback", out_error);
-                        goto codec_error;
-                    }
-                    else if (error_mode == 0) {
-                        (void)__tinypy_codec_raise_unicode_error(vm, text, encoding, codec, TINYPY_TRUE, offset, error_end, out_error);
-                        goto codec_error;
-                    }
-                }
-                offset += width != 0U ? width : tinypy_internal_utf8_invalid_span(bytes + offset, size - offset);
-            }
-        }
-        tinypy_value_t *return_value_2 = __tinypy_string_builder_finish(&builder, INT32_C(1), out_error);
-        __tinypy_codec_error_state_finalize(&error_state);
-        return return_value_2;
-    }
-    if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_STRING) {
-        while (offset < size) {
-            if (bytes[offset] >= 0x80U) {
-                (void)__tinypy_codec_raise_unicode_error(vm, text, NULL, 0, TINYPY_TRUE, offset, offset + 1U, out_error);
+            else if (error_mode == 3 || error_mode == 4) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "don't know how to handle UnicodeDecodeError in error callback", out_error);
                 goto codec_error;
             }
-            offset += 1U;
+            else if (error_mode == 0) {
+                (void)__tinypy_codec_raise_unicode_error(vm, text, encoding, codec, TINYPY_TRUE, offset, error_end, out_error);
+                goto codec_error;
+            }
+            offset = error_end;
+            continue;
         }
-        offset = 0U;
-    }
-    while (offset < size) {
         uint32_t code_point;
         size_t width = tinypy_internal_utf8_decode(bytes + offset, size - offset, &code_point);
 
@@ -3987,22 +4092,18 @@ static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_text_codec_builtin(tinypy_v
             goto codec_error;
         }
         if (codec == 1) {
-            if (code_point >= UINT32_C(0xd800) && code_point <= UINT32_C(0xdbff)) {
-                uint32_t next_code_point;
-                size_t next_width = tinypy_internal_utf8_decode(bytes + offset + width, size - offset - width, &next_code_point);
+            /* The run stopped before a high surrogate. */
+            uint32_t next_code_point;
+            size_t next_width = tinypy_internal_utf8_decode(bytes + offset + width, size - offset - width, &next_code_point);
 
-                if (next_width != 0U && next_code_point >= UINT32_C(0xdc00) && next_code_point <= UINT32_C(0xdfff)) {
-                    uint32_t combined = UINT32_C(0x10000) + ((code_point - UINT32_C(0xd800)) << 10U) + (next_code_point - UINT32_C(0xdc00));
+            if (next_width != 0U && next_code_point >= UINT32_C(0xdc00) && next_code_point <= UINT32_C(0xdfff)) {
+                uint32_t combined = UINT32_C(0x10000) + ((code_point - UINT32_C(0xd800)) << 10U) + (next_code_point - UINT32_C(0xdc00));
 
-                    __tinypy_utf8_append(&builder, combined);
-                    offset += width + next_width;
-                    continue;
-                }
+                __tinypy_utf8_append(&builder, combined);
+                offset += width + next_width;
+                continue;
             }
             __tinypy_string_builder_append(&builder, bytes + offset, width);
-        }
-        else if ((codec == 0 && code_point <= 0x7fU) || (codec == 2 && code_point <= 0xffU)) {
-            __tinypy_string_builder_character(&builder, (uint8_t)code_point);
         }
         else {
             size_t character = tinypy_internal_unicode_character_index(text, offset);
@@ -4041,9 +4142,9 @@ static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_text_codec_builtin(tinypy_v
         }
         offset += width;
     }
-    tinypy_value_t *return_value_4 = __tinypy_string_builder_finish(&builder, INT32_C(0), out_error);
+    tinypy_value_t *result = __tinypy_string_builder_finish(&builder, decode, out_error);
     __tinypy_codec_error_state_finalize(&error_state);
-    return return_value_4;
+    return result;
 
 codec_error:
     __tinypy_string_builder_discard(&builder);

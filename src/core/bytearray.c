@@ -304,9 +304,11 @@ static tinypy_bool_t __tinypy_bytearray_collect(tinypy_vm_t *vm, tinypy_value_t 
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* bytearray_iconcat. The bytes are copied aside before the array grows, which
-   can move the storage the right operand views; appending the array to itself
-   fails as its own exported buffer does. */
+/* bytearray_iconcat. A result that fits the allocation is stored in place,
+   which an export does not prevent; otherwise the bytes are copied aside
+   before the array grows, which can move the storage the right operand
+   views, and appending the array to itself fails as its own exported buffer
+   does. */
 static tinypy_bool_t __tinypy_bytearray_concat_in_place(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     const uint8_t *right_bytes;
@@ -321,12 +323,19 @@ static tinypy_bool_t __tinypy_bytearray_concat_in_place(tinypy_value_t *left, ti
         return TINYPY_FALSE;
     }
     size_t left_size = TINYPY_SIZED_SIZE(left);
-    if (left == right && right_size != 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_BUFFER, "Existing exports of data: object cannot be re-sized", out_error);
-        return TINYPY_FALSE;
-    }
     if (right_size > SIZE_MAX - left_size) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "bytearray is too large", out_error);
+        return TINYPY_FALSE;
+    }
+    if (left_size + right_size < __tinypy_bytearray_allocation(TINYPY_BYTEARRAY_OBJECT(left))) {
+        if (right_size != 0U) {
+            (void)memmove(TINYPY_BYTEARRAY_OBJECT(left)->bytes + left_size, right_bytes, right_size);
+        }
+        TINYPY_SIZED_SIZE(left) = left_size + right_size;
+        return TINYPY_TRUE;
+    }
+    if (left == right && right_size != 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_BUFFER, "Existing exports of data: object cannot be re-sized", out_error);
         return TINYPY_FALSE;
     }
     if (tinypy_internal_bytearray_resize_allowed(left, left_size + right_size, out_error) == 0) {
@@ -1174,11 +1183,10 @@ static tinypy_value_t *__tinypy_bytearray_inplace_multiply_method(tinypy_value_t
     if (__tinypy_bytearray_index_argument(TINYPY_TUPLE_GET(args, 1U), &count, TINYPY_FALSE, out_error) == 0) {
         return NULL;
     }
+    /* bytearray_irepeat stores a result that fits the allocation in place,
+       which an export does not prevent, so the array keeps its storage. */
     size_t unit_size = TINYPY_SIZED_SIZE(value);
     if (count <= 0) {
-        if (tinypy_internal_bytearray_resize_allowed(value, 0U, out_error) == 0) {
-            return NULL;
-        }
         TINYPY_SIZED_SIZE(value) = 0U;
     }
     else if (count > 1 && unit_size != 0U) {
@@ -1187,11 +1195,13 @@ static tinypy_value_t *__tinypy_bytearray_inplace_multiply_method(tinypy_value_t
             return NULL;
         }
         size_t total_size = unit_size * (size_t)count;
-        if (tinypy_internal_bytearray_resize_allowed(value, total_size, out_error) == 0) {
-            return NULL;
-        }
-        if (__tinypy_bytearray_reserve_checked(value, total_size, out_error) == 0) {
-            return NULL;
+        if (total_size >= __tinypy_bytearray_allocation(TINYPY_BYTEARRAY_OBJECT(value))) {
+            if (tinypy_internal_bytearray_resize_allowed(value, total_size, out_error) == 0) {
+                return NULL;
+            }
+            if (__tinypy_bytearray_reserve_checked(value, total_size, out_error) == 0) {
+                return NULL;
+            }
         }
         uint8_t *bytes = TINYPY_BYTEARRAY_OBJECT(value)->bytes;
         size_t copied = unit_size;
@@ -1282,6 +1292,8 @@ static tinypy_value_t *__tinypy_bytearray_extend_method(tinypy_value_t *function
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
+/* find, rfind, index, rindex and count, which search the bytes of the
+   array between its adjusted bounds in place. */
 static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     const uint8_t *needle;
@@ -1297,9 +1309,12 @@ static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, 
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, SIZE_MAX, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
+    tinypy_bool_t counting = name == vm->internal_count_key ? TINYPY_TRUE : TINYPY_FALSE;
     size_t supplied = TINYPY_TUPLE_SIZE(args) - 1U;
     if (supplied < 1U || supplied > 3U) {
-        tinypy_internal_make_arity_error(vm, "find/rfind/index/rindex", sizeof("find/rfind/index/rindex") - 1U, supplied, 1U, 3U, TINYPY_ARITY_STYLE_PARSED, out_error);
+        const char *function_name = counting != 0 ? "count" : "find/rfind/index/rindex";
+
+        tinypy_internal_make_arity_error(vm, function_name, strlen(function_name), supplied, 1U, 3U, TINYPY_ARITY_STYLE_PARSED, out_error);
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
@@ -1335,6 +1350,16 @@ static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, 
     if ((uint64_t)stop > (uint64_t)size) {
         stop = (int64_t)size;
     }
+    if (counting != 0) {
+        const uint8_t *haystack = TINYPY_BYTEARRAY_OBJECT(value)->bytes;
+        size_t occurrences = 0U;
+
+        if (start <= stop) {
+            occurrences = tinypy_internal_count_bytes(haystack != NULL ? haystack + (size_t)start : NULL, (size_t)(stop - start), needle, needle_size);
+        }
+        tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, (int64_t)occurrences);
+        return return_value_1;
+    }
     if (start <= stop && needle_size <= (size_t)(stop - start)) {
         const uint8_t *haystack = TINYPY_BYTEARRAY_OBJECT(value)->bytes;
         tinypy_bool_t reverse = name == vm->internal_rfind_key || name == vm->internal_rindex_key ? TINYPY_TRUE : TINYPY_FALSE;
@@ -1347,8 +1372,8 @@ static tinypy_value_t *__tinypy_bytearray_find_method(tinypy_value_t *function, 
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "subsection not found", out_error);
         return NULL;
     }
-    tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, (int64_t)found);
-    return return_value_1;
+    tinypy_value_t *return_value_2 = tinypy_integer_from_i64(vm, (int64_t)found);
+    return return_value_2;
 }
 //////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_bytearray_bridge_result_e {
@@ -1628,7 +1653,8 @@ static tinypy_value_t *__tinypy_bytearray_prefix(tinypy_value_t *self, tinypy_va
 //////////////////////////////////////////////////////////////////////////
 /* bytearray_decode hands the array itself to PyCodec_Decode and returns what
    a registered codec returns; the builtin codecs decode its bytes as
-   str.decode does. */
+   str.decode does, holding an export of the array as the s* argument of
+   their decoders does, so that an error handler cannot resize it. */
 static tinypy_value_t *__tinypy_bytearray_decode_method(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *encoding;
@@ -1647,7 +1673,9 @@ static tinypy_value_t *__tinypy_bytearray_decode_method(tinypy_value_t *function
         tinypy_value_t *string = tinypy_internal_string_from_bytes_checked(vm, TINYPY_BYTEARRAY_OBJECT(self)->bytes, TINYPY_SIZED_SIZE(self), out_error);
 
         if (string != NULL) {
+            TINYPY_BYTEARRAY_OBJECT(self)->exports += 1U;
             result = tinypy_internal_text_codec_builtin(vm, string, builtin, encoding, errors, TINYPY_TRUE, out_error);
+            TINYPY_BYTEARRAY_OBJECT(self)->exports -= 1U;
             TINYPY_DECREF(string);
         }
     }
@@ -1683,7 +1711,7 @@ static tinypy_value_t *__tinypy_bytearray_bridge_method(tinypy_value_t *function
     }
     /* Mutable receivers and buffer arguments are copied after scalar parsers
        have run their Python callbacks, as the native bytearray methods do. */
-    tinypy_bool_t bounds = name == vm->internal_count_key || name == vm->internal_rfind_key || name == vm->internal_index_key || name == vm->internal_rindex_key || name == vm->internal_startswith_key || name == vm->internal_endswith_key;
+    tinypy_bool_t bounds = name == vm->internal_startswith_key || name == vm->internal_endswith_key;
     size_t scalar_begin = bounds != 0 && argument_count >= 2U ? 2U : 0U;
     tinypy_bool_t c_integer = name == vm->internal_expandtabs_key || name == vm->internal_splitlines_key;
     if (((name == vm->internal_center_key || name == vm->internal_ljust_key || name == vm->internal_rjust_key) && argument_count >= 2U && argument_count <= 3U) ||
@@ -1758,7 +1786,7 @@ static tinypy_value_t *__tinypy_bytearray_bridge_method(tinypy_value_t *function
     if (name == vm->internal_replace_key) {
         buffer_count = 2U;
     }
-    else if (name == vm->internal_count_key || partition != TINYPY_FALSE) {
+    else if (partition != TINYPY_FALSE) {
         buffer_count = 1U;
     }
     else if (name == vm->internal_split_key || name == vm->internal_rsplit_key || name == vm->internal_strip_key || name == vm->internal_lstrip_key || name == vm->internal_rstrip_key || name == vm->internal_translate_key) {
@@ -2084,7 +2112,6 @@ void tinypy_internal_initialize_bytearray_methods(tinypy_vm_t *vm) {
     static const tinypy_bytearray_bridge_spec_t bridge_specs[] = {
         {offsetof(tinypy_vm_t, internal_capitalize_key), TINYPY_BYTEARRAY_BRIDGE_VALUE, TINYPY_FALSE, 0U, 0U, TINYPY_ARITY_STYLE_PARSED},
         {offsetof(tinypy_vm_t, internal_center_key), TINYPY_BYTEARRAY_BRIDGE_VALUE, TINYPY_FALSE, 1U, 2U, TINYPY_ARITY_STYLE_PARSED},
-        {offsetof(tinypy_vm_t, internal_count_key), TINYPY_BYTEARRAY_BRIDGE_DIRECT, TINYPY_FALSE, 1U, 3U, TINYPY_ARITY_STYLE_PARSED},
         {offsetof(tinypy_vm_t, internal_endswith_key), TINYPY_BYTEARRAY_BRIDGE_DIRECT, TINYPY_FALSE, 1U, 3U, TINYPY_ARITY_STYLE_PARSED},
         {offsetof(tinypy_vm_t, internal_expandtabs_key), TINYPY_BYTEARRAY_BRIDGE_VALUE, TINYPY_FALSE, 0U, 1U, TINYPY_ARITY_STYLE_PARSED},
         {offsetof(tinypy_vm_t, internal_isalnum_key), TINYPY_BYTEARRAY_BRIDGE_DIRECT, TINYPY_FALSE, 0U, 0U, TINYPY_ARITY_STYLE_PARSED},
@@ -2127,6 +2154,7 @@ void tinypy_internal_initialize_bytearray_methods(tinypy_vm_t *vm) {
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_BYTEARRAY], vm->internal_rfind_key, __tinypy_bytearray_find_method, vm->internal_rfind_key, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_BYTEARRAY], vm->internal_index_key, __tinypy_bytearray_find_method, vm->internal_index_key, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_BYTEARRAY], vm->internal_rindex_key, __tinypy_bytearray_find_method, vm->internal_rindex_key, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_BYTEARRAY], vm->internal_count_key, __tinypy_bytearray_find_method, vm->internal_count_key, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_BYTEARRAY], vm->internal_insert_key, __tinypy_bytearray_insert_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_BYTEARRAY], vm->internal_pop_key, __tinypy_bytearray_pop_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_BYTEARRAY], vm->internal_remove_key, __tinypy_bytearray_remove_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

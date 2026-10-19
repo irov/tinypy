@@ -265,6 +265,33 @@ class ImportSemantics(unittest.TestCase):
             sys.meta_path[:] = [finder for finder in sys.meta_path if not isinstance(finder, OneShot)]
             sys.modules.pop('tinypy_one_shot', None)
 
+    def test_finder_and_loader_methods_must_be_callable(self):
+        # find_module and load_module are called through PyObject_CallMethod,
+        # which requires the attribute to be callable, for a reload as well.
+        class NotCallableFinder(object):
+            find_module = 5
+
+        class NotCallableLoader(object):
+            load_module = None
+
+        class Finder(object):
+            def find_module(self, name, path=None):
+                return NotCallableLoader()
+
+        saved = sys.meta_path[:]
+        try:
+            sys.meta_path[:] = [NotCallableFinder()]
+            self.assertEqual(self.failure(__import__, 'tinypy_meta_uncallable'), "TypeError: attribute of type 'int' is not callable")
+            module = sys.modules['tinypy_meta_uncallable'] = type(sys)('tinypy_meta_uncallable')
+            self.assertEqual(self.failure(reload, module), "TypeError: attribute of type 'int' is not callable")
+            del sys.modules['tinypy_meta_uncallable']
+            sys.meta_path[:] = [Finder()]
+            self.assertEqual(self.failure(__import__, 'tinypy_meta_uncallable'), "TypeError: attribute of type 'NoneType' is not callable")
+            self.assertFalse('tinypy_meta_uncallable' in sys.modules)
+        finally:
+            sys.meta_path[:] = saved
+            sys.modules.pop('tinypy_meta_uncallable', None)
+
     def test_relative_miss_is_marked_once_the_absolute_head_imported(self):
         # load_next marks the name an implicit relative import misses as
         # soon as the absolute head imported, before the rest of the name, so

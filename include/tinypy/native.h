@@ -46,7 +46,9 @@ typedef tinypy_value_t *(*tinypy_native_compare_t)(tinypy_value_t *instance, voi
  * callbacks report failures through out_error or the VM error alone, which
  * the slot then reports through out_error too. Without iter, sequence_get
  * makes instances iterable by index until IndexError, ahead of mapping_get,
- * and with sequence_length reversible, as sq_item does in CPython.
+ * and with sequence_length reversible, as sq_item does in CPython; like
+ * PySequence_GetItem, the iteration calls it without out_error and reads a
+ * failure from the VM error.
  * payload_alignment accepts any power of two up to alignof(max_align_t). */
 struct tinypy_native_type_spec_t {
     uint32_t abi_version;
@@ -97,8 +99,9 @@ tinypy_value_t *tinypy_native_function_new(tinypy_vm_t *vm, const char *name, si
 tinypy_value_t *tinypy_native_function_new_key(tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize);
 /* An items function checks minimum <= count <= maximum and rejects keyword
  * arguments before its callback runs, reporting both as PyArg_ParseTuple
- * does. Registered on a type through tinypy_type_set_attr it becomes a method
- * descriptor that calls through an instance without a bound method.
+ * does. Registered fresh on a type through tinypy_type_set_attr, as that
+ * function describes, it becomes a method descriptor that calls through an
+ * instance without a bound method.
  * The callback reads user_data with tinypy_native_function_user_data, which
  * for a bound method is the user data of its descriptor. */
 tinypy_value_t *tinypy_native_function_new_items(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_native_items_callback_t callback, size_t minimum, size_t maximum, void *user_data, tinypy_native_function_finalize_t finalize);

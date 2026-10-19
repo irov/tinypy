@@ -438,3 +438,95 @@ class TypeDeep(unittest.TestCase):
             self.assertEqual(type.__hash__(value), hash(value))
             self.assertEqual(type.__hash__(value), object.__hash__(value))
         self.assertEqual({int: 1, Derived: 2}[Derived], 2)
+
+    def test_python_new_keeps_slot_new_once_removed(self):
+        log = []
+        class Meta(type):
+            def __getattribute__(cls, name):
+                if name == '__new__':
+                    log.append(cls.__name__)
+                return type.__getattribute__(cls, name)
+        class Base(object):
+            __metaclass__ = Meta
+            def __new__(cls, *args):
+                return object.__new__(cls)
+        class Derived(Base):
+            pass
+        del Base.__new__
+        class Later(Base):
+            pass
+        self.assertEqual([type(Base()), type(Derived()), type(Later())], [Base, Derived, Later])
+        self.assertEqual(log, ['Base', 'Derived', 'Later'])
+        del log[:]
+        class Fresh(object):
+            __metaclass__ = Meta
+        class FreshChild(Fresh):
+            pass
+        Fresh()
+        self.assertEqual(log, [])
+        Fresh.__new__ = staticmethod(lambda cls: object.__new__(cls))
+        del Fresh.__new__
+        Fresh()
+        FreshChild()
+        self.assertEqual(log, ['Fresh', 'FreshChild'])
+        del log[:]
+        class Python(object):
+            def __new__(cls, *args):
+                return object.__new__(cls)
+        class Neutral(object):
+            pass
+        class Moved(Neutral):
+            __metaclass__ = Meta
+        Moved.__bases__ = (Python,)
+        Moved.__bases__ = (Neutral,)
+        Moved()
+        self.assertEqual(log, ['Moved'])
+        class Failure(Exception):
+            __metaclass__ = Meta
+            def __new__(cls, *args):
+                return Exception.__new__(cls, *args)
+        del Failure.__new__
+        del log[:]
+        self.assertEqual(Failure('message').args, ('message',))
+        self.assertEqual(log, ['Failure'])
+
+    def test_builtin_new_keeps_the_inherited_constructor(self):
+        log = []
+        class Meta(type):
+            def __getattribute__(cls, name):
+                if name == '__new__':
+                    log.append(cls.__name__)
+                return type.__getattribute__(cls, name)
+        class Mapping(dict):
+            __metaclass__ = Meta
+        Mapping.__new__ = dict.__new__
+        self.assertEqual(Mapping(key=1), {'key': 1})
+        class Other(dict):
+            __metaclass__ = Meta
+        Other.__new__ = list.__new__
+        self.assertEqual(Other(key=1), {'key': 1})
+        class Plain(object):
+            __metaclass__ = Meta
+            __new__ = dict.__new__
+        self.assertIs(type(Plain()), Plain)
+        class Failure(ValueError):
+            __metaclass__ = Meta
+        Failure.__new__ = KeyError.__new__
+        self.assertEqual(Failure('message').args, ('message',))
+        self.assertEqual(log, [])
+        class Static(dict):
+            __new__ = staticmethod(list.__new__)
+        self.assertRaises(TypeError, Static)
+
+    def test_object_init_takes_arguments_while_slot_new_stays(self):
+        class Removed(object):
+            def __new__(cls, *args):
+                return object.__new__(cls)
+            def __init__(self, *args):
+                object.__init__(self, *args)
+        del Removed.__new__
+        self.assertIs(type(Removed(1)), Removed)
+        class Plain(object):
+            def __init__(self, *args):
+                object.__init__(self, *args)
+        self.assertRaises(TypeError, Plain, 1)

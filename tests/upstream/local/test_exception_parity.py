@@ -39,6 +39,83 @@ def _limited(operation, headroom, *args):
         sys.setrecursionlimit(limit)
 
 
+def _deepest_frame(depth):
+    try:
+        return _deepest_frame(depth + 1)
+    except RuntimeError:
+        return depth
+
+
+# Each handler below catches the error that the runtime raises in it, and
+# makes no call, which would fail in the deepest frame.
+def _key_error_frame(depth):
+    try:
+        return _key_error_frame(depth + 1)
+    except RuntimeError:
+        try:
+            {}[depth]
+        except KeyError:
+            return depth
+
+
+def _index_error_frame(depth):
+    try:
+        return _index_error_frame(depth + 1)
+    except RuntimeError:
+        try:
+            [][depth]
+        except IndexError:
+            return depth
+
+
+def _zero_division_frame(depth):
+    try:
+        return _zero_division_frame(depth + 1)
+    except RuntimeError:
+        try:
+            depth / 0
+        except ZeroDivisionError:
+            return depth
+
+
+def _name_error_frame(depth):
+    try:
+        return _name_error_frame(depth + 1)
+    except RuntimeError:
+        try:
+            _undefined_name
+        except NameError:
+            return depth
+
+
+def _attribute_error_frame(depth):
+    try:
+        return _attribute_error_frame(depth + 1)
+    except RuntimeError:
+        try:
+            depth.missing
+        except AttributeError:
+            return depth
+
+
+def _classic_checks(instance, derived, root, other):
+    results = [isinstance(instance, root), issubclass(derived, root)]
+    try:
+        raise instance
+    except (other, root):
+        results.append('caught')
+    return results
+
+
+def _class_released_at_the_limit(released):
+    try:
+        _class_released_at_the_limit(released)
+    except RuntimeError:
+        transient = type('Transient', (object,), {})
+        del transient
+        released.append(True)
+
+
 class ExceptionParity(unittest.TestCase):
     def test_located_syntax_error_has_an_empty_message(self):
         cases = [
@@ -153,6 +230,55 @@ class ExceptionParity(unittest.TestCase):
         for index in range(100):
             derived = type(Base)('Derived%d' % index, (derived,), {})
         self.assertEqual(_limited(lambda: (derived.value, derived().value, hasattr(derived, 'missing')), 20), (1, 1, False))
+
+    def test_classic_lookup_compares_keys_at_the_depth_of_its_caller(self):
+        class Name(object):
+            def __hash__(self):
+                return hash('target')
+
+            def __eq__(self, other):
+                return other == 'target'
+
+        class Base:
+            pass
+
+        Base.__dict__[Name()] = 'found'
+        derived = Base
+        for index in range(40):
+            derived = type(Base)('Derived%d' % index, (derived,), {})
+        self.assertEqual(_limited(lambda: getattr(derived, 'target', 'missing'), 20), 'found')
+
+    def test_classic_subclass_checks_take_no_recursion_level(self):
+        class Root:
+            pass
+
+        class Other:
+            pass
+
+        derived = Root
+        for index in range(40):
+            derived = type(Root)('Derived%d' % index, (derived, Other), {})
+        results = _limited(_classic_checks, 12, derived(), derived, Root, Other)
+        sys.exc_clear()
+        self.assertEqual((results, len([1, 2])), ([True, True, 'caught'], 2))
+
+    def test_runtime_error_raised_in_the_deepest_frame_is_caught_one_frame_up(self):
+        # The runtime raises an error as its class and arguments, which the
+        # handler normalizes with a call to the class; in the deepest frame
+        # that call fails, so the handler sees RuntimeError instead.
+        deepest = _limited(_deepest_frame, 20, 0)
+        frames = (_key_error_frame, _index_error_frame, _zero_division_frame, _name_error_frame, _attribute_error_frame)
+        self.assertEqual([_limited(frame, 20, 0) for frame in frames], [deepest - 1] * len(frames))
+        sys.exc_clear()
+
+    def test_class_released_in_the_deepest_frame_reports_nothing(self):
+        # The bases list a class through weak references without a callback,
+        # whose call would fail there and report the error on stderr, which
+        # the case compares.
+        released = []
+        _limited(_class_released_at_the_limit, 20, released)
+        sys.exc_clear()
+        self.assertEqual(released, [True])
 
 if __name__ == '__main__':
     unittest.main()

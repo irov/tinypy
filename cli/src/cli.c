@@ -549,18 +549,24 @@ static tinypy_bool_t __tinypy_cli_error_is_incomplete(const tinypy_error_t *erro
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyString_AsString: a byte string as is, a unicode string in the ASCII
-   default encoding. */
+   default encoding, read as a C string up to its first NUL. */
 static const char *__tinypy_cli_c_string(const tinypy_value_t *value, size_t *out_size) {
     const char *text = __tinypy_cli_text_view(value, out_size);
 
-    if (text == NULL || tinypy_typeof(value) == TINYPY_VALUE_STRING) {
-        return text;
+    if (text == NULL) {
+        return NULL;
     }
-    for (size_t index = 0U; index < *out_size; ++index) {
-        if ((uint8_t)text[index] >= 0x80U) {
-            *out_size = 0U;
-            return NULL;
+    if (tinypy_typeof(value) != TINYPY_VALUE_STRING) {
+        for (size_t index = 0U; index < *out_size; ++index) {
+            if ((uint8_t)text[index] >= 0x80U) {
+                *out_size = 0U;
+                return NULL;
+            }
         }
+    }
+    const char *terminator = (const char *)memchr(text, '\0', *out_size);
+    if (terminator != NULL) {
+        *out_size = (size_t)(terminator - text);
     }
     return text;
 }
@@ -1100,7 +1106,8 @@ static void __tinypy_cli_write_error_text(tinypy_cli_writer_t *writer, int32_t o
     __tinypy_cli_write_text(writer, "^\n");
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyExceptionClass_Name: the part of a class name after its last dot. */
+/* PyExceptionClass_Name: the part of the C string of a class name after
+   its last dot. */
 static const char *__tinypy_cli_exception_type_name(tinypy_value_t *type, size_t *out_size) {
     const char *type_name;
 
@@ -1111,6 +1118,10 @@ static const char *__tinypy_cli_exception_type_name(tinypy_value_t *type, size_t
     else {
         const tinypy_type_t *class_type = tinypy_value_as_const_type(type);
         type_name = tinypy_type_name(class_type, out_size);
+    }
+    const char *terminator = (const char *)memchr(type_name, '\0', *out_size);
+    if (terminator != NULL) {
+        *out_size = (size_t)(terminator - type_name);
     }
     size_t offset = 0U;
 

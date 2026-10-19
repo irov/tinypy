@@ -1771,7 +1771,7 @@ tinypy_bool_t tinypy_internal_vm_valid(const tinypy_vm_t *vm) {
 tinypy_bool_t tinypy_internal_recursion_check(tinypy_vm_t *vm, uintptr_t stack_address, const char *message, tinypy_error_t **out_error) {
     size_t stack_usage = 0U;
 
-    if (vm->evaluation_depth == 0U) {
+    if (vm->evaluation_depth == 0U && vm->native_recursion_depth == 0U) {
         vm->native_stack_origin = stack_address;
     }
     else {
@@ -1786,7 +1786,6 @@ tinypy_bool_t tinypy_internal_recursion_check(tinypy_vm_t *vm, uintptr_t stack_a
 //////////////////////////////////////////////////////////////////////////
 TINYPY_NOINLINE void tinypy_internal_recursion_error(tinypy_vm_t *vm, const char *message, tinypy_error_t **out_error) {
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, message, out_error);
-    vm->recursion_error = TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size) {
@@ -2384,6 +2383,7 @@ void tinypy_vm_destroy(tinypy_vm_t *vm) {
     tinypy_internal_intern_finalize(vm);
     tinypy_internal_type_lookup_cache_finalize(vm);
     tinypy_internal_integer_free_list_finalize(vm);
+    tinypy_internal_float_free_list_finalize(vm);
     tinypy_internal_frame_free_list_finalize(vm);
     tinypy_internal_method_free_list_finalize(vm);
     tinypy_internal_native_method_free_list_finalize(vm);

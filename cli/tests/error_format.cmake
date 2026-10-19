@@ -182,6 +182,12 @@ tinypy_expect(excepthook_any_type CODES 0 ARGS -c "import sys\nsys.excepthook(1.
 tinypy_expect(excepthook_plain_type CODES 0 ARGS -c "import sys\nsys.__excepthook__(int, 2, None)" STDERR_EQUAL "<type 'int'>: 2\n")
 tinypy_expect(excepthook_not_traceback CODES 0 ARGS -c "import sys\nsys.excepthook(ValueError, ValueError('v'), 'not a traceback')" STDERR_EQUAL "\n")
 tinypy_expect(excepthook_classic_dotted_name CODES 0 ARGS -c "import sys\nclass Old:\n    pass\nOld.__name__ = 'pkg.Dotted'\nsys.excepthook(Old, 'v', None)" STDERR_EQUAL "__main__.Dotted: v\n")
+# __module__, the class name and the file of a SyntaxError are written as C
+# strings, up to their first NUL.
+tinypy_expect(excepthook_names_up_to_nul CODES 0 ARGS -c "import sys\nclass E(Exception):\n    pass\nE.__module__ = 'mo\\0dule'\nsys.excepthook(E, E('x'), None)\nE.__module__ = 'exceptions\\0tail'\nsys.excepthook(E, E('y'), None)\nclass Old:\n    pass\nNamed = type(Old)('Ol\\0d.Name', (), {})\nsys.excepthook(Named, 'z', None)"
+    STDERR_EQUAL "mo.E: x\nE: y\n__main__.Ol: z\n")
+tinypy_expect(syntax_file_up_to_nul CODES 1 ARGS -c "raise SyntaxError('m', ('f\\0g.py', 3, 2, 'line'))"
+    STDERR_EQUAL "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"f\", line 3\n    line\n     ^\nSyntaxError: m\n")
 tinypy_expect(excepthook_failed_write CODES 0 ARGS -c "import sys\nclass W(object):\n    def write(self, s):\n        sys.stdout.write(repr(s) + '\\n')\n        raise IOError('no')\nsys.stderr = W()\nsys.excepthook(ValueError, ValueError('v'), None)"
     STDOUT_EQUAL "'ValueError'\n'\\n'\n" STDERR_EQUAL "")
 tinypy_expect(excepthook_arity CODES 0 ARGS -c "import sys\ntry:\n    sys.excepthook(1, 2)\nexcept TypeError as e:\n    print e" STDOUT_EQUAL "excepthook expected 3 arguments, got 2\n")

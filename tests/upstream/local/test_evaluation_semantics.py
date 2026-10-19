@@ -845,6 +845,49 @@ class EvaluationSemantics(unittest.TestCase):
         del Middle.flag
         self.assertEqual(read(instance), (3, 3, 3))
 
+    def test_attribute_caches_follow_changes_at_sites_of_many_classes(self):
+        def make(index):
+            class Component(object):
+                kind = index
+                def __init__(self):
+                    self.value = index
+                def update(self):
+                    return ('update', index)
+            return Component
+        class Slotted(object):
+            __slots__ = ('value',)
+            kind = 'slotted'
+            def update(self):
+                return 'slotted'
+        classes = [make(index) for index in range(5)] + [Slotted]
+        def read(target):
+            return (target.value, target.kind, target.update())
+        for count in (3, 4, 6):
+            targets = [classes[index % count]() for index in range(12)]
+            if count == 6:
+                targets[5].value = 'slot'
+                targets[11].value = 'slot'
+            for repeat in range(3):
+                self.assertEqual([read(target) for target in targets], [(getattr(target, 'value'), getattr(target, 'kind'), getattr(target, 'update')()) for target in targets])
+            update = classes[2].__dict__['update']
+            classes[1].kind = 'changed'
+            classes[2].update = lambda self: 'replaced'
+            targets[0].value = 'instance'
+            self.assertEqual([read(target) for target in targets[:3]], [('instance', 0, ('update', 0)), (1, 'changed', ('update', 1)), (2, 2, 'replaced')])
+            del classes[1].kind
+            self.assertRaises(AttributeError, read, targets[1])
+            classes[1].kind = 1
+            classes[2].update = update
+            targets[0].__class__ = classes[3]
+            self.assertEqual(read(targets[0]), ('instance', 3, ('update', 3)))
+            targets[0].__class__ = classes[0]
+        slotted = Slotted()
+        self.assertRaises(AttributeError, read, slotted)
+        slotted.value = 'late'
+        self.assertEqual(read(slotted), ('late', 'slotted', 'slotted'))
+        sequences = ['ab', u'ab', ['a', 'b'], ('a', 'b'), bytearray('ab')]
+        self.assertEqual([[sequence.count('a') for sequence in sequences] for repeat in range(3)], [[1] * 5] * 3)
+
     def test_descriptor_subclass_slots_follow_class_changes(self):
         events = []
         class Lazy(property):

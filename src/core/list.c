@@ -4,6 +4,8 @@
 
 #include <string.h>
 
+#define TINYPY_LIST_RECYCLE_SIZE 8U
+
 //////////////////////////////////////////////////////////////////////////
 /* list_dealloc releases the items from the last one, which orders their
    __del__ calls. */
@@ -95,12 +97,33 @@ tinypy_bool_t tinypy_internal_list_reserve_checked(tinypy_vm_t *vm, tinypy_value
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* list_resize to a smaller size: storage less than half used shrinks to the
-   size and its margin. An emptied list gives its storage back as list_clear
-   does, except the storage that one append takes, which a stack pushing and
-   popping one item would otherwise reallocate each time. A shrink that
-   cannot reallocate keeps the larger storage. */
-static void __tinypy_internal_list_shrink(tinypy_value_t *list) {
+/* The capacity list_resize gives a list holding size items, at least one,
+   in allocated slots: storage less than half used shrinks to the size and
+   its margin. Storage of the host allocator moves into the pool only for a
+   capacity of at most half its largest block, so that a list oscillating
+   around that size does not move between them each time. */
+static size_t __tinypy_internal_list_shrunk_capacity(size_t size, size_t allocated) {
+    size_t pool_capacity = TINYPY_INTERNAL_POOL_SMALL_REQUEST / sizeof(tinypy_value_t *);
+
+    if (size >= allocated >> 1U) {
+        return allocated;
+    }
+    size_t capacity = size + __tinypy_internal_list_margin(size);
+    if (allocated > pool_capacity && capacity <= pool_capacity && capacity > pool_capacity >> 1U) {
+        return pool_capacity + 1U;
+    }
+    return capacity;
+}
+//////////////////////////////////////////////////////////////////////////
+/* list_resize to the size the list has, after removing items or, as
+   listextend cuts back, after a reservation the iteration did not fill:
+   storage less than half used shrinks to the size and its margin. An emptied
+   list gives its storage back as list_clear does, except the storage that
+   one append takes, which a stack pushing and popping one item would
+   otherwise reallocate each time; giving it back counts as a change, which
+   listsort detects as it detects any list_resize. A shrink that cannot
+   reallocate keeps the larger storage. */
+void tinypy_internal_list_shrink(tinypy_value_t *list) {
     tinypy_list_object_t *object = TINYPY_LIST_OBJECT(list);
     size_t size = TINYPY_SIZED_SIZE(list);
     size_t allocated = object->allocated;
@@ -112,12 +135,10 @@ static void __tinypy_internal_list_shrink(tinypy_value_t *list) {
         tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(list), object->items, __tinypy_internal_list_storage_size(allocated));
         object->items = NULL;
         object->allocated = 0U;
+        object->mutation_version += UINT64_C(1);
         return;
     }
-    if (size >= allocated >> 1U) {
-        return;
-    }
-    size_t capacity = size + __tinypy_internal_list_margin(size);
+    size_t capacity = __tinypy_internal_list_shrunk_capacity(size, allocated);
     if (capacity == allocated) {
         return;
     }
@@ -127,34 +148,6 @@ static void __tinypy_internal_list_shrink(tinypy_value_t *list) {
     }
     object->items = items;
     object->allocated = capacity;
-}
-//////////////////////////////////////////////////////////////////////////
-void tinypy_internal_list_shrink_to_fit(tinypy_vm_t *vm, tinypy_value_t *list) {
-    tinypy_list_object_t *list_object = TINYPY_LIST_OBJECT(list);
-    size_t size = TINYPY_LIST_SIZE(list);
-    size_t allocated = list_object->allocated;
-
-    if (allocated == size) {
-        return;
-    }
-    if (size == 0U) {
-        if (list_object->items != NULL) {
-            tinypy_internal_vm_deallocate(vm, list_object->items, __tinypy_internal_list_storage_size(allocated));
-            list_object->items = NULL;
-        }
-        list_object->allocated = 0U;
-        return;
-    }
-    tinypy_value_t **items = (tinypy_value_t **)tinypy_internal_vm_reallocate(
-        vm,
-        list_object->items,
-        __tinypy_internal_list_storage_size(allocated),
-        __tinypy_internal_list_storage_size(size));
-    if (items == NULL) {
-        return;
-    }
-    list_object->items = items;
-    list_object->allocated = size;
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyList_New filled with the items: the storage holds exactly size items.
@@ -406,34 +399,36 @@ void tinypy_list_delete(tinypy_value_t *list, size_t index) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_remove(TINYPY_VALUE_VM(list), list, index);
 #endif
-    __tinypy_internal_list_shrink(list);
+    tinypy_internal_list_shrink(list);
     TINYPY_DECREF(previous);
 }
 //////////////////////////////////////////////////////////////////////////
-/* Displaced items are released only after the list is consistent again, so
-   a finalizer that mutates the list cannot observe a half-edited layout. */
-static tinypy_value_t **__tinypy_list_detach_begin(tinypy_vm_t *vm, size_t count, tinypy_error_t **out_error) {
-    tinypy_value_t **displaced;
-
-    if (count == 0U) {
-        return NULL;
+/* list_ass_slice and list_ass_subscript copy the items they remove aside and
+   release them only once the list is consistent again, so a finalizer that
+   mutates the list cannot observe a half-edited layout. A few items stay on
+   the stack, as in recycle_on_stack; more take a transient array that the
+   heap budget does not refuse, as it does not refuse the storage a shrinking
+   list moves into: removing items never fails for want of budget. */
+static tinypy_value_t **__tinypy_list_recycle_begin(tinypy_vm_t *vm, tinypy_value_t **inline_items, size_t count, tinypy_error_t **out_error) {
+    if (count <= TINYPY_LIST_RECYCLE_SIZE) {
+        return inline_items;
     }
-    displaced = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, count * sizeof(*displaced), out_error);
-    return displaced;
+    tinypy_value_t **recycle = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, count * sizeof(*recycle));
+    if (recycle == NULL) {
+        tinypy_internal_vm_allocation_error(vm, out_error);
+    }
+    return recycle;
 }
 //////////////////////////////////////////////////////////////////////////
-/* list_ass_slice releases the displaced items from the last one, the
-   extended slice operations from the first. */
-static void __tinypy_list_detach_end(tinypy_vm_t *vm, tinypy_value_t **displaced, size_t count, tinypy_bool_t backwards) {
-    size_t index;
-
-    if (displaced == NULL) {
-        return;
+/* list_ass_slice releases the removed items from the last one, the extended
+   slice operations from the first. */
+static void __tinypy_list_recycle_end(tinypy_vm_t *vm, tinypy_value_t **recycle, tinypy_value_t **inline_items, size_t count, tinypy_bool_t backwards) {
+    for (size_t index = 0U; index < count; ++index) {
+        TINYPY_DECREF(recycle[backwards != 0 ? count - 1U - index : index]);
     }
-    for (index = 0U; index < count; ++index) {
-        TINYPY_DECREF(displaced[backwards != 0 ? count - 1U - index : index]);
+    if (recycle != inline_items) {
+        tinypy_internal_vm_deallocate(vm, recycle, count * sizeof(*recycle));
     }
-    tinypy_internal_vm_deallocate(vm, displaced, count * sizeof(*displaced));
 }
 //////////////////////////////////////////////////////////////////////////
 /* items must not alias the list storage; callers pass a materialized copy. */
@@ -444,9 +439,9 @@ tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, s
     size_t tail = size - start - count;
     size_t new_size;
     size_t index;
-    tinypy_value_t **displaced;
 
-    /* list_ass_slice leaves the list untouched when nothing is replaced. */
+    /* list_ass_slice leaves the list untouched when nothing is replaced and
+       clears one that loses all its items. */
     if (count == 0U && item_count == 0U) {
         return TINYPY_TRUE;
     }
@@ -455,18 +450,32 @@ tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, s
         return TINYPY_FALSE;
     }
     new_size = size - count + item_count;
-    displaced = __tinypy_list_detach_begin(vm, count, out_error);
-    if (count != 0U && displaced == NULL) {
-        return TINYPY_FALSE;
+    if (new_size == 0U) {
+        tinypy_list_clear(list);
+        return TINYPY_TRUE;
     }
     if (new_size > size && tinypy_internal_list_reserve_checked(vm, list, new_size, out_error) == 0) {
-        if (displaced != NULL) {
-            tinypy_internal_vm_deallocate(vm, displaced, count * sizeof(*displaced));
-        }
         return TINYPY_FALSE;
     }
-    if (count != 0U) {
-        (void)memcpy(displaced, object->items + start, count * sizeof(*displaced));
+    /* A list that shrinks moves into its smaller storage, and the storage it
+       leaves holds the removed items. */
+    tinypy_value_t **storage = object->items;
+    size_t allocated = object->allocated;
+    size_t capacity = __tinypy_internal_list_shrunk_capacity(new_size, allocated);
+    tinypy_value_t **shrunk = NULL;
+    if (capacity != allocated) {
+        shrunk = (tinypy_value_t **)tinypy_internal_vm_allocate(vm, __tinypy_internal_list_storage_size(capacity));
+    }
+    tinypy_value_t *inline_items[TINYPY_LIST_RECYCLE_SIZE];
+    tinypy_value_t **recycle = storage + start;
+    if (shrunk == NULL) {
+        recycle = __tinypy_list_recycle_begin(vm, inline_items, count, out_error);
+        if (recycle == NULL) {
+            return TINYPY_FALSE;
+        }
+        if (count != 0U) {
+            (void)memcpy(recycle, storage + start, count * sizeof(*recycle));
+        }
     }
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     for (index = 0U; index < count; ++index) {
@@ -476,14 +485,20 @@ tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, s
     for (index = 0U; index < item_count; ++index) {
         TINYPY_INCREF(items[index]);
     }
-    if (tail != 0U && item_count != count) {
-        (void)memmove(object->items + start + item_count, object->items + start + count, tail * sizeof(tinypy_value_t *));
+    if (shrunk != NULL) {
+        (void)memcpy(shrunk, storage, start * sizeof(tinypy_value_t *));
+        (void)memcpy(shrunk + start + item_count, storage + start + count, tail * sizeof(tinypy_value_t *));
+        object->items = shrunk;
+        object->allocated = capacity;
+    }
+    else if (tail != 0U && item_count != count) {
+        (void)memmove(storage + start + item_count, storage + start + count, tail * sizeof(tinypy_value_t *));
     }
     if (item_count != 0U) {
         (void)memcpy(object->items + start, items, item_count * sizeof(tinypy_value_t *));
     }
-    if (new_size < size) {
-        (void)memset(object->items + new_size, 0, (size - new_size) * sizeof(tinypy_value_t *));
+    if (shrunk == NULL && new_size < size) {
+        (void)memset(storage + new_size, 0, (size - new_size) * sizeof(tinypy_value_t *));
     }
     object->base.size = new_size;
     object->mutation_version += UINT64_C(1);
@@ -492,10 +507,15 @@ tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, s
         __tinypy_internal_cycle_diagnostics_list_insert(vm, list, start + index, items[index]);
     }
 #endif
-    if (new_size < size) {
-        __tinypy_internal_list_shrink(list);
+    if (shrunk == NULL) {
+        tinypy_internal_list_shrink(list);
+        __tinypy_list_recycle_end(vm, recycle, inline_items, count, TINYPY_TRUE);
+        return TINYPY_TRUE;
     }
-    __tinypy_list_detach_end(vm, displaced, count, TINYPY_TRUE);
+    for (index = count; index != 0U; --index) {
+        TINYPY_DECREF(recycle[index - 1U]);
+    }
+    tinypy_internal_vm_deallocate(vm, storage, __tinypy_internal_list_storage_size(allocated));
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -503,27 +523,27 @@ tinypy_bool_t tinypy_internal_list_replace_strided_checked(tinypy_value_t *list,
     tinypy_vm_t *vm = TINYPY_VALUE_VM(list);
     tinypy_list_object_t *object = TINYPY_LIST_OBJECT(list);
     size_t index;
-    tinypy_value_t **displaced;
 
     if (count == 0U) {
         return TINYPY_TRUE;
     }
-    displaced = __tinypy_list_detach_begin(vm, count, out_error);
-    if (displaced == NULL) {
+    tinypy_value_t *inline_items[TINYPY_LIST_RECYCLE_SIZE];
+    tinypy_value_t **recycle = __tinypy_list_recycle_begin(vm, inline_items, count, out_error);
+    if (recycle == NULL) {
         return TINYPY_FALSE;
     }
     for (index = 0U; index < count; ++index) {
         size_t position = (size_t)((int64_t)start + (int64_t)index * step);
 
         TINYPY_INCREF(items[index]);
-        displaced[index] = object->items[position];
+        recycle[index] = object->items[position];
         object->items[position] = items[index];
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
         __tinypy_internal_cycle_diagnostics_list_set(vm, list, position, items[index]);
 #endif
     }
     object->mutation_version += UINT64_C(1);
-    __tinypy_list_detach_end(vm, displaced, count, TINYPY_FALSE);
+    __tinypy_list_recycle_end(vm, recycle, inline_items, count, TINYPY_FALSE);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -533,7 +553,6 @@ tinypy_bool_t tinypy_internal_list_delete_strided_checked(tinypy_value_t *list, 
     size_t size = TINYPY_SIZED_SIZE(list);
     size_t stride;
     size_t index;
-    tinypy_value_t **displaced;
 
     if (count == 0U) {
         return TINYPY_TRUE;
@@ -547,8 +566,9 @@ tinypy_bool_t tinypy_internal_list_delete_strided_checked(tinypy_value_t *list, 
     else {
         stride = (size_t)step;
     }
-    displaced = __tinypy_list_detach_begin(vm, count, out_error);
-    if (displaced == NULL) {
+    tinypy_value_t *inline_items[TINYPY_LIST_RECYCLE_SIZE];
+    tinypy_value_t **recycle = __tinypy_list_recycle_begin(vm, inline_items, count, out_error);
+    if (recycle == NULL) {
         return TINYPY_FALSE;
     }
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
@@ -561,7 +581,7 @@ tinypy_bool_t tinypy_internal_list_delete_strided_checked(tinypy_value_t *list, 
         size_t next = index + 1U < count ? current + stride : size;
         size_t kept = next - current - 1U;
 
-        displaced[index] = object->items[current];
+        recycle[index] = object->items[current];
         if (kept != 0U) {
             (void)memmove(object->items + current - index, object->items + current + 1U, kept * sizeof(tinypy_value_t *));
         }
@@ -569,8 +589,8 @@ tinypy_bool_t tinypy_internal_list_delete_strided_checked(tinypy_value_t *list, 
     (void)memset(object->items + size - count, 0, count * sizeof(tinypy_value_t *));
     object->base.size = size - count;
     object->mutation_version += UINT64_C(1);
-    __tinypy_internal_list_shrink(list);
-    __tinypy_list_detach_end(vm, displaced, count, TINYPY_FALSE);
+    tinypy_internal_list_shrink(list);
+    __tinypy_list_recycle_end(vm, recycle, inline_items, count, TINYPY_FALSE);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -591,7 +611,7 @@ tinypy_value_t *tinypy_list_pop(tinypy_value_t *list, size_t index) {
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
     __tinypy_internal_cycle_diagnostics_list_remove(TINYPY_VALUE_VM(list), list, index);
 #endif
-    __tinypy_internal_list_shrink(list);
+    tinypy_internal_list_shrink(list);
     return item;
 }
 //////////////////////////////////////////////////////////////////////////

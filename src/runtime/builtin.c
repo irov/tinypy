@@ -611,6 +611,10 @@ static TINYPY_ALWAYS_INLINE int32_t __tinypy_builtin_real_instance_check(tinypy_
             int32_t return_value_1 = tinypy_type_is_subtype((tinypy_type_t *)object, (tinypy_type_t *)classinfo);
             return return_value_1;
         }
+        if (TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_CLASS && TINYPY_VALUE_KIND(object) == TINYPY_VALUE_CLASS) {
+            int32_t classic = tinypy_internal_class_is_subclass(object, classinfo, out_error);
+            return classic;
+        }
         if (__tinypy_builtin_check_class(vm, object, "issubclass() arg 1 must be a class", out_error) == 0 || __tinypy_builtin_check_class(vm, classinfo, "issubclass() arg 2 must be a class or tuple of classes", out_error) == 0) {
             return -1;
         }
@@ -618,7 +622,8 @@ static TINYPY_ALWAYS_INLINE int32_t __tinypy_builtin_real_instance_check(tinypy_
         return return_value_2;
     }
     if (TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_CLASS && TINYPY_VALUE_KIND(object) == TINYPY_VALUE_OLD_INSTANCE) {
-        int32_t return_value_3 = tinypy_class_is_subclass(tinypy_old_instance_class(object), classinfo);
+        tinypy_value_t *instance_class = tinypy_old_instance_class(object);
+        int32_t return_value_3 = tinypy_internal_class_is_subclass(instance_class, classinfo, out_error);
         return return_value_3;
     }
     if (TINYPY_VALUE_KIND(classinfo) == TINYPY_VALUE_TYPE) {
@@ -1359,6 +1364,7 @@ static tinypy_value_t *__tinypy_builtin_sorted(tinypy_value_t *function, tinypy_
         TINYPY_DECREF(list);
         return NULL;
     }
+    tinypy_internal_list_shrink(list);
     sort_method = tinypy_object_get_attr_value(list, vm->internal_sort_key, out_error);
     if (sort_method == NULL) {
         TINYPY_DECREF(list);
@@ -1695,12 +1701,7 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
         }
     }
     else {
-        size_t selected_size = TINYPY_LIST_SIZE(selected);
-        size_t selected_capacity = TINYPY_LIST_OBJECT(selected)->allocated;
-
-        if (selected_capacity - selected_size > selected_size / 4U + 8U) {
-            tinypy_internal_list_shrink_to_fit(vm, selected);
-        }
+        tinypy_internal_list_shrink(selected);
         result = TINYPY_RET(selected);
     }
     TINYPY_DECREF(selected);
@@ -1908,6 +1909,10 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
         TINYPY_DECREF(mapped);
     }
 map_cleanup:
+    /* map and zip cut the list made for the length hint back to the items. */
+    if (result != NULL) {
+        tinypy_internal_list_shrink(result);
+    }
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
         TINYPY_DECREF(iterators[iterable_index]);
     }
@@ -2030,6 +2035,9 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
         TINYPY_DECREF(tuple);
     }
 zip_cleanup:
+    if (result != NULL) {
+        tinypy_internal_list_shrink(result);
+    }
     for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
         TINYPY_DECREF(iterators[iterable_index]);
     }

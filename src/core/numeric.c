@@ -14,6 +14,18 @@ tinypy_value_t *tinypy_float_from_double(tinypy_vm_t *vm, double value) {
         tinypy_value_t *result = TINYPY_RET(&vm->float_zero_object.base);
         return result;
     }
+    if (vm->float_free_list != NULL) {
+        tinypy_float_object_t *number = vm->float_free_list;
+
+        vm->float_free_list = __tinypy_internal_float_free_next(number);
+        vm->float_free_count -= 1U;
+        number->base.ref = 1;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+        __tinypy_internal_cycle_diagnostics_value_reuse(vm, &number->base);
+#endif
+        number->value = value;
+        return &number->base;
+    }
     tinypy_value_t *result = tinypy_internal_value_allocate(
         vm,
         TINYPY_VALUE_FLOAT,
@@ -23,8 +35,8 @@ tinypy_value_t *tinypy_float_from_double(tinypy_vm_t *vm, double value) {
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_float_from_double_checked(tinypy_vm_t *vm, double value, tinypy_error_t **out_error) {
-    if (value == 0.0 && signbit(value) == 0) {
-        tinypy_value_t *result = TINYPY_RET(&vm->float_zero_object.base);
+    if ((value == 0.0 && signbit(value) == 0) || vm->float_free_list != NULL) {
+        tinypy_value_t *result = tinypy_float_from_double(vm, value);
         return result;
     }
     tinypy_value_t *result = tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_FLOAT], sizeof(tinypy_float_object_t), out_error);

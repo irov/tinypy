@@ -334,8 +334,10 @@ static tinypy_get_item_slot_t __tinypy_iterator_sequence_item_slot(tinypy_value_
 /* PySequence_GetItem, which seqiter and reversed call: a type with both
    protocols, as a native type with mapping_get and sequence_get, gives its
    items through sq_item. The sequence lives through the call, which may
-   exhaust the iterator that holds it. */
-static tinypy_value_t *__tinypy_iterator_sequence_item(tinypy_value_t *sequence, size_t index, tinypy_error_t **out_error) {
+   exhaust the iterator that holds it. A failure is reported through the VM
+   error alone, as in CPython, so the IndexError that ends the sequence takes
+   no diagnostic. */
+static tinypy_value_t *__tinypy_iterator_sequence_item(tinypy_value_t *sequence, size_t index) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
     tinypy_value_t *key = tinypy_integer_from_i64(vm, (int64_t)index);
     tinypy_value_t *item;
@@ -343,10 +345,10 @@ static tinypy_value_t *__tinypy_iterator_sequence_item(tinypy_value_t *sequence,
     TINYPY_INCREF(sequence);
     tinypy_get_item_slot_t get_item = __tinypy_iterator_sequence_item_slot(sequence);
     if (get_item != NULL) {
-        item = get_item(sequence, key, out_error);
+        item = get_item(sequence, key, NULL);
     }
     else {
-        item = tinypy_get_item(sequence, key, out_error);
+        item = tinypy_get_item(sequence, key, NULL);
     }
     TINYPY_DECREF(sequence);
     TINYPY_DECREF(key);
@@ -355,24 +357,16 @@ static tinypy_value_t *__tinypy_iterator_sequence_item(tinypy_value_t *sequence,
 //////////////////////////////////////////////////////////////////////////
 /* A sequence iterator ends at IndexError or StopIteration, matched by the
    raised type as PyErr_ExceptionMatches does, so a SystemExit carrying an
-   IndexError value propagates. Any other failure passes on, also one that a
-   native callback reports through the VM error alone. */
-static tinypy_bool_t __tinypy_iterator_sequence_ended(tinypy_vm_t *vm, tinypy_error_t *item_error, tinypy_error_t **out_error) {
-    if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_INDEX_ERROR, &item_error) != 0) {
+   IndexError value propagates. Any other failure passes on. */
+static tinypy_bool_t __tinypy_iterator_sequence_ended(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_INDEX_ERROR, NULL) != 0) {
         return TINYPY_TRUE;
     }
-    if (tinypy_internal_exception_consume_stop_iteration(vm, &item_error) != 0) {
+    if (tinypy_internal_exception_consume_stop_iteration(vm, NULL) != 0) {
         return TINYPY_TRUE;
     }
-    if (item_error == NULL) {
-        tinypy_internal_exception_make_diagnostic(vm, &item_error);
-    }
-    if (out_error != NULL) {
-        *out_error = item_error;
-    }
-    else if (item_error != NULL) {
-        tinypy_error_release(item_error);
-    }
+    TINYPY_CLEAR_ERROR(out_error);
+    tinypy_internal_exception_make_diagnostic(vm, out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -404,14 +398,13 @@ tinypy_value_t *tinypy_internal_iterator_next(tinypy_value_t *value, tinypy_erro
     }
     if (iterator->mode == INT32_C(4)) {
         tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-        tinypy_error_t *item_error = NULL;
-        tinypy_value_t *result = __tinypy_iterator_sequence_item(iterator->iterable, iterator->index, &item_error);
+        tinypy_value_t *result = __tinypy_iterator_sequence_item(iterator->iterable, iterator->index);
 
         if (result != NULL) {
             iterator->index += 1U;
             return result;
         }
-        if (__tinypy_iterator_sequence_ended(vm, item_error, out_error) != 0) {
+        if (__tinypy_iterator_sequence_ended(vm, out_error) != 0) {
             tinypy_internal_iterator_clear(iterator);
         }
         return NULL;
@@ -1417,8 +1410,7 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
         return return_value_1;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_error_t *item_error = NULL;
-    tinypy_value_t *result = __tinypy_iterator_sequence_item(reversed->sequence, index, &item_error);
+    tinypy_value_t *result = __tinypy_iterator_sequence_item(reversed->sequence, index);
     /* reversed_next steps past an item only once it has it: __getitem__ may
        have advanced this iterator meanwhile, up to its exhaustion. */
     if (result != NULL) {
@@ -1427,7 +1419,7 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
         }
         return result;
     }
-    (void)__tinypy_iterator_sequence_ended(vm, item_error, out_error);
+    (void)__tinypy_iterator_sequence_ended(vm, out_error);
     __tinypy_reversed_clear(reversed);
     return NULL;
 }
@@ -1591,8 +1583,8 @@ static void __tinypy_iter_clear_error(tinypy_vm_t *vm, tinypy_error_t **out_erro
    AttributeError, which leaves found 0. Both then iterate by index when they
    find __getitem__, which slot_tp_iter binds, instance_getiter fetches
    through __getattr__ too and PySeqIter_New fetches once more for
-   PySequence_Check; a failure to find it reports the object as not
-   iterable. */
+   PySequence_Check, which refuses a dict as a bad internal call; a failure
+   to find it reports the object as not iterable. */
 static tinypy_value_t *__tinypy_iter_getitem_fallback(tinypy_vm_t *vm, tinypy_value_t *value, int32_t found, tinypy_error_t **out_error) {
     tinypy_bool_t classic = TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *method;
@@ -1608,6 +1600,10 @@ static tinypy_value_t *__tinypy_iter_getitem_fallback(tinypy_vm_t *vm, tinypy_va
     }
     if (found > 0) {
         TINYPY_DECREF(method);
+        if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_DICT) {
+            tinypy_internal_exception_raise_system_error(vm, "bad argument to internal function", out_error);
+            return NULL;
+        }
         tinypy_value_t *iterator = __tinypy_internal_iterator_new(value);
 
         TINYPY_ITERATOR_OBJECT(iterator)->mode = INT32_C(4);

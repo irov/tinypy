@@ -112,6 +112,9 @@ typedef struct tinypy_intern_entry_t {
 /* Exact instances have no weak references or finalizers to run before their
    contents are released; a string must also be outside the intern table. */
 #define TINYPY_TYPE_FLAG_PLAIN_RELEASE UINT64_C(128)
+/* The tp_new of the type is slot_tp_new, which update_one_slot installs once
+   the type finds a __new__ written in Python and keeps from then on. */
+#define TINYPY_TYPE_FLAG_SLOT_NEW UINT64_C(256)
 #define TINYPY_VM_STATE_LIVE UINT32_C(0x5450594c)
 #define TINYPY_VM_STATE_DESTROYING UINT32_C(0x54505944)
 #define TINYPY_BUILTIN_TYPE_COUNT ((size_t)TINYPY_VALUE_NATIVE_INSTANCE)
@@ -120,6 +123,7 @@ typedef struct tinypy_intern_entry_t {
 #define TINYPY_INTEGER_CONSTANT_MAX INT64_C(1024)
 #define TINYPY_INTEGER_CONSTANT_COUNT 2048U
 #define TINYPY_INTEGER_FREE_LIST_MAX 256U
+#define TINYPY_FLOAT_FREE_LIST_MAX 256U
 #define TINYPY_FRAME_FREE_LIST_MAX 64U
 #define TINYPY_METHOD_FREE_LIST_MAX 256U
 #define TINYPY_NATIVE_METHOD_FREE_LIST_MAX 64U
@@ -389,7 +393,6 @@ typedef struct tinypy_intern_entry_t {
     X(internal_special_pos_key, "__pos__", 1) \
     X(internal_special_radd_key, "__radd__", 1) \
     X(internal_special_rdiv_key, "__rdiv__", 1) \
-    X(internal_special_remove_subclass_key, "__remove_subclass", 1) \
     X(internal_special_rmul_key, "__rmul__", 1) \
     X(internal_special_rsub_key, "__rsub__", 1) \
     X(internal_special_sub_key, "__sub__", 1) \
@@ -1131,6 +1134,10 @@ typedef struct tinypy_attribute_store_cache_entry_t {
 //////////////////////////////////////////////////////////////////////////
 #define TINYPY_CODE_CACHE_SLOTS_MAX 16U
 #define TINYPY_ATTRIBUTE_LOOKUP_CACHE_WAYS 2U
+#define TINYPY_ATTRIBUTE_LOOKUP_VICTIM_WAYS 2U
+/* A full victim set takes an evicted entry once in this many evictions into
+   full sets of the VM, a power of two. */
+#define TINYPY_ATTRIBUTE_LOOKUP_VICTIM_TURNOVER 64U
 //////////////////////////////////////////////////////////////////////////
 typedef enum tinypy_iterator_type_index_e {
     TINYPY_ITERATOR_TYPE_LIST = 0,
@@ -1336,9 +1343,9 @@ struct tinypy_type_t {
        can number. It fills padding: a larger type would turn each indexing
        of the VM type table on 64-bit targets from a shift into a multiply. */
     uint16_t rebase_record_index;
-    /* The cleared references of dead subclasses that the subclasses list
-       still holds. */
-    uint32_t subclasses_cleared;
+    /* The references that the subclasses list kept when it last dropped
+       the cleared references of dead subclasses. */
+    uint32_t subclasses_kept;
     tinypy_value_t *weakrefs;
     tinypy_value_t *subclasses;
     size_t native_payload_offset;
@@ -1644,7 +1651,9 @@ typedef struct tinypy_global_cache_entry_t {
    caches are allocated by the first execution with a power of two of slots,
    enough for its names up to TINYPY_CODE_CACHE_SLOTS_MAX, and are indexed by
    the name; an attribute lookup slot holds TINYPY_ATTRIBUTE_LOOKUP_CACHE_WAYS
-   entries. */
+   entries. The entries without an owner that a slot evicts for receivers of
+   other types of the same name move to its TINYPY_ATTRIBUTE_LOOKUP_VICTIM_WAYS
+   victims, which take their own allocation with the first such eviction. */
 typedef struct tinypy_code_object_t {
     tinypy_value_t base;
     int32_t arg_count;
@@ -1676,6 +1685,7 @@ typedef struct tinypy_code_object_t {
     size_t method_bytecode_size;
     size_t method_call_slots;
     tinypy_value_t *weakrefs;
+    tinypy_attribute_lookup_cache_entry_t *attribute_victims;
 } tinypy_code_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_frame_block_t {
@@ -2053,6 +2063,8 @@ struct tinypy_vm_t {
     tinypy_pool_allocator_t pool_allocator;
     tinypy_integer_object_t *integer_free_list;
     size_t integer_free_count;
+    tinypy_float_object_t *float_free_list;
+    size_t float_free_count;
     tinypy_frame_object_t *frame_free_list;
     size_t frame_free_count;
     tinypy_method_object_t *method_free_list;
@@ -2111,12 +2123,19 @@ struct tinypy_vm_t {
     size_t release_depth;
     tinypy_value_t *pending_releases;
     size_t evaluation_depth;
+    /* The levels of the native recursions that Python 2.7 does not count
+       against the recursion limit, such as class_lookup over the bases.
+       While one is active, the native stack keeps the origin that its
+       outermost level set. */
+    size_t native_recursion_depth;
     size_t recursion_limit;
     uintptr_t native_stack_origin;
     size_t max_stack_bytes;
-    /* Whether the raised exception is the RuntimeError of the recursion
-       guard, which PyErr_Format leaves for a handler to normalize. */
-    tinypy_bool_t recursion_error;
+    /* Whether the raised exception stands for one that CPython raises as a
+       class and its arguments, as PyErr_SetObject and PyErr_Format do, and
+       a handler normalizes with a call to the class; set aside and restored,
+       the exception counts as normalized. */
+    tinypy_bool_t raised_unnormalized;
     tinypy_representation_frame_t *representation_frames;
 #if defined(TINYPY_DEBUGGER)
     tinypy_debugger_t debugger;
@@ -2178,6 +2197,8 @@ struct tinypy_vm_t {
     tinypy_type_t **classic_versioned_types;
     size_t classic_versioned_count;
     size_t classic_versioned_capacity;
+    /* Counts the evictions of attribute lookup entries into full victim sets. */
+    size_t attribute_victim_clock;
 };
 //////////////////////////////////////////////////////////////////////////
 struct tinypy_error_t {
@@ -2211,8 +2232,8 @@ struct tinypy_error_t {
 tinypy_bool_t tinypy_internal_host_valid(const tinypy_host_t *host);
 tinypy_bool_t tinypy_internal_vm_valid(const tinypy_vm_t *vm);
 tinypy_bool_t tinypy_internal_recursion_check(tinypy_vm_t *vm, uintptr_t stack_address, const char *message, tinypy_error_t **out_error);
-/* The RuntimeError of a recursion that a check stopped, flagged as made by
-   the recursion guard until it is normalized or cleared. */
+/* The RuntimeError of a recursion that a check stopped, made out of line so
+   that the checks stay small inline. */
 void tinypy_internal_recursion_error(tinypy_vm_t *vm, const char *message, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 /* The native stack used since the origin that the check of the outermost
@@ -2227,22 +2248,33 @@ static inline size_t __tinypy_internal_native_stack_usage(const tinypy_vm_t *vm,
     return stack_usage;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The native stack budget alone, for a native recursion that Python 2.7 does
-   not count against the recursion limit, such as hashing nested values or
-   class_lookup over the bases. Outside any call the check sets the origin of
-   the stack, as the recursion check does; where the compiler cannot measure
-   the stack, the recursion limit bounds the levels a caller takes. */
-static inline tinypy_bool_t __tinypy_internal_native_stack_check(tinypy_vm_t *vm, uintptr_t stack_address, const char *message, tinypy_error_t **out_error) {
-    if (vm->evaluation_depth == 0U) {
+/* A level of a native recursion that Python 2.7 does not count against the
+   recursion limit, such as hashing nested values or class_lookup over the
+   bases, which the native stack budget alone fails. Outside any call and
+   native recursion the check sets the origin of the stack, as the recursion
+   check does, so a recursion that a host starts meets the budget as well;
+   where the compiler cannot measure the stack, the recursion limit bounds
+   the levels. The caller leaves with __tinypy_internal_native_recursion_leave. */
+static inline tinypy_bool_t __tinypy_internal_native_recursion_enter(tinypy_vm_t *vm, uintptr_t stack_address, const char *message, tinypy_error_t **out_error) {
+    size_t levels = vm->evaluation_depth + vm->native_recursion_depth;
+
+    if (levels == 0U) {
         vm->native_stack_origin = stack_address;
-        return TINYPY_TRUE;
     }
-    size_t stack_usage = __tinypy_internal_native_stack_usage(vm, stack_address);
-    if (stack_usage < vm->max_stack_bytes && (stack_address != 0U || vm->evaluation_depth < vm->recursion_limit)) {
-        return TINYPY_TRUE;
+    else {
+        size_t stack_usage = __tinypy_internal_native_stack_usage(vm, stack_address);
+
+        if (stack_usage >= vm->max_stack_bytes || (stack_address == 0U && levels >= vm->recursion_limit)) {
+            tinypy_internal_recursion_error(vm, message, out_error);
+            return TINYPY_FALSE;
+        }
     }
-    tinypy_internal_recursion_error(vm, message, out_error);
-    return TINYPY_FALSE;
+    vm->native_recursion_depth += 1U;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static inline void __tinypy_internal_native_recursion_leave(tinypy_vm_t *vm) {
+    vm->native_recursion_depth -= 1U;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The recursion level that tinypy_call takes for a call. A direct call that
@@ -2347,6 +2379,7 @@ tinypy_bool_t tinypy_internal_value_is_vm_embedded(const tinypy_vm_t *vm, const 
 size_t tinypy_internal_utf8_decode(const uint8_t *bytes, size_t size, uint32_t *out_code_point);
 size_t tinypy_internal_utf8_invalid_span(const uint8_t *bytes, size_t size);
 size_t tinypy_internal_utf8_encode(uint32_t code_point, uint8_t bytes[4]);
+size_t tinypy_internal_ascii_prefix(const uint8_t *bytes, size_t size);
 size_t tinypy_internal_unicode_byte_offset(tinypy_value_t *value, size_t character_index);
 size_t tinypy_internal_unicode_character_index(tinypy_value_t *value, size_t byte_offset);
 const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, size_t *out_size, tinypy_error_t **out_error);
@@ -2371,6 +2404,7 @@ tinypy_bool_t tinypy_internal_raise_ascii_decode_error(tinypy_vm_t *vm, const ti
 tinypy_bool_t tinypy_internal_string_size_check(tinypy_vm_t *vm, uint64_t size, tinypy_error_t **out_error);
 void tinypy_internal_raise_text_exception(tinypy_vm_t *vm, tinypy_exception_type_index_e index, const void *bytes, size_t size, tinypy_error_t **out_error);
 ptrdiff_t tinypy_internal_find_bytes(const uint8_t *haystack, size_t haystack_size, const uint8_t *needle, size_t needle_size, tinypy_bool_t reverse);
+size_t tinypy_internal_count_bytes(const uint8_t *haystack, size_t haystack_size, const uint8_t *needle, size_t needle_size);
 tinypy_vm_t *tinypy_internal_value_vm(const tinypy_value_t *value);
 tinypy_value_type_e tinypy_internal_value_kind(const tinypy_value_t *value);
 tinypy_value_t *tinypy_internal_value_allocate(tinypy_vm_t *vm, tinypy_value_type_e type, size_t allocation_size);
@@ -2486,6 +2520,7 @@ tinypy_value_t *tinypy_internal_immutable_subclass_copy(tinypy_type_t *type, tin
 void tinypy_internal_value_destroy(tinypy_value_t *value);
 void tinypy_internal_value_release_zero(tinypy_value_t *value);
 void tinypy_internal_integer_free_list_finalize(tinypy_vm_t *vm);
+void tinypy_internal_float_free_list_finalize(tinypy_vm_t *vm);
 const uint8_t *tinypy_internal_text_bytes(const tinypy_value_t *value);
 size_t tinypy_internal_text_byte_size(const tinypy_value_t *value);
 tinypy_value_t *tinypy_internal_text_allocate_uninitialized(tinypy_vm_t *vm, tinypy_value_type_e type, size_t byte_size, size_t code_point_count, uint8_t **out_bytes);
@@ -2527,7 +2562,9 @@ tinypy_value_t *tinypy_internal_tuple_prepend_checked(tinypy_vm_t *vm, tinypy_va
 tinypy_value_t *tinypy_internal_tuple_join_items_checked(tinypy_vm_t *vm, tinypy_value_t *first, tinypy_value_t *const *left, size_t left_size, tinypy_value_t *const *right, size_t right_size, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_tuple_concat_checked(tinypy_vm_t *vm, const tinypy_value_t *left, const tinypy_value_t *right, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_tuple_tail_checked(tinypy_vm_t *vm, const tinypy_value_t *tuple, size_t start, tinypy_error_t **out_error);
-void tinypy_internal_list_shrink_to_fit(tinypy_vm_t *vm, tinypy_value_t *list);
+/* list_resize to the size the list has, as after removing items or when
+   listextend cuts back a reservation. */
+void tinypy_internal_list_shrink(tinypy_value_t *list);
 void tinypy_internal_dict_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_dict_destroy(tinypy_value_t *value);
 void tinypy_internal_dict_initialize_empty(tinypy_value_t *dict);
@@ -2597,6 +2634,7 @@ tinypy_value_t *tinypy_internal_set_create(tinypy_type_t *type, tinypy_value_t *
 tinypy_value_t *tinypy_internal_frozenset_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_set_update_iterable(tinypy_value_t *set, tinypy_value_t *iterable, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_set_initialize(tinypy_value_t *set, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_integer_power(int64_t base, int64_t exponent, int64_t modulus, int64_t *out_result);
 tinypy_value_t *tinypy_internal_power_modulo(tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_builtin_power_slot(tinypy_value_type_e owner_kind, tinypy_value_t *base, tinypy_value_t *exponent, tinypy_value_t *modulus, tinypy_error_t **out_error);
@@ -2789,12 +2827,17 @@ tinypy_bool_t tinypy_internal_type_set_name(tinypy_type_t *type, tinypy_value_t 
 void tinypy_internal_instance_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_type_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_type_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
-/* The __new__ and __init__ a class call looks up, borrowed. */
+/* The __new__ and __init__ a class call looks up, borrowed: the __new__ the
+   type finds with slot_tp_new, else that of its built-in base, whose tp_new
+   the type keeps. */
 tinypy_value_t *tinypy_internal_type_constructor_new(tinypy_type_t *type);
 tinypy_value_t *tinypy_internal_type_constructor_init(tinypy_type_t *type);
-/* The __new__ that slot_tp_new calls, owned, from the __new__ entry that the
-   MRO of type holds, which the caller lends. */
+/* The __new__ that a class call calls, owned, from the __new__ of
+   tinypy_internal_type_constructor_new, which the caller lends. */
 tinypy_value_t *tinypy_internal_type_bind_new(tinypy_type_t *type, tinypy_value_t *new_attribute, tinypy_error_t **out_error);
+/* update_one_slot of tp_new for the type and the subclasses that find the
+   same __new__, after the __new__ that it finds may have changed. */
+void tinypy_internal_type_update_new(tinypy_type_t *type);
 tinypy_value_t *tinypy_internal_object_new_items(tinypy_type_t *class_type, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 /* tp_new_wrapper: the class that the __new__ of owner receives first, which
    must be a subtype of owner, and the error when the __new__ of owner is not
@@ -2818,6 +2861,9 @@ tinypy_bool_t tinypy_internal_old_instance_set_class(tinypy_value_t *instance_va
 tinypy_bool_t tinypy_internal_old_instance_set_dict(tinypy_value_t *instance_value, tinypy_value_t *dict_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_old_instance_delete_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_class_lookup_key(tinypy_vm_t *vm, tinypy_value_t *class_value, tinypy_value_t *key);
+/* Whether a classic class is candidate_base or derives from it; -1 with
+   RuntimeError raised when the native stack guard fails the walk. */
+int32_t tinypy_internal_class_is_subclass(const tinypy_value_t *class_value, const tinypy_value_t *candidate_base, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_old_instance_has_special_key(tinypy_value_t *value, tinypy_value_t *key);
 /* The __getattr__, __setattr__ or __delattr__ hook of a classic class, borrowed. */
 tinypy_value_t *tinypy_internal_class_hook(tinypy_value_t *class_value, tinypy_value_t *name);
@@ -2872,6 +2918,26 @@ static inline tinypy_bool_t __tinypy_internal_object_overrides_dispatch(tinypy_v
     return memoized;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The lookup of __tinypy_internal_object_getattr_hook, which memoizes the
+   hook when the dispatch memo does not know it. */
+tinypy_value_t *tinypy_internal_object_lookup_getattr_hook(tinypy_value_t *value);
+//////////////////////////////////////////////////////////////////////////
+/* The __getattr__ of a heap type, owned, which slot_tp_getattr_hook fetches
+   once before the lookup it may answer; a known dispatch memo spares the
+   lookup for a type without one. */
+static inline tinypy_value_t *__tinypy_internal_object_getattr_hook(tinypy_value_t *value) {
+    uint64_t getattr_bit = TINYPY_INTERNAL_DISPATCH_BIT(GETATTR);
+
+    if ((value->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) {
+        return NULL;
+    }
+    if (__tinypy_internal_object_known_dispatch(value, getattr_bit) != 0 && (value->type->dispatch_overrides & getattr_bit) == 0U) {
+        return NULL;
+    }
+    tinypy_value_t *hook = tinypy_internal_object_lookup_getattr_hook(value);
+    return hook;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_object_initialize_special_keys(tinypy_vm_t *vm);
 /* Owned preset name, or an ordinary owned string for names outside the registry. */
 tinypy_value_t *tinypy_internal_name_from_bytes(tinypy_vm_t *vm, const char *name, size_t name_size);
@@ -2903,6 +2969,9 @@ tinypy_value_t *tinypy_internal_type_function_key(tinypy_value_t *value, tinypy_
 /* Calls a Python function found on the receiver's type as its bound method,
    with at most two arguments after the receiver. */
 tinypy_value_t *tinypy_internal_call_type_function(tinypy_value_t *function, tinypy_value_t *receiver, tinypy_value_t *const *arguments, size_t argument_count, tinypy_error_t **out_error);
+/* Calls the attribute name of value with args as PyObject_CallMethod does,
+   which reports an attribute that is not callable by its type. */
+tinypy_value_t *tinypy_internal_call_method(tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t *args, tinypy_error_t **out_error);
 /* The object fields of a code object in marshal order: bytecode, consts,
    names, varnames, freevars, cellvars, filename, name and lnotab. */
 #define TINYPY_CODE_OBJECT_FIELD_COUNT 9U
@@ -3028,8 +3097,8 @@ tinypy_value_t *tinypy_internal_object_get_base_attr_key(tinypy_value_t *value, 
 tinypy_value_t *tinypy_internal_object_generic_get_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
 /* slot_tp_getattr_hook once the generic lookup of an object whose type keeps
    object's __getattribute__ has failed: no error or an AttributeError gives
-   way to the __getattr__ of a heap type. */
-tinypy_value_t *tinypy_internal_object_get_attr_hook_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
+   way to the hook fetched before, which the call consumes. */
+tinypy_value_t *tinypy_internal_object_get_attr_hook_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *getattr_hook, tinypy_error_t **out_error);
 int32_t tinypy_internal_object_get_optional_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t **out_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *attribute_value, tinypy_error_t **out_error);
 void tinypy_internal_object_make_attribute_error_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
@@ -3235,6 +3304,19 @@ static inline tinypy_value_t *__tinypy_internal_integer_from_i64_fast(tinypy_vm_
     result = tinypy_internal_value_allocate(vm, TINYPY_VALUE_INTEGER, sizeof(tinypy_integer_object_t));
     TINYPY_INTEGER_VALUE(result) = value;
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static inline tinypy_float_object_t *__tinypy_internal_float_free_next(const tinypy_float_object_t *value)
+{
+    tinypy_float_object_t *next;
+
+    (void)memcpy(&next, &value->value, sizeof(next));
+    return next;
+}
+//////////////////////////////////////////////////////////////////////////
+static inline void __tinypy_internal_float_set_free_next(tinypy_float_object_t *value, tinypy_float_object_t *next)
+{
+    (void)memcpy(&value->value, &next, sizeof(next));
 }
 //////////////////////////////////////////////////////////////////////////
 /* i_divmod: the floored quotient, or the remainder taking the divisor's

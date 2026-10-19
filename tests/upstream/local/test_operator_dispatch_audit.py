@@ -409,5 +409,72 @@ class OperatorDispatchAudit(unittest.TestCase):
         self.assertEqual(events, ['power', 'coerce'])
 
 
+    def test_foreign_slot_wrapper_keeps_the_inherited_slot(self):
+        class Number(int):
+            __add__ = long.__add__
+            __mul__ = str.__mul__
+            __sub__ = float.__sub__
+        value = Number(3)
+        self.assertEqual((value + value, type(value + value)), (6, int))
+        self.assertEqual((value + 1, 1 + value, value * 2, 2 * value, value - 1), (4, 4, 6, 6, 2))
+        self.assertEqual(_failure(lambda: value.__add__(value)), ('TypeError', "descriptor '__add__' for 'long' objects doesn't apply to 'Number' object"))
+        class Reflected(float):
+            __radd__ = long.__radd__
+        self.assertEqual(1 + Reflected(2.5), 3.5)
+        class Both(int):
+            __add__ = long.__add__
+            __radd__ = long.__radd__
+        self.assertEqual(_failure(lambda: Both(3) + 1)[0], 'TypeError')
+        class Python(int):
+            __add__ = long.__add__
+            def __radd__(self, other):
+                return 'reflected'
+        self.assertEqual(_failure(lambda: Python(3) + 1)[0], 'TypeError')
+        self.assertEqual(1 + Python(3), 'reflected')
+        class Text(str):
+            __mul__ = int.__mul__
+            __radd__ = int.__radd__
+        self.assertEqual(Text('ab') * 2, 'abab')
+        self.assertEqual(_failure(lambda: 'x' + Text('ab'))[0], 'TypeError')
+        class Bytes(bytearray):
+            __mul__ = int.__mul__
+        self.assertEqual(Bytes('ef') * 2, bytearray('efef'))
+        self.assertEqual(2 * Bytes('ef'), bytearray('efef'))
+        class Items(list):
+            __add__ = tuple.__add__
+            __setitem__ = dict.__setitem__
+        class Deleting(list):
+            __delitem__ = bytearray.__delitem__
+        class Both(list):
+            __setitem__ = dict.__setitem__
+            __delitem__ = bytearray.__delitem__
+        self.assertEqual(_failure(lambda: Items([1]) + [2])[0], 'TypeError')
+        items = Items([1, 2])
+        items[0] = 5
+        deleting = Deleting([1, 2])
+        del deleting[1]
+        self.assertEqual((items, deleting), ([5, 2], [1]))
+        both = Both([1])
+        self.assertEqual(_failure(lambda: both.__setitem__(0, 2))[0], 'TypeError')
+        def store():
+            both[0] = 2
+        self.assertEqual(_failure(store)[0], 'TypeError')
+        class Merged(set):
+            __or__ = int.__or__
+        self.assertEqual(Merged([1]) | set([2]), set([1, 2]))
+
+    def test_foreign_iter_wrapper_falls_back_to_the_sequence_protocol(self):
+        class Mapping(dict):
+            __iter__ = list.__iter__
+        mapping = Mapping({1: 2})
+        self.assertEqual(_failure(lambda: list(mapping))[0], 'SystemError')
+        self.assertEqual(_failure(lambda: [key for key in mapping])[0], 'SystemError')
+        self.assertEqual((len(mapping), 1 in mapping), (1, True))
+        class Items(list):
+            __iter__ = tuple.__iter__
+        self.assertEqual(list(Items([1, 2])), [1, 2])
+        self.assertEqual(sorted(Items([2, 1])), [1, 2])
+
+
 if __name__ == '__main__':
     unittest.main()

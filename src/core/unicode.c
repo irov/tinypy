@@ -443,6 +443,26 @@ size_t tinypy_internal_utf8_encode(uint32_t code_point, uint8_t bytes[4]) {
     return 4U;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The size of the ASCII run the bytes start with, read a word at a time. */
+size_t tinypy_internal_ascii_prefix(const uint8_t *bytes, size_t size) {
+    size_t high_bits = SIZE_MAX / 0xffU * 0x80U;
+    size_t offset = 0U;
+
+    while (size - offset >= sizeof(size_t)) {
+        size_t word;
+
+        (void)memcpy(&word, bytes + offset, sizeof(word));
+        if ((word & high_bits) != 0U) {
+            break;
+        }
+        offset += sizeof(word);
+    }
+    while (offset < size && bytes[offset] < 0x80U) {
+        offset += 1U;
+    }
+    return offset;
+}
+//////////////////////////////////////////////////////////////////////////
 uint32_t tinypy_internal_unicode_lower(uint32_t code_point) {
     if (code_point >= (uint32_t)'A' && code_point <= (uint32_t)'Z') {
         return code_point + ((uint32_t)'a' - (uint32_t)'A');

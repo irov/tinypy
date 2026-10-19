@@ -755,3 +755,48 @@ class AttributeEdges(unittest.TestCase):
                 call()
             self.assertEqual(caught.exception.args, (message,))
         sys.exc_clear()
+
+    def test_getattr_hook_is_fetched_before_the_lookup(self):
+        class Switch(object):
+            def __init__(self, how):
+                self.how = how
+            def __get__(self, instance, owner=None):
+                if instance is not None:
+                    if self.how == 'class':
+                        instance.__class__ = Other
+                    elif self.how == 'replace':
+                        Hooked.__getattr__ = lambda self, name: ('new', name)
+                    elif self.how == 'delete':
+                        del Hooked.__getattr__
+                    elif self.how == 'add':
+                        Plain.__getattr__ = lambda self, name: ('added', name)
+                raise AttributeError('descriptor')
+        class Hooked(object):
+            moved = Switch('class')
+            replaced = Switch('replace')
+            deleted = Switch('delete')
+            prop = property(lambda self: Switch('class').__get__(self))
+            def __getattr__(self, name):
+                return ('old', name)
+        class Other(object):
+            def __getattr__(self, name):
+                return ('other', name)
+        class Plain(object):
+            added = Switch('add')
+        hook = Hooked.__dict__['__getattr__']
+        for attempt in range(2):
+            self.assertEqual((Hooked().moved, getattr(Hooked(), 'moved')), (('old', 'moved'), ('old', 'moved')))
+            self.assertEqual((Hooked().prop, getattr(Hooked(), 'prop')), (('old', 'prop'), ('old', 'prop')))
+            for name in ('replaced', 'deleted'):
+                self.assertEqual(getattr(Hooked(), name), ('old', name))
+                Hooked.__getattr__ = hook
+            self.assertEqual(Hooked().replaced, ('old', 'replaced'))
+            Hooked.__getattr__ = hook
+            self.assertEqual(Hooked().deleted, ('old', 'deleted'))
+            Hooked.__getattr__ = hook
+            self.assertRaises(AttributeError, lambda: Plain().added)
+            del Plain.__getattr__
+            self.assertRaises(AttributeError, getattr, Plain(), 'added')
+            del Plain.__getattr__
+            self.assertEqual(hasattr(Plain(), 'added'), False)
+            del Plain.__getattr__
