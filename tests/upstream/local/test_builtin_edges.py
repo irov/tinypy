@@ -16,7 +16,188 @@ def error_text(function, *args, **kwargs):
     raise AssertionError('no exception raised')
 
 
+def native_failure_source(events, items):
+    """Yield items, then fail in list.pop without retaining a Python frame."""
+    class Owner(list):
+        def __del__(self):
+            events.append(('owner',))
+    class Source(object):
+        def __init__(self, owner):
+            self.owner = owner
+        def __iter__(self):
+            iterator = iter(self.owner.pop, None)
+            self.owner = None
+            return iterator
+    return Source(Owner(items))
+
+
 class BuiltinEdges(unittest.TestCase):
+    def test_set_item_error_releases_iterator_before_key(self):
+        events = []
+        class Key(list):
+            def __del__(self):
+                events.append('key')
+        class Iterator(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                return Key()
+            def __del__(self):
+                events.append('iterator')
+        class Source(object):
+            def __iter__(self):
+                return Iterator()
+        target = set([1])
+        operations = (set, frozenset, target.update, target.union,
+                      target.intersection, target.intersection_update,
+                      target.difference, target.difference_update,
+                      target.symmetric_difference,
+                      target.symmetric_difference_update,
+                      target.issubset, target.issuperset)
+        for operation in operations:
+            events[:] = []
+            with self.assertRaises(TypeError):
+                operation(Source())
+            self.assertEqual(events, ['iterator', 'key'])
+        events[:] = []
+        with self.assertRaises(TypeError):
+            target.isdisjoint(Source())
+        self.assertEqual(events, ['key', 'iterator'])
+
+    def test_set_intersection_item_error_releases_result_before_key(self):
+        events = []
+        class Key(list):
+            def __del__(self):
+                events.append('key')
+        class Iterator(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                return Key()
+            def __del__(self):
+                events.append('iterator')
+        class Source(object):
+            def __iter__(self):
+                return Iterator()
+        class Set(set):
+            def __del__(self):
+                events.append('result')
+        target = Set([1])
+        with self.assertRaises(TypeError):
+            target.intersection(Source())
+        self.assertEqual(events, ['iterator', 'result', 'key'])
+
+    def test_dict_mapping_lookup_error_releases_iterator_before_key(self):
+        events = []
+        class Key(int):
+            def __del__(self):
+                events.append('key')
+        class Iterator(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                return Key(0)
+            def __del__(self):
+                events.append('iterator')
+        class Source(object):
+            def __iter__(self):
+                return Iterator()
+        class Mapping(object):
+            __getitem__ = [].pop
+            def keys(self):
+                return Source()
+        for operation in (dict, {}.update):
+            events[:] = []
+            with self.assertRaises(IndexError) as caught:
+                operation(Mapping())
+            self.assertEqual(caught.exception.args, ('pop from empty list',))
+            self.assertEqual(events, ['iterator', 'key'])
+
+    def test_dict_mapping_insert_error_releases_key_value_iterator(self):
+        events = []
+        class Key(list):
+            def __del__(self):
+                events.append('key')
+        class Value(object):
+            def __del__(self):
+                events.append('value')
+        class Iterator(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                return Key()
+            def __del__(self):
+                events.append('iterator')
+        class Source(object):
+            def __iter__(self):
+                return Iterator()
+        class Mapping(object):
+            def keys(self):
+                return Source()
+            def __getitem__(self, key):
+                return Value()
+        for operation in (dict, {}.update):
+            events[:] = []
+            with self.assertRaises(TypeError):
+                operation(Mapping())
+            self.assertEqual(events, ['key', 'value', 'iterator'])
+
+    def test_dict_invalid_pair_releases_pair_before_converted_items(self):
+        events = []
+        class Item(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                events.append(self.name)
+        class Pair(object):
+            def __iter__(self):
+                return iter([Item('first'), Item('second'), Item('third')])
+            def __del__(self):
+                events.append('pair')
+        class Iterator(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                return Pair()
+            def __del__(self):
+                events.append('iterator')
+        class Source(object):
+            def __iter__(self):
+                return Iterator()
+        for operation in (dict, {}.update):
+            events[:] = []
+            with self.assertRaises(ValueError) as caught:
+                operation(Source())
+            self.assertEqual(caught.exception.args,
+                             ('dictionary update sequence element #0 has length 3; 2 is required',))
+            self.assertEqual(events, ['pair', 'third', 'second', 'first', 'iterator'])
+
+    def test_join_iteration_error_releases_items_before_iterator(self):
+        events = []
+        class Item(object):
+            def __del__(self):
+                events.append(('item',))
+        for separator in ('', u'', bytearray()):
+            events[:] = []
+            with self.assertRaises(IndexError) as caught:
+                separator.join(native_failure_source(events, [Item()]))
+            self.assertEqual(caught.exception.args, ('pop from empty list',))
+            self.assertEqual(events, [('item',), ('owner',)])
+
+    def test_list_slice_iteration_error_releases_items_before_iterator(self):
+        events = []
+        class Item(object):
+            def __del__(self):
+                events.append(('item',))
+        for step in (1, 2):
+            events[:] = []
+            target = [1, 2, 3]
+            with self.assertRaises(IndexError) as caught:
+                target[::step] = native_failure_source(events, [Item()])
+            self.assertEqual(caught.exception.args, ('pop from empty list',))
+            self.assertEqual(target, [1, 2, 3])
+            self.assertEqual(events, [('item',), ('owner',)])
+
     def test_length_float_conversion_prevents_hint_fallback(self):
         events = []
         class Source(object):
@@ -528,18 +709,318 @@ class BuiltinEdges(unittest.TestCase):
         self.assertEqual(released, [True])
 
     def test_min_releases_discarded_temporary_keys(self):
-        references = []
-        class Key(object):
+        events = []
+        class Item(object):
             def __init__(self, value):
                 self.value = value
+            def __del__(self):
+                events.append(('item', self.value))
+        class Key(object):
+            def __init__(self, item):
+                self.value = item.value
+                self.item = weakref.ref(item)
             def __lt__(self, other):
                 return self.value < other.value
-        def key(value):
-            result = Key(value)
-            references.append(weakref.ref(result))
-            return result
-        self.assertEqual(min([2, 1], key=key), 1)
-        self.assertEqual([reference() for reference in references], [None, None])
+            def __del__(self):
+                events.append(('key', self.value, self.item() is not None))
+        class Source(object):
+            def __init__(self):
+                self.value = 0
+            def __iter__(self):
+                return self
+            def next(self):
+                self.value += 1
+                if self.value > 2:
+                    raise StopIteration
+                return Item(self.value)
+        result = min(Source(), key=Key)
+        self.assertEqual((result.value, events),
+                         (1, [('item', 2), ('key', 2, False), ('key', 1, True)]))
+        del result
+        self.assertEqual(events[-1], ('item', 1))
+
+    def test_sum_releases_previous_total_before_current_item(self):
+        events = []
+        class Accumulator(object):
+            def __init__(self, value):
+                self.value = value
+            def __add__(self, item):
+                events.append(('add', self.value, item.value))
+                return Accumulator(self.value + item.value)
+            def __del__(self):
+                events.append(('accumulator', self.value))
+        class Item(object):
+            def __init__(self, value):
+                self.value = value
+            def __del__(self):
+                events.append(('item', self.value))
+        class Source(object):
+            def __init__(self):
+                self.value = 0
+            def __iter__(self):
+                return self
+            def next(self):
+                self.value += 1
+                if self.value > 2:
+                    raise StopIteration
+                return Item(self.value)
+        result = sum(Source(), Accumulator(0))
+        self.assertEqual((result.value, events),
+                         (3, [('add', 0, 1), ('item', 1), ('add', 1, 2),
+                              ('accumulator', 1), ('item', 2), ('accumulator', 0)]))
+        del result
+        self.assertEqual(events[-1], ('accumulator', 3))
+
+    def test_map_releases_callback_items_right_to_left(self):
+        events = []
+        class Item(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                events.append(('item', self.name))
+        class Source(object):
+            def __init__(self, name):
+                self.name = name
+                self.done = False
+            def __iter__(self):
+                return self
+            def next(self):
+                if self.done:
+                    raise StopIteration
+                self.done = True
+                return Item(self.name)
+        def callback(left, right):
+            events.append(('call', left.name, right.name))
+            return 0
+        self.assertEqual(map(callback, Source('left'), Source('right')), [0])
+        self.assertEqual(events, [('call', 'left', 'right'),
+                                  ('item', 'right'), ('item', 'left')])
+
+        events[:] = []
+        class Broken(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                raise ValueError('broken')
+        self.assertRaises(ValueError, map, callback,
+                          Source('left'), Source('middle'), Broken())
+        self.assertEqual(events, [('item', 'middle'), ('item', 'left')])
+
+    def test_map_releases_partially_created_iterators_left_to_right(self):
+        events = []
+        class Iterator(object):
+            def __init__(self, name):
+                self.name = name
+            def __iter__(self):
+                return self
+            def next(self):
+                raise StopIteration
+            def __del__(self):
+                events.append(self.name)
+        class Source(object):
+            def __init__(self, name):
+                self.name = name
+            def __iter__(self):
+                return Iterator(self.name)
+        class Broken(object):
+            def __iter__(self):
+                raise ValueError('broken')
+        with self.assertRaises(TypeError) as caught:
+            map(None, Source('left'), Source('middle'), Broken())
+        self.assertEqual(caught.exception.args,
+                         ('argument 4 to map() must support iteration',))
+        self.assertEqual(events, ['left', 'middle'])
+
+    def test_zip_releases_partial_rows_and_iterators_right_to_left(self):
+        events = []
+        class Item(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                events.append(('item', self.name))
+        class Source(object):
+            def __init__(self, name, empty=False):
+                self.name = name
+                self.empty = empty
+                self.done = False
+            def __iter__(self):
+                return self
+            def next(self):
+                if self.empty or self.done:
+                    raise StopIteration
+                self.done = True
+                return Item(self.name)
+        self.assertEqual(zip(Source('left'), Source('middle'), Source('empty', True)), [])
+        self.assertEqual(events, [('item', 'middle'), ('item', 'left')])
+
+        events[:] = []
+        class Iterator(object):
+            def __init__(self, name):
+                self.name = name
+                self.done = False
+            def __iter__(self):
+                return self
+            def next(self):
+                if self.done:
+                    raise StopIteration
+                self.done = True
+                return self.name
+            def __del__(self):
+                events.append(('iterator', self.name))
+        class IteratorSource(object):
+            def __init__(self, name):
+                self.name = name
+            def __iter__(self):
+                return Iterator(self.name)
+        self.assertEqual(zip(IteratorSource('left'), IteratorSource('right')),
+                         [('left', 'right')])
+        self.assertEqual(events, [('iterator', 'right'), ('iterator', 'left')])
+
+    def test_min_max_success_releases_best_key_before_iterator(self):
+        events = []
+        class Key(int):
+            def __del__(self):
+                events.append(('key',))
+        class Iterator(object):
+            def __init__(self):
+                self.done = False
+            def __iter__(self):
+                return self
+            def next(self):
+                if self.done:
+                    raise StopIteration
+                self.done = True
+                return 17
+            def __del__(self):
+                events.append(('iterator',))
+        class Source(object):
+            def __iter__(self):
+                return Iterator()
+        for operation in (min, max):
+            events[:] = []
+            self.assertEqual(operation(Source(), key=Key), 17)
+            self.assertEqual(events, [('key',), ('iterator',)])
+
+    def test_min_max_comparison_error_releases_candidate_key_first(self):
+        events = []
+        class Item(int):
+            def __del__(self):
+                events.append(('item', int(self)))
+        class Key(complex):
+            def __del__(self):
+                events.append(('key', int(self.real)))
+        class Iterator(object):
+            def __init__(self):
+                self.value = 0
+            def __iter__(self):
+                return self
+            def next(self):
+                self.value += 1
+                return Item(self.value)
+            def __del__(self):
+                events.append(('iterator',))
+        class Source(object):
+            def __iter__(self):
+                return Iterator()
+        for operation in (min, max):
+            events[:] = []
+            with self.assertRaises(TypeError) as caught:
+                operation(Source(), key=Key)
+            self.assertEqual(caught.exception.args,
+                             ('no ordering relation is defined for complex numbers',))
+            self.assertEqual(events, [('key', 2), ('item', 2),
+                                      ('key', 1), ('item', 1), ('iterator',)])
+
+    def test_min_max_key_error_releases_best_before_iterator(self):
+        events = []
+        class Item(object):
+            def __del__(self):
+                events.append(('item',))
+        class Sized(Item):
+            def __len__(self):
+                return 1
+        class Iterator(object):
+            def __init__(self):
+                self.done = False
+            def __iter__(self):
+                return self
+            def next(self):
+                if self.done:
+                    return Item()
+                self.done = True
+                return Sized()
+            def __del__(self):
+                events.append(('iterator',))
+        class Source(object):
+            def __iter__(self):
+                return Iterator()
+        for operation in (min, max):
+            events[:] = []
+            self.assertRaises(TypeError, operation, Source(), key=len)
+            self.assertEqual(events, [('item',), ('item',), ('iterator',)])
+
+    def test_min_max_iteration_error_releases_best_before_iterator(self):
+        events = []
+        class Item(object):
+            def __del__(self):
+                events.append(('item',))
+        class Key(object):
+            def __init__(self, item):
+                pass
+            def __del__(self):
+                events.append(('key',))
+        for operation in (min, max):
+            for keywords in ({}, {'key': Key}):
+                events[:] = []
+                with self.assertRaises(IndexError) as caught:
+                    operation(native_failure_source(events, [Item()]), **keywords)
+                self.assertEqual(caught.exception.args, ('pop from empty list',))
+                expected = [('key',)] if keywords else []
+                self.assertEqual(events, expected + [('item',), ('owner',)])
+
+    def test_filter_iteration_error_releases_selected_before_iterator(self):
+        events = []
+        class Item(object):
+            def __del__(self):
+                events.append(('item',))
+        for predicate in (None, bool, lambda item: True):
+            events[:] = []
+            with self.assertRaises(IndexError) as caught:
+                filter(predicate, native_failure_source(events, [Item()]))
+            self.assertEqual(caught.exception.args, ('pop from empty list',))
+            self.assertEqual(events, [('item',), ('owner',)])
+
+    def test_sum_iteration_error_releases_total_before_iterator(self):
+        events = []
+        class Total(object):
+            def __radd__(self, other):
+                return self
+            def __del__(self):
+                events.append(('total',))
+        with self.assertRaises(IndexError) as caught:
+            sum(native_failure_source(events, [Total()]))
+        self.assertEqual(caught.exception.args, ('pop from empty list',))
+        self.assertEqual(events, [('total',), ('owner',)])
+
+    def test_tuple_and_star_iteration_error_release_items_before_iterator(self):
+        events = []
+        class Item(object):
+            def __del__(self):
+                events.append(('item',))
+        class Tuple(tuple):
+            pass
+        def star(source):
+            return (lambda *args: args)(*source)
+        tuple_order = [('item',), ('owner',)]
+        list_order = [('owner',), ('item',)]
+        for operation, expected in ((tuple, tuple_order), (Tuple, tuple_order),
+                                    (star, tuple_order), (list, list_order),
+                                    (lambda source: map(None, source), list_order)):
+            events[:] = []
+            with self.assertRaises(IndexError) as caught:
+                operation(native_failure_source(events, [Item()]))
+            self.assertEqual(caught.exception.args, ('pop from empty list',))
+            self.assertEqual(events, expected)
 
     def test_native_getters_reject_foreign_receivers(self):
         for receiver, kind in ((5, 'int'), ('abc', 'str'), (bytearray('abc'), 'bytearray')):

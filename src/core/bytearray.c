@@ -1445,11 +1445,12 @@ static tinypy_value_t *__tinypy_bytearray_join(tinypy_value_t *self, tinypy_valu
             return NULL;
         }
         tinypy_bool_t extended = tinypy_internal_list_extend_iterable(sequence, iterator, "error return without exception set", out_error);
-        TINYPY_DECREF(iterator);
         if (extended == 0) {
             TINYPY_DECREF(sequence);
+            TINYPY_DECREF(iterator);
             return NULL;
         }
+        TINYPY_DECREF(iterator);
     }
     size_t count = TINYPY_SIZED_SIZE(sequence);
     size_t total_size = 0U;

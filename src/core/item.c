@@ -623,9 +623,6 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, con
     tinypy_error_t *collection_error = NULL;
     tinypy_bool_t collected = tinypy_internal_list_extend_iterable(items, value, negative_hint_message, &collection_error);
 
-    if (iterator != NULL) {
-        TINYPY_DECREF(iterator);
-    }
     if (collected == 0) {
         /* A NULL diagnostic permits only the helper's hint -1 abort. User
            exceptions remain owned errors, even with the same SystemError text. */
@@ -639,7 +636,13 @@ static tinypy_value_t *__tinypy_item_collect_iterable(tinypy_value_t *value, con
             }
         }
         TINYPY_DECREF(items);
+        if (iterator != NULL) {
+            TINYPY_DECREF(iterator);
+        }
         return NULL;
+    }
+    if (iterator != NULL) {
+        TINYPY_DECREF(iterator);
     }
     return items;
 }

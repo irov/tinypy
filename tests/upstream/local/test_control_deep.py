@@ -6,6 +6,54 @@ import _weakref as weakref
 
 
 class ControlDeep(unittest.TestCase):
+    def test_unpack_too_many_releases_items_before_iterator(self):
+        events = []
+        class Item(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                events.append(self.name)
+        class Iterator(object):
+            def __init__(self):
+                self.names = iter(('first', 'second', 'extra'))
+            def __iter__(self):
+                return self
+            def next(self):
+                return Item(next(self.names))
+            def __del__(self):
+                events.append('iterator')
+        class Source(object):
+            def __iter__(self):
+                return Iterator()
+        try:
+            left, right = Source()
+        except ValueError as error:
+            self.assertEqual(error.args, ('too many values to unpack',))
+        else:
+            self.fail('unpack accepted an extra item')
+        self.assertEqual(events, ['extra', 'second', 'first', 'iterator'])
+
+    def test_unpack_final_probe_error_releases_items_before_iterator(self):
+        events = []
+        class Item(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                events.append(self.name)
+        class Owner(list):
+            def __del__(self):
+                events.append('owner')
+        class Source(object):
+            def __iter__(self):
+                return iter(Owner([Item('second'), Item('first')]).pop, None)
+        try:
+            left, right = Source()
+        except IndexError as error:
+            self.assertEqual(error.args, ('pop from empty list',))
+        else:
+            self.fail('unpack lost the final iteration error')
+        self.assertEqual(events, ['second', 'first', 'owner'])
+
     def test_generator_explicit_stop_iteration_preserves_type_value_and_payload(self):
         class Stopped(StopIteration):
             pass

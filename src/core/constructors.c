@@ -368,10 +368,6 @@ static int32_t __tinypy_constructor_call_found_attribute(tinypy_value_t *value, 
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_constructor_unicode_from_default_encoding(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_error_t **out_error) {
-    const uint8_t *bytes;
-    size_t size;
-    size_t index;
-
     if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
         return TINYPY_RET(text);
     }
@@ -385,14 +381,7 @@ static tinypy_value_t *__tinypy_constructor_unicode_from_default_encoding(tinypy
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
     }
-    bytes = (const uint8_t *)tinypy_string_view(text, &size);
-    for (index = 0U; index < size; ++index) {
-        if (bytes[index] >= 0x80U) {
-            (void)tinypy_internal_raise_ascii_decode_error(vm, text, index, index + 1U, out_error);
-            return NULL;
-        }
-    }
-    tinypy_value_t *return_value = tinypy_internal_unicode_from_utf8_checked(vm, (const char *)bytes, size, out_error);
+    tinypy_value_t *return_value = tinypy_internal_text_to_unicode(vm, text, out_error);
     return return_value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1129,20 +1118,20 @@ static tinypy_value_t *__tinypy_constructor_sequence_to_list(tinypy_vm_t *vm, ti
     }
     int64_t hint;
     if (tinypy_internal_length_hint(iterable, INT64_C(10), &hint, out_error) == 0) {
-        TINYPY_DECREF(iterator);
         TINYPY_DECREF(result);
+        TINYPY_DECREF(iterator);
         return NULL;
     }
     if (hint < 0) {
         tinypy_internal_exception_raise_system_error(vm, hint == INT64_C(-1) ? negative_hint_message : "bad argument to internal function", out_error);
-        TINYPY_DECREF(iterator);
         TINYPY_DECREF(result);
+        TINYPY_DECREF(iterator);
         return NULL;
     }
     size_t reserve_hint = __tinypy_internal_hint_size(hint);
     if (tinypy_internal_list_reserve_checked(vm, result, reserve_hint, out_error) == 0) {
-        TINYPY_DECREF(iterator);
         TINYPY_DECREF(result);
+        TINYPY_DECREF(iterator);
         return NULL;
     }
     for (;;) {
@@ -1153,17 +1142,18 @@ static tinypy_value_t *__tinypy_constructor_sequence_to_list(tinypy_vm_t *vm, ti
         }
         if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
             TINYPY_DECREF(item);
-            TINYPY_DECREF(iterator);
             TINYPY_DECREF(result);
+            TINYPY_DECREF(iterator);
             return NULL;
         }
         TINYPY_DECREF(item);
     }
-    TINYPY_DECREF(iterator);
     if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         TINYPY_DECREF(result);
+        TINYPY_DECREF(iterator);
         return NULL;
     }
+    TINYPY_DECREF(iterator);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

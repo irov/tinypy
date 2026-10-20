@@ -896,6 +896,8 @@ static void __tinypy_internal_dict_pair_conversion_error(tinypy_vm_t *vm, size_t
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+/* Consumes pair, before its converted sequence on failure and after it on
+   success, as PyDict_MergeFromSeq2 releases item and fast. */
 static tinypy_bool_t __tinypy_internal_dict_set_pair(tinypy_value_t *target, tinypy_value_t *pair, size_t index, const char *negative_hint_message, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
     tinypy_value_t *sequence;
@@ -923,6 +925,7 @@ static tinypy_bool_t __tinypy_internal_dict_set_pair(tinypy_value_t *target, tin
             else {
                 __tinypy_internal_dict_iteration_error(conversion_error, out_error);
             }
+            TINYPY_DECREF(pair);
             return TINYPY_FALSE;
         }
     }
@@ -942,8 +945,9 @@ static tinypy_bool_t __tinypy_internal_dict_set_pair(tinypy_value_t *target, tin
             TINYPY_MESSAGE_PART_LITERAL("; 2 is required")
         };
 
-        TINYPY_DECREF(sequence);
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        TINYPY_DECREF(pair);
+        TINYPY_DECREF(sequence);
         return TINYPY_FALSE;
     }
     tinypy_value_t *key = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(sequence, 0U) : TINYPY_LIST_GET(sequence, 0U);
@@ -955,8 +959,14 @@ static tinypy_bool_t __tinypy_internal_dict_set_pair(tinypy_value_t *target, tin
 
     TINYPY_DECREF(key);
     TINYPY_DECREF(value);
+    if (inserted == 0) {
+        TINYPY_DECREF(pair);
+        TINYPY_DECREF(sequence);
+        return TINYPY_FALSE;
+    }
     TINYPY_DECREF(sequence);
-    return inserted;
+    TINYPY_DECREF(pair);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyMapping_Keys calls the method through PyObject_CallMethod. */
@@ -991,16 +1001,18 @@ tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy
             break;
         }
         tinypy_value_t *value = tinypy_get_item(source, key, out_error);
-        if (value == NULL || tinypy_internal_dict_set_checked(vm, target, key, value, out_error) == 0) {
-            if (value != NULL) {
-                TINYPY_DECREF(value);
-            }
+        if (value == NULL) {
+            TINYPY_DECREF(iterator);
             TINYPY_DECREF(key);
+            return TINYPY_FALSE;
+        }
+        tinypy_bool_t inserted = tinypy_internal_dict_set_checked(vm, target, key, value, out_error);
+        TINYPY_DECREF(key);
+        TINYPY_DECREF(value);
+        if (inserted == 0) {
             TINYPY_DECREF(iterator);
             return TINYPY_FALSE;
         }
-        TINYPY_DECREF(value);
-        TINYPY_DECREF(key);
     }
     TINYPY_DECREF(iterator);
     if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
@@ -1079,7 +1091,6 @@ tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_va
             break;
         }
         tinypy_bool_t updated = __tinypy_internal_dict_set_pair(target, pair, index, negative_hint_message, out_error);
-        TINYPY_DECREF(pair);
         if (updated == 0) {
             TINYPY_DECREF(iterator);
             return TINYPY_FALSE;

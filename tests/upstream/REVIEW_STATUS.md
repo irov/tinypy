@@ -64,12 +64,54 @@ independent allocator accounting. No new skip, DEFER, expected failure, detector
 adaptation or SPEC boundary was added. Python-visible validation remains active
 in Release. These are finite local results on macOS arm64.
 
-Two root-builtins observations remain outside this prepared checkpoint: generic
-keyword rejection loses the builtin name, and min/max diagnostics differ while
-min releases a losing key before its item. Ordinary CPython/Tiny witnesses are
-in `.temp/twelfth-builtins/probe.py` with quiet reference streams and zero Tiny
-allocator balance. They need permanent regressions and a separate accepted patch;
-they are not exclusions from the supported contract.
+The root-builtins observations originally left outside this prepared checkpoint
+were covered by later permanent regressions. Subsequent changes corrected generic
+keyword rejection and min/max diagnostics. Later follow-ups release a losing
+`min(iterable, key=...)` item before its temporary key, the prior `sum` total
+before the current item, and temporary `map` arguments plus `zip` rows and
+iterators in CPython's right-to-left tuple order. Partially created `map`
+iterators are released separately in CPython's left-to-right descriptor order.
+The original CPython/Tiny witnesses remain in `.temp/twelfth-builtins/probe.py`
+as historical evidence and were never exclusions from the supported contract.
+
+The cleanup follow-up adds nine portable regressions. Successful min/max release
+the best key before the iterator; key, comparison and iteration failures release
+the candidate key, candidate, best key and best item in the applicable CPython
+order before the iterator and key function. Filter, generic sum and tuple/star
+conversion release their partial result before a failing iterator. List and
+single-input map(None, ...) retain their distinct iterator-first cleanup. A
+native iter(list.pop, None) witness avoids the intentional traceback/fast-locals
+lifetime difference. Unpacking releases an extra item and the extracted items
+before the iterator, including when the final exhaustion probe raises. Existing
+SPEC boundaries and detector adaptations are unchanged.
+
+The next follow-up adds 19 portable regressions for five audited families.
+Set item failures release the iterator before the failing key; intersection
+also releases its temporary result before that key. Mapping lookup and insertion
+failures keep their distinct iterator/key/value order. Invalid dictionary pairs
+release the original pair before its converted sequence. String, Unicode and
+bytearray join, and list slice collection, release partial items before a failing
+iterator, while list construction retains its separate order.
+
+ASCII and UTF-8 decoding consult registered handlers for every policy name,
+including default strict. ASCII/Latin-1 encoding retains its four builtin
+policies and looks up backslashreplace. Implicit Unicode conversion uses the
+actual replacement in concatenation, comparisons, containment, joins, search,
+replacement, splitting and formatting. Search bounds are parsed once before
+codec callbacks and adjusted to the converted length. Unicode joins re-read list
+size after item/separator callbacks; percent formatting reparses a converted
+remainder and converts its earlier byte output afterwards. Standard handlers
+are restored by every regression that overrides them. The selected inventory
+is 2,403 cases, with the existing four Release/LTO detector adaptations.
+
+The four-profile follow-up passes all 273 validation stages on macOS arm64:
+2,403 portable PASS in Debug/sanitize, and 2,399 PASS plus the four declared
+detector SKIP in Release/LTO. Strict builds, 90 host/API/tool checks, native
+tests, compiler comparisons, symbol audits and allocator accounting pass.
+The final source/test/SPEC SHA-256 is
+`bb40b1aeebfb10902b3913bf9874c00aeaf4b0d60f32a8798bde379d141acb69`.
+An additional 816-outcome callback/cleanup product matches CPython in each
+profile with zero outstanding allocations and clean diagnostics.
 
 Primary references:
 [bytearrayobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/bytearrayobject.c),

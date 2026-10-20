@@ -1631,11 +1631,12 @@ static tinypy_value_t *__tinypy_builtin_filter(tinypy_value_t *function, tinypy_
         }
         TINYPY_DECREF(item);
     }
-    TINYPY_DECREF(iteration_source);
     if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         TINYPY_DECREF(selected);
+        TINYPY_DECREF(iteration_source);
         return NULL;
     }
+    TINYPY_DECREF(iteration_source);
     if (TINYPY_VALUE_KIND(input) == TINYPY_VALUE_TUPLE) {
         size_t list_size = TINYPY_LIST_SIZE(selected);
         result = tinypy_internal_tuple_from_items_checked(vm, TINYPY_LIST_OBJECT(selected)->items, list_size, out_error);
@@ -1791,8 +1792,8 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
             };
 
             tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-            while (iterable_index != 0U) {
-                TINYPY_DECREF(iterators[--iterable_index]);
+            for (size_t release_index = 0U; release_index < iterable_index; ++release_index) {
+                TINYPY_DECREF(iterators[release_index]);
             }
             tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
             __tinypy_builtin_exception_state_release(&pending);
@@ -1857,9 +1858,10 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
                 }
                 __tinypy_builtin_exception_state_release(&pending);
                 if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
-                    size_t release_index;
+                    size_t release_index = iterable_index;
 
-                    for (release_index = 0U; release_index < iterable_index; ++release_index) {
+                    while (release_index != 0U) {
+                        --release_index;
                         if (yielded[release_index] != 0U) {
                             TINYPY_DECREF(call_items[release_index]);
                         }
@@ -1890,7 +1892,9 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
         else {
             mapped = __tinypy_builtin_call_items(vm, callable, call_items, iterable_count, out_error);
         }
-        for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
+        iterable_index = iterable_count;
+        while (iterable_index != 0U) {
+            --iterable_index;
             if (yielded[iterable_index] != 0U) {
                 TINYPY_DECREF(call_items[iterable_index]);
             }
@@ -2005,10 +2009,10 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
 
             tuple_items[iterable_index] = tinypy_next(iterators[iterable_index], &iteration_error);
             if (tuple_items[iterable_index] == NULL) {
-                size_t release_index;
+                size_t release_index = iterable_index;
 
-                for (release_index = 0U; release_index < iterable_index; ++release_index) {
-                    TINYPY_DECREF(tuple_items[release_index]);
+                while (release_index != 0U) {
+                    TINYPY_DECREF(tuple_items[--release_index]);
                 }
                 if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
                     TINYPY_DECREF(result);
@@ -2018,8 +2022,9 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
             }
         }
         tuple = tinypy_internal_tuple_from_items_checked(vm, tuple_items, iterable_count, out_error);
-        for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
-            TINYPY_DECREF(tuple_items[iterable_index]);
+        iterable_index = iterable_count;
+        while (iterable_index != 0U) {
+            TINYPY_DECREF(tuple_items[--iterable_index]);
         }
         if (tuple == NULL) {
             TINYPY_DECREF(result);
@@ -2038,8 +2043,9 @@ zip_cleanup:
     if (result != NULL) {
         tinypy_internal_list_shrink(result);
     }
-    for (iterable_index = 0U; iterable_index < iterable_count; ++iterable_index) {
-        TINYPY_DECREF(iterators[iterable_index]);
+    iterable_index = iterable_count;
+    while (iterable_index != 0U) {
+        TINYPY_DECREF(iterators[--iterable_index]);
     }
     tinypy_internal_vm_deallocate(vm, scratch, scratch_size);
     return result;
@@ -2049,8 +2055,8 @@ zip_cleanup:
 static tinypy_value_t *__tinypy_builtin_sum_add(tinypy_value_t *total, tinypy_value_t *item, tinypy_error_t **out_error) {
     tinypy_value_t *next_total = tinypy_add(total, item, out_error);
 
-    TINYPY_DECREF(item);
     TINYPY_DECREF(total);
+    TINYPY_DECREF(item);
     return next_total;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2149,11 +2155,12 @@ static tinypy_value_t *__tinypy_builtin_sum(tinypy_value_t *function, tinypy_val
         }
     }
 finish:
-    TINYPY_DECREF(iterator);
     if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         TINYPY_DECREF(total);
+        TINYPY_DECREF(iterator);
         return NULL;
     }
+    TINYPY_DECREF(iterator);
     return total;
 failed:
     TINYPY_DECREF(iterator);
@@ -2161,17 +2168,23 @@ failed:
 }
 //////////////////////////////////////////////////////////////////////////
 /* Offers a candidate of min or max, which becomes the best one when it is the
-   first or its key compares better than the best one's key. */
-static tinypy_bool_t __tinypy_builtin_min_max_offer(tinypy_vm_t *vm, tinypy_value_t *key_function, tinypy_compare_operation_e operation, tinypy_value_t *candidate, tinypy_value_t **in_out_best, tinypy_value_t **in_out_best_key, tinypy_error_t **out_error) {
+   first or its key compares better than the best one's key. A losing key is
+   returned so an owned iterator candidate can be released before that key. */
+static tinypy_bool_t __tinypy_builtin_min_max_offer(tinypy_vm_t *vm, tinypy_value_t *key_function, tinypy_compare_operation_e operation, tinypy_value_t *candidate, tinypy_value_t **in_out_best, tinypy_value_t **in_out_best_key, tinypy_value_t **out_discarded_key, tinypy_error_t **out_error) {
     tinypy_value_t *candidate_key = key_function != NULL ? __tinypy_builtin_call_items(vm, key_function, &candidate, 1U, out_error) : TINYPY_RET(candidate);
 
+    *out_discarded_key = NULL;
     if (candidate_key == NULL) {
         return TINYPY_FALSE;
     }
     int32_t better = *in_out_best != NULL ? tinypy_compare_bool(candidate_key, *in_out_best_key, operation, out_error) : INT32_C(1);
-    if (better <= 0) {
+    if (better < 0) {
         TINYPY_DECREF(candidate_key);
-        return better == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        return TINYPY_FALSE;
+    }
+    if (better == 0) {
+        *out_discarded_key = candidate_key;
+        return TINYPY_TRUE;
     }
     if (*in_out_best != NULL) {
         TINYPY_DECREF(*in_out_best_key);
@@ -2189,6 +2202,7 @@ static tinypy_value_t *__tinypy_builtin_min_max(tinypy_value_t *function, tinypy
     tinypy_value_t *key_function = NULL;
     tinypy_value_t *best = NULL;
     tinypy_value_t *best_key = NULL;
+    tinypy_value_t *iterator = NULL;
     tinypy_error_t *iteration_error = NULL;
     tinypy_bool_t offered = TINYPY_TRUE;
     tinypy_value_t *name = TINYPY_NATIVE_FUNCTION_OBJECT(function)->name;
@@ -2215,11 +2229,16 @@ static tinypy_value_t *__tinypy_builtin_min_max(tinypy_value_t *function, tinypy
     }
     if (count != 1U) {
         for (size_t index = 0U; index < count && offered != 0; ++index) {
-            offered = __tinypy_builtin_min_max_offer(vm, key_function, operation, items[index], &best, &best_key, out_error);
+            tinypy_value_t *discarded_key = NULL;
+
+            offered = __tinypy_builtin_min_max_offer(vm, key_function, operation, items[index], &best, &best_key, &discarded_key, out_error);
+            if (discarded_key != NULL) {
+                TINYPY_DECREF(discarded_key);
+            }
         }
     }
     else {
-        tinypy_value_t *iterator = tinypy_iter(items[0U], out_error);
+        iterator = tinypy_iter(items[0U], out_error);
 
         offered = iterator != NULL ? TINYPY_TRUE : TINYPY_FALSE;
         while (offered != 0) {
@@ -2228,33 +2247,39 @@ static tinypy_value_t *__tinypy_builtin_min_max(tinypy_value_t *function, tinypy
             if (candidate == NULL) {
                 break;
             }
-            offered = __tinypy_builtin_min_max_offer(vm, key_function, operation, candidate, &best, &best_key, out_error);
+            tinypy_value_t *discarded_key = NULL;
+
+            offered = __tinypy_builtin_min_max_offer(vm, key_function, operation, candidate, &best, &best_key, &discarded_key, out_error);
             TINYPY_DECREF(candidate);
+            if (discarded_key != NULL) {
+                TINYPY_DECREF(discarded_key);
+            }
         }
-        if (iterator != NULL) {
-            TINYPY_DECREF(iterator);
-        }
-    }
-    if (key_function != NULL) {
-        TINYPY_DECREF(key_function);
     }
     if (offered == 0 || tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
         if (best != NULL) {
             TINYPY_DECREF(best_key);
             TINYPY_DECREF(best);
+            best = NULL;
         }
-        return NULL;
     }
-    if (best == NULL) {
+    else if (best == NULL) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_TEXT(name),
             TINYPY_MESSAGE_PART_LITERAL("() arg is an empty sequence")
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_VALUE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        return NULL;
     }
-    TINYPY_DECREF(best_key);
+    else {
+        TINYPY_DECREF(best_key);
+    }
+    if (iterator != NULL) {
+        TINYPY_DECREF(iterator);
+    }
+    if (key_function != NULL) {
+        TINYPY_DECREF(key_function);
+    }
     return best;
 }
 //////////////////////////////////////////////////////////////////////////

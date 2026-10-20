@@ -179,11 +179,12 @@ tinypy_bool_t tinypy_internal_set_update_iterable(tinypy_value_t *set, tinypy_va
             break;
         }
         tinypy_bool_t added = __tinypy_set_add_key(set, key, out_error);
-        TINYPY_DECREF(key);
         if (added == 0) {
             TINYPY_DECREF(iterator);
+            TINYPY_DECREF(key);
             return TINYPY_FALSE;
         }
+        TINYPY_DECREF(key);
     }
     TINYPY_DECREF(iterator);
     if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
@@ -276,13 +277,15 @@ static tinypy_bool_t __tinypy_set_select_entries(tinypy_value_t *result, const t
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_set_intersect_iterable(tinypy_value_t *result, tinypy_value_t *set, tinypy_value_t *iterable, tinypy_error_t **out_error) {
+/* Owns result: on an item error CPython releases iterator, result, key. */
+static tinypy_value_t *__tinypy_set_intersect_iterable(tinypy_value_t *result, tinypy_value_t *set, tinypy_value_t *iterable, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(result);
     tinypy_error_t *iteration_error = NULL;
     tinypy_value_t *iterator = tinypy_iter(iterable, out_error);
 
     if (iterator == NULL) {
-        return TINYPY_FALSE;
+        TINYPY_DECREF(result);
+        return NULL;
     }
     for (;;) {
         tinypy_value_t *key = tinypy_next(iterator, &iteration_error);
@@ -300,17 +303,20 @@ static tinypy_bool_t __tinypy_set_intersect_iterable(tinypy_value_t *result, tin
                 selected = __tinypy_set_add_entry(result, key, hash, out_error);
             }
         }
-        TINYPY_DECREF(key);
         if (selected == 0) {
             TINYPY_DECREF(iterator);
-            return TINYPY_FALSE;
+            TINYPY_DECREF(result);
+            TINYPY_DECREF(key);
+            return NULL;
         }
+        TINYPY_DECREF(key);
     }
     TINYPY_DECREF(iterator);
     if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
-        return TINYPY_FALSE;
+        TINYPY_DECREF(result);
+        return NULL;
     }
-    return TINYPY_TRUE;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* set_intersection walks the smaller of two sets, the other operand on a tie;
@@ -335,7 +341,9 @@ static tinypy_value_t *__tinypy_set_intersection(tinypy_value_t *set, tinypy_val
         intersected = __tinypy_set_select_entries(result, walked_dict, probed_dict, TINYPY_FALSE, out_error);
     }
     else {
-        intersected = __tinypy_set_intersect_iterable(result, set, other, out_error);
+        tinypy_value_t *return_value = __tinypy_set_intersect_iterable(result, set, other, out_error);
+
+        return return_value;
     }
     if (intersected == 0) {
         TINYPY_DECREF(result);
@@ -375,11 +383,12 @@ static tinypy_bool_t __tinypy_set_discard_iterable(tinypy_value_t *set, tinypy_v
         if (tinypy_internal_dict_hash_checked(vm, key, &hash, out_error) != 0) {
             discarded = __tinypy_set_discard_entry(set, key, hash, out_error);
         }
-        TINYPY_DECREF(key);
         if (discarded < 0) {
             TINYPY_DECREF(iterator);
+            TINYPY_DECREF(key);
             return TINYPY_FALSE;
         }
+        TINYPY_DECREF(key);
     }
     TINYPY_DECREF(iterator);
     if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {

@@ -18,6 +18,251 @@ class Wide(unicode):
 
 
 class UnicodeMethodsAudit(unittest.TestCase):
+    def test_search_methods_use_default_codec_replacement(self):
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            return u'\u1234Z', error.end
+        try:
+            _codecs.register_error('strict', handler)
+            for text, needle in ((u'a\u1234Zb', '\xff'), ('a\xffb', u'\u1234Z')):
+                for name in ('find', 'rfind', 'index', 'rindex'):
+                    self.assertEqual(getattr(text, name)(needle), 1)
+                self.assertEqual(text.count(needle), 1)
+                self.assertTrue(text.startswith(needle, 1))
+                self.assertTrue(text.endswith(needle, 0, -1))
+                self.assertTrue(text.startswith((u'x', needle), 1))
+                self.assertTrue(text.endswith((u'x', needle), 0, -1))
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_search_bounds_are_parsed_once_before_codec_and_adjusted_after(self):
+        events = []
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            events.append('codec')
+            return u'\u1234Z', error.end
+        class Start(object):
+            def __index__(self):
+                events.append('start')
+                return -3
+        class End(object):
+            def __index__(self):
+                events.append('end')
+                return -1
+        try:
+            _codecs.register_error('strict', handler)
+            for text, needle in ((u'a\u1234Zb', '\xff'), ('a\xffb', u'\u1234Z')):
+                for name, expected in (('find', 1), ('count', 1),
+                                       ('startswith', True), ('endswith', True)):
+                    events[:] = []
+                    self.assertEqual(getattr(text, name)(needle, Start(), End()), expected)
+                    self.assertEqual(events, ['start', 'end', 'codec'])
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_text_transformations_use_default_codec_replacement(self):
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            return u'\u1234Z', error.end
+        operations = (
+            (lambda: u'a\u1234Zb'.replace('\xff', 'x'), u'axb'),
+            (lambda: 'a\xffb'.replace(u'\u1234Z', 'x'), u'axb'),
+            (lambda: u'a\u1234Zb'.split('\xff'), [u'a', u'b']),
+            (lambda: 'a\xffb'.rsplit(u'\u1234Z'), [u'a', u'b']),
+            (lambda: u'a\u1234Zb'.partition('\xff'), (u'a', u'\u1234Z', u'b')),
+            (lambda: 'a\xffb'.rpartition(u'\u1234Z'), (u'a', u'\u1234Z', u'b')),
+            (lambda: u'\u1234ZaZ'.strip('\xff'), u'a'),
+            (lambda: '\xffa\xff'.strip(u'\u1234Z'), u'a'))
+        try:
+            _codecs.register_error('strict', handler)
+            for operation, expected in operations:
+                self.assertEqual(operation(), expected)
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_percent_format_decodes_and_reparses_remaining_format(self):
+        events = []
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            events.append(error.object)
+            return replacement, error.end
+        try:
+            _codecs.register_error('strict', handler)
+            for replacement, expected in ((u'Z', u'aZ'), (u'%%', u'a%'), (u'', u'a')):
+                events[:] = []
+                self.assertEqual('%s\xff' % u'a', expected)
+                self.assertEqual(events, ['%s\xff'])
+            replacement = u'%s'
+            self.assertEqual('%s\xff' % (u'a', u'b'), u'ab')
+            replacement = u'Z'
+            events[:] = []
+            self.assertEqual('\xff%s\xff' % u'a', u'ZaZ')
+            self.assertEqual(events, ['%s\xff', '\xff'])
+            self.assertEqual(u'%c' % '\xff', u'Z')
+            replacement = u'XY'
+            self.assertEqual(u'%c' % '\xff', u'X')
+            replacement = u''
+            self.assertEqual(u'%c' % '\xff', u'\x00')
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_unicode_format_spec_decodes_default_codec_replacement(self):
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            return u'\u1234', error.end
+        try:
+            _codecs.register_error('strict', handler)
+            self.assertEqual(format(u'a', '\xff>3s'), u'\u1234\u1234a')
+            self.assertEqual(u'{}'.format('\xff'), u'\u1234')
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_decoders_use_registered_standard_error_handlers(self):
+        events = []
+        def handler(error):
+            events.append((type(error).__name__, error.start, error.end))
+            return u'\u1234Z', error.end
+        for name in ('strict', 'ignore', 'replace', 'xmlcharrefreplace', 'backslashreplace'):
+            previous = _codecs.lookup_error(name)
+            try:
+                _codecs.register_error(name, handler)
+                self.assertIs(_codecs.lookup_error(name), handler)
+                for codec in ('ascii', 'utf8'):
+                    events[:] = []
+                    self.assertEqual('a\xffb\xff'.decode(codec, name),
+                                     u'a\u1234Zb\u1234Z')
+                    self.assertEqual(events, [('UnicodeDecodeError', 1, 2),
+                                              ('UnicodeDecodeError', 3, 4)])
+                self.assertEqual(_codecs.ascii_decode('\xff', name), (u'\u1234Z', 1))
+                self.assertEqual(_codecs.utf_8_decode('\xff', name, True), (u'\u1234Z', 1))
+            finally:
+                _codecs.register_error(name, previous)
+
+    def test_encoders_keep_builtin_policies_except_backslashreplace(self):
+        events = []
+        def handler(error):
+            events.append((type(error).__name__, error.start, error.end))
+            return u'Z', error.end
+        for name, expected in (('strict', None), ('ignore', ''),
+                               ('replace', '??'),
+                               ('xmlcharrefreplace', '&#4660;&#4661;'),
+                               ('backslashreplace', 'Z')):
+            previous = _codecs.lookup_error(name)
+            try:
+                _codecs.register_error(name, handler)
+                for codec in ('ascii', 'latin1'):
+                    events[:] = []
+                    if expected is None:
+                        with self.assertRaises(UnicodeEncodeError):
+                            u'\u1234\u1235'.encode(codec, name)
+                    else:
+                        self.assertEqual(u'\u1234\u1235'.encode(codec, name), expected)
+                    self.assertEqual(events,
+                                     [('UnicodeEncodeError', 0, 2)] if name == 'backslashreplace' else [])
+            finally:
+                _codecs.register_error(name, previous)
+
+    def test_default_ascii_coercion_uses_registered_strict_replacement(self):
+        events = []
+        def handler(error):
+            events.append((error.encoding, error.start, error.end))
+            return u'\u1234Z', error.end
+        previous = _codecs.lookup_error('strict')
+        operations = (
+            (lambda: '\xff'.decode('ascii'), u'\u1234Z'),
+            (lambda: unicode('\xff'), u'\u1234Z'),
+            (lambda: unicode('\xff', 'ascii'), u'\u1234Z'),
+            (lambda: u'a' + '\xff', u'a\u1234Z'),
+            (lambda: '\xff' + u'a', u'\u1234Za'),
+            (lambda: u''.join(['a', '\xff']), u'a\u1234Z'),
+            (lambda: ''.join([u'a', '\xff']), u'a\u1234Z'),
+            (lambda: u'\u1234Z' == '\xff', True),
+            (lambda: '\xff' == u'\u1234Z', True),
+            (lambda: '\xff' < u'\u1235', True),
+            (lambda: '\xff' in u'\u1234Z', True),
+            (lambda: u'\u1234' in '\xff', True),
+            (lambda: u'%s' % '\xff', u'\u1234Z'),
+            (lambda: '\xff'.encode('utf8'), '\xe1\x88\xb4Z'))
+        try:
+            _codecs.register_error('strict', handler)
+            for operation, expected in operations:
+                events[:] = []
+                self.assertEqual(operation(), expected)
+                self.assertEqual(events, [('ascii', 0, 1)])
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_decode_error_handler_is_cached_within_one_conversion(self):
+        events = []
+        previous = _codecs.lookup_error('strict')
+        def second(error):
+            events.append('second')
+            return u'B', error.end
+        def first(error):
+            events.append('first')
+            _codecs.register_error('strict', second)
+            return u'A', error.end
+        try:
+            _codecs.register_error('strict', first)
+            self.assertEqual('\xff\xff'.decode('ascii'), u'AA')
+            self.assertEqual(events, ['first', 'first'])
+            self.assertEqual(unicode('\xff'), u'B')
+            self.assertEqual(events, ['first', 'first', 'second'])
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_join_rechecks_list_after_item_codec_callback(self):
+        previous = _codecs.lookup_error('strict')
+        source = []
+        def handler(error):
+            source[:] = replacement
+            return u'Z', error.end
+        try:
+            _codecs.register_error('strict', handler)
+            for replacement, expected in (([], u'a|Z'),
+                                           ([u'x', u'y', u'c'], u'a|Z|c')):
+                source[:] = [u'a', '\xff', u'b']
+                self.assertEqual(u'|'.join(source), expected)
+            # CPython retains its default space if a singleton grows while
+            # decoding its only item, before a separator was needed.
+            replacement = [u'x', u'y']
+            source[:] = ['\xff']
+            self.assertEqual(u'|'.join(source), u'Z y')
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_join_rechecks_list_after_separator_codec_callback(self):
+        previous = _codecs.lookup_error('strict')
+        source = []
+        def handler(error):
+            source[:] = replacement
+            return u'Z', error.end
+        try:
+            _codecs.register_error('strict', handler)
+            for replacement, expected in (([], u''), ([u'x'], u'x'),
+                                           ([u'x', u'y', u'z'], u'xZyZz')):
+                source[:] = [u'a', u'b']
+                self.assertEqual('\xff'.join(source), expected)
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_mixed_unicode_comparison_preserves_callback_failures(self):
+        previous = _codecs.lookup_error('strict')
+        marker = RuntimeError('codec failed')
+        def handler(error):
+            raise marker
+        try:
+            _codecs.register_error('strict', handler)
+            for operation in (lambda: '\xff' == u'Z',
+                              lambda: u'Z' != '\xff',
+                              lambda: '\xff' < u'Z',
+                              lambda: '\xff' in u'Z'):
+                with self.assertRaises(RuntimeError) as caught:
+                    operation()
+                self.assertIs(caught.exception, marker)
+        finally:
+            _codecs.register_error('strict', previous)
+
     def test_hex_codec_requires_strict_errors_before_source_conversion(self):
         for transform in (_codecs.encode, _codecs.decode):
             for source in ('ab', u'ab', u'\xff', object()):

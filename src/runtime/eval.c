@@ -3874,7 +3874,6 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
                 break;
             }
             tinypy_value_t *extra = tinypy_next(iterator, &iteration_error);
-            TINYPY_DECREF(iterator);
             if (extra != NULL || tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
                 if (extra != NULL) {
                     TINYPY_DECREF(extra);
@@ -3883,9 +3882,11 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
                 for (; index != argument; ++index) {
                     TINYPY_DECREF(unpacked_items[index]);
                 }
+                TINYPY_DECREF(iterator);
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
                 break;
             }
+            TINYPY_DECREF(iterator);
             frame->stack_top += argument;
         }
         break;

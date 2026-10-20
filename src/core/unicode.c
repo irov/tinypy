@@ -585,6 +585,17 @@ tinypy_bool_t tinypy_internal_unicode_is_numeric(uint32_t code_point) {
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_text_to_unicode(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *result = tinypy_internal_immutable_subclass_copy(&vm->types[TINYPY_VALUE_UNICODE], TINYPY_RET(value), out_error);
+
+        return result;
+    }
+    tinypy_value_t *result = tinypy_internal_text_codec_builtin(vm, value, TINYPY_INTERNAL_BUILTIN_CODEC_ASCII, NULL, NULL, TINYPY_TRUE, out_error);
+
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_text_ascii_compatible(tinypy_vm_t *vm, const tinypy_value_t *value, tinypy_error_t **out_error) {
     size_t index;
 

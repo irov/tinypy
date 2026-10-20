@@ -1083,8 +1083,20 @@ static tinypy_value_t *__tinypy_operator_concat_text(tinypy_vm_t *vm, tinypy_val
     uint8_t *output;
 
     if (unicode != 0) {
-        if (tinypy_internal_text_ascii_compatible(vm, left, out_error) == 0 || tinypy_internal_text_ascii_compatible(vm, right, out_error) == 0) {
-            return NULL;
+        tinypy_value_t *string = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_STRING ? left : right;
+
+        if (TINYPY_VALUE_KIND(string) == TINYPY_VALUE_STRING && tinypy_internal_ascii_prefix(TINYPY_TEXT_BYTES(string), TINYPY_TEXT_BYTE_SIZE(string)) != TINYPY_TEXT_BYTE_SIZE(string)) {
+            tinypy_value_t *decoded = tinypy_internal_text_to_unicode(vm, string, out_error);
+
+            if (decoded == NULL) {
+                return NULL;
+            }
+            tinypy_value_t *result = string == left
+                ? __tinypy_operator_concat_text(vm, decoded, right, TINYPY_TRUE, out_error)
+                : __tinypy_operator_concat_text(vm, left, decoded, TINYPY_TRUE, out_error);
+
+            TINYPY_DECREF(decoded);
+            return result;
         }
         left_bytes = TINYPY_TEXT_BYTES(left);
         left_size = TINYPY_TEXT_BYTE_SIZE(left);

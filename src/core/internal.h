@@ -2400,6 +2400,8 @@ tinypy_bool_t tinypy_internal_unicode_is_decimal(uint32_t code_point);
 tinypy_bool_t tinypy_internal_unicode_is_numeric(uint32_t code_point);
 tinypy_bool_t tinypy_internal_unicode_decimal_digit(uint32_t code_point, uint8_t *out_digit);
 tinypy_bool_t tinypy_internal_text_ascii_compatible(tinypy_vm_t *vm, const tinypy_value_t *value, tinypy_error_t **out_error);
+/* Owned Unicode from a str/unicode, without dispatching __unicode__. */
+tinypy_value_t *tinypy_internal_text_to_unicode(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_raise_ascii_decode_error(tinypy_vm_t *vm, const tinypy_value_t *text, size_t start, size_t end, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_string_size_check(tinypy_vm_t *vm, uint64_t size, tinypy_error_t **out_error);
 void tinypy_internal_raise_text_exception(tinypy_vm_t *vm, tinypy_exception_type_index_e index, const void *bytes, size_t size, tinypy_error_t **out_error);
