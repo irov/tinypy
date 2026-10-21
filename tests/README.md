@@ -32,8 +32,8 @@ The run includes:
 3. Every selected portable case against external CPython 2.7.18, with discovery
    validation, exact source hashes for unchanged vendor modules, and zero
    allocator balance for each tinypy process. The current inventory contains 58
-   project-authored modules with 2,193 cases and 210 selected vendor cases,
-   for 2,403 selected cases in total.
+   project-authored modules with 2,236 cases and 210 selected vendor cases,
+   for 2,446 selected cases in total.
 4. A fixed matrix of 15,040 numeric and sequence outcomes. It compares values,
    result types and exception classes, including division, reflected builtin
    numeric combinations, infinities, NaN, subnormal/maximum finite doubles,
@@ -100,7 +100,7 @@ The run includes:
 The portable report is rejected for missing/duplicate cases, ordinary skips,
 DEFER, reference failures, or inconsistent counts. Only the four declared
 ownership-cycle adaptations may skip in Release; Debug must exercise the
-detector. Acceptance requires 2,403 PASS in Debug and 2,399 PASS with those
+detector. Acceptance requires 2,446 PASS in Debug and 2,442 PASS with those
 four expected detector SKIP results in Release. These are inventory requirements;
 the generated report records which profiles completed acceptance.
 Python-visible conversion errors, callbacks and error ordering remain
@@ -112,7 +112,7 @@ stage's process tree, preserving captured output and a failed report.
 Reverse inventories require every local test file and runtime matrix to be
 registered and assigned to a coverage domain.
 
-The twelfth-pass frozen inventory passed all 273 stages on macOS arm64 in
+The current frozen inventory passed all 273 stages on macOS arm64 in
 Debug, Release, ASan/UBSan and Release LTO. The source/test/SPEC fingerprint
 matches after the run. Results and the historical baselines are recorded in
 [REVIEW_STATUS.md](upstream/REVIEW_STATUS.md).

@@ -1994,3 +1994,56 @@ tinypy_bool_t tinypy_internal_compare_three_way(tinypy_value_t *left, tinypy_val
     __tinypy_comparison_leave(vm);
     return result;
 }
+//////////////////////////////////////////////////////////////////////////
+/* The rich slot returns NotImplemented after both classic halves; the
+   three-way slot returns 2 when neither half implements the comparison. */
+static tinypy_value_t *__tinypy_comparison_classic_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    int32_t operation = (int32_t)(intptr_t)user_data;
+
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_bool_t handled = TINYPY_FALSE;
+    tinypy_value_t *result = NULL;
+
+    if (operation >= 0) {
+        if (__tinypy_comparison_try_rich_slot(left, right, (tinypy_compare_operation_e)operation, &handled, &result, out_error) == 0) {
+            return NULL;
+        }
+        if (handled != 0) {
+            return result;
+        }
+        return TINYPY_RET_NOT_IMPLEMENTED(vm);
+    }
+    if (TINYPY_VALUE_KIND(right) != TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("instance.__cmp__(x,y) requires y to be a 'instance', not a '"),
+            TINYPY_MESSAGE_PART_TYPE_NAME(right), TINYPY_MESSAGE_PART_LITERAL("'")
+        };
+
+        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+        return NULL;
+    }
+    int32_t order;
+
+    if (__tinypy_comparison_try_three_way_pair(left, right, &order, &handled, out_error) == 0) {
+        return NULL;
+    }
+    result = tinypy_integer_from_i64(vm, handled != 0 ? order : INT32_C(2));
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_initialize_classic_comparison_methods(tinypy_vm_t *vm) {
+    tinypy_type_t *type = &vm->types[TINYPY_VALUE_OLD_INSTANCE];
+
+    for (int32_t operation = 0; operation < 6; ++operation) {
+        tinypy_value_t *name = tinypy_internal_dispatch_key(vm, (tinypy_internal_dispatch_e)(TINYPY_INTERNAL_DISPATCH_LT + operation));
+
+        tinypy_internal_type_add_method(type, name, __tinypy_comparison_classic_method, (void *)(intptr_t)operation, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    }
+    tinypy_internal_type_add_method(type, vm->internal_special_cmp_key, __tinypy_comparison_classic_method, (void *)(intptr_t)-1, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+}
+//////////////////////////////////////////////////////////////////////////

@@ -447,7 +447,7 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
         }
         final = integer != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     }
-    tinypy_value_t *text_input = __tinypy_codecs_text_input(vm, input, decode, out_error);
+    tinypy_value_t *text_input = decode != 0 ? TINYPY_RET(input) : __tinypy_codecs_text_input(vm, input, TINYPY_FALSE, out_error);
     if (text_input == NULL) {
         goto cleanup_input;
     }

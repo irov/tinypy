@@ -1,9 +1,69 @@
 """Project-authored formatting vectors and conversion-protocol checks."""
 
 import unittest
+import sys
 
 
 class PercentFormat(unittest.TestCase):
+    def test_mapping_unicode_restart_repeats_lookup_with_unicode_key(self):
+        events = []
+        class Mapping(object):
+            def __getitem__(self, key):
+                events.append((type(key), key))
+                return u'A' if len(events) == 1 else u'B'
+        for pattern in ('%(k)s', '%(k)c', '%(k)3s', '%(k).1s'):
+            events[:] = []
+            self.assertEqual(pattern % Mapping(), u'  B' if pattern == '%(k)3s' else u'B')
+            self.assertEqual(events, [(str, 'k'), (unicode, u'k')])
+
+    def test_mapping_unicode_restart_preserves_second_lookup_error(self):
+        events = []
+        marker = LookupError('second lookup')
+        outer = ValueError('outer')
+        class Mapping(object):
+            def __getitem__(self, key):
+                events.append(type(key))
+                if len(events) == 2:
+                    raise marker
+                return u'A'
+        def check_failure():
+            with self.assertRaises(LookupError) as caught:
+                '%(k)s' % Mapping()
+            self.assertIs(caught.exception, marker)
+        try:
+            raise outer
+        except ValueError:
+            check_failure()
+            self.assertIs(sys.exc_info()[1], outer)
+        self.assertEqual(events, [str, unicode])
+
+    def test_mapping_unicode_restart_keeps_prefix_and_converts_remaining_keys(self):
+        events = []
+        class Mapping(object):
+            def __getitem__(self, key):
+                events.append((type(key), key))
+                if key == 'head':
+                    return 'H'
+                return u'U' if key == 'wide' else u'T'
+        self.assertEqual('%(head)s:%(wide)s/%(tail)s' % Mapping(), u'H:U/T')
+        self.assertEqual(events, [(str, 'head'), (str, 'wide'),
+                                  (unicode, u'wide'), (unicode, u'tail')])
+
+    def test_mapping_unicode_restart_releases_discarded_str_result(self):
+        events = []
+        class First(object):
+            def __str__(self):
+                events.append('str')
+                return u'A'
+            def __del__(self):
+                events.append('released')
+        class Mapping(object):
+            def __getitem__(self, key):
+                events.append(type(key).__name__)
+                return First() if type(key) is str else u'B'
+        self.assertEqual('%(k)s' % Mapping(), u'B')
+        self.assertEqual(events, ['str', 'str', 'released', 'unicode'])
+
     def test_mapping_lookup_order(self):
         class Lookup(object):
             def __init__(self):

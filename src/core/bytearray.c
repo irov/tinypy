@@ -1671,14 +1671,9 @@ static tinypy_value_t *__tinypy_bytearray_decode_method(tinypy_value_t *function
         result = tinypy_internal_codecs_transform_registered(vm, self, encoding, errors, TINYPY_TRUE, out_error);
     }
     else {
-        tinypy_value_t *string = tinypy_internal_string_from_bytes_checked(vm, TINYPY_BYTEARRAY_OBJECT(self)->bytes, TINYPY_SIZED_SIZE(self), out_error);
-
-        if (string != NULL) {
-            TINYPY_BYTEARRAY_OBJECT(self)->exports += 1U;
-            result = tinypy_internal_text_codec_builtin(vm, string, builtin, encoding, errors, TINYPY_TRUE, out_error);
-            TINYPY_BYTEARRAY_OBJECT(self)->exports -= 1U;
-            TINYPY_DECREF(string);
-        }
+        TINYPY_BYTEARRAY_OBJECT(self)->exports += 1U;
+        result = tinypy_internal_text_codec_builtin(vm, self, builtin, encoding, errors, TINYPY_TRUE, out_error);
+        TINYPY_BYTEARRAY_OBJECT(self)->exports -= 1U;
     }
     if (errors != NULL) {
         TINYPY_DECREF(errors);

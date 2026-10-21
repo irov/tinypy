@@ -5,6 +5,127 @@ import unittest
 
 
 class ObjectEvaluationDeep(unittest.TestCase):
+    def test_super_dictionary_avoids_own_type_probe_before_target_mro(self):
+        events = []
+        class Key(str):
+            def __hash__(self):
+                return hash('__dict__')
+            def __eq__(self, other):
+                events.append(other)
+                return False
+        class Root(object):
+            pass
+        class Base(Root):
+            pass
+        Custom = type('Custom', (super,), {Key('noise'): 17})
+        owner = Base()
+        proxy = Custom(Base, owner)
+        events[:] = []
+        self.assertIs(proxy.__dict__, owner.__dict__)
+        self.assertEqual(events, [])
+
+    def test_super_fallback_reads_own_dictionary_in_every_binding_state(self):
+        class Root(object):
+            pass
+        class Base(Root):
+            pass
+        class Custom(super):
+            pass
+        owner = Base()
+        blank = super.__new__(Custom)
+        rebound = Custom(Base, owner)
+        super.__init__(rebound, Root, owner)
+        for proxy in (Custom(Base), Custom(Base, owner), Custom(Base, Base), blank, rebound):
+            proxy.payload = 73
+            self.assertEqual(proxy.payload, 73)
+            self.assertEqual(super.__getattribute__(proxy, 'payload'), 73)
+            self.assertEqual(object.__getattribute__(proxy, 'payload'), 73)
+
+    def test_super_fallback_keeps_instance_before_nondata_class_attribute(self):
+        class Base(object):
+            pass
+        class Custom(super):
+            payload = 'class'
+        proxy = Custom(Base)
+        proxy.payload = 'instance'
+        self.assertEqual(proxy.payload, 'instance')
+        del proxy.payload
+        self.assertEqual(proxy.payload, 'class')
+
+    def test_super_fallback_preserves_data_descriptors_and_getattr(self):
+        events = []
+        marker = LookupError('descriptor')
+        class Base(object):
+            pass
+        class Custom(super):
+            @property
+            def payload(self):
+                raise marker
+            def __getattr__(self, name):
+                events.append(name)
+                return 'fallback'
+        proxy = Custom(Base)
+        object.__getattribute__(proxy, '__dict__')['payload'] = 'hidden'
+        with self.assertRaises(LookupError) as caught:
+            unused = proxy.payload
+        self.assertIs(caught.exception, marker)
+        self.assertEqual(events, [])
+        proxy.local = 'local'
+        self.assertEqual(proxy.local, 'local')
+        self.assertEqual(proxy.missing, 'fallback')
+        self.assertEqual(events, ['missing'])
+
+    def test_super_dictionary_follows_bound_target_mro(self):
+        class Root(object):
+            pass
+        class Base(Root):
+            pass
+        class Custom(super):
+            pass
+        owner = Base()
+        owner.target = 7
+        proxy = Custom(Base, owner)
+        local = object.__getattribute__(proxy, '__dict__')
+        local['local'] = 11
+        self.assertIs(proxy.__dict__, owner.__dict__)
+        self.assertIs(super.__getattribute__(proxy, '__dict__'), owner.__dict__)
+        self.assertEqual(local, {'local': 11})
+        self.assertEqual(proxy.__dict__, {'target': 7})
+        self.assertIs(proxy.__class__, Custom)
+
+    def test_super_dictionary_returns_to_local_after_unbinding(self):
+        class Root(object):
+            pass
+        class Base(Root):
+            pass
+        class Custom(super):
+            pass
+        owner = Base()
+        proxy = Custom(Base, owner)
+        local = object.__getattribute__(proxy, '__dict__')
+        local['local'] = 17
+        self.assertIs(proxy.__dict__, owner.__dict__)
+        super.__init__(proxy, Base)
+        self.assertIs(proxy.__dict__, local)
+        self.assertEqual(proxy.local, 17)
+        super.__init__(proxy, Base, owner)
+        self.assertIs(proxy.__dict__, owner.__dict__)
+        self.assertEqual(proxy.local, 17)
+
+    def test_super_target_mro_precedes_own_dictionary_and_descriptors(self):
+        class Root(object):
+            payload = 'target'
+        class Base(Root):
+            pass
+        class Custom(super):
+            @property
+            def payload(self):
+                return 'property'
+        proxy = Custom(Base, Base())
+        object.__getattribute__(proxy, '__dict__')['payload'] = 'instance'
+        self.assertEqual(proxy.payload, 'target')
+        self.assertEqual(object.__getattribute__(proxy, 'payload'), 'property')
+
     def test_super_none_is_unbound(self):
         class Base(object):
             marker = 23

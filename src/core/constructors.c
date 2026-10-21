@@ -1381,12 +1381,28 @@ static void __tinypy_constructor_conversion_error(tinypy_vm_t *vm, const char *p
 //////////////////////////////////////////////////////////////////////////
 /* instance_int, instance_long and instance_float look the conversion up
    like any attribute of the classic instance, so a missing one is the
-   instance's AttributeError. */
+   instance's AttributeError. instance_index translates a missing attribute
+   into TypeError, while preserving exceptions from calling the method. */
 tinypy_value_t *tinypy_internal_call_classic_conversion(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_value_t *method = tinypy_internal_object_get_attr_key(value, name, out_error);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_value_t *method;
 
-    if (method == NULL) {
-        return NULL;
+    if (name == vm->internal_special_index_key) {
+        int32_t found = tinypy_internal_object_get_optional_attr_key(value, name, &method, out_error);
+
+        if (found < 0) {
+            return NULL;
+        }
+        if (found == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object cannot be interpreted as an index", out_error);
+            return NULL;
+        }
+    }
+    else {
+        method = tinypy_internal_object_get_attr_key(value, name, out_error);
+        if (method == NULL) {
+            return NULL;
+        }
     }
     tinypy_value_t *args = TINYPY_RET_EMPTY_TUPLE(TINYPY_VALUE_VM(value));
     tinypy_value_t *result = tinypy_call(method, args, NULL, out_error);
@@ -1969,7 +1985,7 @@ static tinypy_value_t *__tinypy_constructor_unicode_value(tinypy_type_t *type, t
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, kind == TINYPY_VALUE_UNICODE ? "decoding Unicode is not supported" : "decoding bytearray is not supported", out_error);
             return NULL;
         }
-        if (kind == TINYPY_VALUE_BUFFER) {
+        if (kind == TINYPY_VALUE_BUFFER && TINYPY_VALUE_KIND(TINYPY_BUFFER_OBJECT(value)->owner) == TINYPY_VALUE_UNICODE) {
             /* PyObject_AsCharBuffer reads the character buffer of a
                legacy buffer, not its raw code units. */
             source = tinypy_internal_buffer_character_string(value, out_error);
@@ -1977,7 +1993,7 @@ static tinypy_value_t *__tinypy_constructor_unicode_value(tinypy_type_t *type, t
                 return NULL;
             }
         }
-        else if (kind != TINYPY_VALUE_STRING) {
+        else if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_BUFFER) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("coercing to Unicode: need string or buffer, "),
                 TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 80U),
@@ -1992,7 +2008,11 @@ static tinypy_value_t *__tinypy_constructor_unicode_value(tinypy_type_t *type, t
            the decoder must return unicode, which unicode() returns as it
            is. */
         tinypy_internal_builtin_codec_e builtin = encoding != NULL ? tinypy_internal_codecs_builtin(vm, encoding) : TINYPY_INTERNAL_BUILTIN_CODEC_ASCII;
-        if (TINYPY_TEXT_BYTE_SIZE(source) == 0U) {
+        const uint8_t *source_bytes;
+        size_t source_size;
+
+        (void)tinypy_internal_bytes_view(source, &source_bytes, &source_size);
+        if (source_size == 0U) {
             result = tinypy_unicode_from_utf8(vm, NULL, 0U);
         }
         else if (builtin <= TINYPY_INTERNAL_BUILTIN_CODEC_LATIN1) {
@@ -2545,6 +2565,10 @@ static tinypy_value_t *__tinypy_constructor_object_getattribute_method(tinypy_va
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *name = TINYPY_TUPLE_GET(args, 1U);
+    if ((const tinypy_type_t *)user_data == &vm->types[TINYPY_VALUE_OLD_INSTANCE] && TINYPY_VALUE_KIND(name) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(name) != TINYPY_VALUE_UNICODE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "attribute name must be a string", out_error);
+        return NULL;
+    }
     if (__tinypy_constructor_object_attribute_name(vm, name, out_error) == TINYPY_FALSE) {
         return NULL;
     }
@@ -2845,6 +2869,7 @@ static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t 
     tinypy_value_t *list_items = NULL;
     tinypy_value_t *dict_items = NULL;
     tinypy_value_t *result = NULL;
+    tinypy_bool_t required_state = TINYPY_FALSE;
 
     if (class_value == NULL) {
         return NULL;
@@ -2880,6 +2905,9 @@ static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t 
     }
     else {
         new_arguments = TINYPY_RET_EMPTY_TUPLE(vm);
+        tinypy_value_type_e kind = TINYPY_VALUE_KIND(self);
+
+        required_state = kind != TINYPY_VALUE_LIST && kind != TINYPY_VALUE_DICT ? TINYPY_TRUE : TINYPY_FALSE;
     }
     tinypy_value_t *getstate = __tinypy_constructor_reduce_optional_attribute(self, vm->internal_special_getstate_key);
     if (getstate != NULL) {
@@ -2890,6 +2918,19 @@ static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t 
         }
     }
     else {
+        /* reduce_2 cannot restore a variable-sized value without constructor
+           arguments or a custom state, except for list/dict iterators.
+           CPython unicode has zero tp_itemsize; TinyPy stores text inline. */
+        if (required_state != 0 && self->type->item_size != 0U && TINYPY_VALUE_KIND(self) != TINYPY_VALUE_UNICODE) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("can't pickle "),
+                TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(self, 200U),
+                TINYPY_MESSAGE_PART_LITERAL(" objects")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+            goto cleanup;
+        }
         state = __tinypy_constructor_reduce_optional_attribute(self, vm->internal_special_dict_key);
         if (state == NULL) {
             state = TINYPY_RET_NONE(vm);
@@ -2935,25 +2976,27 @@ static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t 
     result = tinypy_tuple_from_items(vm, reduce_items, 5U);
 
 cleanup:
-    if (dict_items != NULL) {
-        TINYPY_DECREF(dict_items);
-    }
-    if (list_items != NULL) {
-        TINYPY_DECREF(list_items);
-    }
-    if (state != NULL) {
-        TINYPY_DECREF(state);
+    /* reduce_2 releases arguments before state and then the iterators;
+       temporary finalizers can observe every step on a failure path. */
+    TINYPY_DECREF(class_value);
+    if (new_arguments != NULL) {
+        TINYPY_DECREF(new_arguments);
     }
     if (constructor_arguments != NULL) {
         TINYPY_DECREF(constructor_arguments);
     }
-    if (new_arguments != NULL) {
-        TINYPY_DECREF(new_arguments);
+    if (state != NULL) {
+        TINYPY_DECREF(state);
+    }
+    if (list_items != NULL) {
+        TINYPY_DECREF(list_items);
+    }
+    if (dict_items != NULL) {
+        TINYPY_DECREF(dict_items);
     }
     if (newobj != NULL) {
         TINYPY_DECREF(newobj);
     }
-    TINYPY_DECREF(class_value);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

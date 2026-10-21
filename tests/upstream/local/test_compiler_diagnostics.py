@@ -1,9 +1,22 @@
 """Project-authored Python 2 decoder phase and diagnostic regressions."""
 
 import unittest
+import _codecs
 
 
 class CompilerDiagnostics(unittest.TestCase):
+    def test_adjacent_literal_wraps_only_unicode_error_from_codec_callback(self):
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            raise UnicodeError('literal callback')
+        try:
+            _codecs.register_error('strict', handler)
+            error = self.syntax_error("u'a' '\\xff'")
+            self.assertEqual(error.msg, '(unicode error) literal callback')
+            self.assertEqual((error.lineno, error.offset, error.text), (1, None, None))
+        finally:
+            _codecs.register_error('strict', previous)
+
     def syntax_error(self, source, mode='eval'):
         try:
             compile(source, '<diagnostic>', mode)

@@ -1783,20 +1783,24 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
             TINYPY_DECREF(getattr_hook);
         }
     }
-    /* A heap type may define a name that the builtin attributes also
-       provide. Of the kinds a subclass may derive, only partial provides
-       ordinary names, so the type is asked about those of a partial alone. */
-    tinypy_bool_t canonical_key = key->type == &vm->types[TINYPY_VALUE_STRING] ? TINYPY_TRUE : TINYPY_FALSE;
-    tinypy_bool_t ordinary_name = name_size < 2U || name[0] != '_' ? TINYPY_TRUE : TINYPY_FALSE;
-    tinypy_bool_t builtin_attribute = canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && ((kind != TINYPY_VALUE_INSTANCE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) || (ordinary_name != TINYPY_FALSE && kind != TINYPY_VALUE_PARTIAL)) ? TINYPY_TRUE : TINYPY_FALSE;
-    if (canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && builtin_attribute == TINYPY_FALSE) {
-        tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
-        builtin_attribute = attribute == NULL || TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_GETSET_DESCRIPTOR ? TINYPY_TRUE : TINYPY_FALSE;
-    }
-    if (builtin_attribute != TINYPY_FALSE) {
-        result = tinypy_internal_object_builtin_attribute(value, key);
-        if (result != NULL) {
-            return result;
+    /* super searches the target MRO before its own builtin attributes;
+       even a preliminary lookup of its own type can run key comparisons. */
+    if (kind != TINYPY_VALUE_SUPER) {
+        /* A heap type may define a name that the builtin attributes also
+           provide. Of the kinds a subclass may derive, only partial provides
+           ordinary names, so the type is asked about those of a partial alone. */
+        tinypy_bool_t canonical_key = key->type == &vm->types[TINYPY_VALUE_STRING] ? TINYPY_TRUE : TINYPY_FALSE;
+        tinypy_bool_t ordinary_name = name_size < 2U || name[0] != '_' ? TINYPY_TRUE : TINYPY_FALSE;
+        tinypy_bool_t builtin_attribute = canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && ((kind != TINYPY_VALUE_INSTANCE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) || (ordinary_name != TINYPY_FALSE && kind != TINYPY_VALUE_PARTIAL)) ? TINYPY_TRUE : TINYPY_FALSE;
+        if (canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && builtin_attribute == TINYPY_FALSE) {
+            tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
+            builtin_attribute = attribute == NULL || TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_GETSET_DESCRIPTOR ? TINYPY_TRUE : TINYPY_FALSE;
+        }
+        if (builtin_attribute != TINYPY_FALSE) {
+            result = tinypy_internal_object_builtin_attribute(value, key);
+            if (result != NULL) {
+                return result;
+            }
         }
     }
     /* It fetches __getattr__ before the generic lookup too, whose

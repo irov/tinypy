@@ -429,15 +429,21 @@ static tinypy_value_t *__tinypy_weakref_proxy_binary(tinypy_value_t *left, tinyp
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_proxy_get_attribute(tinypy_value_t *proxy, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_value_t *object = __tinypy_weakref_proxy_referent(proxy, out_error);
+    tinypy_value_t *attribute = __tinypy_weakref_proxy_binary(proxy, name, tinypy_object_get_attr_value, out_error);
 
-    if (object == NULL) {
+    return attribute;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The direct tp_getattro wrapper unwraps both operands before validating
+   the name; PyObject_GetAttr still validates names before entering the slot. */
+static tinypy_value_t *__tinypy_weakref_proxy_getattribute_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *attribute = tinypy_internal_object_get_attr_key(object, name, out_error);
+    tinypy_value_t *result = __tinypy_weakref_proxy_get_attribute(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), out_error);
 
-    TINYPY_DECREF(object);
-    return attribute;
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_weakref_proxy_set_attribute(tinypy_value_t *proxy, tinypy_value_t *name, tinypy_value_t *value, tinypy_error_t **out_error) {
@@ -639,14 +645,8 @@ static ptrdiff_t __tinypy_weakref_proxy_length(tinypy_value_t *proxy, tinypy_err
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_weakref_proxy_get_item(tinypy_value_t *proxy, tinypy_value_t *key, tinypy_error_t **out_error) {
-    tinypy_value_t *object = __tinypy_weakref_proxy_referent(proxy, out_error);
+    tinypy_value_t *item = __tinypy_weakref_proxy_binary(proxy, key, tinypy_get_item, out_error);
 
-    if (object == NULL) {
-        return NULL;
-    }
-    tinypy_value_t *item = tinypy_get_item(object, key, out_error);
-
-    TINYPY_DECREF(object);
     return item;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -783,10 +783,23 @@ static tinypy_value_t *__tinypy_weakref_proxy_power(tinypy_value_t *base, tinypy
         TINYPY_DECREF(base_object);
         return NULL;
     }
-    tinypy_value_t *result = modulus == NULL || TINYPY_VALUE_KIND(modulus) == TINYPY_VALUE_NONE
-                                 ? tinypy_power(base_object, exponent_object, out_error)
-                                 : tinypy_internal_power_modulo(base_object, exponent_object, modulus, out_error);
+    tinypy_value_t *modulus_object = NULL;
 
+    if (modulus != NULL) {
+        modulus_object = __tinypy_weakref_proxy_operand(vm, modulus, out_error);
+        if (modulus_object == NULL) {
+            TINYPY_DECREF(exponent_object);
+            TINYPY_DECREF(base_object);
+            return NULL;
+        }
+    }
+    tinypy_value_t *result = modulus_object == NULL || TINYPY_VALUE_KIND(modulus_object) == TINYPY_VALUE_NONE
+                                 ? tinypy_power(base_object, exponent_object, out_error)
+                                 : tinypy_internal_power_modulo(base_object, exponent_object, modulus_object, out_error);
+
+    if (modulus_object != NULL) {
+        TINYPY_DECREF(modulus_object);
+    }
     TINYPY_DECREF(exponent_object);
     TINYPY_DECREF(base_object);
     return result;
@@ -959,6 +972,11 @@ static tinypy_value_t *__tinypy_weakref_proxy_sequence_method(tinypy_value_t *fu
     if (tinypy_internal_native_method_arguments(function, args, kwargs, count, count, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
     }
+    if (operation == TINYPY_WEAKREF_PROXY_GET_ITEM) {
+        tinypy_value_t *item = __tinypy_weakref_proxy_get_item(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), out_error);
+
+        return item;
+    }
     tinypy_value_t *object = __tinypy_weakref_proxy_referent(TINYPY_TUPLE_GET(args, 0U), out_error);
     tinypy_value_t *result;
 
@@ -980,9 +998,6 @@ static tinypy_value_t *__tinypy_weakref_proxy_sequence_method(tinypy_value_t *fu
         if (result == NULL && tinypy_vm_has_error(vm) == 0 && (out_error == NULL || *out_error == NULL)) {
             tinypy_internal_exception_raise_stop_iteration(vm, out_error);
         }
-        break;
-    case TINYPY_WEAKREF_PROXY_GET_ITEM:
-        result = tinypy_get_item(object, TINYPY_TUPLE_GET(args, 1U), out_error);
         break;
     case TINYPY_WEAKREF_PROXY_DELETE_ITEM:
         result = tinypy_delete_item(object, TINYPY_TUPLE_GET(args, 1U), out_error) != 0 ? TINYPY_RET_NONE(vm) : NULL;
@@ -1025,17 +1040,24 @@ static tinypy_value_t *__tinypy_weakref_proxy_call_method(tinypy_value_t *functi
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The sequence, mapping, iteration and call wrappers that the proxy types
-   list for introspection describe the slots a proxy runs itself, which
-   they therefore do not override. */
+/* These wrappers describe slots the proxy runs itself, so they do not
+   override them. Power must keep its native ternary slot in every position. */
 tinypy_bool_t tinypy_internal_weakref_proxy_slot_wrapper(const tinypy_value_t *value, tinypy_value_t *attribute) {
     const tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
     if (__tinypy_weakref_is_proxy(vm, value) == TINYPY_FALSE || TINYPY_VALUE_KIND(attribute) != TINYPY_VALUE_NATIVE_FUNCTION) {
         return TINYPY_FALSE;
     }
-    tinypy_native_function_callback_t callback = TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->callback;
-    tinypy_bool_t slot_wrapper = callback == __tinypy_weakref_proxy_sequence_method || callback == __tinypy_weakref_proxy_call_method ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_native_function_object_t *native = TINYPY_NATIVE_FUNCTION_OBJECT(attribute);
+    tinypy_native_function_callback_t callback = native->callback;
+
+    if (callback == __tinypy_weakref_proxy_binary_method) {
+        intptr_t operation = (intptr_t)native->user_data;
+        tinypy_bool_t power_slot = operation == TINYPY_WEAKREF_PROXY_POWER || operation == TINYPY_WEAKREF_PROXY_POWER + TINYPY_WEAKREF_PROXY_REFLECTED_OFFSET ? TINYPY_TRUE : TINYPY_FALSE;
+
+        return power_slot;
+    }
+    tinypy_bool_t slot_wrapper = callback == __tinypy_weakref_proxy_sequence_method || callback == __tinypy_weakref_proxy_call_method || callback == __tinypy_weakref_proxy_getattribute_method ? TINYPY_TRUE : TINYPY_FALSE;
     return slot_wrapper;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1325,6 +1347,7 @@ static tinypy_type_t *__tinypy_weakref_proxy_type_new(tinypy_value_t *name, tiny
     type->create = NULL;
     type->flags = (type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
     tinypy_type_set_attr_key(type, type->vm->internal_special_hash_key, &vm->none_object.base);
+    tinypy_internal_type_add_method(type, vm->internal_special_getattribute_key, __tinypy_weakref_proxy_getattribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     tinypy_internal_type_add_method(type, vm->internal_special_delattr_key, __tinypy_weakref_proxy_delete_attribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_weakref_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
     tinypy_internal_type_add_method(type, vm->internal_special_cmp_key, __tinypy_weakref_proxy_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);

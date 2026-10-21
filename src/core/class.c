@@ -864,14 +864,174 @@ static tinypy_value_t *__tinypy_class_call_method(tinypy_value_t *function, tiny
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* classobj exposes class_repr, class_str and PyInstance_New as __repr__,
-   __str__ and __call__; instance has instance_new. */
+/* Native instance slots are also callable through type(instance). Their
+   implementations keep using the classic class and __getattr__ protocols. */
+static tinypy_value_t *__tinypy_classic_unary_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *name = tinypy_native_function_name(function);
+    tinypy_value_t *result;
+
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+
+    if (name == vm->internal_special_repr_key || name == vm->internal_special_str_key) {
+        result = tinypy_internal_object_call_representation(self, name, out_error);
+        return result;
+    }
+    if (name == vm->internal_special_iter_key) {
+        result = tinypy_iter(self, out_error);
+        return result;
+    }
+    if (name == vm->internal_special_next_key) {
+        result = tinypy_next(self, out_error);
+        if (result == NULL && tinypy_vm_has_error(vm) == 0 && (out_error == NULL || *out_error == NULL)) {
+            tinypy_internal_exception_raise_stop_iteration(vm, out_error);
+        }
+        return result;
+    }
+    if (name == vm->internal_special_nonzero_key) {
+        int32_t truth = tinypy_truth(self, out_error);
+
+        result = truth >= 0 ? tinypy_bool_from_i32(vm, truth) : NULL;
+        return result;
+    }
+    tinypy_bool_t handled;
+    if (name == vm->internal_special_int_key) {
+        result = tinypy_internal_call_int_conversion(self, &handled, out_error);
+        return result;
+    }
+    if (name == vm->internal_special_long_key) {
+        result = tinypy_internal_call_long_conversion(self, &handled, out_error);
+        return result;
+    }
+    result = tinypy_internal_call_classic_conversion(self, name, out_error);
+    if (result == NULL || name != vm->internal_special_length_key) {
+        return result;
+    }
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(result);
+    if (kind != TINYPY_VALUE_BOOL && kind != TINYPY_VALUE_INTEGER) {
+        TINYPY_DECREF(result);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__len__() should return an int", out_error);
+        return NULL;
+    }
+    int64_t length;
+
+    if (tinypy_internal_number_as_ssize(result, &length, out_error) == 0) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    TINYPY_DECREF(result);
+    if (length < 0) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__() should return >= 0", out_error);
+        return NULL;
+    }
+    result = tinypy_integer_from_i64(vm, length);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_classic_item_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *name = tinypy_native_function_name(function);
+    size_t count = (size_t)(uintptr_t)user_data;
+    tinypy_arity_style_e style = count == 2U ? TINYPY_ARITY_STYLE_UNPACK : TINYPY_ARITY_STYLE_WRAPPER;
+
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, count, count, style, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *key = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_t *result;
+    tinypy_bool_t assigned;
+
+    if (name == vm->internal_special_getitem_key) {
+        result = tinypy_get_item(self, key, out_error);
+        return result;
+    }
+    if (name == vm->internal_special_contains_key) {
+        int32_t contained = tinypy_contains(self, key, out_error);
+
+        result = contained >= 0 ? tinypy_bool_from_i32(vm, contained) : NULL;
+        return result;
+    }
+    if (name == vm->internal_special_setattr_key || name == vm->internal_special_delattr_key) {
+        tinypy_value_type_e kind = TINYPY_VALUE_KIND(key);
+        if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "attribute name must be a string", out_error);
+            return NULL;
+        }
+        assigned = name == vm->internal_special_setattr_key
+            ? tinypy_object_set_attr_value(self, key, TINYPY_TUPLE_GET(args, 2U), out_error)
+            : tinypy_internal_object_delete_attr_protocol_key(self, key, out_error);
+    }
+    else {
+        assigned = name == vm->internal_special_setitem_key
+            ? tinypy_set_item(self, key, TINYPY_TUPLE_GET(args, 2U), out_error)
+            : tinypy_delete_item(self, key, out_error);
+    }
+    result = assigned != 0 ? TINYPY_RET_NONE(vm) : NULL;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_classic_call_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, NULL, 0U, SIZE_MAX, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *const *items = tinypy_internal_tuple_items(args);
+    tinypy_value_t *arguments = tinypy_tuple_from_items(vm, items + 1U, TINYPY_TUPLE_SIZE(args) - 1U);
+    tinypy_value_t *result = tinypy_call(items[0], arguments, kwargs, out_error);
+
+    TINYPY_DECREF(arguments);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_classic_add_methods(tinypy_vm_t *vm) {
+    tinypy_type_t *type = &vm->types[TINYPY_VALUE_OLD_INSTANCE];
+    tinypy_value_t *unary[] = {
+        vm->internal_special_pos_key, vm->internal_special_neg_key, vm->internal_special_abs_key, vm->internal_special_invert_key,
+        vm->internal_special_int_key, vm->internal_special_long_key, vm->internal_special_float_key,
+        vm->internal_special_oct_key, vm->internal_special_hex_key, vm->internal_special_index_key,
+        vm->internal_special_nonzero_key, vm->internal_special_length_key, vm->internal_special_iter_key, vm->internal_special_next_key,
+        vm->internal_special_repr_key, vm->internal_special_str_key
+    };
+    struct {
+        tinypy_value_t *name;
+        size_t count;
+    } items[] = {
+        {vm->internal_special_getitem_key, 1U}, {vm->internal_special_setitem_key, 2U}, {vm->internal_special_delitem_key, 1U},
+        {vm->internal_special_contains_key, 1U}, {vm->internal_special_setattr_key, 2U}, {vm->internal_special_delattr_key, 1U}
+    };
+    tinypy_value_t *slices[] = {vm->internal_special_getslice_key, vm->internal_special_setslice_key, vm->internal_special_delslice_key};
+
+    for (size_t index = 0U; index < sizeof(unary) / sizeof(unary[0]); ++index) {
+        tinypy_internal_type_add_method(type, unary[index], __tinypy_classic_unary_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    }
+    for (size_t index = 0U; index < sizeof(items) / sizeof(items[0]); ++index) {
+        tinypy_internal_type_add_method(type, items[index].name, __tinypy_classic_item_method, (void *)(uintptr_t)items[index].count, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    }
+    for (size_t index = 0U; index < sizeof(slices) / sizeof(slices[0]); ++index) {
+        tinypy_internal_type_add_method(type, slices[index], tinypy_internal_classic_slice_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    }
+    tinypy_internal_type_add_method(type, vm->internal_special_call_key, __tinypy_classic_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    tinypy_internal_type_add_method(type, vm->internal_special_hash_key, tinypy_internal_hash_builtin_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    tinypy_internal_initialize_classic_operator_methods(vm);
+    tinypy_internal_initialize_classic_comparison_methods(vm);
+}
+//////////////////////////////////////////////////////////////////////////
+/* Classic classes expose class_repr, class_str and PyInstance_New; the
+   instance type exposes its protocol slots as native wrappers. */
 void tinypy_internal_initialize_class_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_CLASS];
     tinypy_type_t *instance_type = &vm->types[TINYPY_VALUE_OLD_INSTANCE];
 
     instance_type->create = tinypy_internal_old_instance_create;
     tinypy_internal_constructor_add_builtin_new(instance_type);
+    __tinypy_classic_add_methods(vm);
 
     tinypy_internal_constructor_add_builtin_new(type);
     tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_class_representation_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

@@ -113,13 +113,103 @@ The final source/test/SPEC SHA-256 is
 An additional 816-outcome callback/cleanup product matches CPython in each
 profile with zero outstanding allocations and clean diagnostics.
 
+The next correction adds 14 portable regressions for three audited families.
+ASCII/UTF-8 decoders read current unread bytes after handler and position
+callbacks over bytearray, legacy buffer and memoryview input. The exception
+retains its original snapshot; subsequent ranges/reasons use current input,
+and direct bytearray exports remain held until success or failure cleanup.
+Byte percent formatting always restarts the Unicode parser when promoted,
+including ASCII-only remainders, repeating mapping lookups with Unicode keys
+and preserving their errors and temporary-release order. Adjacent mixed
+literals use actual default-codec replacements, retain non-UnicodeError
+identity, and wrap UnicodeError as a compiler diagnostic. Large literal runs
+still concatenate in linear time. The selected inventory is now 2,417 cases,
+with the existing four Release/LTO detector adaptations.
+
+This three-family correction passes all 273 validation stages on macOS arm64
+in 388.6 recorded stage seconds: 2,417 portable PASS in Debug/sanitize and
+2,413 PASS plus four declared detector SKIP in Release/LTO. All 141 native
+groups, 90 host/API/tool checks, 43 runtime matrices and 11,679 compiler
+comparisons per profile pass, together with strict builds, symbol audits and
+allocator accounting. The post-run source/test/SPEC SHA-256 matches
+`cf4c0188f7f9387809414dba2ce294c25230e2c31b2b1a46635fd3cf27987090`.
+The accepted report is `/private/tmp/tinypy-three-fix-validation/report.json`.
+An additional deterministic 662-outcome callback product matches CPython
+in each profile (2,648 comparisons), with zero outstanding allocations and
+clean diagnostics; its report is
+`/private/tmp/tinypy-three-fix-final-probes/report.json`.
+
+The next correction adds 16 portable regressions for four audited families.
+Weak proxies unwrap both operands of subscription, and every operand of
+ternary power, including a proxy used only as exponent or modulus. Direct
+proxy `__getattribute__` unwraps its name before the attribute slot validates
+it; ordinary `getattr` retains its earlier name validation. Assignment,
+deletion and membership continue to pass their raw key/value operands.
+The classic `instance` type now exposes its native protocol wrappers through
+its existing operator, coercion, comparison, conversion and item algorithms.
+Direct legacy slice wrappers preserve signed bounds without calling `__len__`.
+The selected inventory is now 2,433 cases, with the existing four Release/LTO
+detector adaptations.
+
+CPython 2.7.18 exposes `instance.__ipow__` through `wrap_binaryfunc`, although
+`instance_ipow` has a ternary C signature. Successful direct calls can use an
+uninitialized modulus and crash the macOS arm64 oracle. The portable tests
+exercise inplace power through its ordinary operator and check the direct
+wrapper's arity; TinyPy gives the two-operand wrapper a defined None modulus.
+The external direct-wrapper product excludes that undefined oracle call.
+
+This four-family correction passes all 273 validation stages on macOS arm64
+in 321.1 recorded stage seconds: 2,433 portable PASS in Debug/sanitize and
+2,429 PASS plus the existing four detector SKIP in Release/LTO. Every profile
+passes all 141 native groups, 43 runtime matrices with 361,017 outcomes and
+11,679 compiler comparisons. All 90 host/API/tool checks, strict builds,
+symbol audits, allocator accounting and sanitizer checks pass. The post-run
+source/test/SPEC SHA-256 matches
+`5b3993bc5e91340473beea35ab1baa1772bc0ef6ddaa2a90f5eb9f77be490066`.
+The accepted report is `/private/tmp/tinypy-four-fix-validation/report.json`.
+An additional 2,838-outcome product combines the original audit witnesses,
+1,008 direct classic-wrapper observations and the previous callback products.
+It matches CPython in each profile (11,352 comparisons), with zero outstanding
+allocations and clean diagnostics. Script hashes and the oracle exclusions
+are recorded in `/private/tmp/tinypy-four-fix-final-probes/report.json`.
+
+The next correction adds 13 portable regressions for four super/reduction
+findings. After the target MRO misses, super reuses generic attribute lookup,
+including its own instance dictionary and descriptor precedence. Its target
+MRO also decides `__dict__`, before any builtin dictionary shortcut or own-type
+key-comparison callbacks; explicit
+`object.__getattribute__` still accesses the wrapper dictionary. Protocol 2+
+reduction rejects variable-sized values when constructor arguments and custom
+state are unavailable, while retaining list/dict iterator state and CPython's
+fixed-size Unicode behavior. Reduction failure releases arguments before
+state, then its iterators, preserving callback order and the original error.
+The selected inventory is now 2,446 cases, with the existing four Release/LTO
+detector adaptations.
+
+This super/reduction correction passes all 273 validation stages on macOS
+arm64 in 352.3 recorded stage seconds: 2,446 portable PASS in Debug/sanitize
+and 2,442 PASS plus the four declared detector SKIP in Release/LTO. All 141
+native groups, 90 host/API/tool checks, 43 runtime matrices with 361,017
+outcomes per profile and 11,679 compiler comparisons per profile pass, together
+with strict builds, symbol audits, allocator accounting and sanitizer checks.
+The post-run source/test/SPEC SHA-256 matches
+`2ff9de0c78e0efad4bcaa51b61951b511c799a2d696c3517ed1b7179736b856a`.
+The accepted report is `/private/tmp/tinypy-super-reduce-validation/report.json`.
+An additional 2,561-outcome product per profile repeats the original audit
+witnesses and checks the super own-type key-comparison boundary. All 10,244
+comparisons match CPython, with zero outstanding allocations and clean
+diagnostics. The script hashes and results are recorded in
+`/private/tmp/tinypy-super-reduce-final-probes/report.json`.
+
 Primary references:
 [bytearrayobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/bytearrayobject.c),
 [unicodeobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/unicodeobject.c),
 [codecs.c](https://github.com/python/cpython/blob/v2.7.18/Python/codecs.c),
 [hex_codec.py](https://github.com/python/cpython/blob/v2.7.18/Lib/encodings/hex_codec.py),
-[classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c)
-and [descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c).
+[classobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/classobject.c),
+[descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c),
+[weakrefobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/weakrefobject.c),
+and [typeobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/typeobject.c).
 
 ## Historical eleventh-pass follow-up
 

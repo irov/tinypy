@@ -1050,15 +1050,10 @@ static tinypy_value_t *__tinypy_item_offsets_slice(tinypy_vm_t *vm, int64_t star
 /* sq_slice and sq_ass_slice: __getslice__ and its siblings receive the
    offsets; a classic instance without them passes a slice of the offsets to
    __getitem__ and its siblings, as instance_slice does. */
-static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *item_name, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_item_call_offset_values(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *item_name, int64_t low, int64_t high, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_value_t *items[3];
-    int64_t low;
-    int64_t high;
 
-    if (__tinypy_item_slice_offsets(container, start, stop, &low, &high, out_error) == 0) {
-        return NULL;
-    }
     /* instance_slice finds __getslice__ and its siblings like any attribute
        of a classic instance, __getattr__ included. */
     tinypy_value_t *method = NULL;
@@ -1093,6 +1088,53 @@ static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tin
     tinypy_value_t *result = __tinypy_item_call_attribute(container, item_name, items, value != NULL ? 2U : 1U, out_error);
     TINYPY_DECREF(items[0]);
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *item_name, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error) {
+    int64_t low;
+    int64_t high;
+
+    if (__tinypy_item_slice_offsets(container, start, stop, &low, &high, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *result = __tinypy_item_call_offset_values(container, slice_name, item_name, low, high, value, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Calling an instance slice slot directly converts its C bounds without
+   the length adjustment performed by PySequence_GetSlice. */
+tinypy_value_t *tinypy_internal_classic_slice_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *name = tinypy_native_function_name(function);
+    tinypy_bool_t store = name == vm->internal_special_setslice_key;
+    size_t count = store != 0 ? 3U : 2U;
+    int64_t bounds[2];
+
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, count, count, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
+        return NULL;
+    }
+    for (size_t index = 0U; index < 2U; ++index) {
+        tinypy_value_t *bound = TINYPY_TUPLE_GET(args, index + 1U);
+
+        if (TINYPY_VALUE_KIND(bound) == TINYPY_VALUE_FLOAT) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument expected, got float", out_error);
+            return NULL;
+        }
+        if (tinypy_internal_number_as_i64(bound, &bounds[index], out_error) == 0) {
+            return NULL;
+        }
+    }
+    tinypy_value_t *item_name = name == vm->internal_special_getslice_key ? vm->internal_special_getitem_key
+        : store != 0 ? vm->internal_special_setitem_key : vm->internal_special_delitem_key;
+    tinypy_value_t *value = store != 0 ? TINYPY_TUPLE_GET(args, 3U) : NULL;
+    tinypy_value_t *result = __tinypy_item_call_offset_values(TINYPY_TUPLE_GET(args, 0U), name, item_name, bounds[0], bounds[1], value, out_error);
+
+    if (result == NULL || name == vm->internal_special_getslice_key) {
+        return result;
+    }
+    TINYPY_DECREF(result);
+    return TINYPY_RET_NONE(vm);
 }
 //////////////////////////////////////////////////////////////////////////
 /* Reads a slice bound that needs no conversion, an exact int, into an index;

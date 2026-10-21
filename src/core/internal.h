@@ -2399,10 +2399,8 @@ tinypy_bool_t tinypy_internal_unicode_is_linebreak(uint32_t code_point);
 tinypy_bool_t tinypy_internal_unicode_is_decimal(uint32_t code_point);
 tinypy_bool_t tinypy_internal_unicode_is_numeric(uint32_t code_point);
 tinypy_bool_t tinypy_internal_unicode_decimal_digit(uint32_t code_point, uint8_t *out_digit);
-tinypy_bool_t tinypy_internal_text_ascii_compatible(tinypy_vm_t *vm, const tinypy_value_t *value, tinypy_error_t **out_error);
 /* Owned Unicode from a str/unicode, without dispatching __unicode__. */
 tinypy_value_t *tinypy_internal_text_to_unicode(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error);
-tinypy_bool_t tinypy_internal_raise_ascii_decode_error(tinypy_vm_t *vm, const tinypy_value_t *text, size_t start, size_t end, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_string_size_check(tinypy_vm_t *vm, uint64_t size, tinypy_error_t **out_error);
 void tinypy_internal_raise_text_exception(tinypy_vm_t *vm, tinypy_exception_type_index_e index, const void *bytes, size_t size, tinypy_error_t **out_error);
 ptrdiff_t tinypy_internal_find_bytes(const uint8_t *haystack, size_t haystack_size, const uint8_t *needle, size_t needle_size, tinypy_bool_t reverse);
@@ -2617,6 +2615,7 @@ int32_t tinypy_internal_number_coerce(tinypy_value_t **left, tinypy_value_t **ri
 tinypy_value_t *tinypy_internal_sequence_concat(tinypy_value_t *sequence, tinypy_value_t *other, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_number_as_index(tinypy_value_t *value, tinypy_error_kind_e overflow_kind, int64_t *out_index, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_get_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_classic_slice_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_delete_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_get_item_builtin(tinypy_value_t *container, tinypy_value_t *key, tinypy_error_t **out_error);
@@ -2852,6 +2851,8 @@ tinypy_value_t *tinypy_internal_class_call(tinypy_value_t *callable, tinypy_valu
 tinypy_value_t *tinypy_internal_class_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_old_instance_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 void tinypy_internal_initialize_class_type(tinypy_vm_t *vm);
+void tinypy_internal_initialize_classic_operator_methods(tinypy_vm_t *vm);
+void tinypy_internal_initialize_classic_comparison_methods(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_class_get_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_old_instance_get_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_old_instance_get_method(tinypy_value_t *value, tinypy_value_t *name, tinypy_bool_t *out_unbound, tinypy_error_t **out_error);

@@ -596,17 +596,3 @@ tinypy_value_t *tinypy_internal_text_to_unicode(tinypy_vm_t *vm, tinypy_value_t 
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_bool_t tinypy_internal_text_ascii_compatible(tinypy_vm_t *vm, const tinypy_value_t *value, tinypy_error_t **out_error) {
-    size_t index;
-
-    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_STRING) {
-        return TINYPY_TRUE;
-    }
-    for (index = 0U; index < TINYPY_TEXT_BYTE_SIZE(value); ++index) {
-        if (TINYPY_TEXT_BYTES(value)[index] >= 0x80U) {
-            tinypy_bool_t return_value_1 = tinypy_internal_raise_ascii_decode_error(vm, value, index, index + 1U, out_error);
-            return return_value_1;
-        }
-    }
-    return TINYPY_TRUE;
-}

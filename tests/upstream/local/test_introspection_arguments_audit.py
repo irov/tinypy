@@ -17,6 +17,129 @@ def sample_generator():
 
 
 class IntrospectionArgumentsAudit(unittest.TestCase):
+    def test_reduce_rejects_variable_value_without_newargs_or_state(self):
+        for base, argument in ((tuple, (1, 2)), (str, 'abc'), (long, 7L)):
+            events = []
+            class Derived(base):
+                def __getattribute__(self, name):
+                    events.append(name)
+                    if name in ('__getnewargs__', '__getstate__'):
+                        raise AttributeError(name)
+                    return base.__getattribute__(self, name)
+            value = Derived(argument)
+            for method in (object.__reduce__, object.__reduce_ex__):
+                for protocol in (2, 3):
+                    events[:] = []
+                    with self.assertRaises(TypeError) as caught:
+                        method(value, protocol)
+                    self.assertEqual(caught.exception.args, ("can't pickle Derived objects",))
+                    self.assertNotIn('__dict__', events)
+
+    def test_reduce_custom_state_allows_missing_variable_constructor_args(self):
+        for base, argument in ((tuple, (1, 2)), (str, 'abc'), (long, 7L)):
+            state = {'custom': 73}
+            class Derived(base):
+                @property
+                def __getnewargs__(self):
+                    raise LookupError('missing constructor arguments')
+                def __getstate__(self):
+                    return state
+            value = Derived(argument)
+            for method in (object.__reduce__, object.__reduce_ex__):
+                reduced = method(value, 2)
+                self.assertEqual(reduced[1], (Derived,))
+                self.assertIs(reduced[2], state)
+
+    def test_reduce_keeps_fixed_size_and_unicode_default_state(self):
+        for base, argument in ((int, 7), (float, 7.5), (complex, 3j), (unicode, u'abc')):
+            class Derived(base):
+                @property
+                def __getnewargs__(self):
+                    raise AttributeError('missing constructor arguments')
+            value = Derived(argument)
+            value.field = 31
+            for method in (object.__reduce__, object.__reduce_ex__):
+                reduced = method(value, 2)
+                self.assertEqual(reduced[1], (Derived,))
+                self.assertEqual(reduced[2], {'field': 31})
+
+    def test_reduce_keeps_list_dict_items_without_constructor_arguments(self):
+        for base, argument in ((list, [1, 2]), (dict, {'a': 7})):
+            class Derived(base):
+                @property
+                def __getnewargs__(self):
+                    raise AttributeError('missing constructor arguments')
+            value = Derived(argument)
+            for method in (object.__reduce__, object.__reduce_ex__):
+                reduced = method(value, 2)
+                self.assertEqual(reduced[1], (Derived,))
+                selected = reduced[3] if base is list else reduced[4]
+                self.assertEqual(list(selected), [1, 2] if base is list else [('a', 7)])
+
+    def test_reduce_iterator_failure_releases_arguments_before_state(self):
+        events = []
+        marker = LookupError('iteration')
+        class Item(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                events.append(self.name)
+        def newargs(self):
+            return (Item('args'),)
+        def getstate(self):
+            return Item('state')
+        def failing(self):
+            raise marker
+        for base in (list, dict):
+            namespace = {'__getnewargs__': newargs, '__getstate__': getstate,
+                         '__iter__' if base is list else 'iteritems': failing}
+            Derived = type('Derived', (base,), namespace)
+            value = Derived()
+            for method in (object.__reduce__, object.__reduce_ex__):
+                events[:] = []
+                with self.assertRaises(LookupError) as caught:
+                    method(value, 2)
+                self.assertIs(caught.exception, marker)
+                self.assertEqual(events, ['args', 'state'])
+
+    def test_reduce_newobj_failure_releases_state_before_iterator(self):
+        import copy_reg
+        events = []
+        class Item(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                events.append(self.name)
+        class Iterator(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                raise StopIteration
+            def __del__(self):
+                events.append('iterator')
+        def newargs(self):
+            return (Item('args'),)
+        def getstate(self):
+            return Item('state')
+        def iterate(self):
+            return Iterator()
+        saved = copy_reg.__newobj__
+        try:
+            del copy_reg.__newobj__
+            for base in (list, dict):
+                namespace = {'__getnewargs__': newargs, '__getstate__': getstate,
+                             '__iter__' if base is list else 'iteritems': iterate}
+                Derived = type('Derived', (base,), namespace)
+                value = Derived()
+                for method in (object.__reduce__, object.__reduce_ex__):
+                    events[:] = []
+                    with self.assertRaises(AttributeError) as caught:
+                        method(value, 2)
+                    self.assertEqual(caught.exception.args, ("'module' object has no attribute '__newobj__'",))
+                    self.assertEqual(events, ['args', 'state', 'iterator'])
+        finally:
+            copy_reg.__newobj__ = saved
+
     def test_sizeof_validates_arguments_without_comparing_physical_layout(self):
         frame, generator = stopped_frame(), sample_generator()
         objects = (object(), 17, 17L, 'abc', (), [], {}, sample,

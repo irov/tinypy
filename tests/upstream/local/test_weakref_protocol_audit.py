@@ -14,6 +14,132 @@ class Reference(weakref.ref):
 
 
 class WeakrefProtocolAudit(unittest.TestCase):
+    def test_proxy_subscript_unwraps_key_in_slot_and_direct_wrapper(self):
+        class Integer(int):
+            pass
+        class Dictionary(dict):
+            pass
+        class Mapping(object):
+            def __getitem__(self, item):
+                return item is key, type(item)
+        key = Integer(3)
+        key_proxy = weakref.proxy(key)
+        mapping = Dictionary({key: 'found'})
+        proxy = weakref.proxy(mapping)
+        self.assertEqual(proxy[key_proxy], 'found')
+        self.assertEqual(type(proxy).__getitem__(proxy, key_proxy), 'found')
+        owner = Mapping()
+        proxy = weakref.proxy(owner)
+        self.assertEqual(proxy[key_proxy], (True, Integer))
+        self.assertEqual(type(proxy).__getitem__(proxy, key_proxy), (True, Integer))
+        self.assertEqual(proxy.__getitem__(key_proxy), (False, type(key_proxy)))
+
+    def test_proxy_subscript_detects_dead_key_before_calling_mapping(self):
+        events = []
+        class Mapping(object):
+            def __getitem__(self, key):
+                events.append('called')
+                return 7
+        owner = Mapping()
+        proxy = weakref.proxy(owner)
+        dead = weakref.proxy(Target())
+        self.assertRaises(ReferenceError, lambda: proxy[dead])
+        self.assertRaises(ReferenceError, type(proxy).__getitem__, proxy, dead)
+        self.assertEqual(events, [])
+        self.assertEqual(proxy.__getitem__(dead), 7)
+
+    def test_proxy_write_delete_and_contains_preserve_key_and_value(self):
+        events = []
+        class Mapping(object):
+            def __setitem__(self, key, value):
+                events.append(('set', key is key_proxy, value is value_proxy))
+            def __delitem__(self, key):
+                events.append(('del', key is key_proxy))
+            def __contains__(self, key):
+                events.append(('contains', key is key_proxy))
+                return True
+        key = Target()
+        value = Target()
+        key_proxy = weakref.proxy(key)
+        value_proxy = weakref.proxy(value)
+        owner = Mapping()
+        proxy = weakref.proxy(owner)
+        proxy[key_proxy] = value_proxy
+        del proxy[key_proxy]
+        self.assertTrue(key_proxy in proxy)
+        self.assertEqual(events, [('set', True, True), ('del', True), ('contains', True)])
+
+    def test_proxy_modular_power_accepts_proxies_in_every_position(self):
+        class Integer(int):
+            pass
+        owners = [Integer(2), Integer(3), Integer(5)]
+        proxies = map(weakref.proxy, owners)
+        for mask in range(8):
+            arguments = [proxies[index] if mask & (1 << index) else owners[index]
+                         for index in range(3)]
+            self.assertEqual(pow(*arguments), 3)
+        self.assertEqual(type(proxies[0]).__pow__(proxies[0], proxies[1], proxies[2]), 3)
+
+    def test_proxy_power_checks_dead_operands_before_user_method(self):
+        events = []
+        class Number(object):
+            def __pow__(self, exponent, modulus=None):
+                events.append((exponent, modulus))
+                return 19
+        owner = Number()
+        proxy = weakref.proxy(owner)
+        dead = weakref.proxy(Target())
+        self.assertRaises(ReferenceError, pow, proxy, 3, dead)
+        self.assertRaises(ReferenceError, type(proxy).__pow__, proxy, 3, dead)
+        self.assertEqual(events, [])
+        self.assertEqual(pow(owner, 3, dead), 19)
+        self.assertEqual(len(events), 1)
+
+    def test_proxy_modular_power_preserves_callback_exception_identity(self):
+        marker = LookupError('power')
+        class Number(object):
+            def __pow__(self, exponent, modulus=None):
+                raise marker
+        owner = Number()
+        proxy = weakref.proxy(owner)
+        for operation in (lambda: pow(proxy, 3, 5),
+                          lambda: type(proxy).__pow__(proxy, 3, 5)):
+            with self.assertRaises(LookupError) as caught:
+                operation()
+            self.assertIs(caught.exception, marker)
+
+    def test_proxy_direct_getattribute_unwraps_unicode_proxy_name(self):
+        class Text(unicode):
+            pass
+        class Owner(object):
+            value = 73
+        class CallableOwner(Owner):
+            def __call__(self):
+                return None
+        name = Text(u'value')
+        name_proxy = weakref.proxy(name)
+        for factory in (Owner, CallableOwner):
+            owner = factory()
+            proxy = weakref.proxy(owner)
+            self.assertEqual(type(proxy).__getattribute__(proxy, name_proxy), 73)
+            self.assertRaises(TypeError, getattr, proxy, name_proxy)
+
+    def test_proxy_direct_getattribute_checks_dead_receiver_and_name(self):
+        class Text(unicode):
+            pass
+        class Owner(object):
+            value = 73
+        for dead_receiver in (False, True):
+            owner = Owner()
+            proxy = weakref.proxy(owner)
+            name = Text(u'value')
+            name_proxy = weakref.proxy(name)
+            if dead_receiver:
+                owner = None
+            else:
+                name = None
+            self.assertRaises(ReferenceError, type(proxy).__getattribute__, proxy, name_proxy)
+
     def test_constructor_count_precedes_keywords(self):
         with self.assertRaises(TypeError) as error:
             weakref.ref(extra=1)

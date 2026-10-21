@@ -1,9 +1,75 @@
 """Project-authored Python 2 compiler boundary and callback regressions."""
 
 import unittest
+import _codecs
+import sys
 
 
 class CompilerEdges(unittest.TestCase):
+    def test_adjacent_literals_keep_default_codec_replacements(self):
+        previous = _codecs.lookup_error('strict')
+        events = []
+        def handler(error):
+            events.append(error.object)
+            return u'\u1234Z', error.end
+        cases = (("u'a' '\\xff'", u'a\u1234Z', ['\xff']),
+                 ("'\\xff' u'a'", u'\u1234Za', ['\xff']),
+                 ("'a' '\\xff' u'b'", u'a\u1234Zb', ['a\xff']),
+                 ("u'a' '\\xff' '\\xfe'", u'a\u1234Z\u1234Z', ['\xff', '\xfe']))
+        try:
+            _codecs.register_error('strict', handler)
+            for source, expected, trace in cases:
+                for mode in ('eval', 'exec'):
+                    events[:] = []
+                    if mode == 'eval':
+                        result = eval(compile(source, '<literal>', mode))
+                    else:
+                        namespace = {}
+                        exec compile('value=' + source, '<literal>', mode) in namespace
+                        result = namespace['value']
+                    self.assertEqual(result, expected)
+                    self.assertEqual(events, trace)
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_adjacent_literal_callback_failure_keeps_identity_and_handled_state(self):
+        previous = _codecs.lookup_error('strict')
+        outer = ValueError('outer')
+        def handler(error):
+            raise marker
+        def check_failure():
+            with self.assertRaises(type(marker)) as caught:
+                compile("u'a' '\\xff'", '<literal>', 'eval')
+            self.assertIs(caught.exception, marker)
+        try:
+            _codecs.register_error('strict', handler)
+            for marker in (RuntimeError('literal'), TypeError('literal')):
+                try:
+                    raise outer
+                except ValueError:
+                    check_failure()
+                    self.assertIs(sys.exc_info()[1], outer)
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_adjacent_literal_codec_callback_can_compile_and_replace_handler(self):
+        previous = _codecs.lookup_error('strict')
+        events = []
+        def second(error):
+            events.append(('second', error.object))
+            return u'Y', error.end
+        def first(error):
+            events.append(('first', error.object))
+            self.assertEqual(eval(compile("u'n' 'x'", '<nested>', 'eval')), u'nx')
+            _codecs.register_error('strict', second)
+            return u'Z', error.end
+        try:
+            _codecs.register_error('strict', first)
+            self.assertEqual(eval("u'a' '\\xff' '\\xfe'"), u'aZY')
+            self.assertEqual(events, [('first', '\xff'), ('second', '\xfe')])
+        finally:
+            _codecs.register_error('strict', previous)
+
     def test_flags_use_int_protocol_before_mode_value(self):
         events = []
 
@@ -114,6 +180,9 @@ class CompilerEdges(unittest.TestCase):
         namespace = {}
         exec compile(source, 'file', 'exec') in namespace
         self.assertEqual(namespace['value'], ''.join(parts))
+        exec compile('value = (u"" ' + ' '.join(["'%s'" % part for part in parts]) + ')\n',
+                     'file', 'exec') in namespace
+        self.assertEqual(namespace['value'], u''.join(parts))
         self.assertEqual(eval("'a' '' 'b' u'c' 'd'"), u'abcd')
         for source, message in [("'ab' '\\xe9' 'cd' u'e' '\\x'", 'byte 0xe9 in position 2'),
                                 ("u'e' 'ab' '\\xe9cd' '\\x'", 'byte 0xe9 in position 0')]:

@@ -117,13 +117,8 @@ tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinyp
             return result;
         }
     }
-    tinypy_value_t *super_attribute = tinypy_internal_type_lookup_key(vm, value->type, name);
-    if (super_attribute != NULL) {
-        tinypy_value_t *return_value_2 = tinypy_internal_descriptor_get_value(vm, super_attribute, value, value->type, out_error);
-        return return_value_2;
-    }
-    tinypy_internal_object_make_attribute_error_key(value, name, out_error);
-    return NULL;
+    tinypy_value_t *result = tinypy_internal_object_generic_get_attr_key(value, name, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* super_init parses "O!|O:super" after rejecting keyword arguments. */

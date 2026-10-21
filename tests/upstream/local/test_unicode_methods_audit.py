@@ -18,6 +18,123 @@ class Wide(unicode):
 
 
 class UnicodeMethodsAudit(unittest.TestCase):
+    def test_decoders_read_live_mutable_input_after_error_handler(self):
+        events = []
+        def handler(error):
+            events.append((error.object, error.start, error.end))
+            owner[1] = ord('b')
+            return u'Z', error.end
+        _codecs.register_error('unicode_methods_live_input', handler)
+        operations = (
+            lambda: owner.decode('ascii', 'unicode_methods_live_input'),
+            lambda: owner.decode('utf8', 'unicode_methods_live_input'),
+            lambda: _codecs.ascii_decode(owner, 'unicode_methods_live_input')[0],
+            lambda: _codecs.utf_8_decode(owner, 'unicode_methods_live_input', True)[0],
+            lambda: _codecs.ascii_decode(buffer(owner), 'unicode_methods_live_input')[0],
+            lambda: _codecs.ascii_decode(memoryview(owner), 'unicode_methods_live_input')[0],
+            lambda: unicode(buffer(owner), 'ascii', 'unicode_methods_live_input'))
+        for operation in operations:
+            owner = bytearray('\xffa')
+            events[:] = []
+            self.assertEqual(operation(), u'Zb')
+            self.assertEqual(owner, bytearray('\xffb'))
+            self.assertEqual(events, [('\xffa', 0, 1)])
+
+    def test_decoder_exception_retains_snapshot_when_mutation_adds_an_error(self):
+        events = []
+        def handler(error):
+            events.append((error.object, error.start, error.end))
+            owner[1] = 255
+            return u'Z', error.end
+        _codecs.register_error('unicode_methods_live_error', handler)
+        for decode in (_codecs.ascii_decode, _codecs.utf_8_decode):
+            owner = bytearray('\xffa')
+            events[:] = []
+            self.assertEqual(decode(owner, 'unicode_methods_live_error'), (u'ZZ', 2))
+            self.assertEqual(events, [('\xffa', 0, 1), ('\xffa', 1, 2)])
+
+    def test_utf8_decoder_rechecks_mutated_sequence_and_reason(self):
+        events = []
+        def handler(error):
+            events.append((error.object, error.start, error.end, error.reason))
+            if len(events) == 1:
+                owner[1] = 240
+            return u'Z', error.end
+        _codecs.register_error('unicode_methods_live_utf8', handler)
+        for final, expected in ((False, (u'Z', 1)), (True, (u'ZZ', 4))):
+            owner = bytearray('\xff\xe2\x82\xac')
+            events[:] = []
+            self.assertEqual(_codecs.utf_8_decode(owner, 'unicode_methods_live_utf8', final), expected)
+            trace = [('\xff\xe2\x82\xac', 0, 1, 'invalid start byte')]
+            if final:
+                trace.append(('\xff\xe2\x82\xac', 1, 4, 'unexpected end of data'))
+            self.assertEqual(events, trace)
+
+    def test_decoder_position_callback_can_mutate_unread_bytes(self):
+        events = []
+        class Position(object):
+            def __int__(self):
+                events.append('position')
+                owner[1] = ord('b')
+                return 1
+        def handler(error):
+            events.append('handler')
+            return u'Z', Position()
+        _codecs.register_error('unicode_methods_live_position', handler)
+        for decode in (_codecs.ascii_decode, _codecs.utf_8_decode):
+            owner = bytearray('\xffa')
+            events[:] = []
+            self.assertEqual(decode(owner, 'unicode_methods_live_position'), (u'Zb', 2))
+            self.assertEqual(events, ['handler', 'position'])
+
+    def test_mutable_decoder_keeps_nested_buffer_and_view_bounds(self):
+        events = []
+        def handler(error):
+            events.append(error.object)
+            owner[2] = ord('b')
+            return u'Z', error.end
+        _codecs.register_error('unicode_methods_live_bounds', handler)
+        sources = (lambda: buffer(owner, 1, 2),
+                   lambda: buffer(buffer(owner, 1), 0, 2),
+                   lambda: memoryview(owner)[1:3])
+        for source in sources:
+            owner = bytearray('p\xffaq')
+            events[:] = []
+            self.assertEqual(_codecs.ascii_decode(source(), 'unicode_methods_live_bounds'), (u'Zb', 2))
+            self.assertEqual(events, ['\xffa'])
+        owner = bytearray('p\xffaq')
+        self.assertEqual(unicode(buffer(owner, 1, 2), 'ascii', 'unicode_methods_live_bounds'), u'Zb')
+
+    def test_decoder_holds_array_export_and_releases_it_after_failure(self):
+        events = []
+        def handler(error):
+            try:
+                owner.append(98)
+            except BufferError:
+                events.append('exported')
+            else:
+                raise AssertionError('decode must retain its export')
+            if fail:
+                raise marker
+            return u'Z', error.end
+        marker = ValueError('handler')
+        _codecs.register_error('unicode_methods_live_export', handler)
+        operations = (lambda: owner.decode('ascii', 'unicode_methods_live_export'),
+                      lambda: _codecs.ascii_decode(owner, 'unicode_methods_live_export')[0])
+        for fail in (False, True):
+            for operation in operations:
+                owner = bytearray('\xffa')
+                events[:] = []
+                if fail:
+                    with self.assertRaises(ValueError) as caught:
+                        operation()
+                    self.assertIs(caught.exception, marker)
+                else:
+                    self.assertEqual(operation(), u'Za')
+                self.assertEqual(events, ['exported'])
+                owner.append(98)
+                self.assertEqual(owner, bytearray('\xffab'))
+
     def test_search_methods_use_default_codec_replacement(self):
         previous = _codecs.lookup_error('strict')
         def handler(error):

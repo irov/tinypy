@@ -628,24 +628,39 @@ static tinypy_value_t *__tinypy_compiler_join_strings(tinypy_compile_ctx_t *ctx,
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyUnicode_Concat decodes its str operand as ASCII: the str parts joined
-   before the first unicode part, or a str part after it. */
-static tinypy_bool_t __tinypy_compiler_concat_ascii(tinypy_compile_ctx_t *ctx, tinypy_value_t *const *parts, size_t count, int32_t line_number) {
+/* PyUnicode_Concat decodes the accumulated byte prefix, then each byte
+   part after the first unicode. Keep the actual default-codec replacement. */
+static tinypy_value_t *__tinypy_compiler_concat_unicode(tinypy_compile_ctx_t *ctx, tinypy_value_t *const *parts, size_t count, int32_t line_number) {
     tinypy_value_t *operand = count == 1U ? TINYPY_RET(parts[0]) : __tinypy_compiler_join_strings(ctx, parts, count, TINYPY_FALSE);
+    tinypy_error_t *decode_error = NULL;
+
     if (operand == NULL) {
-        return TINYPY_FALSE;
+        return NULL;
     }
-    tinypy_bool_t ascii = tinypy_internal_text_ascii_compatible(ctx->vm, operand, NULL);
+    tinypy_value_t *decoded = tinypy_internal_text_to_unicode(ctx->vm, operand, &decode_error);
+
     TINYPY_DECREF(operand);
-    if (ascii != 0) {
-        return TINYPY_TRUE;
+    if (decoded != NULL) {
+        return decoded;
     }
-    if (ctx->vm->raised_value == NULL) {
-        tinypy_internal_compiler_memory_error(ctx);
-        return TINYPY_FALSE;
+    tinypy_value_t *raised_type = ctx->vm->raised_type;
+
+    if (raised_type != NULL && TINYPY_VALUE_KIND(raised_type) == TINYPY_VALUE_TYPE && tinypy_type_is_subtype((tinypy_type_t *)raised_type, ctx->vm->exception_types[TINYPY_EXCEPTION_UNICODE_ERROR]) != 0) {
+        if (decode_error != NULL) {
+            tinypy_error_release(decode_error);
+        }
+        tinypy_internal_compiler_decode_error(ctx, ctx->vm->raised_value, line_number, TINYPY_TRUE);
+        return NULL;
     }
-    tinypy_internal_compiler_decode_error(ctx, ctx->vm->raised_value, line_number, TINYPY_TRUE);
-    return TINYPY_FALSE;
+    /* Other handler failures propagate with their original exception. */
+    ctx->failed = TINYPY_TRUE;
+    if (ctx->out_error != NULL) {
+        *ctx->out_error = decode_error;
+    }
+    else if (decode_error != NULL) {
+        tinypy_error_release(decode_error);
+    }
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Adjacent literals, which parsestrplus folds pairwise, joined at once with
@@ -657,45 +672,62 @@ tinypy_value_t *tinypy_internal_compiler_parse_strings(tinypy_compile_ctx_t *ctx
         return NULL;
     }
     tinypy_bool_t unicode = TINYPY_FALSE;
-    size_t non_empty_count = 0U;
-    size_t alone = 0U;
     size_t parsed = 0U;
 
-    while (parsed != count) {
-        tinypy_value_t *part = __tinypy_compiler_parse_string(ctx, texts[parsed], future_unicode, line_number, column_offset);
+    size_t index;
+
+    for (index = 0U; index < count; ++index) {
+        tinypy_value_t *part = __tinypy_compiler_parse_string(ctx, texts[index], future_unicode, line_number, column_offset);
         if (part == NULL) {
             break;
         }
         tinypy_bool_t part_unicode = TINYPY_VALUE_KIND(part) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
         if (parsed != 0U && part_unicode != unicode) {
-            tinypy_bool_t ascii = part_unicode != 0
-                ? __tinypy_compiler_concat_ascii(ctx, parts, parsed, line_number)
-                : __tinypy_compiler_concat_ascii(ctx, &part, 1U, line_number);
-            if (ascii == 0) {
+            tinypy_value_t *decoded = part_unicode != 0
+                ? __tinypy_compiler_concat_unicode(ctx, parts, parsed, line_number)
+                : __tinypy_compiler_concat_unicode(ctx, &part, 1U, line_number);
+
+            if (decoded == NULL) {
                 TINYPY_DECREF(part);
                 break;
+            }
+            if (part_unicode != 0) {
+                while (parsed != 0U) {
+                    parsed -= 1U;
+                    TINYPY_DECREF(parts[parsed]);
+                }
+                parts[parsed++] = decoded;
+            }
+            else {
+                TINYPY_DECREF(part);
+                part = decoded;
             }
         }
         parts[parsed++] = part;
         if (part_unicode != 0) {
             unicode = TINYPY_TRUE;
         }
-        if (TINYPY_TEXT_BYTE_SIZE(part) != 0U) {
-            non_empty_count += 1U;
-            alone = parsed - 1U;
-        }
-        else if (non_empty_count == 0U) {
-            alone = parsed - 1U;
-        }
     }
     tinypy_value_t *result = NULL;
 
-    if (parsed == count) {
+    if (index == count) {
+        size_t non_empty_count = 0U;
+        size_t alone = 0U;
+
+        for (size_t item = 0U; item < parsed; ++item) {
+            if (TINYPY_TEXT_BYTE_SIZE(parts[item]) != 0U) {
+                non_empty_count += 1U;
+                alone = item;
+            }
+            else if (non_empty_count == 0U) {
+                alone = item;
+            }
+        }
         tinypy_value_type_e type = unicode != 0 ? TINYPY_VALUE_UNICODE : TINYPY_VALUE_STRING;
 
         result = non_empty_count <= 1U && TINYPY_VALUE_KIND(parts[alone]) == type
             ? TINYPY_RET(parts[alone])
-            : __tinypy_compiler_join_strings(ctx, parts, count, unicode);
+            : __tinypy_compiler_join_strings(ctx, parts, parsed, unicode);
     }
     while (parsed != 0U) {
         parsed -= 1U;

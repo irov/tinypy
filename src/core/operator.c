@@ -4239,3 +4239,78 @@ tinypy_value_t *tinypy_internal_unary_builtin(tinypy_value_t *value, int32_t mod
 
     return result;
 }
+//////////////////////////////////////////////////////////////////////////
+/* wrap_binaryfunc, wrap_binaryfunc_r and wrap_ternaryfunc expose the
+   existing instance_* slot, including coercion and the reflected half. */
+static tinypy_value_t *__tinypy_operator_classic_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    size_t mode = (size_t)(uintptr_t)user_data;
+    const tinypy_operator_binary_spec_t *spec = &__tinypy_operator_binary_specs[mode / 3U];
+    size_t direction = mode % 3U;
+    tinypy_bool_t power = spec->operation == TINYPY_OPERATOR_BINARY_POWER;
+    tinypy_bool_t ternary = power != 0 && direction != 2U;
+    size_t maximum = ternary != 0 ? 2U : 1U;
+
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, maximum, ternary != 0 ? TINYPY_ARITY_STYLE_UNPACK : TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *left = TINYPY_TUPLE_GET(args, direction == 1U ? 1U : 0U);
+    tinypy_value_t *right = TINYPY_TUPLE_GET(args, direction == 1U ? 0U : 1U);
+    tinypy_value_t *result;
+
+    if (power != 0) {
+        tinypy_value_t *modulus = TINYPY_TUPLE_SIZE(args) == 3U ? TINYPY_TUPLE_GET(args, 2U) : &vm->none_object.base;
+
+        result = __tinypy_operator_classic_power(left, right, modulus, direction == 2U, out_error);
+        return result;
+    }
+    tinypy_value_t *name = tinypy_internal_dispatch_key(vm, spec->name);
+    tinypy_value_t *reverse = tinypy_internal_dispatch_key(vm, spec->reverse_name);
+
+    if (direction == 2U) {
+        result = __tinypy_operator_classic_inplace(left, right, tinypy_internal_dispatch_key(vm, spec->inplace_name), name, reverse, spec->inplace_function, out_error);
+        return result;
+    }
+    result = __tinypy_operator_classic_binary(left, right, name, reverse, spec->function, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_operator_classic_coerce_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *operands[2] = {TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U)};
+    int32_t status = __tinypy_operator_coerce_slot(&operands[0], &operands[1], out_error);
+
+    if (status < 0) {
+        return NULL;
+    }
+    if (status > 0) {
+        return TINYPY_RET_NOT_IMPLEMENTED(vm);
+    }
+    tinypy_value_t *result = tinypy_tuple_from_items(vm, operands, 2U);
+
+    TINYPY_DECREF(operands[1]);
+    TINYPY_DECREF(operands[0]);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_initialize_classic_operator_methods(tinypy_vm_t *vm) {
+    tinypy_type_t *type = &vm->types[TINYPY_VALUE_OLD_INSTANCE];
+
+    for (size_t index = 0U; index < sizeof(__tinypy_operator_binary_specs) / sizeof(__tinypy_operator_binary_specs[0]); ++index) {
+        const tinypy_operator_binary_spec_t *spec = &__tinypy_operator_binary_specs[index];
+        tinypy_internal_dispatch_e names[3] = {spec->name, spec->reverse_name, spec->inplace_name};
+
+        for (size_t direction = 0U; direction < 3U; ++direction) {
+            if (names[direction] == TINYPY_OPERATOR_NO_DISPATCH) {
+                continue;
+            }
+            tinypy_internal_type_add_method(type, tinypy_internal_dispatch_key(vm, names[direction]), __tinypy_operator_classic_method, (void *)(uintptr_t)(index * 3U + direction), NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+        }
+    }
+    tinypy_internal_type_add_method(type, vm->internal_special_coerce_key, __tinypy_operator_classic_coerce_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+}
+//////////////////////////////////////////////////////////////////////////

@@ -6,6 +6,219 @@ import unittest
 
 
 class ObjectProtocols(unittest.TestCase):
+    def test_classic_instance_type_exposes_native_slot_wrappers(self):
+        class Classic:
+            pass
+        kind = type(Classic())
+        expected = '''__abs__ __add__ __and__ __call__ __cmp__ __coerce__
+            __contains__ __delattr__ __delitem__ __delslice__ __div__ __divmod__
+            __doc__ __eq__ __float__ __floordiv__ __ge__ __getattribute__
+            __getitem__ __getslice__ __gt__ __hash__ __hex__ __iadd__ __iand__
+            __idiv__ __ifloordiv__ __ilshift__ __imod__ __imul__ __index__
+            __int__ __invert__ __ior__ __ipow__ __irshift__ __isub__ __iter__
+            __itruediv__ __ixor__ __le__ __len__ __long__ __lshift__ __lt__
+            __mod__ __mul__ __ne__ __neg__ __new__ __nonzero__ __oct__ __or__
+            __pos__ __pow__ __radd__ __rand__ __rdiv__ __rdivmod__ __repr__
+            __rfloordiv__ __rlshift__ __rmod__ __rmul__ __ror__ __rpow__
+            __rrshift__ __rshift__ __rsub__ __rtruediv__ __rxor__ __setattr__
+            __setitem__ __setslice__ __str__ __sub__ __truediv__ __xor__ next'''.split()
+        self.assertEqual(sorted(vars(kind)), sorted(expected))
+        for name in expected:
+            if name in ('__doc__', '__new__'):
+                continue
+            descriptor = vars(kind)[name]
+            self.assertEqual(type(descriptor).__name__, 'wrapper_descriptor')
+            self.assertIs(descriptor.__objclass__, kind)
+            self.assertEqual(descriptor.__name__, name)
+
+    def test_classic_native_binary_slots_keep_coercion_and_declining_result(self):
+        events = []
+        class Left:
+            def __coerce__(self, other):
+                events.append('coerce')
+                return NotImplemented
+            def __add__(self, other):
+                events.append('add')
+                return NotImplemented
+        class NewRight(object):
+            def __radd__(self, other):
+                events.append('new reflected')
+                return 31
+        class ClassicRight:
+            def __radd__(self, other):
+                events.append('classic reflected')
+                return 37
+        left = Left()
+        kind = type(left)
+        self.assertIs(kind.__add__(left, NewRight()), NotImplemented)
+        self.assertEqual(events, ['coerce', 'add'])
+        events[:] = []
+        self.assertEqual(kind.__add__(left, ClassicRight()), 37)
+        self.assertEqual(events, ['coerce', 'add', 'classic reflected'])
+        class Coerced:
+            def __coerce__(self, other):
+                return 5, 7
+        coerced = Coerced()
+        self.assertEqual(kind.__add__(coerced, 1), 12)
+        self.assertEqual(kind.__rsub__(coerced, 1), 2)
+        self.assertEqual(kind.__coerce__(coerced, 1), (5, 7))
+        self.assertIs(kind.__coerce__(left, NewRight()), NotImplemented)
+
+    def test_classic_native_inplace_and_power_slots_use_existing_fallbacks(self):
+        events = []
+        class Classic:
+            def __iadd__(self, other):
+                events.append('inplace')
+                return NotImplemented
+            def __add__(self, other):
+                events.append('add')
+                return 13
+            def __pow__(self, *arguments):
+                events.append(('power', arguments))
+                return 17
+        value = Classic()
+        kind = type(value)
+        self.assertEqual(kind.__iadd__(value, 2), 13)
+        self.assertEqual(events, ['inplace', 'add'])
+        events[:] = []
+        self.assertEqual(kind.__pow__(value, 3, 5), 17)
+        value **= 3
+        self.assertEqual(value, 17)
+        self.assertEqual(events, [('power', (3, 5)), ('power', (3,))])
+        self.assertRaises(TypeError, kind.__ipow__, Classic(), 3, 5)
+
+    def test_classic_native_unary_and_conversion_slots_return_raw_values(self):
+        result = ['raw result']
+        class Classic:
+            def __getattr__(self, name):
+                return lambda: result
+        value = Classic()
+        kind = type(value)
+        for name in ('__abs__', '__pos__', '__neg__', '__invert__', '__int__',
+                     '__long__', '__float__', '__index__', '__hex__', '__oct__',
+                     '__repr__', '__str__'):
+            self.assertIs(getattr(kind, name)(value), result)
+        class Integral:
+            def __int__(self):
+                return 23
+        self.assertEqual(kind.__long__(Integral()), 23)
+        class Empty:
+            pass
+        with self.assertRaises(TypeError) as caught:
+            kind.__index__(Empty())
+        self.assertEqual(caught.exception.args, ('object cannot be interpreted as an index',))
+        marker = AttributeError('from index callback')
+        class Failing:
+            def __index__(self):
+                raise marker
+        with self.assertRaises(AttributeError) as caught:
+            kind.__index__(Failing())
+        self.assertIs(caught.exception, marker)
+
+    def test_classic_native_length_and_truth_keep_return_validation(self):
+        class Classic:
+            def __len__(self):
+                return answer
+        value = Classic()
+        kind = type(value)
+        for answer in (True, 7):
+            self.assertEqual(kind.__len__(value), int(answer))
+            self.assertIs(kind.__nonzero__(value), True)
+        for answer, exception, message in ((-1, ValueError, '__len__() should return >= 0'),
+                                           (1L, TypeError, '__len__() should return an int'),
+                                           ([], TypeError, '__len__() should return an int')):
+            with self.assertRaises(exception) as caught:
+                kind.__len__(value)
+            self.assertEqual(caught.exception.args, (message,))
+        class Empty:
+            pass
+        self.assertIs(kind.__nonzero__(Empty()), True)
+
+    def test_classic_native_comparisons_return_not_implemented_without_fallback(self):
+        events = []
+        class Left:
+            def __eq__(self, other):
+                events.append('left')
+                return NotImplemented
+        class Right:
+            def __eq__(self, other):
+                events.append('right')
+                return 'equal'
+        left = Left()
+        right = Right()
+        kind = type(left)
+        self.assertEqual(kind.__eq__(left, right), 'equal')
+        self.assertEqual(events, ['left', 'right'])
+        self.assertIs(kind.__lt__(left, right), NotImplemented)
+        self.assertEqual(kind.__cmp__(left, right), 2)
+        self.assertRaises(TypeError, kind.__cmp__, left, 1)
+
+    def test_classic_native_item_and_slice_slots_preserve_protocols(self):
+        events = []
+        class Classic:
+            def __getitem__(self, key):
+                events.append(('get', key))
+                return key
+            def __setitem__(self, key, value):
+                events.append(('set', key, value))
+                return 'discarded'
+            def __delitem__(self, key):
+                events.append(('del', key))
+                return 'discarded'
+        value = Classic()
+        kind = type(value)
+        self.assertEqual(kind.__getitem__(value, 7), 7)
+        selected = kind.__getslice__(value, -3, 9)
+        self.assertEqual((selected.start, selected.stop, selected.step), (-3, 9, None))
+        self.assertIs(kind.__setitem__(value, 2, 3), None)
+        self.assertIs(kind.__delitem__(value, 2), None)
+        self.assertIs(kind.__setslice__(value, -3, 9, 'items'), None)
+        self.assertIs(kind.__delslice__(value, -3, 9), None)
+        self.assertEqual(events[0], ('get', 7))
+        self.assertEqual(events[2:4], [('set', 2, 3), ('del', 2)])
+        self.assertEqual((events[4][1].start, events[4][1].stop, events[4][2]), (-3, 9, 'items'))
+        self.assertEqual((events[5][1].start, events[5][1].stop), (-3, 9))
+        class Legacy(Classic):
+            def __len__(self):
+                raise AssertionError('direct slot must preserve bounds')
+            def __getslice__(self, start, stop):
+                return start, stop
+            def __setslice__(self, start, stop, value):
+                events.append((start, stop, value))
+            def __delslice__(self, start, stop):
+                events.append((start, stop))
+        legacy = Legacy()
+        self.assertEqual(kind.__getslice__(legacy, -3, -1), (-3, -1))
+        self.assertIs(kind.__setslice__(legacy, -3, -1, 'items'), None)
+        self.assertIs(kind.__delslice__(legacy, -3, -1), None)
+        self.assertEqual(events[-2:], [(-3, -1, 'items'), (-3, -1)])
+
+    def test_classic_native_call_and_attribute_slots_keep_hooks(self):
+        events = []
+        class Classic:
+            def __call__(self, *args, **kwargs):
+                return args, kwargs
+            def __setattr__(self, name, value):
+                events.append(('set', name, value))
+                return 'discarded'
+            def __delattr__(self, name):
+                events.append(('del', name))
+                return 'discarded'
+        value = Classic()
+        kind = type(value)
+        self.assertEqual(kind.__call__(value, 1, key=2), ((1,), {'key': 2}))
+        self.assertIs(kind.__setattr__(value, 'field', 7), None)
+        self.assertIs(kind.__delattr__(value, 'field'), None)
+        self.assertEqual(events, [('set', 'field', 7), ('del', 'field')])
+        self.assertRaises(TypeError, kind.__setattr__, value, 1, 7)
+        with self.assertRaises(TypeError) as caught:
+            kind.__getattribute__(value, 1)
+        self.assertEqual(caught.exception.args, ('attribute name must be a string',))
+        for name in ('__setattr__', '__setitem__'):
+            with self.assertRaises(TypeError) as caught:
+                getattr(kind, name)(value)
+            self.assertEqual(caught.exception.args, (' expected 2 arguments, got 0',))
+
     def test_boolean_numeric_relationship(self):
         self.assertIsInstance(True, int)
         self.assertIsInstance(False, int)
