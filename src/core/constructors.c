@@ -2745,7 +2745,7 @@ static tinypy_value_t *__tinypy_constructor_copy_reg_function(tinypy_vm_t *vm, t
 //////////////////////////////////////////////////////////////////////////
 /* Protocol 2 carries __slots__ values beside the instance dictionary, so that
    pickle and copy can restore attributes that live outside __dict__. */
-static tinypy_bool_t __tinypy_constructor_append_slot_state(tinypy_vm_t *vm, tinypy_value_t *self, tinypy_value_t *class_value, tinypy_value_t **in_out_state, tinypy_error_t **out_error) {
+static tinypy_bool_t __tinypy_constructor_append_slot_state(tinypy_vm_t *vm, tinypy_value_t *self, tinypy_value_t *class_value, tinypy_value_t **in_out_state, tinypy_value_t **out_names, tinypy_value_t **out_slots, tinypy_error_t **out_error) {
     if (TINYPY_VALUE_KIND(class_value) != TINYPY_VALUE_TYPE) {
         return TINYPY_TRUE;
     }
@@ -2771,7 +2771,7 @@ static tinypy_bool_t __tinypy_constructor_append_slot_state(tinypy_vm_t *vm, tin
         }
     }
     if (TINYPY_VALUE_KIND(names) == TINYPY_VALUE_NONE) {
-        TINYPY_DECREF(names);
+        *out_names = names;
         return TINYPY_TRUE;
     }
     if (TINYPY_VALUE_KIND(names) != TINYPY_VALUE_LIST) {
@@ -2779,11 +2779,12 @@ static tinypy_bool_t __tinypy_constructor_append_slot_state(tinypy_vm_t *vm, tin
         TINYPY_DECREF(names);
         return TINYPY_FALSE;
     }
+    *out_names = names;
     if (TINYPY_LIST_SIZE(names) == 0U) {
-        TINYPY_DECREF(names);
         return TINYPY_TRUE;
     }
     slots = tinypy_dict_new(vm);
+    *out_slots = slots;
     for (index = 0U; index < TINYPY_LIST_SIZE(names); ++index) {
         tinypy_value_t *name = TINYPY_RET(TINYPY_LIST_GET(names, index));
         tinypy_error_t *lookup_error = NULL;
@@ -2801,20 +2802,15 @@ static tinypy_bool_t __tinypy_constructor_append_slot_state(tinypy_vm_t *vm, tin
         TINYPY_DECREF(name);
         TINYPY_DECREF(value);
         if (inserted == TINYPY_FALSE) {
-            TINYPY_DECREF(names);
-            TINYPY_DECREF(slots);
             return TINYPY_FALSE;
         }
     }
-    TINYPY_DECREF(names);
     if (TINYPY_DICT_SIZE(slots) == 0U) {
-        TINYPY_DECREF(slots);
         return TINYPY_TRUE;
     }
     tinypy_value_t *items[2] = {*in_out_state, slots};
 
     combined = tinypy_tuple_from_items(vm, items, 2U);
-    TINYPY_DECREF(slots);
     TINYPY_DECREF(*in_out_state);
     *in_out_state = combined;
     return TINYPY_TRUE;
@@ -2866,6 +2862,8 @@ static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t 
     tinypy_value_t *new_arguments = NULL;
     tinypy_value_t *constructor_arguments = NULL;
     tinypy_value_t *state = NULL;
+    tinypy_value_t *slot_names = NULL;
+    tinypy_value_t *slot_values = NULL;
     tinypy_value_t *list_items = NULL;
     tinypy_value_t *dict_items = NULL;
     tinypy_value_t *result = NULL;
@@ -2935,7 +2933,7 @@ static tinypy_value_t *__tinypy_constructor_object_common_reduce(tinypy_value_t 
         if (state == NULL) {
             state = TINYPY_RET_NONE(vm);
         }
-        if (__tinypy_constructor_append_slot_state(vm, self, class_value, &state, out_error) == 0) {
+        if (__tinypy_constructor_append_slot_state(vm, self, class_value, &state, &slot_names, &slot_values, out_error) == 0) {
             goto cleanup;
         }
     }
@@ -2985,8 +2983,14 @@ cleanup:
     if (constructor_arguments != NULL) {
         TINYPY_DECREF(constructor_arguments);
     }
+    if (slot_values != NULL) {
+        TINYPY_DECREF(slot_values);
+    }
     if (state != NULL) {
         TINYPY_DECREF(state);
+    }
+    if (slot_names != NULL) {
+        TINYPY_DECREF(slot_names);
     }
     if (list_items != NULL) {
         TINYPY_DECREF(list_items);
@@ -3713,99 +3717,109 @@ static tinypy_bool_t __tinypy_copy_reg_callable(tinypy_value_t *value) {
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* '_%s%s' % (c.__name__.lstrip('_'), name) for a private slot of an entry
-   of cls.__mro__; an entry that is no class answers through its __name__
-   attribute. */
-static tinypy_value_t *__tinypy_copy_reg_slot_name(tinypy_vm_t *vm, tinypy_value_t *owner, tinypy_value_t *slot, tinypy_error_t **out_error) {
-    const uint8_t *bytes = TINYPY_TEXT_BYTES(slot);
-    size_t size = TINYPY_TEXT_BYTE_SIZE(slot);
-    tinypy_value_type_e owner_kind = TINYPY_VALUE_KIND(owner);
-    tinypy_value_t *owner_name = NULL;
-    const char *class_name;
-    size_t class_name_size;
-    size_t class_start = 0U;
-    uint8_t *mangled;
-    size_t mangled_size;
-    tinypy_value_t *result;
+static tinypy_value_t *__tinypy_copy_reg_call_method(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *name, tinypy_value_t *const *items, size_t count, tinypy_error_t **out_error) {
+    tinypy_value_t *method = tinypy_object_get_attr_value(value, name, out_error);
 
-    if (size < 3U || bytes[0] != (uint8_t)'_' || bytes[1] != (uint8_t)'_' || (bytes[size - 2U] == (uint8_t)'_' && bytes[size - 1U] == (uint8_t)'_')) {
-        return TINYPY_RET(slot);
+    if (method == NULL) {
+        return NULL;
     }
-    if (owner_kind == TINYPY_VALUE_TYPE) {
-        class_name = ((const tinypy_type_t *)owner)->name;
-        class_name_size = ((const tinypy_type_t *)owner)->name_size;
-    }
-    else if (owner_kind == TINYPY_VALUE_CLASS) {
-        owner_name = TINYPY_RET(TINYPY_CLASS_OBJECT(owner)->name);
-        class_name = (const char *)TINYPY_TEXT_BYTES(owner_name);
-        class_name_size = TINYPY_TEXT_BYTE_SIZE(owner_name);
-    }
-    else {
-        owner_name = tinypy_object_get_attr_value(owner, vm->internal_special_name_key, out_error);
-        if (owner_name == NULL) {
-            return NULL;
-        }
-        if (TINYPY_VALUE_KIND(owner_name) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(owner_name) != TINYPY_VALUE_UNICODE) {
-            tinypy_internal_object_make_attribute_error_key(owner_name, vm->internal_lstrip_key, out_error);
-            TINYPY_DECREF(owner_name);
-            return NULL;
-        }
-        class_name = (const char *)TINYPY_TEXT_BYTES(owner_name);
-        class_name_size = TINYPY_TEXT_BYTE_SIZE(owner_name);
-    }
-    while (class_start < class_name_size && class_name[class_start] == '_') {
-        class_start += 1U;
-    }
-    if (class_start == class_name_size) {
-        result = TINYPY_RET(slot);
-    }
-    else {
-        mangled_size = 1U + class_name_size - class_start + size;
-        mangled = (uint8_t *)__tinypy_internal_vm_allocate_checked(vm, mangled_size, out_error);
-        if (mangled == NULL) {
-            if (owner_name != NULL) {
-                TINYPY_DECREF(owner_name);
-            }
-            return NULL;
-        }
-        mangled[0] = (uint8_t)'_';
-        (void)memcpy(mangled + 1U, class_name + class_start, class_name_size - class_start);
-        (void)memcpy(mangled + 1U + class_name_size - class_start, bytes, size);
-        result = TINYPY_VALUE_KIND(slot) == TINYPY_VALUE_UNICODE
-                     ? tinypy_internal_unicode_from_utf8_checked(vm, (const char *)mangled, mangled_size, out_error)
-                     : tinypy_internal_string_from_bytes_checked(vm, mangled, mangled_size, out_error);
-        tinypy_internal_vm_deallocate(vm, mangled, mangled_size);
-    }
-    if (owner_name != NULL) {
-        TINYPY_DECREF(owner_name);
-    }
+    tinypy_value_t *result = __tinypy_constructor_call_with_items(vm, method, items, count, out_error);
+    TINYPY_DECREF(method);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* c.__dict__['__slots__'] when "__slots__" in c.__dict__, for an entry of
-   cls.__mro__ that a metaclass may make any iterable: a class probes its own
-   dictionary and any other object its __dict__ attribute. */
-static tinypy_bool_t __tinypy_copy_reg_entry_slots(tinypy_vm_t *vm, tinypy_value_t *entry, tinypy_value_t *slots_key, tinypy_value_t **out_slots, tinypy_error_t **out_error) {
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(entry);
-    tinypy_value_t *entry_dict;
-
-    *out_slots = NULL;
-    if (kind == TINYPY_VALUE_TYPE || kind == TINYPY_VALUE_CLASS) {
-        entry_dict = TINYPY_RET(tinypy_internal_type_mro_entry_dict(entry));
+/* copy_reg calls the slot's string methods and the public class name; both
+   may be supplied by Python subclasses or a metaclass. */
+static tinypy_value_t *__tinypy_copy_reg_slot_name(tinypy_vm_t *vm, tinypy_value_t *owner, tinypy_value_t *slot, tinypy_error_t **out_error) {
+    tinypy_value_t *prefix = tinypy_string_from_bytes(vm, "__", 2U);
+    tinypy_value_t *starts = __tinypy_copy_reg_call_method(vm, slot, vm->internal_startswith_key, &prefix, 1U, out_error);
+    if (starts == NULL) {
+        TINYPY_DECREF(prefix);
+        return NULL;
     }
-    else {
-        entry_dict = tinypy_object_get_attr_value(entry, vm->internal_special_dict_key, out_error);
-        if (entry_dict == NULL) {
-            return TINYPY_FALSE;
-        }
+    int32_t is_private = tinypy_truth(starts, out_error);
+    TINYPY_DECREF(starts);
+    if (is_private < 0) {
+        TINYPY_DECREF(prefix);
+        return NULL;
+    }
+    if (is_private == 0) {
+        TINYPY_DECREF(prefix);
+        return TINYPY_RET(slot);
+    }
+    tinypy_value_t *ends = __tinypy_copy_reg_call_method(vm, slot, vm->internal_endswith_key, &prefix, 1U, out_error);
+    TINYPY_DECREF(prefix);
+    if (ends == NULL) {
+        return NULL;
+    }
+    int32_t is_suffixed = tinypy_truth(ends, out_error);
+    TINYPY_DECREF(ends);
+    if (is_suffixed < 0) {
+        return NULL;
+    }
+    if (is_suffixed != 0) {
+        return TINYPY_RET(slot);
+    }
+
+    tinypy_value_t *owner_name = tinypy_object_get_attr_value(owner, vm->internal_special_name_key, out_error);
+    if (owner_name == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *underscore = tinypy_string_from_bytes(vm, "_", 1U);
+    tinypy_value_t *stripped = __tinypy_copy_reg_call_method(vm, owner_name, vm->internal_lstrip_key, &underscore, 1U, out_error);
+    TINYPY_DECREF(underscore);
+    TINYPY_DECREF(owner_name);
+    if (stripped == NULL) {
+        return NULL;
+    }
+    int32_t has_name = tinypy_truth(stripped, out_error);
+    if (has_name < 0) {
+        TINYPY_DECREF(stripped);
+        return NULL;
+    }
+    if (has_name == 0) {
+        TINYPY_DECREF(stripped);
+        return TINYPY_RET(slot);
+    }
+    tinypy_value_t *format = tinypy_string_from_bytes(vm, "_%s%s", 5U);
+    tinypy_value_t *values[] = {stripped, slot};
+    tinypy_value_t *arguments = tinypy_internal_tuple_from_items_checked(vm, values, 2U, out_error);
+    TINYPY_DECREF(stripped);
+    if (arguments == NULL) {
+        TINYPY_DECREF(format);
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_remainder(format, arguments, out_error);
+    TINYPY_DECREF(arguments);
+    TINYPY_DECREF(format);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* copy_reg reads c.__dict__ separately for membership and indexing. */
+static tinypy_bool_t __tinypy_copy_reg_entry_slots(tinypy_vm_t *vm, tinypy_value_t *entry, tinypy_value_t *slots_key, tinypy_value_t **out_slots, tinypy_error_t **out_error) {
+    *out_slots = NULL;
+    tinypy_value_t *entry_dict = tinypy_object_get_attr_value(entry, vm->internal_special_dict_key, out_error);
+    if (entry_dict == NULL) {
+        return TINYPY_FALSE;
     }
     int32_t present = tinypy_contains(entry_dict, slots_key, out_error);
-    if (present > 0) {
-        *out_slots = tinypy_get_item(entry_dict, slots_key, out_error);
-    }
     TINYPY_DECREF(entry_dict);
-    tinypy_bool_t found = present == 0 || *out_slots != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-    return found;
+    if (present < 0) {
+        return TINYPY_FALSE;
+    }
+    if (present == 0) {
+        return TINYPY_TRUE;
+    }
+    entry_dict = tinypy_object_get_attr_value(entry, vm->internal_special_dict_key, out_error);
+    if (entry_dict == NULL) {
+        return TINYPY_FALSE;
+    }
+    *out_slots = tinypy_get_item(entry_dict, slots_key, out_error);
+    TINYPY_DECREF(entry_dict);
+    if (*out_slots == NULL) {
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The pure-Python copy_reg reads its tables as module globals, so a deleted
@@ -4070,6 +4084,7 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *cache_key = NULL;
     tinypy_value_t *slots_key = NULL;
+    tinypy_value_t *special_slots = NULL;
     tinypy_value_t *mro_iterator = NULL;
     tinypy_value_t *candidate = NULL;
     tinypy_value_t *result = NULL;
@@ -4085,31 +4100,33 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument must be a class", out_error);
         return NULL;
     }
-    /* The class dictionary is held while it is probed: a colliding key may
-       replace it, and the cache then goes to the current one, as the
-       cls.__slotnames__ assignment of copy_reg does. */
-    tinypy_value_t *namespace_dict = kind == TINYPY_VALUE_TYPE ? ((tinypy_type_t *)type_value)->dict : TINYPY_CLASS_OBJECT(type_value)->dict;
     cache_key = TINYPY_RET(vm->internal_special_slotnames_key);
-    TINYPY_INCREF(namespace_dict);
-    tinypy_value_t *cached;
-    if (tinypy_internal_dict_get_optional_checked(vm, namespace_dict, cache_key, &cached, out_error) == 0) {
-        TINYPY_DECREF(namespace_dict);
+    tinypy_value_t *namespace_dict = tinypy_object_get_attr_value(type_value, vm->internal_special_dict_key, out_error);
+    if (namespace_dict == NULL) {
         TINYPY_DECREF(cache_key);
         return NULL;
     }
-    if (cached != NULL && TINYPY_VALUE_KIND(cached) != TINYPY_VALUE_NONE) {
-        TINYPY_INCREF(cached);
-        TINYPY_DECREF(namespace_dict);
+    tinypy_value_t *cached = __tinypy_copy_reg_call_method(vm, namespace_dict, vm->internal_get_key, &cache_key, 1U, out_error);
+    TINYPY_DECREF(namespace_dict);
+    if (cached == NULL) {
+        TINYPY_DECREF(cache_key);
+        return NULL;
+    }
+    if (TINYPY_VALUE_KIND(cached) != TINYPY_VALUE_NONE) {
         TINYPY_DECREF(cache_key);
         return cached;
     }
-    TINYPY_DECREF(namespace_dict);
+    TINYPY_DECREF(cached);
     result = tinypy_list_from_items(vm, NULL, 0U);
     slots_key = TINYPY_RET(vm->internal_special_slots_key);
-    tinypy_value_t *declared_slots = kind == TINYPY_VALUE_CLASS
-                                        ? tinypy_internal_class_lookup_key(vm, type_value, slots_key)
-                                        : tinypy_internal_type_lookup_key(vm, (tinypy_type_t *)type_value, slots_key);
+    tinypy_value_t *declared_slots = __tinypy_constructor_reduce_optional_attribute(type_value, slots_key);
     if (declared_slots != NULL) {
+        TINYPY_DECREF(declared_slots);
+        tinypy_value_t *special_names[] = {vm->internal_special_dict_key, vm->internal_special_weakref_key};
+        special_slots = tinypy_internal_tuple_from_items_checked(vm, special_names, 2U, out_error);
+        if (special_slots == NULL) {
+            goto error;
+        }
         /* The public MRO a metaclass may redefine: its iterator owns the
            snapshot that keeps the entries alive across callbacks that can
            change the class hierarchy. */
@@ -4164,18 +4181,12 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
                 }
                 break;
             }
-            if (TINYPY_VALUE_KIND(slot) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(slot) != TINYPY_VALUE_UNICODE) {
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(slot, 50U),
-                    TINYPY_MESSAGE_PART_LITERAL("' object has no attribute 'startswith'"),
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+            int32_t is_special = tinypy_contains(special_slots, slot, out_error);
+            if (is_special < 0) {
                 TINYPY_DECREF(slot);
                 goto error;
             }
-            if (TINYPY_NAME_EQ(slot, vm->internal_special_dict_key) != 0 || TINYPY_NAME_EQ(slot, vm->internal_special_weakref_key) != 0) {
+            if (is_special != 0) {
                 TINYPY_DECREF(slot);
                 continue;
             }
@@ -4198,13 +4209,19 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
     if (mro_iterator != NULL) {
         TINYPY_DECREF(mro_iterator);
     }
+    if (special_slots != NULL) {
+        TINYPY_DECREF(special_slots);
+    }
     TINYPY_DECREF(slots_key);
-    if (kind == TINYPY_VALUE_CLASS) {
-        tinypy_dict_set(TINYPY_CLASS_OBJECT(type_value)->dict, cache_key, result);
+    tinypy_internal_exception_state_t previous;
+    tinypy_error_t *cache_error = NULL;
+
+    tinypy_internal_exception_preserve_begin(vm, &previous);
+    (void)tinypy_object_set_attr_value(type_value, cache_key, result, &cache_error);
+    if (cache_error != NULL) {
+        tinypy_error_release(cache_error);
     }
-    else if ((((tinypy_type_t *)type_value)->flags & TINYPY_TYPE_FLAG_HEAP) != 0U) {
-        tinypy_type_set_attr_key((tinypy_type_t *)type_value, ((tinypy_type_t *)type_value)->vm->internal_special_slotnames_key, result);
-    }
+    tinypy_internal_exception_preserve_end(vm, &previous);
     TINYPY_DECREF(cache_key);
     return result;
 error:
@@ -4216,6 +4233,9 @@ error:
     }
     if (mro_iterator != NULL) {
         TINYPY_DECREF(mro_iterator);
+    }
+    if (special_slots != NULL) {
+        TINYPY_DECREF(special_slots);
     }
     TINYPY_DECREF(slots_key);
     TINYPY_DECREF(cache_key);

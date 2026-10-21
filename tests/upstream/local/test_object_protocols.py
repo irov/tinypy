@@ -1532,6 +1532,106 @@ class ObjectProtocols(unittest.TestCase):
         self.assertFalse('__new__' in dictproxy.__dict__)
         self.assert_message(TypeError, 'object.__new__(dictproxy) is not safe, use dictproxy.__new__()', dictproxy.__new__, dictproxy)
 
+    def test_slotnames_calls_slot_comparisons_and_methods(self):
+        import copy_reg
+
+        events = []
+        class Slot(str):
+            def startswith(self, prefix):
+                self.prefix = prefix
+                events.append(('startswith', prefix))
+                return True
+            def endswith(self, suffix):
+                events.append(('endswith', suffix, suffix is self.prefix))
+                return False
+        class S(object):
+            __slots__ = ('x',)
+        S.__slots__ = (Slot('x'),)
+        subject = S()
+        subject.x = 42
+        self.assertEqual(copy_reg._slotnames(S), ['_Sx'])
+        self.assertEqual(events, [('startswith', '__'), ('endswith', '__', True)])
+        self.assertIs(subject.__reduce_ex__(2)[2], None)
+
+        class EqualSlot(str):
+            def __eq__(self, other):
+                events.append(('equal', other))
+                return other == '__dict__'
+        C = type('C', (object,), {})
+        C.__slots__ = (EqualSlot('field'),)
+        self.assertEqual(copy_reg._slotnames(C), [])
+        self.assertEqual(events[-1], ('equal', '__dict__'))
+
+        class DuckSlot(object):
+            def __eq__(self, other):
+                return False
+            def startswith(self, prefix):
+                return False
+        D = type('D', (object,), {})
+        name = DuckSlot()
+        D.__slots__ = (name,)
+        self.assertIs(copy_reg._slotnames(D)[0], name)
+
+    def test_slotnames_reads_metaclass_visible_metadata(self):
+        import copy_reg
+
+        class HiddenSlots(type):
+            def __getattribute__(cls, name):
+                if name == '__slots__':
+                    raise AttributeError(name)
+                return type.__getattribute__(cls, name)
+        class Hidden(object):
+            __metaclass__ = HiddenSlots
+            __slots__ = ('field',)
+        subject = Hidden()
+        subject.field = 55
+        self.assertEqual(copy_reg._slotnames(Hidden), [])
+        self.assertIs(subject.__reduce_ex__(2)[2], None)
+
+        class SyntheticDict(type):
+            def __getattribute__(cls, name):
+                if name == '__dict__':
+                    return {'__slots__': ('fake',)}
+                return type.__getattribute__(cls, name)
+        class Synthetic(object):
+            __metaclass__ = SyntheticDict
+            __slots__ = ('actual',)
+        self.assertEqual(copy_reg._slotnames(Synthetic), ['fake'])
+
+        events = []
+        class Name(str):
+            def lstrip(self, characters):
+                events.append(characters)
+                return 'Alternate'
+        class SyntheticName(type):
+            def __getattribute__(cls, name):
+                if name == '__name__':
+                    return Name('Owner')
+                return type.__getattribute__(cls, name)
+        class Owner(object):
+            __metaclass__ = SyntheticName
+            __slots__ = ('__private',)
+        self.assertEqual(copy_reg._slotnames(Owner), ['_Alternate__private'])
+        self.assertEqual(events, ['_'])
+
+    def test_slotnames_cache_write_uses_metaclass_setattr(self):
+        import copy_reg
+
+        events = []
+        class Meta(type):
+            def __setattr__(cls, name, value):
+                events.append(name)
+                if name == '__slotnames__':
+                    raise RuntimeError('cache blocked')
+                return type.__setattr__(cls, name, value)
+        class C(object):
+            __metaclass__ = Meta
+            __slots__ = ('field',)
+        self.assertEqual(copy_reg._slotnames(C), ['field'])
+        self.assertEqual(copy_reg._slotnames(C), ['field'])
+        self.assertEqual(events, ['__slotnames__', '__slotnames__'])
+        self.assertFalse(hasattr(C, '__slotnames__'))
+
     def test_slotnames_probes_survive_replaced_class_dicts(self):
         import copy_reg
 

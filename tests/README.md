@@ -32,8 +32,8 @@ The run includes:
 3. Every selected portable case against external CPython 2.7.18, with discovery
    validation, exact source hashes for unchanged vendor modules, and zero
    allocator balance for each tinypy process. The current inventory contains 58
-   project-authored modules with 2,236 cases and 210 selected vendor cases,
-   for 2,446 selected cases in total.
+   project-authored modules with 2,240 cases and 210 selected vendor cases,
+   for 2,450 selected cases in total.
 4. A fixed matrix of 15,040 numeric and sequence outcomes. It compares values,
    result types and exception classes, including division, reflected builtin
    numeric combinations, infinities, NaN, subnormal/maximum finite doubles,
@@ -100,7 +100,7 @@ The run includes:
 The portable report is rejected for missing/duplicate cases, ordinary skips,
 DEFER, reference failures, or inconsistent counts. Only the four declared
 ownership-cycle adaptations may skip in Release; Debug must exercise the
-detector. Acceptance requires 2,446 PASS in Debug and 2,442 PASS with those
+detector. Acceptance requires 2,450 PASS in Debug and 2,446 PASS with those
 four expected detector SKIP results in Release. These are inventory requirements;
 the generated report records which profiles completed acceptance.
 Python-visible conversion errors, callbacks and error ordering remain

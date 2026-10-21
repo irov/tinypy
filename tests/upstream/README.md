@@ -1,8 +1,8 @@
 # Portable Python 2 tests
 
 This corpus vendors 20 complete CPython 2.7.18 modules with 221 discovered
-cases, of which 210 are selected, and adds fifty-two project-authored
-modules with 1,594 cases. The selected inventory contains 1,804 cases.
+cases, of which 210 are selected, and adds 58 project-authored
+modules with 2,240 cases. The selected inventory contains 2,450 cases.
 Upstream files are byte-for-byte unchanged.
 `manifest.json` records source commits, paths, SHA-256 hashes, case names and
 explicit reasons for excluding originals outside the tinypy corpus. Locally authored modules

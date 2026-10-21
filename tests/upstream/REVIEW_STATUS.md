@@ -183,7 +183,7 @@ reduction rejects variable-sized values when constructor arguments and custom
 state are unavailable, while retaining list/dict iterator state and CPython's
 fixed-size Unicode behavior. Reduction failure releases arguments before
 state, then its iterators, preserving callback order and the original error.
-The selected inventory is now 2,446 cases, with the existing four Release/LTO
+At that pass, the selected inventory contained 2,446 cases, with the existing four Release/LTO
 detector adaptations.
 
 This super/reduction correction passes all 273 validation stages on macOS
@@ -210,6 +210,34 @@ Primary references:
 [descrobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/descrobject.c),
 [weakrefobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/weakrefobject.c),
 and [typeobject.c](https://github.com/python/cpython/blob/v2.7.18/Objects/typeobject.c).
+
+## Slot-name reduction and copy_reg follow-up — accepted
+
+Four portable regressions cover transient and cached `__slotnames__` finalizers,
+dynamic slot-name comparisons and methods, metaclass-visible slot metadata,
+and cache writes through metaclass `__setattr__`. Protocol 2+ reduction retains
+its names and slots through result construction and releases them in CPython's
+cleanup order. `copy_reg._slotnames` uses the public attribute, comparison and
+string-method protocols for its reads and writes; rejected cache writes remain
+nonfatal. The source oracle is CPython 2.7.18
+[`typeobject.c`](https://github.com/python/cpython/blob/v2.7.18/Objects/typeobject.c)
+and [`copy_reg.py`](https://github.com/python/cpython/blob/v2.7.18/Lib/copy_reg.py).
+
+The selected inventory is 2,450 cases: 2,240 project-authored cases across 58
+modules and 210 selected vendor cases. All 273 validation stages pass on macOS
+arm64: Debug and ASan/UBSan each pass 2,450 portable cases; Release and LTO
+each pass 2,446 plus the four declared detector SKIP. Strict builds, 141 native
+groups, 43 runtime matrices with 361,017 outcomes per profile, 11,679 compiler
+comparisons per profile, symbol audits and allocator checks pass. The final
+source/test/SPEC SHA-256 is
+`5349b3ec49129ab46d819a64fd9d0b1ec80d0b89c756d6db4e68c9b21c2a9d27`.
+The accepted report is
+`/private/tmp/tinypy-slotnames-fix-final-validation/report.json`.
+Five supplemental scripts compare 1,364 scenario rows per profile (5,456
+comparisons total), including the 41 new audit cases and prior reduction and
+cleanup matrices. All outputs match CPython, sanitizer diagnostics are clean,
+and each TinyPy process ends with zero outstanding allocations; see
+`/private/tmp/tinypy-slotnames-fix-probes/report.json`.
 
 ## Historical eleventh-pass follow-up
 

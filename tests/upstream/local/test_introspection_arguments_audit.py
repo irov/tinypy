@@ -462,6 +462,47 @@ class IntrospectionArgumentsAudit(unittest.TestCase):
             value.__reduce_ex__(0)
         self.assertEqual(caught.exception.args, ('a class that defines __slots__ without defining __getstate__ cannot be pickled',))
 
+    def test_reduce_retains_slotnames_until_iterator_and_newobj_lookup(self):
+        import copy_reg
+        original_slotnames = copy_reg._slotnames
+        original_newobj = copy_reg.__newobj__
+        try:
+            for source in ('returned', 'cached'):
+                for protocol in (2, 3):
+                    events = []
+                    class Subject(list):
+                        def __iter__(self):
+                            events.append('iter')
+                            return iter(list.__getslice__(self, 0, len(self)))
+                        def __getattribute__(self, name):
+                            if source == 'cached' and name == 'field':
+                                del Subject.__slotnames__
+                                events.append('uncache')
+                            return list.__getattribute__(self, name)
+                    subject = Subject([1, 2])
+                    subject.field = 7
+                    class Names(list):
+                        def __del__(self):
+                            events.append('names')
+                            subject.append(9)
+                            del copy_reg.__newobj__
+                    if source == 'returned':
+                        copy_reg._slotnames = lambda cls: Names([])
+                    else:
+                        copy_reg._slotnames = original_slotnames
+                        Subject.__slotnames__ = Names(['field'])
+                    try:
+                        reduced = object.__reduce_ex__(subject, protocol)
+                    finally:
+                        copy_reg.__newobj__ = original_newobj
+                    self.assertIs(reduced[0], original_newobj)
+                    self.assertEqual(list(reduced[3]), [1, 2])
+                    expected = ['iter', 'names'] if source == 'returned' else ['uncache', 'iter', 'names']
+                    self.assertEqual(events, expected)
+        finally:
+            copy_reg._slotnames = original_slotnames
+            copy_reg.__newobj__ = original_newobj
+
     def test_reduce_validates_slotnames_result_and_uses_own_list_cache(self):
         import copy_reg
         original = copy_reg._slotnames
