@@ -255,24 +255,8 @@ static tinypy_bool_t __tinypy_module_arguments(tinypy_vm_t *vm, tinypy_value_t *
             *out_doc = values[index];
         }
     }
-    if (recognized != keywords) {
-        tinypy_dict_entry_t *entry = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
-        tinypy_dict_entry_t *end = TINYPY_DICT_ITERATOR_END(kwargs);
-
-        for (; entry != end; ++entry) {
-            if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) != 0
-                && !((TINYPY_NAME_EQ(entry->key, vm->internal_name_key) != TINYPY_FALSE)
-                     || (TINYPY_NAME_EQ(entry->key, vm->internal_doc_key) != TINYPY_FALSE))) {
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    {(const char *)TINYPY_TEXT_BYTES(entry->key), TINYPY_TEXT_BYTE_SIZE(entry->key)},
-                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function")
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-                goto failure;
-            }
-        }
+    if (__tinypy_internal_constructor_check_keywords(vm, kwargs, keywords - recognized, names, 2U, out_error) == 0) {
+        goto failure;
     }
     return TINYPY_TRUE;
 failure:

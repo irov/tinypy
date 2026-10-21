@@ -186,3 +186,38 @@ assert thrown.throw(ClassicSignal) == "caught"
 thrown = classic_catcher()
 thrown.next()
 assert thrown.throw(ClassicSignal()) == "caught"
+
+
+# What is thrown into an unstarted generator leaves it at its entry, so
+# close(), throw() and the release of one whose code fails verification
+# raise no verification error, as in CPython.
+import sys
+
+
+class UnraisableLog(object):
+    def __init__(self):
+        self.parts = []
+
+    def write(self, text):
+        self.parts.append(text)
+
+
+code_type = type(values.func_code)
+function_type = type(values)
+unverified = code_type(0, 0, 0, 0x63, "d\x00\x00V\x01d\x00\x00S", (None,), (), (), "unverified.py", "unverified", 1, "")
+unstarted = function_type(unverified, {})()
+unstarted.close()
+assert unstarted.gi_frame is None
+unstarted = function_type(unverified, {})()
+try:
+    unstarted.throw(KeyError("thrown"))
+except KeyError as error:
+    assert error.args == ("thrown",)
+assert unstarted.gi_frame is None
+saved_stderr = sys.stderr
+sys.stderr = UnraisableLog()
+unstarted = function_type(unverified, {})()
+del unstarted
+unraisable_parts = sys.stderr.parts
+sys.stderr = saved_stderr
+assert unraisable_parts == []

@@ -42,7 +42,10 @@ const tinypy_type_t *tinypy_type_mro_at(const tinypy_type_t *type, size_t index)
  * freed with its last reference, and a descriptor that outlives it accepts no
  * receiver. A native function held elsewhere too, such as the builtin len,
  * is stored unchanged, as PyObject_SetAttrString stores it: it stays a plain
- * function for every holder and binds no receiver. */
+ * function for every holder and binds no receiver. A native function set as
+ * __new__ is stored unchanged too: like the static method type_new makes of a
+ * Python __new__, it binds no receiver, and a class call passes it the class
+ * first. */
 tinypy_value_t *tinypy_type_get_attr(const tinypy_type_t *type, const char *name, size_t name_size);
 void tinypy_type_set_attr(tinypy_type_t *type, const char *name, size_t name_size, tinypy_value_t *value);
 /* Key variants borrow an existing str/unicode name from the same VM. They

@@ -994,40 +994,9 @@ tinypy_value_t *tinypy_internal_enumerate_create(tinypy_type_t *type, tinypy_val
             return NULL;
         }
     }
-    if (recognized_keyword_count != keyword_count) {
-        for (size_t slot = 0U; slot <= TINYPY_DICT_OBJECT(kwargs)->mask; ++slot) {
-            tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(kwargs)->table[slot];
-            tinypy_bool_t known = TINYPY_FALSE;
-
-            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
-                continue;
-            }
-            tinypy_value_type_e kind = TINYPY_VALUE_KIND(entry->key);
-            if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
-                for (size_t parameter = 0U; parameter < 2U; ++parameter) {
-                    if (TINYPY_NAME_EQ(entry->key, names[parameter]) != 0) {
-                        known = TINYPY_TRUE;
-                        break;
-                    }
-                }
-            }
-            if (known == 0) {
-                const char *name = (const char *)TINYPY_TEXT_BYTES(entry->key);
-                size_t size = TINYPY_TEXT_BYTE_SIZE(entry->key);
-                const char *nul = (const char *)memchr(name, 0, size);
-                if (nul != NULL) {
-                    size = (size_t)(nul - name);
-                }
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    {name, size < 200U ? size : 200U},
-                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function"),
-                };
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                __tinypy_enumerate_release_arguments(values);
-                return NULL;
-            }
-        }
+    if (__tinypy_internal_constructor_check_keywords(vm, kwargs, keyword_count - recognized_keyword_count, names, 2U, out_error) == 0) {
+        __tinypy_enumerate_release_arguments(values);
+        return NULL;
     }
     tinypy_value_t *iterable = values[0];
     tinypy_value_t *start = values[1];

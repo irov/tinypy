@@ -410,6 +410,13 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
     else {
         input = TINYPY_RET(source);
     }
+    /* The s* argument holds an export of a bytearray from the time it parses,
+       so neither the scalar parsers that run Python code after it nor an error
+       handler can resize the array. */
+    tinypy_value_t *exported = decode != 0 && TINYPY_VALUE_KIND(input) == TINYPY_VALUE_BYTEARRAY ? input : NULL;
+    if (exported != NULL) {
+        TINYPY_BYTEARRAY_OBJECT(exported)->exports += 1U;
+    }
     if (TINYPY_TUPLE_SIZE(args) >= 2U) {
         errors = TINYPY_TUPLE_GET(args, 1U);
         tinypy_value_type_e errors_kind = TINYPY_VALUE_KIND(errors);
@@ -451,15 +458,9 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
     if (text_input == NULL) {
         goto cleanup_input;
     }
-    /* The s* argument holds an export of a bytearray while it is decoded, so
-       an error handler cannot resize it. */
-    tinypy_bool_t exported = TINYPY_VALUE_KIND(input) == TINYPY_VALUE_BYTEARRAY ? TINYPY_TRUE : TINYPY_FALSE;
-    if (exported != 0) {
-        TINYPY_BYTEARRAY_OBJECT(input)->exports += 1U;
-    }
     converted = tinypy_internal_text_codec(vm, text_input, encoding, errors, decode, operation == (intptr_t)1 ? final : TINYPY_TRUE, &consumed, out_error);
-    if (exported != 0) {
-        TINYPY_BYTEARRAY_OBJECT(input)->exports -= 1U;
+    if (exported != NULL) {
+        TINYPY_BYTEARRAY_OBJECT(exported)->exports -= 1U;
     }
     TINYPY_DECREF(text_input);
     TINYPY_DECREF(input);
@@ -474,6 +475,9 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
     TINYPY_DECREF(converted);
     return result;
 cleanup_input:
+    if (exported != NULL) {
+        TINYPY_BYTEARRAY_OBJECT(exported)->exports -= 1U;
+    }
     TINYPY_DECREF(input);
     return NULL;
 }
@@ -491,72 +495,8 @@ static int32_t __tinypy_codecs_hex_digit(uint8_t character) {
     return -1;
 }
 //////////////////////////////////////////////////////////////////////////
-/* hex_encode(input, errors='strict') and hex_decode are Python functions
-   of encodings.hex_codec: their arguments bind as PyEval_EvalCodeEx binds
-   them. */
-static tinypy_bool_t __tinypy_codecs_hex_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t **outputs, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *name = tinypy_native_function_name(function);
-    tinypy_value_t *const names[2] = {vm->internal_input_key, vm->internal_errors_key};
-    size_t count = TINYPY_TUPLE_SIZE(args);
-    size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
-
-    if (count > 2U) {
-        tinypy_internal_make_arity_error(vm, (const char *)TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name), count + keyword_count, 1U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error);
-        return TINYPY_FALSE;
-    }
-    outputs[0] = count > 0U ? TINYPY_TUPLE_GET(args, 0U) : NULL;
-    outputs[1] = count > 1U ? TINYPY_TUPLE_GET(args, 1U) : NULL;
-    if (keyword_count != 0U) {
-        tinypy_dict_object_t *dictionary = TINYPY_DICT_OBJECT(kwargs);
-
-        for (size_t slot = 0U; slot <= dictionary->mask; ++slot) {
-            tinypy_dict_entry_t *entry = &dictionary->table[slot];
-            size_t index = 0U;
-
-            if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) == 0) {
-                continue;
-            }
-            if (TINYPY_VALUE_KIND(entry->key) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(entry->key) != TINYPY_VALUE_UNICODE) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
-                return TINYPY_FALSE;
-            }
-            while (index < 2U && TINYPY_NAME_EQ(entry->key, names[index]) == 0) {
-                index += 1U;
-            }
-            if (index == 2U || outputs[index] != NULL) {
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_TEXT(name),
-                    {index == 2U ? "() got an unexpected keyword argument '" : "() got multiple values for keyword argument '", index == 2U ? 39U : 45U},
-                    TINYPY_MESSAGE_PART_TEXT(entry->key),
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                return TINYPY_FALSE;
-            }
-            outputs[index] = entry->value;
-        }
-    }
-    if (outputs[0] == NULL) {
-        /* The count names the bound parameters, so a keyword errors alone
-           still reads "(1 given)". */
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_TEXT(name),
-            {outputs[1] != NULL ? "() takes at least 1 argument (1 given)" : "() takes at least 1 argument (0 given)", 38U},
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_codecs_hex(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_codecs_hex_bound(tinypy_vm_t *vm, tinypy_value_t *arguments, tinypy_bool_t decode, tinypy_error_t **out_error) {
     static const uint8_t hexadecimal[] = "0123456789abcdef";
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_bool_t decode = (intptr_t)user_data != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-    tinypy_value_t *values[2];
     tinypy_value_t *input;
     tinypy_value_t *bytes_value;
     tinypy_value_t *converted;
@@ -566,11 +506,8 @@ static tinypy_value_t *__tinypy_codecs_hex(tinypy_value_t *function, tinypy_valu
     uint8_t *output;
     size_t index;
 
-    if (__tinypy_codecs_hex_arguments(function, args, kwargs, values, out_error) == TINYPY_FALSE) {
-        return NULL;
-    }
-    if (values[1] != NULL) {
-        int32_t strict = tinypy_compare_bool(values[1], vm->internal_codec_strict_name, TINYPY_COMPARE_EQUAL, out_error);
+    if (TINYPY_TUPLE_SIZE(arguments) == 2U) {
+        int32_t strict = tinypy_compare_bool(TINYPY_TUPLE_GET(arguments, 1U), vm->internal_codec_strict_name, TINYPY_COMPARE_EQUAL, out_error);
 
         if (strict < 0) {
             return NULL;
@@ -587,7 +524,7 @@ static tinypy_value_t *__tinypy_codecs_hex(tinypy_value_t *function, tinypy_valu
             return NULL;
         }
     }
-    input = values[0];
+    input = TINYPY_TUPLE_GET(arguments, 0U);
     bytes_value = __tinypy_codecs_buffer_argument(vm, decode != 0 ? "a2b_hex" : "b2a_hex", 7U, input, out_error);
     if (bytes_value == NULL) {
         return NULL;
@@ -636,6 +573,23 @@ static tinypy_value_t *__tinypy_codecs_hex(tinypy_value_t *function, tinypy_valu
     }
     result = __tinypy_codecs_codec_result(vm, input, bytes_value, converted);
     TINYPY_DECREF(bytes_value);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* hex_encode(input, errors='strict') and hex_decode are Python functions
+   of encodings.hex_codec. */
+static tinypy_value_t *__tinypy_codecs_hex(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *const names[2] = {vm->internal_input_key, vm->internal_errors_key};
+    tinypy_value_t *arguments = tinypy_internal_native_bind_arguments(function, args, kwargs, names, 2U, 1U, TINYPY_FALSE, out_error);
+
+    if (arguments == NULL) {
+        return NULL;
+    }
+    tinypy_bool_t decode = (intptr_t)user_data != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_value_t *result = __tinypy_codecs_hex_bound(vm, arguments, decode, out_error);
+
+    TINYPY_DECREF(arguments);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1019,6 +973,17 @@ cleanup:
         TINYPY_DECREF(object);
     }
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The policy of a builtin error handler, from strict (0) to
+   backslashreplace (4), whose result a builtin codec may produce without
+   calling it; -1 for any other callable. */
+int32_t tinypy_internal_codecs_error_policy(tinypy_value_t *handler) {
+    if (TINYPY_VALUE_KIND(handler) != TINYPY_VALUE_NATIVE_FUNCTION || TINYPY_NATIVE_FUNCTION_OBJECT(handler)->callback != __tinypy_codecs_error_handler || TINYPY_NATIVE_FUNCTION_OBJECT(handler)->self != NULL) {
+        return -1;
+    }
+    int32_t policy = (int32_t)(intptr_t)TINYPY_NATIVE_FUNCTION_OBJECT(handler)->user_data;
+    return policy;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_codecs_add_function(tinypy_value_t *module, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data) {

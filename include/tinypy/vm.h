@@ -30,10 +30,10 @@ typedef struct tinypy_host_t {
     uint32_t struct_size;
     void *user_data;
 
-    /* Returns the artifact of the request, or NULL without one: an
-     * exception raised before returning NULL fails the import, except an
-     * ImportError, which, as from a finder, means that nobody provides the
-     * module. */
+    /* Returns the artifact of the request, or NULL without one. An
+     * exception raised before it returns fails the import, with or without
+     * an artifact, except an ImportError raised before returning NULL,
+     * which, as from a finder, means that nobody provides the module. */
     const tinypy_module_artifact_t *(*resolve_module)(void *user_data, const tinypy_module_request_t *request);
 
     void (*release_module_artifact)(void *user_data, const tinypy_module_artifact_t *artifact);

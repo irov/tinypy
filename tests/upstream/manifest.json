@@ -1136,10 +1136,15 @@
         "ContainerDeep.test_building_cuts_an_unfilled_reservation_back",
         "ContainerDeep.test_builtin_iterator_exhaustion_is_sticky",
         "ContainerDeep.test_bytearray_count_searches_the_bounded_range",
+        "ContainerDeep.test_bytearray_decoders_read_the_exported_bytes",
         "ContainerDeep.test_bytearray_decoding_holds_an_export",
+        "ContainerDeep.test_bytearray_exports_refuse_what_the_storage_cannot_hold",
         "ContainerDeep.test_bytearray_in_place_results_that_fit_ignore_exports",
+        "ContainerDeep.test_bytearray_init_copies_its_own_bytes_before_resizing",
         "ContainerDeep.test_bytearray_item_index_callback_error_is_preserved",
         "ContainerDeep.test_bytearray_item_range_and_exact_string_errors",
+        "ContainerDeep.test_bytearray_pop_takes_the_size_before_the_index",
+        "ContainerDeep.test_bytearray_storage_follows_pybytearray_resize",
         "ContainerDeep.test_comparison_refilling_the_free_slot_finds_that_entry",
         "ContainerDeep.test_container_constructor_and_wrapper_messages",
         "ContainerDeep.test_dict_ordering_compares_the_entries_once",
@@ -1159,6 +1164,7 @@
         "ContainerDeep.test_list_self_subclass_extension_is_atomic_on_iterator_failure",
         "ContainerDeep.test_list_self_subclass_extension_snapshots_before_appending",
         "ContainerDeep.test_lookup_finds_the_stored_key_whatever_its_hash",
+        "ContainerDeep.test_memoryview_keeps_the_bytes_it_exported",
         "ContainerDeep.test_merge_does_not_resize_a_target_emptied_midway",
         "ContainerDeep.test_mutation_methods_accept_int_not_index",
         "ContainerDeep.test_mutation_methods_integer_callback_errors_precede_empty_check",
@@ -1166,6 +1172,7 @@
         "ContainerDeep.test_mutation_methods_integer_subclass_conversion",
         "ContainerDeep.test_negative_length_hint_message_follows_the_call",
         "ContainerDeep.test_object_init_only_checks_its_arguments",
+        "ContainerDeep.test_repeating_past_the_largest_size",
         "ContainerDeep.test_reversed_iterator_exhausts_after_arbitrary_item_error",
         "ContainerDeep.test_reversed_iterator_type_and_subclassability",
         "ContainerDeep.test_reversed_list_iterator_length_hint_and_sticky_exhaustion",
@@ -1189,6 +1196,7 @@
         "ContainerDeep.test_shrinking_lists_give_storage_back",
         "ContainerDeep.test_slice_removal_finalizers_may_extend_the_list",
         "ContainerDeep.test_slice_removal_releases_items_once_the_list_is_consistent",
+        "ContainerDeep.test_sort_reports_extending_with_no_length_hint",
         "ContainerDeep.test_sort_reverse_c_int_overflow",
         "ContainerDeep.test_sort_reverse_rejects_invalid_protocols",
         "ContainerDeep.test_sort_reverse_uses_integer_conversion",
@@ -1456,6 +1464,7 @@
         "TypeDeep.test_bases_iteration_error_is_preserved",
         "TypeDeep.test_bases_iteration_merges_types_outside_the_bases",
         "TypeDeep.test_bases_tuple_identity_and_subtype_protocol",
+        "TypeDeep.test_builtin_new_entry_is_the_constructor_function",
         "TypeDeep.test_builtin_new_keeps_the_inherited_constructor",
         "TypeDeep.test_changing_slots_attribute_does_not_change_layout",
         "TypeDeep.test_default_weakrefs_match_variable_layout",
@@ -1467,6 +1476,7 @@
         "TypeDeep.test_namespace_copied_after_slots_callbacks",
         "TypeDeep.test_namespace_dict_subtype_hooks_are_bypassed",
         "TypeDeep.test_namespace_values_shadow_generated_special_descriptors",
+        "TypeDeep.test_new_update_holds_a_subclass_its_lookup_releases",
         "TypeDeep.test_nonempty_variable_layout_slots_rejected_first",
         "TypeDeep.test_object_init_takes_arguments_while_slot_new_stays",
         "TypeDeep.test_python_new_keeps_slot_new_once_removed",
@@ -1590,6 +1600,7 @@
         "BuiltinEdges.test_dict_mapping_insert_error_releases_key_value_iterator",
         "BuiltinEdges.test_dict_mapping_lookup_error_releases_iterator_before_key",
         "BuiltinEdges.test_dir_merge_survives_dict_replacement",
+        "BuiltinEdges.test_dir_merges_bases_deeper_than_the_recursion_limit",
         "BuiltinEdges.test_enumerate_pairs_release_previous_items",
         "BuiltinEdges.test_exhausted_enumerate_lets_its_last_pair_go",
         "BuiltinEdges.test_extend_accepts_float_length_result",
@@ -1710,6 +1721,7 @@
       "origin": "project-authored",
       "cases": [
         "DescriptorEdges.test_callable_descriptors_reinit_and_argument_errors",
+        "DescriptorEdges.test_class_and_slice_members_are_builtin_descriptors",
         "DescriptorEdges.test_classic_lookup_calls_every_descriptor_get",
         "DescriptorEdges.test_heap_descriptor_get_is_called_unbound",
         "DescriptorEdges.test_init_descriptor_is_released_before_the_call",
@@ -2145,8 +2157,10 @@
         "OperatorDispatchAudit.test_classic_success_precedes_right_coercion",
         "OperatorDispatchAudit.test_coercion_tuple_lives_through_replacement_callback",
         "OperatorDispatchAudit.test_distinct_numeric_builtin_slot_remains_available",
+        "OperatorDispatchAudit.test_foreign_attribute_wrapper_keeps_the_slot_of_an_exception",
         "OperatorDispatchAudit.test_foreign_iter_wrapper_falls_back_to_the_sequence_protocol",
         "OperatorDispatchAudit.test_foreign_slot_wrapper_keeps_the_inherited_slot",
+        "OperatorDispatchAudit.test_foreign_wrapper_of_a_sequence_slot_leaves_it_empty",
         "OperatorDispatchAudit.test_inplace_notimplemented_calls_hook_once",
         "OperatorDispatchAudit.test_inplace_preserves_callback_error_identity_and_text",
         "OperatorDispatchAudit.test_inplace_unsupported_error_uses_augmented_symbol",
@@ -2741,6 +2755,7 @@
       "cases": [
         "UnicodeMethodsAudit.test_builtin_codecs_convert_runs_around_errors",
         "UnicodeMethodsAudit.test_builtin_codecs_resume_where_handlers_point",
+        "UnicodeMethodsAudit.test_builtin_codecs_take_dense_errors_as_runs",
         "UnicodeMethodsAudit.test_decode_error_handler_is_cached_within_one_conversion",
         "UnicodeMethodsAudit.test_decode_replace_handler_only_uses_clamped_end",
         "UnicodeMethodsAudit.test_decoder_exception_retains_snapshot_when_mutation_adds_an_error",
@@ -2811,6 +2826,7 @@
         "NumericSemantics.test_complex_repr_keeps_sixteen_integer_digits",
         "NumericSemantics.test_complex_str_keeps_twelve_integer_digits",
         "NumericSemantics.test_division_by_two_digit_divisors",
+        "NumericSemantics.test_divisions_keep_the_floor_identity",
         "NumericSemantics.test_float_literals_round_like_float_text",
         "NumericSemantics.test_float_str_keeps_eleven_integer_digits",
         "NumericSemantics.test_float_str_keeps_the_zeros_of_a_tie_rounded_down",
@@ -2821,6 +2837,8 @@
         "NumericSemantics.test_integer_power_keeps_int_until_a_step_overflows",
         "NumericSemantics.test_integral_float_hashes_as_the_integer",
         "NumericSemantics.test_lopsided_products_match_single_digit_sums",
+        "NumericSemantics.test_modular_powers_match_right_to_left_squaring",
+        "NumericSemantics.test_products_and_squares_across_the_word_kernels",
         "NumericSemantics.test_recycled_floats_hold_their_own_values",
         "NumericSemantics.test_reflected_float_subtraction_keeps_the_nan_operand"
       ]
@@ -2925,6 +2943,7 @@
       "origin": "project-authored",
       "cases": [
         "ExceptionParity.test_builtin_method_under_another_slot_name_is_called",
+        "ExceptionParity.test_class_and_members_read_in_the_deepest_frame",
         "ExceptionParity.test_class_released_in_the_deepest_frame_reports_nothing",
         "ExceptionParity.test_classic_lookup_compares_keys_at_the_depth_of_its_caller",
         "ExceptionParity.test_classic_lookup_takes_no_recursion_level",
@@ -2934,7 +2953,8 @@
         "ExceptionParity.test_recursion_in_str_and_repr_names_the_conversion",
         "ExceptionParity.test_runtime_error_raised_in_the_deepest_frame_is_caught_one_frame_up",
         "ExceptionParity.test_setstate_names_the_type_of_a_key_that_is_no_string",
-        "ExceptionParity.test_syntax_error_located_after_raising_keeps_its_message"
+        "ExceptionParity.test_syntax_error_located_after_raising_keeps_its_message",
+        "ExceptionParity.test_tuple_clause_in_the_deepest_frame_keeps_the_exception"
       ]
     },
     "local.test_runtime_parity_audit": {
@@ -2955,6 +2975,22 @@
         "RuntimeParityAudit.test_slice_releases_its_step_first",
         "RuntimeParityAudit.test_type_checks_run_the_default_rules",
         "RuntimeParityAudit.test_unraisable_report_writes_names_up_to_their_first_nul"
+      ]
+    },
+    "local.test_keyword_arguments_audit": {
+      "path": "local/test_keyword_arguments_audit.py",
+      "origin": "project-authored",
+      "cases": [
+        "KeywordArgumentsAudit.test_a_key_that_is_not_a_str_is_rejected_before_it_is_read",
+        "KeywordArgumentsAudit.test_copy_reg_functions_bind_keywords_as_python_functions",
+        "KeywordArgumentsAudit.test_copy_reg_functions_report_keywords_as_python_functions",
+        "KeywordArgumentsAudit.test_extra_key_is_reported_up_to_its_first_nul_and_in_full",
+        "KeywordArgumentsAudit.test_extra_key_naming_a_parameter_before_its_first_nul_is_ignored",
+        "KeywordArgumentsAudit.test_hex_codec_binds_keywords_as_python_functions",
+        "KeywordArgumentsAudit.test_hex_codec_holds_arguments_a_comparison_releases",
+        "KeywordArgumentsAudit.test_str_subclass_keys_are_str",
+        "KeywordArgumentsAudit.test_subclasshook_rejects_keywords_as_a_c_function",
+        "KeywordArgumentsAudit.test_unicode_keys_name_parameters_and_extra_ones_must_be_str"
       ]
     }
   },

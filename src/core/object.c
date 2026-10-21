@@ -1154,28 +1154,60 @@ static const uint64_t __tinypy_object_dispatch_slots[] = {
     TINYPY_INTERNAL_DISPATCH_BIT(SETATTR) | TINYPY_INTERNAL_DISPATCH_BIT(DELATTR),
 };
 //////////////////////////////////////////////////////////////////////////
+/* The names of sq_concat and sq_repeat and of their in-place forms, slots
+   that update_one_slot fills from a slot wrapper alone. */
+static const uint64_t __tinypy_object_sequence_specials = TINYPY_INTERNAL_DISPATCH_BIT(ADD) | TINYPY_INTERNAL_DISPATCH_BIT(MUL) | TINYPY_INTERNAL_DISPATCH_BIT(RMUL) | TINYPY_INTERNAL_DISPATCH_BIT(IADD) | TINYPY_INTERNAL_DISPATCH_BIT(IMUL);
+//////////////////////////////////////////////////////////////////////////
+/* The built-in sequences, which fill sq_concat and sq_repeat rather than
+   the number slots of the same names. */
+static tinypy_bool_t __tinypy_object_sequence_kind(tinypy_value_type_e kind) {
+    switch (kind) {
+    case TINYPY_VALUE_STRING:
+    case TINYPY_VALUE_UNICODE:
+    case TINYPY_VALUE_TUPLE:
+    case TINYPY_VALUE_LIST:
+    case TINYPY_VALUE_BYTEARRAY:
+    case TINYPY_VALUE_BUFFER:
+        return TINYPY_TRUE;
+    default:
+        return TINYPY_FALSE;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 /* update_one_slot passes over a slot wrapper of a type the value's type does
    not derive from under the name of its own slot, which could not bind to
-   the value: the value's type keeps the C slot that its built-in base fills
-   for that name when another name of that slot still finds the slot wrapper
-   of the base. */
-static tinypy_bool_t __tinypy_object_dispatch_slot_inherited(tinypy_value_t *value, tinypy_internal_dispatch_e special, tinypy_value_t *key) {
+   the value, when the built-in base of the value's type, object for native
+   instances, fills that slot. The value's type keeps the C slot of its base
+   when another name of that slot still finds the slot wrapper of the base.
+   Otherwise sq_concat and sq_repeat with their in-place forms, which no
+   method fills, stay empty, so the name defines nothing, and any other slot
+   calls the method, which fails. */
+static void __tinypy_object_dispatch_foreign_wrapper(tinypy_value_t *value, tinypy_internal_dispatch_e special, tinypy_value_t *key, tinypy_bool_t *in_out_defined, tinypy_bool_t *in_out_overridden) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-    uint64_t bit = TINYPY_INTERNAL_DISPATCH_MASK(special);
-    uint64_t siblings = 0U;
 
+    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+        return;
+    }
+    const tinypy_type_t *base = (size_t)kind < TINYPY_BUILTIN_TYPE_COUNT ? &vm->types[kind] : &vm->types[TINYPY_VALUE_INSTANCE];
+    if (tinypy_internal_type_lookup_key(vm, base, key) == NULL) {
+        return;
+    }
+    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
+    if (attribute == NULL || attribute->type != vm->native_wrapper_descriptor_type || TINYPY_NAME_EQ(TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->name, key) == 0 || tinypy_internal_native_method_applies(attribute, value) != 0) {
+        return;
+    }
+    uint64_t bit = TINYPY_INTERNAL_DISPATCH_MASK(special);
+    if ((__tinypy_object_sequence_specials & bit) != 0U && __tinypy_object_sequence_kind(kind) != 0) {
+        *in_out_defined = TINYPY_FALSE;
+        *in_out_overridden = TINYPY_FALSE;
+        return;
+    }
+    uint64_t siblings = 0U;
     for (size_t index = 0U; index < sizeof(__tinypy_object_dispatch_slots) / sizeof(__tinypy_object_dispatch_slots[0]); ++index) {
         if ((__tinypy_object_dispatch_slots[index] & bit) != 0U) {
             siblings = __tinypy_object_dispatch_slots[index] & ~bit;
         }
-    }
-    if (siblings == 0U || (size_t)kind >= TINYPY_BUILTIN_TYPE_COUNT || kind == TINYPY_VALUE_OLD_INSTANCE || tinypy_internal_type_lookup_key(vm, &vm->types[kind], key) == NULL) {
-        return TINYPY_FALSE;
-    }
-    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
-    if (attribute == NULL || attribute->type != vm->native_wrapper_descriptor_type || TINYPY_NAME_EQ(TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->name, key) == 0 || tinypy_internal_native_method_applies(attribute, value) != 0) {
-        return TINYPY_FALSE;
     }
     while (siblings != 0U) {
         size_t sibling = __tinypy_internal_lowest_bit_index(siblings);
@@ -1183,10 +1215,10 @@ static tinypy_bool_t __tinypy_object_dispatch_slot_inherited(tinypy_value_t *val
 
         siblings &= ~TINYPY_INTERNAL_DISPATCH_MASK(sibling);
         if (tinypy_internal_object_has_special_key(value, sibling_key) != 0 && tinypy_internal_object_has_special_override_key(value, sibling_key) == 0) {
-            return TINYPY_TRUE;
+            *in_out_overridden = TINYPY_FALSE;
+            return;
         }
     }
-    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Records the answers for a dispatch special of a type whose dispatch memo
@@ -1226,8 +1258,8 @@ tinypy_bool_t tinypy_internal_object_memoize_dispatch(tinypy_value_t *value, uin
         tinypy_bool_t defined = tinypy_internal_object_has_special_key(value, key);
         tinypy_bool_t overridden = defined != 0 ? tinypy_internal_object_has_special_override_key(value, key) : TINYPY_FALSE;
 
-        if (overridden != 0 && __tinypy_object_dispatch_slot_inherited(value, (tinypy_internal_dispatch_e)special, key) != 0) {
-            overridden = TINYPY_FALSE;
+        if (overridden != 0) {
+            __tinypy_object_dispatch_foreign_wrapper(value, (tinypy_internal_dispatch_e)special, key, &defined, &overridden);
         }
 
         /* A lookup comparing keys may have run Python code that changed the

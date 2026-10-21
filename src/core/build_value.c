@@ -19,17 +19,7 @@ static void __tinypy_build_value_system_error(tinypy_vm_t *vm, const char *messa
     if (vm->raised_value != NULL) {
         return;
     }
-
-    tinypy_value_t *text = tinypy_string_from_bytes(vm, message, strlen(message));
-    tinypy_value_t *args = tinypy_tuple_from_items(vm, &text, 1U);
-    tinypy_value_t *exception = tinypy_exception_new(vm->exception_types[TINYPY_EXCEPTION_SYSTEM_ERROR], args, NULL);
-
-    TINYPY_DECREF(args);
-    TINYPY_DECREF(text);
-    if (exception != NULL) {
-        tinypy_internal_exception_set_raised(vm, exception, NULL);
-        TINYPY_DECREF(exception);
-    }
+    tinypy_internal_exception_raise_system_error(vm, message, NULL);
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_build_value_remember_error(tinypy_build_value_state_t *state) {

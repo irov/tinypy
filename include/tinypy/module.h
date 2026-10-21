@@ -13,6 +13,11 @@ typedef enum tinypy_module_artifact_flag_e {
     TINYPY_MODULE_ARTIFACT_PACKAGE = 1 << 0
 } tinypy_module_artifact_flag_e;
 //////////////////////////////////////////////////////////////////////////
+/* Fills the module of an import and returns TRUE, or FALSE with an exception
+ * raised or an error in out_error. As _PyImport_LoadDynamicModule checks
+ * PyErr_Occurred after it, an exception left raised fails the import even
+ * when the initializer returns TRUE; a failed import leaves no module in
+ * sys.modules. */
 typedef tinypy_bool_t (*tinypy_native_module_initialize_t)(tinypy_value_t *module, void *user_data, tinypy_error_t **out_error);
 //////////////////////////////////////////////////////////////////////////
 struct tinypy_module_request_t {

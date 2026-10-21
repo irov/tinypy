@@ -1626,6 +1626,12 @@ void tinypy_internal_exception_make_diagnostic(tinypy_vm_t *vm, tinypy_error_t *
     tinypy_internal_make_exception_error(vm, exception_type, value, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
+void tinypy_internal_exception_raise_args(tinypy_vm_t *vm, tinypy_exception_type_index_e index, tinypy_value_t *args, tinypy_error_t **out_error) {
+    TINYPY_CLEAR_ERROR(out_error);
+    __tinypy_exception_raise_builtin(vm, index, args);
+    tinypy_internal_exception_make_diagnostic(vm, out_error);
+}
+//////////////////////////////////////////////////////////////////////////
 /* set_key_error. */
 void tinypy_internal_exception_raise_key_error(tinypy_vm_t *vm, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_value_t *args = tinypy_tuple_from_items(vm, &key, 1U);
@@ -1737,13 +1743,38 @@ static tinypy_value_t *__tinypy_exception_instance_class(tinypy_vm_t *vm, tinypy
     return &value->type->base.base;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_exception_matches_tuple(tinypy_value_t *exception, tinypy_value_t *candidate, tinypy_error_t **out_error) {
+static int32_t __tinypy_exception_matches_tuple(tinypy_vm_t *vm, tinypy_value_t *exception, tinypy_value_t *candidate);
+//////////////////////////////////////////////////////////////////////////
+/* PyErr_GivenExceptionMatches recurses into a nested tuple on the native
+   stack, which CPython does not bound, so only the native stack guard fails
+   it: like a failing check, that is reported as unraisable with the pending
+   exception set aside, and does not match. */
+static TINYPY_NOINLINE int32_t __tinypy_exception_matches_nested(tinypy_vm_t *vm, tinypy_value_t *exception, tinypy_value_t *candidate) {
+    tinypy_internal_exception_state_t state;
+    int32_t matched = 0;
+
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    if (__tinypy_internal_native_recursion_enter(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in __subclasscheck__", NULL) != 0) {
+        matched = __tinypy_exception_matches_tuple(vm, exception, candidate);
+        __tinypy_internal_native_recursion_leave(vm);
+    }
+    else {
+        tinypy_value_t *instance_class = __tinypy_exception_instance_class(vm, exception);
+        tinypy_value_t *exception_class = instance_class != NULL ? instance_class : exception;
+
+        tinypy_internal_output_unraisable(vm, exception_class);
+    }
+    tinypy_internal_exception_preserve_end(vm, &state);
+    return matched;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_exception_matches_tuple(tinypy_vm_t *vm, tinypy_value_t *exception, tinypy_value_t *candidate) {
     tinypy_value_t *const *iterator = TINYPY_TUPLE_ITERATOR_BEGIN(candidate);
     tinypy_value_t *const *iterator_end = TINYPY_TUPLE_ITERATOR_END(candidate);
 
     for (; iterator != iterator_end; ++iterator) {
         tinypy_value_t *item = *iterator;
-        int32_t matched = tinypy_exception_matches(exception, item, out_error);
+        int32_t matched = TINYPY_VALUE_KIND(item) == TINYPY_VALUE_TUPLE ? __tinypy_exception_matches_nested(vm, exception, item) : tinypy_exception_matches(exception, item, NULL);
 
         if (matched != 0) {
             return matched;
@@ -1752,20 +1783,16 @@ static int32_t __tinypy_exception_matches_tuple(tinypy_value_t *exception, tinyp
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyErr_GivenExceptionMatches matches the class of an instance, and values
-   other than exception classes by identity, without raising: the failure of
-   a check that runs Python code is reported as unraisable. */
+/* PyErr_GivenExceptionMatches, which never fails and takes no recursion
+   level, so that an except clause matches in the deepest frame too, matches
+   the class of an instance, and values other than exception classes by
+   identity: the failure of a check that runs Python code is reported as
+   unraisable. */
 int32_t tinypy_exception_matches(tinypy_value_t *exception, tinypy_value_t *candidate, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(exception);
     TINYPY_CLEAR_ERROR(out_error);
     if (TINYPY_VALUE_KIND(candidate) == TINYPY_VALUE_TUPLE) {
-        /* Nested tuples recurse on the C stack; CPython has no guard here. */
-        if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in __subclasscheck__", out_error) == 0) {
-            return -1;
-        }
-        vm->evaluation_depth += 1U;
-        int32_t matched = __tinypy_exception_matches_tuple(exception, candidate, out_error);
-        vm->evaluation_depth -= 1U;
+        int32_t matched = __tinypy_exception_matches_tuple(vm, exception, candidate);
         return matched;
     }
     tinypy_value_t *instance_class = __tinypy_exception_instance_class(vm, exception);

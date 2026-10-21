@@ -615,6 +615,10 @@ tinypy_bool_t tinypy_internal_memoryview_is_readonly(const tinypy_value_t *value
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* A view of a bytearray covers the bytes it exported, as a Py_buffer does,
+   whatever size the array has since: the export keeps the storage of the
+   array, which holds them, in place. Other owners bound the view by their
+   current bytes. */
 const uint8_t *tinypy_internal_memoryview_view(const tinypy_value_t *value, size_t *out_size) {
     const tinypy_internal_memoryview_payload_t *payload = __tinypy_memoryview_const_payload(value);
     const uint8_t *bytes;
@@ -624,7 +628,9 @@ const uint8_t *tinypy_internal_memoryview_view(const tinypy_value_t *value, size
         bytes = (const uint8_t *)tinypy_string_view(payload->owner, &owner_size);
     }
     else if (TINYPY_VALUE_KIND(payload->owner) == TINYPY_VALUE_BYTEARRAY) {
-        bytes = (const uint8_t *)tinypy_bytearray_view(payload->owner, &owner_size);
+        bytes = TINYPY_BYTEARRAY_OBJECT(payload->owner)->bytes;
+        *out_size = payload->size;
+        return bytes != NULL ? bytes + payload->offset : NULL;
     }
     else {
         bytes = (const uint8_t *)tinypy_buffer_view(payload->owner, &owner_size);
@@ -819,15 +825,10 @@ static tinypy_hash_t __tinypy_memoryview_hash(tinypy_value_t *instance, void *pa
 static void __tinypy_memoryview_not_implemented(tinypy_vm_t *vm, tinypy_error_t **out_error) {
     tinypy_value_t *message = TINYPY_RET_EMPTY_STRING(vm);
     tinypy_value_t *args = tinypy_tuple_from_items(vm, &message, 1U);
-    tinypy_value_t *exception = tinypy_internal_exception_instantiate(vm->exception_types[TINYPY_EXCEPTION_NOT_IMPLEMENTED_ERROR], args, NULL, out_error);
 
+    tinypy_internal_exception_raise_args(vm, TINYPY_EXCEPTION_NOT_IMPLEMENTED_ERROR, args, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(message);
-    if (exception != NULL) {
-        tinypy_internal_exception_set_raised(vm, exception, NULL);
-        TINYPY_DECREF(exception);
-        tinypy_internal_exception_make_diagnostic(vm, out_error);
-    }
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_memoryview_index(tinypy_value_t *instance, tinypy_value_t *key, size_t size, size_t *out_index, tinypy_error_t **out_error) {

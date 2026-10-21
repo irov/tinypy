@@ -669,19 +669,6 @@ static void __tinypy_struct_duplicate_keyword(tinypy_vm_t *vm, tinypy_value_t *n
     tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 5U, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_struct_known_keyword(tinypy_value_t *key, tinypy_value_t *name) {
-    const uint8_t *bytes = TINYPY_TEXT_BYTES(key);
-    size_t size = TINYPY_TEXT_BYTE_SIZE(key);
-    const uint8_t *terminator = (const uint8_t *)memchr(bytes, 0, size);
-
-    if (terminator != NULL) {
-        size = (size_t)(terminator - bytes);
-    }
-    tinypy_bool_t known = size == TINYPY_TEXT_BYTE_SIZE(name) && memcmp(bytes, TINYPY_TEXT_BYTES(name), size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
-
-    return known;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_struct_unpack_from(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_struct_format_t format;
@@ -760,32 +747,10 @@ static tinypy_value_t *__tinypy_struct_unpack_from(tinypy_value_t *function, tin
     if (offset_value != NULL && tinypy_internal_integer_as_ssize(offset_value, &signed_offset, out_error) == 0) {
         goto cleanup;
     }
-    if (recognized != keyword_count) {
-        tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
-        tinypy_dict_entry_t *end = TINYPY_DICT_ITERATOR_END(kwargs);
+    tinypy_value_t *const names[2] = {vm->internal_buffer_key, vm->internal_offset_key};
 
-        for (; iterator != end; ++iterator) {
-            if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator) != 0 && TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
-                goto cleanup;
-            }
-            if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator) != 0 && __tinypy_struct_known_keyword(iterator->key, vm->internal_buffer_key) == TINYPY_FALSE && __tinypy_struct_known_keyword(iterator->key, vm->internal_offset_key) == TINYPY_FALSE) {
-                const uint8_t *bytes = TINYPY_TEXT_BYTES(iterator->key);
-                size_t size = TINYPY_TEXT_BYTE_SIZE(iterator->key);
-                const uint8_t *terminator = (const uint8_t *)memchr(bytes, 0, size);
-                if (terminator != NULL) {
-                    size = (size_t)(terminator - bytes);
-                }
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    {(const char *)bytes, size},
-                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function")
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-                goto cleanup;
-            }
-        }
+    if (__tinypy_internal_constructor_check_keywords(vm, kwargs, keyword_count - recognized, names, 2U, out_error) == 0) {
+        goto cleanup;
     }
     if (TINYPY_VALUE_KIND(buffer) == TINYPY_VALUE_NONE) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "unpack_from requires a buffer argument", out_error);

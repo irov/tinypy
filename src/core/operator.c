@@ -36,6 +36,14 @@ typedef enum tinypy_operator_long_division_result_e {
     TINYPY_OPERATOR_LONG_DIVISION_PAIR
 } tinypy_operator_long_division_result_e;
 
+typedef struct tinypy_operator_long_modulus_t {
+    const uint32_t *words;
+    const uint32_t *normalized;
+    uint32_t *product;
+    size_t count;
+    uint32_t shift;
+} tinypy_operator_long_modulus_t;
+
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_operator_is_integer(tinypy_value_type_e kind) {
     return kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG;
@@ -126,20 +134,24 @@ static size_t __tinypy_operator_view_bit_length(const tinypy_integer_view_t *vie
     return bits;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The 30-bit word of a magnitude at index: the pair of 15-bit digits it
+   covers. */
+static uint32_t __tinypy_operator_view_word(const tinypy_integer_view_t *view, size_t index) {
+    size_t digit_index = index * 2U;
+    uint32_t word = view->digits[digit_index];
+
+    if (digit_index + 1U < view->count) {
+        word |= (uint32_t)view->digits[digit_index + 1U] << 15U;
+    }
+    return word;
+}
+//////////////////////////////////////////////////////////////////////////
 /* The digit count and the most significant digit of a magnitude in
    CPython's 30-bit long digits. */
 static void __tinypy_operator_view_top_digit30(const tinypy_integer_view_t *view, size_t *out_count, uint32_t *out_top) {
     size_t count = (__tinypy_operator_view_bit_length(view) + 29U) / 30U;
-    uint32_t top = 0U;
+    uint32_t top = count != 0U ? __tinypy_operator_view_word(view, count - 1U) : 0U;
 
-    if (count != 0U) {
-        size_t index = (count - 1U) * 2U;
-
-        top = view->digits[index];
-        if (index + 1U < view->count) {
-            top |= (uint32_t)view->digits[index + 1U] << 15U;
-        }
-    }
     *out_count = count;
     *out_top = top;
 }
@@ -298,108 +310,215 @@ static tinypy_value_t *__tinypy_operator_long_add_views(tinypy_vm_t *vm, const t
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-#define TINYPY_LONG_KARATSUBA_CUTOFF 128U
-
-static size_t __tinypy_operator_trim_digits(const uint16_t *digits, size_t count);
-
-static void __tinypy_operator_long_multiply_schoolbook(uint16_t *output, size_t output_capacity, const uint16_t *left, size_t left_count, const uint16_t *right, size_t right_count) {
-    if (left_count > right_count) {
-        const uint16_t *digits = left;
-        size_t count = left_count;
-        left = right;
-        left_count = right_count;
-        right = digits;
-        right_count = count;
-    }
-    size_t left_index;
-
-    for (left_index = 0U; left_index < left_count; ++left_index) {
-        uint32_t carry = 0U;
-        size_t right_index;
-
-        for (right_index = 0U; right_index < right_count; ++right_index) {
-            size_t output_index = left_index + right_index;
-            uint32_t product = (uint32_t)output[output_index] + (uint32_t)left[left_index] * (uint32_t)right[right_index] + carry;
-
-            output[output_index] = (uint16_t)(product & TINYPY_LONG_MASK);
-            carry = product >> 15U;
-        }
-        right_index = left_index + right_count;
-        while (carry != 0U && right_index < output_capacity) {
-            uint32_t sum = (uint32_t)output[right_index] + carry;
-
-            output[right_index] = (uint16_t)(sum & TINYPY_LONG_MASK);
-            carry = sum >> 15U;
-            right_index += 1U;
-        }
-    }
-}
-//////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_operator_long_add_digits(uint16_t *output, const uint16_t *left, size_t left_count, const uint16_t *right, size_t right_count) {
-    size_t count = left_count > right_count ? left_count : right_count;
-    uint32_t carry = 0U;
-    size_t index;
-
-    for (index = 0U; index < count; ++index) {
-        uint32_t sum = (index < left_count ? (uint32_t)left[index] : 0U) + (index < right_count ? (uint32_t)right[index] : 0U) + carry;
-
-        output[index] = (uint16_t)(sum & TINYPY_LONG_MASK);
-        carry = sum >> 15U;
-    }
-    if (carry != 0U) {
-        output[count++] = (uint16_t)carry;
+static size_t __tinypy_operator_trim_digits(const uint16_t *digits, size_t count) {
+    while (count != 0U && digits[count - 1U] == 0U) {
+        count -= 1U;
     }
     return count;
 }
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_operator_long_subtract_digits(uint16_t *target, size_t target_count, const uint16_t *subtrahend, size_t subtrahend_count) {
-    uint32_t borrow = 0U;
-    size_t index;
+/* The multiplication and division kernels work on CPython's 30-bit digits,
+   called words here: each packs the pair of 15-bit digits it covers, least
+   significant first. Operands small enough use a local buffer; the
+   Karatsuba cutoffs are measured for these kernels. */
+#define TINYPY_LONG_WORD_BASE UINT32_C(0x40000000)
+#define TINYPY_LONG_WORD_MASK UINT32_C(0x3fffffff)
+#define TINYPY_LONG_LOCAL_WORDS 96U
+#define TINYPY_LONG_KARATSUBA_CUTOFF 60U
+#define TINYPY_LONG_KARATSUBA_SQUARE_CUTOFF 80U
+#define TINYPY_LONG_FIVEARY_CUTOFF 240U
 
-    for (index = 0U; index < target_count; ++index) {
-        uint32_t amount = (index < subtrahend_count ? (uint32_t)subtrahend[index] : 0U) + borrow;
+static size_t __tinypy_operator_long_word_count(size_t digit_count) {
+    size_t word_count = digit_count / 2U + (digit_count & 1U);
 
-        if ((uint32_t)target[index] < amount) {
-            target[index] = (uint16_t)((uint32_t)target[index] + TINYPY_LONG_BASE - amount);
-            borrow = 1U;
-        }
-        else {
-            target[index] = (uint16_t)((uint32_t)target[index] - amount);
-            borrow = 0U;
-        }
-    }
-    size_t return_value_1 = __tinypy_operator_trim_digits(target, target_count);
-    return return_value_1;
+    return word_count;
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_operator_long_add_shifted(uint16_t *output, size_t output_capacity, const uint16_t *digits, size_t count, size_t shift) {
-    uint32_t carry = 0U;
-    size_t index;
+static size_t __tinypy_operator_long_pack_words(uint32_t *words, const uint16_t *digits, size_t digit_count) {
+    size_t pair_count = digit_count / 2U;
 
-    for (index = 0U; index < count; ++index) {
-        uint32_t sum = (uint32_t)output[shift + index] + (uint32_t)digits[index] + carry;
-
-        output[shift + index] = (uint16_t)(sum & TINYPY_LONG_MASK);
-        carry = sum >> 15U;
+    for (size_t index = 0U; index != pair_count; ++index) {
+        words[index] = (uint32_t)digits[index * 2U] | ((uint32_t)digits[index * 2U + 1U] << 15U);
     }
-    index = shift + count;
-    while (carry != 0U && index < output_capacity) {
-        uint32_t sum = (uint32_t)output[index] + carry;
+    if ((digit_count & 1U) == 0U) {
+        return pair_count;
+    }
+    words[pair_count] = digits[digit_count - 1U];
+    return pair_count + 1U;
+}
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_operator_long_trim_words(const uint32_t *words, size_t count) {
+    while (count != 0U && words[count - 1U] == 0U) {
+        count -= 1U;
+    }
+    return count;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A new long of the sign and the magnitude the words hold. */
+static tinypy_value_t *__tinypy_operator_long_from_words(tinypy_vm_t *vm, int32_t sign, const uint32_t *words, size_t count, tinypy_error_t **out_error) {
+    count = __tinypy_operator_long_trim_words(words, count);
+    if (count == 0U) {
+        tinypy_value_t *zero = tinypy_internal_long_allocate_digits(vm, 0, 0U, out_error);
+        return zero;
+    }
+    size_t last = count - 1U;
+    size_t digit_count = words[last] > TINYPY_LONG_MASK ? count * 2U : count * 2U - 1U;
+    tinypy_value_t *result = tinypy_internal_long_allocate_digits(vm, sign, digit_count, out_error);
 
-        output[index] = (uint16_t)(sum & TINYPY_LONG_MASK);
-        carry = sum >> 15U;
+    if (result == NULL) {
+        return NULL;
+    }
+    uint16_t *digits = TINYPY_LONG_OBJECT(result)->digits;
+
+    for (size_t index = 0U; index != last; ++index) {
+        digits[index * 2U] = (uint16_t)(words[index] & TINYPY_LONG_MASK);
+        digits[index * 2U + 1U] = (uint16_t)(words[index] >> 15U);
+    }
+    digits[last * 2U] = (uint16_t)(words[last] & TINYPY_LONG_MASK);
+    if (digit_count != last * 2U + 1U) {
+        digits[last * 2U + 1U] = (uint16_t)(words[last] >> 15U);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static uint32_t *__tinypy_operator_long_allocate_words(tinypy_vm_t *vm, uint32_t *local_words, size_t count, tinypy_error_t **out_error) {
+    if (count <= TINYPY_LONG_LOCAL_WORDS) {
+        return local_words;
+    }
+    if (count > SIZE_MAX / sizeof(*local_words)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long int temporary storage is too large", out_error);
+        return NULL;
+    }
+    uint32_t *words = (uint32_t *)__tinypy_internal_vm_allocate_checked(vm, count * sizeof(*words), out_error);
+    return words;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_operator_long_release_words(tinypy_vm_t *vm, uint32_t *words, const uint32_t *local_words, size_t count) {
+    if (words != local_words) {
+        tinypy_internal_vm_deallocate(vm, words, count * sizeof(*words));
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_operator_long_compare_words(const uint32_t *left, size_t left_count, const uint32_t *right, size_t right_count) {
+    if (left_count != right_count) {
+        return left_count < right_count ? -1 : 1;
+    }
+    for (size_t index = left_count; index != 0U; --index) {
+        if (left[index - 1U] != right[index - 1U]) {
+            return left[index - 1U] < right[index - 1U] ? -1 : 1;
+        }
+    }
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_operator_long_carry_words(uint32_t *output, size_t output_capacity, size_t index, uint64_t carry) {
+    while (carry != 0U && index < output_capacity) {
+        carry += output[index];
+        output[index] = (uint32_t)(carry & TINYPY_LONG_WORD_MASK);
+        carry >>= 30U;
         index += 1U;
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_operator_long_multiply_digits(tinypy_vm_t *vm, uint16_t *output, size_t output_capacity, const uint16_t *left, size_t left_count, const uint16_t *right, size_t right_count, tinypy_error_t **out_error) {
+/* output[0, output_capacity) += left * right, as x_mul computes it: a square
+   takes every cross product once, doubled. */
+static void __tinypy_operator_long_multiply_schoolbook(uint32_t *output, size_t output_capacity, const uint32_t *left, size_t left_count, const uint32_t *right, size_t right_count) {
+    if (left == right && left_count == right_count) {
+        for (size_t left_index = 0U; left_index != left_count; ++left_index) {
+            uint64_t factor = left[left_index];
+            size_t output_index = left_index * 2U;
+            uint64_t carry = (uint64_t)output[output_index] + factor * factor;
+
+            output[output_index] = (uint32_t)(carry & TINYPY_LONG_WORD_MASK);
+            carry >>= 30U;
+            factor <<= 1U;
+            for (size_t right_index = left_index + 1U; right_index != left_count; ++right_index) {
+                output_index += 1U;
+                carry += (uint64_t)output[output_index] + (uint64_t)left[right_index] * factor;
+                output[output_index] = (uint32_t)(carry & TINYPY_LONG_WORD_MASK);
+                carry >>= 30U;
+            }
+            __tinypy_operator_long_carry_words(output, output_capacity, output_index + 1U, carry);
+        }
+        return;
+    }
+    if (left_count > right_count) {
+        const uint32_t *words = left;
+        size_t count = left_count;
+
+        left = right;
+        left_count = right_count;
+        right = words;
+        right_count = count;
+    }
+    for (size_t left_index = 0U; left_index != left_count; ++left_index) {
+        uint64_t factor = left[left_index];
+        uint32_t *window = output + left_index;
+        uint64_t carry = 0U;
+
+        for (size_t right_index = 0U; right_index != right_count; ++right_index) {
+            carry += (uint64_t)window[right_index] + (uint64_t)right[right_index] * factor;
+            window[right_index] = (uint32_t)(carry & TINYPY_LONG_WORD_MASK);
+            carry >>= 30U;
+        }
+        __tinypy_operator_long_carry_words(output, output_capacity, left_index + right_count, carry);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+static size_t __tinypy_operator_long_add_words(uint32_t *output, const uint32_t *left, size_t left_count, const uint32_t *right, size_t right_count) {
+    size_t count = left_count > right_count ? left_count : right_count;
+    uint32_t carry = 0U;
+
+    for (size_t index = 0U; index != count; ++index) {
+        uint32_t sum = (index < left_count ? left[index] : 0U) + (index < right_count ? right[index] : 0U) + carry;
+
+        output[index] = sum & TINYPY_LONG_WORD_MASK;
+        carry = sum >> 30U;
+    }
+    if (carry != 0U) {
+        output[count++] = carry;
+    }
+    return count;
+}
+//////////////////////////////////////////////////////////////////////////
+/* target -= subtrahend for a target at least as large; returns the trimmed
+   count. */
+static size_t __tinypy_operator_long_subtract_words(uint32_t *target, size_t target_count, const uint32_t *subtrahend, size_t subtrahend_count) {
+    uint32_t borrow = 0U;
+
+    for (size_t index = 0U; index != target_count; ++index) {
+        uint32_t difference = target[index] - ((index < subtrahend_count ? subtrahend[index] : 0U) + borrow);
+
+        borrow = difference >> 31U;
+        target[index] = difference & TINYPY_LONG_WORD_MASK;
+    }
+    size_t count = __tinypy_operator_long_trim_words(target, target_count);
+    return count;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_operator_long_add_shifted(uint32_t *output, size_t output_capacity, const uint32_t *words, size_t count, size_t shift) {
+    uint32_t carry = 0U;
+
+    for (size_t index = 0U; index != count; ++index) {
+        uint32_t sum = output[shift + index] + words[index] + carry;
+
+        output[shift + index] = sum & TINYPY_LONG_WORD_MASK;
+        carry = sum >> 30U;
+    }
+    __tinypy_operator_long_carry_words(output, output_capacity, shift + count, carry);
+}
+//////////////////////////////////////////////////////////////////////////
+/* output[0, output_capacity) += left * right: k_mul splits balanced operands
+   past the cutoffs, and squares when left and right are the same words. */
+static tinypy_bool_t __tinypy_operator_long_multiply_words(tinypy_vm_t *vm, uint32_t *output, size_t output_capacity, const uint32_t *left, size_t left_count, const uint32_t *right, size_t right_count, tinypy_error_t **out_error) {
+    tinypy_bool_t square = left == right && left_count == right_count ? TINYPY_TRUE : TINYPY_FALSE;
     size_t minimum_count = left_count < right_count ? left_count : right_count;
     size_t maximum_count = left_count > right_count ? left_count : right_count;
 
     if (minimum_count == 0U) {
         return TINYPY_TRUE;
     }
-    if (minimum_count < TINYPY_LONG_KARATSUBA_CUTOFF) {
+    if (minimum_count < (square != 0 ? TINYPY_LONG_KARATSUBA_SQUARE_CUTOFF : TINYPY_LONG_KARATSUBA_CUTOFF)) {
         __tinypy_operator_long_multiply_schoolbook(output, output_capacity, left, left_count, right, right_count);
         return TINYPY_TRUE;
     }
@@ -407,13 +526,13 @@ static tinypy_bool_t __tinypy_operator_long_multiply_digits(tinypy_vm_t *vm, uin
        high half, so the larger one is taken in slices of the smaller one's
        size, each a balanced product added in at its own offset. */
     if (minimum_count <= SIZE_MAX / 2U && maximum_count >= minimum_count * 2U) {
-        const uint16_t *smaller = left_count < right_count ? left : right;
-        const uint16_t *larger = left_count < right_count ? right : left;
+        const uint32_t *smaller = left_count < right_count ? left : right;
+        const uint32_t *larger = left_count < right_count ? right : left;
 
         for (size_t done = 0U; done < maximum_count; done += minimum_count) {
             size_t slice_count = maximum_count - done < minimum_count ? maximum_count - done : minimum_count;
 
-            if (__tinypy_operator_long_multiply_digits(vm, output + done, output_capacity - done, smaller, minimum_count, larger + done, slice_count, out_error) == 0) {
+            if (__tinypy_operator_long_multiply_words(vm, output + done, output_capacity - done, smaller, minimum_count, larger + done, slice_count, out_error) == 0) {
                 return TINYPY_FALSE;
             }
         }
@@ -431,12 +550,12 @@ static tinypy_bool_t __tinypy_operator_long_multiply_digits(tinypy_vm_t *vm, uin
     size_t right_sum_capacity;
     size_t cross_capacity;
     size_t scratch_capacity;
-    uint16_t *scratch;
-    uint16_t *zero_low;
-    uint16_t *zero_high;
-    uint16_t *left_sum;
-    uint16_t *right_sum;
-    uint16_t *cross;
+    uint32_t *scratch;
+    uint32_t *zero_low;
+    uint32_t *zero_high;
+    uint32_t *left_sum;
+    uint32_t *right_sum;
+    uint32_t *cross;
     size_t left_sum_count;
     size_t right_sum_count;
     size_t zero_low_count;
@@ -474,7 +593,7 @@ static tinypy_bool_t __tinypy_operator_long_multiply_digits(tinypy_vm_t *vm, uin
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long multiplication temporary storage is too large", out_error);
         return TINYPY_FALSE;
     }
-    scratch = (uint16_t *)__tinypy_internal_vm_allocate_checked(vm, scratch_capacity * sizeof(*scratch), out_error);
+    scratch = (uint32_t *)__tinypy_internal_vm_allocate_checked(vm, scratch_capacity * sizeof(*scratch), out_error);
     if (scratch == NULL) {
         return TINYPY_FALSE;
     }
@@ -484,20 +603,26 @@ static tinypy_bool_t __tinypy_operator_long_multiply_digits(tinypy_vm_t *vm, uin
     right_sum = left_sum + left_sum_capacity;
     cross = right_sum + right_sum_capacity;
     (void)memset(scratch, 0, scratch_capacity * sizeof(*scratch));
-    left_sum_count = __tinypy_operator_long_add_digits(left_sum, left, left_low_count, left + split, left_high_count);
-    right_sum_count = __tinypy_operator_long_add_digits(right_sum, right, right_low_count, right + split, right_high_count);
+    left_sum_count = __tinypy_operator_long_add_words(left_sum, left, left_low_count, left + split, left_high_count);
+    if (square != 0) {
+        right_sum = left_sum;
+        right_sum_count = left_sum_count;
+    }
+    else {
+        right_sum_count = __tinypy_operator_long_add_words(right_sum, right, right_low_count, right + split, right_high_count);
+    }
 
-    if (__tinypy_operator_long_multiply_digits(vm, zero_low, zero_low_capacity, left, left_low_count, right, right_low_count, out_error) == 0
-        || __tinypy_operator_long_multiply_digits(vm, zero_high, zero_high_capacity, left + split, left_high_count, right + split, right_high_count, out_error) == 0
-        || __tinypy_operator_long_multiply_digits(vm, cross, cross_capacity, left_sum, left_sum_count, right_sum, right_sum_count, out_error) == 0) {
+    if (__tinypy_operator_long_multiply_words(vm, zero_low, zero_low_capacity, left, left_low_count, right, right_low_count, out_error) == 0
+        || __tinypy_operator_long_multiply_words(vm, zero_high, zero_high_capacity, left + split, left_high_count, right + split, right_high_count, out_error) == 0
+        || __tinypy_operator_long_multiply_words(vm, cross, cross_capacity, left_sum, left_sum_count, right_sum, right_sum_count, out_error) == 0) {
         tinypy_internal_vm_deallocate(vm, scratch, scratch_capacity * sizeof(*scratch));
         return TINYPY_FALSE;
     }
-    zero_low_count = __tinypy_operator_trim_digits(zero_low, zero_low_capacity);
-    zero_high_count = __tinypy_operator_trim_digits(zero_high, zero_high_capacity);
-    cross_count = __tinypy_operator_trim_digits(cross, cross_capacity);
-    cross_count = __tinypy_operator_long_subtract_digits(cross, cross_count, zero_low, zero_low_count);
-    cross_count = __tinypy_operator_long_subtract_digits(cross, cross_count, zero_high, zero_high_count);
+    zero_low_count = __tinypy_operator_long_trim_words(zero_low, zero_low_capacity);
+    zero_high_count = __tinypy_operator_long_trim_words(zero_high, zero_high_capacity);
+    cross_count = __tinypy_operator_long_trim_words(cross, cross_capacity);
+    cross_count = __tinypy_operator_long_subtract_words(cross, cross_count, zero_low, zero_low_count);
+    cross_count = __tinypy_operator_long_subtract_words(cross, cross_count, zero_high, zero_high_count);
     __tinypy_operator_long_add_shifted(output, output_capacity, zero_low, zero_low_count, 0U);
     __tinypy_operator_long_add_shifted(output, output_capacity, cross, cross_count, split);
     __tinypy_operator_long_add_shifted(output, output_capacity, zero_high, zero_high_count, split * 2U);
@@ -506,312 +631,275 @@ static tinypy_bool_t __tinypy_operator_long_multiply_digits(tinypy_vm_t *vm, uin
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_operator_long_multiply_views(tinypy_vm_t *vm, const tinypy_integer_view_t *left, const tinypy_integer_view_t *right, tinypy_error_t **out_error) {
-    size_t capacity;
-    uint16_t *digits;
-    tinypy_value_t *result;
+/* The product of magnitudes of three words or more, multiplied as words. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_operator_long_multiply_packed(tinypy_vm_t *vm, int32_t sign, const tinypy_integer_view_t *left, const tinypy_integer_view_t *right, tinypy_error_t **out_error) {
+    size_t left_count = __tinypy_operator_long_word_count(left->count);
+    size_t right_count = __tinypy_operator_long_word_count(right->count);
+    tinypy_bool_t square = left->digits == right->digits && left->count == right->count ? TINYPY_TRUE : TINYPY_FALSE;
+    size_t product_count = left_count + right_count;
+    size_t scratch_count = (square != 0 ? left_count : product_count) + product_count;
+    uint32_t local_words[TINYPY_LONG_LOCAL_WORDS];
+    uint32_t *scratch = __tinypy_operator_long_allocate_words(vm, local_words, scratch_count, out_error);
 
-    if (left->sign == 0 || right->sign == 0) {
-        result = tinypy_internal_long_allocate_digits(vm, 0, 0U, out_error);
-        return result;
-    }
-    if (left->count > SIZE_MAX - right->count) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long int is too large", out_error);
+    if (scratch == NULL) {
         return NULL;
     }
-    capacity = left->count + right->count;
-    result = tinypy_internal_long_allocate_digits(vm, left->sign == right->sign ? 1 : -1, capacity, out_error);
-    if (result == NULL) {
-        return NULL;
-    }
-    digits = TINYPY_LONG_OBJECT(result)->digits;
-    if (left->count == 1U || right->count == 1U) {
-        const tinypy_integer_view_t *large = left->count == 1U ? right : left;
-        uint32_t multiplier = left->count == 1U ? left->digits[0] : right->digits[0];
-        uint32_t carry = 0U;
+    uint32_t *left_words = scratch;
+    uint32_t *right_words = left_words;
+    uint32_t *product = scratch + scratch_count - product_count;
 
-        for (size_t index = 0U; index < large->count; ++index) {
-            uint32_t product = (uint32_t)large->digits[index] * multiplier + carry;
+    (void)__tinypy_operator_long_pack_words(left_words, left->digits, left->count);
+    if (square == 0) {
+        right_words = left_words + left_count;
+        (void)__tinypy_operator_long_pack_words(right_words, right->digits, right->count);
+    }
+    (void)memset(product, 0, product_count * sizeof(*product));
+    tinypy_value_t *result = NULL;
 
-            digits[index] = (uint16_t)(product & TINYPY_LONG_MASK);
-            carry = product >> 15U;
-        }
-        digits[large->count] = (uint16_t)carry;
-        TINYPY_LONG_OBJECT(result)->digit_count = large->count + (carry != 0U ? 1U : 0U);
-        return result;
+    if (__tinypy_operator_long_multiply_words(vm, product, product_count, left_words, left_count, right_words, right_count, out_error) != 0) {
+        result = __tinypy_operator_long_from_words(vm, sign, product, product_count, out_error);
     }
-    (void)memset(digits, 0, capacity * sizeof(*digits));
-    if (__tinypy_operator_long_multiply_digits(vm, digits, capacity, left->digits, left->count, right->digits, right->count, out_error) == 0) {
-        TINYPY_DECREF(result);
-        return NULL;
-    }
-    TINYPY_LONG_OBJECT(result)->digit_count = __tinypy_operator_trim_digits(digits, capacity);
+    __tinypy_operator_long_release_words(vm, scratch, local_words, scratch_count);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_operator_trim_digits(const uint16_t *digits, size_t count) {
-    while (count != 0U && digits[count - 1U] == 0U) {
-        count -= 1U;
+static tinypy_value_t *__tinypy_operator_long_multiply_views(tinypy_vm_t *vm, const tinypy_integer_view_t *left, const tinypy_integer_view_t *right, tinypy_error_t **out_error) {
+    if (left->sign == 0 || right->sign == 0) {
+        tinypy_value_t *zero = tinypy_internal_long_allocate_digits(vm, 0, 0U, out_error);
+        return zero;
     }
-    return count;
+    int32_t sign = left->sign == right->sign ? 1 : -1;
+    const tinypy_integer_view_t *smaller = left->count <= right->count ? left : right;
+    const tinypy_integer_view_t *larger = left->count <= right->count ? right : left;
+
+    if (smaller->count <= 4U) {
+        /* A factor of up to two words scales the zeroed digits of the result
+           directly: its low word writes them, its high word adds in. */
+        size_t capacity = larger->count + smaller->count;
+        tinypy_value_t *result = tinypy_internal_long_allocate_digits(vm, sign, capacity, out_error);
+
+        if (result == NULL) {
+            return NULL;
+        }
+        uint16_t *digits = TINYPY_LONG_OBJECT(result)->digits;
+        uint64_t factor = __tinypy_operator_view_word(smaller, 0U);
+        uint64_t carry = 0U;
+
+        for (size_t index = 0U; index < larger->count; ++index) {
+            carry += (uint64_t)larger->digits[index] * factor;
+            digits[index] = (uint16_t)(carry & TINYPY_LONG_MASK);
+            carry >>= 15U;
+        }
+        for (size_t index = larger->count; carry != 0U; ++index) {
+            digits[index] = (uint16_t)(carry & TINYPY_LONG_MASK);
+            carry >>= 15U;
+        }
+        if (smaller->count > 2U) {
+            uint16_t *window = digits + 2U;
+
+            factor = __tinypy_operator_view_word(smaller, 1U);
+            for (size_t index = 0U; index < larger->count; ++index) {
+                carry += window[index] + (uint64_t)larger->digits[index] * factor;
+                window[index] = (uint16_t)(carry & TINYPY_LONG_MASK);
+                carry >>= 15U;
+            }
+            for (size_t index = larger->count; carry != 0U; ++index) {
+                carry += window[index];
+                window[index] = (uint16_t)(carry & TINYPY_LONG_MASK);
+                carry >>= 15U;
+            }
+        }
+        TINYPY_LONG_OBJECT(result)->digit_count = __tinypy_operator_trim_digits(digits, capacity);
+        return result;
+    }
+    tinypy_value_t *result = __tinypy_operator_long_multiply_packed(vm, sign, left, right, out_error);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_operator_compare_digits(const uint16_t *left, size_t left_count, const uint16_t *right, size_t right_count) {
-    size_t index;
+/* Shifts the words left by shift bits, below 30, into output, which may be
+   the words themselves, and returns the bits shifted out of the top word. */
+static uint32_t __tinypy_operator_long_shift_words_left(uint32_t *output, const uint32_t *words, size_t count, uint32_t shift) {
+    uint32_t carry = 0U;
 
-    left_count = __tinypy_operator_trim_digits(left, left_count);
-    right_count = __tinypy_operator_trim_digits(right, right_count);
-    if (left_count != right_count) {
-        return left_count < right_count ? -1 : 1;
+    for (size_t index = 0U; index != count; ++index) {
+        uint64_t shifted = ((uint64_t)words[index] << shift) | carry;
+
+        output[index] = (uint32_t)(shifted & TINYPY_LONG_WORD_MASK);
+        carry = (uint32_t)(shifted >> 30U);
     }
-    for (index = left_count; index != 0U; index -= 1U) {
-        if (left[index - 1U] != right[index - 1U]) {
-            return left[index - 1U] < right[index - 1U] ? -1 : 1;
+    return carry;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __tinypy_operator_long_shift_words_right(uint32_t *output, const uint32_t *words, size_t count, uint32_t shift) {
+    uint32_t mask = (UINT32_C(1) << shift) - 1U;
+    uint32_t carry = 0U;
+
+    for (size_t index = count; index != 0U; --index) {
+        uint32_t word = words[index - 1U];
+
+        output[index - 1U] = (uint32_t)((((uint64_t)carry << 30U) | word) >> shift);
+        carry = word & mask;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The shift that sets the high bit of a nonzero top word, as x_divrem
+   normalizes its divisor. */
+static uint32_t __tinypy_operator_long_normal_shift(uint32_t top) {
+    uint32_t shift = 0U;
+
+    while (top < (TINYPY_LONG_WORD_BASE >> 1U)) {
+        top <<= 1U;
+        shift += 1U;
+    }
+    return shift;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The loop of x_divrem for a normalized divisor of two words or more and a
+   dividend whose top word is below the divisor's: each step replaces a
+   window of the dividend by its remainder, so the remainder ends in the low
+   divisor_count words. quotient, unless NULL, receives dividend_count -
+   divisor_count words. */
+static void __tinypy_operator_long_divide_words(uint32_t *dividend, size_t dividend_count, const uint32_t *divisor, size_t divisor_count, uint32_t *quotient) {
+    uint32_t divisor_top = divisor[divisor_count - 1U];
+    uint32_t divisor_next = divisor[divisor_count - 2U];
+
+    for (size_t offset = dividend_count - divisor_count; offset != 0U; --offset) {
+        uint32_t *window = dividend + offset - 1U;
+        uint32_t window_top = window[divisor_count];
+        uint64_t numerator = ((uint64_t)window_top << 30U) | window[divisor_count - 1U];
+        uint64_t estimate = numerator / divisor_top;
+        uint64_t estimate_remainder = numerator - estimate * divisor_top;
+
+        while (estimate * divisor_next > ((estimate_remainder << 30U) | window[divisor_count - 2U])) {
+            estimate -= 1U;
+            estimate_remainder += divisor_top;
+            if (estimate_remainder >= TINYPY_LONG_WORD_BASE) {
+                break;
+            }
+        }
+        uint32_t digit = (uint32_t)estimate;
+        uint64_t carry = 0U;
+
+        /* The borrow of each word joins the carry of the product into the
+           next one. */
+        for (size_t index = 0U; index != divisor_count; ++index) {
+            uint64_t product = (uint64_t)digit * divisor[index] + carry;
+            uint32_t difference = window[index] - (uint32_t)(product & TINYPY_LONG_WORD_MASK);
+
+            carry = (product >> 30U) + (difference >> 31U);
+            window[index] = difference & TINYPY_LONG_WORD_MASK;
+        }
+        if (window_top < carry) {
+            uint32_t sum = 0U;
+
+            for (size_t index = 0U; index != divisor_count; ++index) {
+                sum += window[index] + divisor[index];
+                window[index] = sum & TINYPY_LONG_WORD_MASK;
+                sum >>= 30U;
+            }
+            digit -= 1U;
+        }
+        if (quotient != NULL) {
+            quotient[offset - 1U] = digit;
         }
     }
-    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* x_divrem by a divisor of two words or more already shifted left by shift
+   bits: the dividend, of at least divisor_count words and with room for one
+   more, is shifted alike, divided, and its remainder shifted back into the
+   low divisor_count words. Returns the number of quotient words. */
+static size_t __tinypy_operator_long_divide_normalized(uint32_t *dividend, size_t dividend_count, const uint32_t *divisor, size_t divisor_count, uint32_t shift, uint32_t *quotient) {
+    uint32_t carry = __tinypy_operator_long_shift_words_left(dividend, dividend, dividend_count, shift);
+
+    if (carry != 0U || dividend[dividend_count - 1U] >= divisor[divisor_count - 1U]) {
+        dividend[dividend_count] = carry;
+        dividend_count += 1U;
+    }
+    __tinypy_operator_long_divide_words(dividend, dividend_count, divisor, divisor_count, quotient);
+    __tinypy_operator_long_shift_words_right(dividend, dividend, divisor_count, shift);
+    size_t quotient_count = dividend_count - divisor_count;
+    return quotient_count;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, const tinypy_integer_view_t *left, const tinypy_integer_view_t *right, tinypy_operator_long_division_result_e result_kind, tinypy_error_t **out_error) {
-    size_t quotient_capacity;
-    size_t remainder_capacity;
-    size_t division_scratch_capacity;
-    uint16_t *division_scratch;
-    uint16_t *quotient;
-    uint16_t *remainder_digits;
-    size_t quotient_count = 0U;
-    size_t remainder_count = 0U;
-    int32_t quotient_sign;
-    int32_t remainder_sign;
-    int32_t comparison;
-
     if (right->sign == 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ZERO_DIVISION, "long division or modulo by zero", out_error);
         return NULL;
     }
-    if (left->count == SIZE_MAX || right->count == SIZE_MAX) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long division temporary storage is too large", out_error);
+    size_t dividend_words = __tinypy_operator_long_word_count(left->count);
+    size_t divisor_words = __tinypy_operator_long_word_count(right->count);
+    /* The dividend with a spare word, the divisor, then the quotient with a
+       spare word for the floor adjustment. */
+    size_t scratch_count = dividend_words * 2U + divisor_words + 2U;
+    uint32_t local_words[TINYPY_LONG_LOCAL_WORDS];
+    uint32_t *scratch = __tinypy_operator_long_allocate_words(vm, local_words, scratch_count, out_error);
+
+    if (scratch == NULL) {
         return NULL;
     }
-    quotient_capacity = left->count + 1U;
-    remainder_capacity = right->count + 1U;
-    if (quotient_capacity > SIZE_MAX - remainder_capacity
-        || quotient_capacity + remainder_capacity > SIZE_MAX / sizeof(*division_scratch)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long division temporary storage is too large", out_error);
-        return NULL;
+    uint32_t *dividend = scratch;
+    uint32_t *divisor = dividend + dividend_words + 1U;
+    uint32_t *quotient = divisor + divisor_words;
+    size_t dividend_count = __tinypy_operator_long_pack_words(dividend, left->digits, left->count);
+    size_t divisor_count = __tinypy_operator_long_pack_words(divisor, right->digits, right->count);
+    int32_t comparison = __tinypy_operator_long_compare_words(dividend, dividend_count, divisor, divisor_count);
+    uint32_t *remainder = dividend;
+    size_t remainder_count = dividend_count;
+    size_t quotient_count = 0U;
+    uint32_t shift = 0U;
+
+    if (comparison >= 0 && divisor_count == 1U) {
+        uint64_t divisor_word = divisor[0];
+        uint64_t rest = 0U;
+
+        for (size_t index = dividend_count; index != 0U; --index) {
+            uint64_t current = (rest << 30U) | dividend[index - 1U];
+
+            quotient[index - 1U] = (uint32_t)(current / divisor_word);
+            rest = current % divisor_word;
+        }
+        quotient_count = dividend_count;
+        dividend[0] = (uint32_t)rest;
+        remainder_count = 1U;
     }
-    division_scratch_capacity = quotient_capacity + remainder_capacity;
-    division_scratch = (uint16_t *)__tinypy_internal_vm_allocate_checked(vm, division_scratch_capacity * sizeof(*division_scratch), out_error);
-    if (division_scratch == NULL) {
-        return NULL;
+    else if (comparison >= 0) {
+        shift = __tinypy_operator_long_normal_shift(divisor[divisor_count - 1U]);
+        (void)__tinypy_operator_long_shift_words_left(divisor, divisor, divisor_count, shift);
+        quotient_count = __tinypy_operator_long_divide_normalized(dividend, dividend_count, divisor, divisor_count, shift, quotient);
+        remainder_count = divisor_count;
     }
-    quotient = division_scratch;
-    remainder_digits = quotient + quotient_capacity;
-    (void)memset(division_scratch, 0, division_scratch_capacity * sizeof(*division_scratch));
-    comparison = __tinypy_operator_compare_digits(left->digits, left->count, right->digits, right->count);
-    if (left->sign == 0) {
-        quotient_count = 0U;
-        remainder_count = 0U;
-    }
-    else if (comparison < 0) {
-        (void)memcpy(remainder_digits, left->digits, left->count * sizeof(*remainder_digits));
-        remainder_count = left->count;
-    }
-    else if (right->count == 1U) {
-        uint32_t remainder = 0U;
-        size_t index;
+    quotient_count = __tinypy_operator_long_trim_words(quotient, quotient_count);
+    remainder_count = __tinypy_operator_long_trim_words(remainder, remainder_count);
+    int32_t quotient_sign = left->sign == right->sign ? 1 : -1;
 
-        for (index = left->count; index != 0U; --index) {
-            uint32_t current = remainder * TINYPY_LONG_BASE + (uint32_t)left->digits[index - 1U];
-
-            quotient[index - 1U] = (uint16_t)(current / (uint32_t)right->digits[0]);
-            remainder = current % (uint32_t)right->digits[0];
-        }
-        quotient_count = __tinypy_operator_trim_digits(quotient, left->count);
-        if (remainder != 0U) {
-            remainder_digits[0] = (uint16_t)remainder;
-            remainder_count = 1U;
-        }
-    }
-    else if (right->count == 2U) {
-        /* A divisor below 2^30, one digit of CPython's, keeps every partial
-           dividend below 2^45. */
-        uint64_t divisor = (uint64_t)right->digits[0] | ((uint64_t)right->digits[1] << 15U);
-        uint64_t remainder = 0U;
-        size_t index;
-
-        for (index = left->count; index != 0U; --index) {
-            uint64_t current = (remainder << 15U) | (uint64_t)left->digits[index - 1U];
-
-            quotient[index - 1U] = (uint16_t)(current / divisor);
-            remainder = current % divisor;
-        }
-        quotient_count = __tinypy_operator_trim_digits(quotient, left->count);
-        remainder_digits[0] = (uint16_t)(remainder & TINYPY_LONG_MASK);
-        remainder_digits[1] = (uint16_t)(remainder >> 15U);
-        remainder_count = __tinypy_operator_trim_digits(remainder_digits, 2U);
-    }
-    else {
-        size_t divisor_count = right->count;
-        size_t dividend_count = left->count;
-        size_t quotient_digits = dividend_count - divisor_count + 1U;
-        uint32_t normalizer = TINYPY_LONG_BASE / ((uint32_t)right->digits[divisor_count - 1U] + 1U);
-        size_t normalized_dividend_capacity;
-        size_t normalized_capacity;
-        uint16_t *normalized_storage;
-        uint16_t *normalized_divisor;
-        uint16_t *normalized_dividend;
-        uint32_t carry = 0U;
-        size_t index;
-        size_t quotient_index;
-
-        if (dividend_count == SIZE_MAX) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long division temporary storage is too large", out_error);
-            tinypy_internal_vm_deallocate(vm, division_scratch, division_scratch_capacity * sizeof(*division_scratch));
-            return NULL;
-        }
-        normalized_dividend_capacity = dividend_count + 1U;
-        if (divisor_count > SIZE_MAX - normalized_dividend_capacity
-            || divisor_count + normalized_dividend_capacity > SIZE_MAX / sizeof(*normalized_storage)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long division temporary storage is too large", out_error);
-            tinypy_internal_vm_deallocate(vm, division_scratch, division_scratch_capacity * sizeof(*division_scratch));
-            return NULL;
-        }
-        normalized_capacity = divisor_count + normalized_dividend_capacity;
-        normalized_storage = (uint16_t *)__tinypy_internal_vm_allocate_checked(vm, normalized_capacity * sizeof(*normalized_storage), out_error);
-        if (normalized_storage == NULL) {
-            tinypy_internal_vm_deallocate(vm, division_scratch, division_scratch_capacity * sizeof(*division_scratch));
-            return NULL;
-        }
-        normalized_divisor = normalized_storage;
-        normalized_dividend = normalized_divisor + divisor_count;
-        for (index = 0U; index < divisor_count; ++index) {
-            uint32_t product = (uint32_t)right->digits[index] * normalizer + carry;
-
-            normalized_divisor[index] = (uint16_t)(product & TINYPY_LONG_MASK);
-            carry = product >> 15U;
-        }
-        carry = 0U;
-        for (index = 0U; index < dividend_count; ++index) {
-            uint32_t product = (uint32_t)left->digits[index] * normalizer + carry;
-
-            normalized_dividend[index] = (uint16_t)(product & TINYPY_LONG_MASK);
-            carry = product >> 15U;
-        }
-        normalized_dividend[dividend_count] = (uint16_t)carry;
-
-        for (quotient_index = quotient_digits; quotient_index != 0U; --quotient_index) {
-            size_t offset = quotient_index - 1U;
-            uint64_t numerator = (uint64_t)normalized_dividend[offset + divisor_count] * (uint64_t)TINYPY_LONG_BASE + (uint64_t)normalized_dividend[offset + divisor_count - 1U];
-            uint64_t quotient_estimate = numerator / (uint64_t)normalized_divisor[divisor_count - 1U];
-            uint64_t estimate_remainder = numerator % (uint64_t)normalized_divisor[divisor_count - 1U];
-            uint32_t product_carry = 0U;
-            uint32_t borrow = 0U;
-            int32_t top_difference;
-
-            if (quotient_estimate >= (uint64_t)TINYPY_LONG_BASE) {
-                quotient_estimate = (uint64_t)TINYPY_LONG_BASE - UINT64_C(1);
-                estimate_remainder = numerator - quotient_estimate * (uint64_t)normalized_divisor[divisor_count - 1U];
-            }
-            while (quotient_estimate * (uint64_t)normalized_divisor[divisor_count - 2U] > estimate_remainder * (uint64_t)TINYPY_LONG_BASE + (uint64_t)normalized_dividend[offset + divisor_count - 2U]) {
-                quotient_estimate -= UINT64_C(1);
-                estimate_remainder += (uint64_t)normalized_divisor[divisor_count - 1U];
-                if (estimate_remainder >= (uint64_t)TINYPY_LONG_BASE) {
-                    break;
-                }
-            }
-            for (index = 0U; index < divisor_count; ++index) {
-                uint32_t product = (uint32_t)quotient_estimate * (uint32_t)normalized_divisor[index] + product_carry;
-                uint32_t subtrahend = (product & TINYPY_LONG_MASK) + borrow;
-
-                product_carry = product >> 15U;
-                if ((uint32_t)normalized_dividend[offset + index] < subtrahend) {
-                    normalized_dividend[offset + index] = (uint16_t)((uint32_t)normalized_dividend[offset + index] + TINYPY_LONG_BASE - subtrahend);
-                    borrow = 1U;
-                }
-                else {
-                    normalized_dividend[offset + index] = (uint16_t)((uint32_t)normalized_dividend[offset + index] - subtrahend);
-                    borrow = 0U;
-                }
-            }
-            top_difference = (int32_t)normalized_dividend[offset + divisor_count] - (int32_t)product_carry - (int32_t)borrow;
-            if (top_difference < 0) {
-                uint32_t add_carry = 0U;
-
-                quotient_estimate -= UINT64_C(1);
-                normalized_dividend[offset + divisor_count] = (uint16_t)(top_difference + (int32_t)TINYPY_LONG_BASE);
-                for (index = 0U; index < divisor_count; ++index) {
-                    uint32_t sum = (uint32_t)normalized_dividend[offset + index] + (uint32_t)normalized_divisor[index] + add_carry;
-
-                    normalized_dividend[offset + index] = (uint16_t)(sum & TINYPY_LONG_MASK);
-                    add_carry = sum >> 15U;
-                }
-                normalized_dividend[offset + divisor_count] = (uint16_t)(((uint32_t)normalized_dividend[offset + divisor_count] + add_carry) & TINYPY_LONG_MASK);
-            }
-            else {
-                normalized_dividend[offset + divisor_count] = (uint16_t)top_difference;
-            }
-            quotient[offset] = (uint16_t)quotient_estimate;
-        }
-        quotient_count = __tinypy_operator_trim_digits(quotient, quotient_digits);
-        if (normalizer == 1U) {
-            (void)memcpy(remainder_digits, normalized_dividend, divisor_count * sizeof(*remainder_digits));
-        }
-        else {
-            uint32_t division_remainder = 0U;
-
-            for (index = divisor_count; index != 0U; --index) {
-                uint32_t current = division_remainder * TINYPY_LONG_BASE + (uint32_t)normalized_dividend[index - 1U];
-
-                remainder_digits[index - 1U] = (uint16_t)(current / normalizer);
-                division_remainder = current % normalizer;
-            }
-        }
-        remainder_count = __tinypy_operator_trim_digits(remainder_digits, divisor_count);
-        tinypy_internal_vm_deallocate(vm, normalized_storage, normalized_capacity * sizeof(*normalized_storage));
-    }
-    quotient_sign = quotient_count == 0U ? 0 : (left->sign == right->sign ? 1 : -1);
-    remainder_sign = remainder_count == 0U ? 0 : right->sign;
     if (left->sign != right->sign && remainder_count != 0U) {
-        uint32_t carry = 1U;
-        size_t index;
+        /* Floor division moves the quotient away from zero and gives the
+           remainder the divisor's sign. */
+        size_t index = 0U;
 
-        for (index = 0U; index < quotient_capacity && carry != 0U; ++index) {
-            uint32_t incremented = (uint32_t)quotient[index] + carry;
-            quotient[index] = (uint16_t)(incremented & TINYPY_LONG_MASK);
-            carry = incremented >> 15U;
+        quotient[quotient_count] = 0U;
+        while (quotient[index] == TINYPY_LONG_WORD_MASK) {
+            quotient[index] = 0U;
+            index += 1U;
         }
-        quotient_count = __tinypy_operator_trim_digits(quotient, quotient_capacity);
-        quotient_sign = -1; {
-            int32_t borrow = 0;
-            size_t previous_remainder_count = remainder_count;
-
-            for (index = 0U; index < right->count; ++index) {
-                int32_t difference = (int32_t)right->digits[index] - borrow - (index < previous_remainder_count ? (int32_t)remainder_digits[index] : 0);
-                if (difference < 0) {
-                    difference += (int32_t)TINYPY_LONG_BASE;
-                    borrow = 1;
-                }
-                else {
-                    borrow = 0;
-                }
-                remainder_digits[index] = (uint16_t)difference;
-            }
-            remainder_count = __tinypy_operator_trim_digits(remainder_digits, right->count);
-        }
-        remainder_sign = right->sign;
+        quotient[index] += 1U;
+        quotient_count += 1U;
+        __tinypy_operator_long_shift_words_right(divisor, divisor, divisor_count, shift);
+        remainder_count = __tinypy_operator_long_subtract_words(divisor, divisor_count, remainder, remainder_count);
+        remainder = divisor;
     }
     tinypy_value_t *result;
 
     if (result_kind == TINYPY_OPERATOR_LONG_DIVISION_PAIR) {
         tinypy_value_t *items[2];
 
-        items[0] = tinypy_internal_long_from_base15_digits_checked(vm, quotient_sign, quotient, quotient_count, out_error);
+        items[0] = __tinypy_operator_long_from_words(vm, quotient_sign, quotient, quotient_count, out_error);
         if (items[0] == NULL) {
             result = NULL;
         }
         else {
-            items[1] = tinypy_internal_long_from_base15_digits_checked(vm, remainder_sign, remainder_digits, remainder_count, out_error);
+            items[1] = __tinypy_operator_long_from_words(vm, right->sign, remainder, remainder_count, out_error);
             if (items[1] == NULL) {
                 result = NULL;
             }
@@ -823,12 +911,188 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
         }
     }
     else if (result_kind == TINYPY_OPERATOR_LONG_DIVISION_REMAINDER) {
-        result = tinypy_internal_long_from_base15_digits_checked(vm, remainder_sign, remainder_digits, remainder_count, out_error);
+        result = __tinypy_operator_long_from_words(vm, right->sign, remainder, remainder_count, out_error);
     }
     else {
-        result = tinypy_internal_long_from_base15_digits_checked(vm, quotient_sign, quotient, quotient_count, out_error);
+        result = __tinypy_operator_long_from_words(vm, quotient_sign, quotient, quotient_count, out_error);
     }
-    tinypy_internal_vm_deallocate(vm, division_scratch, division_scratch_capacity * sizeof(*division_scratch));
+    __tinypy_operator_long_release_words(vm, scratch, local_words, scratch_count);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Bits of a magnitude from position up, within one of its 15-bit digits. */
+static uint32_t __tinypy_operator_view_bits(const tinypy_integer_view_t *view, size_t position, uint32_t width) {
+    uint32_t digit = view->digits[position / 15U];
+    uint32_t bits = (digit >> (position % 15U)) & ((UINT32_C(1) << width) - 1U);
+
+    return bits;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Reduces the words, with room for one more, in place by the modulus and
+   returns the count of the remainder. */
+static size_t __tinypy_operator_long_reduce_words(const tinypy_operator_long_modulus_t *modulus, uint32_t *words, size_t count) {
+    if (count < modulus->count) {
+        return count;
+    }
+    if (modulus->count == 1U) {
+        uint64_t rest = 0U;
+
+        for (size_t index = count; index != 0U; --index) {
+            rest = ((rest << 30U) | words[index - 1U]) % modulus->words[0];
+        }
+        words[0] = (uint32_t)rest;
+        return rest != 0U ? 1U : 0U;
+    }
+    (void)__tinypy_operator_long_divide_normalized(words, count, modulus->normalized, modulus->count, modulus->shift, NULL);
+    size_t remainder_count = __tinypy_operator_long_trim_words(words, modulus->count);
+    return remainder_count;
+}
+//////////////////////////////////////////////////////////////////////////
+/* output = left * right reduced by the modulus, as MULT in long_pow: both
+   below the modulus, output may be either of them. */
+static tinypy_bool_t __tinypy_operator_long_multiply_modulo(tinypy_vm_t *vm, const tinypy_operator_long_modulus_t *modulus, uint32_t *output, size_t *output_count, const uint32_t *left, size_t left_count, const uint32_t *right, size_t right_count, tinypy_error_t **out_error) {
+    uint32_t *product = modulus->product;
+    size_t product_count = left_count + right_count;
+
+    (void)memset(product, 0, product_count * sizeof(*product));
+    if (__tinypy_operator_long_multiply_words(vm, product, product_count, left, left_count, right, right_count, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    product_count = __tinypy_operator_long_trim_words(product, product_count);
+    product_count = __tinypy_operator_long_reduce_words(modulus, product, product_count);
+    (void)memcpy(output, product, product_count * sizeof(*product));
+    *output_count = product_count;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* power = base ** exponent reduced by the modulus, as long_pow computes it:
+   zero for a modulus of one, else left-to-right binary exponentiation up to
+   the 5-ary cutoff, then 5-bit windows over the table of the base's powers
+   1 to 31. */
+static tinypy_bool_t __tinypy_operator_long_power_words(tinypy_vm_t *vm, const tinypy_operator_long_modulus_t *modulus, uint32_t *power, size_t *power_count, const uint32_t *base, size_t base_count, uint32_t *table, const tinypy_integer_view_t *exponent, tinypy_error_t **out_error) {
+    size_t exponent_bits = __tinypy_operator_view_bit_length(exponent);
+
+    if (modulus->count == 1U && modulus->words[0] == 1U) {
+        *power_count = 0U;
+        return TINYPY_TRUE;
+    }
+    if (exponent_bits == 0U) {
+        power[0] = 1U;
+        *power_count = 1U;
+        return TINYPY_TRUE;
+    }
+    if (exponent_bits <= TINYPY_LONG_FIVEARY_CUTOFF) {
+        (void)memcpy(power, base, base_count * sizeof(*power));
+        *power_count = base_count;
+        for (size_t position = exponent_bits - 1U; position != 0U; --position) {
+            if (__tinypy_operator_long_multiply_modulo(vm, modulus, power, power_count, power, *power_count, power, *power_count, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+            if (__tinypy_operator_view_bits(exponent, position - 1U, 1U) == 0U) {
+                continue;
+            }
+            if (__tinypy_operator_long_multiply_modulo(vm, modulus, power, power_count, power, *power_count, base, base_count, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+        }
+        return TINYPY_TRUE;
+    }
+    size_t table_counts[32];
+
+    (void)memcpy(table, base, base_count * sizeof(*table));
+    table_counts[1] = base_count;
+    for (size_t index = 2U; index != 32U; ++index) {
+        uint32_t *previous = table + (index - 2U) * modulus->count;
+
+        if (__tinypy_operator_long_multiply_modulo(vm, modulus, previous + modulus->count, &table_counts[index], previous, table_counts[index - 1U], base, base_count, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    size_t window = (exponent_bits + 4U) / 5U - 1U;
+    uint32_t index = __tinypy_operator_view_bits(exponent, window * 5U, 5U);
+
+    (void)memcpy(power, table + (index - 1U) * modulus->count, table_counts[index] * sizeof(*power));
+    *power_count = table_counts[index];
+    for (; window != 0U; --window) {
+        for (size_t step = 0U; step != 5U; ++step) {
+            if (__tinypy_operator_long_multiply_modulo(vm, modulus, power, power_count, power, *power_count, power, *power_count, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+        }
+        index = __tinypy_operator_view_bits(exponent, (window - 1U) * 5U, 5U);
+        if (index == 0U) {
+            continue;
+        }
+        if (__tinypy_operator_long_multiply_modulo(vm, modulus, power, power_count, power, *power_count, table + (index - 1U) * modulus->count, table_counts[index], out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* pow(base, exponent, modulus) of integers past int_pow, as long_pow: the
+   base is reduced by the modulus magnitude and every product reduced in
+   place by the normalized modulus; a negative modulus moves a nonzero
+   result below zero. */
+static tinypy_value_t *__tinypy_operator_long_power_modulo(tinypy_vm_t *vm, const tinypy_integer_view_t *base, const tinypy_integer_view_t *exponent, const tinypy_integer_view_t *modulus, tinypy_error_t **out_error) {
+    size_t count = __tinypy_operator_long_word_count(modulus->count);
+    size_t base_word_count = __tinypy_operator_long_word_count(base->count);
+    size_t base_capacity = base_word_count >= count ? base_word_count + 1U : count;
+    size_t table_count = __tinypy_operator_view_bit_length(exponent) > TINYPY_LONG_FIVEARY_CUTOFF ? 31U : 0U;
+    size_t buffer_count = 5U + table_count;
+
+    /* The modulus, its normalized copy, the product with a spare word, the
+       power, the table and the base. */
+    if (count > (SIZE_MAX - base_capacity - 1U) / buffer_count) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "long int temporary storage is too large", out_error);
+        return NULL;
+    }
+    size_t scratch_count = count * buffer_count + 1U + base_capacity;
+    uint32_t local_words[TINYPY_LONG_LOCAL_WORDS];
+    uint32_t *scratch = __tinypy_operator_long_allocate_words(vm, local_words, scratch_count, out_error);
+
+    if (scratch == NULL) {
+        return NULL;
+    }
+    uint32_t *modulus_words = scratch;
+    uint32_t *normalized = modulus_words + count;
+    uint32_t *product = normalized + count;
+    uint32_t *power = product + count * 2U + 1U;
+    uint32_t *table = power + count;
+    uint32_t *reduced_base = table + count * table_count;
+    tinypy_operator_long_modulus_t reduction;
+
+    (void)__tinypy_operator_long_pack_words(modulus_words, modulus->digits, modulus->count);
+    reduction.shift = __tinypy_operator_long_normal_shift(modulus_words[count - 1U]);
+    (void)__tinypy_operator_long_shift_words_left(normalized, modulus_words, count, reduction.shift);
+    reduction.words = modulus_words;
+    reduction.normalized = normalized;
+    reduction.product = product;
+    reduction.count = count;
+    size_t base_count = __tinypy_operator_long_pack_words(reduced_base, base->digits, base->count);
+
+    base_count = __tinypy_operator_long_reduce_words(&reduction, reduced_base, base_count);
+    if (base->sign < 0 && base_count != 0U) {
+        (void)memcpy(product, modulus_words, count * sizeof(*product));
+        base_count = __tinypy_operator_long_subtract_words(product, count, reduced_base, base_count);
+        (void)memcpy(reduced_base, product, base_count * sizeof(*product));
+    }
+    size_t power_count = 0U;
+    if (__tinypy_operator_long_power_words(vm, &reduction, power, &power_count, reduced_base, base_count, table, exponent, out_error) == 0) {
+        __tinypy_operator_long_release_words(vm, scratch, local_words, scratch_count);
+        return NULL;
+    }
+    tinypy_value_t *result;
+
+    if (modulus->sign < 0 && power_count != 0U) {
+        size_t negative_count = __tinypy_operator_long_subtract_words(modulus_words, count, power, power_count);
+
+        result = __tinypy_operator_long_from_words(vm, -1, modulus_words, negative_count, out_error);
+    }
+    else {
+        result = __tinypy_operator_long_from_words(vm, 1, power, power_count, out_error);
+    }
+    __tinypy_operator_long_release_words(vm, scratch, local_words, scratch_count);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1588,35 +1852,41 @@ static tinypy_value_t *__tinypy_operator_concat_sequence(tinypy_vm_t *vm, tinypy
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t *sequence, size_t count, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t *sequence, uint64_t count, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(sequence);
     size_t unit_size;
     size_t total_size;
-    size_t index;
 
     /* Immutable sequences repeated once are returned as they are, the way
        tuplerepeat and string_repeat short-circuit in Python 2.7. */
-    if (count == 1U && sequence->type == &vm->types[kind] && (kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE)) {
+    if (count == UINT64_C(1) && sequence->type == &vm->types[kind] && (kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE)) {
         return TINYPY_RET(sequence);
     }
 
     if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
         const uint8_t *bytes = TINYPY_TEXT_BYTES(sequence);
         unit_size = TINYPY_TEXT_BYTE_SIZE(sequence);
-        if (unit_size != 0U && count > SIZE_MAX / unit_size) {
+        /* string_repeat and unicode_repeat of 64-bit CPython: a length past
+           Py_ssize_t, or for unicode one whose UCS4 code units and terminator
+           a size_t cannot count in bytes, is too long, while a length the host
+           cannot hold runs out of memory. */
+        uint64_t length = kind == TINYPY_VALUE_STRING ? (uint64_t)unit_size : (uint64_t)TINYPY_SIZED_SIZE(sequence);
+        uint64_t longest = kind == TINYPY_VALUE_STRING ? (uint64_t)INT64_MAX : (UINT64_MAX >> 2U) - 1U;
+        if (length != 0U && count > longest / length) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "repeated string is too long", out_error);
             return NULL;
         }
-        total_size = unit_size * count;
-        if (total_size >= (size_t)PTRDIFF_MAX) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "repeated string is too long", out_error);
+        uint64_t total = (uint64_t)unit_size * count;
+        if (total >= (uint64_t)PTRDIFF_MAX) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "", out_error);
             return NULL;
         }
+        total_size = (size_t)total;
         if (total_size == 0U) {
             tinypy_value_t *return_value_1 = kind == TINYPY_VALUE_STRING ? TINYPY_RET_EMPTY_STRING(vm) : tinypy_unicode_from_utf8(vm, NULL, 0U);
             return return_value_1;
         }
-        size_t code_point_count = kind == TINYPY_VALUE_STRING ? total_size : TINYPY_SIZED_SIZE(sequence) * count;
+        size_t code_point_count = kind == TINYPY_VALUE_STRING ? total_size : TINYPY_SIZED_SIZE(sequence) * (size_t)count;
         uint8_t *buffer;
         tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, kind, total_size, code_point_count, &buffer, out_error);
 
@@ -1635,40 +1905,22 @@ static tinypy_value_t *__tinypy_operator_repeat(tinypy_vm_t *vm, tinypy_value_t 
         return result;
     }
     unit_size = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_SIZE(sequence) : TINYPY_LIST_SIZE(sequence);
-    if (unit_size != 0U && count > SIZE_MAX / unit_size) {
+    if (unit_size != 0U && count > (uint64_t)(SIZE_MAX / unit_size)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "", out_error);
         return NULL;
     }
-    total_size = unit_size * count; {
-        if (total_size >= (size_t)PTRDIFF_MAX || total_size > SIZE_MAX / sizeof(tinypy_value_t *)) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "", out_error);
-            return NULL;
-        }
-        tinypy_value_t *result = kind == TINYPY_VALUE_TUPLE ? tinypy_internal_tuple_new_checked(vm, total_size, out_error) : tinypy_list_from_items(vm, NULL, 0U);
-
-        if (result == NULL) {
-            return NULL;
-        }
-
-        if (kind == TINYPY_VALUE_LIST) {
-            if (tinypy_internal_list_reserve_checked(vm, result, total_size, out_error) == 0) {
-                TINYPY_DECREF(result);
-                return NULL;
-            }
-        }
-        for (index = 0U; index < total_size; ++index) {
-            tinypy_value_t *item = kind == TINYPY_VALUE_TUPLE ? TINYPY_TUPLE_GET(sequence, index % unit_size) : TINYPY_LIST_GET(sequence, index % unit_size);
-
-            if (kind == TINYPY_VALUE_TUPLE) {
-                tinypy_tuple_set(result, index, item);
-            }
-            else if (tinypy_internal_list_append_checked(result, item, out_error) == 0) {
-                TINYPY_DECREF(result);
-                return NULL;
-            }
-        }
-        return result;
+    total_size = unit_size * (size_t)count;
+    if (total_size >= (size_t)PTRDIFF_MAX || total_size > SIZE_MAX / sizeof(tinypy_value_t *)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "", out_error);
+        return NULL;
     }
+    tinypy_value_t *const *unit = kind == TINYPY_VALUE_TUPLE ? tinypy_internal_tuple_items(sequence) : TINYPY_LIST_OBJECT(sequence)->items;
+    if (kind == TINYPY_VALUE_TUPLE) {
+        tinypy_value_t *tuple = tinypy_internal_tuple_repeat_checked(vm, unit, unit_size, (size_t)count, out_error);
+        return tuple;
+    }
+    tinypy_value_t *list = tinypy_internal_list_repeat_checked(vm, unit, unit_size, (size_t)count, out_error);
+    return list;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The binary operators in the order of the built-in numeric modes. */
@@ -2356,7 +2608,8 @@ static tinypy_value_t *__tinypy_operator_binary_op1(const tinypy_operator_binary
 }
 //////////////////////////////////////////////////////////////////////////
 /* sq_concat, sq_inplace_concat, sq_repeat and sq_inplace_repeat survive in a
-   subclass only while it leaves the methods wrapping them alone. */
+   subclass only while it leaves the methods wrapping them alone; a slot
+   wrapper of another type in their place leaves the slot empty. */
 static tinypy_bool_t __tinypy_operator_has_sequence_slot(tinypy_value_t *value, tinypy_operator_sequence_slot_e slot) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_bool_t inplace = slot == TINYPY_OPERATOR_SEQUENCE_INPLACE_CONCAT || slot == TINYPY_OPERATOR_SEQUENCE_INPLACE_REPEAT ? TINYPY_TRUE : TINYPY_FALSE;
@@ -2385,7 +2638,8 @@ static tinypy_bool_t __tinypy_operator_has_sequence_slot(tinypy_value_t *value, 
         [TINYPY_OPERATOR_SEQUENCE_REPEAT] = TINYPY_INTERNAL_DISPATCH_BIT(MUL) | TINYPY_INTERNAL_DISPATCH_BIT(RMUL),
         [TINYPY_OPERATOR_SEQUENCE_INPLACE_REPEAT] = TINYPY_INTERNAL_DISPATCH_BIT(IMUL),
     };
-    tinypy_bool_t kept = __tinypy_internal_object_overrides_dispatch(value, wrapping_specials[slot]) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    uint64_t specials = wrapping_specials[slot];
+    tinypy_bool_t kept = __tinypy_internal_object_defines_dispatch(value, specials) != 0 && __tinypy_internal_object_overrides_dispatch(value, specials) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
     return kept;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2578,9 +2832,7 @@ static tinypy_value_t *__tinypy_operator_sequence_repeat(tinypy_value_t *sequenc
         TINYPY_DECREF(integer);
         return native;
     }
-    /* A count past the address space of a 32-bit host repeats as the
-       largest size does, which fails unless the sequence is empty. */
-    size_t repeat_count = count <= 0 ? 0U : ((uint64_t)count > (uint64_t)PTRDIFF_MAX ? (size_t)PTRDIFF_MAX : (size_t)count);
+    uint64_t repeat_count = count <= 0 ? UINT64_C(0) : (uint64_t)count;
     tinypy_value_t *repeated = __tinypy_operator_repeat(vm, sequence, repeat_count, out_error);
     return repeated;
 }
@@ -2701,9 +2953,9 @@ static tinypy_operator_slot_e __tinypy_operator_inplace_slot(const tinypy_operat
             return TINYPY_OPERATOR_SLOT_NATIVE;
         }
         /* update_one_slot takes the inherited __iadd__ wrapper of list and
-           bytearray for nb_inplace_add of a subclass, so their in-place
-           concatenation runs before any binary method there. */
-        if (spec->operation == TINYPY_OPERATOR_BINARY_ADD && (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_BYTEARRAY)) {
+           bytearray for nb_inplace_add of a subclass that keeps it, so their
+           in-place concatenation runs before any binary method there. */
+        if (spec->operation == TINYPY_OPERATOR_BINARY_ADD && (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_BYTEARRAY) && __tinypy_internal_object_defines_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(IADD)) != 0) {
             return TINYPY_OPERATOR_SLOT_METHOD;
         }
     }
@@ -3226,14 +3478,9 @@ static void __tinypy_operator_raise_errno(tinypy_vm_t *vm, int error_number, tin
     tinypy_value_t *args = tinypy_tuple_from_items(vm, items, 2U);
     TINYPY_DECREF(items[1]);
     TINYPY_DECREF(items[0]);
-    tinypy_type_t *type = vm->exception_types[error_number == ERANGE ? TINYPY_EXCEPTION_OVERFLOW_ERROR : TINYPY_EXCEPTION_VALUE_ERROR];
-    tinypy_value_t *exception = tinypy_exception_new(type, args, out_error);
+    tinypy_exception_type_index_e index = error_number == ERANGE ? TINYPY_EXCEPTION_OVERFLOW_ERROR : TINYPY_EXCEPTION_VALUE_ERROR;
+    tinypy_internal_exception_raise_args(vm, index, args, out_error);
     TINYPY_DECREF(args);
-    if (exception == NULL) {
-        return;
-    }
-    (void)tinypy_exception_raise(exception, NULL, out_error);
-    TINYPY_DECREF(exception);
 }
 //////////////////////////////////////////////////////////////////////////
 /* int_pow of a non-negative exponent, reduced by the modulus unless it is
@@ -3396,12 +3643,7 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
         tinypy_value_t *return_value_11 = tinypy_float_from_double(vm, result);
         return return_value_11;
     }
-    tinypy_integer_view_t exponent_view;
-    tinypy_integer_view_t base_view;
-    size_t exponent;
     tinypy_bool_t prefer_long = left_kind == TINYPY_VALUE_LONG || right_kind == TINYPY_VALUE_LONG;
-    tinypy_value_t *result;
-    tinypy_value_t *base;
 
     if (prefer_long == 0) {
         int64_t power = 0;
@@ -3410,6 +3652,19 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
             return integer;
         }
     }
+    tinypy_value_t *result = tinypy_internal_integer_power_long(left, right, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* long_pow of integers with a non-negative exponent, which int_pow hands its
+   operands to on overflow; the result is a long when an operand is one. */
+tinypy_value_t *tinypy_internal_integer_power_long(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_integer_view_t exponent_view;
+    tinypy_integer_view_t base_view;
+    size_t exponent;
+    tinypy_bool_t prefer_long = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_LONG || TINYPY_VALUE_KIND(right) == TINYPY_VALUE_LONG;
+
     __tinypy_operator_integer_view(right, &exponent_view);
     __tinypy_operator_integer_view(left, &base_view);
     if (base_view.count == 0U || (base_view.count == 1U && base_view.digits[0] == 1U)) {
@@ -3420,32 +3675,36 @@ static tinypy_value_t *__tinypy_operator_power_builtin(tinypy_value_t *left, tin
     if (__tinypy_operator_integer_exponent(vm, right, &exponent, out_error) == 0) {
         return NULL;
     }
-    result = prefer_long != 0 ? tinypy_long_from_i64(vm, 1) : tinypy_integer_from_i64(vm, 1);
-    base = TINYPY_RET(left);
-    while (exponent != 0U) {
-        if ((exponent & 1U) != 0U) {
-            tinypy_value_t *multiplied = tinypy_internal_operator_builtin(result, base, 2, out_error);
+    size_t top = 1U;
+
+    while (top <= exponent / 2U) {
+        top <<= 1U;
+    }
+    tinypy_value_t *result = prefer_long != 0 ? tinypy_long_from_i64(vm, 1) : tinypy_integer_from_i64(vm, 1);
+
+    /* Left-to-right binary exponentiation, as long_pow: the partial power is
+       squared, then multiplied by the base for every set bit. */
+    for (size_t mask = top; mask != 0U; mask >>= 1U) {
+        if (mask != top) {
+            tinypy_value_t *squared = tinypy_internal_operator_builtin(result, result, 2, out_error);
 
             TINYPY_DECREF(result);
-            if (multiplied == NULL) {
-                TINYPY_DECREF(base);
-                return NULL;
-            }
-            result = multiplied;
-        }
-        exponent >>= 1U;
-        if (exponent != 0U) {
-            tinypy_value_t *squared = tinypy_internal_operator_builtin(base, base, 2, out_error);
-
-            TINYPY_DECREF(base);
             if (squared == NULL) {
-                TINYPY_DECREF(result);
                 return NULL;
             }
-            base = squared;
+            result = squared;
         }
+        if ((exponent & mask) == 0U) {
+            continue;
+        }
+        tinypy_value_t *multiplied = tinypy_internal_operator_builtin(result, left, 2, out_error);
+
+        TINYPY_DECREF(result);
+        if (multiplied == NULL) {
+            return NULL;
+        }
+        result = multiplied;
     }
-    TINYPY_DECREF(base);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3456,10 +3715,6 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
     tinypy_vm_t *vm = TINYPY_VALUE_VM(base_value);
     tinypy_integer_view_t exponent;
     tinypy_integer_view_t modulus;
-    tinypy_value_t *result;
-    tinypy_value_t *base;
-    size_t digit_index;
-    size_t bit_index;
 
     TINYPY_CLEAR_ERROR(out_error);
     if (__tinypy_operator_is_integer(base_kind) == 0 || __tinypy_operator_is_integer(exponent_kind) == 0 || __tinypy_operator_is_integer(modulus_kind) == 0) {
@@ -3483,82 +3738,10 @@ tinypy_value_t *tinypy_internal_power_modulo_builtin(tinypy_value_t *base_value,
             return integer;
         }
     }
-    result = tinypy_long_from_i64(vm, INT64_C(1));
-    {
-        tinypy_value_t *reduced = tinypy_internal_operator_builtin(result, modulus_value, 6, out_error);
+    tinypy_integer_view_t base;
 
-        TINYPY_DECREF(result);
-        if (reduced == NULL) {
-            return NULL;
-        }
-        result = reduced;
-    }
-    base = tinypy_internal_operator_builtin(base_value, modulus_value, 6, out_error);
-    if (base == NULL) {
-        TINYPY_DECREF(result);
-        return NULL;
-    }
-    for (digit_index = 0U; digit_index < exponent.count; ++digit_index) {
-        uint16_t digit = exponent.digits[digit_index];
-        size_t bits_in_digit = 15U;
-
-        if (digit_index + 1U == exponent.count) {
-            bits_in_digit = 0U;
-            while ((digit >> bits_in_digit) != 0U) {
-                bits_in_digit += 1U;
-            }
-        }
-
-        for (bit_index = 0U; bit_index < bits_in_digit; ++bit_index) {
-            tinypy_value_t *squared;
-            tinypy_value_t *square_reduced;
-
-            if ((digit & (UINT16_C(1) << bit_index)) != 0U) {
-                tinypy_value_t *multiplied = tinypy_internal_operator_builtin(result, base, 2, out_error);
-                tinypy_value_t *reduced;
-
-                if (multiplied == NULL) {
-                    TINYPY_DECREF(base);
-                    TINYPY_DECREF(result);
-                    return NULL;
-                }
-                reduced = tinypy_internal_operator_builtin(multiplied, modulus_value, 6, out_error);
-                TINYPY_DECREF(multiplied);
-                if (reduced == NULL) {
-                    TINYPY_DECREF(base);
-                    TINYPY_DECREF(result);
-                    return NULL;
-                }
-                TINYPY_DECREF(result);
-                result = reduced;
-            }
-            if (digit_index + 1U == exponent.count && bit_index + 1U == bits_in_digit) {
-                break;
-            }
-            squared = tinypy_internal_operator_builtin(base, base, 2, out_error);
-            if (squared == NULL) {
-                TINYPY_DECREF(base);
-                TINYPY_DECREF(result);
-                return NULL;
-            }
-            square_reduced = tinypy_internal_operator_builtin(squared, modulus_value, 6, out_error);
-            TINYPY_DECREF(squared);
-            if (square_reduced == NULL) {
-                TINYPY_DECREF(base);
-                TINYPY_DECREF(result);
-                return NULL;
-            }
-            TINYPY_DECREF(base);
-            base = square_reduced;
-        }
-    }
-    TINYPY_DECREF(base);
-    if (TINYPY_VALUE_KIND(result) != TINYPY_VALUE_LONG) {
-        tinypy_value_t *promoted = tinypy_long_from_i64(vm, TINYPY_INTEGER_VALUE(result));
-
-        TINYPY_DECREF(result);
-        result = promoted;
-    }
+    __tinypy_operator_integer_view(base_value, &base);
+    tinypy_value_t *result = __tinypy_operator_long_power_modulo(vm, &base, &exponent, &modulus, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

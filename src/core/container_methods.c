@@ -157,13 +157,18 @@ tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_
     }
     /* Hint callbacks may mutate the destination. Python 2 ignores a hint
        whose addition would overflow a Py_ssize_t, then appends each yielded
-       item. */
+       item. Its list_resize gives a list without storage, as listsort
+       leaves the list it sorts, an allocation even for a hint of 0, which
+       listsort then reports as a modification. */
     size_t size = TINYPY_LIST_SIZE(list);
     if (hint >= 0 && (uint64_t)hint <= (uint64_t)INT64_MAX - (uint64_t)size) {
         size_t reserve_hint = __tinypy_internal_hint_size(hint + (int64_t)size);
         if (tinypy_internal_list_reserve_checked(vm, list, reserve_hint, out_error) == 0) {
             TINYPY_DECREF(iterator);
             return TINYPY_FALSE;
+        }
+        if (TINYPY_LIST_OBJECT(list)->items == NULL) {
+            TINYPY_LIST_OBJECT(list)->mutation_version += UINT64_C(1);
         }
     }
     for (;;) {
@@ -613,34 +618,36 @@ static void __tinypy_list_sort_reverse(const tinypy_list_sort_slice_t *slice, si
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static inline void __tinypy_list_sort_slice_advance(tinypy_list_sort_slice_t *slice, ptrdiff_t count) {
+/* The slice helpers move the values only for a sort with values, which a
+   merge instantiates as a constant. */
+static inline void __tinypy_list_sort_slice_advance(tinypy_list_sort_slice_t *slice, ptrdiff_t count, tinypy_bool_t with_values) {
     slice->keys += count;
-    if (slice->values != NULL) {
+    if (with_values != 0) {
         slice->values += count;
     }
 }
 //////////////////////////////////////////////////////////////////////////
 /* sortslice_memmove, which also serves the copies that cannot overlap. */
-static inline void __tinypy_list_sort_slice_move(const tinypy_list_sort_slice_t *destination, ptrdiff_t destination_index, const tinypy_list_sort_slice_t *source, ptrdiff_t source_index, ptrdiff_t count) {
+static inline void __tinypy_list_sort_slice_move(const tinypy_list_sort_slice_t *destination, ptrdiff_t destination_index, const tinypy_list_sort_slice_t *source, ptrdiff_t source_index, ptrdiff_t count, tinypy_bool_t with_values) {
     (void)memmove(destination->keys + destination_index, source->keys + source_index, (size_t)count * sizeof(tinypy_value_t *));
-    if (destination->values != NULL) {
+    if (with_values != 0) {
         (void)memmove(destination->values + destination_index, source->values + source_index, (size_t)count * sizeof(tinypy_value_t *));
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static inline void __tinypy_list_sort_slice_copy(const tinypy_list_sort_slice_t *destination, ptrdiff_t destination_index, const tinypy_list_sort_slice_t *source, ptrdiff_t source_index) {
+static inline void __tinypy_list_sort_slice_copy(const tinypy_list_sort_slice_t *destination, ptrdiff_t destination_index, const tinypy_list_sort_slice_t *source, ptrdiff_t source_index, tinypy_bool_t with_values) {
     destination->keys[destination_index] = source->keys[source_index];
-    if (destination->values != NULL) {
+    if (with_values != 0) {
         destination->values[destination_index] = source->values[source_index];
     }
 }
 //////////////////////////////////////////////////////////////////////////
 /* sortslice_copy_incr and sortslice_copy_decr: one item, after which both
    slices step in the direction. */
-static inline void __tinypy_list_sort_slice_step(tinypy_list_sort_slice_t *destination, tinypy_list_sort_slice_t *source, ptrdiff_t direction) {
-    __tinypy_list_sort_slice_copy(destination, 0, source, 0);
-    __tinypy_list_sort_slice_advance(destination, direction);
-    __tinypy_list_sort_slice_advance(source, direction);
+static inline void __tinypy_list_sort_slice_step(tinypy_list_sort_slice_t *destination, tinypy_list_sort_slice_t *source, ptrdiff_t direction, tinypy_bool_t with_values) {
+    __tinypy_list_sort_slice_copy(destination, 0, source, 0, with_values);
+    __tinypy_list_sort_slice_advance(destination, direction, with_values);
+    __tinypy_list_sort_slice_advance(source, direction, with_values);
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_list_sort_less(tinypy_list_sort_state_t *state, tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_less, tinypy_error_t **out_error) {
@@ -911,7 +918,7 @@ static tinypy_bool_t __tinypy_list_sort_reserve(tinypy_list_sort_state_t *state,
 //////////////////////////////////////////////////////////////////////////
 /* merge_lo merges the shorter run a, copied aside, with the run b after it;
    keys[a] > keys[b] and the last of a ends the merge. */
-static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *state, tinypy_list_sort_slice_t a, ptrdiff_t a_count, tinypy_list_sort_slice_t b, ptrdiff_t b_count, tinypy_error_t **out_error) {
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *state, tinypy_list_sort_slice_t a, ptrdiff_t a_count, tinypy_list_sort_slice_t b, ptrdiff_t b_count, tinypy_bool_t with_values, tinypy_error_t **out_error) {
     size_t min_gallop = state->min_gallop;
     tinypy_bool_t merged = TINYPY_FALSE;
     tinypy_bool_t less;
@@ -920,11 +927,11 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
     if (__tinypy_list_sort_reserve(state, a_count, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    __tinypy_list_sort_slice_move(&state->temporary, 0, &a, 0, a_count);
+    __tinypy_list_sort_slice_move(&state->temporary, 0, &a, 0, a_count, with_values);
     tinypy_list_sort_slice_t destination = a;
     a = state->temporary;
 
-    __tinypy_list_sort_slice_step(&destination, &b, 1);
+    __tinypy_list_sort_slice_step(&destination, &b, 1, with_values);
     --b_count;
     if (b_count == 0) {
         goto succeed;
@@ -941,7 +948,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
                 goto fail;
             }
             if (less != 0) {
-                __tinypy_list_sort_slice_step(&destination, &b, 1);
+                __tinypy_list_sort_slice_step(&destination, &b, 1, with_values);
                 ++b_wins;
                 a_wins = 0U;
                 --b_count;
@@ -953,7 +960,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
                 }
             }
             else {
-                __tinypy_list_sort_slice_step(&destination, &a, 1);
+                __tinypy_list_sort_slice_step(&destination, &a, 1, with_values);
                 ++a_wins;
                 b_wins = 0U;
                 --a_count;
@@ -974,9 +981,9 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
             }
             a_wins = (size_t)position;
             if (position != 0) {
-                __tinypy_list_sort_slice_move(&destination, 0, &a, 0, position);
-                __tinypy_list_sort_slice_advance(&destination, position);
-                __tinypy_list_sort_slice_advance(&a, position);
+                __tinypy_list_sort_slice_move(&destination, 0, &a, 0, position, with_values);
+                __tinypy_list_sort_slice_advance(&destination, position, with_values);
+                __tinypy_list_sort_slice_advance(&a, position, with_values);
                 a_count -= position;
                 if (a_count == 1) {
                     goto copy_b;
@@ -985,7 +992,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
                     goto succeed;
                 }
             }
-            __tinypy_list_sort_slice_step(&destination, &b, 1);
+            __tinypy_list_sort_slice_step(&destination, &b, 1, with_values);
             --b_count;
             if (b_count == 0) {
                 goto succeed;
@@ -995,15 +1002,15 @@ static tinypy_bool_t __tinypy_list_sort_merge_low(tinypy_list_sort_state_t *stat
             }
             b_wins = (size_t)position;
             if (position != 0) {
-                __tinypy_list_sort_slice_move(&destination, 0, &b, 0, position);
-                __tinypy_list_sort_slice_advance(&destination, position);
-                __tinypy_list_sort_slice_advance(&b, position);
+                __tinypy_list_sort_slice_move(&destination, 0, &b, 0, position, with_values);
+                __tinypy_list_sort_slice_advance(&destination, position, with_values);
+                __tinypy_list_sort_slice_advance(&b, position, with_values);
                 b_count -= position;
                 if (b_count == 0) {
                     goto succeed;
                 }
             }
-            __tinypy_list_sort_slice_step(&destination, &a, 1);
+            __tinypy_list_sort_slice_step(&destination, &a, 1, with_values);
             --a_count;
             if (a_count == 1) {
                 goto copy_b;
@@ -1016,18 +1023,18 @@ succeed:
     merged = TINYPY_TRUE;
 fail:
     if (a_count != 0) {
-        __tinypy_list_sort_slice_move(&destination, 0, &a, 0, a_count);
+        __tinypy_list_sort_slice_move(&destination, 0, &a, 0, a_count, with_values);
     }
     return merged;
 copy_b:
-    __tinypy_list_sort_slice_move(&destination, 0, &b, 0, b_count);
-    __tinypy_list_sort_slice_copy(&destination, b_count, &a, 0);
+    __tinypy_list_sort_slice_move(&destination, 0, &b, 0, b_count, with_values);
+    __tinypy_list_sort_slice_copy(&destination, b_count, &a, 0, with_values);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* merge_hi merges the run a with the shorter run b after it, copied aside,
    from the right end. */
-static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *state, tinypy_list_sort_slice_t a, ptrdiff_t a_count, tinypy_list_sort_slice_t b, ptrdiff_t b_count, tinypy_error_t **out_error) {
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *state, tinypy_list_sort_slice_t a, ptrdiff_t a_count, tinypy_list_sort_slice_t b, ptrdiff_t b_count, tinypy_bool_t with_values, tinypy_error_t **out_error) {
     size_t min_gallop = state->min_gallop;
     tinypy_bool_t merged = TINYPY_FALSE;
     tinypy_bool_t less;
@@ -1037,15 +1044,15 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
         return TINYPY_FALSE;
     }
     tinypy_list_sort_slice_t destination = b;
-    __tinypy_list_sort_slice_advance(&destination, b_count - 1);
-    __tinypy_list_sort_slice_move(&state->temporary, 0, &b, 0, b_count);
+    __tinypy_list_sort_slice_advance(&destination, b_count - 1, with_values);
+    __tinypy_list_sort_slice_move(&state->temporary, 0, &b, 0, b_count, with_values);
     tinypy_list_sort_slice_t a_base = a;
     tinypy_list_sort_slice_t b_base = state->temporary;
     b = state->temporary;
-    __tinypy_list_sort_slice_advance(&b, b_count - 1);
-    __tinypy_list_sort_slice_advance(&a, a_count - 1);
+    __tinypy_list_sort_slice_advance(&b, b_count - 1, with_values);
+    __tinypy_list_sort_slice_advance(&a, a_count - 1, with_values);
 
-    __tinypy_list_sort_slice_step(&destination, &a, -1);
+    __tinypy_list_sort_slice_step(&destination, &a, -1, with_values);
     --a_count;
     if (a_count == 0) {
         goto succeed;
@@ -1062,7 +1069,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
                 goto fail;
             }
             if (less != 0) {
-                __tinypy_list_sort_slice_step(&destination, &a, -1);
+                __tinypy_list_sort_slice_step(&destination, &a, -1, with_values);
                 ++a_wins;
                 b_wins = 0U;
                 --a_count;
@@ -1074,7 +1081,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
                 }
             }
             else {
-                __tinypy_list_sort_slice_step(&destination, &b, -1);
+                __tinypy_list_sort_slice_step(&destination, &b, -1, with_values);
                 ++b_wins;
                 a_wins = 0U;
                 --b_count;
@@ -1096,15 +1103,15 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
             position = a_count - position;
             a_wins = (size_t)position;
             if (position != 0) {
-                __tinypy_list_sort_slice_advance(&destination, -position);
-                __tinypy_list_sort_slice_advance(&a, -position);
-                __tinypy_list_sort_slice_move(&destination, 1, &a, 1, position);
+                __tinypy_list_sort_slice_advance(&destination, -position, with_values);
+                __tinypy_list_sort_slice_advance(&a, -position, with_values);
+                __tinypy_list_sort_slice_move(&destination, 1, &a, 1, position, with_values);
                 a_count -= position;
                 if (a_count == 0) {
                     goto succeed;
                 }
             }
-            __tinypy_list_sort_slice_step(&destination, &b, -1);
+            __tinypy_list_sort_slice_step(&destination, &b, -1, with_values);
             --b_count;
             if (b_count == 1) {
                 goto copy_a;
@@ -1115,9 +1122,9 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
             position = b_count - position;
             b_wins = (size_t)position;
             if (position != 0) {
-                __tinypy_list_sort_slice_advance(&destination, -position);
-                __tinypy_list_sort_slice_advance(&b, -position);
-                __tinypy_list_sort_slice_move(&destination, 1, &b, 1, position);
+                __tinypy_list_sort_slice_advance(&destination, -position, with_values);
+                __tinypy_list_sort_slice_advance(&b, -position, with_values);
+                __tinypy_list_sort_slice_move(&destination, 1, &b, 1, position, with_values);
                 b_count -= position;
                 if (b_count == 1) {
                     goto copy_a;
@@ -1126,7 +1133,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_high(tinypy_list_sort_state_t *sta
                     goto succeed;
                 }
             }
-            __tinypy_list_sort_slice_step(&destination, &a, -1);
+            __tinypy_list_sort_slice_step(&destination, &a, -1, with_values);
             --a_count;
             if (a_count == 0) {
                 goto succeed;
@@ -1139,15 +1146,31 @@ succeed:
     merged = TINYPY_TRUE;
 fail:
     if (b_count != 0) {
-        __tinypy_list_sort_slice_move(&destination, -(b_count - 1), &b_base, 0, b_count);
+        __tinypy_list_sort_slice_move(&destination, -(b_count - 1), &b_base, 0, b_count, with_values);
     }
     return merged;
 copy_a:
-    __tinypy_list_sort_slice_advance(&destination, -a_count);
-    __tinypy_list_sort_slice_advance(&a, -a_count);
-    __tinypy_list_sort_slice_move(&destination, 1, &a, 1, a_count);
-    __tinypy_list_sort_slice_copy(&destination, 0, &b, 0);
+    __tinypy_list_sort_slice_advance(&destination, -a_count, with_values);
+    __tinypy_list_sort_slice_advance(&a, -a_count, with_values);
+    __tinypy_list_sort_slice_move(&destination, 1, &a, 1, a_count, with_values);
+    __tinypy_list_sort_slice_copy(&destination, 0, &b, 0, with_values);
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The merges of a sort without values and of one whose values move with the
+   keys: each instantiation takes its steps without asking which it is. */
+static TINYPY_NOINLINE tinypy_bool_t __tinypy_list_sort_merge_keys(tinypy_list_sort_state_t *state, tinypy_list_sort_slice_t a, ptrdiff_t a_count, tinypy_list_sort_slice_t b, ptrdiff_t b_count, tinypy_error_t **out_error) {
+    tinypy_bool_t merged = a_count <= b_count
+                               ? __tinypy_list_sort_merge_low(state, a, a_count, b, b_count, TINYPY_FALSE, out_error)
+                               : __tinypy_list_sort_merge_high(state, a, a_count, b, b_count, TINYPY_FALSE, out_error);
+    return merged;
+}
+//////////////////////////////////////////////////////////////////////////
+static TINYPY_NOINLINE tinypy_bool_t __tinypy_list_sort_merge_items(tinypy_list_sort_state_t *state, tinypy_list_sort_slice_t a, ptrdiff_t a_count, tinypy_list_sort_slice_t b, ptrdiff_t b_count, tinypy_error_t **out_error) {
+    tinypy_bool_t merged = a_count <= b_count
+                               ? __tinypy_list_sort_merge_low(state, a, a_count, b, b_count, TINYPY_TRUE, out_error)
+                               : __tinypy_list_sort_merge_high(state, a, a_count, b, b_count, TINYPY_TRUE, out_error);
+    return merged;
 }
 //////////////////////////////////////////////////////////////////////////
 /* merge_at merges the pending runs at index and index + 1, skipping the
@@ -1158,6 +1181,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_at(tinypy_list_sort_state_t *state
     ptrdiff_t a_count = (ptrdiff_t)runs[index].length;
     tinypy_list_sort_slice_t b = runs[index + 1U].base;
     ptrdiff_t b_count = (ptrdiff_t)runs[index + 1U].length;
+    tinypy_bool_t with_values = state->temporary.values != NULL;
     ptrdiff_t position;
 
     runs[index].length = (size_t)(a_count + b_count);
@@ -1168,7 +1192,7 @@ static tinypy_bool_t __tinypy_list_sort_merge_at(tinypy_list_sort_state_t *state
     if (__tinypy_list_sort_gallop_right(state, b.keys[0], a.keys, a_count, 0, &position, out_error) == 0) {
         return TINYPY_FALSE;
     }
-    __tinypy_list_sort_slice_advance(&a, position);
+    __tinypy_list_sort_slice_advance(&a, position, with_values);
     a_count -= position;
     if (a_count == 0) {
         return TINYPY_TRUE;
@@ -1179,9 +1203,9 @@ static tinypy_bool_t __tinypy_list_sort_merge_at(tinypy_list_sort_state_t *state
     if (b_count == 0) {
         return TINYPY_TRUE;
     }
-    tinypy_bool_t merged = a_count <= b_count
-                               ? __tinypy_list_sort_merge_low(state, a, a_count, b, b_count, out_error)
-                               : __tinypy_list_sort_merge_high(state, a, a_count, b, b_count, out_error);
+    tinypy_bool_t merged = with_values != 0
+                               ? __tinypy_list_sort_merge_items(state, a, a_count, b, b_count, out_error)
+                               : __tinypy_list_sort_merge_keys(state, a, a_count, b, b_count, out_error);
     return merged;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1252,6 +1276,7 @@ static tinypy_bool_t __tinypy_list_sort_items(tinypy_vm_t *vm, tinypy_list_sort_
     __tinypy_list_sort_use_inline(&state);
     state.run_count = 0U;
     tinypy_list_sort_slice_t low = items;
+    tinypy_bool_t with_values = items.values != NULL;
     size_t remaining = size;
     size_t minimum_run = __tinypy_list_sort_minimum_run(size);
     while (remaining != 0U) {
@@ -1281,7 +1306,7 @@ static tinypy_bool_t __tinypy_list_sort_items(tinypy_vm_t *vm, tinypy_list_sort_
             sorted = TINYPY_FALSE;
             break;
         }
-        __tinypy_list_sort_slice_advance(&low, (ptrdiff_t)length);
+        __tinypy_list_sort_slice_advance(&low, (ptrdiff_t)length, with_values);
         remaining -= length;
     }
     if (sorted != 0) {
@@ -1344,44 +1369,8 @@ static tinypy_bool_t __tinypy_list_sort_arguments(tinypy_vm_t *vm, tinypy_value_
         }
         *out_reverse = integer != 0 ? TINYPY_TRUE : TINYPY_FALSE;
     }
-    if (matched_keywords != keyword_count) {
-        for (size_t slot = 0U; slot <= TINYPY_DICT_OBJECT(kwargs)->mask; ++slot) {
-            tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(kwargs)->table[slot];
-            tinypy_bool_t known = TINYPY_FALSE;
-
-            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
-                continue;
-            }
-            tinypy_value_type_e kind = TINYPY_VALUE_KIND(entry->key);
-            if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
-                goto failed;
-            }
-            /* The keyword is read as a C string, up to an embedded NUL. */
-            const char *name = (const char *)TINYPY_TEXT_BYTES(entry->key);
-            size_t name_size = TINYPY_TEXT_BYTE_SIZE(entry->key);
-            const char *terminator = (const char *)memchr(name, 0, name_size);
-
-            if (terminator != NULL) {
-                name_size = (size_t)(terminator - name);
-            }
-            for (size_t parameter = 0U; parameter < 3U; ++parameter) {
-                if (name_size == TINYPY_TEXT_BYTE_SIZE(names[parameter]) && memcmp(name, TINYPY_TEXT_BYTES(names[parameter]), name_size) == 0) {
-                    known = TINYPY_TRUE;
-                    break;
-                }
-            }
-            if (known == 0) {
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    {name, name_size < 200U ? name_size : 200U},
-                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function"),
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                goto failed;
-            }
-        }
+    if (__tinypy_internal_constructor_check_keywords(vm, kwargs, keyword_count - matched_keywords, names, 3U, out_error) == 0) {
+        goto failed;
     }
     if (values[2] != NULL) {
         TINYPY_DECREF(values[2]);

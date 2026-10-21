@@ -194,8 +194,9 @@ tinypy_bool_t tinypy_debugger_frame_delete(tinypy_value_t *frame_value, tinypy_d
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_debugger_frame_sync(tinypy_value_t *frame_value) {
-    tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT(frame_value);
-    frame->debugger_line = tinypy_frame_line_number(frame_value);
+    TINYPY_INCREF(frame_value);
+    tinypy_internal_frame_locals_to_fast(TINYPY_FRAME_OBJECT(frame_value));
+    TINYPY_DECREF(frame_value);
 }
 
 #endif

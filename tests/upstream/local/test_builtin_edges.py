@@ -1241,6 +1241,32 @@ class BuiltinEdges(unittest.TestCase):
         self.assertIn('x19', dir(holder))
         self.assertEqual(events, ['a'])
 
+    def test_dir_merges_bases_deeper_than_the_recursion_limit(self):
+        # merge_class_dict takes no recursion level, so a hierarchy deeper
+        # than the limit lists every inherited name.
+        class OldBase:
+            inherited = 1
+        class NewBase(object):
+            inherited = 1
+        old, new = OldBase, NewBase
+        for index in range(200):
+            derived = type(OldBase)('Old%d' % index, (), {})
+            derived.__bases__ = (old,)
+            old = derived
+            new = type('New%d' % index, (new,), {})
+        frame = sys._getframe()
+        depth = 0
+        while frame is not None:
+            depth += 1
+            frame = frame.f_back
+        limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(depth + 50)
+        try:
+            found = ['inherited' in dir(value) for value in (old, old(), new, new())]
+        finally:
+            sys.setrecursionlimit(limit)
+        self.assertEqual(found, [True] * 4)
+
     def test_import_with_none_parent_is_absolute(self):
         sys.modules['builtin_edges_none_parent'] = None
         try:

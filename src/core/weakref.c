@@ -361,16 +361,10 @@ static void __tinypy_weakref_raise_reference_error(tinypy_vm_t *vm, tinypy_error
     }
     tinypy_value_t *text = tinypy_string_from_bytes(vm, message, sizeof(message) - 1U);
     tinypy_value_t *args = tinypy_tuple_from_items(vm, &text, 1U);
-    tinypy_value_t *exception = tinypy_internal_exception_instantiate(vm->exception_types[TINYPY_EXCEPTION_REFERENCE_ERROR], args, NULL, out_error);
 
+    tinypy_internal_exception_raise_args(vm, TINYPY_EXCEPTION_REFERENCE_ERROR, args, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(text);
-    if (exception == NULL) {
-        return;
-    }
-    tinypy_internal_exception_set_raised(vm, exception, NULL);
-    TINYPY_DECREF(exception);
-    tinypy_internal_exception_make_diagnostic(vm, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 /* The referent a proxy forwards an operation to, owned while the operation

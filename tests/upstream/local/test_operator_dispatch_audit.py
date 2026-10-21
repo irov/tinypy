@@ -475,6 +475,76 @@ class OperatorDispatchAudit(unittest.TestCase):
         self.assertEqual(list(Items([1, 2])), [1, 2])
         self.assertEqual(sorted(Items([2, 1])), [1, 2])
 
+    def test_foreign_wrapper_of_a_sequence_slot_leaves_it_empty(self):
+        class Reflected(object):
+            def __radd__(self, other):
+                return 'reflected'
+            def __rmul__(self, other):
+                return 'reflected'
+        class Joined(list):
+            __add__ = tuple.__add__
+        joined = Joined([1, 2])
+        self.assertEqual(_failure(lambda: joined + joined), ('TypeError', "unsupported operand type(s) for +: 'Joined' and 'Joined'"))
+        self.assertEqual(_failure(lambda: joined + [3]), ('TypeError', "unsupported operand type(s) for +: 'Joined' and 'list'"))
+        self.assertEqual(([3] + joined, joined + Reflected()), ([3, 1, 2], 'reflected'))
+        class Number(list):
+            __add__ = int.__add__
+        self.assertEqual(_failure(lambda: Number([1]) + 1), ('TypeError', "unsupported operand type(s) for +: 'Number' and 'int'"))
+        class Text(str):
+            __add__ = unicode.__add__
+            __mul__ = int.__mul__
+            __rmul__ = int.__rmul__
+        self.assertEqual(_failure(lambda: Text('a') + 'b'), ('TypeError', "unsupported operand type(s) for +: 'Text' and 'str'"))
+        self.assertEqual(_failure(lambda: 2 * Text('a')), ('TypeError', "unsupported operand type(s) for *: 'int' and 'Text'"))
+        self.assertEqual(('b' + Text('a'), Text('a') * Reflected()), ('ba', 'reflected'))
+        class Pair(tuple):
+            __add__ = list.__add__
+            __mul__ = list.__mul__
+        self.assertEqual((Pair((1,)) * 2, (2,) + Pair((1,))), ((1, 1), (2, 1)))
+        class Python(list):
+            __add__ = tuple.__add__
+            def __radd__(self, other):
+                return 'python'
+        self.assertEqual(_failure(lambda: Python([1]) + 1)[0], 'TypeError')
+        self.assertEqual(1 + Python([1]), 'python')
+        class Plain(object):
+            __add__ = int.__add__
+        self.assertEqual(_failure(lambda: Plain() + Reflected()), ('TypeError', "descriptor '__add__' for 'int' objects doesn't apply to 'Plain' object"))
+        def grow(cls, value, other, repeat):
+            item = first = cls(value)
+            if repeat:
+                item *= other
+            else:
+                item += other
+            return type(item).__name__, item is first, item
+        class Bytes(bytearray):
+            __iadd__ = list.__iadd__
+            __imul__ = list.__imul__
+        class Items(list):
+            __iadd__ = bytearray.__iadd__
+            __imul__ = bytearray.__imul__
+        self.assertEqual(grow(Bytes, 'ab', 'cd', False), ('bytearray', False, bytearray('abcd')))
+        self.assertEqual(grow(Bytes, 'ab', 2, True), ('bytearray', False, bytearray('abab')))
+        self.assertEqual(grow(Items, [1], [2], False), ('list', False, [1, 2]))
+        self.assertEqual(grow(Items, [1], 2, True), ('list', False, [1, 1]))
+
+    def test_foreign_attribute_wrapper_keeps_the_slot_of_an_exception(self):
+        class Missing(KeyError):
+            __delattr__ = type.__delattr__
+        class Failure(Exception):
+            __setattr__ = type.__setattr__
+        class Both(Exception):
+            __setattr__ = type.__setattr__
+            __delattr__ = type.__delattr__
+        missing, failure = Missing(1), Failure('f')
+        missing.value = failure.value = 9
+        self.assertEqual((missing.value, failure.value), (9, 9))
+        del missing.value, failure.value
+        self.assertEqual((hasattr(missing, 'value'), hasattr(failure, 'value')), (False, False))
+        def store():
+            Both().value = 1
+        self.assertEqual(_failure(store)[0], 'TypeError')
+
 
 if __name__ == '__main__':
     unittest.main()

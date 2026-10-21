@@ -6076,8 +6076,16 @@ static tinypy_bool_t __test_module_request_is(const tinypy_module_request_t *req
     return equal;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Raises ValueError and reports the success that native_pending asks for. */
+static tinypy_bool_t __test_module_resolver_contract_initialize(tinypy_value_t *module, void *user_data, tinypy_error_t **out_error) {
+    (void)out_error;
+    tinypy_vm_raise_error(tinypy_value_vm(module), TINYPY_ERROR_VALUE, "the initializer raised");
+    return user_data != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Offers each module as source, with the field its name tells left NULL
-   but sized, or raises the error its name tells. */
+   but sized, or raises the error its name tells. The native modules
+   initialize with an exception raised. */
 static const tinypy_module_artifact_t *__test_module_resolver_contract_resolve(void *user_data, const tinypy_module_request_t *request) {
     static const char source[] = "VALUE = 1\n";
     test_module_resolver_state_t *state = (test_module_resolver_state_t *)user_data;
@@ -6104,6 +6112,14 @@ static const tinypy_module_artifact_t *__test_module_resolver_contract_resolve(v
     if (__test_module_request_is(request, "null_token") != TINYPY_FALSE) {
         state->artifact.flags = (uint32_t)TINYPY_MODULE_ARTIFACT_PACKAGE;
         state->artifact.package_token_size = 4U;
+    }
+    if (__test_module_request_is(request, "raising_artifact") != TINYPY_FALSE) {
+        tinypy_vm_raise_error(state->vm, TINYPY_ERROR_RUNTIME, "the resolver raised");
+    }
+    if (__test_module_request_is(request, "native_pending") != TINYPY_FALSE || __test_module_request_is(request, "native_failing") != TINYPY_FALSE) {
+        state->artifact.content_kind = TINYPY_MODULE_CONTENT_NATIVE;
+        state->artifact.native_initialize = __test_module_resolver_contract_initialize;
+        state->artifact.native_user_data = __test_module_request_is(request, "native_pending") != TINYPY_FALSE ? state : NULL;
     }
     return &state->artifact;
 }
@@ -6135,7 +6151,9 @@ static tinypy_bool_t __test_module_import_fails(tinypy_vm_t *vm, const char *nam
 //////////////////////////////////////////////////////////////////////////
 /* An artifact with a NULL field of nonzero size is invalid, and a resolver
    that returns no artifact fails the import with the exception it raised,
-   except an ImportError, which means that it has no module. */
+   except an ImportError, which means that it has no module. An exception
+   raised with an artifact, or by a native initializer whatever it reports,
+   fails the import too and leaves no module in sys.modules. */
 static int32_t __test_module_resolver_contract(void) {
     test_allocator_state_t allocator_state;
     test_module_resolver_state_t resolver_state;
@@ -6161,15 +6179,22 @@ static int32_t __test_module_resolver_contract(void) {
     TEST_CHECK(resolver_state.release_count == 2U);
     TEST_CHECK(__test_module_import_fails(vm, "raising_runtime", TINYPY_ERROR_RUNTIME, "the resolver failed") != TINYPY_FALSE);
     TEST_CHECK(__test_module_import_fails(vm, "raising_import", TINYPY_ERROR_IMPORT, "No module named raising_import") != TINYPY_FALSE);
+    TEST_CHECK(__test_module_import_fails(vm, "raising_artifact", TINYPY_ERROR_RUNTIME, "the resolver raised") != TINYPY_FALSE);
+    TEST_CHECK(__test_module_import_fails(vm, "native_pending", TINYPY_ERROR_VALUE, "the initializer raised") != TINYPY_FALSE);
+    TEST_CHECK(__test_module_import_fails(vm, "native_failing", TINYPY_ERROR_VALUE, "the initializer raised") != TINYPY_FALSE);
+    TEST_CHECK(resolver_state.release_count == 5U);
     tinypy_value_t *modules = tinypy_vm_modules(vm);
-    tinypy_value_t *key = tinypy_string_from_bytes(vm, "null_filename", 13U);
-    TEST_CHECK(tinypy_dict_contains(modules, key) == 0);
-    tinypy_release(key);
+    static const char *const failed_names[] = {"null_filename", "raising_artifact", "native_pending", "native_failing"};
+    for (size_t index = 0U; index < sizeof(failed_names) / sizeof(failed_names[0]); ++index) {
+        tinypy_value_t *key = tinypy_string_from_bytes(vm, failed_names[index], strlen(failed_names[index]));
+        TEST_CHECK(tinypy_dict_contains(modules, key) == 0);
+        tinypy_release(key);
+    }
     tinypy_value_t *module = tinypy_import_module(vm, "valid", 5U, NULL, NULL, 0, &error);
     TEST_CHECK(module != NULL && error == NULL);
     tinypy_value_t *value = tinypy_module_get_value(module, "VALUE", 5U);
     TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == 1);
-    TEST_CHECK(resolver_state.release_count == 3U);
+    TEST_CHECK(resolver_state.release_count == 6U);
     tinypy_release(module);
     tinypy_vm_destroy(vm);
     TEST_CHECK(allocator_state.outstanding_allocations == 0U);
@@ -7123,8 +7148,10 @@ static int32_t __test_class_subclass_native_guard(void) {
 /* tinypy_vm_raise_error raises a complete instance of the class of every
    kind, UnicodeError for the kinds of the codec errors, whose fields
    tinypy_exception_new gives. The str and the repr of a nested exception
-   take the levels of PyObject_Str and PyObject_Repr, and nested candidate
-   tuples match up to the recursion limit. */
+   take the levels of PyObject_Str and PyObject_Repr. Nested candidate tuples
+   match past the recursion limit, under the native stack budget alone: a
+   nesting that exhausts it is reported as unraisable and does not match,
+   and the exception pending meanwhile stays. */
 static int32_t __test_exception_contracts(void) {
     static const char define[] =
         "import sys\n"
@@ -7144,6 +7171,7 @@ static int32_t __test_exception_contracts(void) {
         "repr_deep = nest(ValueError, 19)\n"
         "within = candidates(30)\n"
         "beyond = candidates(60)\n"
+        "exhausting = candidates(100000)\n"
         "instance = ValueError('raised')\n"
         "decode_args = ('utf-8', '\\xff', 0, 1, 'invalid start byte')\n"
         "sys.setrecursionlimit(40)\n";
@@ -7220,10 +7248,13 @@ static int32_t __test_exception_contracts(void) {
     tinypy_value_t *instance = __test_global(globals, "instance");
     tinypy_value_t *within = __test_global(globals, "within");
     tinypy_value_t *beyond = __test_global(globals, "beyond");
+    tinypy_value_t *exhausting = __test_global(globals, "exhausting");
     TEST_CHECK(tinypy_exception_matches(instance, within, &error) == 1 && error == NULL);
-    TEST_CHECK(tinypy_exception_matches(instance, beyond, &error) == -1 && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_RUNTIME);
-    tinypy_error_release(error);
-    error = NULL;
+    TEST_CHECK(tinypy_exception_matches(instance, beyond, &error) == 1 && error == NULL);
+    tinypy_vm_raise_error(vm, TINYPY_ERROR_KEY, "pending");
+    tinypy_value_t *pending = tinypy_vm_raised_exception(vm);
+    TEST_CHECK(tinypy_exception_matches(instance, exhausting, &error) == 0 && error == NULL);
+    TEST_CHECK(tinypy_vm_raised_exception(vm) == pending && vm->native_recursion_depth == 0U);
     tinypy_vm_clear_error(vm);
     error = __test_exception_diagnostic(vm, globals, restore, sizeof(restore) - 1U);
     TEST_CHECK(error == NULL);
@@ -9859,13 +9890,17 @@ static tinypy_value_t *__test_set_attr_probe(tinypy_value_t *function, tinypy_va
    its methods, into a method descriptor of the type, and stores one held
    elsewhere too, as the builtin len, a function of a module or a function the
    host keeps in a dictionary, as it is, as PyObject_SetAttrString does: it
-   stays a plain function for every holder. */
+   stays a plain function for every holder. A fresh __new__ stays a plain
+   function too, which a class call passes the class first. */
 static int32_t __test_type_set_attr_sharing(void) {
     static const char source[] =
         "class T(object):\n"
+        "    pass\n"
+        "class N(object):\n"
         "    pass\n";
     static const char check_source[] =
         "check(type(T.__dict__['fresh']).__name__, 'method_descriptor')\n"
+        "check((type(N.__dict__['__new__']).__name__, N(1), N()), ('builtin_function_or_method', 2, 1))\n"
         "check(T().fresh(1), 101)\n"
         "check((T.size is len, len('abc'), T().size('ab')), (True, 3, 2))\n"
         "check((T.helper is host.helper, host.helper(), T().helper(1)), (True, 0, 1))\n"
@@ -9885,6 +9920,11 @@ static int32_t __test_type_set_attr_sharing(void) {
     tinypy_value_t *fresh = tinypy_native_function_new_items_keywords(vm, "fresh", 5U, __test_set_attr_probe, NULL, NULL);
     tinypy_type_set_attr(type, "fresh", 5U, fresh);
     tinypy_release(fresh);
+
+    tinypy_type_t *constructed = tinypy_value_as_type(__test_global(globals, "N"));
+    tinypy_value_t *constructor = tinypy_native_function_new_items_keywords(vm, "__new__", 7U, __test_set_attr_probe, NULL, NULL);
+    tinypy_type_set_attr(constructed, "__new__", 7U, constructor);
+    tinypy_release(constructor);
 
     tinypy_value_t *builtins = tinypy_vm_builtins(vm);
     tinypy_value_t *len_key = tinypy_string_from_bytes(vm, "len", 3U);
@@ -10242,6 +10282,287 @@ static int32_t __test_debugger_return_events(void) {
     TEST_CHECK(allocator_state.outstanding_bytes == 0U);
     return 0;
 }
+//////////////////////////////////////////////////////////////////////////
+typedef struct test_debugger_forward_state_t {
+    tinypy_value_t *globals;
+    tinypy_bool_t interrupt;
+    tinypy_bool_t busy;
+    size_t failures;
+} test_debugger_forward_state_t;
+//////////////////////////////////////////////////////////////////////////
+/* Calls the function tracer of the globals with the arguments of a trace
+   function of CPython: (event, frame, exception, traceback, exception
+   type). As in CPython, the code that it runs is not traced. */
+static void __test_debugger_forward_event(void *user_data, const tinypy_debugger_event_t *event) {
+    test_debugger_forward_state_t *state = (test_debugger_forward_state_t *)user_data;
+    tinypy_value_t *tracer = __test_global(state->globals, "tracer");
+
+    if (state->busy != 0 || tracer == NULL) {
+        return;
+    }
+    tinypy_vm_t *vm = tinypy_value_vm(event->frame);
+    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_value_t *kind = tinypy_integer_from_i64(vm, (int64_t)event->event);
+    tinypy_bool_t typed = event->struct_size >= offsetof(tinypy_debugger_event_t, exception_type) + sizeof(event->exception_type) ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_value_t *exception_type = typed != 0 && event->exception_type != NULL ? event->exception_type : none;
+    tinypy_value_t *items[] = {kind, event->frame, event->exception != NULL ? event->exception : none, event->traceback != NULL ? event->traceback : none, exception_type};
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, items, sizeof(items) / sizeof(items[0]));
+
+    tinypy_retain(tracer);
+    state->busy = TINYPY_TRUE;
+    tinypy_value_t *result = tinypy_call(tracer, args, NULL, NULL);
+    state->busy = TINYPY_FALSE;
+    if (result == NULL) {
+        state->failures += 1U;
+        tinypy_vm_clear_error(vm);
+    }
+    else {
+        tinypy_release(result);
+    }
+    tinypy_release(tracer);
+    tinypy_release(args);
+    tinypy_release(kind);
+    tinypy_release(none);
+}
+//////////////////////////////////////////////////////////////////////////
+/* An interrupt that arm_interrupt requests is reported once. */
+static tinypy_bool_t __test_debugger_poll_interrupt(void *user_data) {
+    test_debugger_forward_state_t *state = (test_debugger_forward_state_t *)user_data;
+    tinypy_bool_t interrupt = state->interrupt;
+
+    state->interrupt = TINYPY_FALSE;
+    return interrupt;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_debugger_arm_interrupt(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    test_debugger_forward_state_t *state = (test_debugger_forward_state_t *)user_data;
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+
+    (void)args;
+    (void)kwargs;
+    (void)out_error;
+    state->interrupt = TINYPY_TRUE;
+    tinypy_value_t *none = tinypy_none_get(vm);
+    return none;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_debugger_sync_frame(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+
+    (void)kwargs;
+    (void)user_data;
+    (void)out_error;
+    tinypy_debugger_frame_sync(tinypy_tuple_get(args, 0U));
+    tinypy_value_t *none = tinypy_none_get(vm);
+    return none;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __test_debugger_add_function(tinypy_value_t *globals, const char *name, tinypy_native_function_callback_t callback, void *user_data) {
+    tinypy_vm_t *vm = tinypy_value_vm(globals);
+    tinypy_value_t *function = tinypy_native_function_new(vm, name, strlen(name), callback, user_data, NULL);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, name, strlen(name));
+
+    tinypy_dict_set(globals, key, function);
+    tinypy_release(key);
+    tinypy_release(function);
+}
+//////////////////////////////////////////////////////////////////////////
+/* Runs source, whose checks see the events through tracer, in a VM whose
+   host polls for the interrupt that arm_interrupt requests. */
+static int32_t __test_debugger_forward_run(const char *source) {
+    test_allocator_state_t allocator_state;
+    test_debugger_forward_state_t state;
+    tinypy_host_t host;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &state;
+    host.poll_interrupt = __test_debugger_poll_interrupt;
+    config.host = &host;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    state.globals = globals;
+    __test_debugger_add_function(globals, "arm_interrupt", __test_debugger_arm_interrupt, &state);
+    __test_debugger_add_function(globals, "sync_frame", __test_debugger_sync_frame, NULL);
+    tinypy_debugger_t debugger = {TINYPY_ABI_VERSION, (uint32_t)sizeof(tinypy_debugger_t), &state, __test_debugger_forward_event};
+    TEST_CHECK(tinypy_debugger_set(vm, &debugger) != 0);
+    TEST_CHECK(__test_native_contract_run(vm, globals, source) == 0);
+    TEST_CHECK(tinypy_debugger_set(vm, NULL) != 0);
+    TEST_CHECK(state.failures == 0U);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* As maybe_call_line_trace, LINE marks the first instruction of a line
+   and a backward jump: none for the lines that a jump passes through or
+   that a generator resumes in, one for each iteration of a loop on one
+   line. The expected events are those of CPython. */
+static int32_t __test_debugger_line_events(void) {
+    static const char source[] =
+        "events = []\n"
+        "def tracer(event, frame, exception, traceback, exception_type):\n"
+        "    name = frame.f_code.co_name\n"
+        "    if event == 1 and name.startswith('s_'):\n"
+        "        events.append((name, frame.f_lineno - frame.f_code.co_firstlineno))\n"
+        "def s_except():\n"
+        "    try:\n"
+        "        raise ValueError\n"
+        "    except KeyError:\n"
+        "        x = 'never runs'\n"
+        "def s_continue():\n"
+        "    for i in range(2):\n"
+        "        if i < 5:\n"
+        "            continue\n"
+        "        y = 'never runs'\n"
+        "def s_empty_for():\n"
+        "    for i in []:\n"
+        "        pass\n"
+        "    else:\n"
+        "        e = 1\n"
+        "def s_one_line():\n"
+        "    n = 0\n"
+        "    for i in range(3): n += i\n"
+        "    return n\n"
+        "def s_generator():\n"
+        "    x = yield 1\n"
+        "    yield x\n"
+        "for f in (s_except, s_continue, s_empty_for, s_one_line):\n"
+        "    try:\n"
+        "        f()\n"
+        "    except ValueError:\n"
+        "        pass\n"
+        "list(s_generator())\n"
+        "check(events, [('s_except', 1), ('s_except', 2), ('s_except', 3),\n"
+        "    ('s_continue', 1), ('s_continue', 2), ('s_continue', 3), ('s_continue', 1), ('s_continue', 2), ('s_continue', 3), ('s_continue', 1),\n"
+        "    ('s_empty_for', 1), ('s_empty_for', 4),\n"
+        "    ('s_one_line', 1), ('s_one_line', 2), ('s_one_line', 2), ('s_one_line', 2), ('s_one_line', 2), ('s_one_line', 3),\n"
+        "    ('s_generator', 1), ('s_generator', 2)])\n";
+
+    int32_t result = __test_debugger_forward_run(source);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* As call_exc_trace, EXCEPTION passes the type, the value as raised and a
+   traceback that holds the frame already. */
+static int32_t __test_debugger_exception_events(void) {
+    static const char source[] =
+        "import sys\n"
+        "records = []\n"
+        "def tracer(event, frame, exception, traceback, exception_type):\n"
+        "    name = frame.f_code.co_name\n"
+        "    if event == 4 and name.startswith('s_'):\n"
+        "        names = []\n"
+        "        while traceback is not None:\n"
+        "            names.append(traceback.tb_frame.f_code.co_name)\n"
+        "            traceback = traceback.tb_next\n"
+        "        records.append((name, exception_type.__name__, repr(exception), names))\n"
+        "def s_inner():\n"
+        "    raise KeyError('k')\n"
+        "def s_outer():\n"
+        "    s_inner()\n"
+        "def s_exit():\n"
+        "    sys.exit(3)\n"
+        "def s_class():\n"
+        "    raise IndexError, 'i'\n"
+        "def s_thrown():\n"
+        "    yield 1\n"
+        "for f in (s_outer, s_exit, s_class):\n"
+        "    try:\n"
+        "        f()\n"
+        "    except BaseException:\n"
+        "        pass\n"
+        "thrown = s_thrown()\n"
+        "next(thrown)\n"
+        "expect_error(ValueError, lambda: thrown.throw(ValueError('v')), 'v')\n"
+        "check(records, [('s_inner', 'KeyError', \"KeyError('k',)\", ['s_inner']),\n"
+        "    ('s_outer', 'KeyError', \"KeyError('k',)\", ['s_outer', 's_inner']),\n"
+        "    ('s_exit', 'SystemExit', '3', ['s_exit']),\n"
+        "    ('s_class', 'IndexError', \"IndexError('i',)\", ['s_class']),\n"
+        "    ('s_thrown', 'ValueError', \"ValueError('v',)\", ['s_thrown'])])\n";
+
+    int32_t result = __test_debugger_forward_run(source);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A host interrupt that the code of a debugger callback receives, and that
+   the callback swallows, still interrupts the program at its next poll. */
+static int32_t __test_debugger_interrupt(void) {
+    static const char source[] =
+        "state = {'armed': True, 'seen': []}\n"
+        "def watch():\n"
+        "    for i in range(50):\n"
+        "        pass\n"
+        "def tracer(event, frame, exception, traceback, exception_type):\n"
+        "    if event == 1 and frame.f_code.co_name == 'work' and state['armed']:\n"
+        "        state['armed'] = False\n"
+        "        arm_interrupt()\n"
+        "        try:\n"
+        "            watch()\n"
+        "            state['seen'].append('finished')\n"
+        "        except KeyboardInterrupt:\n"
+        "            state['seen'].append('interrupted')\n"
+        "def work():\n"
+        "    total = 0\n"
+        "    for i in range(5):\n"
+        "        total += i\n"
+        "    return total\n"
+        "expect_error(KeyboardInterrupt, work, 'execution interrupted by host')\n"
+        "check(state, {'armed': False, 'seen': ['interrupted']})\n"
+        "check(work(), 10)\n";
+
+    int32_t result = __test_debugger_forward_run(source);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* tinypy_debugger_frame_sync stores what code changed in the locals that
+   tinypy_frame_locals materialized, as PyFrame_LocalsToFast; it stops when
+   a value it replaces finishes the generator that suspended the frame. */
+static int32_t __test_debugger_frame_sync(void) {
+    static const char source[] =
+        "def tracer(event, frame, exception, traceback, exception_type):\n"
+        "    if event == 1 and frame.f_code.co_name == 'target' and frame.f_lineno - frame.f_code.co_firstlineno == 5:\n"
+        "        local_names = frame.f_locals\n"
+        "        local_names['value'] = 41\n"
+        "        local_names['cell'] = 'new'\n"
+        "        sync_frame(frame)\n"
+        "def target():\n"
+        "    value = 1\n"
+        "    cell = 'old'\n"
+        "    def inner():\n"
+        "        return cell\n"
+        "    marker = None\n"
+        "    return value + 1, inner()\n"
+        "check(target(), (42, 'new'))\n"
+        "class Closer(object):\n"
+        "    def __del__(self):\n"
+        "        holder.pop().close()\n"
+        "def suspended():\n"
+        "    first = Closer()\n"
+        "    second = 'kept'\n"
+        "    yield 1\n"
+        "holder = [suspended()]\n"
+        "next(holder[0])\n"
+        "suspended_frame = holder[0].gi_frame\n"
+        "local_names = suspended_frame.f_locals\n"
+        "local_names['first'] = 0\n"
+        "local_names['second'] = 'dropped'\n"
+        "sync_frame(suspended_frame)\n"
+        "check(holder, [])\n"
+        "check(suspended_frame.f_locals, {})\n";
+
+    int32_t result = __test_debugger_forward_run(source);
+    return result;
+}
 #endif
 //////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
@@ -10589,6 +10910,38 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "debugger_return_events") == 0) {
 #if defined(TINYPY_DEBUGGER)
         int result = __test_debugger_return_events();
+        return result;
+#else
+        return 0;
+#endif
+    }
+    if (strcmp(argv[1], "debugger_line_events") == 0) {
+#if defined(TINYPY_DEBUGGER)
+        int result = __test_debugger_line_events();
+        return result;
+#else
+        return 0;
+#endif
+    }
+    if (strcmp(argv[1], "debugger_exception_events") == 0) {
+#if defined(TINYPY_DEBUGGER)
+        int result = __test_debugger_exception_events();
+        return result;
+#else
+        return 0;
+#endif
+    }
+    if (strcmp(argv[1], "debugger_interrupt") == 0) {
+#if defined(TINYPY_DEBUGGER)
+        int result = __test_debugger_interrupt();
+        return result;
+#else
+        return 0;
+#endif
+    }
+    if (strcmp(argv[1], "debugger_frame_sync") == 0) {
+#if defined(TINYPY_DEBUGGER)
+        int result = __test_debugger_frame_sync();
         return result;
 #else
         return 0;

@@ -7,6 +7,24 @@ import unittest
 import _struct
 
 
+def _number(state, bits):
+    value = 0
+    while value.bit_length() < bits:
+        state[0] = (state[0] * 1103515245 + 12345) & 0x7fffffff
+        value = (value << 31) | state[0] | 1
+    return value >> (value.bit_length() - bits)
+
+
+def _digit_product(large, small):
+    total = 0
+    shift = 0
+    while small:
+        total += (large * (small & 0x7fff)) << shift
+        small >>= 15
+        shift += 15
+    return total
+
+
 def _error(operation, *args):
     try:
         operation(*args)
@@ -268,29 +286,76 @@ class NumericSemantics(unittest.TestCase):
 
     def test_lopsided_products_match_single_digit_sums(self):
         state = [7]
-
-        def number(bits):
-            value = 0
-            while value.bit_length() < bits:
-                state[0] = (state[0] * 1103515245 + 12345) & 0x7fffffff
-                value = (value << 31) | state[0] | 1
-            return value >> (value.bit_length() - bits)
-
-        def digit_product(large, small):
-            total = 0
-            shift = 0
-            while small:
-                total += (large * (small & 0x7fff)) << shift
-                small >>= 15
-                shift += 15
-            return total
         for small_bits, large_bits in ((1920, 3840), (1935, 3870), (2400, 7300), (3000, 6001), (1950, 30000), (4500, 8999)):
-            small = number(small_bits)
-            large = number(large_bits)
-            product = digit_product(large, small)
+            small = _number(state, small_bits)
+            large = _number(state, large_bits)
+            product = _digit_product(large, small)
             self.assertEqual([small * large, -large * small, small * -large], [product, -product, -product])
-        value = number(6000)
-        self.assertEqual(value ** 3, digit_product(value * value, value))
+        value = _number(state, 6000)
+        self.assertEqual(value ** 3, _digit_product(value * value, value))
+
+    def test_products_and_squares_across_the_word_kernels(self):
+        state = [11]
+        for small_bits, large_bits in ((31, 47), (45, 60), (60, 61), (61, 900), (91, 1800), (1770, 1770), (1800, 1830), (1830, 4300),
+                                       (2370, 2370), (2430, 2460), (1800, 9000)):
+            for small, large in ((_number(state, small_bits), _number(state, large_bits)), ((1 << small_bits) - 1, (1 << large_bits) - 1)):
+                product = _digit_product(large, small)
+                self.assertEqual([small * large, -large * small, small * -large], [product, -product, -product])
+        for bits in (61, 91, 1800, 2370, 2400, 2430, 4860):
+            for value in (_number(state, bits), (1 << bits) - 1, -(1 << (bits - 1))):
+                square = _digit_product(abs(value), abs(value))
+                self.assertEqual([value * value, value ** 2, value * (value + 0)], [square, square, square])
+        value = _number(state, 700)
+        powers = [1]
+        for exponent in range(1, 18):
+            powers.append(powers[-1] * value)
+        self.assertEqual([value ** exponent for exponent in range(18)], powers)
+        self.assertEqual([(-value) ** 17, value ** 3L, type(2 ** 3L), (-3) ** 41], [-powers[17], powers[3], long, -36472996377170786403L])
+
+    def test_divisions_keep_the_floor_identity(self):
+        def check(dividend, divisor):
+            quotient, remainder = divmod(dividend, divisor)
+            self.assertEqual((quotient * divisor + remainder, abs(remainder) < abs(divisor), remainder * divisor >= 0), (dividend, True, True))
+            self.assertEqual((dividend // divisor, dividend % divisor), (quotient, remainder))
+        # Quotient estimates of BASE + 1 and the add-back step of 30-bit digits, as test_long checks them.
+        for dividend, divisor in ((1231948412290879395966702881L, 1147341367131428698L), (815427756481275430342312021515587883L, 707270836069027745L),
+                                  (627976073697012820849443363563599041L, 643588798496057020L),
+                                  (1115141373653752303710932756325578065L, 1038556335171453937726882627L),
+                                  (922498905405436751940989320930368494L, 949985870686786135626943396L),
+                                  (768235853328091167204009652174031844L, 1091555541180371554426545266L)):
+            for signs in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+                check(signs[0] * dividend, signs[1] * divisor)
+        self.assertEqual(divmod(1115141373653752303710932756325578065L, 1038556335171453937726882627L), (1073741823L, 1038556335055541328303569044L))
+        state = [13]
+        for dividend_bits, divisor_bits in ((61, 31), (90, 60), (91, 61), (2100, 61), (4300, 2100), (9000, 4230), (600, 599)):
+            for dividend in (_number(state, dividend_bits), (1 << dividend_bits) - 1):
+                for divisor in (_number(state, divisor_bits), (1 << divisor_bits) - 1, 1 << (divisor_bits - 1)):
+                    for signs in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+                        check(signs[0] * dividend, signs[1] * divisor)
+
+    def test_modular_powers_match_right_to_left_squaring(self):
+        def reference(base, exponent, modulus):
+            result = 1 % modulus
+            base %= modulus
+            while exponent:
+                if exponent & 1:
+                    result = result * base % modulus
+                base = base * base % modulus
+                exponent >>= 1
+            return result
+        state = [17]
+        for modulus_bits, exponent_sizes in ((2, (0, 1, 2, 600)), (31, (1, 240, 241)), (61, (2, 240, 241, 600)), (1100, (1, 241))):
+            for modulus in (_number(state, modulus_bits), (1 << modulus_bits) - 1, -_number(state, modulus_bits)):
+                for exponent_bits in exponent_sizes:
+                    exponent = _number(state, exponent_bits) if exponent_bits else 0
+                    for base in (_number(state, modulus_bits + 7), -_number(state, 45), modulus, 2 * modulus - 1):
+                        self.assertEqual(pow(base, exponent, modulus), reference(base, exponent, modulus))
+        modulus = -_number(state, 2430)
+        for exponent in (3, _number(state, 241)):
+            for base in (_number(state, 2437), -_number(state, 45)):
+                self.assertEqual(pow(base, exponent, modulus), reference(base, exponent, modulus))
+        self.assertEqual([pow(5L, 0, 1), pow(5L, 0, -1), pow(-5L, 3, -1), pow(5L, 0, -7), pow(-5L, 3, 7), pow(5L, 3, -7), pow(2 ** 64, 2 ** 300, 1 << 61)],
+                         [0L, 0L, 0L, -6L, 1L, -1L, 0L])
 
     def test_recycled_floats_hold_their_own_values(self):
         held = [index + 0.5 for index in range(600)]

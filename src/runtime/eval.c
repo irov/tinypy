@@ -43,6 +43,16 @@ typedef struct tinypy_eval_resume_t {
     tinypy_value_t *throw_traceback;
     tinypy_bool_t yielded;
 } tinypy_eval_resume_t;
+#if defined(TINYPY_DEBUGGER)
+//////////////////////////////////////////////////////////////////////////
+/* The instruction window of maybe_call_line_trace: the line range of the
+   instruction traced last and that instruction. */
+typedef struct tinypy_eval_line_window_t {
+    int32_t lower;
+    int32_t upper;
+    int32_t previous;
+} tinypy_eval_line_window_t;
+#endif
 
 static tinypy_bool_t __tinypy_eval_push_block(tinypy_frame_object_t *frame, int32_t type, size_t handler);
 static tinypy_value_t *__tinypy_eval_function_items_keywords(tinypy_value_t *function_value, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_value_t *const *keyword_items, size_t keyword_count, tinypy_error_t **out_error);
@@ -114,7 +124,9 @@ static tinypy_value_t *__tinypy_eval_next(tinypy_vm_t *vm, tinypy_value_t *value
         }
         item = TINYPY_TUPLE_GET(iterable, iterator->index);
     }
-    else if (iterable->type == &vm->types[TINYPY_VALUE_LIST] && TINYPY_LIST_OBJECT(iterable)->mutation_version == iterator->expected_state) {
+    else if (iterable->type == &vm->types[TINYPY_VALUE_LIST]) {
+        /* listiter_next: the index alone decides, however the list changed,
+           as the iterator's own next slot does. */
         size = TINYPY_LIST_SIZE(iterable);
         if (iterator->index >= size) {
             tinypy_internal_iterator_clear(iterator);
@@ -278,47 +290,47 @@ static TINYPY_NOINLINE tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attr
 //////////////////////////////////////////////////////////////////////////
 /* The newest victim takes the first way. A site that sees more receiver
    types than the ways keeps some of them in a full victim set, which takes
-   an entry only once in TINYPY_ATTRIBUTE_LOOKUP_VICTIM_TURNOVER evictions, so
-   that stale victims still turn over. Only misses evict, so the eviction
-   stays out of the evaluator loop that the hits run in. */
-static TINYPY_NOINLINE void __tinypy_eval_attribute_cache_evict(tinypy_value_t *code, const tinypy_attribute_lookup_cache_entry_t *entry, size_t name_index) {
+   an entry only once in TINYPY_ATTRIBUTE_LOOKUP_VICTIM_TURNOVER misses of its
+   slot, so that stale victims still turn over. The set takes this entry and
+   returns how many misses it refuses next, which the slot counts down
+   without a call. */
+static TINYPY_NOINLINE uint32_t __tinypy_eval_attribute_cache_evict(tinypy_value_t *code, const tinypy_attribute_lookup_cache_entry_t *entry, size_t name_index) {
     if (TINYPY_CODE_OBJECT(code)->attribute_victims == NULL) {
         tinypy_attribute_lookup_cache_entry_t *victims = __tinypy_eval_attribute_victims_allocate(code);
 
         if (victims == NULL) {
-            return;
+            return 0U;
         }
     }
     tinypy_attribute_lookup_cache_entry_t *set = __tinypy_eval_attribute_victim_set(code, name_index);
-    if (set[1].type != NULL) {
-        tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
-
-        vm->attribute_victim_clock += 1U;
-        if ((vm->attribute_victim_clock & (TINYPY_ATTRIBUTE_LOOKUP_VICTIM_TURNOVER - 1U)) != 0U) {
-            return;
-        }
-    }
+    uint32_t refusals = set[1].type != NULL ? TINYPY_ATTRIBUTE_LOOKUP_VICTIM_TURNOVER - 1U : 0U;
     set[1] = set[0];
     set[0] = *entry;
+    return refusals;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The new entry takes the first way of its set and the previous one moves to
    the second, pushing out an entry that becomes a victim when it has no owner
-   and is for the same name and a receiver of another type. Its versions are
-   the ones read before the lookups that filled it, so a type changed while
-   they ran leaves the entry stale, and an entry that a type without a version
-   decides never matches. A version names one type for good, so the
-   attribute's type is known by its version alone. A module entry does not
-   depend on the type of its value. */
+   and is for the same name and a receiver of another type, unless the victims
+   refuse it. Its versions are the ones read before the lookups that filled
+   it, so a type changed while they ran leaves the entry stale, and an entry
+   that a type without a version decides never matches. A version names one
+   type for good, so the attribute's type is known by its version alone. A
+   module entry does not depend on the type of its value. */
 static tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attribute_cache_insert(tinypy_value_t *code, tinypy_type_t *type, uint64_t type_version, tinypy_value_t *owner, uint64_t owner_version, size_t name_index, tinypy_value_t *attribute, uint64_t attribute_type_version) {
     tinypy_attribute_lookup_cache_entry_t *set = __tinypy_eval_attribute_cache_set(code, name_index);
     tinypy_type_t *entry_type = type_version != 0U ? type : NULL;
+    uint32_t victim_refusals = set[0].victim_refusals;
 
-    if (set[1].type != NULL && set[1].owner == NULL && set[1].name_index == name_index && set[1].type != entry_type) {
-        __tinypy_eval_attribute_cache_evict(code, &set[1], name_index);
+    if (victim_refusals != 0U) {
+        victim_refusals -= 1U;
+    }
+    else if (set[1].type != NULL && set[1].owner == NULL && set[1].name_index == name_index && set[1].type != entry_type) {
+        victim_refusals = __tinypy_eval_attribute_cache_evict(code, &set[1], name_index);
     }
     set[1] = set[0];
     (void)memset(set, 0, sizeof(*set));
+    set->victim_refusals = victim_refusals;
     set->type_version = type_version;
     set->owner_version = owner_version;
     set->attribute_type_version = attribute_type_version;
@@ -332,7 +344,7 @@ static tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_attribute_cache_inse
 /* Caches an attribute that a class or a type holds itself, once the lookup
    that found it is done. Looking for __get__ on the attribute's type may run
    a key's __eq__, which can drop the attribute from its class. */
-static void __tinypy_eval_attribute_cache_fill(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_type_t *type, uint64_t type_version, tinypy_value_t *owner, uint64_t owner_version, size_t name_index, tinypy_value_t *attribute) {
+static TINYPY_NOINLINE void __tinypy_eval_attribute_cache_fill(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_type_t *type, uint64_t type_version, tinypy_value_t *owner, uint64_t owner_version, size_t name_index, tinypy_value_t *attribute) {
     TINYPY_INCREF(attribute);
     uint64_t attribute_type_version = __tinypy_internal_type_version(attribute->type);
     tinypy_bool_t has_get = tinypy_internal_descriptor_has_get(vm, attribute);
@@ -461,6 +473,37 @@ static TINYPY_NOINLINE tinypy_value_t *__tinypy_eval_load_attr_missing(tinypy_va
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The lookup of an attribute of an instance that the caches of its site
+   miss, which fills an entry for it out of the evaluator loop. The entry
+   comes back with the receiver's type and the attribute held, as a hit holds
+   them past the instance dictionary, since a key comparison of the lookups
+   may drop them; NULL when the type overrides __getattribute__. */
+static TINYPY_NOINLINE tinypy_attribute_lookup_cache_entry_t *__tinypy_eval_load_attr_lookup(tinypy_vm_t *vm, tinypy_value_t *code, tinypy_value_t *object, tinypy_value_t *name, size_t name_index) {
+    tinypy_type_t *type = object->type;
+    uint64_t type_version = __tinypy_internal_type_version(type);
+    /* A key comparison of the dispatch lookups may reassign __class__. */
+    TINYPY_INCREF(&type->base.base);
+    if (__tinypy_internal_object_overrides_dispatch(object, TINYPY_INTERNAL_DISPATCH_BIT(GETATTRIBUTE)) != 0) {
+        TINYPY_DECREF(&type->base.base);
+        return NULL;
+    }
+    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, type, name);
+    if (attribute != NULL) {
+        TINYPY_INCREF(attribute);
+    }
+    uint64_t attribute_type_version = attribute != NULL ? __tinypy_internal_type_version(attribute->type) : UINT64_C(0);
+    tinypy_bool_t has_get = attribute != NULL ? tinypy_internal_descriptor_has_get(vm, attribute) : TINYPY_FALSE;
+    tinypy_bool_t data_descriptor = attribute != NULL && has_get != 0 ? tinypy_internal_descriptor_is_data(vm, attribute) : TINYPY_FALSE;
+    size_t slot_index = 0U;
+    tinypy_bool_t member_slot = data_descriptor != 0 ? tinypy_internal_member_descriptor_slot(attribute, type, &slot_index) : TINYPY_FALSE;
+    tinypy_attribute_lookup_cache_entry_t *cache = __tinypy_eval_attribute_cache_insert(code, type, type_version, NULL, UINT64_C(0), name_index, attribute, attribute_type_version);
+    cache->index = slot_index;
+    cache->data_descriptor = data_descriptor;
+    cache->has_descriptor_get = has_get;
+    cache->member_slot = member_slot;
+    return cache;
+}
+//////////////////////////////////////////////////////////////////////////
 /* With out_unbound, a function or method descriptor of the type, or a
    function of a classic instance's class, that binding would make a method of
    the object is returned as it is, for the method call to run with the object
@@ -510,32 +553,12 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         cache = __tinypy_eval_attribute_victim_find(code, object, name_index);
     }
     tinypy_type_t *type = object->type;
-    tinypy_value_t *attribute;
-    tinypy_bool_t data_descriptor;
-    tinypy_bool_t has_get;
     if (cache == NULL) {
-        uint64_t type_version = __tinypy_internal_type_version(type);
-        /* A key comparison of the dispatch lookups may reassign __class__. */
-        TINYPY_INCREF(&type->base.base);
-        if (__tinypy_internal_object_overrides_dispatch(object, TINYPY_INTERNAL_DISPATCH_BIT(GETATTRIBUTE)) != 0) {
-            TINYPY_DECREF(&type->base.base);
+        cache = __tinypy_eval_load_attr_lookup(vm, code, object, name, name_index);
+        if (cache == NULL) {
             tinypy_value_t *result = tinypy_internal_object_get_attr_key(object, name, out_error);
             return result;
         }
-        attribute = tinypy_internal_type_lookup_key(vm, type, name);
-        if (attribute != NULL) {
-            TINYPY_INCREF(attribute);
-        }
-        uint64_t attribute_type_version = attribute != NULL ? __tinypy_internal_type_version(attribute->type) : UINT64_C(0);
-        has_get = attribute != NULL ? tinypy_internal_descriptor_has_get(vm, attribute) : TINYPY_FALSE;
-        data_descriptor = attribute != NULL && has_get != 0 ? tinypy_internal_descriptor_is_data(vm, attribute) : TINYPY_FALSE;
-        size_t slot_index = 0U;
-        tinypy_bool_t member_slot = data_descriptor != 0 ? tinypy_internal_member_descriptor_slot(attribute, type, &slot_index) : TINYPY_FALSE;
-        cache = __tinypy_eval_attribute_cache_insert(code, type, type_version, NULL, UINT64_C(0), name_index, attribute, attribute_type_version);
-        cache->index = slot_index;
-        cache->data_descriptor = data_descriptor;
-        cache->has_descriptor_get = has_get;
-        cache->member_slot = member_slot;
     }
     else {
         /* An empty slot takes the descriptor's path to raise AttributeError.
@@ -556,14 +579,14 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
                 return TINYPY_RET(hint_value);
             }
         }
-        attribute = cache->attribute;
-        data_descriptor = cache->data_descriptor;
-        has_get = cache->has_descriptor_get;
-        if (attribute != NULL) {
-            TINYPY_INCREF(attribute);
+        if (cache->attribute != NULL) {
+            TINYPY_INCREF(cache->attribute);
         }
         TINYPY_INCREF(&type->base.base);
     }
+    tinypy_value_t *attribute = cache->attribute;
+    tinypy_bool_t data_descriptor = cache->data_descriptor;
+    tinypy_bool_t has_get = cache->has_descriptor_get;
     tinypy_value_t *result = NULL;
     tinypy_value_t *getattr_hook = NULL;
     if (data_descriptor != 0) {
@@ -1018,10 +1041,6 @@ static tinypy_value_t *__tinypy_eval_compare(tinypy_vm_t *vm, tinypy_value_t *le
        comparison, so an except clause still works below a lowered limit. */
     if (operation == (size_t)TINYPY_COMPARE_EXCEPTION_MATCH) {
         int32_t matched = tinypy_exception_matches(left, right, out_error);
-
-        if (matched < 0) {
-            return NULL;
-        }
         tinypy_value_t *match = tinypy_bool_from_i32(vm, matched);
         return match;
     }
@@ -1863,6 +1882,37 @@ static inline tinypy_bool_t __tinypy_eval_concat_in_place(tinypy_vm_t *vm, tinyp
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Whether the int_pow of the exact integer operands overflowed, as it
+   declines only that and a negative exponent. */
+static inline tinypy_bool_t __tinypy_eval_power_overflowed(tinypy_value_t *left, tinypy_value_t *right) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_bool_t overflowed = left->type == &vm->types[TINYPY_VALUE_INTEGER] && right->type == &vm->types[TINYPY_VALUE_INTEGER] && TINYPY_INTEGER_VALUE(right) >= 0;
+
+    return overflowed;
+}
+//////////////////////////////////////////////////////////////////////////
+/* BINARY_POWER of the operands that the int_pow of the evaluator declines,
+   out of line as tinypy_power: an int_pow that overflowed goes on as
+   long_pow without running again. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_eval_power(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    if (__tinypy_eval_power_overflowed(left, right) != 0) {
+        tinypy_value_t *power = tinypy_internal_integer_power_long(left, right, out_error);
+        return power;
+    }
+    tinypy_value_t *result = tinypy_power(left, right, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* INPLACE_POWER likewise, as int has no in-place power. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_eval_inplace_power(tinypy_value_t *left, tinypy_value_t *right, tinypy_error_t **out_error) {
+    if (__tinypy_eval_power_overflowed(left, right) != 0) {
+        tinypy_value_t *power = tinypy_internal_integer_power_long(left, right, out_error);
+        return power;
+    }
+    tinypy_value_t *result = tinypy_inplace_power(left, right, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static inline tinypy_bool_t __tinypy_eval_binary(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_binary_slot_t operation, tinypy_eval_integer_binary_e integer_operation, tinypy_error_t **out_error) {
     tinypy_value_t *right = __tinypy_eval_pop_owned(frame);
     tinypy_value_t *left = __tinypy_eval_pop_owned(frame);
@@ -1933,9 +1983,29 @@ static void __tinypy_eval_clear_diagnostic(tinypy_error_t **out_error) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* Unlike a trace function of CPython, a debugger callback cannot pass an
+   exception on: an interrupt that the host reports while one runs stops the
+   Python code of the callback and stays pending for the next poll after it,
+   so that the program does not lose it. */
+static inline tinypy_bool_t __tinypy_eval_host_interrupted(tinypy_vm_t *vm) {
+#if defined(TINYPY_DEBUGGER)
+    if (vm->debugger_interrupt != 0 && vm->debugger_depth == 0U) {
+        vm->debugger_interrupt = TINYPY_FALSE;
+        return TINYPY_TRUE;
+    }
+#endif
+    tinypy_bool_t interrupted = vm->host.poll_interrupt(vm->host.user_data) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+#if defined(TINYPY_DEBUGGER)
+    if (interrupted != 0 && vm->debugger_depth != 0U) {
+        vm->debugger_interrupt = TINYPY_TRUE;
+    }
+#endif
+    return interrupted;
+}
+//////////////////////////////////////////////////////////////////////////
 /* A VM without a host keeps its host callbacks zeroed. */
 static tinypy_bool_t __tinypy_eval_poll_interrupt(tinypy_vm_t *vm, tinypy_error_t **out_error) {
-    if (vm->host.poll_interrupt != NULL && vm->host.poll_interrupt(vm->host.user_data) != 0) {
+    if (vm->host.poll_interrupt != NULL && __tinypy_eval_host_interrupted(vm) != 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_INTERRUPT, "execution interrupted by host", out_error);
         return TINYPY_FALSE;
     }
@@ -1957,6 +2027,8 @@ static inline tinypy_eval_reason_e __tinypy_eval_jump(tinypy_vm_t *vm, size_t of
 }
 //////////////////////////////////////////////////////////////////////////
 #if defined(TINYPY_DEBUGGER)
+/* call_trace and call_exc_trace: EXCEPTION passes the raised type, value
+   and traceback, which the frame is already part of. */
 static void __tinypy_eval_debugger_event(tinypy_vm_t *vm, tinypy_debugger_event_e kind, tinypy_frame_object_t *frame) {
     if (vm->has_debugger == 0) {
         return;
@@ -1969,10 +2041,30 @@ static void __tinypy_eval_debugger_event(tinypy_vm_t *vm, tinypy_debugger_event_
     event.frame = &frame->base.base;
     event.exception = kind == TINYPY_DEBUGGER_EVENT_EXCEPTION ? vm->raised_value : NULL;
     event.traceback = kind == TINYPY_DEBUGGER_EVENT_EXCEPTION ? vm->raised_traceback : NULL;
+    event.exception_type = kind == TINYPY_DEBUGGER_EVENT_EXCEPTION ? vm->raised_type : NULL;
     tinypy_internal_exception_state_t state;
     tinypy_internal_exception_preserve_begin(vm, &state);
+    vm->debugger_depth += 1U;
     vm->debugger.callback(vm->debugger.user_data, &event);
+    vm->debugger_depth -= 1U;
     tinypy_internal_exception_preserve_end(vm, &state);
+}
+//////////////////////////////////////////////////////////////////////////
+/* maybe_call_line_trace: LINE marks the first instruction of a line range
+   of the lnotab and the target of a backward jump, not an instruction a
+   jump reaches in the middle of a line, as the END_FINALLY of the last
+   handler that an unmatched exception passes. Each evaluation, as each
+   resumption of a generator, starts with an empty window. */
+static TINYPY_NOINLINE void __tinypy_eval_debugger_line(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_eval_line_window_t *window) {
+    int32_t offset = frame->last_instruction;
+
+    if (offset < window->lower || offset >= window->upper) {
+        tinypy_internal_frame_line_range(frame, &window->lower, &window->upper);
+    }
+    if (offset == window->lower || offset < window->previous) {
+        __tinypy_eval_debugger_event(vm, TINYPY_DEBUGGER_EVENT_LINE, frame);
+    }
+    window->previous = offset;
 }
 #endif
 //////////////////////////////////////////////////////////////////////////
@@ -2012,12 +2104,17 @@ static void __tinypy_eval_normalize_raised(tinypy_vm_t *vm, tinypy_error_t **out
     }
 }
 //////////////////////////////////////////////////////////////////////////
+/* As in CPython, an exception adds the frame to its traceback before the
+   debugger sees it; a re-raise does neither. */
 static tinypy_bool_t __tinypy_eval_unwind_reason(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_eval_reason_e *reason, size_t *out_instruction_offset, tinypy_value_t **in_out_result, tinypy_error_t **out_error) {
     if (*reason == TINYPY_EVAL_REASON_EXCEPTION) {
         if (vm->raised_value == NULL) {
             __tinypy_eval_raise_lost_exception(vm, out_error);
         }
         tinypy_internal_traceback_here(vm, frame);
+#if defined(TINYPY_DEBUGGER)
+        __tinypy_eval_debugger_event(vm, TINYPY_DEBUGGER_EVENT_EXCEPTION, frame);
+#endif
     }
     else if (*reason == TINYPY_EVAL_REASON_RERAISE) {
         *reason = TINYPY_EVAL_REASON_EXCEPTION;
@@ -2939,6 +3036,9 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
     tinypy_value_t *result = NULL;
     tinypy_eval_reason_e reason = TINYPY_EVAL_REASON_NOT;
     int32_t generator_execution = generator != NULL;
+#if defined(TINYPY_DEBUGGER)
+    tinypy_eval_line_window_t line_window = {0, -1, -1};
+#endif
 
     TINYPY_CLEAR_ERROR(out_error);
 
@@ -2963,9 +3063,6 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
         reason = TINYPY_EVAL_REASON_EXCEPTION;
     }
     if (reason == TINYPY_EVAL_REASON_EXCEPTION) {
-#if defined(TINYPY_DEBUGGER)
-        __tinypy_eval_debugger_event(vm, TINYPY_DEBUGGER_EVENT_EXCEPTION, frame);
-#endif
         (void)__tinypy_eval_unwind_reason(vm, frame, &reason, &instruction_offset, &result, out_error);
     }
 
@@ -2976,10 +3073,8 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
         __tinypy_eval_decode_trusted(bytecode, instruction_offset, &instruction);
         frame->last_instruction = (int32_t)instruction.offset;
 #if defined(TINYPY_DEBUGGER)
-        int32_t debugger_line = tinypy_frame_line_number(&frame->base.base);
-        if (debugger_line != frame->debugger_line) {
-            frame->debugger_line = debugger_line;
-            __tinypy_eval_debugger_event(vm, TINYPY_DEBUGGER_EVENT_LINE, frame);
+        if (vm->has_debugger != 0) {
+            __tinypy_eval_debugger_line(vm, frame, &line_window);
         }
 #endif
         instruction_offset = instruction.next_offset;
@@ -3192,12 +3287,12 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             }
             break;
         case TINYPY_OP_BINARY_POWER:
-            if (__tinypy_eval_binary(vm, frame, tinypy_power, TINYPY_EVAL_INTEGER_BINARY_POWER, out_error) == 0) {
+            if (__tinypy_eval_binary(vm, frame, __tinypy_eval_power, TINYPY_EVAL_INTEGER_BINARY_POWER, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
         case TINYPY_OP_INPLACE_POWER:
-            if (__tinypy_eval_binary(vm, frame, tinypy_inplace_power, TINYPY_EVAL_INTEGER_BINARY_POWER, out_error) == 0) {
+            if (__tinypy_eval_binary(vm, frame, __tinypy_eval_inplace_power, TINYPY_EVAL_INTEGER_BINARY_POWER, out_error) == 0) {
                 reason = TINYPY_EVAL_REASON_EXCEPTION;
             }
             break;
@@ -4145,11 +4240,6 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
             break;
         }
 
-        if (reason == TINYPY_EVAL_REASON_EXCEPTION) {
-#if defined(TINYPY_DEBUGGER)
-            __tinypy_eval_debugger_event(vm, TINYPY_DEBUGGER_EVENT_EXCEPTION, frame);
-#endif
-        }
         if (reason != TINYPY_EVAL_REASON_NOT && reason != TINYPY_EVAL_REASON_YIELD && (reason != TINYPY_EVAL_REASON_RETURN || frame->block_count != 0U) && __tinypy_eval_unwind_reason(vm, frame, &reason, &instruction_offset, &result, out_error) != 0) {
             continue;
         }
@@ -4365,7 +4455,10 @@ tinypy_value_t *tinypy_internal_eval_generator_resume(tinypy_generator_object_t 
     if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded", out_error) == 0) {
         return NULL;
     }
-    if (TINYPY_CODE_OBJECT(frame->code)->bytecode_verified == 0 && __tinypy_eval_verify_code(vm, TINYPY_CODE_OBJECT(frame->code), out_error) == 0) {
+    /* What is thrown into a generator that has not started leaves it at its
+       entry, as close() does, before any of its bytecode runs. */
+    tinypy_bool_t runs_bytecode = generator->started != 0 || throw_value == NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    if (runs_bytecode != 0 && TINYPY_CODE_OBJECT(frame->code)->bytecode_verified == 0 && __tinypy_eval_verify_code(vm, TINYPY_CODE_OBJECT(frame->code), out_error) == 0) {
         return NULL;
     }
     frame->back = vm->current_frame != NULL ? &vm->current_frame->base.base : NULL;

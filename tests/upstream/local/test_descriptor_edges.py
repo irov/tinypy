@@ -423,6 +423,26 @@ class DescriptorEdges(unittest.TestCase):
         self.assertEqual(caught.exception.args, ('This object has no __weakref__',))
         sys.exc_clear()
 
+    def test_class_and_slice_members_are_builtin_descriptors(self):
+        class Instance(object):
+            pass
+
+        instance = Instance()
+        receiver = slice(1, 2, 3)
+        kinds = [type(object.__dict__['__class__']).__name__] + [type(slice.__dict__[name]).__name__ for name in ('start', 'stop', 'step')]
+        self.assertEqual(kinds, ['getset_descriptor'] + ['member_descriptor'] * 3)
+        self.assertEqual([repr(object.__dict__['__class__']), repr(slice.__dict__['step'])], ["<attribute '__class__' of 'object' objects>", "<member 'step' of 'slice' objects>"])
+        errors = []
+        for operation in (lambda: setattr(receiver, 'start', 0), lambda: delattr(receiver, 'stop'), lambda: delattr(instance, '__class__'), lambda: setattr(instance, '__class__', 1)):
+            try:
+                operation()
+            except TypeError as error:
+                errors.append(str(error))
+        self.assertEqual(errors, ['readonly attribute', 'readonly attribute', "can't delete __class__ attribute", "__class__ must be set to new-style class, not 'int' object"])
+        object.__dict__['__class__'].__set__(instance, type('Other', (Instance,), {}))
+        self.assertEqual((instance.__class__.__name__, receiver.start, receiver.step), ('Other', 1, 3))
+        sys.exc_clear()
+
     def test_instancemethod_names_its_parts_like_the_interpreter(self):
         class Owner(object):
             def method(self):

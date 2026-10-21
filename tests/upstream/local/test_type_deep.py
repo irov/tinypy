@@ -518,6 +518,47 @@ class TypeDeep(unittest.TestCase):
             __new__ = staticmethod(list.__new__)
         self.assertRaises(TypeError, Static)
 
+    def test_builtin_new_entry_is_the_constructor_function(self):
+        entry = int.__dict__['__new__']
+        self.assertIs(entry, int.__new__)
+        self.assertEqual(type(entry).__name__, 'builtin_function_or_method')
+        self.assertFalse(hasattr(entry, '__get__'))
+        self.assertEqual(entry(int, '5'), 5)
+        class Assigned(object):
+            pass
+        Assigned.__new__ = int.__dict__['__new__']
+        class Stored(object):
+            __new__ = int.__dict__['__new__']
+        self.assertEqual([type(Assigned()), type(Stored())], [Assigned, Stored])
+        class Static(object):
+            __new__ = staticmethod(int.__new__)
+        self.assertRaises(TypeError, Static)
+
+    def test_new_update_holds_a_subclass_its_lookup_releases(self):
+        release = [None]
+        class Key(str):
+            def __hash__(self):
+                return hash('__new__')
+            def __eq__(self, other):
+                pending = release[0]
+                release[0] = None
+                if pending is not None:
+                    pending()
+                return False
+        class Base(object):
+            pass
+        holder = [type('Derived', (Base,), {Key('key'): 1})]
+        release[0] = holder.pop
+        Base.__new__ = staticmethod(lambda cls: object.__new__(cls))
+        self.assertEqual((holder, type(Base()).__name__), ([], 'Base'))
+        class Python(object):
+            def __new__(cls, *args):
+                return object.__new__(cls)
+        holder.append(type('Derived', (Python,), {Key('key'): 1}))
+        release[0] = holder.pop
+        del Python.__new__
+        self.assertEqual((holder, type(Python()).__name__), ([], 'Python'))
+
     def test_object_init_takes_arguments_while_slot_new_stays(self):
         class Removed(object):
             def __new__(cls, *args):

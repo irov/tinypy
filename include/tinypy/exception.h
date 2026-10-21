@@ -6,10 +6,11 @@
 /* Calls type, a subclass of BaseException, with args, which must be a
  * tuple as for tinypy_call. */
 tinypy_value_t *tinypy_exception_new(tinypy_type_t *type, tinypy_value_t *args, tinypy_error_t **out_error);
-/* PyErr_GivenExceptionMatches, which reports a failing __subclasscheck__ as
- * unraisable instead of raising. Each level of nested candidate tuples takes
- * a recursion level, so a nesting deeper than the recursion limit returns -1
- * with RuntimeError, where CPython recurses without a limit. */
+/* PyErr_GivenExceptionMatches: returns 1 or 0 and never fails, reporting a
+ * failing __subclasscheck__ as unraisable. It takes no recursion level;
+ * nested candidate tuples recurse under the native stack budget alone, and a
+ * nesting deeper than that budget, where CPython recurses without a limit,
+ * is reported as unraisable and does not match. */
 int32_t tinypy_exception_matches(tinypy_value_t *exception, tinypy_value_t *candidate, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_exception_raise(tinypy_value_t *exception, tinypy_value_t *traceback, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_vm_raised_exception(const tinypy_vm_t *vm);

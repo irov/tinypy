@@ -69,42 +69,6 @@ tinypy_value_t *tinypy_internal_slice_create(tinypy_type_t *type, tinypy_value_t
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_slice_field_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    if (tinypy_internal_native_method_arguments(function, args, kwargs, 0U, 0U, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
-        return NULL;
-    }
-    /* The getter is reachable unbound through the property's fget. */
-    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(self) != TINYPY_VALUE_SLICE) {
-        const tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_LITERAL("descriptor '"),
-            TINYPY_MESSAGE_PART_TEXT(tinypy_native_function_name(function)),
-            TINYPY_MESSAGE_PART_LITERAL("' for 'slice' objects doesn't apply to '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(self, 100U),
-            TINYPY_MESSAGE_PART_LITERAL("' object")
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-        return NULL;
-    }
-    tinypy_slice_object_t *slice = TINYPY_SLICE_OBJECT(self);
-    tinypy_value_t *result;
-    switch ((intptr_t)user_data) {
-    case 0:
-        result = slice->start;
-        break;
-    case 1:
-        result = slice->stop;
-        break;
-    default:
-        result = slice->step;
-        break;
-    }
-    return TINYPY_RET(result);
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_slice_indices_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     int64_t length;
@@ -208,9 +172,7 @@ static tinypy_value_t *__tinypy_slice_hash_method(tinypy_value_t *function, tiny
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_slice_type(tinypy_vm_t *vm) {
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_SLICE]), vm->internal_start_key, __tinypy_slice_field_method, (void *)(intptr_t)0, NULL);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_SLICE]), vm->internal_stop_key, __tinypy_slice_field_method, (void *)(intptr_t)1, NULL);
-    tinypy_internal_type_add_property((&vm->types[TINYPY_VALUE_SLICE]), vm->internal_step_key, __tinypy_slice_field_method, (void *)(intptr_t)2, NULL);
+    tinypy_internal_initialize_slice_descriptors(&vm->types[TINYPY_VALUE_SLICE]);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SLICE]), vm->internal_indices_key, __tinypy_slice_indices_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SLICE]), vm->internal_special_cmp_key, __tinypy_slice_cmp_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method((&vm->types[TINYPY_VALUE_SLICE]), vm->internal_special_repr_key, __tinypy_slice_repr_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

@@ -1137,3 +1137,196 @@ class ContainerDeep(unittest.TestCase):
         self.assertEqual(results[3], ['item', 'item'] + range(28, 0, -1))
         self.assertEqual(results[4], ['item', 'x', 'y', 'item'] + range(28, 0, -1))
         self.assertEqual(results[5], ['item'] * 15 + range(1, 30, 2))
+
+    def test_bytearray_storage_follows_pybytearray_resize(self):
+        data = bytearray()
+        appended = []
+        for index in range(40):
+            data.append(65)
+            appended.append(data.__alloc__())
+        self.assertEqual(appended, [2, 5, 5, 5, 8, 8, 8] + [12] * 4 + [19] * 7 + [27] * 8 + [36] * 9 + [46] * 5)
+        def resized(operation):
+            data = bytearray('abc')
+            operation(data)
+            return len(data), data.__alloc__()
+        operations = [
+            lambda data: data.append(100), lambda data: data.insert(0, 65), lambda data: data.extend('defghij'),
+            lambda data: data.extend(iter('de')), lambda data: data.__iadd__('defghij'), lambda data: data.__iadd__('d'),
+            lambda data: data.__imul__(2), lambda data: data.__imul__(0), lambda data: data.__setitem__(slice(None), 'k' * 24),
+            lambda data: data.__setitem__(slice(1, 2), 'kk'), lambda data: data.__setitem__(slice(0, 0), 'k' * 4),
+            lambda data: data.__delitem__(slice(None)), lambda data: data.__delitem__(0), lambda data: data.__delitem__(slice(None, None, 2)),
+            lambda data: data.pop(), lambda data: data.remove(98), lambda data: data.__init__(), lambda data: data.__init__([1, 2]),
+            lambda data: data.__init__('xyzw'), lambda data: data.__init__(5),
+        ]
+        self.assertEqual([resized(operation) for operation in operations],
+                         [(4, 7), (4, 7), (10, 11), (5, 6), (10, 11), (4, 7), (6, 7), (0, 4), (24, 25), (4, 7),
+                          (7, 8), (0, 1), (2, 4), (1, 2), (2, 4), (2, 4), (0, 1), (2, 4), (4, 5), (5, 6)])
+        made = [bytearray(), bytearray(''), bytearray(5), bytearray(range(5)), bytearray(iter(range(13))), bytearray(bytearray('abcd')),
+                bytearray(memoryview('abcdef')), bytearray(u'abc', 'ascii'), bytearray('abc') * 3, bytearray('abcdef')[1:4],
+                bytearray('abcabc').translate(None, 'a'), bytearray('aaaa').translate(None, 'a'), bytearray.fromhex('aa      bb'),
+                bytearray.fromhex('aabb   ')]
+        self.assertEqual([(len(data), data.__alloc__()) for data in made],
+                         [(0, 0), (0, 0), (5, 6), (5, 8), (13, 19), (4, 5), (6, 7), (3, 4), (9, 10), (3, 4), (4, 7), (0, 1), (2, 3), (2, 4)])
+        data = bytearray('abcdefghijklmnop')
+        shrinking = []
+        while data:
+            data.pop()
+            shrinking.append(data.__alloc__())
+        self.assertEqual(shrinking, [17] * 8 + [8] * 4 + [4, 4, 2, 1])
+
+    def test_bytearray_exports_refuse_what_the_storage_cannot_hold(self):
+        def concatenated(setup):
+            data = bytearray('abc')
+            setup(data)
+            view = memoryview(data)
+            try:
+                data += 'xy'
+            except BufferError:
+                return data.__alloc__(), 'BufferError'
+            return data.__alloc__(), str(data)
+        setups = [lambda data: data.append(100), lambda data: data.insert(0, 65), lambda data: data.__init__(range(5)),
+                  lambda data: data.__imul__(2), lambda data: data.__iadd__('defghij'), lambda data: data.__setitem__(slice(None), 'k' * 24)]
+        self.assertEqual([concatenated(setup) for setup in setups],
+                         [(7, 'abcdxy'), (7, 'Aabcxy'), (7, 'BufferError'), (7, 'BufferError'), (11, 'BufferError'), (25, 'BufferError')])
+        data = bytearray('abcd')
+        data *= 3
+        view = memoryview(data)
+        self.assertEqual(_error(lambda: data.__iadd__('zz')), ('BufferError', 'Existing exports of data: object cannot be re-sized'))
+        outcomes = []
+        for operation in (lambda: data.__init__(4), lambda: data.__init__(bytearray('xy')), lambda: data.__init__(memoryview('xy'))):
+            data *= 0
+            outcomes.append(_error(operation)[0])
+        data.__init__('xy')
+        data *= 0
+        data.__init__([65, 66, 67])
+        self.assertEqual(data, bytearray('ABC'))
+        for operation in (lambda: data.__init__(), lambda: data.append(1), lambda: data.extend('q')):
+            outcomes.append(_error(operation)[0])
+        self.assertEqual((outcomes, data), (['BufferError'] * 6, bytearray('ABC')))
+        del view
+        data.extend('q')
+        self.assertEqual((data, data.__alloc__()), (bytearray('ABCq'), 5))
+
+    def test_memoryview_keeps_the_bytes_it_exported(self):
+        data = bytearray('abcdefgh')
+        view = memoryview(data)
+        part = view[2:6]
+        nested = memoryview(view)
+        data *= 0
+        self.assertEqual((len(data), len(view), view.tobytes(), part.tobytes(), len(nested)), (0, 8, '\x00bcdefgh', 'cdef', 8))
+        data += 'xy'
+        self.assertEqual((str(data), view.tobytes(), view[5], view[1:3].tobytes()), ('xy', 'xy\x00defgh', 'f', 'y\x00'))
+        view[7] = 'Z'
+        part[0] = 'Q'
+        nested[3:5] = 'RS'
+        self.assertEqual((str(data), view.tobytes(), view.tolist()[6:], view == 'xyQRSfgZ', list(nested)[:2]), ('xy', 'xyQRSfgZ', [103, 90], True, ['x', 'y']))
+        self.assertEqual(_error(lambda: data.append(1))[0], 'BufferError')
+        data += 'tuvwx'
+        self.assertEqual((str(data), view.tobytes()), ('xytuvwx', 'xytuvwx\x00'))
+        del view, part, nested
+        data.append(33)
+        self.assertEqual(data, bytearray('xytuvwx!'))
+        data = bytearray('q' * 8)
+        view = memoryview(data)
+        data *= 0
+        data += 'rrr'
+        self.assertEqual((len(view), view == 'rrr', view.tobytes()), (8, False, 'rrr\x00qqqq'))
+
+    def test_bytearray_init_copies_its_own_bytes_before_resizing(self):
+        class Source(bytearray):
+            def __index__(self):
+                self.extend('abcdefghijklmnopqrstuvwxyz' * 3)
+                raise TypeError('not a count')
+        data = Source('xyz')
+        data.__init__(data)
+        self.assertEqual(data, bytearray('abcdefghijklmnopqrstuvwxyz' * 3))
+        data = Source('xyz')
+        data.__init__(buffer(data))
+        self.assertEqual(data, bytearray())
+
+    def test_bytearray_decoders_read_the_exported_bytes(self):
+        import _codecs
+        def rewrite(error):
+            data[3:5] = 'XY'
+            return (u'?', error.end)
+        _codecs.register_error('test_container_deep_rewrite', rewrite)
+        results = []
+        for decode in (lambda: data.decode('utf-8', 'test_container_deep_rewrite'), lambda: data.decode('ascii', 'test_container_deep_rewrite'),
+                       lambda: _codecs.utf_8_decode(data, 'test_container_deep_rewrite')[0], lambda: _codecs.decode(data, 'utf-8', 'test_container_deep_rewrite'),
+                       lambda: _codecs.ascii_decode(memoryview(data), 'test_container_deep_rewrite')[0]):
+            data = bytearray('a\xffbcd')
+            results.append((decode(), str(data)))
+        self.assertEqual(results, [(u'a?bXY', 'a\xffbXY')] * 5)
+        def shrink(error):
+            data.__imul__(0)
+            return (u'?', error.end)
+        _codecs.register_error('test_container_deep_shrink', shrink)
+        data = bytearray('a\xffbc')
+        self.assertEqual(data.decode('utf-8', 'test_container_deep_shrink'), u'a?bc')
+        data = bytearray('a\xffbc')
+        self.assertEqual(_codecs.utf_8_decode(data, 'test_container_deep_shrink'), (u'a?bc', 4))
+        class Final(object):
+            def __init__(self, operation):
+                self.operation = operation
+            def __int__(self):
+                outcomes.append(_error(self.operation)[0] if self.operation is not None else None)
+                return 0
+        outcomes = []
+        data = bytearray('ab\xe2\x82\xac')
+        self.assertEqual(_codecs.utf_8_decode(data, 'strict', Final(lambda: data.__delitem__(slice(None)))), (u'ab\u20ac', 5))
+        self.assertEqual(_codecs.utf_8_decode(data, 'strict', Final(lambda: data.append(1))), (u'ab\u20ac', 5))
+        self.assertEqual(outcomes, ['BufferError'] * 2)
+
+    def test_bytearray_pop_takes_the_size_before_the_index(self):
+        class Index(object):
+            def __init__(self, contents):
+                self.contents = contents
+            def __int__(self):
+                data[:] = self.contents
+                return 0
+        data = bytearray('abc')
+        self.assertEqual(_error(lambda: data.pop(Index(''))), ('IndexError', 'pop index out of range'))
+        data = bytearray()
+        self.assertEqual(_error(lambda: data.pop(Index('xyz'))), ('IndexError', 'pop from empty bytearray'))
+        self.assertEqual(data, bytearray('xyz'))
+        data = bytearray('ab')
+        self.assertEqual(data.pop(Index('qr')), ord('q'))
+        self.assertEqual(data, bytearray('r'))
+
+    def test_sort_reports_extending_with_no_length_hint(self):
+        class Hint(object):
+            def __init__(self, hint):
+                self.hint = hint
+            def __iter__(self):
+                return iter(())
+            def __length_hint__(self):
+                return self.hint
+        mutations = [
+            lambda items: items.extend(iter([])), lambda items: items.extend(xrange(0)), lambda items: items.__iadd__(iter(())),
+            lambda items: items.__init__(iter([])), lambda items: items.extend(Hint(0)), lambda items: items.extend(set()),
+            lambda items: items.extend([]), lambda items: items.extend(()), lambda items: items.extend(items), lambda items: items.extend(Hint(-2)),
+            lambda items: items.__init__(), lambda items: items.__init__([]), lambda items: items.__imul__(2), lambda items: items.__setitem__(slice(None), iter([])),
+        ]
+        results = []
+        for mutation in mutations:
+            items = [3, 1, 2]
+            pending = [mutation]
+            def key(item):
+                if pending:
+                    pending.pop()(items)
+                return item
+            results.append(_error(lambda: items.sort(key=key))[0] if mutation in mutations[:6] else (items.sort(key=key), items))
+        self.assertEqual(results, ['ValueError'] * 6 + [(None, [1, 2, 3])] * 8)
+
+    def test_repeating_past_the_largest_size(self):
+        import sys
+        largest = sys.maxint
+        cases = [
+            (lambda: 'x' * largest, 'MemoryError'), (lambda: 'xx' * largest, 'OverflowError'), (lambda: 'xx' * (largest // 2 + 1), 'OverflowError'),
+            (lambda: largest * 'xxx', 'OverflowError'), (lambda: u'x' * (largest // 2), 'OverflowError'), (lambda: u'xx' * (largest // 4 + 1), 'OverflowError'),
+            (lambda: u'\xe9' * (largest // 2), 'OverflowError'), (lambda: [0] * largest, 'MemoryError'), (lambda: (0, 0) * largest, 'MemoryError'),
+            (lambda: bytearray('x') * largest, 'MemoryError'), (lambda: bytearray('xx') * largest, 'MemoryError'), (lambda: 'x' * (largest + 1), 'OverflowError'),
+        ]
+        self.assertEqual([_error(repeat)[0] for repeat, expected in cases], [expected for repeat, expected in cases])
+        self.assertEqual(_error(lambda: 'xx' * largest), ('OverflowError', 'repeated string is too long'))
+        self.assertEqual(('' * largest, u'' * largest, [] * largest), ('', u'', []))

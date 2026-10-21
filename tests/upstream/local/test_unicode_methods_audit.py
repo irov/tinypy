@@ -622,6 +622,39 @@ class UnicodeMethodsAudit(unittest.TestCase):
         self.assertEqual(_message((u'a' * 20 + unichr(0xe9) * 2 + u'b').decode, 'utf-8'),
                          ('UnicodeEncodeError', "'ascii' codec can't encode characters in position 20-21: ordinal not in range(128)"))
 
+    def test_builtin_codecs_take_dense_errors_as_runs(self):
+        replacement = unichr(0xfffd)
+        data = '\xff' * 3 + 'a' + '\x80\xff' + 'b' * 9 + '\xff' + 'c' * 17 + '\xfe'
+        self.assertEqual(data.decode('ascii', 'ignore'), u'a' + u'b' * 9 + u'c' * 17)
+        self.assertEqual(data.decode('ascii', 'replace'), replacement * 3 + u'a' + replacement * 2 + u'b' * 9 + replacement + u'c' * 17 + replacement)
+        self.assertEqual(data.decode('utf-8', 'replace'), data.decode('ascii', 'replace'))
+        self.assertEqual(('abcdefg\xff' * 20).decode('ascii', 'ignore'), u'abcdefg' * 20)
+        self.assertEqual((('x' * 63 + '\xe9') * 3).decode('ascii', 'replace'), (u'x' * 63 + replacement) * 3)
+        mixed = 'a\xff' * 3 + '\xc3\xa9\xc3' + 'b\xe2\x82\xac\xe2\x82' + 'c\xed\xa0\xbd\xc0\x80\xf4\x90'
+        self.assertEqual(mixed.decode('utf-8', 'replace'),
+                         u'a' + replacement + u'a' + replacement + u'a' + replacement + unichr(0xe9) + replacement + u'b' + unichr(0x20ac) + replacement + u'c' + unichr(0xd83d) + replacement * 3)
+        self.assertEqual(mixed.decode('utf-8', 'ignore'), u'aaa' + unichr(0xe9) + u'b' + unichr(0x20ac) + u'c' + unichr(0xd83d))
+        self.assertEqual(_codecs.utf_8_decode(mixed[:-8], 'ignore', False), (u'aaa' + unichr(0xe9) + u'b' + unichr(0x20ac), 13))
+        positions = []
+
+        def record(error):
+            positions.append((error.start, error.end))
+            return (u'', error.end)
+        _codecs.register_error('unicode_methods_audit_record', record)
+        self.assertEqual(('\xff\xfe' + 'a' + '\x80').decode('ascii', 'unicode_methods_audit_record'), u'a')
+        text = unichr(0xe9) * 3 + u'a' + unichr(0x20ac) + unichr(0x444) + unichr(0xff) + u'b' * 9 + unichr(0x100)
+        self.assertEqual(text.encode('ascii', 'unicode_methods_audit_record'), 'a' + 'b' * 9)
+        self.assertEqual(text.encode('latin-1', 'unicode_methods_audit_record'), '\xe9' * 3 + 'a\xff' + 'b' * 9)
+        self.assertEqual(positions, [(0, 1), (1, 2), (3, 4), (0, 3), (4, 7), (16, 17), (4, 6), (16, 17)])
+        self.assertEqual(text.encode('ascii', 'ignore'), 'a' + 'b' * 9)
+        self.assertEqual(text.encode('ascii', 'replace'), '???a???' + 'b' * 9 + '?')
+        self.assertEqual(text.encode('latin-1', 'replace'), '\xe9' * 3 + 'a??\xff' + 'b' * 9 + '?')
+        self.assertEqual(text.encode('latin-1', 'xmlcharrefreplace'), '\xe9' * 3 + 'a&#8364;&#1092;\xff' + 'b' * 9 + '&#256;')
+        self.assertEqual(text.encode('ascii', 'backslashreplace'), '\\xe9' * 3 + 'a\\u20ac\\u0444\\xff' + 'b' * 9 + '\\u0100')
+        self.assertEqual(_message(text.encode, 'latin-1'),
+                         ('UnicodeEncodeError', "'latin-1' codec can't encode characters in position 4-5: ordinal not in range(256)"))
+        self.assertEqual((type(''.decode('ascii')), type(u''.encode('latin-1')), _codecs.utf_8_decode('', 'strict', False)), (unicode, str, (u'', 0)))
+
     def test_builtin_codecs_resume_where_handlers_point(self):
         def middle(error):
             return (u'<%d:%d>' % (error.start, error.end), error.end + 1)

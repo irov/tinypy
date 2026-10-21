@@ -107,12 +107,10 @@ void tinypy_internal_type_add_class_method(tinypy_type_t *type, tinypy_value_t *
     tinypy_internal_type_add_method(type, name, callback, user_data, finalize, TINYPY_NATIVE_DESCRIPTOR_CLASS_METHOD);
 }
 //////////////////////////////////////////////////////////////////////////
+/* The type's dictionary holds a static method of a built-in type as the
+   function itself, as add_tp_new_wrapper stores the __new__ of a type. */
 void tinypy_internal_type_add_static_method(tinypy_type_t *type, tinypy_value_t *name, tinypy_native_function_callback_t callback, void *user_data, tinypy_native_function_finalize_t finalize) {
-    tinypy_value_t *function = tinypy_native_function_new_key(name, callback, user_data, finalize);
-    tinypy_value_t *descriptor = tinypy_static_method_new(function);
-    tinypy_type_set_attr_key(type, name, descriptor);
-    TINYPY_DECREF(descriptor);
-    TINYPY_DECREF(function);
+    tinypy_internal_type_add_method(type, name, callback, user_data, finalize, TINYPY_NATIVE_DESCRIPTOR_STATIC);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_native_function_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data) {
@@ -398,6 +396,111 @@ tinypy_bool_t tinypy_internal_native_method_arguments(tinypy_value_t *function, 
     }
     tinypy_bool_t result = tinypy_internal_native_arguments_check(function, count - 1U, kwargs, minimum, maximum, style, out_error);
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* As PyEval_EvalCodeEx, too many arguments are reported first, then in
+   dictionary order a keyword that is not a str or unicode, names no
+   parameter or names a bound one, and then an unbound required parameter,
+   counting the bound ones as given. Binding runs no code, so the keywords
+   are read in place. */
+tinypy_value_t *tinypy_internal_native_bind_arguments(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_value_t *const *names, size_t count, size_t required, tinypy_bool_t variadic, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *name = TINYPY_NATIVE_FUNCTION_OBJECT(function)->name;
+    size_t positional_count = TINYPY_TUPLE_SIZE(args);
+    size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
+    size_t given = positional_count < count ? positional_count : count;
+
+    if (variadic == 0 && (positional_count > count || (count == 0U && keyword_count != 0U))) {
+        tinypy_internal_make_arity_error(vm, (const char *)TINYPY_TEXT_BYTES(name), TINYPY_TEXT_BYTE_SIZE(name), positional_count + keyword_count, required, count, TINYPY_ARITY_STYLE_PARSED, out_error);
+        return NULL;
+    }
+    if (keyword_count == 0U && given >= required) {
+        tinypy_value_t *result = TINYPY_RET(args);
+        return result;
+    }
+    size_t size = positional_count > count ? positional_count : count;
+    tinypy_value_t *bound = tinypy_internal_tuple_new_checked(vm, size, out_error);
+    uint32_t taken = given != 0U ? UINT32_MAX >> (32U - given) : 0U;
+
+    if (bound == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0U; index < positional_count; ++index) {
+        tinypy_tuple_set(bound, index, TINYPY_TUPLE_GET(args, index));
+    }
+    tinypy_dict_entry_t *entry = keyword_count != 0U ? TINYPY_DICT_ITERATOR_BEGIN(kwargs) : NULL;
+    tinypy_dict_entry_t *end = keyword_count != 0U ? TINYPY_DICT_ITERATOR_END(kwargs) : NULL;
+
+    for (; entry != end; ++entry) {
+        size_t index = 0U;
+
+        if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) == 0) {
+            continue;
+        }
+        if (TINYPY_VALUE_KIND(entry->key) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(entry->key) != TINYPY_VALUE_UNICODE) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_TEXT_PRECISION(name, 200U),
+                TINYPY_MESSAGE_PART_LITERAL("() keywords must be strings")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 2U, out_error);
+            goto failed;
+        }
+        while (index < count && TINYPY_NAME_EQ(entry->key, names[index]) == 0) {
+            index += 1U;
+        }
+        if (index == count || (taken & (UINT32_C(1) << index)) != 0U) {
+            tinypy_value_t *keyword = tinypy_internal_keyword_as_string(vm, entry->key, out_error);
+
+            if (keyword != NULL) {
+                tinypy_message_part_t parts[] = {
+                    TINYPY_MESSAGE_PART_TEXT_PRECISION(name, 200U),
+                    {index == count ? "() got an unexpected keyword argument '" : "() got multiple values for keyword argument '", index == count ? 39U : 45U},
+                    TINYPY_MESSAGE_PART_TEXT_PRECISION(keyword, 400U),
+                    TINYPY_MESSAGE_PART_LITERAL("'")
+                };
+
+                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 4U, out_error);
+                TINYPY_DECREF(keyword);
+            }
+            goto failed;
+        }
+        tinypy_tuple_set(bound, index, entry->value);
+        taken |= UINT32_C(1) << index;
+        given += 1U;
+    }
+    for (size_t index = 0U; index < required; ++index) {
+        if ((taken & (UINT32_C(1) << index)) == 0U) {
+            char required_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+            size_t required_size = tinypy_internal_format_size(required_buffer, required);
+            char given_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
+            size_t given_size = tinypy_internal_format_size(given_buffer, given);
+            tinypy_bool_t exact = variadic == 0 && required == count ? TINYPY_TRUE : TINYPY_FALSE;
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_TEXT_PRECISION(name, 200U),
+                {exact != 0 ? "() takes exactly " : "() takes at least ", exact != 0 ? 17U : 18U},
+                {required_buffer, required_size},
+                {required == 1U ? " argument (" : " arguments (", required == 1U ? 11U : 12U},
+                {given_buffer, given_size},
+                TINYPY_MESSAGE_PART_LITERAL(" given)")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 6U, out_error);
+            goto failed;
+        }
+    }
+    if (required != count && (taken & (UINT32_C(1) << (count - 1U))) == 0U) {
+        tinypy_value_t *const *items = tinypy_internal_tuple_items(bound);
+        tinypy_value_t *result = tinypy_internal_tuple_from_items_checked(vm, items, count - 1U, out_error);
+
+        TINYPY_DECREF(bound);
+        return result;
+    }
+    return bound;
+
+failed:
+    TINYPY_DECREF(bound);
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_native_function_call(tinypy_value_t *callable, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {

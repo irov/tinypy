@@ -1642,23 +1642,17 @@ static const tinypy_type_t *__tinypy_internal_type_static_base(const tinypy_type
 }
 //////////////////////////////////////////////////////////////////////////
 /* update_one_slot keeps the tp_new of a type for a __new__ that is the
-   tp_new_wrapper of a built-in type: the static method that the built-in
-   base holds, or the native function that a built-in __new__ gives, which
-   may be stored anywhere. Any other __new__, a static method in a class
-   too, makes the tp_new slot_tp_new. */
-static tinypy_bool_t __tinypy_internal_type_builtin_new(tinypy_type_t *type, tinypy_value_t *attribute) {
-    tinypy_vm_t *vm = type->vm;
-
-    if (attribute->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION]) {
-        const tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(attribute);
-        tinypy_bool_t wrapper = function->self == NULL && TINYPY_NAME_EQ(function->name, vm->internal_special_new_key) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-
-        return wrapper;
+   tp_new_wrapper of a built-in type, which may be stored anywhere. Any other
+   __new__, a static method made of a built-in one or a native function the
+   host registers too, makes the tp_new slot_tp_new. */
+static tinypy_bool_t __tinypy_internal_type_builtin_new(tinypy_vm_t *vm, tinypy_value_t *attribute) {
+    if (attribute->type != &vm->types[TINYPY_VALUE_NATIVE_FUNCTION]) {
+        return TINYPY_FALSE;
     }
-    const tinypy_type_t *static_base = __tinypy_internal_type_static_base(type);
-    tinypy_bool_t inherited = tinypy_internal_type_lookup_key(vm, static_base, vm->internal_special_new_key) == attribute ? TINYPY_TRUE : TINYPY_FALSE;
+    const tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(attribute);
+    tinypy_bool_t wrapper = function->descriptor_kind == TINYPY_NATIVE_DESCRIPTOR_STATIC && TINYPY_NAME_EQ(function->name, vm->internal_special_new_key) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
 
-    return inherited;
+    return wrapper;
 }
 //////////////////////////////////////////////////////////////////////////
 /* update_one_slot of tp_new for the type alone. */
@@ -1666,26 +1660,29 @@ static void __tinypy_internal_type_update_one_new(tinypy_type_t *type) {
     tinypy_vm_t *vm = type->vm;
     tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, type, vm->internal_special_new_key);
 
-    if (attribute != NULL && __tinypy_internal_type_builtin_new(type, attribute) == 0) {
+    if (attribute != NULL && __tinypy_internal_type_builtin_new(vm, attribute) == 0) {
         type->flags |= TINYPY_TYPE_FLAG_SLOT_NEW;
     }
 }
 //////////////////////////////////////////////////////////////////////////
 /* update_subclasses passes over a subclass that defines the name itself,
    whose subclasses find another __new__. A lookup comparing keys may change
-   the subclasses, which are held while they are updated. */
+   the subclasses or drop the last reference to one, so each is held from
+   its weak reference on. */
 void tinypy_internal_type_update_new(tinypy_type_t *type) {
     tinypy_vm_t *vm = type->vm;
 
     __tinypy_internal_type_update_one_new(type);
     for (size_t index = 0U; type->subclasses != NULL && index < TINYPY_LIST_SIZE(type->subclasses); ++index) {
-        tinypy_type_t *subclass = (tinypy_type_t *)tinypy_weakref_get(TINYPY_LIST_GET(type->subclasses, index));
+        tinypy_value_t *subclass_value = tinypy_weakref_get(TINYPY_LIST_GET(type->subclasses, index));
 
-        if (subclass == NULL || tinypy_internal_dict_get_optional_suppressed(vm, subclass->dict, vm->internal_special_new_key) != NULL) {
+        if (subclass_value == NULL) {
             continue;
         }
-        TINYPY_INCREF(&subclass->base.base);
-        tinypy_internal_type_update_new(subclass);
+        tinypy_type_t *subclass = (tinypy_type_t *)TINYPY_RET(subclass_value);
+        if (tinypy_internal_dict_get_optional_suppressed(vm, subclass->dict, vm->internal_special_new_key) == NULL) {
+            tinypy_internal_type_update_new(subclass);
+        }
         TINYPY_DECREF(&subclass->base.base);
     }
 }
@@ -2815,14 +2812,16 @@ static void __tinypy_internal_type_check_accessor(tinypy_value_t *accessor) {
    place. A function held elsewhere too, such as the builtin len or a function
    of a module, is stored as it is, as PyObject_SetAttrString stores it, so
    that it does not change for its other holders; a plain assignment from
-   Python keeps builtins unbound as well, as CPython does. */
+   Python keeps builtins unbound as well, as CPython does. A static function
+   stays a plain function, as does a __new__, which type_new makes a static
+   method too: a class call passes it the class first. */
 void tinypy_type_set_attr_key(tinypy_type_t *type, tinypy_value_t *key, tinypy_value_t *value) {
     tinypy_vm_t *vm = type->vm;
 
     if (value->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] && vm->native_method_descriptor_type != NULL && vm->native_wrapper_descriptor_type != NULL) {
         tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT(value);
 
-        if (TINYPY_REFCNT(value) == 1 && function->module == NULL && function->self == NULL && function->function == NULL && function->owner == NULL && (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(key) == TINYPY_VALUE_UNICODE)) {
+        if (TINYPY_REFCNT(value) == 1 && function->module == NULL && function->self == NULL && function->function == NULL && function->owner == NULL && function->descriptor_kind != TINYPY_NATIVE_DESCRIPTOR_STATIC && (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(key) == TINYPY_VALUE_UNICODE) && TINYPY_NAME_EQ(key, vm->internal_special_new_key) == 0) {
             tinypy_bool_t wrapper = function->descriptor_kind == TINYPY_NATIVE_DESCRIPTOR_WRAPPER
                                         ? TINYPY_TRUE
                                         : function->descriptor_kind != TINYPY_NATIVE_DESCRIPTOR_AUTO
@@ -2978,7 +2977,7 @@ static TINYPY_NOINLINE tinypy_value_t *__tinypy_internal_type_lookup_new_attribu
     tinypy_value_t *object_new = tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_new_key);
     tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, type, vm->internal_special_new_key);
 
-    if (attribute != NULL && __tinypy_internal_type_builtin_new(type, attribute) == 0) {
+    if (attribute != NULL && __tinypy_internal_type_builtin_new(vm, attribute) == 0) {
         type->flags |= TINYPY_TYPE_FLAG_SLOT_NEW;
     }
     *out_object_new = TINYPY_FALSE;
@@ -3016,6 +3015,7 @@ tinypy_value_t *tinypy_internal_type_constructor_new(tinypy_type_t *type) {
 }
 //////////////////////////////////////////////////////////////////////////
 /* slot_tp_new gets __new__ from the type, which binds what it finds there:
+   a native function, such as the __new__ of a built-in type, binds nothing,
    a static method yields its function, a class method is bound to the type,
    which the call then receives a second time, and a plain function is an
    unbound method. A __getattribute__ of the metaclass answers that lookup.
@@ -3030,7 +3030,7 @@ static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_internal_type_bind_new(tiny
         tinypy_value_t *constructor = tinypy_internal_object_get_attr_key(&type->base.base, vm->internal_special_new_key, out_error);
         return constructor;
     }
-    tinypy_value_t *callable = new_attribute->type == &vm->types[TINYPY_VALUE_STATIC_METHOD] ? tinypy_static_method_callable(new_attribute) : NULL;
+    tinypy_value_t *callable = new_attribute->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] ? new_attribute : (new_attribute->type == &vm->types[TINYPY_VALUE_STATIC_METHOD] ? tinypy_static_method_callable(new_attribute) : NULL);
     tinypy_value_t *constructor = callable != NULL ? TINYPY_RET(callable) : tinypy_internal_descriptor_get_value(vm, new_attribute, NULL, type, out_error);
     TINYPY_DECREF(new_attribute);
     return constructor;

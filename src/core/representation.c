@@ -1503,43 +1503,15 @@ static tinypy_value_t *__tinypy_builtin_representation_method(tinypy_value_t *fu
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_object_class_property(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+/* object_set_class: __class__ may be reassigned between Python-defined
+   classes whose instances have the same layout. */
+tinypy_bool_t tinypy_internal_object_set_class(tinypy_value_t *self, tinypy_value_t *replacement, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
 
-    (void)user_data;
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 1U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ descriptor received invalid arguments", out_error);
-        return NULL;
+    if (replacement == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can't delete __class__ attribute", out_error);
+        return TINYPY_FALSE;
     }
-    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *result = TINYPY_RET(&self->type->base.base);
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
-/* object_set_class refuses to delete __class__. */
-static tinypy_value_t *__tinypy_object_class_delete(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    (void)args;
-    (void)kwargs;
-    (void)user_data;
-    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can't delete __class__ attribute", out_error);
-    return NULL;
-}
-//////////////////////////////////////////////////////////////////////////
-/* __class__ may be reassigned between Python-defined classes whose instances
-   have the same layout, matching object_set_class in Python 2.7. */
-static tinypy_value_t *__tinypy_object_class_assign(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-
-    (void)user_data;
-    if ((kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) || TINYPY_TUPLE_SIZE(args) != 2U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ descriptor received invalid arguments", out_error);
-        return NULL;
-    }
-    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *replacement = TINYPY_TUPLE_GET(args, 1U);
-
     if (TINYPY_VALUE_KIND(replacement) != TINYPY_VALUE_TYPE) {
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("__class__ must be set to new-style class, not '"),
@@ -1548,23 +1520,22 @@ static tinypy_value_t *__tinypy_object_class_assign(tinypy_value_t *function, ti
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-        return NULL;
+        return TINYPY_FALSE;
     }
     tinypy_type_t *current = self->type;
     tinypy_type_t *target = (tinypy_type_t *)replacement;
 
     if ((current->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U || (target->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__class__ assignment: only for heap types", out_error);
-        return NULL;
+        return TINYPY_FALSE;
     }
     if (tinypy_internal_type_layout_compatible(target, current, "__class__", 9U, out_error) == 0) {
-        return NULL;
+        return TINYPY_FALSE;
     }
     TINYPY_INCREF(replacement);
     self->type = target;
     TINYPY_DECREF(&current->base.base);
-    tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
-    return return_value_1;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_object_sizeof_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1648,14 +1619,7 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_FLOAT], vm->internal_special_str_key, __tinypy_representation_method, (void *)(intptr_t)1, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_repr_key, __tinypy_object_representation_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_str_key, __tinypy_object_representation_method, (void *)(intptr_t)1, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-
-    tinypy_value_t *class_getter = tinypy_native_function_new_key(vm->internal_special_class_key, __tinypy_object_class_property, NULL, NULL);
-    tinypy_value_t *class_setter = tinypy_native_function_new_key(vm->internal_special_class_key, __tinypy_object_class_assign, NULL, NULL);
-    tinypy_value_t *class_deleter = tinypy_native_function_new_key(vm->internal_special_class_key, __tinypy_object_class_delete, NULL, NULL);
-    tinypy_value_t *class_property = tinypy_property_new(vm, class_getter, class_setter, class_deleter, NULL);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_sizeof_key, __tinypy_object_sizeof_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-
-    tinypy_type_set_attr_key(&vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_class_key, class_property);
     for (size_t index = 0U; index < sizeof(direct_sizeof_types) / sizeof(direct_sizeof_types[0]); ++index) {
         tinypy_internal_type_add_method(&vm->types[direct_sizeof_types[index]], vm->internal_special_sizeof_key, __tinypy_object_sizeof_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
@@ -1665,10 +1629,6 @@ void tinypy_internal_initialize_representation_types(tinypy_vm_t *vm) {
         tinypy_internal_type_add_method(&vm->types[kind], vm->internal_special_repr_key, __tinypy_builtin_representation_method, (void *)(intptr_t)kind, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     }
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_NONE], vm->internal_special_hash_key, tinypy_internal_hash_builtin_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    TINYPY_DECREF(class_property);
-    TINYPY_DECREF(class_deleter);
-    TINYPY_DECREF(class_setter);
-    TINYPY_DECREF(class_getter);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_string_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {

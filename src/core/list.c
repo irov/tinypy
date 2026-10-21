@@ -4,7 +4,8 @@
 
 #include <string.h>
 
-#define TINYPY_LIST_RECYCLE_SIZE 8U
+#define TINYPY_LIST_RECYCLE_SIZE 64U
+#define TINYPY_LIST_REPEAT_ITEM_COPIES 16U
 
 //////////////////////////////////////////////////////////////////////////
 /* list_dealloc releases the items from the last one, which orders their
@@ -198,6 +199,73 @@ tinypy_value_t *tinypy_list_from_items(tinypy_vm_t *vm, tinypy_value_t *const *i
 tinypy_value_t *tinypy_internal_list_from_items_exact_checked(tinypy_vm_t *vm, tinypy_value_t *const *items, size_t size, tinypy_error_t **out_error) {
     tinypy_value_t *result = __tinypy_internal_list_from_items_exact(vm, items, size, TINYPY_TRUE, out_error);
 
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_list_new_checked(tinypy_vm_t *vm, size_t capacity, tinypy_error_t **out_error) {
+    tinypy_value_t *result = tinypy_list_from_items(vm, NULL, 0U);
+
+    if (capacity == 0U) {
+        return result;
+    }
+    if (capacity > SIZE_MAX / sizeof(tinypy_value_t *)) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "list is too large", out_error);
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    tinypy_value_t **items = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, __tinypy_internal_list_storage_size(capacity), out_error);
+    if (items == NULL) {
+        TINYPY_DECREF(result);
+        return NULL;
+    }
+    TINYPY_LIST_OBJECT(result)->items = items;
+    TINYPY_LIST_OBJECT(result)->allocated = capacity;
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The first copies of the unit go item by item, which costs a short repeat
+   less than a block copy; then the copies double, so that a long repeat of a
+   short unit takes a few block copies rather than a step for each item. */
+void tinypy_internal_items_repeat(tinypy_value_t **items, size_t unit_size, size_t count) {
+    size_t size = unit_size * count;
+    size_t copied = unit_size;
+
+    for (size_t index = 0U; index < unit_size; ++index) {
+        TINYPY_REFCNT(items[index]) += (tinypy_ref_t)(count - 1U);
+    }
+    while (copied < size && copied < TINYPY_LIST_REPEAT_ITEM_COPIES) {
+        for (size_t index = 0U; index < unit_size; ++index) {
+            items[copied + index] = items[index];
+        }
+        copied += unit_size;
+    }
+    while (copied < size) {
+        size_t chunk = copied < size - copied ? copied : size - copied;
+
+        (void)memcpy(items + copied, items, chunk * sizeof(*items));
+        copied += chunk;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* list_repeat: storage of exactly count copies of the unit, whose size the
+   caller has checked. */
+tinypy_value_t *tinypy_internal_list_repeat_checked(tinypy_vm_t *vm, tinypy_value_t *const *unit, size_t unit_size, size_t count, tinypy_error_t **out_error) {
+    size_t size = unit_size * count;
+    tinypy_value_t *result = tinypy_internal_list_new_checked(vm, size, out_error);
+
+    if (result == NULL || size == 0U) {
+        return result;
+    }
+    tinypy_value_t **items = TINYPY_LIST_OBJECT(result)->items;
+    for (size_t index = 0U; index < unit_size; ++index) {
+        TINYPY_INCREF(unit[index]);
+        items[index] = unit[index];
+    }
+    tinypy_internal_items_repeat(items, unit_size, count);
+    TINYPY_SIZED_SIZE(result) = size;
+#if defined(TINYPY_CYCLE_DIAGNOSTICS)
+    __tinypy_internal_cycle_diagnostics_list_extend(vm, result, 0U, items, size);
+#endif
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -405,8 +473,10 @@ void tinypy_list_delete(tinypy_value_t *list, size_t index) {
 //////////////////////////////////////////////////////////////////////////
 /* list_ass_slice and list_ass_subscript copy the items they remove aside and
    release them only once the list is consistent again, so a finalizer that
-   mutates the list cannot observe a half-edited layout. A few items stay on
-   the stack, as in recycle_on_stack; more take a transient array that the
+   mutates the list cannot observe a half-edited layout. Up to
+   TINYPY_LIST_RECYCLE_SIZE items stay on the stack, as in recycle_on_stack,
+   which holds fewer: a transient array would cost a removal of a few dozen
+   items a good part of its time. More items take a transient array that the
    heap budget does not refuse, as it does not refuse the storage a shrinking
    list moves into: removing items never fails for want of budget. */
 static tinypy_value_t **__tinypy_list_recycle_begin(tinypy_vm_t *vm, tinypy_value_t **inline_items, size_t count, tinypy_error_t **out_error) {
@@ -507,8 +577,9 @@ tinypy_bool_t tinypy_internal_list_replace_range_checked(tinypy_value_t *list, s
         __tinypy_internal_cycle_diagnostics_list_insert(vm, list, start + index, items[index]);
     }
 #endif
+    /* A list that did not move keeps storage that is used enough, or that it
+       could not leave. */
     if (shrunk == NULL) {
-        tinypy_internal_list_shrink(list);
         __tinypy_list_recycle_end(vm, recycle, inline_items, count, TINYPY_TRUE);
         return TINYPY_TRUE;
     }

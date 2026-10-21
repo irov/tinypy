@@ -156,19 +156,21 @@ Length hint, который не помещается в адресное про
 за все разряды даёт 0 или -1, а сдвиг влево и степень, результат которых не
 помещается в адресное пространство host, дают `MemoryError`.
 
-Как `list_resize` и `PyByteArray_Resize`, list и bytearray, у которых после
-удаления занято меньше половины памяти, отдают её: list сокращается до размера
-с запасом `list_resize`, bytearray — до размера. Так же, как `listextend`, list
-сокращает память, которую length hint зарезервировал сверх добавленных
-элементов. Память host allocator переходит в pool только для ёмкости не больше
-половины наибольшего блока pool, чтобы list, колеблющийся около этого размера,
-не перевыделял её при каждом колебании. Опустевший list сохраняет
-память одного append, а bytearray — один байт, чтобы стек из одного элемента
-не перевыделял её. Bytearray без памяти получает ровно нужный размер, а с
-памятью растёт в полтора раза, тогда как CPython добавляет восьмую часть и
-хранит завершающий нулевой байт; срез list с шагом 1, как `list_slice`,
-занимает ровно свои элементы. Поэтому `__sizeof__` и `__alloc__` совпадают с
-CPython там, где совпадают эти правила и размер заголовка объекта.
+Как `list_resize`, list, у которого после удаления занято меньше половины
+памяти, отдаёт её и сокращается до размера с запасом `list_resize`. Так же, как
+`listextend`, list сокращает память, которую length hint зарезервировал сверх
+добавленных элементов. Память host allocator переходит в pool только для
+ёмкости не больше половины наибольшего блока pool, чтобы list, колеблющийся
+около этого размера, не перевыделял её при каждом колебании. Опустевший list
+сохраняет память одного append, чтобы стек из одного элемента не перевыделял
+её; срез list с шагом 1, как `list_slice`, занимает ровно свои элементы.
+Bytearray, как в CPython, хранит после байтов завершающий нулевой байт, а его
+память на каждом пути изменения размера следует `PyByteArray_Resize` и
+`PyByteArray_FromStringAndSize`; `+=`, `*=` и заполнение `__init__` из
+итератора сохраняют на месте результат, который эта память вмещает, даже при
+exports. Поэтому `__sizeof__` и `__alloc__` совпадают с CPython там, где
+совпадают эти правила и размер заголовка объекта, а `BufferError` возникает в
+тех же случаях.
 
 Lifetime определяется reference counting. Ациклические объекты уничтожаются
 немедленно. Host обязан освободить owned references и разорвать owning cycles
@@ -304,6 +306,12 @@ host выполняется, когда освобождается послед�
 Уничтожаемая weak reference отсоединяется от referent до освобождения своих
 `__dict__` и slots, поэтому её собственный callback не вызывается, даже если
 только они удерживали referent.
+
+Memoryview над bytearray, как `Py_buffer`, держит export и видит bytes,
+которые экспортировал: его длина не следует за изменением размера массива на
+месте, а bytes за текущим размером — завершающий нулевой байт и прежнее
+содержимое памяти, как в CPython. Пока существует export, память bytearray не
+перевыделяется и не освобождается.
 
 Legacy `buffer` хранит запрошенные offset и size, а доступ ограничивает их
 текущей длиной owner. Уменьшение и последующее увеличение bytearray owner не
@@ -493,7 +501,10 @@ callback получает его как self, а method call вызывает de
 method. Native function, которую держит кто-то ещё, например builtin `len` или
 функция модуля, сохраняется без изменений, как её сохраняет
 `PyObject_SetAttrString` CPython: для всех владельцев она остаётся обычной
-функцией и получателя не связывает. В остальных
+функцией и получателя не связывает. Функция, установленная как `__new__`,
+тоже сохраняется без изменений: как static method, который `type_new` делает
+из Python `__new__`, она не связывает получателя, и вызов класса передаёт ей
+класс первым аргументом. В остальных
 случаях, например как getter property, self равен NULL, а все аргументы лежат
 в items. Callback, которому нужен argument tuple, получает его через
 `tinypy_native_arguments_acquire`: self, если он не NULL, и items, как у
@@ -535,7 +546,9 @@ errors: первое безопасное attribute read отмечает общ
 предшествующие set/delete не выполняют этот переход. Eager VM names и
 регистрация namespace не меняются. Numeric real/imag/numerator/denominator
 поля имеют соответствующие C member/getset descriptor kinds, включая readonly
-и wrong-receiver diagnostics.
+и wrong-receiver diagnostics. `object.__class__` тоже getset descriptor, а
+`start`, `stop` и `step` объектов slice — readonly member descriptors, поэтому
+их чтение, как в CPython, не занимает уровня рекурсии.
 Имена встроенных codecs сравниваются с presets после нормализации
 `encodings.search_function`: ASCII-буквы приводятся к нижнему регистру, каждая
 серия прочих символов, кроме `.`, между буквами и цифрами становится одним `_`;
@@ -593,6 +606,11 @@ Python-visible bundled surface намеренно ограничен memory-only
   `_functools`, `_weakref`, `_struct`, `_sre` и `copy_reg`;
 - `_codecs` гарантирует ASCII, Latin-1, UTF-8 и transform codec `hex`; остальные
   encodings должен предоставить host search function;
+- native функции `copy_reg` и `hex_encode`/`hex_decode`, которые в CPython
+  написаны на Python, связывают позиционные и keyword-аргументы как
+  `PyEval_EvalCodeEx` и сообщают об ошибках связывания как Python-функции;
+  ключи keywords сравниваются с именами параметров по тексту, без вызова
+  `__eq__` подтипов `str` и `unicode`;
 - `_struct` гарантирует формат `d` с repeat counts и byte-order prefixes, а
   также `Struct`, `pack`, `unpack`, `pack_into` и `unpack_from`; `_struct.error`
   является `ValueError`. `Struct` хранит compiled format в native payload,
@@ -1100,7 +1118,12 @@ NULL для top-level модуля, который host ищет там, где 
 CPython, получают path `None`. Resolver без модуля возвращает NULL; exception,
 поднятая им до этого, завершает import, кроме `ImportError`, которая, как у
 finders, означает, что модуля нет (так CLI сообщает `RuntimeError` о
-`sys.path` или `__path__`, который не является list). `sys.path_hooks` и
+`sys.path` или `__path__`, который не является list). Artifact, который
+resolver возвращает с поднятой exception, не загружается: import завершается
+этой exception. Native initializer, как в `_PyImport_LoadDynamicModule`,
+который проверяет `PyErr_Occurred()`, завершает import поднятой им exception
+и тогда, когда возвращает true; модуль неудачного import удаляется из
+`sys.modules`. `sys.path_hooks` и
 `sys.path_importer_cache` не существуют: элементы search path принадлежат
 host, core их не читает, и hook, установленный из Python, не был бы вызван.
 
@@ -1153,6 +1176,25 @@ Evaluator вызывает `poll_interrupt` при входе в frame и пер
 поэтому host может прервать его: true из `poll_interrupt` поднимает
 `KeyboardInterrupt` (`TINYPY_ERROR_INTERRUPT`).
 
+Debugger (`TINYPY_DEBUGGER`, только Debug build, `debugger.h`) получает
+события trace function, которую в CPython устанавливает `PyEval_SetTrace`.
+LINE, как `maybe_call_line_trace`, отмечает первую инструкцию строки по
+`co_lnotab` и переход назад: каждая итерация цикла в одну строку получает
+свой LINE, а строка, в середину которой ведёт переход (например,
+`END_FINALLY` после несовпавшего `except`), — нет; каждое выполнение frame, в
+том числе возобновление generator, начинает с пустого окна строки. EXCEPTION,
+как `call_exc_trace`, приходит, когда frame уже добавлен в traceback, и
+передаёт type, value в том виде, в каком оно поднято (аргумент `sys.exit` —
+не экземпляр), и traceback; поле `exception_type` события есть, когда его
+покрывает `struct_size`. Callback выполняется с отложенной pending exception
+и не может поднять свою: то, что оставил его код, отбрасывается. Interrupt, о
+котором `poll_interrupt` сообщает, пока выполняется callback, прерывает его
+код и поднимается снова при следующем опросе после callback, поэтому
+программа его не теряет (trace function CPython передала бы
+`KeyboardInterrupt` дальше). `tinypy_debugger_frame_sync`, как
+`PyFrame_LocalsToFast(frame, 0)`, переносит в fast locals и cells значения
+locals, которые материализовал `tinypy_frame_locals`.
+
 Отчёт об uncaught exception — обязанность host: он читает raised exception,
 её type и traceback через public API и пишет отчёт в объект `sys.stderr`.
 Как `PyErr_SetObject`, `sys.exit` оставляет SystemExit ненормализованным:
@@ -1172,21 +1214,23 @@ false, а pending остаётся exception, которую он поднял, 
 ним, как `PyExc_RecursionErrorInst`, pending становится RuntimeError
 «maximum recursion depth exceeded» с тем же traceback. Исключения, которые
 runtime поднимает классом и аргументами, как `PyErr_SetString`,
-`PyErr_SetObject` и `PyErr_Format` (KeyError, IndexError, ZeroDivisionError,
-NameError, AttributeError, RuntimeError recursion guard и другие ошибки VM),
-остаются ненормализованными до первого handler: нормализация на recursion
-limit заменяет их, поэтому `except` в самом глубоком frame, как в CPython,
-видит RuntimeError. Исключение, которое runtime отложил и восстановил, пока
-выполнялся другой код, считается нормализованным. Host, как `PyErr_PrintEx`, нормализует uncaught
+`PyErr_SetObject`, `PyErr_Format` и `PyErr_SetFromErrno` (KeyError,
+IndexError, ZeroDivisionError, NameError, AttributeError, OverflowError
+возведения float в степень, ReferenceError мёртвого proxy, RuntimeError
+recursion guard и другие ошибки VM), остаются ненормализованными до первого
+handler: нормализация на recursion limit заменяет их, поэтому `except` в
+самом глубоком frame, как в CPython, видит RuntimeError. Исключение, которое
+runtime отложил и восстановил, пока выполнялся другой код, считается нормализованным. Host, как `PyErr_PrintEx`, нормализует uncaught
 exception после проверки SystemExit, до `sys.excepthook` и отчёта.
 Как `PyErr_GivenExceptionMatches`,
 `tinypy_exception_matches` сопоставляет класс экземпляра exception, а
 значение, которое не является exception class, — по identity, и не поднимает
 exception: ошибку `__subclasscheck__` metaclass она сообщает как unraisable.
-Каждый уровень вложенных tuples кандидатов, в том числе в `except`, занимает
-уровень рекурсии, поэтому вложенность глубже recursion limit поднимает
-RuntimeError, тогда как CPython рекурсирует без ограничения.
 Поэтому ненормализованное raised value SystemExit не совпадает с SystemExit.
+Сопоставление, в том числе в `except` самого глубокого frame, не занимает
+уровней рекурсии: tuple кандидатов проверяется поэлементно, а вложенные tuples
+ограничивает только native stack budget; вложенность глубже него, где CPython
+рекурсирует без ограничения, сообщается как unraisable и не совпадает.
 Host, завершающий программу как `Py_Finalize`, до `tinypy_vm_destroy` вызывает
 `sys.exitfunc`, а затем заменяет значения module namespaces на `None` в
 порядке `PyImport_Cleanup`, чтобы finalizers ещё живых объектов выполнились;

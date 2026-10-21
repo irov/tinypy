@@ -4,6 +4,7 @@ state of built-in exceptions.
 Expectations are checked on CPython 2.7.18.
 """
 
+import _weakref
 import sys
 import unittest
 
@@ -96,6 +97,92 @@ def _attribute_error_frame(depth):
             depth.missing
         except AttributeError:
             return depth
+
+
+_BASE = 2.0
+
+
+def _overflow_error_frame(depth):
+    try:
+        return _overflow_error_frame(depth + 1)
+    except RuntimeError:
+        try:
+            _BASE ** 5000
+        except OverflowError:
+            return depth
+
+
+def _format_error_frame(depth):
+    try:
+        return _format_error_frame(depth + 1)
+    except RuntimeError:
+        try:
+            '%y' % depth
+        except ValueError:
+            return depth
+
+
+class _Referent(object):
+    pass
+
+
+_DEAD_PROXY = _weakref.proxy(_Referent())
+
+
+def _reference_error_frame(depth):
+    try:
+        return _reference_error_frame(depth + 1)
+    except RuntimeError:
+        try:
+            _DEAD_PROXY.missing
+        except ReferenceError:
+            return depth
+
+
+class _Root:
+    pass
+
+
+class _Derived(_Root):
+    pass
+
+
+class _Other:
+    pass
+
+
+_PENDING = ValueError('pending')
+_CLASSIC = _Derived()
+_SLICE = slice(1, 2)
+
+
+# The except clause of a tuple takes no recursion level, so in the deepest
+# frame it still matches, or lets the exception pass, unchanged. Classic
+# classes match there without the __subclasscheck__ call after which CPython
+# leaves its recursion error pending.
+def _tuple_clause_frame(depth, raised, candidates):
+    try:
+        return _tuple_clause_frame(depth + 1, raised, candidates)
+    except RuntimeError:
+        try:
+            raise raised
+        except candidates:
+            return depth
+
+
+def _escaped(operation, *args):
+    try:
+        operation(*args)
+    except:
+        return sys.exc_info()[1]
+
+
+# __class__ and the members of slice are descriptors that take no level.
+def _attributes_frame(depth, instance):
+    try:
+        return _attributes_frame(depth + 1, instance)
+    except RuntimeError as error:
+        return depth, error.__class__, instance.__class__, _SLICE.start
 
 
 def _classic_checks(instance, derived, root, other):
@@ -267,8 +354,25 @@ class ExceptionParity(unittest.TestCase):
         # handler normalizes with a call to the class; in the deepest frame
         # that call fails, so the handler sees RuntimeError instead.
         deepest = _limited(_deepest_frame, 20, 0)
-        frames = (_key_error_frame, _index_error_frame, _zero_division_frame, _name_error_frame, _attribute_error_frame)
+        frames = (_key_error_frame, _index_error_frame, _zero_division_frame, _name_error_frame, _attribute_error_frame,
+                  _overflow_error_frame, _format_error_frame, _reference_error_frame)
         self.assertEqual([_limited(frame, 20, 0) for frame in frames], [deepest - 1] * len(frames))
+        sys.exc_clear()
+
+    def test_tuple_clause_in_the_deepest_frame_keeps_the_exception(self):
+        deepest = _limited(_deepest_frame, 20, 0)
+        matching = [(_Other, _Root), (_Other, (_Other, (_Root,)))]
+        self.assertEqual([_limited(_tuple_clause_frame, 20, 0, _CLASSIC, candidates) for candidates in matching], [deepest] * 2)
+        escaping = [(_PENDING, (KeyError, IndexError)), (_CLASSIC, (LookupError, KeyError))]
+        self.assertEqual([_escaped(_limited, _tuple_clause_frame, 20, 0, raised, candidates) for raised, candidates in escaping], [_PENDING, _CLASSIC])
+        sys.exc_clear()
+
+    def test_class_and_members_read_in_the_deepest_frame(self):
+        class Instance(object):
+            pass
+
+        deepest = _limited(_deepest_frame, 20, 0)
+        self.assertEqual(_limited(_attributes_frame, 20, 0, Instance()), (deepest, RuntimeError, Instance, 1))
         sys.exc_clear()
 
     def test_class_released_in_the_deepest_frame_reports_nothing(self):

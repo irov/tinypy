@@ -3380,35 +3380,8 @@ static tinypy_value_t *__tinypy_sre_keyword_method(tinypy_value_t *function, tin
             items[index + 1U] = value;
         }
     }
-    if (remaining_keywords != 0U) {
-        size_t position = 0U;
-        tinypy_value_t *key;
-        tinypy_value_t *value;
-
-        while (tinypy_dict_next(kwargs, &position, &key, &value) != 0) {
-            tinypy_bool_t recognized = TINYPY_FALSE;
-
-            if (TINYPY_VALUE_KIND(key) != TINYPY_VALUE_STRING) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
-                goto cleanup;
-            }
-            for (index = 0U; index < field_count; ++index) {
-                if (TINYPY_NAME_EQ(key, parameters[index]) != 0) {
-                    recognized = TINYPY_TRUE;
-                    break;
-                }
-            }
-            if (recognized == 0) {
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    TINYPY_MESSAGE_PART_TEXT(key),
-                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function")
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-                goto cleanup;
-            }
-        }
+    if (__tinypy_internal_constructor_check_keywords(vm, kwargs, remaining_keywords, parameters, field_count, out_error) == 0) {
+        goto cleanup;
     }
     if (spec->has_alias != 0) {
         if (alias != NULL) {

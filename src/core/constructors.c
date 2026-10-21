@@ -11,14 +11,6 @@ typedef struct tinypy_constructor_text_view_t {
     size_t capacity;
 } tinypy_constructor_text_view_t;
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_constructor_no_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
-    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "constructor does not accept keyword arguments", out_error);
-        return TINYPY_FALSE;
-    }
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_constructor_argument_count(tinypy_vm_t *vm, const char *name, size_t name_size, tinypy_value_t *args, size_t minimum, size_t maximum, tinypy_arity_style_e style, tinypy_error_t **out_error) {
     size_t count = TINYPY_TUPLE_SIZE(args);
 
@@ -33,6 +25,48 @@ tinypy_value_t *tinypy_internal_constructor_keyword_optional(tinypy_value_t *kwa
     tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
     tinypy_value_t *keyword = tinypy_internal_dict_get_optional_suppressed(vm, kwargs, name);
     return keyword;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A key that is not a str is reported as "keywords must be strings", and a
+   str names a parameter by its text up to an embedded NUL, as strcmp
+   compares them, so "base\0x" passes unused. Nothing runs code, so the keys
+   are read in place. */
+TINYPY_NOINLINE tinypy_bool_t tinypy_internal_constructor_reject_keywords(tinypy_vm_t *vm, tinypy_value_t *kwargs, tinypy_value_t *const *names, size_t name_count, tinypy_error_t **out_error) {
+    tinypy_dict_entry_t *entry = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
+    tinypy_dict_entry_t *end = TINYPY_DICT_ITERATOR_END(kwargs);
+
+    for (; entry != end; ++entry) {
+        if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) == 0) {
+            continue;
+        }
+        if (TINYPY_VALUE_KIND(entry->key) != TINYPY_VALUE_STRING) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
+            return TINYPY_FALSE;
+        }
+        const char *bytes = (const char *)TINYPY_STRING_OBJECT(entry->key)->bytes;
+        size_t size = TINYPY_STRING_SIZE(entry->key);
+        const char *terminator = (const char *)memchr(bytes, 0, size);
+
+        if (terminator != NULL) {
+            size = (size_t)(terminator - bytes);
+        }
+        size_t index = 0U;
+
+        while (index < name_count && (size != TINYPY_TEXT_BYTE_SIZE(names[index]) || memcmp(bytes, TINYPY_TEXT_BYTES(names[index]), size) != 0)) {
+            index += 1U;
+        }
+        if (index == name_count) {
+            tinypy_message_part_t parts[] = {
+                TINYPY_MESSAGE_PART_LITERAL("'"),
+                {bytes, size},
+                TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function")
+            };
+
+            tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_constructor_release_arguments(tinypy_value_t **values, size_t count) {
@@ -151,37 +185,8 @@ static tinypy_bool_t __tinypy_constructor_arguments(tinypy_vm_t *vm, const char 
             }
         }
     }
-    if (recognized != keyword_count) {
-        tinypy_dict_object_t *dictionary = TINYPY_DICT_OBJECT(kwargs);
-
-        for (size_t slot = 0U; slot <= dictionary->mask; ++slot) {
-            tinypy_dict_entry_t *entry = &dictionary->table[slot];
-            tinypy_bool_t known = TINYPY_FALSE;
-
-            if (TINYPY_DICT_ENTRY_IS_ACTIVE(entry) == 0) {
-                continue;
-            }
-            for (size_t index = 0U; index < maximum; ++index) {
-                if (TINYPY_NAME_EQ(entry->key, names[index]) != 0) {
-                    known = TINYPY_TRUE;
-                    break;
-                }
-            }
-            if (known == 0) {
-                if (TINYPY_VALUE_KIND(entry->key) != TINYPY_VALUE_STRING) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
-                    goto failed;
-                }
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    {(const char *)TINYPY_TEXT_BYTES(entry->key), TINYPY_TEXT_BYTE_SIZE(entry->key)},
-                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function")
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-                goto failed;
-            }
-        }
+    if (__tinypy_internal_constructor_check_keywords(vm, kwargs, keyword_count - recognized, names, maximum, out_error) == 0) {
+        goto failed;
     }
     return TINYPY_TRUE;
 
@@ -2712,8 +2717,7 @@ static tinypy_value_t *__tinypy_constructor_object_subclasshook_method(tinypy_va
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
     (void)user_data;
-    (void)args;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0) {
+    if (tinypy_internal_native_arguments_check(function, TINYPY_TUPLE_SIZE(args), kwargs, 0U, SIZE_MAX, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = TINYPY_RET_NOT_IMPLEMENTED(vm);
@@ -3084,11 +3088,29 @@ static tinypy_value_t *__tinypy_constructor_object_reduce_ex_method(tinypy_value
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The copy_reg functions are Python functions in CPython: a call with
+   keywords binds its arguments as theirs do and is made again with them. */
+static tinypy_value_t *__tinypy_copy_reg_call_bound(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_value_t *const *names, size_t count, size_t required, tinypy_bool_t variadic, tinypy_native_function_callback_t callback, tinypy_error_t **out_error) {
+    tinypy_value_t *bound = tinypy_internal_native_bind_arguments(function, args, kwargs, names, count, required, variadic, out_error);
+
+    if (bound == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *result = callback(function, bound, NULL, user_data, out_error);
+
+    TINYPY_DECREF(bound);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_copy_reg_newobj(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    (void)user_data;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 1U, SIZE_MAX, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *const names[1] = {vm->internal_cls_key};
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 1U, 1U, TINYPY_TRUE, __tinypy_copy_reg_newobj, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 1U, SIZE_MAX, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);
@@ -3109,8 +3131,12 @@ static tinypy_value_t *__tinypy_copy_reg_reconstructor(tinypy_value_t *function,
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *instance = NULL;
 
-    (void)user_data;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 3U, 3U, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *const names[3] = {vm->internal_cls_key, vm->internal_base_key, vm->internal_state_key};
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 3U, 3U, TINYPY_FALSE, __tinypy_copy_reg_reconstructor, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 3U, 3U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);
@@ -3166,8 +3192,12 @@ static tinypy_value_t *__tinypy_copy_reg_reduce_ex(tinypy_value_t *function, tin
     tinypy_value_t *constructor_args = NULL;
     tinypy_value_t *result = NULL;
 
-    (void)user_data;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 2U, 2U, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *const names[2] = {vm->internal_self_key, vm->internal_proto_key};
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 2U, 2U, TINYPY_FALSE, __tinypy_copy_reg_reduce_ex, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 2U, 2U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
@@ -3869,8 +3899,12 @@ static tinypy_value_t *__tinypy_copy_reg_constructor(tinypy_value_t *function, t
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *result;
 
-    (void)user_data;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 1U, 1U, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *const names[1] = {vm->internal_object_key};
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 1U, 1U, TINYPY_FALSE, __tinypy_copy_reg_constructor, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
     if (__tinypy_copy_reg_callable(TINYPY_TUPLE_GET(args, 0U)) == 0) {
@@ -3886,7 +3920,12 @@ static tinypy_value_t *__tinypy_copy_reg_pickle(tinypy_value_t *function, tinypy
     tinypy_value_t *module = (tinypy_value_t *)user_data;
     tinypy_value_t *result;
 
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 2U, 3U, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *const names[3] = {vm->internal_ob_type_key, vm->internal_pickle_function_key, vm->internal_constructor_ob_key};
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 3U, 2U, TINYPY_FALSE, __tinypy_copy_reg_pickle, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 2U, 3U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *object_type = TINYPY_TUPLE_GET(args, 0U);
@@ -3920,8 +3959,12 @@ static tinypy_value_t *__tinypy_copy_reg_pickle(tinypy_value_t *function, tinypy
 static tinypy_value_t *__tinypy_copy_reg_pickle_complex(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
 
-    (void)user_data;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 1U, 1U, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *const names[1] = {vm->internal_c_key};
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 1U, 1U, TINYPY_FALSE, __tinypy_copy_reg_pickle_complex, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
@@ -3952,7 +3995,12 @@ static tinypy_value_t *__tinypy_copy_reg_extension(tinypy_value_t *function, tin
     tinypy_bool_t remove = TINYPY_TEXT_BYTE_SIZE(function_name) == 16U ? TINYPY_TRUE : TINYPY_FALSE;
     int64_t code;
 
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 3U, 3U, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *const names[3] = {vm->internal_module_key, vm->internal_name_key, vm->internal_code_key};
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 3U, 3U, TINYPY_FALSE, __tinypy_copy_reg_extension, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 3U, 3U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *module_name = TINYPY_TUPLE_GET(args, 0U);
@@ -4053,7 +4101,11 @@ static tinypy_value_t *__tinypy_copy_reg_clear_extension_cache(tinypy_value_t *f
     tinypy_value_t *module = (tinypy_value_t *)user_data;
     tinypy_value_t *result = NULL;
 
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 0U, 0U, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, NULL, 0U, 0U, TINYPY_FALSE, __tinypy_copy_reg_clear_extension_cache, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 0U, 0U, out_error) == 0) {
         return NULL;
     }
     /* _extension_cache.clear() */
@@ -4090,8 +4142,12 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
     tinypy_value_t *result = NULL;
     tinypy_value_t *iterator = NULL;
 
-    (void)user_data;
-    if (__tinypy_constructor_no_keywords(vm, kwargs, out_error) == 0 || __tinypy_constructor_function_argument_count(function, args, 1U, 1U, out_error) == 0) {
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *const names[1] = {vm->internal_cls_key};
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 1U, 1U, TINYPY_FALSE, __tinypy_copy_reg_slotnames, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);

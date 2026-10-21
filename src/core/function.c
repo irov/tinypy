@@ -196,30 +196,6 @@ tinypy_value_t *tinypy_function_doc(const tinypy_value_t *function) {
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __tinypy_function_keyword_index(const tinypy_value_t *key) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(key);
-    tinypy_value_t *const names[] = {vm->internal_code_key, vm->internal_globals_key, vm->internal_name_key, vm->internal_argdefs_key, vm->internal_closure_key};
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(key);
-    size_t index;
-
-    if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
-        return -INT32_C(1);
-    }
-    const uint8_t *bytes = TINYPY_TEXT_BYTES(key);
-    size_t size = TINYPY_TEXT_BYTE_SIZE(key);
-    const uint8_t *terminator = (const uint8_t *)memchr(bytes, '\0', size);
-
-    if (terminator != NULL) {
-        size = (size_t)(terminator - bytes);
-    }
-    for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
-        if (size == TINYPY_TEXT_BYTE_SIZE(names[index]) && memcmp(bytes, TINYPY_TEXT_BYTES(names[index]), size) == 0) {
-            return (int32_t)index;
-        }
-    }
-    return -INT32_C(1);
-}
-//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_function_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = type->vm;
     size_t count = TINYPY_TUPLE_SIZE(args);
@@ -285,34 +261,8 @@ tinypy_value_t *tinypy_internal_function_create(tinypy_type_t *type, tinypy_valu
             }
         }
     }
-    if (recognized != keywords) {
-        tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
-        tinypy_dict_entry_t *end = TINYPY_DICT_ITERATOR_END(kwargs);
-
-        for (; iterator != end; ++iterator) {
-            int32_t keyword_index;
-
-            if (TINYPY_DICT_ENTRY_IS_ACTIVE(iterator) == 0) {
-                continue;
-            }
-            keyword_index = __tinypy_function_keyword_index(iterator->key);
-            if (keyword_index < 0) {
-                const uint8_t *bytes = TINYPY_TEXT_BYTES(iterator->key);
-                size_t size = TINYPY_TEXT_BYTE_SIZE(iterator->key);
-                const uint8_t *terminator = (const uint8_t *)memchr(bytes, '\0', size);
-
-                if (terminator != NULL) {
-                    size = (size_t)(terminator - bytes);
-                }
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"), {(const char *)bytes, size},
-                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function")
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-                goto cleanup;
-            }
-        }
+    if (__tinypy_internal_constructor_check_keywords(vm, kwargs, keywords - recognized, names, 5U, out_error) == 0) {
+        goto cleanup;
     }
     code = arguments[0];
     globals = arguments[1];

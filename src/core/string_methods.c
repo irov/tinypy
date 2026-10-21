@@ -77,14 +77,10 @@ void tinypy_internal_raise_text_exception(tinypy_vm_t *vm, tinypy_exception_type
         return;
     }
     tinypy_value_t *args = tinypy_tuple_from_items(vm, &message, 1U);
-    tinypy_value_t *exception = tinypy_exception_new(vm->exception_types[index], args, out_error);
 
+    tinypy_internal_exception_raise_args(vm, index, args, out_error);
     TINYPY_DECREF(args);
     TINYPY_DECREF(message);
-    if (exception != NULL) {
-        (void)tinypy_exception_raise(exception, NULL, out_error);
-        TINYPY_DECREF(exception);
-    }
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_string_builder_allocate_exact(tinypy_string_builder_t *builder, tinypy_vm_t *vm, tinypy_bool_t unicode, size_t byte_size, size_t code_point_count, tinypy_error_t **out_error) {
@@ -3932,6 +3928,23 @@ static void __tinypy_codec_append_xml_reference(tinypy_string_builder_t *builder
     __tinypy_string_builder_append(builder, buffer, (size_t)size);
 }
 //////////////////////////////////////////////////////////////////////////
+/* The escape the builtin backslashreplace handler writes for a code point. */
+static void __tinypy_codec_append_backslash_escape(tinypy_string_builder_t *builder, uint32_t code_point) {
+    char buffer[16];
+    int size;
+
+    if (code_point <= UINT32_C(0xff)) {
+        size = snprintf(buffer, sizeof(buffer), "\\x%02" PRIx32, code_point);
+    }
+    else if (code_point <= UINT32_C(0xffff)) {
+        size = snprintf(buffer, sizeof(buffer), "\\u%04" PRIx32, code_point);
+    }
+    else {
+        size = snprintf(buffer, sizeof(buffer), "\\U%08" PRIx32, code_point);
+    }
+    __tinypy_string_builder_append(builder, buffer, (size_t)size);
+}
+//////////////////////////////////////////////////////////////////////////
 static void __tinypy_utf8_append(tinypy_string_builder_t *builder, uint32_t code_point) {
     __tinypy_string_builder_code_point(builder, code_point);
 }
@@ -4000,6 +4013,19 @@ static tinypy_value_t *__tinypy_string_codec_method(tinypy_value_t *function, ti
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Decodes the UTF-8 sequence the bytes start with, a two-byte one, the most
+   common above ASCII, in place. */
+static TINYPY_ALWAYS_INLINE size_t __tinypy_codec_decode(const uint8_t *bytes, size_t size, uint32_t *out_code_point) {
+    uint32_t lead = bytes[0];
+
+    if (lead >= 0xc2U && lead < 0xe0U && size >= 2U && (bytes[1] & 0xc0U) == 0x80U) {
+        *out_code_point = ((lead & 0x1fU) << 6U) | (bytes[1] & 0x3fU);
+        return 2U;
+    }
+    size_t width = tinypy_internal_utf8_decode(bytes, size, out_code_point);
+    return width;
+}
+//////////////////////////////////////////////////////////////////////////
 /* The bytes from the start of the input that a builtin codec converts
    without an error, with the size of their output and the characters they
    hold. The UTF-8 encoder stops before a high surrogate too, which it joins
@@ -4018,22 +4044,16 @@ static size_t __tinypy_codec_run(const uint8_t *bytes, size_t size, int32_t code
     }
     else if (codec != 0) {
         while (offset < size) {
-            uint32_t code_point = bytes[offset];
-            size_t width = 2U;
+            uint32_t code_point;
 
-            if (code_point < 0x80U) {
+            if (bytes[offset] < 0x80U) {
                 offset += 1U;
                 output_size += 1U;
                 characters += 1U;
                 continue;
             }
-            /* Two-byte sequences, the most common ones, decode in place. */
-            if (code_point >= 0xc2U && code_point < 0xe0U && size - offset >= 2U && (bytes[offset + 1U] & 0xc0U) == 0x80U) {
-                code_point = ((code_point & 0x1fU) << 6U) | (bytes[offset + 1U] & 0x3fU);
-            }
-            else {
-                width = tinypy_internal_utf8_decode(bytes + offset, size - offset, &code_point);
-            }
+            size_t width = __tinypy_codec_decode(bytes + offset, size - offset, &code_point);
+
             if (width == 0U) {
                 break;
             }
@@ -4081,35 +4101,308 @@ static void __tinypy_codec_convert_run(uint8_t *output, const uint8_t *bytes, si
     }
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_codec_append_run(tinypy_string_builder_t *builder, const uint8_t *bytes, size_t size, size_t output_size, int32_t codec, tinypy_bool_t decode) {
-    if (size == 0U) {
-        return;
+/* Converts the run the input starts with into the builder, with room for
+   one byte per input byte after it, and returns its size. */
+static size_t __tinypy_codec_append_run(tinypy_string_builder_t *builder, const uint8_t *bytes, size_t size, int32_t codec, tinypy_bool_t decode) {
+    size_t output_size;
+    size_t characters;
+    size_t run = __tinypy_codec_run(bytes, size, codec, decode, &output_size, &characters);
+
+    if (run != 0U) {
+        __tinypy_string_builder_reserve(builder, output_size + (size - run));
+        if (builder->failed == 0) {
+            __tinypy_codec_convert_run(builder->bytes + builder->size, bytes, run, codec, decode);
+            builder->size += output_size;
+        }
     }
-    __tinypy_string_builder_reserve(builder, output_size);
-    if (builder->failed != 0) {
-        return;
+    return run;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Copies the ASCII run the bytes start with, a word at a time, to an output
+   with room for all the bytes, and returns its size. */
+static TINYPY_ALWAYS_INLINE size_t __tinypy_codec_copy_ascii(uint8_t *output, const uint8_t *bytes, size_t size) {
+    size_t high_bits = SIZE_MAX / 0xffU * 0x80U;
+    size_t offset = 0U;
+
+    while (size - offset >= sizeof(size_t)) {
+        size_t word;
+
+        (void)memcpy(&word, bytes + offset, sizeof(word));
+        if ((word & high_bits) != 0U) {
+            break;
+        }
+        (void)memcpy(output + offset, &word, sizeof(word));
+        offset += sizeof(word);
     }
-    __tinypy_codec_convert_run(builder->bytes + builder->size, bytes, size, codec, decode);
-    builder->size += output_size;
+    while (offset < size && bytes[offset] < 0x80U) {
+        output[offset] = bytes[offset];
+        offset += 1U;
+    }
+    return offset;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Looks up the handler of the codec's errors at its first error. The codec
+   produces the result of a builtin handler that drops or replaces the
+   error, or for an encoder escapes it, itself, taking only the recursion
+   level of the call it stands in for. Returns the error mode to apply, or
+   -1 on failure. */
+static int32_t __tinypy_codec_resolve_handler(tinypy_vm_t *vm, tinypy_codec_error_state_t *state, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_error_t **out_error) {
+    state->handler = tinypy_internal_codecs_lookup_error(vm, errors != NULL ? errors : vm->internal_codec_strict_name, out_error);
+    if (state->handler == NULL) {
+        return -1;
+    }
+    int32_t policy = tinypy_internal_codecs_error_policy(state->handler);
+
+    if (policy < 1 || policy > (decode != 0 ? 2 : 4)) {
+        return 5;
+    }
+    if (__tinypy_internal_call_enter(vm, out_error) == 0) {
+        return -1;
+    }
+    __tinypy_internal_call_leave(vm);
+    return policy;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Converts the rest of the input from its first error on, after the run
+   before it, whose output takes output_size bytes. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_codec_convert_rest(tinypy_vm_t *vm, tinypy_value_t *text, int32_t codec, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t offset, size_t output_size, size_t *out_consumed, tinypy_error_t **out_error) {
+    /* Unlike the ASCII/Latin-1 encoders, decoders look up every error
+       policy, including the standard names. */
+    int32_t error_mode = decode != 0 ? 5 : __tinypy_codec_error_mode(vm, errors);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(text);
+    tinypy_bool_t buffer_input = decode != 0 && kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE;
+    const uint8_t *view_bytes;
+    size_t view_size;
+    tinypy_string_builder_t builder;
+    tinypy_codec_error_state_t error_state = {NULL, NULL};
+
+    /* The view goes through locals of its own, which keeps the input the
+       loops read in registers. */
+    __tinypy_codec_input_view(text, &view_bytes, &view_size);
+    const uint8_t *bytes = view_bytes;
+    size_t size = view_size;
+    size_t input_size = view_size;
+
+    /* The builder keeps room for one byte per input byte left: ASCII and
+       the errors dropped or replaced by ? take no more, the other output
+       reserves again. */
+    (void)memset(&builder, 0, sizeof(builder));
+    builder.vm = vm;
+    __tinypy_string_builder_reserve(&builder, output_size + (size - offset));
+    if (builder.failed == 0 && offset != 0U) {
+        __tinypy_codec_convert_run(builder.bytes, bytes, offset, codec, decode);
+        builder.size = output_size;
+    }
+    /* Latin-1 decodes every byte, so only the ASCII and UTF-8 decoders get
+       here: the error is a byte ASCII cannot decode, a byte that leads no
+       UTF-8 sequence or the invalid sequence another one leads. */
+    while (decode != 0 && offset < size && builder.failed == 0) {
+        size_t ascii = __tinypy_codec_copy_ascii(builder.bytes + builder.size, bytes + offset, size - offset);
+
+        builder.size += ascii;
+        offset += ascii;
+        if (offset == size) {
+            break;
+        }
+        uint8_t lead = bytes[offset];
+        size_t error_end = offset + 1U;
+
+        if (codec == 1 && lead >= 0xc2U && lead <= 0xf4U) {
+            size_t run = __tinypy_codec_append_run(&builder, bytes + offset, size - offset, codec, decode);
+            size_t expected = lead < 0xe0U ? 2U : (lead < 0xf0U ? 3U : 4U);
+
+            if (run != 0U) {
+                offset += run;
+                continue;
+            }
+            /* PyUnicode_DecodeUTF8Stateful defers a sequence whose length
+               exceeds the remaining input before it looks at the
+               continuation bytes. */
+            if (final == 0 && size - offset < expected) {
+                if (out_consumed != NULL) {
+                    *out_consumed = offset;
+                }
+                break;
+            }
+            error_end = offset + tinypy_internal_utf8_invalid_span(bytes + offset, size - offset);
+        }
+        if (error_mode == 5 && error_state.handler == NULL) {
+            error_mode = __tinypy_codec_resolve_handler(vm, &error_state, errors, TINYPY_TRUE, out_error);
+            if (error_mode < 0) {
+                goto codec_error;
+            }
+        }
+        if (error_mode == 1) {
+            /* Dropping its errors, the ASCII decoder keeps only the ASCII
+               runs between them. */
+            while (codec == 0 && error_end < size) {
+                if (bytes[error_end] >= 0x80U) {
+                    error_end += 1U;
+                    continue;
+                }
+                size_t kept = __tinypy_codec_copy_ascii(builder.bytes + builder.size, bytes + error_end, size - error_end);
+
+                builder.size += kept;
+                error_end += kept;
+            }
+        }
+        else if (error_mode == 2) {
+            /* U+FFFD takes three bytes. */
+            __tinypy_string_builder_reserve(&builder, 3U + (size - error_end));
+            if (builder.failed == 0) {
+                (void)memcpy(builder.bytes + builder.size, "\xef\xbf\xbd", 3U);
+                builder.size += 3U;
+            }
+        }
+        else {
+            const char *reason = codec == 0 ? "ordinal not in range(128)" : __tinypy_codec_utf8_decode_reason(bytes + offset, size - offset);
+            size_t next;
+
+            if (__tinypy_codec_call_error_handler(vm, &builder, &error_state, text, encoding, errors, codec, TINYPY_TRUE, input_size, offset, error_end, reason, &next, out_error) == 0) {
+                goto codec_error;
+            }
+            /* The exception owns a snapshot; the decoder keeps reading its
+               live input after handler and position callbacks. A bytearray
+               whose storage stayed in place, as its export keeps it, still
+               holds the bytes it had, past a size it shrank to in place too,
+               which the buffer of CPython goes on reading. */
+            tinypy_bool_t kept = kind == TINYPY_VALUE_BYTEARRAY && TINYPY_BYTEARRAY_OBJECT(text)->bytes == bytes && TINYPY_BYTEARRAY_OBJECT(text)->capacity > input_size ? TINYPY_TRUE : TINYPY_FALSE;
+            if (buffer_input != 0 && kept == 0) {
+                __tinypy_codec_input_view(text, &view_bytes, &view_size);
+                bytes = view_bytes;
+                size = view_size < input_size ? view_size : input_size;
+            }
+            __tinypy_string_builder_reserve(&builder, next < size ? size - next : 0U);
+            error_end = next;
+        }
+        offset = error_end;
+    }
+    /* The encoders meet an error at a character above ASCII, and the UTF-8
+       one a high surrogate, which it joins with a low surrogate that
+       follows. */
+    while (decode == 0 && offset < size && builder.failed == 0) {
+        uint8_t lead = bytes[offset];
+        uint32_t code_point;
+
+        if (lead < 0x80U) {
+            size_t run = __tinypy_codec_copy_ascii(builder.bytes + builder.size, bytes + offset, size - offset);
+
+            builder.size += run;
+            offset += run;
+            continue;
+        }
+        if (codec == 1 || (codec == 2 && lead < 0xc4U)) {
+            size_t run = __tinypy_codec_append_run(&builder, bytes + offset, size - offset, codec, decode);
+
+            if (run != 0U) {
+                offset += run;
+                continue;
+            }
+        }
+        size_t width = __tinypy_codec_decode(bytes + offset, size - offset, &code_point);
+
+        if (width == 0U) {
+            /* Only a value made from invalid UTF-8, which the contract of
+               tinypy_unicode_from_utf8 rules out, has a sequence that no
+               codec encodes. */
+            size_t character = tinypy_internal_unicode_character_index(text, offset);
+            tinypy_value_t *exception = __tinypy_codec_unicode_exception(vm, text, encoding, codec, TINYPY_FALSE, character, character + 1U, "invalid internal unicode value", out_error);
+
+            if (exception != NULL) {
+                (void)tinypy_exception_raise(exception, NULL, out_error);
+                TINYPY_DECREF(exception);
+            }
+            goto codec_error;
+        }
+        if (codec == 1) {
+            uint32_t next_code_point;
+            size_t next_width = tinypy_internal_utf8_decode(bytes + offset + width, size - offset - width, &next_code_point);
+
+            if (next_width != 0U && next_code_point >= UINT32_C(0xdc00) && next_code_point <= UINT32_C(0xdfff)) {
+                uint32_t combined = UINT32_C(0x10000) + ((code_point - UINT32_C(0xd800)) << 10U) + (next_code_point - UINT32_C(0xdc00));
+
+                __tinypy_utf8_append(&builder, combined);
+                offset += width + next_width;
+                continue;
+            }
+            __tinypy_string_builder_append(&builder, bytes + offset, width);
+            offset += width;
+            continue;
+        }
+        /* The characters up to the next one the codec encodes form one
+           error, as the collstart and collend of PyUnicode_EncodeLatin1. */
+        size_t error_end = offset + width;
+        size_t error_count = 1U;
+
+        while (error_end < size && bytes[error_end] >= 0x80U) {
+            uint32_t next_code_point;
+            size_t next_width = __tinypy_codec_decode(bytes + error_end, size - error_end, &next_code_point);
+
+            if (next_width == 0U || (codec == 2 && next_code_point <= UINT32_C(0xff))) {
+                break;
+            }
+            error_end += next_width;
+            error_count += 1U;
+        }
+        if (error_mode == 5 && error_state.handler == NULL) {
+            error_mode = __tinypy_codec_resolve_handler(vm, &error_state, errors, TINYPY_FALSE, out_error);
+            if (error_mode < 0) {
+                goto codec_error;
+            }
+        }
+        if (error_mode == 2) {
+            (void)memset(builder.bytes + builder.size, '?', error_count);
+            builder.size += error_count;
+        }
+        else if (error_mode == 3 || error_mode == 4) {
+            for (size_t index = offset; index < error_end; index += width) {
+                width = __tinypy_codec_decode(bytes + index, size - index, &code_point);
+                if (error_mode == 3) {
+                    __tinypy_codec_append_xml_reference(&builder, code_point);
+                }
+                else {
+                    __tinypy_codec_append_backslash_escape(&builder, code_point);
+                }
+            }
+            __tinypy_string_builder_reserve(&builder, size - error_end);
+        }
+        else if (error_mode == 0 || error_mode == 5) {
+            /* Only the exception names the characters. */
+            size_t character = tinypy_internal_unicode_character_index(text, offset);
+            const char *reason = __tinypy_codec_unicode_reason(text, codec, TINYPY_FALSE, character);
+            size_t next;
+
+            if (error_mode == 0) {
+                (void)__tinypy_codec_raise_unicode_error(vm, text, encoding, codec, TINYPY_FALSE, character, character + error_count, out_error);
+                goto codec_error;
+            }
+            if (__tinypy_codec_call_error_handler(vm, &builder, &error_state, text, encoding, errors, codec, TINYPY_FALSE, TINYPY_SIZED_SIZE(text), character, character + error_count, reason, &next, out_error) == 0) {
+                goto codec_error;
+            }
+            __tinypy_string_builder_reserve(&builder, size - next);
+            error_end = next;
+        }
+        offset = error_end;
+    }
+    tinypy_value_t *result = __tinypy_string_builder_finish(&builder, decode, out_error);
+    __tinypy_codec_error_state_finalize(&error_state);
+    return result;
+
+codec_error:
+    __tinypy_string_builder_discard(&builder);
+    __tinypy_codec_error_state_finalize(&error_state);
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_text_codec_builtin(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_internal_builtin_codec_e builtin, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t *out_consumed, tinypy_error_t **out_error) {
     int32_t codec = (int32_t)builtin;
-    int32_t error_mode = errors == NULL ? 0 : -2;
-    tinypy_string_builder_t builder;
     const uint8_t *bytes;
     size_t size;
-    size_t input_size;
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(text);
-    tinypy_bool_t buffer_input = decode != 0 && kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE;
     size_t offset;
     size_t output_size;
     size_t characters;
-    tinypy_codec_error_state_t error_state = {NULL, NULL};
 
     __tinypy_codec_input_view(text, &bytes, &size);
-    input_size = size;
-
     if (decode != 0 && TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE) {
         offset = tinypy_internal_ascii_prefix(bytes, size);
         if (offset != size) {
@@ -4141,8 +4434,12 @@ static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_text_codec_builtin(tinypy_v
         }
     }
     offset = __tinypy_codec_run(bytes, size, codec, decode, &output_size, &characters);
-    if (offset == size && size != 0U) {
+    if (offset == size) {
         uint8_t *output;
+
+        if (size == 0U && decode == 0) {
+            return TINYPY_RET_EMPTY_STRING(vm);
+        }
         tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, decode != 0 ? TINYPY_VALUE_UNICODE : TINYPY_VALUE_STRING, output_size, characters, &output, out_error);
 
         if (result != NULL) {
@@ -4150,130 +4447,8 @@ static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_text_codec_builtin(tinypy_v
         }
         return result;
     }
-    (void)memset(&builder, 0, sizeof(builder));
-    builder.vm = vm;
-    __tinypy_string_builder_reserve(&builder, output_size + (size - offset));
-    __tinypy_codec_append_run(&builder, bytes, offset, output_size, codec, decode);
-    while (offset < size) {
-        size_t run = __tinypy_codec_run(bytes + offset, size - offset, codec, decode, &output_size, &characters);
-
-        if (run != 0U) {
-            __tinypy_codec_append_run(&builder, bytes + offset, run, output_size, codec, decode);
-            offset += run;
-            continue;
-        }
-        if (decode != 0) {
-            /* Latin-1 decodes any byte: the error is the byte ASCII cannot
-               decode or a sequence UTF-8 cannot. */
-            size_t error_end = offset + 1U;
-
-            if (codec == 1) {
-                uint8_t first = bytes[offset];
-                size_t expected = first < 0xe0U ? 2U : (first < 0xf0U ? 3U : 4U);
-
-                /* PyUnicode_DecodeUTF8Stateful defers a sequence whose
-                   length exceeds the remaining input before it looks at
-                   the continuation bytes. */
-                if (final == 0 && first >= 0xc2U && first <= 0xf4U && size - offset < expected) {
-                    if (out_consumed != NULL) {
-                        *out_consumed = offset;
-                    }
-                    break;
-                }
-                error_end = offset + tinypy_internal_utf8_invalid_span(bytes + offset, size - offset);
-            }
-            /* Unlike the ASCII/Latin-1 encoders, decoders look up every
-               error policy, including the standard names. */
-            const char *reason = codec == 0 ? "ordinal not in range(128)" : __tinypy_codec_utf8_decode_reason(bytes + offset, size - offset);
-
-            if (__tinypy_codec_call_error_handler(vm, &builder, &error_state, text, encoding, errors, codec, TINYPY_TRUE, input_size, offset, error_end, reason, &offset, out_error) == 0) {
-                goto codec_error;
-            }
-            if (buffer_input != 0) {
-                /* The exception owns a snapshot; the decoder keeps reading
-                   its live input after handler and position callbacks. */
-                __tinypy_codec_input_view(text, &bytes, &size);
-                if (size > input_size) {
-                    size = input_size;
-                }
-            }
-            continue;
-        }
-        uint32_t code_point;
-        size_t width = tinypy_internal_utf8_decode(bytes + offset, size - offset, &code_point);
-
-        if (width == 0U) {
-            /* Only a value made from invalid UTF-8, which the contract of
-               tinypy_unicode_from_utf8 rules out, has a sequence that no
-               codec encodes. */
-            size_t character = tinypy_internal_unicode_character_index(text, offset);
-            tinypy_value_t *exception = __tinypy_codec_unicode_exception(vm, text, encoding, codec, TINYPY_FALSE, character, character + 1U, "invalid internal unicode value", out_error);
-
-            if (exception != NULL) {
-                (void)tinypy_exception_raise(exception, NULL, out_error);
-                TINYPY_DECREF(exception);
-            }
-            goto codec_error;
-        }
-        if (codec == 1) {
-            /* The run stopped before a high surrogate. */
-            uint32_t next_code_point;
-            size_t next_width = tinypy_internal_utf8_decode(bytes + offset + width, size - offset - width, &next_code_point);
-
-            if (next_width != 0U && next_code_point >= UINT32_C(0xdc00) && next_code_point <= UINT32_C(0xdfff)) {
-                uint32_t combined = UINT32_C(0x10000) + ((code_point - UINT32_C(0xd800)) << 10U) + (next_code_point - UINT32_C(0xdc00));
-
-                __tinypy_utf8_append(&builder, combined);
-                offset += width + next_width;
-                continue;
-            }
-            __tinypy_string_builder_append(&builder, bytes + offset, width);
-        }
-        else {
-            size_t character = tinypy_internal_unicode_character_index(text, offset);
-            size_t error_end = character + 1U;
-
-            if (error_mode < 0) {
-                error_mode = __tinypy_codec_error_mode(vm, errors);
-            }
-            size_t scan = offset + width;
-            while ((error_mode == 0 || error_mode == 5) && scan < size) {
-                uint32_t next_scalar;
-                size_t next_width = tinypy_internal_utf8_decode(bytes + scan, size - scan, &next_scalar);
-                if (next_width == 0U || (codec == 0 && next_scalar <= UINT32_C(0x7f)) || (codec == 2 && next_scalar <= UINT32_C(0xff))) {
-                    break;
-                }
-                error_end += 1U;
-                scan += next_width;
-            }
-
-            if (error_mode == 2) {
-                __tinypy_string_builder_character(&builder, (uint8_t)'?');
-            }
-            else if (error_mode == 3) {
-                __tinypy_codec_append_xml_reference(&builder, code_point);
-            }
-            else if (error_mode == 5) {
-                if (__tinypy_codec_call_error_handler(vm, &builder, &error_state, text, encoding, errors, codec, TINYPY_FALSE, TINYPY_SIZED_SIZE(text), character, error_end, __tinypy_codec_unicode_reason(text, codec, TINYPY_FALSE, character), &offset, out_error) == 0) {
-                    goto codec_error;
-                }
-                continue;
-            }
-            else if (error_mode == 0) {
-                (void)__tinypy_codec_raise_unicode_error(vm, text, encoding, codec, TINYPY_FALSE, character, error_end, out_error);
-                goto codec_error;
-            }
-        }
-        offset += width;
-    }
-    tinypy_value_t *result = __tinypy_string_builder_finish(&builder, decode, out_error);
-    __tinypy_codec_error_state_finalize(&error_state);
+    tinypy_value_t *result = __tinypy_codec_convert_rest(vm, text, codec, encoding, errors, decode, final, offset, output_size, out_consumed, out_error);
     return result;
-
-codec_error:
-    __tinypy_string_builder_discard(&builder);
-    __tinypy_codec_error_state_finalize(&error_state);
-    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_bool_t final, size_t *out_consumed, tinypy_error_t **out_error) {

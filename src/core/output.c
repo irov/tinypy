@@ -451,44 +451,8 @@ static tinypy_value_t *__tinypy_output_writelines_method(tinypy_value_t *functio
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The softspace flag of print statements, read and written as an int the
-   way file objects expose it. */
-static tinypy_value_t *__tinypy_output_softspace_property(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    size_t count = user_data != NULL ? 2U : 1U;
-
-    if (__tinypy_output_method_arguments(vm, args, kwargs, count, out_error) == 0) {
-        return NULL;
-    }
-    tinypy_value_t *stream = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(stream) != TINYPY_VALUE_OUTPUT_STREAM) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "descriptor requires an output stream object", out_error);
-        return NULL;
-    }
-    if (user_data == NULL) {
-        tinypy_value_t *result = tinypy_integer_from_i64(vm, TINYPY_OUTPUT_STREAM_OBJECT(stream)->soft_space != 0 ? INT64_C(1) : INT64_C(0));
-
-        return result;
-    }
-    int64_t flag;
-    if (tinypy_internal_number_as_i64(TINYPY_TUPLE_GET(args, 1U), &flag, out_error) == 0) {
-        return NULL;
-    }
-    TINYPY_OUTPUT_STREAM_OBJECT(stream)->soft_space = flag != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-    tinypy_value_t *result = TINYPY_RET_NONE(vm);
-
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_output_type(tinypy_vm_t *vm) {
-    tinypy_value_t *getter = tinypy_native_function_new_key(vm->internal_softspace_key, __tinypy_output_softspace_property, NULL, NULL);
-    tinypy_value_t *setter = tinypy_native_function_new_key(vm->internal_softspace_key, __tinypy_output_softspace_property, (void *)(intptr_t)1, NULL);
-    tinypy_value_t *softspace = tinypy_property_new(vm, getter, setter, NULL, NULL);
-
-    tinypy_type_set_attr_key(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], vm->internal_softspace_key, softspace);
-    TINYPY_DECREF(softspace);
-    TINYPY_DECREF(setter);
-    TINYPY_DECREF(getter);
+    tinypy_internal_initialize_output_descriptors(&vm->types[TINYPY_VALUE_OUTPUT_STREAM]);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], vm->internal_write_key, __tinypy_output_write_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], vm->internal_writelines_key, __tinypy_output_writelines_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_OUTPUT_STREAM], vm->internal_flush_key, __tinypy_output_flush_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

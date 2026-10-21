@@ -44,7 +44,10 @@ typedef tinypy_value_t *(*tinypy_native_compare_t)(tinypy_value_t *instance, voi
  * construct is the type's tp_new: it receives the call arguments, which
  * object.__init__ then accepts. hash never reports -1, which reads as -2;
  * callbacks report failures through out_error or the VM error alone, which
- * the slot then reports through out_error too. Without iter, sequence_get
+ * the slot then reports through out_error too. A callback, as a native
+ * function, that reports success leaves no exception raised: as for the
+ * slots and C functions of CPython 2.7, its result is used unchecked and
+ * such an exception stays pending. Without iter, sequence_get
  * makes instances iterable by index until IndexError, ahead of mapping_get,
  * and with sequence_length reversible, as sq_item does in CPython; like
  * PySequence_GetItem, the iteration calls it without out_error and reads a

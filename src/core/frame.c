@@ -32,6 +32,41 @@ static int32_t __tinypy_internal_frame_line_number(const tinypy_frame_object_t *
     int32_t result = (int32_t)line;
     return result;
 }
+#if defined(TINYPY_DEBUGGER)
+//////////////////////////////////////////////////////////////////////////
+/* _PyCode_CheckLineNumber: the line of the last instruction starts at the
+   lnotab entry that last advanced the line before it and ends at the next
+   entry that advances it, or at the last entry; without another entry the
+   range extends past the code. */
+void tinypy_internal_frame_line_range(const tinypy_frame_object_t *frame, int32_t *out_lower, int32_t *out_upper) {
+    const tinypy_code_object_t *code = TINYPY_CODE_OBJECT(frame->code);
+    const uint8_t *bytes = TINYPY_STRING_OBJECT(code->lnotab)->bytes;
+    size_t size = TINYPY_SIZED_SIZE(code->lnotab);
+    size_t instruction_offset = (size_t)frame->last_instruction;
+    size_t address = 0U;
+    size_t lower = 0U;
+    size_t index = 0U;
+
+    for (; index + 1U < size && address + bytes[index] <= instruction_offset; index += 2U) {
+        address += bytes[index];
+        if (bytes[index + 1U] != 0U) {
+            lower = address;
+        }
+    }
+    *out_lower = (int32_t)lower;
+    if (index + 1U >= size) {
+        *out_upper = INT32_MAX;
+        return;
+    }
+    for (; index + 1U < size; index += 2U) {
+        address += bytes[index];
+        if (bytes[index + 1U] != 0U) {
+            break;
+        }
+    }
+    *out_upper = address < (size_t)INT32_MAX ? (int32_t)address : INT32_MAX;
+}
+#endif
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_internal_frame_make_builtins(tinypy_vm_t *vm, tinypy_value_t *globals, int32_t function_frame) {
     if (vm->current_frame != NULL && vm->current_frame->globals == globals) {
@@ -315,7 +350,9 @@ tinypy_value_t *tinypy_internal_frame_locals_get(tinypy_vm_t *vm, tinypy_value_t
 }
 //////////////////////////////////////////////////////////////////////////
 /* Mirrors PyFrame_LocalsToFast(frame, 0): names missing from the mapping
-   keep their current fast values. */
+   keep their current fast values. A stale value it replaces may run a
+   finalizer that finishes the generator of a suspended frame, which lets
+   the mapping go: the sync stops there. */
 void tinypy_internal_frame_locals_to_fast(tinypy_frame_object_t *frame) {
     tinypy_value_t *code = frame->code;
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
@@ -325,14 +362,16 @@ void tinypy_internal_frame_locals_to_fast(tinypy_frame_object_t *frame) {
     size_t local_count = (size_t)TINYPY_CODE_LOCAL_COUNT(code);
     size_t cell_count = TINYPY_TUPLE_SIZE(cellvars);
     size_t free_count = (TINYPY_CODE_FLAGS(code) & TINYPY_CODE_OPTIMIZED) != 0 ? TINYPY_TUPLE_SIZE(freevars) : 0U;
+    tinypy_value_t *locals = frame->locals;
     size_t index;
 
-    if (frame->locals == NULL) {
+    if (locals == NULL) {
         return;
     }
-    for (index = 0U; index < local_count; ++index) {
+    TINYPY_INCREF(locals);
+    for (index = 0U; index < local_count && frame->locals == locals; ++index) {
         tinypy_error_t *error = NULL;
-        tinypy_value_t *value = tinypy_internal_frame_locals_get(vm, frame->locals, TINYPY_TUPLE_GET(varnames, index), &error);
+        tinypy_value_t *value = tinypy_internal_frame_locals_get(vm, locals, TINYPY_TUPLE_GET(varnames, index), &error);
         tinypy_value_t *previous = frame->locals_plus[index];
 
         if (error != NULL) {
@@ -347,11 +386,11 @@ void tinypy_internal_frame_locals_to_fast(tinypy_frame_object_t *frame) {
             TINYPY_DECREF(previous);
         }
     }
-    for (index = 0U; index < cell_count + free_count; ++index) {
+    for (index = 0U; index < cell_count + free_count && frame->locals == locals; ++index) {
         tinypy_value_t *name = index < cell_count ? TINYPY_TUPLE_GET(cellvars, index) : TINYPY_TUPLE_GET(freevars, index - cell_count);
         tinypy_value_t *cell = frame->locals_plus[local_count + index];
         tinypy_error_t *error = NULL;
-        tinypy_value_t *value = tinypy_internal_frame_locals_get(vm, frame->locals, name, &error);
+        tinypy_value_t *value = tinypy_internal_frame_locals_get(vm, locals, name, &error);
 
         if (error != NULL) {
             tinypy_error_release(error);
@@ -365,6 +404,7 @@ void tinypy_internal_frame_locals_to_fast(tinypy_frame_object_t *frame) {
         }
         TINYPY_DECREF(value);
     }
+    TINYPY_DECREF(locals);
 }
 //////////////////////////////////////////////////////////////////////////
 /* map_to_dict: the names of a group go from the last to the first, until
@@ -496,9 +536,6 @@ static tinypy_value_t *__tinypy_internal_frame_new(tinypy_value_t *code, tinypy_
     frame->previous_handled_traceback = NULL;
     frame->stack_top = frame->value_stack;
     frame->last_instruction = -1;
-#if defined(TINYPY_DEBUGGER)
-    frame->debugger_line = -1;
-#endif
     frame->block_count = 0U;
     if (frame->back != NULL) {
         TINYPY_INCREF(frame->back);

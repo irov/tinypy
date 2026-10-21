@@ -104,7 +104,10 @@ typedef enum tinypy_internal_c_descriptor_field_e {
     TINYPY_INTERNAL_C_DESCRIPTOR_EXCEPTION_MEMBER = 97,
     TINYPY_INTERNAL_C_DESCRIPTOR_STRUCT_SEQUENCE_ITEM = 98,
     TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD = 99,
-    TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD = 100
+    TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD = 100,
+    TINYPY_INTERNAL_C_DESCRIPTOR_OBJECT_CLASS = 101,
+    TINYPY_INTERNAL_C_DESCRIPTOR_SLICE_FIELD = 102,
+    TINYPY_INTERNAL_C_DESCRIPTOR_OUTPUT_SOFTSPACE = 103
 } tinypy_internal_c_descriptor_field_e;
 
 //////////////////////////////////////////////////////////////////////////
@@ -464,17 +467,21 @@ static tinypy_bool_t __tinypy_internal_property_initialize(tinypy_value_t *self,
     tinypy_value_t *owned_doc = NULL;
     tinypy_bool_t success = TINYPY_FALSE;
     size_t count = TINYPY_TUPLE_SIZE(args);
+    size_t keyword_count = kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U;
+    size_t recognized = 0U;
 
-    size_t total = count + (kwargs != NULL ? TINYPY_DICT_SIZE(kwargs) : 0U);
-    if (total > 4U) {
-        tinypy_internal_make_arity_error(vm, "property", 8U, total, 0U, 4U, TINYPY_ARITY_STYLE_PARSED, out_error);
+    if (count + keyword_count > 4U) {
+        tinypy_internal_make_arity_error(vm, "property", 8U, count + keyword_count, 0U, 4U, TINYPY_ARITY_STYLE_PARSED, out_error);
         return TINYPY_FALSE;
     }
     for (size_t index = 0U; index < 4U; ++index) {
         tinypy_value_t *keyword = NULL;
 
-        if (kwargs != NULL) {
+        if (recognized < keyword_count) {
             keyword = tinypy_internal_constructor_keyword_optional(kwargs, names[index]);
+        }
+        if (keyword != NULL) {
+            recognized += 1U;
         }
         if (index < count && keyword != NULL) {
             char position_buffer[TINYPY_MESSAGE_SIZE_BUFFER];
@@ -497,37 +504,8 @@ static tinypy_bool_t __tinypy_internal_property_initialize(tinypy_value_t *self,
             TINYPY_INCREF(value);
         }
     }
-    if (kwargs != NULL) {
-        tinypy_dict_entry_t *iterator = TINYPY_DICT_ITERATOR_BEGIN(kwargs);
-        tinypy_dict_entry_t *iterator_end = TINYPY_DICT_ITERATOR_END(kwargs);
-
-        for (; iterator != iterator_end; ++iterator) {
-            tinypy_bool_t recognized = TINYPY_FALSE;
-
-            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(iterator)) {
-                continue;
-            }
-            if (TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(iterator->key) != TINYPY_VALUE_UNICODE) {
-                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "keywords must be strings", out_error);
-                goto cleanup;
-            }
-            for (size_t index = 0U; index < 4U; ++index) {
-                if (TINYPY_NAME_EQ(iterator->key, names[index]) != 0) {
-                    recognized = TINYPY_TRUE;
-                    break;
-                }
-            }
-            if (recognized == 0) {
-                tinypy_message_part_t parts[] = {
-                    TINYPY_MESSAGE_PART_LITERAL("'"),
-                    TINYPY_MESSAGE_PART_TEXT(iterator->key),
-                    TINYPY_MESSAGE_PART_LITERAL("' is an invalid keyword argument for this function"),
-                };
-
-                tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
-                goto cleanup;
-            }
-        }
+    if (__tinypy_internal_constructor_check_keywords(vm, kwargs, keyword_count - recognized, names, 4U, out_error) == 0) {
+        goto cleanup;
     }
     tinypy_property_object_t *property = TINYPY_PROPERTY_OBJECT(self);
     tinypy_value_t *previous[4] = {property->getter, property->setter, property->deleter, property->doc};
@@ -1050,6 +1028,9 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         __tinypy_internal_c_descriptor_receiver_error(descriptor, instance, TINYPY_FALSE, out_error);
         return NULL;
     }
+    if (field == TINYPY_INTERNAL_C_DESCRIPTOR_OBJECT_CLASS) {
+        return TINYPY_RET(&instance->type->base.base);
+    }
     if (field == TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD) {
         function_result = tinypy_internal_sre_field(instance, descriptor->index, out_error);
         return function_result;
@@ -1104,6 +1085,16 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
     }
     if (field == TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD) {
         function_result = tinypy_internal_memoryview_field(instance, descriptor->index);
+        return function_result;
+    }
+    if (field == TINYPY_INTERNAL_C_DESCRIPTOR_SLICE_FIELD) {
+        tinypy_slice_object_t *slice = TINYPY_SLICE_OBJECT(instance);
+        tinypy_value_t *const fields[] = {slice->start, slice->stop, slice->step};
+
+        return TINYPY_RET(fields[descriptor->index]);
+    }
+    if (field == TINYPY_INTERNAL_C_DESCRIPTOR_OUTPUT_SOFTSPACE) {
+        function_result = tinypy_integer_from_i64(vm, TINYPY_OUTPUT_STREAM_OBJECT(instance)->soft_space != 0 ? INT64_C(1) : INT64_C(0));
         return function_result;
     }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC) {
@@ -1503,6 +1494,25 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         __tinypy_internal_c_descriptor_replace(&TINYPY_NATIVE_FUNCTION_OBJECT(instance)->module, value);
         return TINYPY_TRUE;
     }
+    if (field == TINYPY_INTERNAL_C_DESCRIPTOR_OBJECT_CLASS) {
+        tinypy_bool_t assigned = tinypy_internal_object_set_class(instance, value, out_error);
+        return assigned;
+    }
+    /* The softspace flag of print statements, written as an int the way
+       file objects take it. */
+    if (field == TINYPY_INTERNAL_C_DESCRIPTOR_OUTPUT_SOFTSPACE) {
+        int64_t flag = 0;
+
+        if (value == NULL) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "can't delete softspace attribute", out_error);
+            return TINYPY_FALSE;
+        }
+        if (tinypy_internal_number_as_i64(value, &flag, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        TINYPY_OUTPUT_STREAM_OBJECT(instance)->soft_space = flag != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        return TINYPY_TRUE;
+    }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC) {
         tinypy_type_t *type;
 
@@ -1876,6 +1886,7 @@ void tinypy_internal_initialize_descriptor_types(tinypy_vm_t *vm) {
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_PROPERTY], TINYPY_VALUE_MEMBER_DESCRIPTOR, vm->internal_fset_key, TINYPY_INTERNAL_C_DESCRIPTOR_PROPERTY_SETTER, TINYPY_FALSE);
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_PROPERTY], TINYPY_VALUE_MEMBER_DESCRIPTOR, vm->internal_fdel_key, TINYPY_INTERNAL_C_DESCRIPTOR_PROPERTY_DELETER, TINYPY_FALSE);
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_PROPERTY], TINYPY_VALUE_MEMBER_DESCRIPTOR, vm->internal_special_doc_key, TINYPY_INTERNAL_C_DESCRIPTOR_PROPERTY_DOC, TINYPY_FALSE);
+    __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_INSTANCE], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_special_class_key, TINYPY_INTERNAL_C_DESCRIPTOR_OBJECT_CLASS, TINYPY_TRUE);
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_TYPE], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_special_abstractmethods_key, TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_ABSTRACT_METHODS, TINYPY_TRUE);
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_TYPE], TINYPY_VALUE_MEMBER_DESCRIPTOR, vm->internal_special_base_key, TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_BASE, TINYPY_FALSE);
     __tinypy_internal_builtin_descriptor_set(vm, &vm->types[TINYPY_VALUE_TYPE], TINYPY_VALUE_GETSET_DESCRIPTOR, vm->internal_special_bases_key, TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_BASES, TINYPY_TRUE);
@@ -1987,6 +1998,24 @@ void tinypy_internal_initialize_memoryview_descriptors(tinypy_type_t *type) {
         tinypy_type_set_attr_key(type, names[index], descriptor);
         TINYPY_DECREF(descriptor);
     }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The readonly members start, stop and step of slice objects. */
+void tinypy_internal_initialize_slice_descriptors(tinypy_type_t *type) {
+    tinypy_vm_t *vm = type->vm;
+    tinypy_value_t *const names[] = {vm->internal_start_key, vm->internal_stop_key, vm->internal_step_key};
+
+    for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        tinypy_value_t *descriptor = __tinypy_internal_c_descriptor_new(vm, TINYPY_VALUE_MEMBER_DESCRIPTOR, type, names[index], TINYPY_INTERNAL_C_DESCRIPTOR_SLICE_FIELD, TINYPY_FALSE);
+
+        TINYPY_C_DESCRIPTOR_OBJECT(descriptor)->index = index;
+        tinypy_type_set_attr_key(type, names[index], descriptor);
+        TINYPY_DECREF(descriptor);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_initialize_output_descriptors(tinypy_type_t *type) {
+    __tinypy_internal_builtin_descriptor_set(type->vm, type, TINYPY_VALUE_GETSET_DESCRIPTOR, type->vm->internal_softspace_key, TINYPY_INTERNAL_C_DESCRIPTOR_OUTPUT_SOFTSPACE, TINYPY_TRUE);
 }
 //////////////////////////////////////////////////////////////////////////
 /* The readonly members of _sre's types and the getsets of its match

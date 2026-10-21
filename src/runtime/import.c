@@ -605,6 +605,13 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
         TINYPY_DECREF(key);
         return NULL;
     }
+    /* Nor does an artifact returned with an exception raised load. */
+    if (vm->raised_value != NULL) {
+        vm->host.release_module_artifact(vm->host.user_data, artifact);
+        TINYPY_DECREF(key);
+        tinypy_internal_exception_make_diagnostic(vm, out_error);
+        return NULL;
+    }
     if (__tinypy_import_artifact_valid(artifact, name, name_size) == 0) {
         vm->host.release_module_artifact(vm->host.user_data, artifact);
         TINYPY_DECREF(key);
@@ -660,8 +667,17 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
         }
     }
     else if (artifact->content_kind == TINYPY_MODULE_CONTENT_NATIVE) {
-        loaded = artifact->native_initialize(module, artifact->native_user_data, out_error) != 0;
-        if (loaded == 0 && vm->raised_value == NULL && (out_error == NULL || *out_error == NULL)) {
+        /* As _PyImport_LoadDynamicModule checks PyErr_Occurred after the
+           initializer, one that reports success with an exception raised
+           fails the import with it. */
+        tinypy_bool_t initialized = artifact->native_initialize(module, artifact->native_user_data, out_error);
+        tinypy_bool_t reported = out_error != NULL && *out_error != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+
+        loaded = initialized != 0 && vm->raised_value == NULL;
+        if (loaded == 0 && reported == 0 && vm->raised_value != NULL) {
+            tinypy_internal_exception_make_diagnostic(vm, out_error);
+        }
+        else if (loaded == 0 && reported == 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "native module initialization failed", out_error);
         }
     }

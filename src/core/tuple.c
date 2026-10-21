@@ -210,6 +210,34 @@ tinypy_value_t *tinypy_internal_tuple_join_items_checked(tinypy_vm_t *vm, tinypy
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* tuplerepeat: count copies of the unit, whose size the caller has
+   checked. */
+tinypy_value_t *tinypy_internal_tuple_repeat_checked(tinypy_vm_t *vm, tinypy_value_t *const *unit, size_t unit_size, size_t count, tinypy_error_t **out_error) {
+    size_t size = unit_size * count;
+
+    if (size == 0U) {
+        tinypy_value_t *result = TINYPY_RET_EMPTY_TUPLE(vm);
+        return result;
+    }
+    size_t allocation_size = __tinypy_internal_tuple_allocation_size(size);
+    if (allocation_size == 0U) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_MEMORY, "tuple is too large", out_error);
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_internal_object_allocate_checked(vm, &vm->types[TINYPY_VALUE_TUPLE], allocation_size, out_error);
+    if (result == NULL) {
+        return NULL;
+    }
+    TINYPY_SIZED_SIZE(result) = size;
+    tinypy_value_t **items = TINYPY_TUPLE_OBJECT(result)->items;
+    for (size_t index = 0U; index < unit_size; ++index) {
+        TINYPY_INCREF(unit[index]);
+        items[index] = unit[index];
+    }
+    tinypy_internal_items_repeat(items, unit_size, count);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_tuple_prepend_checked(tinypy_vm_t *vm, tinypy_value_t *first, const tinypy_value_t *tail, tinypy_error_t **out_error) {
     tinypy_value_t *const *tail_items = tinypy_internal_tuple_items(tail);
     tinypy_value_t *result = tinypy_internal_tuple_join_items_checked(vm, first, NULL, 0U, tail_items, TINYPY_TUPLE_SIZE(tail), out_error);
