@@ -26,6 +26,7 @@ if(BUILD_TESTING)
     add_test(NAME cli_command COMMAND tinypy_console -c "assert 6 * 7 == 42")
 
     set(tinypy_runtime_source_fixtures
+        array_runtime
         buffer_runtime
         builtin_semantics_runtime
         bytearray_runtime

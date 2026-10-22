@@ -7,7 +7,7 @@ domain. [coverage.json](coverage.json) assigns the existing fixtures to domains;
 [the coordinator](../run_validation.py) verifies their inventories and runs all
 acceptance layers together.
 
-The twelfth-audit inventory contains 43 finite runtime matrices with 361,017
+The fifteenth-pass inventory contains 44 finite runtime matrices with 373,812
 outcomes per profile. The ninth-pass additions cover metadata/receiver arguments
 (325), numeric arguments and snapshots (995), container arguments and error
 phases (3,756), and function construction/reduction/saved frames (1,026).
@@ -17,7 +17,9 @@ The eleventh pass adds live-buffer lifetime/character views (7,524), text
 arguments/padding/codecs (26,217), native readiness (913) and weakref protocols
 (5,032). The twelfth pass adds bytearray construction/hints/callback snapshots
 (4,158), Unicode translation and codec callbacks (18,636), and direct descriptor
-calls and optional owners (681). The portable inventory contains 52
+calls and optional owners (681). The fifteenth pass adds the array module:
+typecodes, constructors, item conversions, subscripts, methods, operators,
+comparisons, buffers and callbacks (12,795). The portable inventory contains 52
 project-authored modules with 1,594 cases and 210 selected vendor cases,
 totaling 1,804. These are declared coverage counts; completed profile acceptance comes from the coordinator's report.
 

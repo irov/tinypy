@@ -72,7 +72,8 @@ The run includes:
    parser/cache/callback/proxy observations.
    The twelfth pass adds 4,158 bytearray constructor/hint/mutation outcomes,
    18,636 Unicode translation/codec callbacks and 681 direct descriptor calls.
-   Total: 361,017 unique outcomes per profile across forty-three matrices.
+   The fifteenth pass adds 12,795 array module outcomes.
+   Total: 373,812 unique outcomes per profile across forty-four matrices.
    Every identity must be unique, with a positive
    declared cardinality.
 5. 3,693 generated valid source inputs: 2,853 `exec`, 420 `eval`, 420 `single`.

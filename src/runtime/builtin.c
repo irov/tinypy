@@ -188,27 +188,6 @@ static tinypy_value_t *__tinypy_builtin_call_items(tinypy_vm_t *vm, tinypy_value
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_builtin_apply_sequence(tinypy_value_t *value) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-
-    if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_XRANGE) {
-        return TINYPY_TRUE;
-    }
-    if (kind == TINYPY_VALUE_DICT || kind == TINYPY_VALUE_SET || kind == TINYPY_VALUE_FROZENSET) {
-        return TINYPY_FALSE;
-    }
-    /* PySequence_Check asks a classic instance hasattr(value, '__getitem__'),
-       __getattr__ included. */
-    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
-        tinypy_bool_t classic_result = tinypy_object_has_attr_value(value, vm->internal_special_getitem_key);
-        return classic_result;
-    }
-    tinypy_bool_t result = tinypy_internal_object_has_special_key(value, vm->internal_special_getitem_key);
-
-    return result;
-}
-//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_builtin_apply(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     size_t count = TINYPY_TUPLE_SIZE(args);
@@ -225,7 +204,7 @@ static tinypy_value_t *__tinypy_builtin_apply(tinypy_value_t *function, tinypy_v
         if (TINYPY_VALUE_KIND(call_args) != TINYPY_VALUE_TUPLE) {
             tinypy_value_t *constructor_args;
 
-            if (__tinypy_builtin_apply_sequence(call_args) == 0) {
+            if (tinypy_internal_object_is_sequence(vm, call_args) == 0) {
                 const tinypy_message_part_t parts[] = {
                     TINYPY_MESSAGE_PART_LITERAL("apply() arg 2 expected sequence, found "),
                     TINYPY_MESSAGE_PART_TYPE_NAME(call_args)
@@ -1713,7 +1692,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
         if (tinypy_internal_length_hint(item, INT64_C(8), &hint, &hint_error) == 0) {
             /* builtin_map leaves the error of _PyObject_LengthHint pending:
                any exception raised later replaces it, as the TypeError of a
-               later new-style operand without __len__ and the IndexError
+               later new-style operand without a length and the IndexError
                ending a sequence iterator do without being raised here, and
                an iterator that ends without an exception reports it unless
                it is a StopIteration, which PyIter_Next clears. */
@@ -1724,7 +1703,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
             tinypy_internal_exception_preserve_begin(vm, &pending);
             continue;
         }
-        if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(item, vm->internal_special_length_key) == 0) {
+        if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_OLD_INSTANCE && __tinypy_internal_type_size_slot(item->type) == NULL && tinypy_internal_object_has_special_key(item, vm->internal_special_length_key) == 0) {
             __tinypy_builtin_exception_state_release(&pending);
         }
         if (hint < 0) {

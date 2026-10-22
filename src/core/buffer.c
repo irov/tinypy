@@ -7,8 +7,9 @@
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_buffer_supported(const tinypy_value_t *value) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+    tinypy_bool_t supported = kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_BYTEARRAY || tinypy_internal_array_check(value) != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
 
-    return kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_BYTEARRAY;
+    return supported;
 }
 //////////////////////////////////////////////////////////////////////////
 static const uint8_t *__tinypy_buffer_owner_view(const tinypy_value_t *owner, size_t *out_size) {
@@ -29,8 +30,10 @@ static const uint8_t *__tinypy_buffer_owner_view(const tinypy_value_t *owner, si
         function_result = (const uint8_t *)tinypy_bytearray_view(owner, out_size);
         return function_result;
     default:
-        *out_size = 0U;
-        return NULL;
+        /* The items of an array, the one other owner, wherever its last
+           resize put them. */
+        function_result = tinypy_internal_array_view(owner, out_size);
+        return function_result;
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -277,6 +280,12 @@ tinypy_value_t *tinypy_internal_buffer_character_string(tinypy_value_t *value, t
     const uint8_t *bytes;
     size_t size;
 
+    /* An array has no bf_getcharbuffer. */
+    if (tinypy_internal_array_check(owner) != TINYPY_FALSE) {
+        TINYPY_DECREF(owner);
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "char buffer type not available", out_error);
+        return NULL;
+    }
     if (TINYPY_VALUE_KIND(owner) == TINYPY_VALUE_UNICODE) {
         tinypy_value_t *encoded = tinypy_internal_text_codec(vm, owner, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
 
@@ -291,6 +300,23 @@ tinypy_value_t *tinypy_internal_buffer_character_string(tinypy_value_t *value, t
     tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(vm, bytes, size, out_error);
 
     TINYPY_DECREF(owner);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyUnicode_FromObject: the character buffer of a buffer, which a buffer of
+   an array does not have. */
+tinypy_value_t *tinypy_internal_buffer_unicode_source(tinypy_value_t *value, tinypy_error_t **out_error) {
+    if (tinypy_internal_array_check(TINYPY_BUFFER_OBJECT(value)->owner) != TINYPY_FALSE) {
+        tinypy_message_part_t parts[] = {
+            TINYPY_MESSAGE_PART_LITERAL("coercing to Unicode: need string or buffer, "),
+            TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 80U),
+            TINYPY_MESSAGE_PART_LITERAL(" found")
+        };
+
+        tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_internal_buffer_character_string(value, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

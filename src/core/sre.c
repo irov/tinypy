@@ -2670,9 +2670,10 @@ static tinypy_value_t *__tinypy_sre_getcodesize(tinypy_value_t *function, tinypy
 }
 //////////////////////////////////////////////////////////////////////////
 /* Template expansion and the scanner protocol live in the re module, exactly
-   as they do in Python 2.7, so the engine calls back into it. */
+   as they do in Python 2.7, so the engine calls back into it, imported as
+   _sre's call() does with PyImport_Import. */
 static tinypy_value_t *__tinypy_sre_call_re_helper(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
-    tinypy_value_t *module = tinypy_import_module_key(vm->internal_re_key, NULL, NULL, INT32_C(0), out_error);
+    tinypy_value_t *module = tinypy_internal_import_module_hooked(vm->internal_re_key, out_error);
     tinypy_value_t *helper;
     tinypy_value_t *call_args;
     tinypy_value_t *result;

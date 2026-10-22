@@ -606,7 +606,7 @@ static tinypy_value_t *__tinypy_eval_load_attr(tinypy_vm_t *vm, tinypy_value_t *
         TINYPY_INCREF(dict);
         result = tinypy_internal_dict_get_optional_index(vm, dict, name, &dict_index, NULL);
         if (result == NULL && vm->raised_type != NULL) {
-            tinypy_internal_exception_clear_raised(vm);
+            tinypy_internal_exception_clear_probe_raised(vm);
         }
         /* No borrowed key survives a callback or a cache eviction. The
            callback may also run this code and move another entry here, whose
@@ -1728,8 +1728,9 @@ static inline const uint8_t *__tinypy_eval_code_bytecode(const tinypy_value_t *c
 /* string_concatenate in ceval drops the reference of the variable that the
    store, the next instruction, rebinds before it grows the left operand in
    place. The namespace is probed by identity first; only a probe that has to
-   compare keys can run a colliding key's __eq__, so its errors are
-   discarded, as PyDict_GetItem and the PyErr_Clear after PyDict_DelItem do.
+   compare keys can run a colliding key's __eq__, whose error is discarded:
+   PyDict_GetItem drops it and keeps the current exception, while the error
+   of PyDict_DelItem replaces that exception before PyErr_Clear clears it.
    Reports whether the variable held left and is now unbound. */
 static tinypy_bool_t __tinypy_eval_concat_unbind(tinypy_vm_t *vm, tinypy_frame_object_t *frame, uint8_t store, size_t argument, tinypy_value_t *left) {
     tinypy_value_t **locals = frame->locals_plus;
@@ -1757,18 +1758,15 @@ static tinypy_bool_t __tinypy_eval_concat_unbind(tinypy_vm_t *vm, tinypy_frame_o
     tinypy_value_t *name = TINYPY_TUPLE_GET(TINYPY_CODE_NAMES(frame->code), argument);
     tinypy_value_t *value = NULL;
     tinypy_bool_t decided = tinypy_internal_dict_get_identity(vm, mapping, name, &value);
-    if (decided != 0 && value != left) {
+    if (decided == 0) {
+        value = tinypy_internal_dict_get_optional_suppressed(vm, mapping, name);
+    }
+    if (value != left) {
         return TINYPY_FALSE;
     }
-    tinypy_bool_t deleted = TINYPY_FALSE;
     tinypy_internal_exception_state_t state;
     tinypy_internal_exception_preserve_begin(vm, &state);
-    if (decided == 0) {
-        value = tinypy_internal_dict_get_optional(vm, mapping, name);
-    }
-    if (value == left) {
-        deleted = tinypy_internal_dict_delete_optional(vm, mapping, name);
-    }
+    tinypy_bool_t deleted = tinypy_internal_dict_delete_optional(vm, mapping, name);
     tinypy_internal_exception_preserve_end(vm, &state);
     return deleted;
 }

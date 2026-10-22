@@ -793,7 +793,23 @@ static int32_t __tinypy_item_sequence_length(tinypy_value_t *container, int64_t 
         length_value = __tinypy_item_call_method(container, vm->internal_special_length_key, NULL, 0U, out_error);
     }
     else {
-        return INT32_C(0);
+        /* The sq_length of a native type, whose slot wrapper defines
+           nothing that object does not; it may fail through the VM error
+           alone. */
+        tinypy_length_slot_t length_slot = container->type->sequence_slots != NULL ? container->type->sequence_slots->length : NULL;
+        if (length_slot == NULL) {
+            return INT32_C(0);
+        }
+        tinypy_value_t *previous_raised = vm->raised_value;
+        ptrdiff_t length = length_slot(container, out_error);
+        if (length < 0) {
+            if ((out_error == NULL || *out_error == NULL) && vm->raised_value == previous_raised) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "length slot returned a negative value", out_error);
+            }
+            return INT32_C(-1);
+        }
+        *out_length = (int64_t)length;
+        return INT32_C(1);
     }
     if (length_value == NULL) {
         return INT32_C(-1);
@@ -846,9 +862,10 @@ tinypy_bool_t tinypy_internal_item_sequence_index(tinypy_value_t *container, int
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* BaseException has only sq_item: PyObject_GetItem demands an index, adds
-   the length of a class defining __len__ to a negative one, and the item is
-   read from the arguments. */
+/* BaseException has only sq_item: PyObject_GetItem demands an index,
+   PySequence_GetItem adds the length of a class defining __len__ to a
+   negative one, and BaseException_getitem reads the item from the
+   arguments. */
 static tinypy_value_t *__tinypy_item_exception_get(tinypy_value_t *container, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     int64_t index;
@@ -860,14 +877,22 @@ static tinypy_value_t *__tinypy_item_exception_get(tinypy_value_t *container, ti
     if (__tinypy_item_number_as_ssize(key, TINYPY_FALSE, TINYPY_ERROR_INDEX, &index, out_error) == 0) {
         return NULL;
     }
-    if (tinypy_internal_item_sequence_index(container, &index, out_error) == 0) {
-        return NULL;
-    }
-    tinypy_value_t *position = tinypy_integer_from_i64(vm, index);
-    tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &position, 1U, out_error);
+    if (index < 0) {
+        if (tinypy_internal_item_sequence_index(container, &index, out_error) == 0) {
+            return NULL;
+        }
+        /* PySequence_GetItem reads sq_item after sq_length, so the
+           __getitem__ that a __len__ gave the class takes the index. */
+        if ((container->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && __tinypy_item_is_exception_sequence(container) == 0) {
+            tinypy_value_t *position = tinypy_integer_from_i64(vm, index);
+            tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &position, 1U, out_error);
 
-    TINYPY_DECREF(position);
-    return result;
+            TINYPY_DECREF(position);
+            return result;
+        }
+    }
+    tinypy_value_t *item = tinypy_internal_exception_get_item(container, index, out_error);
+    return item;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The kinds whose values slice themselves: str, unicode, tuple and list. */

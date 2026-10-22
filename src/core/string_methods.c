@@ -1181,11 +1181,7 @@ static tinypy_value_t *__tinypy_string_format_lookup(tinypy_vm_t *vm, tinypy_val
             return NULL;
         }
         if (kwargs != NULL) {
-            tinypy_internal_exception_state_t state;
-
-            tinypy_internal_exception_preserve_begin(vm, &state);
-            value = tinypy_dict_get_optional(kwargs, key);
-            tinypy_internal_exception_preserve_end(vm, &state);
+            value = tinypy_internal_dict_get_optional_suppressed(vm, kwargs, key);
         }
         if (value == NULL) {
             tinypy_internal_exception_raise_key_error(vm, key, out_error);
@@ -1943,7 +1939,7 @@ tinypy_value_t *tinypy_internal_string_argument_text(tinypy_vm_t *vm, tinypy_val
         return TINYPY_RET(value);
     }
     if (kind == TINYPY_VALUE_BUFFER) {
-        tinypy_value_t *result = tinypy_internal_buffer_character_string(value, out_error);
+        tinypy_value_t *result = unicode != 0 ? tinypy_internal_buffer_unicode_source(value, out_error) : tinypy_internal_buffer_character_string(value, out_error);
 
         if (result != NULL && unicode != 0) {
             tinypy_value_t *decoded = tinypy_internal_text_to_unicode(vm, result, out_error);
@@ -5193,6 +5189,12 @@ static tinypy_bool_t __tinypy_percent_float_operand(tinypy_vm_t *vm, tinypy_valu
         tinypy_error_release(float_error);
     }
     return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_number_as_double(tinypy_value_t *value, double *out_value, tinypy_error_t **out_error) {
+    tinypy_bool_t converted = __tinypy_percent_float_operand(TINYPY_VALUE_VM(value), value, TINYPY_FALSE, TINYPY_FALSE, out_value, out_error);
+
+    return converted;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_percent_next_argument(tinypy_vm_t *vm, tinypy_percent_arguments_t *arguments, tinypy_error_t **out_error) {

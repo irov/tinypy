@@ -4595,7 +4595,7 @@ static int32_t __test_text_heap_budget(void) {
     /* float() and complex() of a literal whose exact conversion runs out of
        heap raise MemoryError, as PyOS_string_to_double does, never the
        ValueError of a malformed literal. */
-    for (budget = 1024U * 1024U; budget <= 4U * 1024U * 1024U; budget *= 2U) {
+    for (budget = 1280U * 1024U; budget <= 5U * 1024U * 1024U; budget *= 2U) {
         test_heap_budget_outcome_e outcome;
         if (__test_heap_budget_run(artifacts, float_source, budget, &outcome) != 0) {
             return 1;
@@ -4609,6 +4609,50 @@ static int32_t __test_text_heap_budget(void) {
         }
         TEST_CHECK(outcome == TEST_HEAP_BUDGET_SUCCEEDED);
     }
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The computed-size storage of an array, from its constructors, copies,
+   repeats, conversions and growth, raises MemoryError once it does not fit
+   the rest of the heap budget, and every array the budget stopped half-way
+   gives its storage back. */
+static int32_t __test_array_heap_budget(void) {
+    static const char source[] =
+        "import array\n"
+        "data = 'abcd' * 40000\n"
+        "words = array.array('I', data)\n"
+        "kept = []\n"
+        "operations = (lambda: words * 3, lambda: words.tolist(), lambda: words.tostring(), lambda: words[::2],\n"
+        "              lambda: words + words, lambda: array.array('d', xrange(20000)), lambda: array.array('i', [7] * 30000),\n"
+        "              lambda: repr(words[:10000]), lambda: array.array('u', u'x' * 20000).tounicode(),\n"
+        "              lambda: words.extend(words), lambda: words.fromstring(data), lambda: words.fromlist([1] * 20000))\n"
+        "for operation in operations:\n"
+        "    try:\n"
+        "        kept.append(operation())\n"
+        "    except MemoryError:\n"
+        "        kept.append(None)\n"
+        "grown = array.array('h', [1])\n"
+        "try:\n"
+        "    while True:\n"
+        "        grown *= 2\n"
+        "except MemoryError:\n"
+        "    pass\n"
+        "assert len(grown) > 1\n";
+    tinypy_module_artifact_t artifacts[2];
+    size_t outcome_counts[3] = {0U, 0U, 0U};
+    size_t budget;
+
+    /* No host module is imported; the resolver finds nothing. */
+    (void)memset(artifacts, 0, sizeof(artifacts));
+    for (budget = 256U * 1024U; budget <= 8U * 1024U * 1024U; budget += budget / 8U) {
+        test_heap_budget_outcome_e outcome;
+        if (__test_heap_budget_run(artifacts, source, budget, &outcome) != 0) {
+            return 1;
+        }
+        outcome_counts[outcome] += 1U;
+    }
+    TEST_CHECK(outcome_counts[TEST_HEAP_BUDGET_MEMORY_ERROR] != 0U);
+    TEST_CHECK(outcome_counts[TEST_HEAP_BUDGET_SUCCEEDED] != 0U);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -7242,6 +7286,68 @@ static int32_t __test_host_hash_native_guard(void) {
     result = tinypy_exec_source(vm, unwind, sizeof(unwind) - 1U, "unwind.py", 9U, globals, NULL, &options, &error);
     TEST_CHECK(result != NULL && error == NULL);
     tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U && state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* object.__reduce_ex__ called by the host without running code imports
+   copy_reg as PyImport_Import does: through the __import__ of the
+   __builtin__ module, given the globals {'__builtins__': __builtin__}, and
+   with AttributeError once the module has none. */
+static int32_t __test_reduce_import_without_frame(void) {
+    static const char setup[] =
+        "import __builtin__\n"
+        "real_import = __builtin__.__import__\n"
+        "imported = []\n"
+        "def logging_import(name, *args):\n"
+        "    imported.append((name,) + args)\n"
+        "    return real_import(name, *args)\n"
+        "class Plain(object):\n"
+        "    pass\n"
+        "reduce_plain = Plain().__reduce_ex__\n"
+        "__builtin__.__import__ = logging_import\n";
+    static const char check[] =
+        "__builtin__.__import__ = real_import\n"
+        "assert [entry[0] for entry in imported] == ['copy_reg']\n"
+        "assert imported[0][1] is imported[0][2] and imported[0][1] == {'__builtins__': __builtin__}\n"
+        "assert imported[0][3:] == (['__doc__'], 0)\n"
+        "del __builtin__.__import__\n";
+    static const char restore[] = "__builtin__.__import__ = real_import\n";
+    test_allocator_state_t state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, setup, sizeof(setup) - 1U, "reduce.py", 9U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+
+    tinypy_value_t *reduce_plain = __test_global(globals, "reduce_plain");
+    tinypy_value_t *protocol = tinypy_integer_from_i64(vm, 0);
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &protocol, 1U);
+    result = tinypy_call(reduce_plain, args, NULL, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    result = tinypy_exec_source(vm, check, sizeof(check) - 1U, "reduce.py", 9U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    result = tinypy_call(reduce_plain, args, NULL, &error);
+    TEST_CHECK(result == NULL && __test_attribute_error_message(vm, error, TINYPY_ERROR_ATTRIBUTE, "'module' object has no attribute '__import__'") != 0);
+    error = NULL;
+    result = tinypy_exec_source(vm, restore, sizeof(restore) - 1U, "reduce.py", 9U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_release(args);
+    tinypy_release(protocol);
     tinypy_dict_clear(globals);
     tinypy_release(globals);
     tinypy_vm_destroy(vm);
@@ -10359,6 +10465,137 @@ static int32_t __test_native_slot_dispatch(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The questions about the slots of a native instance follow the slots: the
+   slot of object that a Python class holds overrides the callback of the
+   spec its host native base replaced it with, a Python class keeps the
+   mapping callback it copied after an update switches its base to a
+   sequence one, sq_item and sq_length make a host native type a sequence
+   for apply(), map() and the offsets of __getslice__, and a host native
+   subtype that lacks a callback of its base reads the attribute of its
+   nearest base that is no host native type, whatever its bases are. */
+static int32_t __test_native_special_lookups(void) {
+    static const char base_source[] =
+        "class Counted(object):\n"
+        "    def __len__(self): return 99\n";
+    static const char source[] =
+        "class Generic(Hooks):\n"
+        "    __getattribute__ = object.__getattribute__\n"
+        "    __setattr__ = object.__setattr__\n"
+        "    __delattr__ = object.__delattr__\n"
+        "    __repr__ = object.__repr__\n"
+        "    __hash__ = object.__hash__\n"
+        "class Fallback(Hooks):\n"
+        "    __getattribute__ = object.__getattribute__\n"
+        "    def __getattr__(self, name): return 'fallback:' + name\n"
+        "class Kept(Hooks):\n"
+        "    pass\n"
+        "generic = Generic()\n"
+        "expect_error(AttributeError, lambda: generic.x, \"'Generic' object has no attribute 'x'\")\n"
+        "generic.y = 1\n"
+        "check(generic.__dict__, {'y': 1})\n"
+        "del generic.y\n"
+        "check((generic.__dict__, repr(generic)[:25], hash(generic) == object.__hash__(generic), log), ({}, '<contract.Generic object ', True, []))\n"
+        "check(Fallback().x, 'fallback:x')\n"
+        "kept = Kept()\n"
+        "kept.y = 1\n"
+        "del kept.y\n"
+        "check((kept.x, repr(kept), hash(kept), log), (('attribute', 'hooks', 'x'), 'hooks', 1000, [('set', 'hooks', 'y'), ('delete', 'hooks', 'y')]))\n"
+        "class KeptMapping(Mapping):\n"
+        "    pass\n"
+        "kept_mapping = KeptMapping()\n"
+        "def collect(*args): return args\n"
+        "class SubSequence(Sequence):\n"
+        "    pass\n"
+        "check((apply(collect, Sequence()), apply(collect, SubSequence())), ((0, 10, 20), (0, 10, 20)))\n"
+        "class Hint(object):\n"
+        "    def __len__(self): raise RuntimeError('hint')\n"
+        "    def __iter__(self): return iter([1, 2])\n"
+        "expect_error(RuntimeError, lambda: map(None, Hint(), Sequence()), 'hint')\n"
+        "class Sliced(Sequence):\n"
+        "    def __getslice__(self, low, high): return (low, high)\n"
+        "check((Sliced()[-1:2], Sliced()[-2:-1]), ((2, 2), (1, 2)))\n"
+        "expect_error(TypeError, lambda: len(Thin()), \"object of type 'Thin' has no len()\")\n"
+        "check(len(Under()), 99)\n";
+    static const char update_source[] =
+        "check((kept_mapping['a'], '%(a)s' % kept_mapping, eval('a', {}, kept_mapping)), (('item', 'map', 'a'), \"('item', 'map', 'a')\", ('item', 'map', 'a')))\n";
+    test_allocator_state_t allocator_state;
+    test_native_wrapper_state_t states[2];
+    tinypy_native_type_spec_t spec;
+    tinypy_native_type_spec_t mapping_spec;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *name_key = tinypy_string_from_bytes(vm, "__name__", 8U);
+    tinypy_value_t *module_name = tinypy_string_from_bytes(vm, "contract", 8U);
+    tinypy_dict_set(globals, name_key, module_name);
+    tinypy_release(module_name);
+    tinypy_release(name_key);
+    tinypy_value_t *log = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *log_key = tinypy_string_from_bytes(vm, "log", 3U);
+    tinypy_dict_set(globals, log_key, log);
+    tinypy_release(log_key);
+    states[0].vm = vm;
+    states[0].log = log;
+    states[0].tag = "hooks";
+    states[1].vm = vm;
+    states[1].log = log;
+    states[1].tag = "map";
+    TEST_CHECK(__test_native_contract_run(vm, globals, base_source) == 0);
+    tinypy_value_t *counted_key = tinypy_string_from_bytes(vm, "Counted", 7U);
+    tinypy_type_t *counted = tinypy_value_as_type(tinypy_dict_get_optional(globals, counted_key));
+    tinypy_release(counted_key);
+
+    tinypy_native_type_spec_init(&spec);
+    spec.user_data = &states[0];
+    spec.get_attribute = __test_native_wrapper_get_attribute;
+    spec.set_attribute = __test_native_wrapper_set_attribute;
+    spec.repr = __test_native_wrapper_repr;
+    spec.hash = __test_native_wrapper_hash;
+    tinypy_type_t *hooks = __test_native_dispatch_type(globals, "Hooks", NULL, &spec);
+    tinypy_native_type_spec_init(&mapping_spec);
+    mapping_spec.user_data = &states[1];
+    mapping_spec.mapping_get = __test_native_wrapper_get_item;
+    tinypy_type_t *mapping = __test_native_dispatch_type(globals, "Mapping", NULL, &mapping_spec);
+    tinypy_native_type_spec_init(&spec);
+    spec.sequence_get = __test_native_slot_item;
+    spec.sequence_length = __test_native_contract_sequence_length;
+    tinypy_type_t *sequence = __test_native_dispatch_type(globals, "Sequence", NULL, &spec);
+    tinypy_native_type_spec_init(&spec);
+    tinypy_type_t *thin = __test_native_dispatch_type(globals, "Thin", sequence, &spec);
+    spec.sequence_length = __test_native_wrapper_length;
+    tinypy_type_t *mixed = __test_native_dispatch_type(globals, "Mixed", counted, &spec);
+    spec.sequence_length = NULL;
+    tinypy_type_t *under = __test_native_dispatch_type(globals, "Under", mixed, &spec);
+    TEST_CHECK(hooks != NULL && mapping != NULL && sequence != NULL && thin != NULL && mixed != NULL && under != NULL);
+    TEST_CHECK(__test_native_contract_run(vm, globals, source) == 0);
+
+    /* The Python class keeps the mapping callback it copied, which an
+       update replaces with a sequence one. */
+    mapping_spec.mapping_get = NULL;
+    mapping_spec.sequence_get = __test_native_wrapper_add;
+    TEST_CHECK(tinypy_native_type_update_spec(mapping, &mapping_spec, &error) != 0 && error == NULL);
+    TEST_CHECK(__test_native_contract_run(vm, globals, update_source) == 0);
+
+    tinypy_release(log);
+    tinypy_type_t *releases[] = {under, mixed, thin, sequence, mapping, hooks};
+    for (size_t index = 0U; index < sizeof(releases) / sizeof(releases[0]); ++index) {
+        tinypy_value_t *type_value = tinypy_type_as_value(releases[index]);
+
+        tinypy_release(type_value);
+    }
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 /* A type change withdraws the versions of the type and of its subclasses.
    The builtin types derived from a builtin type are no registered
    subclasses and follow it all the same, and once the versions run out the
@@ -11501,6 +11738,10 @@ int main(int argc, char **argv) {
         int result = __test_host_hash_native_guard();
         return result;
     }
+    if (strcmp(argv[1], "reduce_import_without_frame") == 0) {
+        int result = __test_reduce_import_without_frame();
+        return result;
+    }
     if (strcmp(argv[1], "class_subclass_native_guard") == 0) {
         int result = __test_class_subclass_native_guard();
         return result;
@@ -11564,6 +11805,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "text_heap_budget") == 0) {
         int text_heap_budget = __test_text_heap_budget();
         return text_heap_budget;
+    }
+    if (strcmp(argv[1], "array_heap_budget") == 0) {
+        int array_heap_budget = __test_array_heap_budget();
+        return array_heap_budget;
     }
     if (strcmp(argv[1], "marshal_load_memory") == 0) {
         int marshal_load_memory = __test_marshal_load_memory();
@@ -11667,6 +11912,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "native_slot_wrappers") == 0) {
         int result = __test_native_slot_wrappers();
+        return result;
+    }
+    if (strcmp(argv[1], "native_special_lookups") == 0) {
+        int result = __test_native_special_lookups();
         return result;
     }
     if (strcmp(argv[1], "type_versions") == 0) {

@@ -1505,7 +1505,9 @@ static int32_t __test_runtime_interrupt_polling(void) {
 /* The quadratic long kernels poll the host as x_mul, x_divrem and
    long_format check signals: one product, division, modular power or
    decimal conversion is interrupted at the first poll after the frame
-   entry, while the constant folds of the compiler do not poll. */
+   entry, a product whose smaller factor is below the Karatsuba cutoffs
+   polls on along a long larger factor, and the constant folds of the
+   compiler do not poll. */
 static int32_t __test_long_kernel_interrupt_polling(void) {
     static const char *const sources[] = {
         "value = 7 ** 30000\nvalue * value\n",
@@ -1516,6 +1518,8 @@ static int32_t __test_long_kernel_interrupt_polling(void) {
         "str(7 ** 30000)\n",
         "value = 7 ** 30000\n'%d' % value\n"
     };
+    static const char lopsided_setup[] = "larger = 1 << 3000000\nsmaller = 7 ** 600\n";
+    static const char lopsided[] = "larger * smaller\n";
     static const char folded[] = "value = 7 ** 60000\n";
     test_allocator_state_t state = {0U, 0U};
     test_interrupt_host_t interrupt_host = {0U, 2U};
@@ -1554,8 +1558,21 @@ static int32_t __test_long_kernel_interrupt_polling(void) {
         tinypy_error_release(error);
         error = NULL;
     }
+    interrupt_host.interrupt_after = SIZE_MAX;
+    tinypy_value_t *result = tinypy_exec_source(vm, lopsided_setup, sizeof(lopsided_setup) - 1U, "interrupt.py", 12U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    tinypy_release(result);
     interrupt_host.polls = 0U;
-    tinypy_value_t *result = tinypy_exec_source(vm, folded, sizeof(folded) - 1U, "interrupt.py", 12U, globals, NULL, &options, &error);
+    interrupt_host.interrupt_after = 3U;
+    result = tinypy_exec_source(vm, lopsided, sizeof(lopsided) - 1U, "interrupt.py", 12U, globals, NULL, &options, &error);
+    assert(result == NULL);
+    assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+    assert(interrupt_host.polls == 3U);
+    tinypy_error_release(error);
+    error = NULL;
+    interrupt_host.polls = 0U;
+    interrupt_host.interrupt_after = 2U;
+    result = tinypy_exec_source(vm, folded, sizeof(folded) - 1U, "interrupt.py", 12U, globals, NULL, &options, &error);
     assert(result != NULL && error == NULL);
     assert(interrupt_host.polls == 1U);
     tinypy_release(result);

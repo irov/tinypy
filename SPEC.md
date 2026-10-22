@@ -123,6 +123,11 @@ Runtime allocations размером до 512 bytes обслуживает VM-lo
   последней в этом порядке: как в CPython 3.9, одна полностью свободная arena
   остаётся для повторного использования и освобождается не позже уничтожения
   VM, а при заданном `max_heap_bytes` не остаётся ни одной;
+- опустевший pool, единственный используемый pool своего size class, остаётся
+  в использовании (вместе с ним и его arena): иначе цикл, который выделяет и
+  освобождает block класса, чьи остальные pools заполнены, брал бы pool из
+  arena и возвращал его на каждом проходе; такой pool возвращается в arena не
+  позже уничтожения VM, а при заданном `max_heap_bytes` сразу;
 - allocations больше 512 bytes передаются host allocator напрямую.
 
 Pool state принадлежит конкретной `tinypy_vm_t`; process globals, TLS и locks
@@ -617,7 +622,7 @@ type, отвечает сам hook.
 Python-visible bundled surface намеренно ограничен memory-only runtime:
 
 - встроены `__builtin__`, `sys`, `exceptions`, `__future__`, `_codecs`,
-  `_functools`, `_weakref`, `_struct`, `_sre` и `copy_reg`;
+  `_functools`, `_weakref`, `_struct`, `_sre`, `array` и `copy_reg`;
 - `_codecs` гарантирует ASCII, Latin-1, UTF-8 и transform codec `hex`; остальные
   encodings должен предоставить host search function;
 - native функции `copy_reg` и `hex_encode`/`hex_decode`, которые в CPython
@@ -628,8 +633,10 @@ Python-visible bundled surface намеренно ограничен memory-only
   аргументам через те же протоколы атрибутов, сравнений, `int()` и таблиц,
   что и `copy_reg.py`, без собственных проверок типов (`_reduce_ex`
   проверяет `proto < 2` как `assert`); `object.__reduce_ex__` импортирует
-  `copy_reg`, как `PyImport_Import`, через `__import__` builtins
-  выполняемого кода;
+  `copy_reg`, как `PyImport_Import`, через `__import__` из `__builtins__`
+  globals выполняемого кода, прочитанных в момент вызова (item словаря или
+  атрибут иного объекта), а без выполняемого кода — модуля `__builtin__` с
+  globals `{'__builtins__': __builtin__}`;
 - `_struct` гарантирует формат `d` с repeat counts и byte-order prefixes, а
   также `Struct`, `pack`, `unpack`, `pack_into` и `unpack_from`; `_struct.error`
   является `ValueError`. `Struct` хранит compiled format в native payload,
@@ -640,7 +647,8 @@ Python-visible bundled surface намеренно ограничен memory-only
 - `_sre` исполняет Python 2.7 regex programs; `_sre.compile` проверяет program
   как `_validate` Python 2.7 и отклоняет любую другую с
   `RuntimeError("invalid SRE code")`; разбор replacement templates и
-  `Match.expand` используют `re._subx` и `re._expand`, предоставленные host.
+  `Match.expand` используют `re._subx` и `re._expand`, предоставленные host;
+  `re` импортируется так же, как `copy_reg` для `object.__reduce_ex__`.
   `groupindex` и `indexgroup` могут быть любыми объектами: имя группы ищется
   subscription `groupindex`, `groupdict` перечисляет имена через его `keys()`,
   а `lastgroup` читает `indexgroup` как sequence.
@@ -650,6 +658,44 @@ Python-visible bundled surface намеренно ограничен memory-only
   концом буфера. Program из 100 групп может ставить marks 200 и 201, а `keys()`
   `groupindex` может вернуть любой iterable; CPython 2.7 пишет такие marks за
   своим массивом и читает результат `keys()` как list;
+- `array` воспроизводит модуль `array` CPython 2.7.18: тип `array.array`
+  (он же `ArrayType`) с typecodes `c b B u h H i I l L f d`, его
+  конструктор, методы, протоколы последовательности, сравнения и
+  итерации, `__reduce__` и сообщения об ошибках CPython. Размеры элементов
+  на всех targets совпадают с LP64-сборкой CPython 2.7 с UCS-4 unicode:
+  `c`, `b`, `B` занимают 1 байт, `h`, `H` 2, `i`, `I`, `f` 4, `l`, `L`,
+  `d` 8 и `u` 4 (code point, как в модели unicode tinypy), поэтому
+  `itemsize`, `tostring`/`fromstring` и `buffer()` одинаковы на 32- и
+  64-битных hosts. Элементы хранятся в host byte order, как в CPython;
+  `byteswap` переставляет их байты. Элемент `u` больше U+10FFFF, который
+  могут записать `byteswap` или `fromstring`, не представим в unicode
+  tinypy: его чтение (`a[i]`, итерация, `tolist`, `tounicode`, `repr`,
+  сравнение) даёт `ValueError`, а его байты остаются доступны через
+  `tostring` и `buffer()`; CPython 2.7 хранит такой элемент как символ.
+  Memory-only runtime не имеет file objects, поэтому `fromfile`/`read` и
+  `tofile`/`write` разбирают аргументы как CPython и затем всегда
+  отвергают файл `TypeError`. Array предоставляет старый buffer protocol:
+  `buffer(a)` читает текущие элементы при каждом обращении, так что resize
+  массива не оставляет висячих указателей; `_struct` (`unpack`,
+  `unpack_from` и запись `pack_into`), decode-функции `_codecs` и
+  `fromstring` принимают array, а character buffer, `memoryview` и
+  операции `bytearray`, требующие нового buffer protocol, его не
+  принимают, как в CPython. Пока вызов `_struct` держит элементы array,
+  resize этого array отвергается `BufferError("cannot resize an array that
+  is exporting buffers")`; CPython 2.7 в этом случае пишет и читает
+  освобождённую память. Conversion callbacks (`__int__`, `__float__`,
+  `__index__`, `__eq__`), меняющие размер того же массива, не выходят за
+  его элементы: присваивание по индексу, которого массив больше не имеет,
+  даёт `IndexError`, `fromlist` конвертирует элементы до роста массива, а
+  `fromstring` из view самого массива читает его элементы после resize;
+  CPython 2.7 здесь обращается к освобождённой или неинициализированной
+  памяти, и результаты могут отличаться. Как `ins1`, `append`, `insert`,
+  `extend` и конструктор из iterable конвертируют элемент дважды.
+  Размеры, вычисленные из числа элементов, проверяются на переполнение и
+  на 32-битных hosts, а память элементов выделяется с учётом
+  `max_heap_bytes` и при отказе даёт `MemoryError`. `arrayiterator`, как в
+  CPython, держит массив и после исчерпания видит добавленные элементы.
+  `_sre` не принимает array как subject;
 - filesystem-backed standard library, source-encoding discovery, process
   metadata, environment-dependent `sys` paths и standard I/O input не
   эмулируются. Их предоставляет host либо импортированный memory artifact.
@@ -727,7 +773,10 @@ Host native type вызывает только callbacks собственной 
 `tinypy_native_type_update_spec` пересчитывает slots по тому же правилу и
 возвращает generic поведение удалённому callback; Python-подклассы, созданные
 раньше, сохраняют скопированные при создании callbacks, а host native подтипы
-сохраняют свою spec. Как `add_operators` для C-типа, host native type
+сохраняют свою spec; special methods Python-подкласса остаются wrappers,
+которые публикует тип, так что имя удалённого callback пропадает и у него,
+хотя скопированный slot по-прежнему вызывает этот callback. Как
+`add_operators` для C-типа, host native type
 публикует в своём словаре slot wrapper для каждого callback своей spec под
 именем его special method: `__setattr__` и `__delattr__` для `set_attribute`,
 `__lt__`…`__ge__` для `compare`, `__radd__` и `__iadd__` для reflected и
@@ -743,6 +792,9 @@ callback spec опубликовавшего его типа, так что Pyth
 экземпляром читают wrapper, найденный под собственным именем, как slot его
 типа, если тип вызывает тот же callback с той же user data — это сам тип или
 Python-подкласс, скопировавший его spec; такой slot ничего не переопределяет.
+Python-подкласс, чья скопированная spec задаёт callback этого slot, сохраняет
+его и после того, как обновление spec базы заменило callback: wrapper базы
+читается как его slot, в том числе для `%` и `eval`/`exec`.
 Wrapper host native базы, callback которой тип (или host native type, чью spec
 скопировал Python-класс) не вызывает, читается как атрибут ближайшей базы
 этого типа, не являющейся host native type. Любой другой wrapper — под другим
@@ -753,7 +805,11 @@ Wrapper host native базы, callback которой тип (или host native
 получает каждое присваивание атрибута раньше дескрипторов типа и каждое
 удаление с NULL значением, как `mapping_set` получает удаление элемента, а
 `object.__setattr__` и `object.__delattr__` остаются generic и callback не
-вызывают. Базы `tinypy_native_type_new` сохраняют раскладку
+вызывают. Атрибут `object`, который держит словарь Python-подкласса или его
+Python-базы, например `__getattribute__ = object.__getattribute__`,
+переопределяет slot, который host native база заменила callback своей spec:
+как `update_one_slot`, slot снова становится slot `object`, а с `__getattr__`
+generic lookup выполняется раньше hook. Базы `tinypy_native_type_new` сохраняют раскладку
 `object` или host native type; база со встроенной раскладкой, например `list`
 или исключение, отвергается с TypeError «native type base '…' has an
 incompatible instance layout». Присваивание `__class__` и `__bases__` не
@@ -764,6 +820,9 @@ spec и даёт «object layout differs». Callback `construct` служит с
 итерируется по индексам до `IndexError` через `sequence_get`, даже при наличии
 `mapping_get`, как тип CPython с `sq_item`; `in` без `contains` использует эту
 итерацию, а `reversed()` принимает тип с `sequence_get` и `sequence_length`.
+Так же `sequence_get` служит `sq_item` для `apply()`, а `sequence_length` —
+`sq_length` для `map()` и отрицательных границ `__getslice__`,
+`__setslice__` и `__delslice__` Python-подкласса.
 Результат `hash`, равный -1, читается как -2, как у `__hash__`; ошибку
 callback сообщает через `out_error` или только через ошибку VM, и slot тогда
 передаёт её через `out_error`. Итерация по индексам, как `PySequence_GetItem`,

@@ -1156,6 +1156,104 @@ tinypy_value_t *tinypy_import_module_key(tinypy_value_t *internal_name_key, tiny
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyObject_GetItem of a dictionary, which an exact one answers without the
+   item protocol. */
+static tinypy_value_t *__tinypy_import_dict_item(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *key, tinypy_error_t **out_error) {
+    tinypy_value_t *value;
+
+    if (dict->type != &vm->types[TINYPY_VALUE_DICT]) {
+        value = tinypy_get_item(dict, key, out_error);
+        return value;
+    }
+    if (tinypy_internal_dict_get_optional_checked(vm, dict, key, &value, out_error) == 0) {
+        return NULL;
+    }
+    if (value == NULL) {
+        tinypy_internal_exception_raise_key_error(vm, key, out_error);
+        return NULL;
+    }
+    return TINYPY_RET(value);
+}
+//////////////////////////////////////////////////////////////////////////
+/* The __import__ of builtins as PyImport_Import reads it: the item of a
+   dictionary, whose failure is KeyError('__import__'), or the attribute of
+   anything else, which a plain module finds in its dictionary as the
+   generic lookup does. */
+static tinypy_value_t *__tinypy_import_builtins_importer(tinypy_vm_t *vm, tinypy_value_t *builtins, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(builtins) == TINYPY_VALUE_DICT) {
+        tinypy_value_t *item = __tinypy_import_dict_item(vm, builtins, vm->internal_import_key, out_error);
+
+        if (item == NULL) {
+            tinypy_internal_exception_raise_key_error(vm, vm->internal_import_key, out_error);
+        }
+        return item;
+    }
+    tinypy_value_t *module_dict = builtins->type == &vm->types[TINYPY_VALUE_MODULE] ? TINYPY_MODULE_OBJECT(builtins)->dict : NULL;
+    tinypy_value_t *found = module_dict != NULL ? tinypy_internal_dict_get_optional_suppressed(vm, module_dict, vm->internal_import_key) : NULL;
+
+    if (found != NULL) {
+        return TINYPY_RET(found);
+    }
+    tinypy_value_t *attribute = tinypy_object_get_attr_value(builtins, vm->internal_import_key, out_error);
+    return attribute;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The call of an import hook, __import__(name, globals, globals,
+   ['__doc__'], 0), with the globals of the running code or, without any,
+   {'__builtins__': builtins}. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_import_call_hook(tinypy_vm_t *vm, tinypy_value_t *importer, tinypy_value_t *name, tinypy_frame_object_t *frame, tinypy_value_t *builtins, tinypy_error_t **out_error) {
+    tinypy_value_t *globals = frame != NULL ? TINYPY_RET(frame->globals) : tinypy_internal_dict_new_checked(vm, out_error);
+
+    if (globals == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *module = NULL;
+    tinypy_bool_t prepared = frame != NULL ? TINYPY_TRUE : tinypy_internal_dict_set_checked(vm, globals, vm->internal_builtins_key, builtins, out_error);
+    tinypy_value_t *fromlist = prepared != 0 ? tinypy_internal_list_from_items_checked(vm, &vm->internal_special_doc_key, 1U, out_error) : NULL;
+
+    if (fromlist != NULL) {
+        tinypy_value_t *level = tinypy_integer_from_i64(vm, INT64_C(0));
+        tinypy_value_t *import_items[] = {name, globals, globals, fromlist, level};
+        tinypy_value_t *import_args = tinypy_internal_tuple_from_items_checked(vm, import_items, 5U, out_error);
+
+        TINYPY_DECREF(level);
+        TINYPY_DECREF(fromlist);
+        if (import_args != NULL) {
+            module = tinypy_call(importer, import_args, NULL, out_error);
+            TINYPY_DECREF(import_args);
+        }
+    }
+    TINYPY_DECREF(globals);
+    return module;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_import_module_hooked(tinypy_value_t *internal_name_key, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(internal_name_key);
+    tinypy_frame_object_t *frame = vm->current_frame;
+    tinypy_value_t *builtins;
+
+    if (frame != NULL) {
+        builtins = __tinypy_import_dict_item(vm, frame->globals, vm->internal_builtins_key, out_error);
+    }
+    else {
+        builtins = tinypy_import_module_key(vm->internal_builtin_module_name, NULL, NULL, INT32_C(0), out_error);
+    }
+    if (builtins == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *module = NULL;
+    tinypy_value_t *importer = __tinypy_import_builtins_importer(vm, builtins, out_error);
+
+    if (importer != NULL) {
+        module = tinypy_internal_builtin_is_import(importer) != TINYPY_FALSE
+                     ? tinypy_import_module_key(internal_name_key, NULL, NULL, INT32_C(0), out_error)
+                     : __tinypy_import_call_hook(vm, importer, internal_name_key, frame, builtins, out_error);
+        TINYPY_DECREF(importer);
+    }
+    TINYPY_DECREF(builtins);
+    return module;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_reload_module(tinypy_value_t *module, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(module);
     tinypy_value_t *name_value;

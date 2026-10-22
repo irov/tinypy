@@ -575,9 +575,22 @@ static tinypy_value_t *__tinypy_exception_owner_string(tinypy_value_t *value, co
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_exception_getitem_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+/* BaseException_getitem: PySequence_GetItem of the arguments, a tuple, which
+   counts a negative index from their end once more. */
+tinypy_value_t *tinypy_internal_exception_get_item(tinypy_value_t *exception, int64_t index, tinypy_error_t **out_error) {
+    tinypy_value_t *exception_args = __tinypy_exception_payload(exception)->args;
+    int64_t size = (int64_t)TINYPY_TUPLE_SIZE(exception_args);
+    int64_t position = index < 0 ? index + size : index;
 
+    if (position < 0 || position >= size) {
+        tinypy_internal_make_vm_error(TINYPY_VALUE_VM(exception), TINYPY_ERROR_INDEX, "tuple index out of range", out_error);
+        return NULL;
+    }
+    tinypy_value_t *item = TINYPY_RET(TINYPY_TUPLE_GET(exception_args, (size_t)position));
+    return item;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_exception_getitem_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     (void)user_data;
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
         return NULL;
@@ -592,11 +605,7 @@ static tinypy_value_t *__tinypy_exception_getitem_method(tinypy_value_t *functio
     if (tinypy_internal_item_sequence_index(self, &index, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *exception_args = __tinypy_exception_payload(self)->args;
-    tinypy_value_t *position = tinypy_integer_from_i64(vm, index);
-    tinypy_value_t *result = tinypy_internal_get_item_builtin(exception_args, position, out_error);
-
-    TINYPY_DECREF(position);
+    tinypy_value_t *result = tinypy_internal_exception_get_item(self, index, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1437,6 +1446,16 @@ void tinypy_internal_exception_clear_raised(tinypy_vm_t *vm) {
     if (traceback != NULL) {
         TINYPY_DECREF(traceback);
     }
+}
+//////////////////////////////////////////////////////////////////////////
+/* Clears the error of a PyDict_GetItem probe that started with no exception
+   pending, so the error was raised during the probe: raised_epoch steps back
+   over that raise, as PyDict_GetItem restores the current exception that an
+   error kept pending aside stands for. An exception that a key comparison
+   raised and caught during the probe still moves the epoch. */
+void tinypy_internal_exception_clear_probe_raised(tinypy_vm_t *vm) {
+    tinypy_internal_exception_clear_raised(vm);
+    vm->raised_epoch -= 1U;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_clear_handled(tinypy_vm_t *vm) {

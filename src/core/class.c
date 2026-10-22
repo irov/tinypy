@@ -15,7 +15,7 @@ static tinypy_value_t *__tinypy_class_dict_probe(tinypy_vm_t *vm, tinypy_value_t
     }
     tinypy_value_t *value = tinypy_internal_dict_get_optional(vm, dict, key);
     if (value == NULL && vm->raised_type != NULL) {
-        tinypy_internal_exception_clear_raised(vm);
+        tinypy_internal_exception_clear_probe_raised(vm);
     }
     return value;
 }

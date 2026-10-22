@@ -363,6 +363,16 @@ static tinypy_bool_t __tinypy_struct_buffer_acquire(tinypy_vm_t *vm, tinypy_valu
     tinypy_value_t *bytes_value = value;
 
     (void)memset(buffer, 0, sizeof(*buffer));
+    /* An array exposes its items through the old buffer protocol, which the
+       s* and w* conversions read as well; its export keeps them in place
+       while the conversions of the items run Python code. */
+    if (tinypy_internal_array_check(value) != TINYPY_FALSE) {
+        buffer->bytes = tinypy_internal_array_view(value, &buffer->size);
+        buffer->owner = TINYPY_RET(value);
+        buffer->export_owner = value;
+        tinypy_internal_array_export(value, 1);
+        return TINYPY_TRUE;
+    }
     if (writable != 0 && kind != TINYPY_VALUE_BYTEARRAY && (tinypy_internal_memoryview_check(value) == 0 || tinypy_internal_memoryview_is_readonly(value) != 0)) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("argument must be read-write buffer, not "),
@@ -398,8 +408,11 @@ static tinypy_bool_t __tinypy_struct_buffer_acquire(tinypy_vm_t *vm, tinypy_valu
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_struct_buffer_release(tinypy_struct_buffer_t *buffer) {
-    if (buffer->export_owner != NULL) {
+    if (buffer->export_owner != NULL && TINYPY_VALUE_KIND(buffer->export_owner) == TINYPY_VALUE_BYTEARRAY) {
         TINYPY_BYTEARRAY_OBJECT(buffer->export_owner)->exports -= 1U;
+    }
+    else if (buffer->export_owner != NULL) {
+        tinypy_internal_array_export(buffer->export_owner, -1);
     }
     if (buffer->encoded != NULL) {
         TINYPY_DECREF(buffer->encoded);

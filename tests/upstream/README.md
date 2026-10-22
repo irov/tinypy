@@ -26,6 +26,11 @@ Sources:
   readiness/physical numeric-descriptor cases and 38 weakref protocol cases.
   The twelfth pass adds 56 cases: 24 bytearray construction/hint/state,
   15 Unicode translation/codec callback and 17 direct descriptor call cases.
+  The fifteenth pass adds 16 array module cases, among them the BIGCHARSET
+  word array that `sre_compile._bytes_to_codes` builds. CPython's
+  `Lib/test/test_array.py` is not vendored: it imports `cStringIO`,
+  `cPickle`, `warnings` and `weakref` at module level and reads and writes
+  files, which the memory-only runtime does not provide.
   Their vectors and expectations are validated on CPython 2.7.18.
 - CPython license and copyright notices: `LICENSES/PSF-2.0.txt`
   relative to the repository root, or

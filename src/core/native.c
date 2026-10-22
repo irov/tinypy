@@ -1727,10 +1727,40 @@ tinypy_value_t *tinypy_internal_native_slot_wrapper_call(tinypy_value_t *functio
 static const tinypy_type_t *__tinypy_internal_native_generic_base(const tinypy_type_t *type) {
     const tinypy_type_t *generic = type->base_type;
 
+    if ((type->flags & TINYPY_TYPE_FLAG_NATIVE_OBJECT_BASE) != 0U) {
+        return &type->vm->types[TINYPY_VALUE_INSTANCE];
+    }
     while (tinypy_internal_type_is_host_native(generic) != 0) {
         generic = generic->base_type;
     }
     return generic;
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_native_type_bases_updated(tinypy_type_t *type) {
+    type->flags &= ~TINYPY_TYPE_FLAG_NATIVE_OBJECT_BASE;
+    if (__tinypy_internal_native_generic_base(type) == &type->vm->types[TINYPY_VALUE_INSTANCE]) {
+        type->flags |= TINYPY_TYPE_FLAG_NATIVE_OBJECT_BASE;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* tinypy_type_is_subtype for the host native type that publishes a slot
+   wrapper: an MRO lists it after the types that derive from it, so the scan
+   starts at the end, near which the bases of a deep hierarchy sit. */
+static tinypy_bool_t __tinypy_internal_native_owner_applies(const tinypy_type_t *type, const tinypy_type_t *owner) {
+    if (type->mro == NULL) {
+        tinypy_bool_t subtype = tinypy_type_is_subtype(type, owner);
+        return subtype;
+    }
+    tinypy_value_t *const *mro_items = TINYPY_TUPLE_ITEMS(type->mro);
+    size_t index = TINYPY_TUPLE_SIZE(type->mro);
+
+    while (index != 0U) {
+        --index;
+        if (mro_items[index] == &owner->base.base) {
+            return TINYPY_TRUE;
+        }
+    }
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Whether the instances of type run the callback of the spec of owner that
@@ -1745,21 +1775,21 @@ static tinypy_bool_t __tinypy_internal_native_wrapper_dispatched(const tinypy_ty
 /* update_one_slot reads a slot wrapper found under its own name that
    applies to the value as the slot it wraps. The slot wrapper of a callback
    that the type of the value dispatches stands for its own slot, which
-   nothing overrides. The static base of the type, the type itself or the
-   host native type a Python class copied its spec from, dispatches no other
-   callback of its host native bases: their slot wrappers read as the
-   attribute of its nearest base that is no host native type. Any other
-   slot wrapper, as one of another base of a Python class or one stored
-   under another name, is an attribute that the generic slots call. */
-TINYPY_NOINLINE tinypy_value_t *tinypy_internal_native_special_attribute(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *key, tinypy_bool_t *out_slot) {
-    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
-
+   nothing overrides, and so does one of a slot that a Python class keeps
+   with the callback it copied from its static base, the host native type
+   it copied its spec from, after that callback changed. The static base,
+   the type itself or that host native type, dispatches no other callback
+   of its host native bases: their slot wrappers read as the attribute of
+   its nearest base that is no host native type. Any other slot wrapper, as
+   one of another base of a Python class or one stored under another name,
+   is an attribute that the generic slots call. */
+TINYPY_NOINLINE tinypy_value_t *tinypy_internal_native_special_attribute(tinypy_value_t *value, tinypy_value_t *attribute, tinypy_value_t *key, tinypy_bool_t *out_slot) {
     *out_slot = TINYPY_FALSE;
-    if (attribute == NULL || attribute->type != vm->native_wrapper_descriptor_type || TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->items_callback != tinypy_internal_native_slot_wrapper_call || TINYPY_NAME_EQ(TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->name, key) == 0) {
+    if (TINYPY_NAME_EQ(TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->name, key) == 0) {
         return attribute;
     }
     tinypy_type_t *owner = tinypy_internal_native_function_owner(attribute);
-    if (owner == NULL || (owner != value->type && owner != value->type->base_type && tinypy_type_is_subtype(value->type, owner) == 0)) {
+    if (owner == NULL || (owner != value->type && owner != value->type->base_type && __tinypy_internal_native_owner_applies(value->type, owner) == 0)) {
         return attribute;
     }
     const tinypy_native_slot_wrapper_t *wrapper = &__tinypy_native_slot_wrappers[(uintptr_t)TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->user_data];
@@ -1768,12 +1798,32 @@ TINYPY_NOINLINE tinypy_value_t *tinypy_internal_native_special_attribute(tinypy_
         return attribute;
     }
     const tinypy_type_t *static_base = tinypy_internal_type_static_base(value->type);
-    if (tinypy_type_is_subtype(static_base, owner) == 0) {
-        return attribute;
+    if (static_base != value->type) {
+        if (__tinypy_internal_native_owner_applies(static_base, owner) == 0) {
+            return attribute;
+        }
+        if (__tinypy_internal_native_wrapper_callback(&value->type->native_spec, wrapper) != NULL) {
+            *out_slot = TINYPY_TRUE;
+            return attribute;
+        }
     }
     const tinypy_type_t *generic = __tinypy_internal_native_generic_base(static_base);
-    tinypy_value_t *generic_attribute = tinypy_internal_type_lookup_key(vm, generic, key);
+    tinypy_value_t *generic_attribute = tinypy_internal_type_lookup_key(generic->vm, generic, key);
     return generic_attribute;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_native_type_wraps_key(const tinypy_type_t *type, tinypy_value_t *key) {
+    size_t wrapper_count = sizeof(__tinypy_native_slot_wrappers) / sizeof(__tinypy_native_slot_wrappers[0]);
+
+    for (size_t index = 0U; index < wrapper_count; ++index) {
+        const tinypy_native_slot_wrapper_t *wrapper = &__tinypy_native_slot_wrappers[index];
+        tinypy_value_t *name = *(tinypy_value_t **)((uint8_t *)type->vm + wrapper->name_offset);
+
+        if (TINYPY_NAME_EQ(key, name) != 0 && __tinypy_internal_native_wrapper_callback(&type->native_spec, wrapper) != NULL) {
+            return TINYPY_TRUE;
+        }
+    }
+    return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The slot wrappers that a spec publishes, one bit per entry: those of the
@@ -1997,6 +2047,7 @@ tinypy_type_t *tinypy_internal_native_type_new_key(tinypy_value_t *name, const t
     type->release_references = tinypy_internal_native_instance_release_references;
     type->traverse_references = tinypy_internal_native_instance_release_references;
     type->destroy = tinypy_internal_native_instance_destroy;
+    tinypy_internal_native_type_bases_updated(type);
     __tinypy_internal_native_configure_slots(type);
     return type;
 }

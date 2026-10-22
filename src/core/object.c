@@ -1193,7 +1193,18 @@ tinypy_bool_t tinypy_internal_object_has_special_override_key(tinypy_value_t *va
         builtin_attribute = tinypy_internal_type_lookup_key(vm, &vm->types[kind], key);
     }
     else if (kind == TINYPY_VALUE_NATIVE_INSTANCE) {
-        builtin_attribute = tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_INSTANCE], key);
+        /* The specials of array.array wrap its C slots, as those of the
+           built-in sequences do. */
+        const tinypy_type_t *base = tinypy_internal_array_check(value) != TINYPY_FALSE ? vm->array_type : &vm->types[TINYPY_VALUE_INSTANCE];
+
+        builtin_attribute = tinypy_internal_type_lookup_key(vm, base, key);
+        /* A Python class that holds the attribute of object where its
+           host native static base finds another overrides the slot of
+           that name the base replaced with a callback of the spec the
+           class copied: update_one_slot makes it object's. */
+        if (attribute == builtin_attribute && (value->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && tinypy_internal_type_lookup_key(vm, tinypy_internal_type_static_base(value->type), key) != attribute && tinypy_internal_native_type_wraps_key(value->type, key) != 0) {
+            return TINYPY_TRUE;
+        }
     }
     if (attribute == builtin_attribute || __tinypy_object_wraps_same_slot(value, attribute, builtin_attribute) != 0) {
         return TINYPY_FALSE;
@@ -1624,6 +1635,27 @@ tinypy_bool_t tinypy_internal_object_is_mapping(tinypy_vm_t *vm, tinypy_value_t 
     tinypy_bool_t mapping = __tinypy_internal_object_mapping_getitem(vm, value) != NULL && tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getslice_key) == NULL ? TINYPY_TRUE : TINYPY_FALSE;
 
     return mapping;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Mirrors PySequence_Check: a classic instance answers hasattr(value,
+   '__getitem__'); any other value needs sq_item, which a dict, a dictproxy
+   and a weak proxy lack though they subscript, and which a native type with
+   sequence_get has though its slot wrapper defines nothing object does not. */
+tinypy_bool_t tinypy_internal_object_is_sequence(tinypy_vm_t *vm, tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_bool_t classic = tinypy_object_has_attr_value(value, vm->internal_special_getitem_key);
+        return classic;
+    }
+    if (kind == TINYPY_VALUE_DICT || value->type == vm->dictproxy_type || __tinypy_internal_weakref_is_proxy(value) != TINYPY_FALSE) {
+        return TINYPY_FALSE;
+    }
+    if (value->type->sequence_slots != NULL && value->type->sequence_slots->get_item != NULL) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t sequence = tinypy_internal_object_has_special_key(value, vm->internal_special_getitem_key);
+    return sequence;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_descriptor_set_value(tinypy_vm_t *vm, tinypy_value_t *attribute, tinypy_value_t *instance, tinypy_value_t *value, tinypy_error_t **out_error) {

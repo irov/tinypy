@@ -146,6 +146,45 @@ with `__getattr__` runs the generic lookup whatever type owns the wrapper, as
 counts a negative index from a subclass `__len__`; and `str()` of a dictproxy
 is `str()` of its dictionary.
 
+In the fifteenth pass a subscript of an exception adds the length of a
+subclass `__len__` to a negative index once and reads the item from the
+arguments, as `PySequence_GetItem` and `BaseException_getitem` do; a
+`__getitem__` that the `__len__` gives the class takes the adjusted index.
+Code equality compares the keys of the items of tuple and frozenset constants
+in one pass, pairing frozenset items by their stored hashes, so nested code
+constants no longer double the work at every level. CPython compares such a
+container with `==` before the keys of its items, so in hand-built constants
+the `__eq__` of an object that is no exact builtin runs only against an item
+of its own type: its calls, and an error it raises, can differ. The
+instance-dictionary probe of an attribute load, classic class and instance
+lookups, the MRO walks of types and `super`, the keyword lookup of
+`str.format` and the namespace probe of string concatenation keep the pending
+length-hint error of `map` as `PyDict_GetItem` does; a key `__eq__` that
+raises and catches an exception during the instance-dictionary probe of an
+attribute load or a classic lookup still moves it, since only a failed probe
+steps back over the raise of the error it clears. The builtin error handlers
+report a deleted `object` of a UnicodeError as not set.
+
+In the fifteenth pass the bundled `array` module follows `arraymodule.c` of
+CPython 2.7.18, so the BIGCHARSET encoding of `sre_compile` (a unicode class
+with more than two runs outside Latin-1) compiles. Its item sizes are those
+of the LP64 UCS-4 build on every target. Its sequence slots concatenate and
+repeat after the number slots of the other operand, a subclass keeps
+`array_inplace_concat` as `nb_inplace_add`, conversions run twice where
+`ins1` runs them, a subclass instance hashes by identity while an array is
+unhashable, and buffers, `_struct`, the `_codecs` decoders and `fromstring`
+read its items through the old buffer protocol while the character buffer
+coercions refuse them. Remaining differences, where CPython 2.7 reads or
+writes released or uninitialized storage: a conversion or `__index__`
+callback that resizes the array stores only into an item the array still
+has, `fromlist` converts before the array grows, `fromstring` of a view of
+the array itself reads after the resize, and a resize while `_struct` holds
+the items raises BufferError. A 'u' item beyond U+10FFFF raises ValueError
+when read, file methods always refuse their file, and `_sre` refuses an
+array subject. Covered by `array_matrix.py` (12,795 outcomes),
+`local.test_array_audit`, `cli_runtime_array_runtime` and
+`runtime_array_heap_budget`.
+
 ASCII and UTF-8 decoding consult registered handlers for every policy name,
 including default strict. ASCII/Latin-1 encoding retains its four builtin
 policies and looks up backslashreplace. Implicit Unicode conversion uses the
@@ -288,6 +327,12 @@ any hook. In the fourteenth pass the `hasattr` probes of `_reduce_ex` and
 reads `_ClassType` as a global, `_reduce_ex` %-formats the name it cannot
 pickle, `object.__reduce_ex__` imports `copy_reg` through the running
 `__import__`, and the functions read the globals of the module the VM keeps.
+In the fifteenth pass that `__import__` is the one `PyImport_Import` finds:
+an item or attribute of the `__builtins__` of the running globals, read at
+call time, or of the `__builtin__` module without running code, and `_sre`
+imports `re` for its template helpers the same way; covered by
+`local.test_object_protocols`, `local.test_sre_deep` and
+`runtime_reduce_import_without_frame`.
 The source oracle is CPython 2.7.18
 [`typeobject.c`](https://github.com/python/cpython/blob/v2.7.18/Objects/typeobject.c)
 and [`copy_reg.py`](https://github.com/python/cpython/blob/v2.7.18/Lib/copy_reg.py).
@@ -326,7 +371,7 @@ ownership, parser order and exception-state paths.
 | Text arguments | Shared native argument styles preserve receiver/count/keyword errors. Unicode padding converts character buffers, validates one character and retains width-before-fill order; byte padding accepts one byte only. Subtype center preserves separately clamped signed margins. Join translates only iterator-acquisition TypeError, while iteration and other callback errors retain identity. Private formatter spans preserve fresh result identity. |
 | Codec arguments | Guaranteed encoder/decoder entries preserve nullable errors, typed/NUL name diagnostics, builtin handler metadata and source/error parser priority. Parsed registry names use exact string keys without subtype hash/equality hooks. Encoders consume character-buffer views; decoders retain raw bytes. The product observes the existing guaranteed codec entries and does not claim standard-library stream reader/writer classes. |
 | Native readiness | Cold/warm metadata errors track first safe attribute access and remain shared by instances of the actual type. Native C descriptor metadata and numeric real/imag/numerator/denominator fields use physical member/getset descriptors, canonical values, receiver validation and readonly error priority. In the eleventh pass `object.__class__`, the members of `slice` and the softspace of the output streams are such descriptors too, read without the recursion level of a property getter's call. In the twelfth pass the softspace keeps the int assigned to it, as the `f_softspace` member of a file does. |
-| Weakrefs | Constructor/new/init/call/module parsers preserve class/referent/keyword/count priority. Basic-reference/proxy caches retain list/callback order across callability changes. Repr and Unicode proxy dispatch preserve reference lookup behavior; dead-reference deletion performs one lookup and suppresses only KeyError. Function/method/generator/set weakref slots, generator callback-before-finally order and exact empty-frozenset identity retain lifetime semantics. In the twelfth pass a proxy passes `__class__` and every other attribute through `proxy_getattr` and `proxy_setattr`, as the getset of `object.__class__` no longer answers before the hook of a proxy or a host native type; its `__getattribute__`, `__setattr__` and `__delattr__` wrappers check the name after the referent as `PyObject_GetAttr` and `PyObject_SetAttr` do; `__str__` and `__cmp__`, which takes proxies alone while other operands get the default ordering that counts a proxy as a number, wrap its own slots; abs, len and next of the referent follow the builtins; the slice wrappers read C long bounds; object's `__setattr__` and `__delattr__` refuse a proxy; and a classic instance whose `__getattr__` provides `__call__` gets a callable proxy. The proxy type still holds `__hash__ = None` where CPython inherits the wrapper of object, and its `__index__` gives an int for a bool result. In the thirteenth pass `reversed()` refuses a proxy, which has no `sq_item`, and a simple slice of a proxy whose referent has neither the slice nor the subscript slot reports what `PySequence_GetSlice` and `PySequence_SetSlice` report. Covered by `local.test_weakref_protocol_audit` and `core_native_attribute_hook_class`. |
+| Weakrefs | Constructor/new/init/call/module parsers preserve class/referent/keyword/count priority. Basic-reference/proxy caches retain list/callback order across callability changes. Repr and Unicode proxy dispatch preserve reference lookup behavior; dead-reference deletion performs one lookup and suppresses only KeyError. Function/method/generator/set weakref slots, generator callback-before-finally order and exact empty-frozenset identity retain lifetime semantics. In the twelfth pass a proxy passes `__class__` and every other attribute through `proxy_getattr` and `proxy_setattr`, as the getset of `object.__class__` no longer answers before the hook of a proxy or a host native type; its `__getattribute__`, `__setattr__` and `__delattr__` wrappers check the name after the referent as `PyObject_GetAttr` and `PyObject_SetAttr` do; `__str__` and `__cmp__`, which takes proxies alone while other operands get the default ordering that counts a proxy as a number, wrap its own slots; abs, len and next of the referent follow the builtins; the slice wrappers read C long bounds; object's `__setattr__` and `__delattr__` refuse a proxy; and a classic instance whose `__getattr__` provides `__call__` gets a callable proxy. The proxy type still holds `__hash__ = None` where CPython inherits the wrapper of object, and its `__index__` gives an int for a bool result. In the thirteenth pass `reversed()` refuses a proxy, which has no `sq_item` (in the fifteenth pass `apply()` shares its `PySequence_Check` and refuses a proxy and a dictproxy too), and a simple slice of a proxy whose referent has neither the slice nor the subscript slot reports what `PySequence_GetSlice` and `PySequence_SetSlice` report. Covered by `local.test_weakref_protocol_audit` and `core_native_attribute_hook_class`. |
 
 The frozen inventory requires 49 project-authored modules with 1,538 cases plus
 210 selected vendor cases: 1,748 Debug/sanitize PASS, or 1,744 Release/LTO PASS

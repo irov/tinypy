@@ -107,7 +107,8 @@ typedef enum tinypy_internal_c_descriptor_field_e {
     TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD = 100,
     TINYPY_INTERNAL_C_DESCRIPTOR_OBJECT_CLASS = 101,
     TINYPY_INTERNAL_C_DESCRIPTOR_SLICE_FIELD = 102,
-    TINYPY_INTERNAL_C_DESCRIPTOR_OUTPUT_SOFTSPACE = 103
+    TINYPY_INTERNAL_C_DESCRIPTOR_OUTPUT_SOFTSPACE = 103,
+    TINYPY_INTERNAL_C_DESCRIPTOR_ARRAY_FIELD = 104
 } tinypy_internal_c_descriptor_field_e;
 
 //////////////////////////////////////////////////////////////////////////
@@ -1087,6 +1088,10 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         function_result = tinypy_internal_memoryview_field(instance, descriptor->index);
         return function_result;
     }
+    if (field == TINYPY_INTERNAL_C_DESCRIPTOR_ARRAY_FIELD) {
+        function_result = tinypy_internal_array_field(instance, descriptor->index);
+        return function_result;
+    }
     if (field == TINYPY_INTERNAL_C_DESCRIPTOR_SLICE_FIELD) {
         tinypy_slice_object_t *slice = TINYPY_SLICE_OBJECT(instance);
         tinypy_value_t *const fields[] = {slice->start, slice->stop, slice->step};
@@ -1476,7 +1481,7 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LINE_NUMBER) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "f_lineno can only be set by a trace function", out_error);
         }
-        else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME || field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_CELL_CONTENT || field == TINYPY_INTERNAL_C_DESCRIPTOR_INSTANCE_WEAKREF || field == TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD || (TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR && ((field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC) || field == TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD))) {
+        else if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DICT || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_LOCALS || field == TINYPY_INTERNAL_C_DESCRIPTOR_FRAME_RESTRICTED || field == TINYPY_INTERNAL_C_DESCRIPTOR_GENERATOR_NAME || field == TINYPY_INTERNAL_C_DESCRIPTOR_METADATA_DOC || field == TINYPY_INTERNAL_C_DESCRIPTOR_CELL_CONTENT || field == TINYPY_INTERNAL_C_DESCRIPTOR_INSTANCE_WEAKREF || field == TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD || field == TINYPY_INTERNAL_C_DESCRIPTOR_ARRAY_FIELD || (TINYPY_VALUE_KIND(descriptor_value) == TINYPY_VALUE_GETSET_DESCRIPTOR && ((field >= TINYPY_INTERNAL_C_DESCRIPTOR_NATIVE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_METHOD_DOC) || field == TINYPY_INTERNAL_C_DESCRIPTOR_SRE_FIELD))) {
             tinypy_message_part_t parts[] = {
                 TINYPY_MESSAGE_PART_LITERAL("attribute '"), {(const char *)TINYPY_TEXT_BYTES(descriptor->name), TINYPY_TEXT_BYTE_SIZE(descriptor->name)},
                 TINYPY_MESSAGE_PART_LITERAL("' of '"), {descriptor->owner->name, descriptor->owner->name_size},
@@ -1996,6 +2001,20 @@ void tinypy_internal_initialize_memoryview_descriptors(tinypy_type_t *type) {
 
     for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
         tinypy_value_t *descriptor = __tinypy_internal_c_descriptor_new(vm, TINYPY_VALUE_GETSET_DESCRIPTOR, type, names[index], TINYPY_INTERNAL_C_DESCRIPTOR_MEMORYVIEW_FIELD, TINYPY_FALSE);
+
+        TINYPY_C_DESCRIPTOR_OBJECT(descriptor)->index = index;
+        tinypy_type_set_attr_key(type, names[index], descriptor);
+        TINYPY_DECREF(descriptor);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The getsets typecode and itemsize of array.array, by index. */
+void tinypy_internal_initialize_array_descriptors(tinypy_type_t *type) {
+    tinypy_vm_t *vm = type->vm;
+    tinypy_value_t *const names[] = {vm->internal_typecode_key, vm->internal_itemsize_key};
+
+    for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        tinypy_value_t *descriptor = __tinypy_internal_c_descriptor_new(vm, TINYPY_VALUE_GETSET_DESCRIPTOR, type, names[index], TINYPY_INTERNAL_C_DESCRIPTOR_ARRAY_FIELD, TINYPY_FALSE);
 
         TINYPY_C_DESCRIPTOR_OBJECT(descriptor)->index = index;
         tinypy_type_set_attr_key(type, names[index], descriptor);

@@ -1608,6 +1608,49 @@ class EvaluationSemantics(unittest.TestCase):
         for function in (lambda item: (Finalized(), item)[1], collect, close, lambda item: dir(item)):
             self.assertRaises(RuntimeError, map, function, BadLength([1, 2]))
 
+    def test_map_pending_length_error_survives_failed_attribute_dict_probes(self):
+        class BadLength(object):
+            def __init__(self, items):
+                self.items = items
+            def __iter__(self):
+                return iter(self.items)
+            def __len__(self):
+                raise RuntimeError('length')
+        class Colliding(str):
+            def __hash__(self):
+                return hash('value')
+            def __eq__(self, other):
+                raise ValueError('collision')
+        class Plain(object):
+            value = 'class'
+        class Base(object):
+            value = 'base'
+        Derived = type('Derived', (Base,), {Colliding('a'): 1})
+        class Lower(Derived):
+            pass
+        class Classic:
+            value = 'classic'
+        class ClassicDerived(Classic):
+            pass
+        plain = Plain()
+        plain.__dict__[Colliding('b')] = 1
+        ClassicDerived.__dict__[Colliding('c')] = 1
+        classic = ClassicDerived()
+        classic.__dict__[Colliding('d')] = 1
+        class Catching(str):
+            def __hash__(self):
+                return hash('value')
+            def __eq__(self, other):
+                try:
+                    raise ValueError('collision')
+                except ValueError:
+                    return False
+        derived, lower = Derived(), Lower()
+        keywords = {Catching('e'): 1}
+        keywords['value'] = 'keyword'
+        for function in (lambda item: plain.value, lambda item: derived.value, lambda item: super(Lower, lower).value, lambda item: ClassicDerived.value, lambda item: classic.value, lambda item: '{value}'.format(**keywords)):
+            self.assertRaises(RuntimeError, map, function, BadLength([1, 2]))
+
     def test_range_long_operands_keep_their_own_protocols(self):
         events = []
         class BadZero(int):

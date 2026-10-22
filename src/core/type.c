@@ -1850,6 +1850,9 @@ tinypy_bool_t tinypy_internal_type_set_bases(tinypy_type_t *type, tinypy_value_t
         __tinypy_internal_rebase_destroy_mro(record->type, record->old_mro);
         record->type->has_finalizer = tinypy_internal_type_lookup_key(vm, record->type, vm->internal_special_del_key) != NULL ? INT32_C(1) : INT32_C(0);
         __tinypy_internal_type_update_one_new(record->type);
+        if (record->type->layout_kind == TINYPY_VALUE_NATIVE_INSTANCE) {
+            tinypy_internal_native_type_bases_updated(record->type);
+        }
     }
     TINYPY_DECREF(old_bases);
     __tinypy_internal_rebase_release_records(vm, records, record_count, record_capacity);
@@ -2722,7 +2725,7 @@ tinypy_value_t *tinypy_internal_type_lookup_after(tinypy_vm_t *vm, const tinypy_
         TINYPY_DECREF(mro);
     }
     TINYPY_DECREF((tinypy_value_t *)&type->base.base);
-    tinypy_internal_exception_preserve_end(vm, &state);
+    tinypy_internal_exception_preserve_restore(vm, &state);
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2925,7 +2928,7 @@ tinypy_value_t *tinypy_instance_get_attr_key(tinypy_value_t *instance_value, tin
 
         tinypy_internal_exception_preserve_begin(vm, &state);
         tinypy_value_t *found = __tinypy_internal_type_probe_dict(vm, *dict_slot, key);
-        tinypy_internal_exception_preserve_end(vm, &state);
+        tinypy_internal_exception_preserve_restore(vm, &state);
         tinypy_value_t *instance_attribute = __tinypy_internal_type_lend_found(found);
 
         if (instance_attribute != NULL) {

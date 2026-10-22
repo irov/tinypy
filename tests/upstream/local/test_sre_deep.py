@@ -148,6 +148,35 @@ class SREDeep(unittest.TestCase):
             else:
                 sys.modules['re'] = original
 
+    def test_template_helpers_import_re_through_builtin_import(self):
+        import __builtin__
+        original = sys.modules.get('re')
+        module = type(sys)('re')
+        module._subx = lambda pattern, template: 'X'
+        module._expand = lambda pattern, match, template: 'E'
+        imported = []
+        real_import = __builtin__.__import__
+        def logging_import(name, *args):
+            imported.append((name,) + args)
+            return real_import(name, *args)
+        def refusing_import(name, *args):
+            raise ImportError('import of %s refused' % name)
+        sys.modules['re'] = module
+        try:
+            __builtin__.__import__ = logging_import
+            pattern = _letter()
+            self.assertEqual((pattern.sub('\\1', 'a'), pattern.match('a').expand('\\0')), ('X', 'E'))
+            __builtin__.__import__ = refusing_import
+            with self.assertRaisesRegexp(ImportError, 'import of re refused'):
+                pattern.sub('\\1', 'a')
+        finally:
+            __builtin__.__import__ = real_import
+            if original is None:
+                del sys.modules['re']
+            else:
+                sys.modules['re'] = original
+        self.assertEqual(imported, [('re', globals(), globals(), ['__doc__'], 0)] * 2)
+
     def test_getlower_uses_integer_protocol_and_signed_c_int_limits(self):
         class Character(object):
             def __int__(self):

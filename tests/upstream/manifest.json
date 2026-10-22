@@ -586,6 +586,7 @@
         "EvaluationSemantics.test_locals_with_getslice_are_not_a_mapping",
         "EvaluationSemantics.test_long_finalizer_chains_run_every_finalizer",
         "EvaluationSemantics.test_map_pending_length_error_is_replaced_by_later_exceptions",
+        "EvaluationSemantics.test_map_pending_length_error_survives_failed_attribute_dict_probes",
         "EvaluationSemantics.test_map_pending_length_error_survives_finalizers_and_dir",
         "EvaluationSemantics.test_map_reports_pending_length_error_like_builtin_map",
         "EvaluationSemantics.test_membership_tests_reach_the_recursion_limit_like_ceval",
@@ -805,6 +806,7 @@
         "ObjectProtocols.test_exception_getitem_takes_an_index",
         "ObjectProtocols.test_exception_getitem_wrapper_counts_from_a_subclass_length",
         "ObjectProtocols.test_exception_members",
+        "ObjectProtocols.test_exception_subscript_counts_from_a_subclass_length_once",
         "ObjectProtocols.test_exception_unicode_follows_str",
         "ObjectProtocols.test_filter_text_returns_new_string",
         "ObjectProtocols.test_float_literal_messages_are_capped",
@@ -827,6 +829,7 @@
         "ObjectProtocols.test_notimplemented_uses_reflected_operation",
         "ObjectProtocols.test_object_init_accepts_arguments_without_tp_new",
         "ObjectProtocols.test_object_reduce_imports_copy_reg_through_builtin_import",
+        "ObjectProtocols.test_object_reduce_reads_import_from_the_running_globals",
         "ObjectProtocols.test_property_data_descriptor",
         "ObjectProtocols.test_read_only_property",
         "ObjectProtocols.test_readonly_descriptor_errors",
@@ -1567,6 +1570,7 @@
         "SREDeep.test_split_and_sub_accept_named_parameters",
         "SREDeep.test_sre_types_are_final_and_immutable",
         "SREDeep.test_sub_count_conversion_precedes_template_helper_and_subject_validation",
+        "SREDeep.test_template_helpers_import_re_through_builtin_import",
         "SREDeep.test_unicode_subclass_subject_dies_with_its_last_reference",
         "SREDeep.test_unset_group_spans_are_undefined_as_a_whole"
       ]
@@ -1593,6 +1597,7 @@
         "ComparisonDeep.test_cmp_result_conversion_invoked_once",
         "ComparisonDeep.test_cmp_result_overflow_differs_for_classic_instances",
         "ComparisonDeep.test_cmp_same_type_precedes_rich_comparison",
+        "ComparisonDeep.test_code_equality_compares_nested_constants_by_their_keys",
         "ComparisonDeep.test_foreign_rich_comparison_wrapper_keeps_the_inherited_comparison",
         "ComparisonDeep.test_hash_result_minus_one_is_normalized",
         "ComparisonDeep.test_hash_result_subtype_override_depends_on_instance_style",
@@ -1623,6 +1628,7 @@
       "origin": "project-authored",
       "cases": [
         "BuiltinEdges.test_all_any_stop_at_first_decisive_value",
+        "BuiltinEdges.test_apply_arguments_need_the_item_slot_of_a_sequence",
         "BuiltinEdges.test_builtin_argument_messages",
         "BuiltinEdges.test_builtin_exception_initializer_fields",
         "BuiltinEdges.test_bytearray_index_and_resize_errors",
@@ -2058,6 +2064,7 @@
       "origin": "project-authored",
       "cases": [
         "TextNumericCallbackAudit.test_builtin_codec_handlers_read_payload_without_attribute_callbacks",
+        "TextNumericCallbackAudit.test_builtin_handlers_report_a_deleted_object",
         "TextNumericCallbackAudit.test_builtin_handlers_report_actual_unsupported_type",
         "TextNumericCallbackAudit.test_builtin_handlers_validate_mutated_object_payload",
         "TextNumericCallbackAudit.test_codec_callback_failure_preserves_handled_exception",
@@ -3058,6 +3065,28 @@
         "KeywordArgumentsAudit.test_str_subclass_keys_are_str",
         "KeywordArgumentsAudit.test_subclasshook_rejects_keywords_as_a_c_function",
         "KeywordArgumentsAudit.test_unicode_keys_name_parameters_and_extra_ones_must_be_str"
+      ]
+    },
+    "local.test_array_audit": {
+      "path": "local/test_array_audit.py",
+      "origin": "project-authored",
+      "cases": [
+        "ArrayAudit.test_bigcharset_codes_come_from_an_array",
+        "ArrayAudit.test_buffer_views_follow_the_items",
+        "ArrayAudit.test_codecs_read_arrays_as_buffers",
+        "ArrayAudit.test_comparisons_reread_resized_arrays",
+        "ArrayAudit.test_conversion_callbacks_run_as_in_cpython",
+        "ArrayAudit.test_fromstring_refuses_its_own_items",
+        "ArrayAudit.test_integer_conversions_report_their_parser",
+        "ArrayAudit.test_item_sizes_and_module_surface",
+        "ArrayAudit.test_iterator_keeps_reading_the_array",
+        "ArrayAudit.test_large_arrays_round_trip",
+        "ArrayAudit.test_operators_use_the_sequence_slots",
+        "ArrayAudit.test_reduction_and_copies",
+        "ArrayAudit.test_self_concatenation_and_slices",
+        "ArrayAudit.test_sequence_initializers_follow_their_size",
+        "ArrayAudit.test_struct_reads_and_writes_items",
+        "ArrayAudit.test_word_arrays_read_host_order_bytes"
       ]
     }
   },

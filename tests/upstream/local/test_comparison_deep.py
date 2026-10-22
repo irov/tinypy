@@ -530,3 +530,23 @@ class ComparisonDeep(unittest.TestCase):
             pass
         self.assertEqual((code((None, shared)) == code((None, shared)), code((None, Text('a'))) == code((None, Text('a'))), code((None, (1, 'a'))) == code((None, (1, 'a')))), (True, False, True))
         self.assertEqual((code((None, 0.0)) == code((None, -0.0)), code((None, 1)) == code((None, 1L)), code((None, frozenset([1, 2]))) == code((None, frozenset([2, 1])))), (False, False, True))
+
+    def test_code_equality_compares_nested_constants_by_their_keys(self):
+        def template():
+            return 1
+        source = template.func_code
+        def code(constants):
+            return type(source)(source.co_argcount, source.co_nlocals, source.co_stacksize, source.co_flags, source.co_code, constants, source.co_names, source.co_varnames, source.co_filename, source.co_name, source.co_firstlineno, source.co_lnotab)
+        def nested(leaf):
+            current = code((None, leaf))
+            for level in range(8):
+                current = code((None, (level, current)))
+            return current
+        def deep(container, leaf):
+            for level in range(1200):
+                leaf = container((leaf, level))
+            return leaf
+        self.assertEqual((nested(1) == nested(1), nested(1) == nested(1.0), nested(0.0) == nested(-0.0), nested((1, 'a')) == nested((1, 'a'))), (True, False, False, True))
+        self.assertEqual((code((None, frozenset([(1, 2.0), 'a']))) == code((None, frozenset(['a', (1, 2.0)]))), code((None, frozenset([(1, 2)]))) == code((None, frozenset([(1, 2.0)])))), (True, False))
+        self.assertRaises(RuntimeError, lambda: code((None, deep(tuple, 1))) == code((None, deep(tuple, 1))))
+        self.assertFalse(code((None, deep(frozenset, 1))) == code((None, deep(frozenset, 2))))

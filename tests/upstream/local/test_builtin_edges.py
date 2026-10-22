@@ -1577,6 +1577,22 @@ class BuiltinEdges(unittest.TestCase):
         self.assertEqual(error_text(reversed, Failing()), 'TypeError: argument to reversed() must be a sequence')
         self.assertEqual(error_text(iter, Failing()), 'TypeError: iteration over non-sequence')
 
+    def test_apply_arguments_need_the_item_slot_of_a_sequence(self):
+        class Listing(list):
+            pass
+        class Indexed(object):
+            def __getitem__(self, index):
+                if index >= 2:
+                    raise IndexError(index)
+                return index
+        def collect(*args):
+            return args
+        listing = Listing([1, 2])
+        self.assertEqual((apply(collect, Indexed()), apply(collect, xrange(2)), apply(collect, bytearray('ab'))), ((0, 1), (0, 1), (97, 98)))
+        self.assertEqual(error_text(apply, collect, weakref.proxy(listing)), 'TypeError: apply() arg 2 expected sequence, found weakproxy')
+        self.assertEqual(error_text(apply, collect, Indexed.__dict__), 'TypeError: apply() arg 2 expected sequence, found dictproxy')
+        self.assertEqual(error_text(reversed, weakref.proxy(listing)), 'TypeError: argument to reversed() must be a sequence')
+
     def test_print_function_checks_stdout_before_its_affixes(self):
         print_function = getattr(__builtin__, 'print')
         class Collect(object):

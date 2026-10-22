@@ -517,6 +517,26 @@ static void __tinypy_operator_long_add_shifted(uint32_t *output, size_t output_c
     __tinypy_operator_long_carry_words(output, output_capacity, shift + count, carry);
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_operator_long_multiply_words(tinypy_vm_t *vm, uint32_t *output, size_t output_capacity, const uint32_t *left, size_t left_count, const uint32_t *right, size_t right_count, tinypy_error_t **out_error);
+//////////////////////////////////////////////////////////////////////////
+/* output[0, output_capacity) += left * right with the larger factor taken in
+   slices of slice_size words, each a product added in at its own offset. */
+static TINYPY_NOINLINE tinypy_bool_t __tinypy_operator_long_multiply_slices(tinypy_vm_t *vm, uint32_t *output, size_t output_capacity, const uint32_t *left, size_t left_count, const uint32_t *right, size_t right_count, size_t slice_size, tinypy_error_t **out_error) {
+    const uint32_t *smaller = left_count < right_count ? left : right;
+    const uint32_t *larger = left_count < right_count ? right : left;
+    size_t smaller_count = left_count < right_count ? left_count : right_count;
+    size_t larger_count = left_count < right_count ? right_count : left_count;
+
+    for (size_t done = 0U; done < larger_count; done += slice_size) {
+        size_t slice_count = larger_count - done < slice_size ? larger_count - done : slice_size;
+
+        if (__tinypy_operator_long_multiply_words(vm, output + done, output_capacity - done, smaller, smaller_count, larger + done, slice_count, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* output[0, output_capacity) += left * right: k_mul splits balanced operands
    past the cutoffs, and squares when left and right are the same words. */
 static tinypy_bool_t __tinypy_operator_long_multiply_words(tinypy_vm_t *vm, uint32_t *output, size_t output_capacity, const uint32_t *left, size_t left_count, const uint32_t *right, size_t right_count, tinypy_error_t **out_error) {
@@ -528,10 +548,16 @@ static tinypy_bool_t __tinypy_operator_long_multiply_words(tinypy_vm_t *vm, uint
         return TINYPY_TRUE;
     }
     if (minimum_count < (square != 0 ? TINYPY_LONG_KARATSUBA_SQUARE_CUTOFF : TINYPY_LONG_KARATSUBA_CUTOFF)) {
-        /* Below the cutoffs the smaller factor has few words: the product
-           polls once for all its word steps. */
+        /* Below the cutoffs the smaller factor has few words: a product of
+           at most TINYPY_LONG_POLL_STEPS word steps polls once for all, a
+           longer one polls per slice of as many, as x_mul's SIGCHECK does
+           per word of the smaller factor. */
         size_t steps = maximum_count > SIZE_MAX / TINYPY_LONG_KARATSUBA_SQUARE_CUTOFF ? SIZE_MAX : maximum_count * minimum_count;
 
+        if (steps > TINYPY_LONG_POLL_STEPS) {
+            tinypy_bool_t sliced = __tinypy_operator_long_multiply_slices(vm, output, output_capacity, left, left_count, right, right_count, TINYPY_LONG_POLL_STEPS / minimum_count, out_error);
+            return sliced;
+        }
         if (__tinypy_internal_long_poll(vm, steps, out_error) == 0) {
             return TINYPY_FALSE;
         }
@@ -540,19 +566,10 @@ static tinypy_bool_t __tinypy_operator_long_multiply_words(tinypy_vm_t *vm, uint
     }
     /* k_lopsided_mul: splitting would leave the smaller operand without a
        high half, so the larger one is taken in slices of the smaller one's
-       size, each a balanced product added in at its own offset. */
+       size, each a balanced product. */
     if (minimum_count <= SIZE_MAX / 2U && maximum_count >= minimum_count * 2U) {
-        const uint32_t *smaller = left_count < right_count ? left : right;
-        const uint32_t *larger = left_count < right_count ? right : left;
-
-        for (size_t done = 0U; done < maximum_count; done += minimum_count) {
-            size_t slice_count = maximum_count - done < minimum_count ? maximum_count - done : minimum_count;
-
-            if (__tinypy_operator_long_multiply_words(vm, output + done, output_capacity - done, smaller, minimum_count, larger + done, slice_count, out_error) == 0) {
-                return TINYPY_FALSE;
-            }
-        }
-        return TINYPY_TRUE;
+        tinypy_bool_t sliced = __tinypy_operator_long_multiply_slices(vm, output, output_capacity, left, left_count, right, right_count, minimum_count, out_error);
+        return sliced;
     }
 
     size_t split = maximum_count / 2U;
@@ -2680,6 +2697,11 @@ static tinypy_bool_t __tinypy_operator_has_sequence_slot(tinypy_value_t *value, 
     case TINYPY_VALUE_LIST:
     case TINYPY_VALUE_BYTEARRAY:
         break;
+    case TINYPY_VALUE_NATIVE_INSTANCE:
+        if (tinypy_internal_array_check(value) == TINYPY_FALSE) {
+            return TINYPY_FALSE;
+        }
+        break;
     case TINYPY_VALUE_STRING:
     case TINYPY_VALUE_UNICODE:
     case TINYPY_VALUE_TUPLE:
@@ -2746,6 +2768,12 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
 
         return extended;
     }
+    /* The native instances with sequence slots are arrays. */
+    if (kind == TINYPY_VALUE_NATIVE_INSTANCE) {
+        tinypy_value_t *concatenated = tinypy_internal_array_concat(sequence, other, inplace, out_error);
+
+        return concatenated;
+    }
     /* bytearray and buffer concatenation are their types' own methods. */
     if (kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_BUFFER) {
         tinypy_value_t *method_name = inplace != 0 ? vm->internal_special_iadd_key : vm->internal_special_add_key;
@@ -2770,7 +2798,7 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
     /* PyUnicode_FromObject decodes the character buffer of a buffer: the
        default encoding of a unicode it views, with its bounds applied. */
     if (kind == TINYPY_VALUE_UNICODE && other_kind == TINYPY_VALUE_BUFFER) {
-        tinypy_value_t *characters = tinypy_internal_buffer_character_string(other, out_error);
+        tinypy_value_t *characters = tinypy_internal_buffer_unicode_source(other, out_error);
         if (characters == NULL) {
             return NULL;
         }
@@ -2886,6 +2914,11 @@ static tinypy_value_t *__tinypy_operator_sequence_repeat(tinypy_value_t *sequenc
         return NULL;
     }
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(sequence);
+    if (kind == TINYPY_VALUE_NATIVE_INSTANCE) {
+        tinypy_value_t *repeated = tinypy_internal_array_repeat(sequence, count, inplace, out_error);
+
+        return repeated;
+    }
     if (inplace != 0 || kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_BUFFER) {
         tinypy_value_t *integer = tinypy_integer_from_i64(vm, count);
         tinypy_value_t *method_name = inplace != 0 ? vm->internal_special_imul_key : vm->internal_special_mul_key;
@@ -3014,10 +3047,12 @@ static tinypy_operator_slot_e __tinypy_operator_inplace_slot(const tinypy_operat
         if (__tinypy_operator_native_slot(value->type, spec->native_inplace_offset) != NULL) {
             return TINYPY_OPERATOR_SLOT_NATIVE;
         }
-        /* update_one_slot takes the inherited __iadd__ wrapper of list and
-           bytearray for nb_inplace_add of a subclass that keeps it, so their
-           in-place concatenation runs before any binary method there. */
-        if (spec->operation == TINYPY_OPERATOR_BINARY_ADD && (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_BYTEARRAY) && __tinypy_internal_object_defines_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(IADD)) != 0) {
+        /* update_one_slot takes the inherited __iadd__ wrapper of list,
+           bytearray and array.array for nb_inplace_add of a subclass that
+           keeps it, so their in-place concatenation runs before any binary
+           method there. */
+        tinypy_bool_t array_subclass = kind == TINYPY_VALUE_NATIVE_INSTANCE && value->type != TINYPY_VALUE_VM(value)->array_type && tinypy_internal_array_check(value) != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
+        if (spec->operation == TINYPY_OPERATOR_BINARY_ADD && (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_BYTEARRAY || array_subclass != TINYPY_FALSE) && __tinypy_internal_object_defines_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(IADD)) != 0) {
             return TINYPY_OPERATOR_SLOT_METHOD;
         }
     }

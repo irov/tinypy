@@ -546,6 +546,30 @@ class ObjectProtocols(unittest.TestCase):
         self.assertRaises(TypeError, Disabled(1).__getitem__, -1)
         self.assertRaises(IndexError, lambda: Sized(1, 2, 3)[-1])
 
+    def test_exception_subscript_counts_from_a_subclass_length_once(self):
+        calls = []
+        class Sized(Exception):
+            def __len__(self):
+                calls.append(len(self.args))
+                return 2
+        class Long(Exception):
+            def __len__(self):
+                return 10
+        class Assigning(Exception):
+            def __len__(self):
+                type(self).__getitem__ = lambda self, index: ('assigned', index)
+                return 1
+        error = Sized('a', 'b', 'c', 'd')
+        self.assertEqual((error[-3], error[-4], error[-5], error[1], error[-1L]), ('d', 'c', 'b', 'b', 'b'))
+        self.assertEqual(calls, [4, 4, 4, 4])
+        self.assertRaises(IndexError, lambda: error[-7])
+        self.assertEqual((Long('a', 'b', 'c')[-11], Long('a', 'b', 'c')[-13]), ('c', 'a'))
+        self.assertRaises(IndexError, lambda: Long('a', 'b', 'c')[-14])
+        self.assertEqual((ValueError('a', 'b')[-1], ValueError('a', 'b')[-2]), ('b', 'a'))
+        self.assertRaises(IndexError, lambda: ValueError('a', 'b')[-3])
+        self.assertEqual(Assigning('a', 'b')[-1], ('assigned', 0))
+        self.assertEqual(Assigning('a', 'b')[-1], ('assigned', -1))
+
     def test_exception_unicode_follows_str(self):
         class Error(Exception):
             def __str__(self):
@@ -2175,6 +2199,43 @@ class ObjectProtocols(unittest.TestCase):
         self.assertIs(imported[0][1], globals())
         self.assertIs(imported[0][2], globals())
         self.assertEqual(imported[0][3:], (['__doc__'], 0))
+
+    def test_object_reduce_reads_import_from_the_running_globals(self):
+        import __builtin__
+
+        class Plain(object):
+            pass
+
+        imported = []
+        real_import = __builtin__.__import__
+
+        def logging_import(name, *args):
+            imported.append(name)
+            return real_import(name, *args)
+
+        class Builtins(object):
+            __import__ = staticmethod(logging_import)
+
+        function_type = type(lambda: None)
+        code = compile('Plain().__reduce_ex__(0)[0].__name__', 'reduce', 'eval')
+        namespace = {'Plain': Plain, 'logging_import': logging_import}
+        exec "__builtins__ = {'__import__': logging_import}\nname = Plain().__reduce_ex__(0)[0].__name__" in namespace
+        self.assertEqual((namespace['name'], imported), ('_reconstructor', ['copy_reg']))
+        try:
+            function_type(code, {'Plain': Plain})()
+        except KeyError as error:
+            self.assertEqual(error.args, ('__builtins__',))
+        else:
+            self.fail('globals without __builtins__')
+        self.assertEqual(function_type(code, {'Plain': Plain, '__builtins__': Builtins()})(), '_reconstructor')
+        self.assertEqual(imported, ['copy_reg'] * 2)
+        reduce_from_module = function_type(code, {'Plain': Plain, '__builtins__': __builtin__})
+        del __builtin__.__import__
+        try:
+            self.assert_message(AttributeError, "'module' object has no attribute '__import__'", reduce_from_module)
+        finally:
+            __builtin__.__import__ = real_import
+        self.assertEqual(reduce_from_module(), '_reconstructor')
 
     def test_heap_type_flags_include_checktypes(self):
         class Plain(object):

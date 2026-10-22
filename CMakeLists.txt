@@ -72,6 +72,7 @@ add_library(tinypy STATIC
     src/compiler/frontend/codegen.c
     src/compiler/frontend/optimizer.c
     src/compiler/generated/grammar.c
+    src/core/array.c
     src/core/dict.c
     src/core/dictproxy.c
     src/core/dict_view.c
@@ -286,9 +287,11 @@ if(BUILD_TESTING)
     add_test(NAME runtime_stack_budget COMMAND tinypy_core_tests stack_budget)
     add_test(NAME runtime_host_hash_native_guard COMMAND tinypy_core_tests host_hash_native_guard)
     add_test(NAME runtime_class_subclass_native_guard COMMAND tinypy_core_tests class_subclass_native_guard)
+    add_test(NAME runtime_reduce_import_without_frame COMMAND tinypy_core_tests reduce_import_without_frame)
     add_test(NAME runtime_container_heap_limits COMMAND tinypy_core_tests container_heap_limits)
     add_test(NAME runtime_heap_budget_sweep COMMAND tinypy_core_tests heap_budget_sweep)
     add_test(NAME runtime_text_heap_budget COMMAND tinypy_core_tests text_heap_budget)
+    add_test(NAME runtime_array_heap_budget COMMAND tinypy_core_tests array_heap_budget)
     add_test(NAME runtime_computed_heap_budget COMMAND tinypy_core_tests computed_heap_budget)
     add_test(NAME runtime_computed_allocation_refusal COMMAND tinypy_core_tests computed_allocation_refusal)
     add_test(NAME runtime_sre_allocation_refusal COMMAND tinypy_core_tests sre_allocation_refusal)
@@ -317,6 +320,7 @@ if(BUILD_TESTING)
     add_test(NAME core_native_slot_dispatch COMMAND tinypy_core_tests native_slot_dispatch)
     add_test(NAME core_native_slot_failures COMMAND tinypy_core_tests native_slot_failures)
     add_test(NAME core_native_slot_wrappers COMMAND tinypy_core_tests native_slot_wrappers)
+    add_test(NAME core_native_special_lookups COMMAND tinypy_core_tests native_special_lookups)
     add_test(NAME core_type_versions COMMAND tinypy_core_tests type_versions)
     add_test(NAME core_type_new_metaclass COMMAND tinypy_core_tests type_new_metaclass)
     add_test(NAME core_type_set_attr_sharing COMMAND tinypy_core_tests type_set_attr_sharing)

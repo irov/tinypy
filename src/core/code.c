@@ -571,11 +571,70 @@ cleanup:
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_code_equal(tinypy_value_t *left_value, tinypy_value_t *right_value, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
+static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
+//////////////////////////////////////////////////////////////////////////
+/* The key of an exact tuple or frozenset holds the constant itself and the
+   keys of its items, which compare its items with == again, so the keys of
+   the items alone decide, in one pass. A frozenset pairs its items by the
+   hashes it holds, which equal keys share, as the == of sets does. */
+static tinypy_bool_t __tinypy_code_constant_items_equal(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
+    *out_equal = TINYPY_FALSE;
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_TUPLE) {
+        size_t size = TINYPY_TUPLE_SIZE(left);
+
+        if (size != TINYPY_TUPLE_SIZE(right)) {
+            return TINYPY_TRUE;
+        }
+        for (size_t index = 0U; index < size; ++index) {
+            tinypy_bool_t item_equal;
+            if (__tinypy_code_constant_equal(TINYPY_TUPLE_GET(left, index), TINYPY_TUPLE_GET(right, index), &item_equal, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+            if (item_equal == 0) {
+                return TINYPY_TRUE;
+            }
+        }
+        *out_equal = TINYPY_TRUE;
+        return TINYPY_TRUE;
+    }
+    tinypy_value_t *left_dict = TINYPY_SET_OBJECT(left)->dict;
+    tinypy_value_t *right_dict = TINYPY_SET_OBJECT(right)->dict;
+    if (TINYPY_DICT_SIZE(left_dict) != TINYPY_DICT_SIZE(right_dict)) {
+        return TINYPY_TRUE;
+    }
+    tinypy_dict_entry_t *left_iterator = TINYPY_DICT_ITERATOR_BEGIN(left_dict);
+    tinypy_dict_entry_t *left_end = TINYPY_DICT_ITERATOR_END(left_dict);
+    for (; left_iterator != left_end; ++left_iterator) {
+        tinypy_bool_t found = TINYPY_FALSE;
+
+        if (TINYPY_DICT_ENTRY_IS_ACTIVE(left_iterator) == 0) {
+            continue;
+        }
+        tinypy_dict_entry_t *right_iterator = TINYPY_DICT_ITERATOR_BEGIN(right_dict);
+        tinypy_dict_entry_t *right_end = TINYPY_DICT_ITERATOR_END(right_dict);
+        for (; right_iterator != right_end && found == 0; ++right_iterator) {
+            if (TINYPY_DICT_ENTRY_IS_ACTIVE(right_iterator) == 0 || right_iterator->hash != left_iterator->hash) {
+                continue;
+            }
+            if (__tinypy_code_constant_equal(left_iterator->key, right_iterator->key, &found, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
+        }
+        if (found == 0) {
+            return TINYPY_TRUE;
+        }
+    }
+    *out_equal = TINYPY_TRUE;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* code_richcompare compares the constants by their _PyCode_ConstantKey,
-   which pairs a constant with its type and compares it with == first. An
-   exact int, long, bool, str, unicode or code object is then equal, an exact
-   float or complex by the sign of a zero as well, an exact tuple or frozenset
-   by the keys of its items, and any other constant by its identity alone. */
+   which pairs a constant with its type. An exact tuple or frozenset is equal
+   by the keys of its items and a code object by code equality; any other
+   constant is compared with == first, and then an exact int, long, bool, str
+   or unicode is equal, an exact float or complex by the sign of a zero as
+   well, and any other constant by its identity alone. */
 static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
@@ -588,66 +647,28 @@ static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_v
         *out_equal = TINYPY_FALSE;
         return TINYPY_TRUE;
     }
+    tinypy_bool_t exact = (size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && left->type == &vm->types[kind] ? TINYPY_TRUE : TINYPY_FALSE;
+    /* Nested keys compare through PyObject_RichCompare, which counts the
+       levels against the recursion limit. */
+    if (exact != 0 && (kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_FROZENSET)) {
+        if (tinypy_internal_recursion_check(vm, TINYPY_NATIVE_STACK_ADDRESS(), "maximum recursion depth exceeded in cmp", out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        vm->evaluation_depth += 1U;
+        tinypy_bool_t compared = __tinypy_code_constant_items_equal(left, right, out_equal, out_error);
+        vm->evaluation_depth -= 1U;
+        return compared;
+    }
+    if (exact != 0 && kind == TINYPY_VALUE_CODE) {
+        tinypy_bool_t return_value_1 = __tinypy_code_equal(left, right, out_equal, out_error);
+        return return_value_1;
+    }
     int32_t equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
     if (equal < 0) {
         return TINYPY_FALSE;
     }
     *out_equal = TINYPY_FALSE;
-    if (equal == 0 || (size_t)kind >= TINYPY_BUILTIN_TYPE_COUNT || left->type != &vm->types[kind]) {
-        return TINYPY_TRUE;
-    }
-    if (kind == TINYPY_VALUE_TUPLE) {
-        size_t size = TINYPY_TUPLE_SIZE(left);
-        size_t index;
-
-        for (index = 0U; index < size; ++index) {
-            tinypy_bool_t item_equal;
-
-            if (__tinypy_code_constant_equal(TINYPY_TUPLE_GET(left, index), TINYPY_TUPLE_GET(right, index), &item_equal, out_error) == 0) {
-                return TINYPY_FALSE;
-            }
-            if (item_equal == 0) {
-                return TINYPY_TRUE;
-            }
-        }
-        *out_equal = TINYPY_TRUE;
-        return TINYPY_TRUE;
-    }
-    if (kind == TINYPY_VALUE_FROZENSET) {
-        tinypy_value_t *left_dict = TINYPY_SET_OBJECT(left)->dict;
-        tinypy_value_t *right_dict = TINYPY_SET_OBJECT(right)->dict;
-        tinypy_dict_entry_t *left_iterator = TINYPY_DICT_ITERATOR_BEGIN(left_dict);
-        tinypy_dict_entry_t *left_end = TINYPY_DICT_ITERATOR_END(left_dict);
-
-        for (; left_iterator != left_end; ++left_iterator) {
-            tinypy_dict_entry_t *right_iterator;
-            tinypy_dict_entry_t *right_end;
-            tinypy_bool_t found = TINYPY_FALSE;
-
-            if (TINYPY_DICT_ENTRY_IS_ACTIVE(left_iterator) == 0) {
-                continue;
-            }
-            right_iterator = TINYPY_DICT_ITERATOR_BEGIN(right_dict);
-            right_end = TINYPY_DICT_ITERATOR_END(right_dict);
-            for (; right_iterator != right_end; ++right_iterator) {
-                tinypy_bool_t item_equal;
-
-                if (TINYPY_DICT_ENTRY_IS_ACTIVE(right_iterator) == 0) {
-                    continue;
-                }
-                if (__tinypy_code_constant_equal(left_iterator->key, right_iterator->key, &item_equal, out_error) == 0) {
-                    return TINYPY_FALSE;
-                }
-                if (item_equal != 0) {
-                    found = TINYPY_TRUE;
-                    break;
-                }
-            }
-            if (found == 0) {
-                return TINYPY_TRUE;
-            }
-        }
-        *out_equal = TINYPY_TRUE;
+    if (equal == 0 || exact == 0) {
         return TINYPY_TRUE;
     }
     if (kind == TINYPY_VALUE_FLOAT) {
@@ -661,7 +682,7 @@ static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_v
         *out_equal = real_sign != 0 && imaginary_sign != 0 ? TINYPY_TRUE : TINYPY_FALSE;
         return TINYPY_TRUE;
     }
-    if (kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_CODE) {
+    if (kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
         *out_equal = TINYPY_TRUE;
     }
     return TINYPY_TRUE;

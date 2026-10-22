@@ -1612,7 +1612,7 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     tinypy_value_t *warn_options = tinypy_list_from_items(vm, NULL, 0U);
     tinypy_module_add_value_key(sys_module, vm->internal_warnoptions_key, warn_options);
     TINYPY_DECREF(warn_options);
-    tinypy_value_t *const builtin_module_name_values[] = {vm->internal_builtin_module_name, vm->internal_future_module_name, vm->internal_main_module_name, vm->internal_codec_module_name, vm->internal_partial_module_name, vm->internal_sre_module_name, vm->internal_struct_module_name, vm->internal_weakref_module_name, vm->internal_copy_reg_module_name, vm->internal_exception_module_name, vm->internal_sys_key};
+    tinypy_value_t *const builtin_module_name_values[] = {vm->internal_builtin_module_name, vm->internal_future_module_name, vm->internal_main_module_name, vm->internal_codec_module_name, vm->internal_partial_module_name, vm->internal_sre_module_name, vm->internal_struct_module_name, vm->internal_array_module_name, vm->internal_weakref_module_name, vm->internal_copy_reg_module_name, vm->internal_exception_module_name, vm->internal_sys_key};
     tinypy_value_t *builtin_module_names = tinypy_tuple_from_items(vm, builtin_module_name_values, sizeof(builtin_module_name_values) / sizeof(builtin_module_name_values[0]));
     tinypy_module_add_value_key(sys_module, vm->internal_builtin_module_names_key, builtin_module_names);
     TINYPY_DECREF(builtin_module_names);
@@ -1637,6 +1637,7 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     tinypy_internal_initialize_codecs_module(vm);
     tinypy_internal_initialize_functools_module(vm);
     tinypy_internal_initialize_struct_module(vm);
+    tinypy_internal_initialize_array_module(vm);
     tinypy_internal_initialize_copy_reg_module(vm);
     tinypy_internal_initialize_sre_module(vm);
     tinypy_internal_initialize_exceptions_module(vm);
@@ -2136,6 +2137,9 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph, tinypy_boo
     }
     if (vm->sre_scanner_type != NULL) {
         __tinypy_shutdown_add(graph, &vm->sre_scanner_type->base.base);
+    }
+    if (vm->array_type != NULL) {
+        __tinypy_shutdown_add(graph, &vm->array_type->base.base);
     }
     __tinypy_shutdown_add(graph, vm->raised_type);
     __tinypy_shutdown_add(graph, vm->raised_value);

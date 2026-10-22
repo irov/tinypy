@@ -333,6 +333,12 @@ static tinypy_value_t *__tinypy_codecs_text_input(tinypy_vm_t *vm, tinypy_value_
         tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(vm, bytes, size, out_error);
         return result;
     }
+    /* The old buffer protocol of an array serves s* as well. */
+    if (decode != 0 && tinypy_internal_array_check(input) != TINYPY_FALSE) {
+        bytes = tinypy_internal_array_view(input, &size);
+        tinypy_value_t *result = tinypy_internal_string_from_bytes_checked(vm, bytes, size, out_error);
+        return result;
+    }
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, decode != 0 ? "decoder requires a string or buffer" : "encoder requires a string or unicode", out_error);
     return NULL;
 }
@@ -347,7 +353,7 @@ static tinypy_bool_t __tinypy_codecs_buffer_argument_accepted(tinypy_vm_t *vm, c
     if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
         return TINYPY_TRUE;
     }
-    if (tinypy_internal_bytes_view(value, &bytes, &size) != 0) {
+    if (tinypy_internal_bytes_view(value, &bytes, &size) != 0 || tinypy_internal_array_check(value) != TINYPY_FALSE) {
         return TINYPY_TRUE;
     }
     tinypy_bool_t heap_type = (value->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
@@ -403,6 +409,14 @@ static tinypy_value_t *__tinypy_codecs_specific(tinypy_value_t *function, tinypy
        scalar parsers have run their Python callbacks. */
     if (decode != 0 && TINYPY_VALUE_KIND(source) == TINYPY_VALUE_UNICODE) {
         input = tinypy_internal_text_codec(vm, source, NULL, NULL, TINYPY_FALSE, TINYPY_TRUE, NULL, out_error);
+        if (input == NULL) {
+            return NULL;
+        }
+    }
+    else if (decode != 0 && tinypy_internal_array_check(source) != TINYPY_FALSE) {
+        /* The codecs read the items of an array as a copy, which no error
+           handler can resize. */
+        input = __tinypy_codecs_text_input(vm, source, TINYPY_TRUE, out_error);
         if (input == NULL) {
             return NULL;
         }
@@ -857,10 +871,13 @@ static tinypy_value_t *__tinypy_codecs_error_handler(tinypy_value_t *function, t
         return NULL;
     }
     tinypy_internal_unicode_error_payload_t *payload = (tinypy_internal_unicode_error_payload_t *)tinypy_native_instance_payload(item);
-    if (payload->object != NULL) {
-        object = TINYPY_RET(payload->object);
+    /* get_string and get_unicode of the UnicodeError accessors. */
+    if (payload->object == NULL) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "object attribute not set", out_error);
+        return NULL;
     }
-    if (object == NULL || TINYPY_VALUE_KIND(object) != (decode != 0 ? TINYPY_VALUE_STRING : TINYPY_VALUE_UNICODE)) {
+    object = TINYPY_RET(payload->object);
+    if (TINYPY_VALUE_KIND(object) != (decode != 0 ? TINYPY_VALUE_STRING : TINYPY_VALUE_UNICODE)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, decode != 0 ? "object attribute must be str" : "object attribute must be unicode", out_error);
         goto cleanup;
     }

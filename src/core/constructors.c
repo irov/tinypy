@@ -1990,10 +1990,11 @@ static tinypy_value_t *__tinypy_constructor_unicode_value(tinypy_type_t *type, t
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, kind == TINYPY_VALUE_UNICODE ? "decoding Unicode is not supported" : "decoding bytearray is not supported", out_error);
             return NULL;
         }
-        if (kind == TINYPY_VALUE_BUFFER && TINYPY_VALUE_KIND(TINYPY_BUFFER_OBJECT(value)->owner) == TINYPY_VALUE_UNICODE) {
+        if (kind == TINYPY_VALUE_BUFFER && (TINYPY_VALUE_KIND(TINYPY_BUFFER_OBJECT(value)->owner) == TINYPY_VALUE_UNICODE || tinypy_internal_array_check(TINYPY_BUFFER_OBJECT(value)->owner) != TINYPY_FALSE)) {
             /* PyObject_AsCharBuffer reads the character buffer of a
-               legacy buffer, not its raw code units. */
-            source = tinypy_internal_buffer_character_string(value, out_error);
+               legacy buffer, not its raw code units, and finds none for an
+               array. */
+            source = tinypy_internal_buffer_unicode_source(value, out_error);
             if (source == NULL) {
                 return NULL;
             }
@@ -2758,39 +2759,10 @@ static tinypy_value_t *__tinypy_constructor_call_with_items(tinypy_vm_t *vm, tin
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* import_copyreg is PyImport_Import: it calls the __import__ of the
-   builtins of the running code, or of the VM without any, as
-   __import__('copy_reg', globals, globals, ['__doc__'], 0), so an import
-   hook sees the import and may refuse it. The built-in __import__ makes
-   the same absolute import without the call. */
-static tinypy_value_t *__tinypy_constructor_import_copy_reg(tinypy_vm_t *vm, tinypy_error_t **out_error) {
-    tinypy_frame_object_t *frame = vm->current_frame;
-    tinypy_value_t *builtins = frame != NULL ? frame->builtins : vm->builtins;
-    tinypy_value_t *importer = tinypy_internal_dict_get_optional(vm, builtins, vm->internal_import_key);
-
-    if (importer == NULL) {
-        tinypy_internal_exception_raise_key_error(vm, vm->internal_import_key, out_error);
-        return NULL;
-    }
-    if (tinypy_internal_builtin_is_import(importer) != TINYPY_FALSE) {
-        tinypy_value_t *builtin_module = tinypy_import_module_key(vm->internal_copy_reg_module_name, NULL, NULL, INT32_C(0), out_error);
-        return builtin_module;
-    }
-    TINYPY_INCREF(importer);
-    tinypy_value_t *globals = frame != NULL ? frame->globals : &vm->none_object.base;
-    tinypy_value_t *fromlist = tinypy_list_from_items(vm, &vm->internal_special_doc_key, 1U);
-    tinypy_value_t *level = tinypy_integer_from_i64(vm, INT64_C(0));
-    tinypy_value_t *import_items[] = {vm->internal_copy_reg_module_name, globals, globals, fromlist, level};
-    tinypy_value_t *module = __tinypy_constructor_call_with_items(vm, importer, import_items, 5U, out_error);
-
-    TINYPY_DECREF(level);
-    TINYPY_DECREF(fromlist);
-    TINYPY_DECREF(importer);
-    return module;
-}
-//////////////////////////////////////////////////////////////////////////
+/* import_copyreg imports copy_reg with PyImport_Import, so an import hook
+   sees the import and may refuse it. */
 static tinypy_value_t *__tinypy_constructor_copy_reg_function(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_value_t *module = __tinypy_constructor_import_copy_reg(vm, out_error);
+    tinypy_value_t *module = tinypy_internal_import_module_hooked(vm->internal_copy_reg_module_name, out_error);
 
     if (module == NULL) {
         return NULL;

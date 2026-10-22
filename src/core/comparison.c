@@ -115,6 +115,7 @@ static int32_t __tinypy_comparison_call_optional(tinypy_value_t *value, tinypy_v
 static tinypy_value_t *__tinypy_comparison_call_binary(tinypy_value_t *receiver, tinypy_value_t *name, tinypy_value_t *argument, tinypy_bool_t missing_is_not_implemented, tinypy_error_t **out_error);
 static tinypy_bool_t __tinypy_comparison_equal_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t identity_implies_equal, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
 static tinypy_bool_t __tinypy_comparison_try_coerced(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_bool_t *out_ordered, tinypy_error_t **out_error);
+static tinypy_value_t *__tinypy_comparison_builtin_value_inner(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error);
 
 //////////////////////////////////////////////////////////////////////////
 /* instance_nonzero takes any int from __nonzero__ or __len__, while
@@ -909,7 +910,7 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
         return -1;
     }
     if (TINYPY_VALUE_KIND(item) == TINYPY_VALUE_BUFFER) {
-        tinypy_value_t *characters = tinypy_internal_buffer_character_string(item, out_error);
+        tinypy_value_t *characters = tinypy_internal_buffer_unicode_source(item, out_error);
 
         if (characters == NULL) {
             return -1;
@@ -1821,26 +1822,40 @@ static tinypy_value_t *__tinypy_comparison_sequence_order_value(tinypy_value_t *
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyUnicode_RichCompare coerces a legacy buffer through its character
+   buffer, which a buffer of an array lacks: that comparison falls back to
+   the default order. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_comparison_unicode_buffer_value(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error) {
+    tinypy_bool_t buffer_left = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_BUFFER ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_value_t *buffer = buffer_left != TINYPY_FALSE ? left : right;
+
+    if (tinypy_internal_array_check(TINYPY_BUFFER_OBJECT(buffer)->owner) != TINYPY_FALSE) {
+        int32_t order = tinypy_internal_comparison_fallback_order(left, right);
+        tinypy_value_t *result = __tinypy_comparison_order_value(TINYPY_VALUE_VM(left), operation, order);
+        return result;
+    }
+    tinypy_value_t *text = tinypy_internal_buffer_character_string(buffer, out_error);
+
+    if (text == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *result = buffer_left != TINYPY_FALSE
+        ? __tinypy_comparison_builtin_value_inner(text, right, operation, out_error)
+        : __tinypy_comparison_builtin_value_inner(left, text, operation, out_error);
+
+    TINYPY_DECREF(text);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_comparison_builtin_value_inner(tinypy_value_t *left, tinypy_value_t *right, tinypy_compare_operation_e operation, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
     tinypy_value_type_e right_kind = TINYPY_VALUE_KIND(right);
 
-    /* PyUnicode_FromObject coerces a legacy buffer through its character
-       buffer; containment leaves the operands as they are, since a buffer
-       container is searched item by item and a unicode container coerces
-       its probe itself. */
-    if (((kind == TINYPY_VALUE_UNICODE && right_kind == TINYPY_VALUE_BUFFER) || (kind == TINYPY_VALUE_BUFFER && right_kind == TINYPY_VALUE_UNICODE)) && operation != TINYPY_COMPARE_IN && operation != TINYPY_COMPARE_NOT_IN) {
-        tinypy_value_t *buffer = kind == TINYPY_VALUE_BUFFER ? left : right;
-        tinypy_value_t *text = tinypy_internal_buffer_character_string(buffer, out_error);
-
-        if (text == NULL) {
-            return NULL;
-        }
-        tinypy_value_t *result = kind == TINYPY_VALUE_BUFFER
-            ? __tinypy_comparison_builtin_value_inner(text, right, operation, out_error)
-            : __tinypy_comparison_builtin_value_inner(left, text, operation, out_error);
-
-        TINYPY_DECREF(text);
+    /* Only the rich comparisons coerce: containment leaves the operands as
+       they are, since a buffer container is searched item by item and a
+       unicode container coerces its probe itself. */
+    if (((kind == TINYPY_VALUE_UNICODE && right_kind == TINYPY_VALUE_BUFFER) || (kind == TINYPY_VALUE_BUFFER && right_kind == TINYPY_VALUE_UNICODE)) && operation <= TINYPY_COMPARE_GREATER_EQUAL) {
+        tinypy_value_t *result = __tinypy_comparison_unicode_buffer_value(left, right, operation, out_error);
         return result;
     }
 

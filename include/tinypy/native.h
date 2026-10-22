@@ -51,13 +51,18 @@ typedef tinypy_value_t *(*tinypy_native_compare_t)(tinypy_value_t *instance, voi
  * makes instances iterable by index until IndexError, ahead of mapping_get,
  * and with sequence_length reversible, as sq_item does in CPython; like
  * PySequence_GetItem, the iteration calls it without out_error and reads a
- * failure from the VM error.
+ * failure from the VM error. sequence_get is the sq_item that apply() asks
+ * for, and sequence_length the sq_length of map() and of the negative bounds
+ * of __getslice__, __setslice__ and __delslice__ of a Python subclass.
  * get_attribute and set_attribute are the tp_getattro and tp_setattro of
  * the type: get_attribute answers the lookups, __class__ included, and
  * set_attribute receives every assignment, ahead of any descriptor of the
  * type, and every deletion with a NULL value, as mapping_set receives the
  * deletion of an item; object.__setattr__ and object.__delattr__ stay
- * generic.
+ * generic. An attribute of object that the dictionary of a Python subclass
+ * or of its Python base holds, as __getattribute__ = object.__getattribute__,
+ * overrides the slot that the spec replaced: as update_one_slot, the slot is
+ * object's again, and with __getattr__ the generic lookup runs first.
  * As add_operators names the slots of a C type, the type publishes a slot
  * wrapper for each callback of its spec under the name of its special
  * method, __setattr__ and __delattr__ for set_attribute, __lt__ to __ge__
@@ -70,7 +75,9 @@ typedef tinypy_value_t *(*tinypy_native_compare_t)(tinypy_value_t *instance, voi
  * the type. As update_one_slot, the operations on an instance read a wrapper
  * found under its own name as the slot of their type when the type runs the
  * same callback with the same user data, as the type itself or a Python
- * subclass that copied its spec. The wrapper of a host native base whose
+ * subclass that copied its spec, which keeps the slot of a callback it copied
+ * after an update replaced that callback of its base, for '%' and eval too.
+ * The wrapper of a host native base whose
  * callback the type, or the host native type a Python class copied its spec
  * from, does not dispatch reads as the attribute of the nearest base of that
  * type that is no host native type. Any other wrapper, as one stored under
@@ -155,7 +162,10 @@ tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_typ
  * other values of the namespace of the type stay as they are, and the same
  * spec again changes nothing.
  * The Python subclasses created earlier keep the callbacks they
- * copied from the type, and host native subtypes keep their own spec. A call
+ * copied from the type, and host native subtypes keep their own spec; the
+ * special methods of the subclasses stay the wrappers the type publishes, so
+ * the name of a removed callback is gone from them too though the slot they
+ * copied still runs it. A call
  * that was already dispatching to a removed callback raises TypeError, or
  * returns NotImplemented from a number or comparison slot. */
 tinypy_bool_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);

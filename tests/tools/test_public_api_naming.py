@@ -15,6 +15,7 @@ STATIC_FUNCTION_ROOTS = ("cli", "src", "tests", "tools", "include")
 STATIC_FUNCTION_SUFFIXES = {".c", ".h", ".cpp", ".hpp"}
 FIXED_WIDTH_TYPE_ROOTS = ("cli", "include", "src", "tests", "tools")
 INTERNAL_CORE_UNITS = {
+    "array",
     "codecs",
     "constructors",
     "container_methods",

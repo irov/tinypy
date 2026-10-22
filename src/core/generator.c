@@ -430,7 +430,7 @@ void tinypy_internal_initialize_generator_types(tinypy_vm_t *vm) {
         if (index == (size_t)TINYPY_ITERATOR_TYPE_LIST_REVERSE) {
             tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_length_hint_key, __tinypy_reversed_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
-        else if (index != (size_t)TINYPY_ITERATOR_TYPE_CALLABLE && index != (size_t)TINYPY_ITERATOR_TYPE_FORMATTER && index != (size_t)TINYPY_ITERATOR_TYPE_FIELD_NAME) {
+        else if (index != (size_t)TINYPY_ITERATOR_TYPE_CALLABLE && index != (size_t)TINYPY_ITERATOR_TYPE_FORMATTER && index != (size_t)TINYPY_ITERATOR_TYPE_FIELD_NAME && index != (size_t)TINYPY_ITERATOR_TYPE_ARRAY) {
             tinypy_internal_type_add_method((vm->iterator_types[index]), vm->internal_special_length_hint_key, tinypy_internal_iterator_length_hint_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
         }
     }

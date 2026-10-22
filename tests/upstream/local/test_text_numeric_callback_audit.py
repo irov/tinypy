@@ -434,6 +434,15 @@ class TextNumericCallbackAudit(unittest.TestCase):
                 self.assertEqual(_message(_codecs.lookup_error('ignore'), error),
                                  ('TypeError', 'object attribute must be %s' % message))
 
+    def test_builtin_handlers_report_a_deleted_object(self):
+        for error, names in ((UnicodeEncodeError('ascii', u'a', 0, 1, 'bad'), ('ignore', 'replace', 'xmlcharrefreplace', 'backslashreplace')),
+                             (UnicodeDecodeError('ascii', 'a', 0, 1, 'bad'), ('ignore', 'replace')),
+                             (UnicodeTranslateError(u'a', 0, 1, 'bad'), ('ignore', 'replace'))):
+            del error.object
+            for name in names:
+                self.assertEqual(_message(_codecs.lookup_error(name), error),
+                                 ('TypeError', 'object attribute not set'))
+
     def test_sre_invalid_replacement_reports_item_after_all_callbacks(self):
         events = []
         for answer in (bytearray('X'), buffer('X'), memoryview('X'), 7):
