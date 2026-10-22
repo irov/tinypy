@@ -1101,6 +1101,25 @@ static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tin
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyArg_ParseTuple's "nn" over the two bounds after the receiver of a slice
+   slot wrapper. */
+tinypy_bool_t tinypy_internal_slice_offset_arguments(tinypy_value_t *args, int64_t *out_offsets, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(args);
+
+    for (size_t index = 0U; index < 2U; ++index) {
+        tinypy_value_t *bound = TINYPY_TUPLE_GET(args, index + 1U);
+
+        if (TINYPY_VALUE_KIND(bound) == TINYPY_VALUE_FLOAT) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument expected, got float", out_error);
+            return TINYPY_FALSE;
+        }
+        if (tinypy_internal_number_as_i64(bound, &out_offsets[index], out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Calling an instance slice slot directly converts its C bounds without
    the length adjustment performed by PySequence_GetSlice. */
 tinypy_value_t *tinypy_internal_classic_slice_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -1114,16 +1133,8 @@ tinypy_value_t *tinypy_internal_classic_slice_method(tinypy_value_t *function, t
     if (tinypy_internal_native_method_arguments(function, args, kwargs, count, count, TINYPY_ARITY_STYLE_PARSED, out_error) == 0) {
         return NULL;
     }
-    for (size_t index = 0U; index < 2U; ++index) {
-        tinypy_value_t *bound = TINYPY_TUPLE_GET(args, index + 1U);
-
-        if (TINYPY_VALUE_KIND(bound) == TINYPY_VALUE_FLOAT) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "integer argument expected, got float", out_error);
-            return NULL;
-        }
-        if (tinypy_internal_number_as_i64(bound, &bounds[index], out_error) == 0) {
-            return NULL;
-        }
+    if (tinypy_internal_slice_offset_arguments(args, bounds, out_error) == 0) {
+        return NULL;
     }
     tinypy_value_t *item_name = name == vm->internal_special_getslice_key ? vm->internal_special_getitem_key
         : store != 0 ? vm->internal_special_setitem_key : vm->internal_special_delitem_key;
@@ -1153,8 +1164,9 @@ static tinypy_bool_t __tinypy_item_plain_bound(tinypy_vm_t *vm, tinypy_value_t *
 /* Whether apply_slice and assign_slice use sq_slice and sq_ass_slice: both
    bounds must be offsets, and only classic instances and types with the
    legacy method have the slot, which subclasses keep even when they override
-   __getitem__ and its siblings. A built-in type itself slices the same way
-   without it. */
+   __getitem__ and its siblings. A built-in type other than buffer slices the
+   same way without it; buffer_ass_slice refuses the read-only buffer only
+   after the offsets are converted. */
 static tinypy_bool_t __tinypy_item_uses_offsets(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *start, tinypy_value_t *stop) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(container);
@@ -1165,7 +1177,7 @@ static tinypy_bool_t __tinypy_item_uses_offsets(tinypy_value_t *container, tinyp
     if (kind == TINYPY_VALUE_OLD_INSTANCE) {
         return TINYPY_TRUE;
     }
-    if ((size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && container->type == &vm->types[kind]) {
+    if ((size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && container->type == &vm->types[kind] && kind != TINYPY_VALUE_BUFFER) {
         return TINYPY_FALSE;
     }
     tinypy_bool_t slot = tinypy_internal_object_has_special_key(container, slice_name);
@@ -1187,7 +1199,8 @@ tinypy_value_t *tinypy_internal_get_slice(tinypy_value_t *container, tinypy_valu
             return result;
         }
     }
-    if (__tinypy_item_uses_offsets(container, vm->internal_special_getslice_key, start, stop) != 0) {
+    /* buffer_slice selects what the subscript of a buffer selects. */
+    if (kind != TINYPY_VALUE_BUFFER && __tinypy_item_uses_offsets(container, vm->internal_special_getslice_key, start, stop) != 0) {
         tinypy_value_t *return_value_1 = __tinypy_item_call_offsets(container, vm->internal_special_getslice_key, vm->internal_special_getitem_key, start, stop, NULL, out_error);
         return return_value_1;
     }

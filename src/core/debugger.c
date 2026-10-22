@@ -15,6 +15,7 @@ tinypy_bool_t tinypy_debugger_set(tinypy_vm_t *vm, const tinypy_debugger_t *debu
     if (debugger == NULL || debugger->callback == NULL) {
         (void)memset(&vm->debugger, 0, sizeof(vm->debugger));
         vm->has_debugger = TINYPY_FALSE;
+        vm->debugger_interrupt = TINYPY_FALSE;
         return TINYPY_TRUE;
     }
     if (debugger->abi_version != TINYPY_ABI_VERSION || debugger->struct_size < (uint32_t)sizeof(*debugger)) {
@@ -33,164 +34,158 @@ static tinypy_bool_t __tinypy_debugger_frame_name_equal(tinypy_value_t *value, c
     return equal != 0 ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The fast slots of a name, as PyFrame_FastToLocals maps them: the cell of
+   a cell variable, or of a free variable of an optimized frame, binds the
+   name over an argument of the same name, whose slot comes too, so that a
+   store keeps both as PyFrame_LocalsToFast does. */
 static tinypy_value_t **__tinypy_debugger_frame_slot(tinypy_frame_object_t *frame, const char *name, size_t name_size, tinypy_value_t **out_cell) {
     tinypy_code_object_t *code = TINYPY_CODE_OBJECT(frame->code);
     size_t local_count = (size_t)code->local_count;
     size_t cell_count = TINYPY_TUPLE_SIZE(code->cellvars);
-    size_t free_count = TINYPY_TUPLE_SIZE(code->freevars);
+    size_t free_count = (code->flags & TINYPY_CODE_OPTIMIZED) != 0 ? TINYPY_TUPLE_SIZE(code->freevars) : 0U;
+    tinypy_value_t **slot = NULL;
     size_t index;
 
     *out_cell = NULL;
-    for (index = 0U; index < local_count; ++index) {
+    for (index = 0U; index < local_count && slot == NULL; ++index) {
         if (__tinypy_debugger_frame_name_equal(TINYPY_TUPLE_GET(code->varnames, index), name, name_size) != 0) {
-            return &frame->locals_plus[index];
+            slot = &frame->locals_plus[index];
         }
     }
-    for (index = 0U; index < cell_count; ++index) {
-        if (__tinypy_debugger_frame_name_equal(TINYPY_TUPLE_GET(code->cellvars, index), name, name_size) != 0) {
-            *out_cell = frame->locals_plus[local_count + index];
-            return NULL;
-        }
-    }
-    for (index = 0U; index < free_count; ++index) {
-        if (__tinypy_debugger_frame_name_equal(TINYPY_TUPLE_GET(code->freevars, index), name, name_size) != 0) {
-            *out_cell = frame->locals_plus[local_count + cell_count + index];
-            return NULL;
-        }
-    }
-    return NULL;
-}
-//////////////////////////////////////////////////////////////////////////
-/* Whether the locals tinypy_internal_frame_locals lent are a dict: they are
-   NULL once the frame died, and exec or eval may give a frame another
-   mapping. */
-static tinypy_bool_t __tinypy_debugger_frame_locals_dict(const tinypy_value_t *locals) {
-    tinypy_bool_t dict = locals != NULL && TINYPY_VALUE_KIND(locals) == TINYPY_VALUE_DICT ? TINYPY_TRUE : TINYPY_FALSE;
+    for (index = 0U; index < cell_count + free_count; ++index) {
+        tinypy_value_t *cell_name = index < cell_count ? TINYPY_TUPLE_GET(code->cellvars, index) : TINYPY_TUPLE_GET(code->freevars, index - cell_count);
 
-    return dict;
+        if (__tinypy_debugger_frame_name_equal(cell_name, name, name_size) != 0) {
+            *out_cell = frame->locals_plus[local_count + index];
+            break;
+        }
+    }
+    return slot;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_debugger_frame_get(const tinypy_value_t *frame_value, tinypy_debugger_scope_e scope, const char *name, size_t name_size) {
-    tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame_value);
-    tinypy_value_t *dictionary;
-    tinypy_value_t *key;
-    tinypy_value_t *cell;
-    tinypy_value_t **slot;
+/* Binds, or unbinds for a NULL value, the slots of a name. The values they
+   held are released after both are stored, as STORE_FAST and DELETE_FAST
+   do, since a release can run code that reads them. */
+static void __tinypy_debugger_frame_store(tinypy_value_t **slot, tinypy_value_t *cell, tinypy_value_t *value) {
+    tinypy_value_t *previous = NULL;
+
+    if (slot != NULL) {
+        previous = *slot;
+        if (value != NULL) {
+            TINYPY_INCREF(value);
+        }
+        *slot = value;
+    }
+    if (cell != NULL) {
+        tinypy_cell_set(cell, value);
+    }
+    if (previous != NULL) {
+        TINYPY_DECREF(previous);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The dict of a scope, held: the key comparisons of a lookup can run code
+   that finishes the generator of the frame, which lets its locals go. NULL
+   when the locals are no dict: tinypy_internal_frame_locals lends none once
+   the frame died, and exec or eval may give a frame another mapping. */
+static tinypy_value_t *__tinypy_debugger_frame_dictionary(tinypy_frame_object_t *frame, tinypy_debugger_scope_e scope) {
+    tinypy_value_t *dictionary = NULL;
 
     if (scope == TINYPY_DEBUGGER_SCOPE_LOCALS) {
-        slot = __tinypy_debugger_frame_slot(frame, name, name_size, &cell);
-        if (slot != NULL) {
-            return *slot;
-        }
-        if (cell != NULL) {
-            tinypy_value_t *return_value_1 = tinypy_cell_get(cell);
-            return return_value_1;
-        }
         dictionary = tinypy_internal_frame_locals(frame);
-        if (__tinypy_debugger_frame_locals_dict(dictionary) == 0) {
-            return NULL;
-        }
     }
     else if (scope == TINYPY_DEBUGGER_SCOPE_GLOBALS) {
         dictionary = frame->globals;
     }
-    else {
+    if (dictionary == NULL || TINYPY_VALUE_KIND(dictionary) != TINYPY_VALUE_DICT) {
         return NULL;
     }
+    TINYPY_INCREF(dictionary);
+    return dictionary;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_debugger_frame_get(const tinypy_value_t *frame_value, tinypy_debugger_scope_e scope, const char *name, size_t name_size) {
+    tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT((tinypy_value_t *)frame_value);
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(frame_value);
 
-    key = tinypy_internal_name_from_bytes(TINYPY_VALUE_VM(frame_value), name, name_size);
+    if (scope == TINYPY_DEBUGGER_SCOPE_LOCALS) {
+        tinypy_value_t *cell;
+        tinypy_value_t **slot = __tinypy_debugger_frame_slot(frame, name, name_size, &cell);
+
+        if (cell != NULL) {
+            tinypy_value_t *content = tinypy_cell_get(cell);
+            return content;
+        }
+        if (slot != NULL) {
+            return *slot;
+        }
+    }
+    tinypy_value_t *dictionary = __tinypy_debugger_frame_dictionary(frame, scope);
+    if (dictionary == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
     tinypy_value_t *value = tinypy_dict_get_optional(dictionary, key);
+    /* The values of a dict that the lookup let go leave with it. */
+    if (TINYPY_REFCNT(dictionary) == 1) {
+        value = NULL;
+    }
     TINYPY_DECREF(key);
+    TINYPY_DECREF(dictionary);
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_debugger_frame_set(tinypy_value_t *frame_value, tinypy_debugger_scope_e scope, const char *name, size_t name_size, tinypy_value_t *value) {
     tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT(frame_value);
-    tinypy_value_t *dictionary;
-    tinypy_value_t *key;
-    tinypy_value_t *cell;
-    tinypy_value_t **slot;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(frame_value);
 
     if (scope == TINYPY_DEBUGGER_SCOPE_LOCALS) {
-        slot = __tinypy_debugger_frame_slot(frame, name, name_size, &cell);
-        if (slot != NULL) {
-            tinypy_value_t *previous = *slot;
+        tinypy_value_t *cell;
+        tinypy_value_t **slot = __tinypy_debugger_frame_slot(frame, name, name_size, &cell);
 
-            TINYPY_INCREF(value);
-            *slot = value;
-            if (previous != NULL) {
-                TINYPY_DECREF(previous);
-            }
+        if (slot != NULL || cell != NULL) {
+            __tinypy_debugger_frame_store(slot, cell, value);
             return TINYPY_TRUE;
         }
-        if (cell != NULL) {
-            tinypy_cell_set(cell, value);
-            return TINYPY_TRUE;
-        }
-        dictionary = tinypy_internal_frame_locals(frame);
-        if (__tinypy_debugger_frame_locals_dict(dictionary) == 0) {
-            return TINYPY_FALSE;
-        }
     }
-    else if (scope == TINYPY_DEBUGGER_SCOPE_GLOBALS) {
-        dictionary = frame->globals;
-    }
-    else {
+    tinypy_value_t *dictionary = __tinypy_debugger_frame_dictionary(frame, scope);
+    if (dictionary == NULL) {
         return TINYPY_FALSE;
     }
-
-    key = tinypy_internal_name_from_bytes(TINYPY_VALUE_VM(frame_value), name, name_size);
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
     tinypy_dict_set(dictionary, key, value);
     TINYPY_DECREF(key);
+    TINYPY_DECREF(dictionary);
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_debugger_frame_delete(tinypy_value_t *frame_value, tinypy_debugger_scope_e scope, const char *name, size_t name_size) {
     tinypy_frame_object_t *frame = TINYPY_FRAME_OBJECT(frame_value);
-    tinypy_value_t *dictionary;
-    tinypy_value_t *key;
-    tinypy_value_t *cell;
-    tinypy_value_t **slot;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(frame_value);
 
     if (scope == TINYPY_DEBUGGER_SCOPE_LOCALS) {
-        slot = __tinypy_debugger_frame_slot(frame, name, name_size, &cell);
-        if (slot != NULL) {
-            tinypy_value_t *previous = *slot;
+        tinypy_value_t *cell;
+        tinypy_value_t **slot = __tinypy_debugger_frame_slot(frame, name, name_size, &cell);
 
-            if (previous == NULL) {
+        if (slot != NULL || cell != NULL) {
+            tinypy_value_t *bound = cell != NULL ? tinypy_cell_get(cell) : *slot;
+
+            if (bound == NULL) {
                 return TINYPY_FALSE;
             }
-            *slot = NULL;
-            TINYPY_DECREF(previous);
+            __tinypy_debugger_frame_store(slot, cell, NULL);
             return TINYPY_TRUE;
         }
-        if (cell != NULL) {
-            if (tinypy_cell_get(cell) == NULL) {
-                return TINYPY_FALSE;
-            }
-            tinypy_cell_set(cell, NULL);
-            return TINYPY_TRUE;
-        }
-        dictionary = tinypy_internal_frame_locals(frame);
-        if (__tinypy_debugger_frame_locals_dict(dictionary) == 0) {
-            return TINYPY_FALSE;
-        }
     }
-    else if (scope == TINYPY_DEBUGGER_SCOPE_GLOBALS) {
-        dictionary = frame->globals;
-    }
-    else {
+    tinypy_value_t *dictionary = __tinypy_debugger_frame_dictionary(frame, scope);
+    if (dictionary == NULL) {
         return TINYPY_FALSE;
     }
-
-    key = tinypy_internal_name_from_bytes(TINYPY_VALUE_VM(frame_value), name, name_size);
-    if (tinypy_dict_contains(dictionary, key) == 0) {
-        TINYPY_DECREF(key);
-        return TINYPY_FALSE;
-    }
-    tinypy_dict_delete(dictionary, key);
+    tinypy_value_t *key = tinypy_internal_name_from_bytes(vm, name, name_size);
+    tinypy_bool_t deleted = tinypy_internal_dict_delete_optional(vm, dictionary, key);
     TINYPY_DECREF(key);
-    return TINYPY_TRUE;
+    TINYPY_DECREF(dictionary);
+    return deleted;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_debugger_frame_sync(tinypy_value_t *frame_value) {

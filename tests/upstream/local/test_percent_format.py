@@ -64,6 +64,34 @@ class PercentFormat(unittest.TestCase):
         self.assertEqual('%(k)s' % Mapping(), u'B')
         self.assertEqual(events, ['str', 'str', 'released', 'unicode'])
 
+    def test_ascii_unicode_restart_looks_dict_keys_up_again(self):
+        events = []
+        class Key(object):
+            def __hash__(self):
+                return hash('k')
+            def __eq__(self, other):
+                events.append(type(other))
+                return False
+        class Rebinding(object):
+            def __str__(self):
+                mapping['k'] = u'rebound'
+                return u'first'
+        mapping = {Key(): None, 'k': u'K', 'n': 1}
+        del events[:]
+        self.assertEqual('%(k)s-%(n)d' % mapping, u'K-1')
+        self.assertEqual(events, [str, unicode])
+        mapping = {'k': Rebinding()}
+        self.assertEqual('<%(k)s>' % mapping, u'<rebound>')
+
+    def test_ascii_unicode_restart_counts_index_from_its_conversion(self):
+        for operand, message in ((u'x', "unsupported format character 'y' (0x79) at index 4"), ('x', "unsupported format character 'y' (0x79) at index 6")):
+            with self.assertRaises(ValueError) as caught:
+                'ab%s %y' % (operand, 1)
+            self.assertEqual(str(caught.exception), message)
+        with self.assertRaises(ValueError) as caught:
+            'ab%s %\x01' % (u'x', 1)
+        self.assertEqual(str(caught.exception), "unsupported format character '?' (0x1) at index 4")
+
     def test_mapping_lookup_order(self):
         class Lookup(object):
             def __init__(self):

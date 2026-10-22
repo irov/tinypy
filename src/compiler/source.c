@@ -455,9 +455,10 @@ void tinypy_internal_compiler_semantic_error_parts(tinypy_compile_ctx_t *ctx, co
     tinypy_internal_compiler_semantic_error(ctx, message, line_number, include_location);
 }
 //////////////////////////////////////////////////////////////////////////
-/* The str() of an exception, copied into the arena; no message once an
-   error was reported, which the compile keeps. */
-static const char *__tinypy_compiler_exception_message(tinypy_compile_ctx_t *ctx, tinypy_value_t *exception, size_t *out_size) {
+/* The str() of an exception, copied into the arena, or the fixed message
+   of the decoder when str() raises anything but a MemoryError; no message
+   once an error was reported, which the compile keeps. */
+static const char *__tinypy_compiler_exception_message(tinypy_compile_ctx_t *ctx, tinypy_value_t *exception, const char *unknown, size_t *out_size) {
     TINYPY_INCREF(exception);
     tinypy_vm_clear_error(ctx->vm);
     if (ctx->failed != 0) {
@@ -467,9 +468,17 @@ static const char *__tinypy_compiler_exception_message(tinypy_compile_ctx_t *ctx
     tinypy_error_t *render_error = NULL;
     tinypy_value_t *rendered = tinypy_object_str(exception, &render_error);
     TINYPY_DECREF(exception);
-    if (rendered == NULL) {
+    if (rendered == NULL && render_error != NULL && tinypy_error_kind(render_error) == TINYPY_ERROR_MEMORY) {
         tinypy_internal_compiler_operation_error(ctx, TINYPY_ERROR_MEMORY, render_error, "memory allocation failed", 0, 0);
         return NULL;
+    }
+    if (rendered == NULL) {
+        if (render_error != NULL) {
+            tinypy_error_release(render_error);
+        }
+        tinypy_internal_exception_clear_raised(ctx->vm);
+        *out_size = strlen(unknown);
+        return unknown;
     }
     size_t message_size;
     const char *message = tinypy_string_view(rendered, &message_size);
@@ -485,7 +494,7 @@ static const char *__tinypy_compiler_exception_message(tinypy_compile_ctx_t *ctx
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_compiler_decode_error(tinypy_compile_ctx_t *ctx, tinypy_value_t *exception, int32_t line_number, tinypy_bool_t literal) {
     size_t message_size;
-    const char *message = __tinypy_compiler_exception_message(ctx, exception, &message_size);
+    const char *message = __tinypy_compiler_exception_message(ctx, exception, literal != 0 ? "unknown error" : "unknown decode error", &message_size);
 
     if (message == NULL) {
         return;
@@ -504,10 +513,12 @@ void tinypy_internal_compiler_decode_error(tinypy_compile_ctx_t *ctx, tinypy_val
     tinypy_internal_compiler_error_text(ctx, TINYPY_ERROR_SOURCE_DECODING, message, line_number, 0, NULL, 0U, ctx->out_error);
 }
 //////////////////////////////////////////////////////////////////////////
-/* Whether bytes decode in a codec; a failure leaves its message in the
-   arena, or no message once a limit diagnostic was reported. The exception
-   the codec raised is cleared. */
-static tinypy_bool_t __tinypy_compiler_decode(tinypy_compile_ctx_t *ctx, const uint8_t *bytes, size_t size, tinypy_value_t *encoding, const char **out_message, size_t *out_message_size) {
+/* The text bytes decode to in a codec with the strict error handler, the
+   replacements of a handler registered for it included; the decoder keeps
+   a sequence the bytes cut unless final. A failure leaves its message in
+   the arena, or no message once a limit diagnostic was reported. The
+   exception the codec raised is cleared. */
+static tinypy_value_t *__tinypy_compiler_decode(tinypy_compile_ctx_t *ctx, const uint8_t *bytes, size_t size, tinypy_value_t *encoding, tinypy_bool_t final, size_t *out_consumed, const char **out_message, size_t *out_message_size) {
     tinypy_vm_t *vm = ctx->vm;
     tinypy_value_t *text = tinypy_string_from_bytes(vm, bytes, size);
     tinypy_error_t *decode_error = NULL;
@@ -516,24 +527,23 @@ static tinypy_bool_t __tinypy_compiler_decode(tinypy_compile_ctx_t *ctx, const u
     *out_message_size = 0U;
     if (text == NULL) {
         tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "source exceeds compiler byte limit", 0, 0, ctx->out_error);
-        return TINYPY_FALSE;
+        return NULL;
     }
-    tinypy_value_t *decoded = tinypy_internal_text_codec(vm, text, encoding, NULL, TINYPY_TRUE, TINYPY_TRUE, NULL, &decode_error);
+    tinypy_value_t *decoded = tinypy_internal_text_codec(vm, text, encoding, NULL, TINYPY_TRUE, final, out_consumed, &decode_error);
     TINYPY_DECREF(text);
     if (decode_error != NULL) {
         tinypy_error_release(decode_error);
     }
     if (decoded != NULL) {
-        TINYPY_DECREF(decoded);
-        return TINYPY_TRUE;
+        return decoded;
     }
     if (vm->raised_value == NULL) {
         ctx->failed = TINYPY_TRUE;
-        return TINYPY_FALSE;
+        return NULL;
     }
-    *out_message = __tinypy_compiler_exception_message(ctx, vm->raised_value, out_message_size);
+    *out_message = __tinypy_compiler_exception_message(ctx, vm->raised_value, "unknown decode error", out_message_size);
     tinypy_vm_clear_error(vm);
-    return TINYPY_FALSE;
+    return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The StreamReader of the UTF-8 or ASCII codec of Python 2, which reads a
@@ -768,28 +778,54 @@ static tinypy_bool_t __tinypy_compiler_stream_lines(tinypy_compiler_stream_reade
 /* A file whose cookie names the UTF-8 or ASCII codec without a fast path is
    read after the cookie line through the codec's StreamReader. The
    tokenizer sees a read that raises on the line it reads then; without
-   one, the size of the text the reads decode, which leaves out a sequence
-   the end of the file cuts. */
-static tinypy_bool_t __tinypy_compiler_file_decoding(tinypy_compile_ctx_t *ctx, const uint8_t *rest, size_t size, int32_t cookie_line, tinypy_bool_t utf8, size_t *out_decoded_size) {
+   one, the text the reads decode, which leaves out a sequence the end of
+   the file cuts. The source becomes that text when an error handler
+   registered for strict replaces the errors: the read its first error
+   fails stands for each read from there on, and the rest of the file for
+   the reads after it. */
+static tinypy_bool_t __tinypy_compiler_file_decoding(tinypy_compile_ctx_t *ctx, const uint8_t **io_input, size_t *io_size, size_t rest_offset, int32_t cookie_line, tinypy_bool_t utf8) {
+    const uint8_t *rest = *io_input + rest_offset;
+    size_t size = *io_size - rest_offset;
     tinypy_compiler_stream_reader_t reader = {rest, size, utf8, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
 
-    *out_decoded_size = size;
     tinypy_bool_t invalid;
     if (__tinypy_compiler_stream_decode(&reader, 0U, size, &invalid) == size) {
         return TINYPY_TRUE;
     }
     size_t line_count;
     if (__tinypy_compiler_stream_lines(&reader, &line_count) != 0) {
-        *out_decoded_size = reader.decoded;
+        *io_size = rest_offset + reader.decoded;
         return TINYPY_TRUE;
     }
     tinypy_value_t *encoding = TINYPY_RET(utf8 != 0 ? ctx->vm->internal_codec_utf8_name : ctx->vm->internal_codec_ascii_name);
     const char *message;
     size_t message_size;
-    tinypy_bool_t decoded = __tinypy_compiler_decode(ctx, rest + reader.error_begin, reader.error_end - reader.error_begin, encoding, &message, &message_size);
+    size_t consumed;
+    tinypy_value_t *decoded = __tinypy_compiler_decode(ctx, rest + reader.error_begin, reader.error_end - reader.error_begin, encoding, TINYPY_FALSE, &consumed, &message, &message_size);
+    tinypy_value_t *remainder = NULL;
+    if (decoded != NULL) {
+        size_t remainder_begin = reader.error_begin + consumed;
+
+        remainder = __tinypy_compiler_decode(ctx, rest + remainder_begin, size - remainder_begin, encoding, TINYPY_FALSE, &consumed, &message, &message_size);
+    }
     TINYPY_DECREF(encoding);
-    if (decoded != 0) {
+    if (remainder != NULL) {
+        const char *parts[] = {(const char *)*io_input, (const char *)TINYPY_TEXT_BYTES(decoded), (const char *)TINYPY_TEXT_BYTES(remainder)};
+        size_t sizes[] = {rest_offset + reader.error_begin, TINYPY_TEXT_BYTE_SIZE(decoded), TINYPY_TEXT_BYTE_SIZE(remainder)};
+        const char *text = __tinypy_compiler_join_parts(ctx, parts, sizes, 3U);
+
+        TINYPY_DECREF(remainder);
+        TINYPY_DECREF(decoded);
+        if (text == NULL) {
+            tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "source normalization exceeds compiler arena limit", 0, 0, ctx->out_error);
+            return TINYPY_FALSE;
+        }
+        *io_input = (const uint8_t *)text;
+        *io_size = sizes[0] + sizes[1] + sizes[2];
         return TINYPY_TRUE;
+    }
+    if (decoded != NULL) {
+        TINYPY_DECREF(decoded);
     }
     if (message == NULL) {
         return TINYPY_FALSE;
@@ -970,6 +1006,7 @@ static tinypy_bool_t __tinypy_compiler_apply_cookie(tinypy_compile_ctx_t *ctx, c
     else {
         *out_codec = __tinypy_compiler_cookie_codec(ctx, cookie, cookie_size);
         ctx->source_literals_encoded = *out_codec == TINYPY_INTERNAL_BUILTIN_CODEC_ASCII || *out_codec == TINYPY_INTERNAL_BUILTIN_CODEC_LATIN1 ? TINYPY_TRUE : TINYPY_FALSE;
+        ctx->source_literals_ascii = *out_codec == TINYPY_INTERNAL_BUILTIN_CODEC_ASCII ? TINYPY_TRUE : TINYPY_FALSE;
     }
     if (*out_codec == TINYPY_INTERNAL_BUILTIN_CODEC_LATIN1) {
         ctx->source_diagnostic_latin1 = TINYPY_TRUE;
@@ -1097,12 +1134,9 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         ctx->source_final_newline_added = TINYPY_TRUE;
         universal_newlines_end = rest_offset;
         if (codec == TINYPY_INTERNAL_BUILTIN_CODEC_ASCII || codec == TINYPY_INTERNAL_BUILTIN_CODEC_UTF8) {
-            size_t decoded_size;
-
-            if (__tinypy_compiler_file_decoding(ctx, input + rest_offset, source_size - rest_offset, cookie_line, codec == TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 ? TINYPY_TRUE : TINYPY_FALSE, &decoded_size) == 0) {
+            if (__tinypy_compiler_file_decoding(ctx, &input, &source_size, rest_offset, cookie_line, codec == TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 ? TINYPY_TRUE : TINYPY_FALSE) == 0) {
                 return TINYPY_FALSE;
             }
-            source_size = rest_offset + decoded_size;
             input = __tinypy_compiler_join_surrogates(ctx, input, source_size, rest_offset, &source_size);
             if (input == NULL) {
                 return TINYPY_FALSE;
@@ -1171,11 +1205,16 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     tinypy_bool_t utf8 = codec == TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *encoding = TINYPY_RET(utf8 != 0 ? ctx->vm->internal_codec_utf8_name : ctx->vm->internal_codec_ascii_name);
     /* translate_into_utf8 decodes the whole string before tokenizing and
-       encodes it again. */
+       encodes it again, with the replacements of an error handler
+       registered for strict. */
     const char *message;
     size_t message_size;
-    tinypy_bool_t prepared = __tinypy_compiler_decode(ctx, output, output_size, encoding, &message, &message_size);
-    if (prepared == 0 && message != NULL) {
+    tinypy_value_t *decoded = __tinypy_compiler_decode(ctx, output, output_size, encoding, TINYPY_TRUE, NULL, &message, &message_size);
+    TINYPY_DECREF(encoding);
+    if (decoded == NULL) {
+        if (message == NULL) {
+            return TINYPY_FALSE;
+        }
         tinypy_compiler_stream_reader_t reader = {output, output_size, utf8, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
         tinypy_bool_t invalid;
         size_t decode_offset = __tinypy_compiler_stream_decode(&reader, 0U, output_size, &invalid);
@@ -1184,11 +1223,21 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
         if (out_error != NULL && *out_error != NULL) {
             __tinypy_compiler_byte_position(output, decode_offset, &(*out_error)->line_number, &(*out_error)->column_offset);
         }
+        return TINYPY_FALSE;
     }
-    TINYPY_DECREF(encoding);
-    if (prepared != 0) {
-        ctx->source.bytes = __tinypy_compiler_join_surrogates(ctx, output, output_size, 0U, &ctx->source.size);
-        prepared = ctx->source.bytes != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    const char *text = (const char *)output;
+    size_t text_size = TINYPY_TEXT_BYTE_SIZE(decoded);
+    if (text_size != output_size || memcmp(TINYPY_TEXT_BYTES(decoded), output, output_size) != 0) {
+        const char *decoded_text = (const char *)TINYPY_TEXT_BYTES(decoded);
+
+        text = __tinypy_compiler_join_parts(ctx, &decoded_text, &text_size, 1U);
     }
+    TINYPY_DECREF(decoded);
+    if (text == NULL) {
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "source normalization exceeds compiler arena limit", 0, 0, out_error);
+        return TINYPY_FALSE;
+    }
+    ctx->source.bytes = __tinypy_compiler_join_surrogates(ctx, (const uint8_t *)text, text_size, 0U, &ctx->source.size);
+    tinypy_bool_t prepared = ctx->source.bytes != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     return prepared;
 }

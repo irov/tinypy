@@ -245,6 +245,18 @@ class NumericSemantics(unittest.TestCase):
             for difference in (3L - complex(value, value), complex(value, value).__rsub__(3), complex(3, 3) - complex(value, value)):
                 self.assertEqual((bits(difference.real), bits(difference.imag)), (expected, expected))
 
+    def test_integer_power_goes_on_from_the_step_that_overflows(self):
+        class Small(int):
+            pass
+
+        for base, exponent in ((3, 45), (3, 41), (-3, 45), (10, 25), (2, 64), (-2, 65), (7, 30), (3037000499, 3), (-3037000500, 3), (2 ** 31, 3), (Small(3), 45)):
+            expected = 1L
+            for _ in range(exponent):
+                expected *= base
+            for result in (base ** exponent, pow(base, exponent), base ** long(exponent), long(base) ** exponent):
+                self.assertEqual((type(result), result), (long, expected))
+        self.assertEqual((3 ** 2L, (-3) ** 3L, type(3 ** 2L)), (9L, -27L, long))
+
     def test_integer_power_keeps_int_until_a_step_overflows(self):
         def kinds(values):
             return [(type(value).__name__, value) for value in values]

@@ -140,6 +140,215 @@ class WeakrefProtocolAudit(unittest.TestCase):
                 name = None
             self.assertRaises(ReferenceError, type(proxy).__getattribute__, proxy, name_proxy)
 
+    def test_proxy_class_comes_from_the_referent(self):
+        class Base(object):
+            def method(self):
+                return 'base'
+        class Derived(Base):
+            def method(self):
+                return ('derived', super(Derived, self).method())
+        class Old:
+            pass
+        target = Derived()
+        proxy = weakref.proxy(target)
+        self.assertIs(proxy.__class__, Derived)
+        self.assertTrue(isinstance(proxy, Base))
+        self.assertEqual(Derived.method(proxy), ('derived', 'base'))
+        self.assertEqual(super(Derived, proxy).method(), 'base')
+        self.assertIs(object.__reduce_ex__(proxy, 2)[1][0], Derived)
+        old = Old()
+        self.assertIs(weakref.proxy(old).__class__, Old)
+        function = lambda: None
+        self.assertIs(weakref.proxy(function).__class__, type(function))
+        dead = weakref.proxy(Derived())
+        self.assertRaises(ReferenceError, getattr, dead, '__class__')
+
+    def test_proxy_class_assignment_reaches_the_referent(self):
+        class First(object):
+            pass
+        class Second(object):
+            pass
+        target = First()
+        proxy = weakref.proxy(target)
+        proxy.__class__ = Second
+        self.assertIs(type(target), Second)
+        with self.assertRaises(TypeError) as error:
+            del proxy.__class__
+        self.assertEqual(error.exception.args, ("can't delete __class__ attribute",))
+
+    def test_proxy_attribute_wrappers_check_names_after_the_referent(self):
+        events = []
+        class Target(object):
+            def __getattr__(self, name):
+                events.append(name)
+                return name
+        target = Target()
+        target.present = 1
+        proxy = weakref.proxy(target)
+        cases = ((weakref.ProxyType.__getattribute__, (proxy, 5)), (weakref.ProxyType.__getattribute__, (proxy, None)),
+                 (weakref.ProxyType.__setattr__, (proxy, 5, 1)), (weakref.ProxyType.__delattr__, (proxy, 123456789)),
+                 (weakref.ProxyType.__delattr__, (proxy, 10 ** 30)), (weakref.ProxyType.__delattr__, (proxy, 2.5)))
+        for wrapper, arguments in cases:
+            with self.assertRaises(TypeError) as error:
+                wrapper(*arguments)
+            self.assertEqual(error.exception.args, ("attribute name must be string, not '%s'" % type(arguments[1]).__name__,))
+        self.assertEqual(events, [])
+        weakref.ProxyType.__setattr__(proxy, u'added', 2)
+        self.assertEqual((weakref.ProxyType.__getattribute__(proxy, u'added'), target.added), (2, 2))
+        weakref.ProxyType.__delattr__(proxy, u'added')
+        self.assertNotIn('added', target.__dict__)
+        dead = weakref.proxy(Target())
+        for wrapper, arguments in ((weakref.ProxyType.__getattribute__, (dead, 5)), (weakref.ProxyType.__setattr__, (dead, 5, 1)),
+                                   (weakref.ProxyType.__delattr__, (dead, 5))):
+            self.assertRaises(ReferenceError, wrapper, *arguments)
+
+    def test_proxy_assignment_and_deletion_reach_the_referent(self):
+        events = []
+        class Hooked(object):
+            def __setattr__(self, name, value):
+                events.append(('set', name, value))
+            def __delattr__(self, name):
+                events.append(('del', name))
+        class Plain(object):
+            pass
+        hooked = Hooked()
+        proxy = weakref.proxy(hooked)
+        proxy.first = 1
+        del proxy.first
+        setattr(proxy, u'second', 2)
+        self.assertEqual(events, [('set', 'first', 1), ('del', 'first'), ('set', 'second', 2)])
+        plain = Plain()
+        proxy = weakref.proxy(plain)
+        proxy.value = 3
+        self.assertEqual(plain.__dict__, {'value': 3})
+        del proxy.value
+        with self.assertRaises(AttributeError) as error:
+            del proxy.value
+        self.assertEqual(error.exception.args, ('value',))
+        for wrapper in (object.__setattr__, object.__delattr__):
+            arguments = (proxy, 'value', 1) if wrapper is object.__setattr__ else (proxy, 'value')
+            with self.assertRaises(TypeError) as error:
+                wrapper(*arguments)
+            self.assertEqual(error.exception.args, ("can't apply this %s to weakproxy object" % wrapper.__name__,))
+        self.assertTrue(set(['__setattr__', '__delattr__', '__str__']) <= set(weakref.ProxyType.__dict__))
+
+    def test_proxy_str_wrapper_converts_the_referent(self):
+        class Text(object):
+            def __call__(self):
+                return None
+            def __str__(self):
+                return 'text'
+        target = Text()
+        proxy = weakref.proxy(target)
+        self.assertEqual((type(proxy).__str__(proxy), str(proxy), unicode(proxy), u'%s' % proxy), ('text', 'text', u'text', u'text'))
+        target = None
+        self.assertRaises(ReferenceError, unicode, proxy)
+        self.assertRaises(ReferenceError, type(proxy).__str__, proxy)
+
+    def test_proxy_compare_wrapper_takes_proxies_alone(self):
+        events = []
+        class Ordered(object):
+            def __init__(self, value):
+                self.value = value
+            def __cmp__(self, other):
+                events.append(other.value)
+                return cmp(self.value, other.value)
+        first, second = Ordered(1), Ordered(2)
+        left, right = weakref.proxy(first), weakref.proxy(second)
+        self.assertEqual((cmp(left, right), events), (-1, [2]))
+        self.assertEqual(weakref.ProxyType.__cmp__(left, right), -1)
+        with self.assertRaises(TypeError) as error:
+            weakref.ProxyType.__cmp__(left, 5)
+        self.assertEqual(error.exception.args, ("weakproxy.__cmp__(x,y) requires y to be a 'weakproxy', not a 'int'",))
+        with self.assertRaises(TypeError) as error:
+            weakref.ProxyType.__cmp__(left)
+        self.assertEqual(error.exception.args, ('expected 1 arguments, got 0',))
+
+    def test_proxy_orders_as_a_number_against_other_types(self):
+        class Coercing(object):
+            def __coerce__(self, other):
+                return None
+        target = Target()
+        proxy = weakref.proxy(target)
+        self.assertEqual((proxy < u'a', proxy < 'a', proxy < [], proxy < (1,), u'a' < proxy, cmp(proxy, u'a')),
+                         (True, True, True, True, False, -1))
+        self.assertIs(min([u'a', proxy]), proxy)
+        self.assertRaises(TypeError, lambda: Coercing() == proxy)
+
+    def test_proxy_unary_length_and_iteration_follow_the_builtins(self):
+        class Old:
+            pass
+        class Sized(object):
+            def __init__(self, length):
+                self.length = length
+            def __len__(self):
+                return self.length
+        class OldSized:
+            def __len__(self):
+                return 3L
+        old = Old()
+        with self.assertRaises(AttributeError) as error:
+            abs(weakref.proxy(old))
+        self.assertEqual(error.exception.args, ("Old instance has no attribute '__abs__'",))
+        for length, kind, message in ((-1, ValueError, '__len__() should return >= 0'), ('3', TypeError, 'an integer is required')):
+            sized = Sized(length)
+            with self.assertRaises(kind) as error:
+                len(weakref.proxy(sized))
+            self.assertEqual(error.exception.args, (message,))
+        sized = Sized(3.0)
+        self.assertEqual(len(weakref.proxy(sized)), 3)
+        old_sized = OldSized()
+        with self.assertRaises(TypeError) as error:
+            len(weakref.proxy(old_sized))
+        self.assertEqual(error.exception.args, ('__len__() should return an int',))
+        target = Target()
+        with self.assertRaises(TypeError) as error:
+            next(weakref.proxy(target))
+        self.assertEqual(error.exception.args, ("'Target' object is not iterable",))
+
+    def test_proxy_slice_wrappers_read_c_long_bounds(self):
+        events = []
+        class Sliced(object):
+            def __getslice__(self, start, stop):
+                return start, stop
+            def __setslice__(self, start, stop, value):
+                events.append((start, stop, value))
+            def __getitem__(self, key):
+                return key
+        class Integral(object):
+            def __int__(self):
+                return 2
+            def __index__(self):
+                return 1
+        target = Sliced()
+        proxy = weakref.proxy(target)
+        self.assertEqual(weakref.ProxyType.__getslice__(proxy, Integral(), True), (2, 1))
+        self.assertEqual(proxy[Integral():2], (1, 2))
+        weakref.ProxyType.__setslice__(proxy, 1, 2, 'value')
+        self.assertEqual(events, [(1, 2, 'value')])
+        for bound, kind, message in (('a', TypeError, 'an integer is required'), (2.5, TypeError, 'integer argument expected, got float'),
+                                     (10 ** 20, OverflowError, 'Python int too large to convert to C long')):
+            with self.assertRaises(kind) as error:
+                weakref.ProxyType.__getslice__(proxy, bound, 2)
+            self.assertEqual(error.exception.args, (message,))
+        with self.assertRaises(TypeError) as error:
+            weakref.ProxyType.__getslice__(proxy, 1)
+        self.assertEqual(error.exception.args, ('function takes exactly 2 arguments (1 given)',))
+        dead = weakref.proxy(Sliced())
+        self.assertRaises(TypeError, weakref.ProxyType.__getslice__, dead, 'a', 2)
+        self.assertRaises(ReferenceError, weakref.ProxyType.__getslice__, dead, 1, 2)
+
+    def test_classic_call_through_getattr_makes_a_callable_proxy(self):
+        class Old:
+            def __getattr__(self, name):
+                if name == '__call__':
+                    return lambda *arguments: arguments
+                raise AttributeError(name)
+        target = Old()
+        proxy = weakref.proxy(target)
+        self.assertIs(type(proxy), weakref.CallableProxyType)
+        self.assertEqual(proxy(1, 2), (1, 2))
+
     def test_constructor_count_precedes_keywords(self):
         with self.assertRaises(TypeError) as error:
             weakref.ref(extra=1)

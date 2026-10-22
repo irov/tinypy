@@ -1907,6 +1907,100 @@ class ObjectProtocols(unittest.TestCase):
         finally:
             restore()
 
+    def test_copy_reg_helpers_use_the_protocols_of_copy_reg_py(self):
+        import copy_reg
+
+        class Plain(object):
+            pass
+
+        class Parts(object):
+            real = 'r'
+            imag = 'i'
+
+        instance = Plain()
+        instance.a = 1
+        for protocol in (1L, None, 1.0, -1):
+            self.assertEqual(copy_reg._reduce_ex(instance, protocol)[2], {'a': 1})
+        for protocol in (2, 'x'):
+            self.assert_message(AssertionError, '', copy_reg._reduce_ex, instance, protocol)
+        self.assert_message(TypeError, 'int.__new__(X): X is not a type object (int)', copy_reg.__newobj__, 1)
+        self.assert_message(TypeError, 'int.__new__(X): X is not a type object (int)', copy_reg._reconstructor, 5, 5, 5)
+        self.assert_message(AttributeError, "'int' object has no attribute '__dict__'", copy_reg._slotnames, 1)
+        self.assertEqual(copy_reg._slotnames(instance), [])
+        self.assertEqual(instance.__slotnames__, [])
+        self.assertEqual(copy_reg.pickle_complex(Parts()), (complex, ('r', 'i')))
+        self.assertEqual(copy_reg.pickle_complex(3L), (complex, (3L, 0L)))
+        self.assert_message(ValueError, 'code out of range', copy_reg.add_extension, 'module', 'name', '0')
+        self.assert_message(ValueError, "invalid literal for int() with base 10: 'x'", copy_reg.add_extension, 'module', 'name', 'x')
+        self.assert_message(TypeError, "unhashable type: 'list'", copy_reg.add_extension, [], 'name', 5)
+        try:
+            copy_reg.add_extension(1, 1, '5')
+            copy_reg.add_extension(1, 1, 5.5)
+            self.assertEqual(copy_reg._extension_registry[(1, 1)], 5)
+            self.assert_message(ValueError, 'key (1, 1) is already registered with code 5', copy_reg.add_extension, 1, 1, 6)
+            self.assert_message(ValueError, 'code 5 is already in use for key (1, 1)', copy_reg.add_extension, 2, 2, 5)
+            self.assert_message(ValueError, 'key (1, 1) is not registered with code 5', copy_reg.remove_extension, 1, 1, '5')
+            copy_reg.remove_extension(1, 1, 5)
+            self.assertEqual((copy_reg._extension_registry, copy_reg._inverted_registry), ({}, {}))
+        finally:
+            copy_reg._extension_registry.pop((1, 1), None)
+            copy_reg._inverted_registry.pop(5, None)
+
+    def test_basestring_subclasses_are_not_instantiable(self):
+        class Text(basestring):
+            pass
+
+        class Derived(Text):
+            def __new__(cls):
+                return basestring.__new__(cls)
+
+        message = 'The basestring type cannot be instantiated'
+        for function, args in ((basestring, ()), (Text, ()), (Derived, ()), (basestring.__new__, (Text,))):
+            self.assert_message(TypeError, message, function, *args)
+        self.assert_message(TypeError, 'basestring.__new__(str) is not safe, use str.__new__()', basestring.__new__, str)
+        self.assert_message(TypeError, 'object.__new__(Text) is not safe, use basestring.__new__()', object.__new__, Text)
+
+    def test_class_calls_skip_only_an_object_init_without_checks(self):
+        class Plain(object):
+            pass
+
+        class Creator(object):
+            def __new__(cls, *args, **kwargs):
+                return object.__new__(Created)
+
+        class Created(Creator):
+            pass
+
+        class Rebinder(object):
+            def __new__(cls, *args):
+                return object.__new__(Rebound)
+
+        class Rebound(Rebinder):
+            __new__ = object.__new__
+
+        class Number(int):
+            __init__ = object.__init__
+
+        class Mismatch(dict):
+            __init__ = list.__init__
+
+        class Items(list):
+            pass
+
+        class Mapping(dict):
+            pass
+
+        self.assert_message(TypeError, 'object() takes no parameters', Plain, 1)
+        self.assertIs(type(Creator(1, key=2)), Created)
+        self.assertIs(type(Rebinder(1)), Rebound)
+        self.assert_message(TypeError, 'object() takes no parameters', Rebound, 1)
+        self.assertEqual((type(Number(7)), Number(7)), (Number, 7))
+        self.assert_message(TypeError, "descriptor '__init__' for 'list' objects doesn't apply to 'Mismatch' object", Mismatch)
+        self.assertEqual((type(Items('ab')), Items('ab')), (Items, ['a', 'b']))
+        self.assert_message(TypeError, 'list() takes at most 1 argument (2 given)', Items, 1, 2)
+        self.assertEqual(Mapping([(1, 2)], a=3), {1: 2, 'a': 3})
+        self.assert_message(TypeError, "'int' object is not iterable", Mapping, 1)
+
     def test_object_init_accepts_arguments_without_tp_new(self):
         dictproxy = type(int.__dict__)
         self.assertIs(dictproxy.__init__(int.__dict__, 1), None)

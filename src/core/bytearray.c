@@ -1410,7 +1410,9 @@ static tinypy_value_t *__tinypy_bytearray_bridge_argument(tinypy_vm_t *vm, tinyp
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_bytearray_join(tinypy_value_t *self, tinypy_value_t *iterable, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
+    tinypy_bytearray_object_t *separator = TINYPY_BYTEARRAY_OBJECT(self);
     size_t separator_size = TINYPY_SIZED_SIZE(self);
+    const uint8_t *separator_bytes = separator->bytes;
     tinypy_value_t *sequence;
 
     if (iterable->type == &vm->types[TINYPY_VALUE_LIST] || iterable->type == &vm->types[TINYPY_VALUE_TUPLE]) {
@@ -1466,14 +1468,20 @@ static tinypy_value_t *__tinypy_bytearray_join(tinypy_value_t *self, tinypy_valu
         TINYPY_DECREF(sequence);
         return NULL;
     }
+    /* bytearray_join copies the separator size it took first from the
+       storage of the separator. Storage that stayed in place, as an export
+       keeps it, still holds those bytes past a size it shrank to in place;
+       from storage that moved only the current bytes are copied and the rest
+       is zeroed. */
+    tinypy_bool_t kept = separator->bytes == separator_bytes && separator->capacity > separator_size ? TINYPY_TRUE : TINYPY_FALSE;
+    size_t available = kept != 0 || TINYPY_SIZED_SIZE(self) > separator_size ? separator_size : TINYPY_SIZED_SIZE(self);
     size_t offset = 0U;
     for (index = 0U; index < count; ++index) {
         tinypy_value_t *item = TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_LIST ? TINYPY_LIST_GET(sequence, index) : TINYPY_TUPLE_GET(sequence, index);
         const uint8_t *bytes;
         size_t size;
         if (index != 0U && separator_size != 0U) {
-            size_t available = TINYPY_SIZED_SIZE(self) < separator_size ? TINYPY_SIZED_SIZE(self) : separator_size;
-            (void)memcpy(TINYPY_BYTEARRAY_OBJECT(result)->bytes + offset, TINYPY_BYTEARRAY_OBJECT(self)->bytes, available);
+            (void)memcpy(TINYPY_BYTEARRAY_OBJECT(result)->bytes + offset, separator->bytes, available);
             (void)memset(TINYPY_BYTEARRAY_OBJECT(result)->bytes + offset + available, 0, separator_size - available);
             offset += separator_size;
         }

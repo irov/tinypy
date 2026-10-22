@@ -307,6 +307,15 @@ host выполняется, когда освобождается послед�
 `__dict__` и slots, поэтому её собственный callback не вызывается, даже если
 только они удерживали referent.
 
+Weak proxy, как `proxy_getattr` и `proxy_setattr`, передаёт referent каждое
+имя атрибута, `__class__` тоже: `isinstance`, `super` и pickling видят класс
+referent, присваивание `__class__` меняет класс referent, а мёртвый proxy
+даёт `ReferenceError`. Прямые wrappers `__getattribute__`, `__setattr__` и
+`__delattr__` типа proxy после проверки referent отвергают имя, не
+являющееся str или unicode, TypeError, как `PyObject_GetAttr` и
+`PyObject_SetAttr`. `__cmp__` proxy принимает только proxy; с другими
+операндами proxy упорядочивается default ordering как число.
+
 Memoryview над bytearray, как `Py_buffer`, держит export и видит bytes,
 которые экспортировал: его длина не следует за изменением размера массива на
 месте, а bytes за текущим размером — завершающий нулевой байт и прежнее
@@ -323,6 +332,9 @@ Character-buffer conversion использует default encoding и отдел�
 bounds к этим байтам, удерживая owner во время codec callbacks. Offset и size
 больше `PTRDIFF_MAX` (возможны только на 32-битных hosts) хранятся как
 `PTRDIFF_MAX`: owner не бывает длиннее, поэтому выбранные bytes не меняются.
+Offset buffer от buffer прибавляется к offset исходного buffer; сумма больше
+`PTRDIFF_MAX` отклоняется `ValueError: offset must be zero or positive`, как
+отрицательная сумма `Py_ssize_t` в CPython.
 
 Type slots возвращают прямой semantic result. Неверный slot input нарушает C
 precondition и имеет undefined behavior. Python exceptions используются только
@@ -598,7 +610,9 @@ builtin-имён не создаётся; входящий key не заменя
 `__hash__`/`__eq__`; коллизии и embedded NUL не сокращают сравниваемый span.
 Общие getters `__class__`,
 `__call__`, `__dict__`, function-code aliases и module dictionary сохраняют
-прямой путь. Приоритет custom hooks, дескрипторов и instance dictionary сохраняется.
+прямой путь. Приоритет custom hooks, дескрипторов и instance dictionary сохраняется:
+`__class__` экземпляра типа с `get_attribute` hook, weak proxy или host native
+type, отвечает сам hook.
 
 Python-visible bundled surface намеренно ограничен memory-only runtime:
 
@@ -610,7 +624,10 @@ Python-visible bundled surface намеренно ограничен memory-only
   написаны на Python, связывают позиционные и keyword-аргументы как
   `PyEval_EvalCodeEx` и сообщают об ошибках связывания как Python-функции;
   ключи keywords сравниваются с именами параметров по тексту, без вызова
-  `__eq__` подтипов `str` и `unicode`;
+  `__eq__` подтипов `str` и `unicode`; функции `copy_reg` обращаются к своим
+  аргументам через те же протоколы атрибутов, сравнений, `int()` и таблиц,
+  что и `copy_reg.py`, без собственных проверок типов (`_reduce_ex`
+  проверяет `proto < 2` как `assert`);
 - `_struct` гарантирует формат `d` с repeat counts и byte-order prefixes, а
   также `Struct`, `pack`, `unpack`, `pack_into` и `unpack_from`; `_struct.error`
   является `ValueError`. `Struct` хранит compiled format в native payload,
@@ -852,6 +869,21 @@ surrogate pair в один code point, как `PyUnicode_AsUTF8String` в `fp_re
 code point), `text` покрывает всю логическую строку
 многострочного token, а «expected an indented block» предшествует
 «unexpected unindent», как в `err_input`.
+
+Ошибки декодирования источника и литералов передаются обработчику, который
+codec registry хранит под именем `strict`, как в CPython. Tokenizer читает
+текст с заменами, которые он вернул: строку — декодированную целиком, файл —
+начиная с чтения, в котором встретилась первая ошибка, а остаток файла после
+этого чтения декодируется одним вызовом. Unicode literal получает замену
+недопустимой последовательности UTF-8 в виде escapes, как в `decode_unicode`,
+а замену escape, который не разбирают `unicodeescape` и `rawunicodeescape`,
+с продолжением разбора с возвращённой позиции; byte literal источника с ASCII
+cookie кодируется обратно строгим ASCII encoder. В литерале только
+UnicodeError становится SyntaxError «(unicode error) ...», остальные
+исключения обработчика распространяются; tokenizer превращает любое
+исключение декодирования в SyntaxError с его текстом. Если `str()` исключения
+не удаётся, сообщение — «(unicode error) unknown error» или «unknown decode
+error», как в `ast.c` и `err_input`.
 
 Согласованность табуляций и пробелов в отступах по умолчанию не проверяется,
 как в CPython без `-t`: табуляция расширяется до кратного восьми.
@@ -1189,9 +1221,15 @@ LINE, как `maybe_call_line_trace`, отмечает первую инстру
 покрывает `struct_size`. Callback выполняется с отложенной pending exception
 и не может поднять свою: то, что оставил его код, отбрасывается. Interrupt, о
 котором `poll_interrupt` сообщает, пока выполняется callback, прерывает его
-код и поднимается снова при следующем опросе после callback, поэтому
-программа его не теряет (trace function CPython передала бы
-`KeyboardInterrupt` дальше). `tinypy_debugger_frame_sync`, как
+код и поднимается снова при следующем опросе после callback в том же
+выполнении, поэтому программа его не теряет (trace function CPython передала
+бы `KeyboardInterrupt` дальше); если раньше завершается внешний frame
+выполнения или `tinypy_debugger_set` снимает debugger, interrupt
+отбрасывается. `tinypy_debugger_frame_get`, `_set` и `_delete`, как
+`PyFrame_FastToLocals`, находят имя аргумента, захваченного замыканием, в его
+cell, а set и delete, как `PyFrame_LocalsToFast`, меняют и cell, и fast slot
+аргумента; free variables frame без `CO_OPTIMIZED` (тела класса) не входят в
+его locals. `tinypy_debugger_frame_sync`, как
 `PyFrame_LocalsToFast(frame, 0)`, переносит в fast locals и cells значения
 locals, которые материализовал `tinypy_frame_locals`.
 
@@ -1282,7 +1320,8 @@ pending, а неудачный заменяет своим. `tinypy_object_get_a
 `tinypy_object_get_attr_value` и `tinypy_object_has_attr*` ищут атрибут, отложив
 его в сторону, поэтому `__getattr__` вызывается, отсутствующий атрибут даёт
 `AttributeError`, а `has_attr` его не сбрасывает; `tinypy_equal` и
-`tinypy_hash` его не читают.
+`tinypy_hash` его не читают. Ключ атрибута, не являющийся строкой, который
+host передаёт value-вариантам, сообщения об ошибках показывают через repr.
 
 При связывании дополнительных `**kwargs` ошибка `__hash__` или сравнения
 ключа немедленно передаётся вызывающему коду; тело функции не выполняется.

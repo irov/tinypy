@@ -710,27 +710,7 @@ static tinypy_value_t *__tinypy_builtin_callable(tinypy_value_t *function, tinyp
     (void)count;
     (void)kwargs;
     (void)out_error;
-    tinypy_bool_t condition = items[0U]->type->call != NULL;
-    if (TINYPY_VALUE_KIND(items[0U]) == TINYPY_VALUE_OLD_INSTANCE) {
-        tinypy_internal_exception_state_t state;
-        tinypy_error_t *error = NULL;
-        tinypy_value_t *item = items[0U];
-        tinypy_value_t *call;
-
-        tinypy_internal_exception_preserve_begin(vm, &state);
-        call = tinypy_object_get_attr_value(item, vm->internal_special_call_key, &error);
-        condition = call != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-        if (call != NULL) {
-            TINYPY_DECREF(call);
-        }
-        if (error != NULL) {
-            tinypy_error_release(error);
-        }
-        tinypy_internal_exception_preserve_end(vm, &state);
-    }
-    else if (condition == 0) {
-        condition = tinypy_internal_object_has_special_key(items[0U], vm->internal_special_call_key) != 0;
-    }
+    tinypy_bool_t condition = tinypy_internal_object_callable(items[0U]);
     tinypy_value_t *return_value_1 = tinypy_bool_from_i32(vm, condition);
     return return_value_1;
 }
@@ -1948,12 +1928,13 @@ static tinypy_value_t *__tinypy_builtin_zip(tinypy_value_t *function, tinypy_val
             if (tuple_items[iterable_index] == NULL) {
                 size_t release_index = iterable_index;
 
-                while (release_index != 0U) {
-                    TINYPY_DECREF(tuple_items[--release_index]);
-                }
+                /* builtin_zip releases the result before the row it fills. */
                 if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {
                     TINYPY_DECREF(result);
                     result = NULL;
+                }
+                while (release_index != 0U) {
+                    TINYPY_DECREF(tuple_items[--release_index]);
                 }
                 goto zip_cleanup;
             }
@@ -2104,30 +2085,33 @@ failed:
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Offers a candidate of min or max, which becomes the best one when it is the
-   first or its key compares better than the best one's key. A losing key is
-   returned so an owned iterator candidate can be released before that key. */
-static tinypy_bool_t __tinypy_builtin_min_max_offer(tinypy_vm_t *vm, tinypy_value_t *key_function, tinypy_compare_operation_e operation, tinypy_value_t *candidate, tinypy_value_t **in_out_best, tinypy_value_t **in_out_best_key, tinypy_value_t **out_discarded_key, tinypy_error_t **out_error) {
+/* Offers a candidate of min or max, whose reference it takes: it becomes the
+   best one when it is the first or its key compares better than the best
+   one's key. min_max releases a losing candidate before its key and, when
+   the comparison fails, the key before the candidate. */
+static tinypy_bool_t __tinypy_builtin_min_max_offer(tinypy_vm_t *vm, tinypy_value_t *key_function, tinypy_compare_operation_e operation, tinypy_value_t *candidate, tinypy_value_t **in_out_best, tinypy_value_t **in_out_best_key, tinypy_error_t **out_error) {
     tinypy_value_t *candidate_key = key_function != NULL ? __tinypy_builtin_call_items(vm, key_function, &candidate, 1U, out_error) : TINYPY_RET(candidate);
 
-    *out_discarded_key = NULL;
     if (candidate_key == NULL) {
+        TINYPY_DECREF(candidate);
         return TINYPY_FALSE;
     }
     int32_t better = *in_out_best != NULL ? tinypy_compare_bool(candidate_key, *in_out_best_key, operation, out_error) : INT32_C(1);
     if (better < 0) {
         TINYPY_DECREF(candidate_key);
+        TINYPY_DECREF(candidate);
         return TINYPY_FALSE;
     }
     if (better == 0) {
-        *out_discarded_key = candidate_key;
+        TINYPY_DECREF(candidate);
+        TINYPY_DECREF(candidate_key);
         return TINYPY_TRUE;
     }
     if (*in_out_best != NULL) {
         TINYPY_DECREF(*in_out_best_key);
         TINYPY_DECREF(*in_out_best);
     }
-    *in_out_best = TINYPY_RET(candidate);
+    *in_out_best = candidate;
     *in_out_best_key = candidate_key;
     return TINYPY_TRUE;
 }
@@ -2166,12 +2150,9 @@ static tinypy_value_t *__tinypy_builtin_min_max(tinypy_value_t *function, tinypy
     }
     if (count != 1U) {
         for (size_t index = 0U; index < count && offered != 0; ++index) {
-            tinypy_value_t *discarded_key = NULL;
+            tinypy_value_t *candidate = TINYPY_RET(items[index]);
 
-            offered = __tinypy_builtin_min_max_offer(vm, key_function, operation, items[index], &best, &best_key, &discarded_key, out_error);
-            if (discarded_key != NULL) {
-                TINYPY_DECREF(discarded_key);
-            }
+            offered = __tinypy_builtin_min_max_offer(vm, key_function, operation, candidate, &best, &best_key, out_error);
         }
     }
     else {
@@ -2184,13 +2165,7 @@ static tinypy_value_t *__tinypy_builtin_min_max(tinypy_value_t *function, tinypy
             if (candidate == NULL) {
                 break;
             }
-            tinypy_value_t *discarded_key = NULL;
-
-            offered = __tinypy_builtin_min_max_offer(vm, key_function, operation, candidate, &best, &best_key, &discarded_key, out_error);
-            TINYPY_DECREF(candidate);
-            if (discarded_key != NULL) {
-                TINYPY_DECREF(discarded_key);
-            }
+            offered = __tinypy_builtin_min_max_offer(vm, key_function, operation, candidate, &best, &best_key, out_error);
         }
     }
     if (offered == 0 || tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {

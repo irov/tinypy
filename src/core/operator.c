@@ -1349,7 +1349,7 @@ static tinypy_value_t *__tinypy_operator_concat_text(tinypy_vm_t *vm, tinypy_val
     if (unicode != 0) {
         tinypy_value_t *string = TINYPY_VALUE_KIND(left) == TINYPY_VALUE_STRING ? left : right;
 
-        if (TINYPY_VALUE_KIND(string) == TINYPY_VALUE_STRING && tinypy_internal_ascii_prefix(TINYPY_TEXT_BYTES(string), TINYPY_TEXT_BYTE_SIZE(string)) != TINYPY_TEXT_BYTE_SIZE(string)) {
+        if (__tinypy_internal_text_needs_decode(string) != 0) {
             tinypy_value_t *decoded = tinypy_internal_text_to_unicode(vm, string, out_error);
 
             if (decoded == NULL) {
@@ -3675,17 +3675,36 @@ tinypy_value_t *tinypy_internal_integer_power_long(tinypy_value_t *left, tinypy_
     if (__tinypy_operator_integer_exponent(vm, right, &exponent, out_error) == 0) {
         return NULL;
     }
-    size_t top = 1U;
+    size_t mask = 1U;
 
-    while (top <= exponent / 2U) {
-        top <<= 1U;
+    while (mask <= exponent / 2U) {
+        mask <<= 1U;
     }
-    tinypy_value_t *result = prefer_long != 0 ? tinypy_long_from_i64(vm, 1) : tinypy_integer_from_i64(vm, 1);
-
     /* Left-to-right binary exponentiation, as long_pow: the partial power is
-       squared, then multiplied by the base for every set bit. */
-    for (size_t mask = top; mask != 0U; mask >>= 1U) {
-        if (mask != top) {
+       squared, then multiplied by the base for every set bit. An int base
+       takes the steps in int64 until one would overflow, and the values take
+       the rest from that step. */
+    int64_t partial = INT64_C(1);
+    tinypy_bool_t square_pending = TINYPY_FALSE;
+
+    if (TINYPY_VALUE_KIND(left) == TINYPY_VALUE_INTEGER) {
+        int64_t base = TINYPY_INTEGER_VALUE(left);
+
+        for (; mask != 0U; mask >>= 1U) {
+            if (square_pending != 0 && __tinypy_operator_multiply_overflow(partial, partial, &partial) != 0) {
+                break;
+            }
+            square_pending = TINYPY_FALSE;
+            if ((exponent & mask) != 0U && __tinypy_operator_multiply_overflow(partial, base, &partial) != 0) {
+                break;
+            }
+            square_pending = TINYPY_TRUE;
+        }
+    }
+    tinypy_value_t *result = prefer_long != 0 ? tinypy_long_from_i64(vm, partial) : tinypy_integer_from_i64(vm, partial);
+
+    for (; mask != 0U; mask >>= 1U) {
+        if (square_pending != 0) {
             tinypy_value_t *squared = tinypy_internal_operator_builtin(result, result, 2, out_error);
 
             TINYPY_DECREF(result);
@@ -3694,6 +3713,7 @@ tinypy_value_t *tinypy_internal_integer_power_long(tinypy_value_t *left, tinypy_
             }
             result = squared;
         }
+        square_pending = TINYPY_TRUE;
         if ((exponent & mask) == 0U) {
             continue;
         }

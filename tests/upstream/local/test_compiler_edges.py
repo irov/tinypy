@@ -70,6 +70,167 @@ class CompilerEdges(unittest.TestCase):
         finally:
             _codecs.register_error('strict', previous)
 
+    def test_unicode_escape_errors_take_strict_handler_replacements(self):
+        # The escape decoders pass an escape they cannot decode to the strict
+        # handler with one exception per literal and go on at the position
+        # it returns; the raw decoder reports the whole backslash run.
+        previous = _codecs.lookup_error('strict')
+        events = []
+        def handler(error):
+            events.append((error, error.encoding, error.object, error.start, error.end, error.reason))
+            return u'<%d>' % error.start, error.end
+        cases = [("u'a\\N{nope}b'", u'a<1>b', [('unicodeescape', 'a\\N{nope}b', 1, 9, 'unknown Unicode character name')]),
+                 ("u'\\x4g\\u12'", u'<0>g<4>', [('unicodeescape', '\\x4g\\u12', 0, 3, 'truncated \\xXX escape'),
+                                                ('unicodeescape', '\\x4g\\u12', 4, 8, 'truncated \\uXXXX escape')]),
+                 ("u'\\U00110000z\\N'", u'<0>z<11>', [('unicodeescape', '\\U00110000z\\N', 0, 10, 'illegal Unicode character'),
+                                                       ('unicodeescape', '\\U00110000z\\N', 11, 13, 'malformed \\N character escape')]),
+                 ("u'\\N{'", u'<0>', [('unicodeescape', '\\N{', 0, 3, 'malformed \\N character escape')]),
+                 ("ur'\\\\\\u12z'", u'\\\\<0>z', [('rawunicodeescape', '\\\\\\u12z', 0, 6, 'truncated \\uXXXX')]),
+                 ("ur'a\\U00110000'", u'a<1>', [('rawunicodeescape', 'a\\U00110000', 1, 11, '\\Uxxxxxxxx out of range')])]
+        try:
+            _codecs.register_error('strict', handler)
+            for source, expected, trace in cases:
+                events[:] = []
+                self.assertEqual(eval(compile(source, '<literal>', 'eval')), expected)
+                self.assertEqual([event[1:] for event in events], trace)
+                self.assertTrue(all(event[0] is events[0][0] for event in events))
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_unicode_escape_handler_position_and_result_checks(self):
+        previous = _codecs.lookup_error('strict')
+        results = []
+        def handler(error):
+            return results.pop(0)
+        cases = [([(u'', 4), (u'', 8)], u''),
+                 ([(u'N', -6), (u'M', -1)], u'N4gMh'),
+                 ([(u'', 9)], IndexError('position 9 from error handler out of bounds')),
+                 ([('s', 3)], TypeError('decoding error handler must return (unicode, int) tuple')),
+                 ([(u'', 3, 4)], TypeError('decoding error handler must return (unicode, int) tuple')),
+                 ([(u'', 3.0)], TypeError('integer argument expected, got float'))]
+        try:
+            _codecs.register_error('strict', handler)
+            for replies, expected in cases:
+                results[:] = replies
+                if isinstance(expected, Exception):
+                    with self.assertRaises(type(expected)) as caught:
+                        compile("u'\\x4g\\x5h'", '<literal>', 'eval')
+                    self.assertEqual(caught.exception.args, expected.args)
+                else:
+                    self.assertEqual(eval(compile("u'\\x4g\\x5h'", '<literal>', 'eval')), expected)
+                self.assertEqual(results, [])
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_unicode_literal_handler_failure_propagates_unless_unicode_error(self):
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            raise marker
+        sources = ["u'\\x4g'", "ur'\\u12'", "# coding: utf-8\nvalue = u'ab\xffcd'\n"]
+        try:
+            _codecs.register_error('strict', handler)
+            for source in sources:
+                for marker in (KeyError('from handler'), MemoryError()):
+                    with self.assertRaises(type(marker)) as caught:
+                        compile(source, '<literal>', 'exec')
+                    self.assertIs(caught.exception, marker)
+                marker = UnicodeError('literal callback')
+                try:
+                    compile(source, '<literal>', 'exec')
+                except SyntaxError as error:
+                    self.assertEqual(error.msg, '(unicode error) literal callback')
+                else:
+                    self.fail('expected SyntaxError')
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_invalid_utf8_unicode_literal_takes_handler_replacement(self):
+        # decode_utf8 decodes the run of non-ASCII bytes and decode_unicode
+        # escapes each character of the result, a backslash included.
+        previous = _codecs.lookup_error('strict')
+        events = []
+        replacement = [u'?']
+        def handler(error):
+            events.append((error.object, error.start, error.end))
+            return replacement[0], error.end
+        try:
+            _codecs.register_error('strict', handler)
+            for source, value, trace in [("u'ab\xffcd'", u'ab?cd', [('\xff', 0, 1)]),
+                                         ("u'ab\xc3\xa9\xffcd \xfe'", u'ab\xe9?cd ?', [('\xc3\xa9\xff', 2, 3), ('\xfe', 0, 1)]),
+                                         ("ur'ab\\\\\xffcd'", u'ab\\\\?cd', [('\xff', 0, 1)])]:
+                events[:] = []
+                namespace = {}
+                exec compile('# coding: utf-8\nvalue = ' + source + '\n', '<literal>', 'exec') in namespace
+                self.assertEqual((namespace['value'], events), (value, trace))
+            replacement[0] = u'\\'
+            self.assertEqual(eval(compile("# coding: utf-8\nu'a\xffn'\n", '<literal>', 'eval')), u'a\\n')
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_codec_cookie_source_tokenizes_decoded_text(self):
+        # translate_into_utf8 decodes the whole string with the strict
+        # handler; the tokenizer reads the text the replacements make.
+        previous = _codecs.lookup_error('strict')
+        events = []
+        replacement = [u'?']
+        def handler(error):
+            events.append((error.encoding, error.start, error.end))
+            return replacement[0], error.end
+        try:
+            _codecs.register_error('strict', handler)
+            for cookie, encoding in [('utf8', 'utf8'), ('ascii', 'ascii'), ('us-ascii', 'ascii')]:
+                for literal, value in [("'a\xffb'", 'a?b'), ("u'a\xffb'", u'a?b')]:
+                    events[:] = []
+                    namespace = {}
+                    source = '# coding: %s\nvalue = %s # \xfe\n' % (cookie, literal)
+                    exec compile(source, '<source>', 'exec') in namespace
+                    self.assertEqual(namespace['value'], value)
+                    start = source.index('\xff')
+                    self.assertEqual(events, [(encoding, start, start + 1), (encoding, start + 6, start + 7)])
+            replacement[0] = u"' 'z"
+            self.assertEqual(eval(compile("# coding: utf8\n'a\xff'\n", '<source>', 'eval')), 'az')
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_ascii_cookie_byte_literal_encodes_handler_replacement(self):
+        # parsestr encodes a byte literal back to the ASCII of the cookie:
+        # the whole literal without a backslash, the run with one.
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            return u'\xe9', error.end
+        try:
+            _codecs.register_error('strict', handler)
+            for literal, position in [("'a\xffb'", 1), ("'\\x41a\xffb'", 0), ("r'\\x\xff'", 2)]:
+                try:
+                    compile('# coding: ascii\nvalue = ' + literal + '\n', '<source>', 'exec')
+                except SyntaxError as error:
+                    self.assertEqual(error.msg, "(unicode error) 'ascii' codec can't encode character u'\\xe9' in position %d: ordinal not in range(128)" % position)
+                    self.assertEqual((error.lineno, error.offset, error.text), (2, None, None))
+                else:
+                    self.fail('expected SyntaxError')
+            namespace = {}
+            exec compile("# coding: ascii\nvalue = u'a\xffb' # \xfe\n", '<source>', 'exec') in namespace
+            exec compile("# coding: utf8\nother = 'a\xffb'\n", '<source>', 'exec') in namespace
+            self.assertEqual((namespace['value'], namespace['other']), (u'a\xe9b', 'a\xc3\xa9b'))
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_codec_cookie_file_decodes_with_strict_handler(self):
+        # The StreamReader of a cookie codec without a fast path decodes the
+        # file with the strict handler, line after line.
+        previous = _codecs.lookup_error('strict')
+        writes = sys.dont_write_bytecode
+        def handler(error):
+            return u'?', error.end
+        try:
+            _codecs.register_error('strict', handler)
+            sys.dont_write_bytecode = True
+            module = __import__('compiler_files.codec_handler', {}, {}, ['x'])
+            self.assertEqual((module.x, module.y), ('a?b', u'c?d'))
+        finally:
+            sys.dont_write_bytecode = writes
+            _codecs.register_error('strict', previous)
+
     def test_flags_use_int_protocol_before_mode_value(self):
         events = []
 

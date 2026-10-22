@@ -1985,8 +1985,8 @@ static void __tinypy_eval_clear_diagnostic(tinypy_error_t **out_error) {
 //////////////////////////////////////////////////////////////////////////
 /* Unlike a trace function of CPython, a debugger callback cannot pass an
    exception on: an interrupt that the host reports while one runs stops the
-   Python code of the callback and stays pending for the next poll after it,
-   so that the program does not lose it. */
+   Python code of the callback and stays pending for the next poll after it
+   in the same execution, so that the program does not lose it. */
 static inline tinypy_bool_t __tinypy_eval_host_interrupted(tinypy_vm_t *vm) {
 #if defined(TINYPY_DEBUGGER)
     if (vm->debugger_interrupt != 0 && vm->debugger_depth == 0U) {
@@ -4270,6 +4270,12 @@ static tinypy_value_t *__tinypy_eval_frame(tinypy_value_t *frame_value, tinypy_e
     }
     vm->evaluation_depth -= 1U;
     vm->current_frame = frame->back != NULL ? TINYPY_FRAME_OBJECT(frame->back) : NULL;
+#if defined(TINYPY_DEBUGGER)
+    /* An interrupt deferred for the execution that ends goes with it. */
+    if (vm->current_frame == NULL) {
+        vm->debugger_interrupt = TINYPY_FALSE;
+    }
+#endif
     if (frame->previous_handled_type != NULL) {
         tinypy_value_t **saved[] = {&frame->previous_handled_type, &frame->previous_handled_value, &frame->previous_handled_traceback};
         tinypy_value_t *restored[] = {frame->previous_handled_type, frame->previous_handled_value, frame->previous_handled_traceback};

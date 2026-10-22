@@ -17,6 +17,33 @@ class CompilerDiagnostics(unittest.TestCase):
         finally:
             _codecs.register_error('strict', previous)
 
+    def test_unrenderable_decode_error_has_fixed_message(self):
+        # ast.c and the tokenizer fall back to a fixed message when str() of
+        # the UnicodeError fails.
+        class Unprintable(UnicodeDecodeError):
+            def __str__(self):
+                raise KeyError('no text')
+
+        class NonAscii(UnicodeDecodeError):
+            def __str__(self):
+                return u'\xe9'
+
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            raise kind('ascii', '\xff', 0, 1, 'boom')
+        cases = [("u'' '\\xff'", '(unicode error) unknown error', 1),
+                 ("# coding: utf-8\nu'\xff'\n", '(unicode error) unknown error', 2),
+                 ("u'\\N{nope}'", '(unicode error) unknown error', 1),
+                 ("# coding: ascii\n1 # \xff\n", 'unknown decode error', 0)]
+        try:
+            _codecs.register_error('strict', handler)
+            for kind in (Unprintable, NonAscii):
+                for source, message, line in cases:
+                    error = self.syntax_error(source)
+                    self.assertEqual((error.msg, error.lineno), (message, line))
+        finally:
+            _codecs.register_error('strict', previous)
+
     def syntax_error(self, source, mode='eval'):
         try:
             compile(source, '<diagnostic>', mode)

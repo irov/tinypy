@@ -524,6 +524,27 @@ class AttributeEdges(unittest.TestCase):
         self.assertIs(get(instance, '__class__'), Old)
         self.assertIs(object.__getattribute__(instance, '__class__'), type(instance))
 
+    def test_classic_wrappers_take_str_names_alone(self):
+        class Name(str):
+            pass
+        class Old:
+            member = 1
+            def __getattr__(self, name):
+                return 'hook'
+        instance = Old()
+        wrappers = ((type(instance).__getattribute__, (instance,)), (type(instance).__setattr__, (instance, None)),
+                    (type(instance).__delattr__, (instance,)), (type(Old).__getattribute__, (Old,)))
+        for wrapper, receiver in wrappers:
+            for name in (u'member', 5):
+                arguments = receiver[:1] + (name,) + receiver[1:]
+                with self.assertRaises(TypeError) as error:
+                    wrapper(*arguments)
+                self.assertEqual(error.exception.args, ('attribute name must be a string',))
+        type(instance).__setattr__(instance, Name('member'), 2)
+        self.assertEqual((type(instance).__getattribute__(instance, Name('member')), type(Old).__getattribute__(Old, Name('member'))), (2, 1))
+        type(instance).__delattr__(instance, Name('member'))
+        self.assertEqual((getattr(instance, u'member'), hasattr(instance, u'other')), (1, True))
+
     def test_methods_and_super_objects_under_object_getattribute(self):
         class Base(object):
             member = 'base'

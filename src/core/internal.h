@@ -1536,10 +1536,12 @@ typedef struct tinypy_set_object_t {
     tinypy_value_t *weakrefs;
 } tinypy_set_object_t;
 //////////////////////////////////////////////////////////////////////////
+/* soft_space keeps the int a softspace assignment gave, as the f_softspace
+   of a file object does. */
 typedef struct tinypy_output_stream_object_t {
     tinypy_value_t base;
     tinypy_output_channel_e channel;
-    tinypy_bool_t soft_space;
+    int64_t soft_space;
 } tinypy_output_stream_object_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_buffer_object_t {
@@ -2153,7 +2155,8 @@ struct tinypy_vm_t {
     tinypy_debugger_t debugger;
     tinypy_bool_t has_debugger;
     /* The debugger callbacks running, and whether the host interrupted one
-       of them, which the next poll after them reports to the program. */
+       of them, which the next poll after them reports to the program until
+       its execution ends or the debugger is removed. */
     uint32_t debugger_depth;
     tinypy_bool_t debugger_interrupt;
 #endif
@@ -2403,6 +2406,17 @@ size_t tinypy_internal_utf8_decode(const uint8_t *bytes, size_t size, uint32_t *
 size_t tinypy_internal_utf8_invalid_span(const uint8_t *bytes, size_t size);
 size_t tinypy_internal_utf8_encode(uint32_t code_point, uint8_t bytes[4]);
 size_t tinypy_internal_ascii_prefix(const uint8_t *bytes, size_t size);
+/* Whether the implicit unicode conversion of a str runs the default codec:
+   an ASCII str holds its own UTF-8, which no error handler sees. */
+static inline tinypy_bool_t __tinypy_internal_text_needs_decode(const tinypy_value_t *value) {
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_STRING) {
+        return TINYPY_FALSE;
+    }
+    size_t size = TINYPY_TEXT_BYTE_SIZE(value);
+    tinypy_bool_t needs_decode = tinypy_internal_ascii_prefix(TINYPY_TEXT_BYTES(value), size) != size ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return needs_decode;
+}
 size_t tinypy_internal_unicode_byte_offset(tinypy_value_t *value, size_t character_index);
 size_t tinypy_internal_unicode_character_index(tinypy_value_t *value, size_t byte_offset);
 const uint8_t *tinypy_internal_unicode_native_buffer(tinypy_value_t *value, size_t *out_size, tinypy_error_t **out_error);
@@ -2649,6 +2663,7 @@ int32_t tinypy_internal_number_coerce(tinypy_value_t **left, tinypy_value_t **ri
 tinypy_value_t *tinypy_internal_sequence_concat(tinypy_value_t *sequence, tinypy_value_t *other, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_number_as_index(tinypy_value_t *value, tinypy_error_kind_e overflow_kind, int64_t *out_index, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_get_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_slice_offset_arguments(tinypy_value_t *args, int64_t *out_offsets, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_classic_slice_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_delete_slice(tinypy_value_t *container, tinypy_value_t *start, tinypy_value_t *stop, tinypy_error_t **out_error);
@@ -2687,6 +2702,8 @@ tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text
 tinypy_bool_t tinypy_internal_text_codec_arguments(tinypy_vm_t *vm, tinypy_bool_t decode, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_value_t **out_encoding, tinypy_value_t **out_errors, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_keyword_as_string(tinypy_vm_t *vm, tinypy_value_t *keyword, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_encode_attribute_name(tinypy_value_t *key, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_object_check_attribute_name(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_object_callable(tinypy_value_t *value);
 tinypy_bool_t tinypy_internal_codecs_validate_name(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error);
 /* The codecs the runtime implements, by encodings module. */
 typedef enum tinypy_internal_builtin_codec_e {
@@ -2732,6 +2749,12 @@ static inline tinypy_value_t **__tinypy_internal_instance_dict_slot(tinypy_value
     tinypy_value_t **slot = value->type->dict_offset != 0U ? (tinypy_value_t **)((uint8_t *)value + value->type->dict_offset) : NULL;
     return slot;
 }
+/* Whether a value is a weak proxy, callable or not. */
+static inline tinypy_bool_t __tinypy_internal_weakref_is_proxy(const tinypy_value_t *value) {
+    const tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_bool_t proxy = value->type == vm->weak_proxy_type || value->type == vm->callable_weak_proxy_type ? TINYPY_TRUE : TINYPY_FALSE;
+    return proxy;
+}
 tinypy_value_t **tinypy_internal_weakref_head_slot(tinypy_value_t *value);
 void tinypy_internal_weakref_clear(tinypy_value_t *value, tinypy_bool_t finalized);
 void tinypy_internal_weakref_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
@@ -2741,12 +2764,21 @@ tinypy_value_t *tinypy_internal_weakref_call(tinypy_value_t *callable, tinypy_va
 tinypy_hash_t tinypy_internal_weakref_hash(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_weakref_compare(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_weakref_proxy_slot_wrapper(const tinypy_value_t *value, tinypy_value_t *attribute);
+tinypy_bool_t tinypy_internal_weakref_proxy_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error);
 void tinypy_internal_initialize_weakref_type(tinypy_vm_t *vm);
 void tinypy_internal_initialize_weakref_module(tinypy_vm_t *vm);
 void tinypy_internal_initialize_codecs_module(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_codecs_transform_registered(tinypy_vm_t *vm, tinypy_value_t *input, tinypy_value_t *encoding, tinypy_value_t *errors, tinypy_bool_t decode, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_codecs_lookup_error(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error);
 int32_t tinypy_internal_codecs_error_policy(tinypy_value_t *handler);
+/* Calls a codec error handler with the UnicodeError of an error: the
+   replacement of the (unicode, int) tuple it returns and the position to go
+   on at in an input of input_length characters, which a negative one counts
+   from the end of. */
+tinypy_value_t *tinypy_internal_codecs_call_error_handler(tinypy_vm_t *vm, tinypy_value_t *handler, tinypy_value_t *exception, tinypy_bool_t decode, size_t input_length, size_t *out_next, tinypy_error_t **out_error);
+/* Sets the start, end and reason of the UnicodeError a codec passes to its
+   error handler again for a later error. */
+void tinypy_internal_unicode_error_update(tinypy_vm_t *vm, tinypy_value_t *exception, const char *reason_text, size_t start, size_t end);
 void tinypy_internal_initialize_functools_module(tinypy_vm_t *vm);
 void tinypy_internal_initialize_struct_module(tinypy_vm_t *vm);
 void tinypy_internal_initialize_copy_reg_module(tinypy_vm_t *vm);

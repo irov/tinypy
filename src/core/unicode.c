@@ -591,6 +591,11 @@ tinypy_value_t *tinypy_internal_text_to_unicode(tinypy_vm_t *vm, tinypy_value_t 
 
         return result;
     }
+    if (__tinypy_internal_text_needs_decode(value) == 0) {
+        tinypy_value_t *result = tinypy_internal_unicode_from_utf8_checked(vm, (const char *)TINYPY_TEXT_BYTES(value), TINYPY_TEXT_BYTE_SIZE(value), out_error);
+
+        return result;
+    }
     tinypy_value_t *result = tinypy_internal_text_codec_builtin(vm, value, TINYPY_INTERNAL_BUILTIN_CODEC_ASCII, NULL, NULL, TINYPY_TRUE, out_error);
 
     return result;

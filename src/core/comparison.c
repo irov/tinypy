@@ -517,7 +517,7 @@ static tinypy_bool_t __tinypy_comparison_equal_checked(tinypy_value_t *left, tin
     if ((left_kind == TINYPY_VALUE_STRING && right_kind == TINYPY_VALUE_UNICODE) || (left_kind == TINYPY_VALUE_UNICODE && right_kind == TINYPY_VALUE_STRING)) {
         tinypy_value_t *string = left_kind == TINYPY_VALUE_STRING ? left : right;
 
-        if (tinypy_internal_ascii_prefix(TINYPY_TEXT_BYTES(string), TINYPY_TEXT_BYTE_SIZE(string)) != TINYPY_TEXT_BYTE_SIZE(string)) {
+        if (__tinypy_internal_text_needs_decode(string) != 0) {
             tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
             tinypy_value_t *decoded = tinypy_internal_text_to_unicode(vm, string, out_error);
 
@@ -534,6 +534,10 @@ static tinypy_bool_t __tinypy_comparison_equal_checked(tinypy_value_t *left, tin
             TINYPY_DECREF(decoded);
             return TINYPY_TRUE;
         }
+        size_t size = TINYPY_TEXT_BYTE_SIZE(left);
+
+        *out_equal = size == TINYPY_TEXT_BYTE_SIZE(right) && memcmp(TINYPY_TEXT_BYTES(left), TINYPY_TEXT_BYTES(right), size) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        return TINYPY_TRUE;
     }
     if ((left_kind == TINYPY_VALUE_TUPLE || left_kind == TINYPY_VALUE_LIST) && (right_kind == TINYPY_VALUE_TUPLE || right_kind == TINYPY_VALUE_LIST)) {
         tinypy_bool_t return_value_1 = __tinypy_comparison_sequence_equal_checked(left, right, out_equal, out_error);
@@ -716,13 +720,21 @@ static tinypy_bool_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_valu
         return TINYPY_TRUE;
     }
     if ((left_kind == TINYPY_VALUE_STRING || left_kind == TINYPY_VALUE_UNICODE) && (right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE)) {
-        if (left_kind != right_kind) {
-            /* Ordering a byte string against unicode decodes it as ASCII. */
-            tinypy_value_t *string = left_kind == TINYPY_VALUE_STRING ? left : right;
-            tinypy_value_t *decoded = tinypy_internal_text_to_unicode(TINYPY_VALUE_VM(left), string, out_error);
+        /* Ordering a byte string against unicode decodes it as ASCII. */
+        tinypy_value_t *string = left_kind == TINYPY_VALUE_STRING ? left : right;
+
+        if (left_kind != right_kind && __tinypy_internal_text_needs_decode(string) != 0) {
+            tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+            tinypy_value_t *decoded = tinypy_internal_text_to_unicode(vm, string, out_error);
 
             if (decoded == NULL) {
-                return TINYPY_FALSE;
+                /* PyUnicode_RichCompare declines on a TypeError, and the
+                   pair takes the default ordering. */
+                if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error) == 0) {
+                    return TINYPY_FALSE;
+                }
+                *out_order = tinypy_internal_comparison_fallback_order(left, right);
+                return TINYPY_TRUE;
             }
             *out_order = left_kind == TINYPY_VALUE_STRING ? tinypy_internal_text_order(decoded, right) : tinypy_internal_text_order(left, decoded);
             TINYPY_DECREF(decoded);
@@ -901,17 +913,22 @@ static int32_t __tinypy_comparison_text_contains(tinypy_value_t *container, tiny
     }
     if (TINYPY_VALUE_KIND(container) != TINYPY_VALUE_KIND(item)) {
         tinypy_value_t *bytes_value = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_STRING ? container : item;
-        tinypy_value_t *decoded = tinypy_internal_text_to_unicode(TINYPY_VALUE_VM(container), bytes_value, out_error);
+        size_t size = TINYPY_SIZED_SIZE(bytes_value);
 
-        if (decoded == NULL) {
-            return -1;
+        /* An ASCII str holds its own UTF-8, which no error handler sees. */
+        if (tinypy_internal_ascii_prefix(TINYPY_STRING_OBJECT(bytes_value)->bytes, size) != size) {
+            tinypy_value_t *decoded = tinypy_internal_text_to_unicode(TINYPY_VALUE_VM(container), bytes_value, out_error);
+
+            if (decoded == NULL) {
+                return -1;
+            }
+            int32_t contained = bytes_value == container
+                ? __tinypy_comparison_text_contains(decoded, item, out_error)
+                : __tinypy_comparison_text_contains(container, decoded, out_error);
+
+            TINYPY_DECREF(decoded);
+            return contained;
         }
-        int32_t contained = bytes_value == container
-            ? __tinypy_comparison_text_contains(decoded, item, out_error)
-            : __tinypy_comparison_text_contains(container, decoded, out_error);
-
-        TINYPY_DECREF(decoded);
-        return contained;
     }
     container_bytes = TINYPY_TEXT_BYTES(container);
     item_bytes = TINYPY_TEXT_BYTES(item);
@@ -1918,6 +1935,11 @@ static tinypy_bool_t __tinypy_comparison_three_way_inner(tinypy_value_t *left, t
     if (left == right) {
         *out_order = 0;
         return TINYPY_TRUE;
+    }
+    /* do_cmp calls the tp_compare that two proxies share. */
+    if (__tinypy_internal_weakref_is_proxy(left) != TINYPY_FALSE && __tinypy_internal_weakref_is_proxy(right) != TINYPY_FALSE) {
+        tinypy_bool_t result = tinypy_internal_weakref_proxy_order(left, right, out_order, out_error);
+        return result;
     }
     if (left->type == right->type && (left->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION] || left->type == vm->native_method_wrapper_type)) {
         tinypy_bool_t result = tinypy_internal_native_function_compare_three_way(left, right, out_order, out_error);

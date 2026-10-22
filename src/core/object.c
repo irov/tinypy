@@ -17,6 +17,46 @@ static tinypy_bool_t __tinypy_object_key_text(tinypy_value_t *key, const char **
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The text a message shows for an attribute key: that of a string, or the
+   repr of a native key a host passed, which *out_owned holds meanwhile. */
+static void __tinypy_object_key_display(tinypy_value_t *key, const char **out_name, size_t *out_name_size, tinypy_value_t **out_owned) {
+    *out_owned = NULL;
+    if (__tinypy_object_key_text(key, out_name, out_name_size) != 0) {
+        return;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(key);
+    tinypy_error_t *representation_error = NULL;
+    tinypy_value_t *representation = tinypy_object_repr(key, &representation_error);
+
+    if (representation != NULL) {
+        *out_name = (const char *)TINYPY_TEXT_BYTES(representation);
+        *out_name_size = TINYPY_TEXT_BYTE_SIZE(representation);
+        *out_owned = representation;
+        return;
+    }
+    if (representation_error != NULL) {
+        tinypy_error_release(representation_error);
+    }
+    tinypy_internal_exception_clear_raised(vm);
+    *out_name = "<native>";
+    *out_name_size = 8U;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyObject_GetAttr and PyObject_SetAttr take a str or a unicode name. */
+tinypy_bool_t tinypy_internal_object_check_attribute_name(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error) {
+    if (TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(name) == TINYPY_VALUE_UNICODE) {
+        return TINYPY_TRUE;
+    }
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("attribute name must be string, not '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(name, 200U),
+        TINYPY_MESSAGE_PART_LITERAL("'")
+    };
+
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_object_encode_attribute_name(tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(key);
 
@@ -91,28 +131,13 @@ static void __tinypy_object_make_attribute_error(tinypy_value_t *value, const ch
 static void __tinypy_object_make_attribute_error_key(tinypy_value_t *value, tinypy_value_t *key, size_t owner_precision, size_t name_precision, tinypy_error_t **out_error) {
     const char *name;
     size_t name_size;
+    tinypy_value_t *owned;
 
-    if (__tinypy_object_key_text(key, &name, &name_size) != 0) {
-        __tinypy_object_make_attribute_error(value, name, name_size, owner_precision, name_precision, out_error);
-        return;
+    __tinypy_object_key_display(key, &name, &name_size, &owned);
+    __tinypy_object_make_attribute_error(value, name, name_size, owner_precision, name_precision, out_error);
+    if (owned != NULL) {
+        TINYPY_DECREF(owned);
     }
-
-    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_error_t *representation_error = NULL;
-    tinypy_value_t *representation = tinypy_object_repr(key, &representation_error);
-
-    if (representation != NULL) {
-        name = (const char *)TINYPY_TEXT_BYTES(representation);
-        name_size = TINYPY_TEXT_BYTE_SIZE(representation);
-        __tinypy_object_make_attribute_error(value, name, name_size, owner_precision, name_precision, out_error);
-        TINYPY_DECREF(representation);
-        return;
-    }
-    if (representation_error != NULL) {
-        tinypy_error_release(representation_error);
-    }
-    tinypy_internal_exception_clear_raised(vm);
-    __tinypy_object_make_attribute_error(value, "<native>", 8U, owner_precision, name_precision, out_error);
 }
 //////////////////////////////////////////////////////////////////////////
 /* PyObject_GenericSetAttr without a dictionary to store into: a class
@@ -122,25 +147,33 @@ static void __tinypy_object_generic_setattr_error(tinypy_value_t *value, tinypy_
         __tinypy_object_make_attribute_error_key(value, key, 100U, 200U, out_error);
         return;
     }
+    const char *name;
+    size_t name_size;
+    tinypy_value_t *owned;
+
+    __tinypy_object_key_display(key, &name, &name_size, &owned);
     tinypy_message_part_t parts[] = {
         TINYPY_MESSAGE_PART_LITERAL("'"),
         TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 50U),
         TINYPY_MESSAGE_PART_LITERAL("' object attribute '"),
-        TINYPY_MESSAGE_PART_TEXT_PRECISION(key, 400U),
+        {name, __tinypy_internal_message_precision(name_size, 400U)},
         TINYPY_MESSAGE_PART_LITERAL("' is read-only"),
     };
 
     tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(value), TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    if (owned != NULL) {
+        TINYPY_DECREF(owned);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
-/* A missing dictionary entry or empty slot reports the bare attribute name,
-   like the KeyError PyObject_GenericSetAttr turns into AttributeError. */
+/* A missing dictionary entry or empty slot raises AttributeError with the
+   name as its argument, whatever its kind, as PyObject_GenericSetAttr turns
+   the KeyError of its dictionary into PyErr_SetObject(AttributeError, name). */
 void tinypy_internal_make_attribute_name_error(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_message_part_t parts[] = {
-        TINYPY_MESSAGE_PART_TEXT(name),
-    };
+    tinypy_value_t *args = tinypy_tuple_from_items(vm, &name, 1U);
 
-    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    tinypy_internal_exception_raise_args(vm, TINYPY_EXCEPTION_ATTRIBUTE_ERROR, args, out_error);
+    TINYPY_DECREF(args);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_object_make_attribute_error_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error) {
@@ -1820,11 +1853,14 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
     if (kind != TINYPY_VALUE_SUPER) {
         /* A heap type may define a name that the builtin attributes also
            provide. Of the kinds a subclass may derive, only partial provides
-           ordinary names, so the type is asked about those of a partial alone. */
+           ordinary names, so the type is asked about those of a partial alone.
+           The attribute hook of a heap type, that of a weak proxy or a host
+           native type, answers __class__ itself, as tp_getattro does, though
+           object provides it as a getset. */
         tinypy_bool_t canonical_key = key->type == &vm->types[TINYPY_VALUE_STRING] ? TINYPY_TRUE : TINYPY_FALSE;
         tinypy_bool_t ordinary_name = name_size < 2U || name[0] != '_' ? TINYPY_TRUE : TINYPY_FALSE;
         tinypy_bool_t builtin_attribute = canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && ((kind != TINYPY_VALUE_INSTANCE && (value->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U) || (ordinary_name != TINYPY_FALSE && kind != TINYPY_VALUE_PARTIAL)) ? TINYPY_TRUE : TINYPY_FALSE;
-        if (canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && builtin_attribute == TINYPY_FALSE) {
+        if (canonical_key != TINYPY_FALSE && internal_text_key != TINYPY_FALSE && builtin_attribute == TINYPY_FALSE && (value->type->get_attribute == NULL || TINYPY_NAME_EQ(key, vm->internal_special_class_key) == TINYPY_FALSE)) {
             tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
             builtin_attribute = attribute == NULL || TINYPY_VALUE_KIND(attribute) == TINYPY_VALUE_GETSET_DESCRIPTOR ? TINYPY_TRUE : TINYPY_FALSE;
         }
@@ -1923,15 +1959,23 @@ tinypy_value_t *tinypy_internal_object_generic_get_attr_key(tinypy_value_t *valu
     tinypy_value_t **dict_slot = kind == TINYPY_VALUE_TYPE ? &((tinypy_type_t *)value)->dict : (value->type->dict_offset != 0U ? tinypy_internal_object_dict_slot(value) : NULL);
     tinypy_value_t *result = __tinypy_internal_instance_attribute(vm, value, dict_slot, key, out_error);
     if (result == NULL && __tinypy_object_error_present(vm, out_error) == 0) {
+        const char *name;
+        size_t name_size;
+        tinypy_value_t *owned;
+
+        __tinypy_object_key_display(key, &name, &name_size, &owned);
         tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("'"),
             TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(value, 50U),
             TINYPY_MESSAGE_PART_LITERAL("' object has no attribute '"),
-            TINYPY_MESSAGE_PART_TEXT_PRECISION(key, 400U),
+            {name, __tinypy_internal_message_precision(name_size, 400U)},
             TINYPY_MESSAGE_PART_LITERAL("'"),
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_ATTRIBUTE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+        if (owned != NULL) {
+            TINYPY_DECREF(owned);
+        }
     }
     return result;
 }
@@ -1994,6 +2038,31 @@ tinypy_bool_t tinypy_object_has_attr(tinypy_value_t *value, const char *name, si
     result = tinypy_object_has_attr_value(value, key);
     TINYPY_DECREF(key);
     return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyCallable_Check: getattr finds the __call__ of a classic instance and
+   any error of that lookup reads as no method, with a pending exception
+   kept aside. */
+tinypy_bool_t tinypy_internal_object_callable(tinypy_value_t *value) {
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE) {
+        tinypy_bool_t callable = tinypy_is_callable(value);
+        return callable;
+    }
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    tinypy_internal_exception_state_t state;
+    tinypy_error_t *error = NULL;
+
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    tinypy_value_t *call = tinypy_object_get_attr_value(value, vm->internal_special_call_key, &error);
+    tinypy_bool_t callable = call != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    if (call != NULL) {
+        TINYPY_DECREF(call);
+    }
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    tinypy_internal_exception_preserve_end(vm, &state);
+    return callable;
 }
 //////////////////////////////////////////////////////////////////////////
 /* hasattr swallows every error of the lookup, which leaves a pending
@@ -2172,8 +2241,11 @@ static tinypy_bool_t __tinypy_object_old_instance_delete_attr(tinypy_value_t *va
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_object_cold_attribute_error(tinypy_value_t *value, tinypy_value_t *key, tinypy_bool_t deleting, tinypy_error_t **out_error) {
-    const char *name = (const char *)TINYPY_TEXT_BYTES(key);
-    size_t size = TINYPY_TEXT_BYTE_SIZE(key);
+    const char *name;
+    size_t size;
+    tinypy_value_t *owned;
+
+    __tinypy_object_key_display(key, &name, &size, &owned);
     const char *terminator = (const char *)memchr(name, 0, size);
 
     if (terminator != NULL) {
@@ -2193,6 +2265,9 @@ static void __tinypy_object_cold_attribute_error(tinypy_value_t *value, tinypy_v
     };
 
     tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(value), TINYPY_ERROR_TYPE, parts, 7U, out_error);
+    if (owned != NULL) {
+        TINYPY_DECREF(owned);
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_object_set_attr_protocol_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *attribute_value, tinypy_error_t **out_error) {
@@ -2213,6 +2288,11 @@ tinypy_bool_t tinypy_internal_object_set_attr_protocol_key(tinypy_value_t *value
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
         tinypy_bool_t return_value_0 = __tinypy_object_old_instance_set_attr(value, key, attribute_value, out_error);
         return return_value_0;
+    }
+    /* proxy_setattr passes every name to the referent, __class__ included. */
+    if (__tinypy_internal_weakref_is_proxy(value) != TINYPY_FALSE) {
+        tinypy_bool_t forwarded = value->type->set_attribute(value, key, attribute_value, out_error);
+        return forwarded;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *hook = NULL;
@@ -2355,6 +2435,10 @@ tinypy_bool_t tinypy_internal_object_delete_attr_protocol_key(tinypy_value_t *va
     if (TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
         tinypy_bool_t return_value_0 = __tinypy_object_old_instance_delete_attr(value, key, out_error);
         return return_value_0;
+    }
+    if (__tinypy_internal_weakref_is_proxy(value) != TINYPY_FALSE) {
+        tinypy_bool_t forwarded = value->type->set_attribute(value, key, NULL, out_error);
+        return forwarded;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_t *hook = NULL;

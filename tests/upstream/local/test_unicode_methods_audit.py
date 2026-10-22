@@ -380,6 +380,49 @@ class UnicodeMethodsAudit(unittest.TestCase):
         finally:
             _codecs.register_error('strict', previous)
 
+    def test_mixed_ordering_declines_a_decoding_type_error(self):
+        previous = _codecs.lookup_error('strict')
+        calls = []
+        class Reflected(str):
+            def __gt__(self, other):
+                return 'reflected'
+        def handler(error):
+            calls.append(error.start)
+            return None
+        text = 'a\xff'
+        try:
+            _codecs.register_error('strict', handler)
+            self.assertTrue(text < u'a')
+            self.assertTrue(u'a' >= text)
+            self.assertEqual(sorted([u'b', text]), [text, u'b'])
+            self.assertEqual(max(text, u'a'), u'a')
+            self.assertFalse(text == u'a')
+            self.assertIs(u'a'.__lt__(text), NotImplemented)
+            self.assertIs(u'a'.__eq__(text), NotImplemented)
+            self.assertEqual(u'a' < Reflected(text), 'reflected')
+            self.assertTrue(Wide(u'a') < text)
+            del calls[:]
+            self.assertEqual(cmp(text, u'a'), -1)
+            self.assertEqual(cmp(u'a', text), 1)
+            self.assertEqual(calls, [1] * 6)
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_prefix_methods_report_a_decoding_type_error_as_argument_type(self):
+        previous = _codecs.lookup_error('strict')
+        marker = TypeError('handler')
+        def handler(error):
+            raise marker
+        try:
+            _codecs.register_error('strict', handler)
+            self.assertEqual(_message(u'a'.startswith, 'a\xff'), ('TypeError', 'startswith first arg must be str, unicode, or tuple, not str'))
+            self.assertEqual(_message('a\xff'.endswith, u'a'), ('TypeError', 'endswith first arg must be str, unicode, or tuple, not unicode'))
+            with self.assertRaises(TypeError) as caught:
+                u'a'.startswith((u'x', 'a\xff'))
+            self.assertIs(caught.exception, marker)
+        finally:
+            _codecs.register_error('strict', previous)
+
     def test_hex_codec_requires_strict_errors_before_source_conversion(self):
         for transform in (_codecs.encode, _codecs.decode):
             for source in ('ab', u'ab', u'\xff', object()):

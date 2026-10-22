@@ -233,6 +233,25 @@ class BuiltinEdges(unittest.TestCase):
         self.assertEqual(target, [2, 1])
         self.assertEqual(events, ['len'])
 
+    def test_list_extending_itself_collects_its_own_iterator(self):
+        # listextend copies itself through PySequence_Fast, which words the
+        # TypeError of a missing iterator and takes the iterator's hint.
+        class Uniterable(list):
+            __iter__ = None
+        target = Uniterable([1, 2])
+        def augmented(other):
+            value = target
+            value += other
+        for extend in (target.extend, target.__iadd__, augmented):
+            self.assertEqual(error_text(extend, target), 'TypeError: argument must be iterable')
+        self.assertEqual(error_text(target.extend, Uniterable()), "TypeError: 'NoneType' object is not callable")
+        class Unsized(list):
+            def __len__(self):
+                raise AssertionError('hint belongs to the iterator')
+        target = Unsized([1, 2])
+        target.extend(target)
+        self.assertEqual(list.__getslice__(target, 0, 10), [1, 2, 1, 2])
+
     def test_length_reads_long_subtype_payload(self):
         events = []
         class Wide(long):
@@ -876,6 +895,21 @@ class BuiltinEdges(unittest.TestCase):
                          [('left', 'right')])
         self.assertEqual(events, [('iterator', 'right'), ('iterator', 'left')])
 
+    def test_zip_iteration_error_releases_result_before_partial_row(self):
+        events = []
+        class Item(object):
+            def __init__(self, name):
+                self.name = name
+            def __del__(self):
+                events.append(self.name)
+        def source(names, fails):
+            items = [Item(name) for name in reversed(names)]
+            return iter((items if fails else [None] + items).pop, None)
+        with self.assertRaises(IndexError):
+            zip(source(['a1', 'a2', 'a3'], False), source(['b1', 'b2'], True))
+        sys.exc_clear()
+        self.assertEqual(events, ['b2', 'a2', 'b1', 'a1', 'a3'])
+
     def test_min_max_success_releases_best_key_before_iterator(self):
         events = []
         class Key(int):
@@ -900,6 +934,23 @@ class BuiltinEdges(unittest.TestCase):
             events[:] = []
             self.assertEqual(operation(Source(), key=Key), 17)
             self.assertEqual(events, [('key',), ('iterator',)])
+
+    def test_min_max_arguments_release_losing_keys_as_they_lose(self):
+        events = []
+        class Item(object):
+            def __init__(self, value):
+                self.value = value
+            def __del__(self):
+                events.append(('item', self.value))
+        class Key(int):
+            def __del__(self):
+                events.append(('key', int(self)))
+        def key(item):
+            return Key(item.value)
+        for operation, keys in ((min, [3, 2, 5, 1]), (max, [1, 2, 3, 5])):
+            events[:] = []
+            self.assertEqual(operation(Item(3), Item(1), Item(2), Item(5), key=key).value, keys[-1])
+            self.assertEqual(events[:4], [('key', value) for value in keys])
 
     def test_min_max_comparison_error_releases_candidate_key_first(self):
         events = []
@@ -1281,6 +1332,16 @@ class BuiltinEdges(unittest.TestCase):
         stream.softspace = 1
         self.assertEqual(stream.softspace, 1)
         stream.softspace = previous
+
+    def test_output_softspace_keeps_the_assigned_int(self):
+        stream = sys.stdout
+        previous = stream.softspace
+        try:
+            for value, expected in ((5, 5), (-3, -3), (True, 1), (2L, 2), (0, 0)):
+                stream.softspace = value
+                self.assertEqual((type(stream.softspace), stream.softspace), (int, expected))
+        finally:
+            stream.softspace = previous
 
     def test_handled_exceptions_do_not_render_messages(self):
         events = []

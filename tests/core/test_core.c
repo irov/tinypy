@@ -812,7 +812,9 @@ static int32_t __test_unicode_utf8(void) {
 //////////////////////////////////////////////////////////////////////////
 /* A buffer over a unicode views the UCS-4 code points the first buffer
    caches on it; when the host refuses their memory, tinypy_buffer_from_object
-   returns NULL with MemoryError raised rather than a buffer without bytes. */
+   returns NULL with MemoryError raised rather than a buffer without bytes.
+   An offset that the offset of a buffer carries past PTRDIFF_MAX returns
+   NULL with ValueError raised rather than a wrapped view. */
 static int32_t __test_buffer_unicode_refusal(void) {
     static const char digits[] = "0123456789abcdef";
     char utf8[512];
@@ -828,6 +830,7 @@ static int32_t __test_buffer_unicode_refusal(void) {
     tinypy_vm_t *vm = tinypy_vm_create(&config);
     TEST_CHECK(vm != NULL);
     tinypy_value_t *memory_error = &vm->exception_types[TINYPY_EXCEPTION_MEMORY_ERROR]->base.base;
+    tinypy_value_t *value_error = &vm->exception_types[TINYPY_EXCEPTION_VALUE_ERROR]->base.base;
     tinypy_value_t *text = tinypy_unicode_from_utf8(vm, utf8, sizeof(utf8));
     TEST_CHECK(text != NULL);
     state.fail_allocation_size = sizeof(utf8) * sizeof(uint32_t);
@@ -842,6 +845,18 @@ static int32_t __test_buffer_unicode_refusal(void) {
     const uint32_t *view = (const uint32_t *)tinypy_buffer_view(buffer, &size);
     TEST_CHECK(view != NULL && size == (sizeof(utf8) - 1U) * sizeof(uint32_t));
     TEST_CHECK(view[0] == (uint32_t)'1' && view[size / sizeof(uint32_t) - 1U] == (uint32_t)'f');
+    size_t overflowing_offsets[] = {(size_t)PTRDIFF_MAX - sizeof(uint32_t) + 1U, (size_t)PTRDIFF_MAX + 1U, SIZE_MAX};
+    for (size_t index = 0U; index < sizeof(overflowing_offsets) / sizeof(overflowing_offsets[0]); ++index) {
+        tinypy_value_t *overflowing = tinypy_buffer_from_object(buffer, overflowing_offsets[index], TINYPY_BUFFER_TO_END);
+        TEST_CHECK(overflowing == NULL);
+        TEST_CHECK(tinypy_vm_raised_exception_type(vm) == value_error);
+        tinypy_vm_clear_error(vm);
+    }
+    tinypy_value_t *farthest = tinypy_buffer_from_object(buffer, (size_t)PTRDIFF_MAX - sizeof(uint32_t), TINYPY_BUFFER_TO_END);
+    TEST_CHECK(farthest != NULL && tinypy_vm_has_error(vm) == 0);
+    const void *farthest_view = tinypy_buffer_view(farthest, &size);
+    TEST_CHECK(farthest_view != NULL && size == 0U);
+    tinypy_release(farthest);
     tinypy_release(buffer);
     tinypy_release(text);
     tinypy_vm_destroy(vm);
@@ -5209,6 +5224,154 @@ static int32_t __test_weakref_optional_error_outputs(void) {
     tinypy_vm_destroy(vm);
     TEST_CHECK(allocator_state.outstanding_allocations == 0U && allocator_state.outstanding_bytes == 0U);
     TEST_CHECK(matching_errors != TINYPY_FALSE);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_attribute_global(tinypy_value_t *globals, const char *name) {
+    tinypy_value_t *key = tinypy_string_from_bytes(tinypy_value_vm(globals), name, strlen(name));
+    tinypy_value_t *value = tinypy_dict_get(globals, key);
+
+    tinypy_release(key);
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_attribute_error_message(tinypy_vm_t *vm, tinypy_error_t *error, tinypy_error_kind_e kind, const char *expected) {
+    size_t size = 0U;
+    const char *message = error != NULL ? tinypy_error_message(error, &size) : "";
+    int32_t matched = error != NULL && tinypy_error_kind(error) == kind && size == strlen(expected) && memcmp(message, expected, size) == 0 ? INT32_C(1) : INT32_C(0);
+
+    if (matched == 0) {
+        (void)fprintf(stderr, "attribute error: expected '%s', got '%.*s'\n", expected, (int)size, message);
+    }
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    tinypy_vm_clear_error(vm);
+    return matched;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A host may pass any hashable value as an attribute key: the messages
+   show its repr, and a deleted key that is missing becomes the argument of
+   the AttributeError, as PyObject_GenericSetAttr raises it. */
+static int32_t __test_attribute_native_key_errors(void) {
+    static const char source[] =
+        "class Slotted(object):\n"
+        "    __slots__ = ()\n"
+        "class Plain(object):\n"
+        "    pass\n"
+        "slotted = Slotted()\n"
+        "plain = Plain()\n"
+        "plain.present = 1\n"
+        "delegating = super(Plain, plain)\n"
+        "iterator = iter([])\n";
+    test_allocator_state_t allocator_state;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "keys.py", 7U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_value_t *key = tinypy_integer_from_i64(vm, 123456789);
+    tinypy_value_t *value = tinypy_integer_from_i64(vm, 1);
+
+    TEST_CHECK(tinypy_object_set_attr_value(__test_attribute_global(globals, "iterator"), key, value, &error) == TINYPY_FALSE);
+    TEST_CHECK(__test_attribute_error_message(vm, error, TINYPY_ERROR_TYPE, "'listiterator' object has only read-only attributes (assign to .123456789)") != 0);
+    error = NULL;
+    TEST_CHECK(tinypy_object_set_attr_value(__test_attribute_global(globals, "Slotted"), key, value, &error) != TINYPY_FALSE && error == NULL);
+    TEST_CHECK(tinypy_object_set_attr_value(__test_attribute_global(globals, "slotted"), key, value, &error) == TINYPY_FALSE);
+    TEST_CHECK(__test_attribute_error_message(vm, error, TINYPY_ERROR_ATTRIBUTE, "'Slotted' object attribute '123456789' is read-only") != 0);
+    error = NULL;
+    TEST_CHECK(tinypy_object_get_attr_value(__test_attribute_global(globals, "delegating"), key, &error) == NULL);
+    TEST_CHECK(__test_attribute_error_message(vm, error, TINYPY_ERROR_ATTRIBUTE, "'super' object has no attribute '123456789'") != 0);
+    error = NULL;
+    TEST_CHECK(tinypy_internal_object_delete_attr_protocol_key(__test_attribute_global(globals, "plain"), key, &error) == TINYPY_FALSE);
+    tinypy_value_t *exception = tinypy_vm_raised_exception(vm);
+    TEST_CHECK(exception != NULL);
+    tinypy_retain(exception);
+    TEST_CHECK(__test_attribute_error_message(vm, error, TINYPY_ERROR_ATTRIBUTE, "123456789") != 0);
+    error = NULL;
+    tinypy_value_t *args = tinypy_object_get_attr(exception, "args", 4U, &error);
+    TEST_CHECK(args != NULL && error == NULL && tinypy_tuple_size(args) == 1U && tinypy_tuple_get(args, 0U) == key);
+    tinypy_release(args);
+    tinypy_release(exception);
+    tinypy_release(value);
+    tinypy_release(key);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U && allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_class_attribute(tinypy_value_t *instance, void *payload, tinypy_value_t *name, void *user_data, tinypy_error_t **out_error) {
+    int32_t *calls = (int32_t *)user_data;
+    size_t size = 0U;
+    const char *text = (const char *)tinypy_string_view(name, &size);
+
+    (void)payload;
+    (void)out_error;
+    *calls += 1;
+    if (size == 9U && memcmp(text, "__class__", 9U) == 0) {
+        tinypy_value_t *marker = tinypy_string_from_bytes(tinypy_value_vm(instance), "hooked", 6U);
+        return marker;
+    }
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The get_attribute callback of a host native type answers __class__, as
+   tp_getattro does, though object provides it as a getset. */
+static int32_t __test_native_attribute_hook_class(void) {
+    static const char source[] =
+        "class Derived(Native):\n"
+        "    pass\n"
+        "derived = Derived()\n"
+        "assert (native.__class__, getattr(native, '__cl' + 'ass__'), derived.__class__) == ('hooked',) * 3\n"
+        "assert isinstance(native, Native) and isinstance(derived, Native)\n";
+    test_allocator_state_t allocator_state;
+    tinypy_compile_options_t options;
+    tinypy_native_type_spec_t spec;
+    tinypy_error_t *error = NULL;
+    int32_t calls = 0;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_native_type_spec_init(&spec);
+    spec.get_attribute = __test_native_class_attribute;
+    spec.user_data = &calls;
+    tinypy_type_t *native = tinypy_native_type_new(vm, "Native", 6U, NULL, 0U, NULL, &spec, &error);
+    TEST_CHECK(native != NULL && error == NULL);
+    tinypy_value_t *instance = tinypy_native_instance_new(native);
+    tinypy_value_t *type_key = tinypy_string_from_bytes(vm, "Native", 6U);
+    tinypy_value_t *instance_key = tinypy_string_from_bytes(vm, "native", 6U);
+    tinypy_dict_set(globals, type_key, tinypy_type_as_value(native));
+    tinypy_dict_set(globals, instance_key, instance);
+    tinypy_release(instance_key);
+    tinypy_release(type_key);
+    tinypy_value_t *attribute = tinypy_object_get_attr(instance, "__class__", 9U, &error);
+    size_t size = 0U;
+    const char *text = attribute != NULL ? (const char *)tinypy_string_view(attribute, &size) : "";
+    TEST_CHECK(error == NULL && size == 6U && memcmp(text, "hooked", 6U) == 0 && calls == 1);
+    tinypy_release(attribute);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "hook.py", 7U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL && calls >= 4);
+    tinypy_release(result);
+    tinypy_release(instance);
+    tinypy_release(tinypy_type_as_value(native));
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U && allocator_state.outstanding_bytes == 0U);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -10357,6 +10520,65 @@ static tinypy_value_t *__test_debugger_sync_frame(tinypy_value_t *function, tiny
     return none;
 }
 //////////////////////////////////////////////////////////////////////////
+/* get_local(frame, name) gives what tinypy_debugger_frame_get finds among
+   the locals of frame, None when nothing. */
+static tinypy_value_t *__test_debugger_get_local(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+    size_t name_size = 0U;
+    const char *name = (const char *)tinypy_string_view(tinypy_tuple_get(args, 1U), &name_size);
+
+    (void)kwargs;
+    (void)user_data;
+    (void)out_error;
+    tinypy_value_t *value = tinypy_debugger_frame_get(tinypy_tuple_get(args, 0U), TINYPY_DEBUGGER_SCOPE_LOCALS, name, name_size);
+    if (value == NULL) {
+        tinypy_value_t *none = tinypy_none_get(vm);
+        return none;
+    }
+    tinypy_retain(value);
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+/* set_local(frame, name, value) */
+static tinypy_value_t *__test_debugger_set_local(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+    size_t name_size = 0U;
+    const char *name = (const char *)tinypy_string_view(tinypy_tuple_get(args, 1U), &name_size);
+
+    (void)kwargs;
+    (void)user_data;
+    (void)out_error;
+    tinypy_bool_t stored = tinypy_debugger_frame_set(tinypy_tuple_get(args, 0U), TINYPY_DEBUGGER_SCOPE_LOCALS, name, name_size, tinypy_tuple_get(args, 2U));
+    tinypy_value_t *result = tinypy_bool_from_i32(vm, stored);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* delete_local(frame, name) */
+static tinypy_value_t *__test_debugger_delete_local(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+    size_t name_size = 0U;
+    const char *name = (const char *)tinypy_string_view(tinypy_tuple_get(args, 1U), &name_size);
+
+    (void)kwargs;
+    (void)user_data;
+    (void)out_error;
+    tinypy_bool_t deleted = tinypy_debugger_frame_delete(tinypy_tuple_get(args, 0U), TINYPY_DEBUGGER_SCOPE_LOCALS, name, name_size);
+    tinypy_value_t *result = tinypy_bool_from_i32(vm, deleted);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_debugger_remove(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = tinypy_value_vm(function);
+
+    (void)args;
+    (void)kwargs;
+    (void)user_data;
+    (void)out_error;
+    tinypy_bool_t removed = tinypy_debugger_set(vm, NULL);
+    tinypy_value_t *result = tinypy_bool_from_i32(vm, removed);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static void __test_debugger_add_function(tinypy_value_t *globals, const char *name, tinypy_native_function_callback_t callback, void *user_data) {
     tinypy_vm_t *vm = tinypy_value_vm(globals);
     tinypy_value_t *function = tinypy_native_function_new(vm, name, strlen(name), callback, user_data, NULL);
@@ -10367,9 +10589,10 @@ static void __test_debugger_add_function(tinypy_value_t *globals, const char *na
     tinypy_release(function);
 }
 //////////////////////////////////////////////////////////////////////////
-/* Runs source, whose checks see the events through tracer, in a VM whose
-   host polls for the interrupt that arm_interrupt requests. */
-static int32_t __test_debugger_forward_run(const char *source) {
+/* Runs each source as an execution of its own, whose checks see the events
+   through tracer, in a VM whose host polls for the interrupt that
+   arm_interrupt requests. */
+static int32_t __test_debugger_forward_run_sources(const char *const *sources, size_t source_count) {
     test_allocator_state_t allocator_state;
     test_debugger_forward_state_t state;
     tinypy_host_t host;
@@ -10390,9 +10613,15 @@ static int32_t __test_debugger_forward_run(const char *source) {
     state.globals = globals;
     __test_debugger_add_function(globals, "arm_interrupt", __test_debugger_arm_interrupt, &state);
     __test_debugger_add_function(globals, "sync_frame", __test_debugger_sync_frame, NULL);
+    __test_debugger_add_function(globals, "get_local", __test_debugger_get_local, NULL);
+    __test_debugger_add_function(globals, "set_local", __test_debugger_set_local, NULL);
+    __test_debugger_add_function(globals, "delete_local", __test_debugger_delete_local, NULL);
+    __test_debugger_add_function(globals, "remove_debugger", __test_debugger_remove, NULL);
     tinypy_debugger_t debugger = {TINYPY_ABI_VERSION, (uint32_t)sizeof(tinypy_debugger_t), &state, __test_debugger_forward_event};
     TEST_CHECK(tinypy_debugger_set(vm, &debugger) != 0);
-    TEST_CHECK(__test_native_contract_run(vm, globals, source) == 0);
+    for (size_t index = 0U; index < source_count; ++index) {
+        TEST_CHECK(__test_native_contract_run(vm, globals, sources[index]) == 0);
+    }
     TEST_CHECK(tinypy_debugger_set(vm, NULL) != 0);
     TEST_CHECK(state.failures == 0U);
     tinypy_dict_clear(globals);
@@ -10401,6 +10630,11 @@ static int32_t __test_debugger_forward_run(const char *source) {
     TEST_CHECK(allocator_state.outstanding_allocations == 0U);
     TEST_CHECK(allocator_state.outstanding_bytes == 0U);
     return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_debugger_forward_run(const char *source) {
+    int32_t result = __test_debugger_forward_run_sources(&source, 1U);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* As maybe_call_line_trace, LINE marks the first instruction of a line
@@ -10519,6 +10753,124 @@ static int32_t __test_debugger_interrupt(void) {
         "expect_error(KeyboardInterrupt, work, 'execution interrupted by host')\n"
         "check(state, {'armed': False, 'seen': ['interrupted']})\n"
         "check(work(), 10)\n";
+
+    int32_t result = __test_debugger_forward_run(source);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* An interrupt that a debugger callback defers belongs to its execution:
+   it is dropped when the execution ends first, so that a later one runs,
+   and when the callback removes the debugger. */
+static int32_t __test_debugger_interrupt_scope(void) {
+    static const char *const sources[] = {
+        "state = {'armed': True, 'seen': []}\n"
+        "def watch():\n"
+        "    arm_interrupt()\n"
+        "    try:\n"
+        "        for i in range(50):\n"
+        "            pass\n"
+        "    except KeyboardInterrupt:\n"
+        "        state['seen'].append('interrupted')\n"
+        "def tracer(event, frame, exception, traceback, exception_type):\n"
+        "    if event == 3 and frame.f_back is None and state['armed']:\n"
+        "        state['armed'] = False\n"
+        "        watch()\n",
+        "for i in range(50):\n"
+        "    pass\n"
+        "check(state, {'armed': False, 'seen': ['interrupted']})\n"
+        "def tracer(event, frame, exception, traceback, exception_type):\n"
+        "    if event == 1 and frame.f_code.co_name == 'work':\n"
+        "        watch()\n"
+        "        check(remove_debugger(), True)\n"
+        "def work():\n"
+        "    total = 0\n"
+        "    for i in range(5):\n"
+        "        total += i\n"
+        "    return total\n"
+        "check(work(), 10)\n"
+        "check(state['seen'], ['interrupted', 'interrupted'])\n"};
+
+    int32_t result = __test_debugger_forward_run_sources(sources, sizeof(sources) / sizeof(sources[0]));
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* As PyFrame_FastToLocals maps them, the debugger finds an argument that a
+   closure captures in its cell, and set and delete rebind the cell as
+   PyFrame_LocalsToFast; the free variables of a class body are not its
+   locals. The expected values are those of CPython. */
+static int32_t __test_debugger_frame_cells(void) {
+    static const char source[] =
+        "import sys\n"
+        "def captured(x):\n"
+        "    def inner():\n"
+        "        return x\n"
+        "    x = 5\n"
+        "    frame = sys._getframe()\n"
+        "    seen = [get_local(frame, 'x')]\n"
+        "    check(set_local(frame, 'x', 7), True)\n"
+        "    seen.append(inner())\n"
+        "    check(delete_local(frame, 'x'), True)\n"
+        "    expect_error(NameError, inner, \"free variable 'x' referenced before assignment in enclosing scope\")\n"
+        "    seen.append(get_local(frame, 'x'))\n"
+        "    check(delete_local(frame, 'x'), False)\n"
+        "    check(set_local(frame, 'x', 9), True)\n"
+        "    seen.append(x)\n"
+        "    return seen\n"
+        "check(captured(1), [5, 7, None, 9])\n"
+        "def outer():\n"
+        "    x = 1\n"
+        "    class Body(object):\n"
+        "        y = x\n"
+        "        frame = sys._getframe()\n"
+        "        seen = get_local(frame, 'x')\n"
+        "        check(set_local(frame, 'x', 99), True)\n"
+        "        z = x\n"
+        "        del frame\n"
+        "    return x, Body.seen, Body.z, Body.x\n"
+        "check(outer(), (1, None, 1, 99))\n";
+
+    int32_t result = __test_debugger_forward_run(source);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A key comparison of a debugger lookup in the locals of a suspended frame
+   can close its generator, which clears the slots of the frame and lets
+   its locals go: frame_sync stores nothing in the cell or the fast local
+   that the lookup released, and frame_get finds nothing in the locals that
+   only the lookup held. */
+static int32_t __test_debugger_generator_close(void) {
+    static const char source[] =
+        "class Closing(str):\n"
+        "    __hash__ = str.__hash__\n"
+        "    def __eq__(self, other):\n"
+        "        if holder:\n"
+        "            holder.pop().close()\n"
+        "        return str.__eq__(self, other)\n"
+        "class Tracked(object):\n"
+        "    pass\n"
+        "def suspended():\n"
+        "    first = Tracked()\n"
+        "    yield 1\n"
+        "    cell = 5\n"
+        "    def inner():\n"
+        "        return cell\n"
+        "holder = []\n"
+        "for name in ('cell', 'other', 'first'):\n"
+        "    generator = suspended()\n"
+        "    next(generator)\n"
+        "    frame = generator.gi_frame\n"
+        "    local_names = frame.f_locals\n"
+        "    local_names.pop(name, None)\n"
+        "    local_names[Closing(name)] = 0\n"
+        "    del local_names\n"
+        "    holder.append(generator)\n"
+        "    del generator\n"
+        "    if name == 'other':\n"
+        "        check(get_local(frame, name), None)\n"
+        "    else:\n"
+        "        sync_frame(frame)\n"
+        "    check(holder, [])\n"
+        "    check(frame.f_locals, {})\n";
 
     int32_t result = __test_debugger_forward_run(source);
     return result;
@@ -10783,6 +11135,14 @@ int main(int argc, char **argv) {
         int code_new_validation = __test_code_new_validation();
         return code_new_validation;
     }
+    if (strcmp(argv[1], "attribute_native_key_errors") == 0) {
+        int result = __test_attribute_native_key_errors();
+        return result;
+    }
+    if (strcmp(argv[1], "native_attribute_hook_class") == 0) {
+        int result = __test_native_attribute_hook_class();
+        return result;
+    }
     if (strcmp(argv[1], "native_embedding") == 0) {
         int return_value_21 = __test_native_embedding();
         return return_value_21;
@@ -10942,6 +11302,30 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "debugger_frame_sync") == 0) {
 #if defined(TINYPY_DEBUGGER)
         int result = __test_debugger_frame_sync();
+        return result;
+#else
+        return 0;
+#endif
+    }
+    if (strcmp(argv[1], "debugger_interrupt_scope") == 0) {
+#if defined(TINYPY_DEBUGGER)
+        int result = __test_debugger_interrupt_scope();
+        return result;
+#else
+        return 0;
+#endif
+    }
+    if (strcmp(argv[1], "debugger_frame_cells") == 0) {
+#if defined(TINYPY_DEBUGGER)
+        int result = __test_debugger_frame_cells();
+        return result;
+#else
+        return 0;
+#endif
+    }
+    if (strcmp(argv[1], "debugger_generator_close") == 0) {
+#if defined(TINYPY_DEBUGGER)
+        int result = __test_debugger_generator_close();
         return result;
 #else
         return 0;

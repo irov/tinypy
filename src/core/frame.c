@@ -349,10 +349,30 @@ tinypy_value_t *tinypy_internal_frame_locals_get(tinypy_vm_t *vm, tinypy_value_t
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The binding of name in the locals that a frame lent, for
+   PyFrame_LocalsToFast to store, or NULL. The lookup can run code that
+   finishes the generator of the frame, which clears its slots and lets the
+   locals go: then nothing is stored. */
+static tinypy_value_t *__tinypy_internal_frame_fast_value(tinypy_vm_t *vm, tinypy_frame_object_t *frame, tinypy_value_t *locals, tinypy_value_t *name) {
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *value = tinypy_internal_frame_locals_get(vm, locals, name, &error);
+
+    if (error != NULL) {
+        tinypy_error_release(error);
+        tinypy_vm_clear_error(vm);
+    }
+    if (value != NULL && frame->locals != locals) {
+        TINYPY_DECREF(value);
+        return NULL;
+    }
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Mirrors PyFrame_LocalsToFast(frame, 0): names missing from the mapping
-   keep their current fast values. A stale value it replaces may run a
-   finalizer that finishes the generator of a suspended frame, which lets
-   the mapping go: the sync stops there. */
+   keep their current fast values. A lookup, or a stale value the sync
+   replaces through the finalizer it runs, may finish the generator of a
+   suspended frame, which lets the mapping go: the sync stops there, and
+   each slot is read only once its value is found. */
 void tinypy_internal_frame_locals_to_fast(tinypy_frame_object_t *frame) {
     tinypy_value_t *code = frame->code;
     tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
@@ -370,17 +390,12 @@ void tinypy_internal_frame_locals_to_fast(tinypy_frame_object_t *frame) {
     }
     TINYPY_INCREF(locals);
     for (index = 0U; index < local_count && frame->locals == locals; ++index) {
-        tinypy_error_t *error = NULL;
-        tinypy_value_t *value = tinypy_internal_frame_locals_get(vm, locals, TINYPY_TUPLE_GET(varnames, index), &error);
-        tinypy_value_t *previous = frame->locals_plus[index];
+        tinypy_value_t *value = __tinypy_internal_frame_fast_value(vm, frame, locals, TINYPY_TUPLE_GET(varnames, index));
 
-        if (error != NULL) {
-            tinypy_error_release(error);
-            tinypy_vm_clear_error(vm);
-        }
         if (value == NULL) {
             continue;
         }
+        tinypy_value_t *previous = frame->locals_plus[index];
         frame->locals_plus[index] = value;
         if (previous != NULL) {
             TINYPY_DECREF(previous);
@@ -388,17 +403,12 @@ void tinypy_internal_frame_locals_to_fast(tinypy_frame_object_t *frame) {
     }
     for (index = 0U; index < cell_count + free_count && frame->locals == locals; ++index) {
         tinypy_value_t *name = index < cell_count ? TINYPY_TUPLE_GET(cellvars, index) : TINYPY_TUPLE_GET(freevars, index - cell_count);
-        tinypy_value_t *cell = frame->locals_plus[local_count + index];
-        tinypy_error_t *error = NULL;
-        tinypy_value_t *value = tinypy_internal_frame_locals_get(vm, locals, name, &error);
+        tinypy_value_t *value = __tinypy_internal_frame_fast_value(vm, frame, locals, name);
 
-        if (error != NULL) {
-            tinypy_error_release(error);
-            tinypy_vm_clear_error(vm);
-        }
         if (value == NULL) {
             continue;
         }
+        tinypy_value_t *cell = frame->locals_plus[local_count + index];
         if (cell != NULL && tinypy_cell_get(cell) != value) {
             tinypy_cell_set(cell, value);
         }

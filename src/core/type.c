@@ -3175,9 +3175,11 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         }
         return instance;
     }
-    /* object_init only refuses arguments, so a call of a class taking
-       object.__new__ without any skips an __init__ that is object's. */
-    if (object_new != 0 && count == 0U && (kwargs == NULL || TINYPY_DICT_SIZE(kwargs) == 0U) && TINYPY_VALUE_KIND(initializer_attribute) != TINYPY_VALUE_FUNCTION) {
+    /* object_init only refuses arguments, and only when the tp_new of the
+       instance's type is object_new: a call of a class taking object.__new__
+       without any, or of one with another __new__ that made an instance of
+       the class itself, skips an __init__ that is object's. */
+    if (TINYPY_VALUE_KIND(initializer_attribute) == TINYPY_VALUE_NATIVE_FUNCTION && (object_new != 0 ? count == 0U && (kwargs == NULL || TINYPY_DICT_SIZE(kwargs) == 0U) : instance->type == type)) {
         tinypy_value_t *object_initializer = tinypy_internal_type_constructor_init(&vm->types[TINYPY_VALUE_INSTANCE]);
 
         if (initializer_attribute == object_initializer) {
@@ -3213,6 +3215,12 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         if (init_items != stack_items) {
             tinypy_internal_vm_deallocate(vm, init_items, items_size);
         }
+    }
+    else if (tinypy_internal_native_method_applies(initializer_attribute, instance) != 0) {
+        /* A built-in __init__ that applies to the instance runs with it as
+           self, as the built-in method binding it would. */
+        initialize_result = tinypy_internal_native_function_call_method(initializer_attribute, instance, items, count, kwargs, out_error);
+        TINYPY_DECREF(initializer_attribute);
     }
     else {
         /* As in slot_tp_init, only what the descriptor returned lives on

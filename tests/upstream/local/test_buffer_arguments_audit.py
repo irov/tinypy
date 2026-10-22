@@ -80,6 +80,24 @@ class BufferArgumentsAudit(unittest.TestCase):
         self.assertEqual(error(buffer('abc').__delslice__, 0, 'bad'),
                          ('TypeError', ('an integer is required',)))
 
+    def test_buffer_slice_statements_convert_offsets_before_readonly(self):
+        class Index(object):
+            def __index__(self):
+                raise KeyError('bound')
+        value = buffer('abcdef')
+        def assign(start, stop):
+            value[start:stop] = 'zz'
+        def delete(start, stop):
+            del value[start:stop]
+        def assign_extended(start, stop):
+            value[start:stop:1] = 'zz'
+        for statement in (assign, delete):
+            self.assertEqual(error(statement, Index(), 2), ('KeyError', ('bound',)))
+            self.assertEqual(error(statement, 1, Index()), ('KeyError', ('bound',)))
+            self.assertEqual(error(statement, 1, 2), ('TypeError', ('buffer is read-only',)))
+            self.assertEqual(error(statement, 'a', Index()), ('TypeError', ('buffer is read-only',)))
+        self.assertEqual(error(assign_extended, Index(), 2), ('TypeError', ('buffer is read-only',)))
+
     def test_buffer_comparison_reports_right_type(self):
         for value in (1, 'a', None):
             self.assertEqual(error(buffer('a').__cmp__, value), ('TypeError',

@@ -87,6 +87,11 @@ class BufferStateAudit(unittest.TestCase):
             self.assertEqual(error.exception.args, ('cannot index memory using "%s"' % name,))
         sys.exc_clear()
 
+    def test_memoryview_dimensions_are_long(self):
+        for view in (memoryview('ab'), memoryview(bytearray('xyz'))[1:]):
+            self.assertEqual([(type(value), value) for value in (view.itemsize, view.ndim)],
+                             [(long, 1L), (long, 1L)])
+
     def test_memoryview_assignment_uses_buffer_and_size_diagnostics(self):
         target = bytearray('ab')
         view = memoryview(target)
@@ -195,6 +200,28 @@ class BufferStateAudit(unittest.TestCase):
             yield 'b'
         self.assertEqual(bytearray('-').join(values()), bytearray('z-b'))
         self.assertEqual(events, ['first', 'second'])
+
+    def test_bytearray_join_copies_the_separator_size_its_storage_kept(self):
+        # The separator size is taken first; storage that stays in place, as
+        # an export keeps it, still holds the bytes past a size it shrank to.
+        exports = []
+        def join(change, pinned):
+            separator = bytearray('-=+')
+            if pinned:
+                exports.append(memoryview(separator))
+            def items():
+                yield 'ab'
+                change(separator)
+                yield 'cd'
+            return separator.join(items())
+        def shrink(separator):
+            separator *= 0
+        def replace_first(separator):
+            separator[0] = 'X'
+        for pinned in (False, True):
+            self.assertEqual(join(shrink, pinned), bytearray('ab\x00=+cd'))
+            self.assertEqual(join(replace_first, pinned), bytearray('abX=+cd'))
+        self.assertEqual([len(view) for view in exports], [3, 3])
 
     def test_bytearray_join_drains_before_validation_and_preserves_tail_error(self):
         events = []

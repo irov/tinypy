@@ -2440,11 +2440,13 @@ static tinypy_value_t *__tinypy_constructor_basestring_new_method(tinypy_value_t
     if (type == NULL) {
         return NULL;
     }
-    if (type == owner) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "The basestring type cannot be instantiated", out_error);
+    /* tp_new_wrapper lets a class whose nearest static base is basestring
+       through to basestring_new. */
+    if (__tinypy_constructor_static_base(type) != owner) {
+        tinypy_internal_constructor_unsafe_new_error(owner, type, out_error);
         return NULL;
     }
-    tinypy_internal_constructor_unsafe_new_error(owner, type, out_error);
+    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "The basestring type cannot be instantiated", out_error);
     return NULL;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2545,20 +2547,6 @@ static tinypy_value_t *__tinypy_constructor_container_init_method(tinypy_value_t
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_constructor_object_attribute_name(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error) {
-    if (TINYPY_VALUE_KIND(name) == TINYPY_VALUE_STRING || TINYPY_VALUE_KIND(name) == TINYPY_VALUE_UNICODE) {
-        return TINYPY_TRUE;
-    }
-    tinypy_message_part_t parts[] = {
-        TINYPY_MESSAGE_PART_LITERAL("attribute name must be string, not '"),
-        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(name, 200U),
-        TINYPY_MESSAGE_PART_LITERAL("'")
-    };
-
-    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
-    return TINYPY_FALSE;
-}
-//////////////////////////////////////////////////////////////////////////
 /* The __getattribute__ entry of the type user_data: that of object is
    PyObject_GenericGetAttr for any object, and that of another type its
    tp_getattro. */
@@ -2570,11 +2558,13 @@ static tinypy_value_t *__tinypy_constructor_object_getattribute_method(tinypy_va
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *name = TINYPY_TUPLE_GET(args, 1U);
-    if ((const tinypy_type_t *)user_data == &vm->types[TINYPY_VALUE_OLD_INSTANCE] && TINYPY_VALUE_KIND(name) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(name) != TINYPY_VALUE_UNICODE) {
+    /* class_getattr and instance_getattr take a str name alone. */
+    tinypy_bool_t classic = (const tinypy_type_t *)user_data == &vm->types[TINYPY_VALUE_CLASS] || (const tinypy_type_t *)user_data == &vm->types[TINYPY_VALUE_OLD_INSTANCE] ? TINYPY_TRUE : TINYPY_FALSE;
+    if (classic != TINYPY_FALSE && TINYPY_VALUE_KIND(name) != TINYPY_VALUE_STRING) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "attribute name must be a string", out_error);
         return NULL;
     }
-    if (__tinypy_constructor_object_attribute_name(vm, name, out_error) == TINYPY_FALSE) {
+    if (tinypy_internal_object_check_attribute_name(vm, name, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     if ((const tinypy_type_t *)user_data == &vm->types[TINYPY_VALUE_INSTANCE]) {
@@ -2586,7 +2576,8 @@ static tinypy_value_t *__tinypy_constructor_object_getattribute_method(tinypy_va
 }
 //////////////////////////////////////////////////////////////////////////
 /* hackcheck: the __setattr__ and __delattr__ wrappers of object and type
-   refuse objects whose built-in type assigns attributes another way. */
+   refuse objects whose built-in type assigns attributes another way, as a
+   weak proxy does. */
 static tinypy_bool_t __tinypy_constructor_object_hackcheck(tinypy_value_t *self, void *user_data, const char *what, size_t what_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(self);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(self);
@@ -2595,7 +2586,7 @@ static tinypy_bool_t __tinypy_constructor_object_hackcheck(tinypy_value_t *self,
     if (kind == TINYPY_VALUE_TYPE || kind == TINYPY_VALUE_CLASS || kind == TINYPY_VALUE_OLD_INSTANCE) {
         type = &vm->types[kind];
     }
-    else if ((self->type->flags & TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY) != 0U) {
+    else if ((self->type->flags & TINYPY_TYPE_FLAG_NEEDS_ATTRIBUTE_READY) != 0U || __tinypy_internal_weakref_is_proxy(self) != TINYPY_FALSE) {
         type = self->type;
     }
     if (type == &vm->types[(tinypy_value_type_e)(intptr_t)user_data]) {
@@ -2624,7 +2615,7 @@ static tinypy_value_t *__tinypy_constructor_object_setattr_method(tinypy_value_t
         return NULL;
     }
     tinypy_value_t *name = TINYPY_TUPLE_GET(args, 1U);
-    if (__tinypy_constructor_object_attribute_name(vm, name, out_error) == TINYPY_FALSE) {
+    if (tinypy_internal_object_check_attribute_name(vm, name, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     if (tinypy_internal_object_set_attr_key(TINYPY_TUPLE_GET(args, 0U), name, TINYPY_TUPLE_GET(args, 2U), out_error) == 0) {
@@ -2645,7 +2636,7 @@ static tinypy_value_t *__tinypy_constructor_object_delattr_method(tinypy_value_t
         return NULL;
     }
     tinypy_value_t *name = TINYPY_TUPLE_GET(args, 1U);
-    if (__tinypy_constructor_object_attribute_name(vm, name, out_error) == TINYPY_FALSE) {
+    if (tinypy_internal_object_check_attribute_name(vm, name, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     if (tinypy_internal_object_delete_attr_key(TINYPY_TUPLE_GET(args, 0U), name, out_error) == 0) {
@@ -3113,12 +3104,8 @@ static tinypy_value_t *__tinypy_copy_reg_newobj(tinypy_value_t *function, tinypy
     if (__tinypy_constructor_function_argument_count(function, args, 1U, SIZE_MAX, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(type_value) != TINYPY_VALUE_TYPE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "__newobj__ requires a type", out_error);
-        return NULL;
-    }
-    tinypy_value_t *constructor = tinypy_object_get_attr_value(type_value, vm->internal_special_new_key, out_error);
+    /* cls.__new__(cls, *args) */
+    tinypy_value_t *constructor = tinypy_object_get_attr_value(TINYPY_TUPLE_GET(args, 0U), vm->internal_special_new_key, out_error);
     if (constructor == NULL) {
         return NULL;
     }
@@ -3129,7 +3116,6 @@ static tinypy_value_t *__tinypy_copy_reg_newobj(tinypy_value_t *function, tinypy
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_copy_reg_reconstructor(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
-    tinypy_value_t *instance = NULL;
 
     if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
         tinypy_value_t *const names[3] = {vm->internal_cls_key, vm->internal_base_key, vm->internal_state_key};
@@ -3140,42 +3126,46 @@ static tinypy_value_t *__tinypy_copy_reg_reconstructor(tinypy_value_t *function,
         return NULL;
     }
     tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *base_value = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_value_t *base = TINYPY_TUPLE_GET(args, 1U);
     tinypy_value_t *state = TINYPY_TUPLE_GET(args, 2U);
-    if (TINYPY_VALUE_KIND(type_value) != TINYPY_VALUE_TYPE || TINYPY_VALUE_KIND(base_value) != TINYPY_VALUE_TYPE) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "_reconstructor requires type arguments", out_error);
-        return NULL;
-    }
-    tinypy_type_t *base = (tinypy_type_t *)base_value;
-    tinypy_value_t *constructor = tinypy_internal_object_get_attr_key(base_value, vm->internal_special_new_key, out_error);
+    tinypy_value_t *object_value = &vm->types[TINYPY_VALUE_INSTANCE].base.base;
+    /* object.__new__(cls), or base.__new__(cls, state) and then
+       base.__init__(obj, state) unless it is object.__init__. */
+    tinypy_value_t *constructor = tinypy_object_get_attr_value(base, vm->internal_special_new_key, out_error);
     if (constructor == NULL) {
         return NULL;
     }
-    if (base == &vm->types[TINYPY_VALUE_INSTANCE]) {
-        tinypy_value_t *items[] = {type_value};
-
-        instance = __tinypy_constructor_call_with_items(vm, constructor, items, 1U, out_error);
-    }
-    else {
-        tinypy_value_t *items[] = {type_value, state};
-
-        instance = __tinypy_constructor_call_with_items(vm, constructor, items, 2U, out_error);
-    }
+    tinypy_value_t *items[] = {type_value, state};
+    tinypy_value_t *instance = __tinypy_constructor_call_with_items(vm, constructor, items, base == object_value ? 1U : 2U, out_error);
     TINYPY_DECREF(constructor);
-    if (instance == NULL || base == &vm->types[TINYPY_VALUE_INSTANCE]) {
+    if (instance == NULL || base == object_value) {
         return instance;
     }
-    tinypy_value_t *initializer = tinypy_internal_type_lookup_key(vm, base, vm->internal_special_init_key);
-    tinypy_value_t *object_initializer = tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_init_key);
-    if (initializer != NULL && initializer != object_initializer) {
-        tinypy_value_t *items[] = {instance, state};
-        tinypy_value_t *initialized = __tinypy_constructor_call_with_items(vm, initializer, items, 2U, out_error);
+    tinypy_value_t *initializer = tinypy_object_get_attr_value(base, vm->internal_special_init_key, out_error);
+    if (initializer == NULL) {
+        TINYPY_DECREF(instance);
+        return NULL;
+    }
+    tinypy_value_t *object_initializer = tinypy_object_get_attr_value(object_value, vm->internal_special_init_key, out_error);
+    int32_t overridden = object_initializer != NULL ? tinypy_compare_bool(initializer, object_initializer, TINYPY_COMPARE_NOT_EQUAL, out_error) : -INT32_C(1);
+    tinypy_bool_t initialized = overridden >= 0 ? TINYPY_TRUE : TINYPY_FALSE;
 
-        if (initialized == NULL) {
-            TINYPY_DECREF(instance);
-            return NULL;
+    if (object_initializer != NULL) {
+        TINYPY_DECREF(object_initializer);
+    }
+    if (overridden > 0) {
+        tinypy_value_t *initializer_items[] = {instance, state};
+        tinypy_value_t *initializer_result = __tinypy_constructor_call_with_items(vm, initializer, initializer_items, 2U, out_error);
+
+        if (initializer_result != NULL) {
+            TINYPY_DECREF(initializer_result);
         }
-        TINYPY_DECREF(initialized);
+        initialized = initializer_result != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+    TINYPY_DECREF(initializer);
+    if (initialized == 0) {
+        TINYPY_DECREF(instance);
+        return NULL;
     }
     return instance;
 }
@@ -3201,9 +3191,19 @@ static tinypy_value_t *__tinypy_copy_reg_reduce_ex(tinypy_value_t *function, tin
         return NULL;
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *protocol = TINYPY_TUPLE_GET(args, 1U);
-    if ((TINYPY_VALUE_KIND(protocol) != TINYPY_VALUE_BOOL && TINYPY_VALUE_KIND(protocol) != TINYPY_VALUE_INTEGER) || TINYPY_INTEGER_VALUE(protocol) >= 2) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "_reduce_ex requires a protocol below 2", out_error);
+    /* assert proto < 2 */
+    tinypy_value_t *limit = tinypy_integer_from_i64(vm, INT64_C(2));
+    int32_t below = tinypy_compare_bool(TINYPY_TUPLE_GET(args, 1U), limit, TINYPY_COMPARE_LESS, out_error);
+
+    TINYPY_DECREF(limit);
+    if (below < 0) {
+        return NULL;
+    }
+    if (below == 0) {
+        tinypy_value_t *empty = TINYPY_RET_EMPTY_TUPLE(vm);
+
+        tinypy_internal_exception_raise_args(vm, TINYPY_EXCEPTION_ASSERTION_ERROR, empty, out_error);
+        TINYPY_DECREF(empty);
         return NULL;
     }
     class_value = tinypy_object_get_attr_value(self, vm->internal_special_class_key, out_error);
@@ -3871,28 +3871,73 @@ static tinypy_value_t *__tinypy_copy_reg_table(tinypy_vm_t *vm, tinypy_value_t *
     return TINYPY_RET(table);
 }
 //////////////////////////////////////////////////////////////////////////
-/* The extension registries are read through their get method first, which
-   any object other than a dict fails with. */
-static tinypy_value_t *__tinypy_copy_reg_registry(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_value_t *name, tinypy_error_t **out_error) {
-    tinypy_value_t *registry = __tinypy_copy_reg_table(vm, module, name, out_error);
-
-    if (registry == NULL || TINYPY_VALUE_KIND(registry) == TINYPY_VALUE_DICT) {
-        return registry;
+/* The comparison of what the get method of an extension table returns for
+   a key, None for a missing one, with the value expected there. */
+static int32_t __tinypy_copy_reg_compare_registered(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_value_t *name, tinypy_value_t *key, tinypy_value_t *expected, tinypy_compare_operation_e operation, tinypy_error_t **out_error) {
+    tinypy_value_t *table = __tinypy_copy_reg_table(vm, module, name, out_error);
+    if (table == NULL) {
+        return -INT32_C(1);
     }
-    tinypy_internal_object_make_attribute_error_key(registry, vm->internal_get_key, out_error);
-    TINYPY_DECREF(registry);
-    return NULL;
+    tinypy_value_t *registered = __tinypy_copy_reg_call_method(vm, table, vm->internal_get_key, &key, 1U, out_error);
+    TINYPY_DECREF(table);
+    if (registered == NULL) {
+        return -INT32_C(1);
+    }
+    int32_t result = tinypy_compare_bool(registered, expected, operation, out_error);
+    TINYPY_DECREF(registered);
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* dict.get of a registry, owned: a later key comparison may release it. */
-static tinypy_bool_t __tinypy_copy_reg_registered(tinypy_vm_t *vm, tinypy_value_t *registry, tinypy_value_t *key, tinypy_value_t **out_value, tinypy_error_t **out_error) {
-    if (tinypy_internal_dict_get_optional_checked(vm, registry, key, out_value, out_error) == 0) {
+/* raise ValueError(format % (first, second)) */
+static void __tinypy_copy_reg_extension_error(tinypy_vm_t *vm, const char *format, tinypy_value_t *first, tinypy_value_t *second, tinypy_error_t **out_error) {
+    tinypy_value_t *format_value = tinypy_string_from_bytes(vm, format, strlen(format));
+    tinypy_value_t *values[] = {first, second};
+    tinypy_value_t *arguments = tinypy_internal_tuple_from_items_checked(vm, values, 2U, out_error);
+    tinypy_value_t *message = arguments != NULL ? tinypy_remainder(format_value, arguments, out_error) : NULL;
+
+    if (arguments != NULL) {
+        TINYPY_DECREF(arguments);
+    }
+    TINYPY_DECREF(format_value);
+    if (message == NULL) {
+        return;
+    }
+    tinypy_value_t *exception_args = tinypy_internal_tuple_from_items_checked(vm, &message, 1U, out_error);
+    TINYPY_DECREF(message);
+    if (exception_args == NULL) {
+        return;
+    }
+    tinypy_internal_exception_raise_args(vm, TINYPY_EXCEPTION_VALUE_ERROR, exception_args, out_error);
+    TINYPY_DECREF(exception_args);
+}
+//////////////////////////////////////////////////////////////////////////
+/* add_extension refuses a key or a code an extension table already has,
+   naming what the table keeps for it. */
+static tinypy_bool_t __tinypy_copy_reg_extension_unused(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_value_t *name, tinypy_value_t *key, const char *format, tinypy_error_t **out_error) {
+    tinypy_value_t *table = __tinypy_copy_reg_table(vm, module, name, out_error);
+    if (table == NULL) {
         return TINYPY_FALSE;
     }
-    if (*out_value != NULL) {
-        TINYPY_INCREF(*out_value);
+    int32_t present = tinypy_contains(table, key, out_error);
+    tinypy_value_t *registered = present > 0 ? tinypy_get_item(table, key, out_error) : NULL;
+    TINYPY_DECREF(table);
+    if (registered != NULL) {
+        __tinypy_copy_reg_extension_error(vm, format, key, registered, out_error);
+        TINYPY_DECREF(registered);
     }
-    return TINYPY_TRUE;
+    tinypy_bool_t unused = present == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return unused;
+}
+//////////////////////////////////////////////////////////////////////////
+/* _extension_table[key] = value, or del _extension_table[key] for NULL. */
+static tinypy_bool_t __tinypy_copy_reg_extension_store(tinypy_vm_t *vm, tinypy_value_t *module, tinypy_value_t *name, tinypy_value_t *key, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *table = __tinypy_copy_reg_table(vm, module, name, out_error);
+    if (table == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t stored = value != NULL ? tinypy_set_item(table, key, value, out_error) : tinypy_delete_item(table, key, out_error);
+    TINYPY_DECREF(table);
+    return stored;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_copy_reg_constructor(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -3967,16 +4012,17 @@ static tinypy_value_t *__tinypy_copy_reg_pickle_complex(tinypy_value_t *function
     if (__tinypy_constructor_function_argument_count(function, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
+    /* return complex, (c.real, c.imag) */
     tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
-    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_COMPLEX) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "pickle_complex requires a complex number", out_error);
+    tinypy_value_t *real_value = tinypy_object_get_attr_value(value, vm->internal_real_key, out_error);
+    if (real_value == NULL) {
         return NULL;
     }
-    double real;
-    double imaginary;
-    tinypy_complex_as_doubles(value, &real, &imaginary);
-    tinypy_value_t *real_value = tinypy_float_from_double(vm, real);
-    tinypy_value_t *imaginary_value = tinypy_float_from_double(vm, imaginary);
+    tinypy_value_t *imaginary_value = tinypy_object_get_attr_value(value, vm->internal_imag_key, out_error);
+    if (imaginary_value == NULL) {
+        TINYPY_DECREF(real_value);
+        return NULL;
+    }
     tinypy_value_t *complex_args_items[2] = {real_value, imaginary_value};
     tinypy_value_t *complex_args = tinypy_tuple_from_items(vm, complex_args_items, 2U);
     tinypy_value_t *result_items[2] = {&vm->types[TINYPY_VALUE_COMPLEX].base.base, complex_args};
@@ -3988,111 +4034,117 @@ static tinypy_value_t *__tinypy_copy_reg_pickle_complex(tinypy_value_t *function
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_copy_reg_extension(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_copy_reg_add_extension(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *module = (tinypy_value_t *)user_data;
-    tinypy_value_t *function_name = tinypy_native_function_name(function);
-    tinypy_bool_t remove = TINYPY_TEXT_BYTE_SIZE(function_name) == 16U ? TINYPY_TRUE : TINYPY_FALSE;
-    int64_t code;
+    tinypy_value_t *result = NULL;
 
     if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
         tinypy_value_t *const names[3] = {vm->internal_module_key, vm->internal_name_key, vm->internal_code_key};
-        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 3U, 3U, TINYPY_FALSE, __tinypy_copy_reg_extension, out_error);
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 3U, 3U, TINYPY_FALSE, __tinypy_copy_reg_add_extension, out_error);
         return keyword_result;
     }
     if (__tinypy_constructor_function_argument_count(function, args, 3U, 3U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *module_name = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *object_name = TINYPY_TUPLE_GET(args, 1U);
-    tinypy_value_t *code_value = TINYPY_TUPLE_GET(args, 2U);
-    if ((TINYPY_VALUE_KIND(module_name) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(module_name) != TINYPY_VALUE_UNICODE) ||
-        (TINYPY_VALUE_KIND(object_name) != TINYPY_VALUE_STRING && TINYPY_VALUE_KIND(object_name) != TINYPY_VALUE_UNICODE) ||
-        tinypy_internal_index_as_i64(code_value, &code, TINYPY_FALSE, out_error) == 0) {
-        if (out_error == NULL || *out_error == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "extension arguments are invalid", out_error);
-        }
+    /* code = int(code) */
+    tinypy_value_t *code_argument = TINYPY_TUPLE_GET(args, 2U);
+    tinypy_value_t *code = __tinypy_constructor_call_with_items(vm, &vm->types[TINYPY_VALUE_INTEGER].base.base, &code_argument, 1U, out_error);
+    if (code == NULL) {
         return NULL;
     }
-    if (code <= 0 || code > INT64_C(0x7fffffff)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code out of range", out_error);
+    /* if not 1 <= code <= 0x7fffffff: raise ValueError, "code out of range" */
+    tinypy_value_t *bounds[] = {tinypy_integer_from_i64(vm, INT64_C(1)), tinypy_integer_from_i64(vm, INT64_C(0x7fffffff))};
+    int32_t in_range = tinypy_compare_bool(bounds[0], code, TINYPY_COMPARE_LESS_EQUAL, out_error);
+    if (in_range > 0) {
+        in_range = tinypy_compare_bool(code, bounds[1], TINYPY_COMPARE_LESS_EQUAL, out_error);
+    }
+    TINYPY_DECREF(bounds[1]);
+    TINYPY_DECREF(bounds[0]);
+    if (in_range <= 0) {
+        if (in_range == 0) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "code out of range", out_error);
+        }
+        TINYPY_DECREF(code);
         return NULL;
     }
-    tinypy_value_t *normalized_code = tinypy_integer_from_i64(vm, code);
-    tinypy_value_t *key_items[2] = {module_name, object_name};
-    tinypy_value_t *key = tinypy_tuple_from_items(vm, key_items, 2U);
-    tinypy_value_t *inverted = NULL;
-    tinypy_value_t *registered_code = NULL;
-    tinypy_value_t *registered_key = NULL;
-    tinypy_value_t *result = NULL;
-    tinypy_bool_t same;
-
-    tinypy_value_t *registry = __tinypy_copy_reg_registry(vm, module, vm->internal_extension_registry_key, out_error);
-    if (registry == NULL) {
+    tinypy_value_t *key = tinypy_tuple_from_items(vm, tinypy_internal_tuple_items(args), 2U);
+    /* Redundant registrations are benign. */
+    int32_t registered = __tinypy_copy_reg_compare_registered(vm, module, vm->internal_extension_registry_key, key, code, TINYPY_COMPARE_EQUAL, out_error);
+    if (registered > 0) {
+        registered = __tinypy_copy_reg_compare_registered(vm, module, vm->internal_inverted_registry_key, code, key, TINYPY_COMPARE_EQUAL, out_error);
+    }
+    if (registered < 0) {
         goto done;
     }
-    inverted = __tinypy_copy_reg_registry(vm, module, vm->internal_inverted_registry_key, out_error);
-    if (inverted == NULL) {
-        goto done;
-    }
-    if (__tinypy_copy_reg_registered(vm, registry, key, &registered_code, out_error) == 0) {
-        goto done;
-    }
-    if (__tinypy_copy_reg_registered(vm, inverted, normalized_code, &registered_key, out_error) == 0) {
-        goto done;
-    }
-    same = registered_code != NULL && TINYPY_VALUE_KIND(registered_code) == TINYPY_VALUE_INTEGER && TINYPY_INTEGER_VALUE(registered_code) == code && registered_key != NULL && tinypy_internal_equal_value(registered_key, key, 1) != 0;
-    if (remove != 0) {
-        if (same == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "extension is not registered with that code", out_error);
+    if (registered == 0) {
+        if (__tinypy_copy_reg_extension_unused(vm, module, vm->internal_extension_registry_key, key, "key %s is already registered with code %s", out_error) == 0) {
             goto done;
         }
-        tinypy_dict_delete(registry, key);
-        tinypy_dict_delete(inverted, normalized_code);
-        /* if code in _extension_cache: del _extension_cache[code] */
-        tinypy_value_t *cache = __tinypy_copy_reg_table(vm, module, vm->internal_extension_cache_key, out_error);
-        if (cache == NULL) {
+        if (__tinypy_copy_reg_extension_unused(vm, module, vm->internal_inverted_registry_key, code, "code %s is already in use for key %s", out_error) == 0) {
             goto done;
         }
-        int32_t cached = tinypy_contains(cache, normalized_code, out_error);
-        if (cached > 0) {
-            cached = tinypy_delete_item(cache, normalized_code, out_error) != 0 ? INT32_C(0) : -INT32_C(1);
-        }
-        TINYPY_DECREF(cache);
-        if (cached < 0) {
+        if (__tinypy_copy_reg_extension_store(vm, module, vm->internal_extension_registry_key, key, code, out_error) == 0) {
             goto done;
         }
-    }
-    else if (registered_code != NULL || registered_key != NULL) {
-        if (same == 0) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "extension code is already in use", out_error);
-            goto done;
-        }
-    }
-    else {
-        if (tinypy_internal_dict_set_checked(vm, registry, key, normalized_code, out_error) == 0) {
-            goto done;
-        }
-        if (tinypy_internal_dict_set_checked(vm, inverted, normalized_code, key, out_error) == 0) {
+        if (__tinypy_copy_reg_extension_store(vm, module, vm->internal_inverted_registry_key, code, key, out_error) == 0) {
             goto done;
         }
     }
     result = TINYPY_RET_NONE(vm);
 done:
-    if (registered_key != NULL) {
-        TINYPY_DECREF(registered_key);
-    }
-    if (registered_code != NULL) {
-        TINYPY_DECREF(registered_code);
-    }
-    if (inverted != NULL) {
-        TINYPY_DECREF(inverted);
-    }
-    if (registry != NULL) {
-        TINYPY_DECREF(registry);
-    }
     TINYPY_DECREF(key);
-    TINYPY_DECREF(normalized_code);
+    TINYPY_DECREF(code);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_copy_reg_remove_extension(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *module = (tinypy_value_t *)user_data;
+    tinypy_value_t *result = NULL;
+
+    if (kwargs != NULL && TINYPY_DICT_SIZE(kwargs) != 0U) {
+        tinypy_value_t *const names[3] = {vm->internal_module_key, vm->internal_name_key, vm->internal_code_key};
+        tinypy_value_t *keyword_result = __tinypy_copy_reg_call_bound(function, args, kwargs, user_data, names, 3U, 3U, TINYPY_FALSE, __tinypy_copy_reg_remove_extension, out_error);
+        return keyword_result;
+    }
+    if (__tinypy_constructor_function_argument_count(function, args, 3U, 3U, out_error) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *code = TINYPY_TUPLE_GET(args, 2U);
+    tinypy_value_t *key = tinypy_tuple_from_items(vm, tinypy_internal_tuple_items(args), 2U);
+    int32_t unregistered = __tinypy_copy_reg_compare_registered(vm, module, vm->internal_extension_registry_key, key, code, TINYPY_COMPARE_NOT_EQUAL, out_error);
+    if (unregistered == 0) {
+        unregistered = __tinypy_copy_reg_compare_registered(vm, module, vm->internal_inverted_registry_key, code, key, TINYPY_COMPARE_NOT_EQUAL, out_error);
+    }
+    if (unregistered != 0) {
+        if (unregistered > 0) {
+            __tinypy_copy_reg_extension_error(vm, "key %s is not registered with code %s", key, code, out_error);
+        }
+        goto done;
+    }
+    if (__tinypy_copy_reg_extension_store(vm, module, vm->internal_extension_registry_key, key, NULL, out_error) == 0) {
+        goto done;
+    }
+    if (__tinypy_copy_reg_extension_store(vm, module, vm->internal_inverted_registry_key, code, NULL, out_error) == 0) {
+        goto done;
+    }
+    /* if code in _extension_cache: del _extension_cache[code] */
+    tinypy_value_t *cache = __tinypy_copy_reg_table(vm, module, vm->internal_extension_cache_key, out_error);
+    if (cache == NULL) {
+        goto done;
+    }
+    int32_t cached = tinypy_contains(cache, code, out_error);
+    TINYPY_DECREF(cache);
+    if (cached < 0) {
+        goto done;
+    }
+    if (cached > 0 && __tinypy_copy_reg_extension_store(vm, module, vm->internal_extension_cache_key, code, NULL, out_error) == 0) {
+        goto done;
+    }
+    result = TINYPY_RET_NONE(vm);
+done:
+    TINYPY_DECREF(key);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -4150,14 +4202,9 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
     if (__tinypy_constructor_function_argument_count(function, args, 1U, 1U, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *type_value = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(type_value);
-    if (kind != TINYPY_VALUE_TYPE && kind != TINYPY_VALUE_CLASS) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument must be a class", out_error);
-        return NULL;
-    }
+    tinypy_value_t *class_value = TINYPY_TUPLE_GET(args, 0U);
     cache_key = TINYPY_RET(vm->internal_special_slotnames_key);
-    tinypy_value_t *namespace_dict = tinypy_object_get_attr_value(type_value, vm->internal_special_dict_key, out_error);
+    tinypy_value_t *namespace_dict = tinypy_object_get_attr_value(class_value, vm->internal_special_dict_key, out_error);
     if (namespace_dict == NULL) {
         TINYPY_DECREF(cache_key);
         return NULL;
@@ -4175,7 +4222,7 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
     TINYPY_DECREF(cached);
     result = tinypy_list_from_items(vm, NULL, 0U);
     slots_key = TINYPY_RET(vm->internal_special_slots_key);
-    tinypy_value_t *declared_slots = __tinypy_constructor_reduce_optional_attribute(type_value, slots_key);
+    tinypy_value_t *declared_slots = __tinypy_constructor_reduce_optional_attribute(class_value, slots_key);
     if (declared_slots != NULL) {
         TINYPY_DECREF(declared_slots);
         tinypy_value_t *special_names[] = {vm->internal_special_dict_key, vm->internal_special_weakref_key};
@@ -4186,7 +4233,7 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
         /* The public MRO a metaclass may redefine: its iterator owns the
            snapshot that keeps the entries alive across callbacks that can
            change the class hierarchy. */
-        tinypy_value_t *mro = tinypy_object_get_attr_value(type_value, vm->internal_special_mro_key, out_error);
+        tinypy_value_t *mro = tinypy_object_get_attr_value(class_value, vm->internal_special_mro_key, out_error);
         if (mro == NULL) {
             goto error;
         }
@@ -4273,7 +4320,7 @@ static tinypy_value_t *__tinypy_copy_reg_slotnames(tinypy_value_t *function, tin
     tinypy_error_t *cache_error = NULL;
 
     tinypy_internal_exception_preserve_begin(vm, &previous);
-    (void)tinypy_object_set_attr_value(type_value, cache_key, result, &cache_error);
+    (void)tinypy_object_set_attr_value(class_value, cache_key, result, &cache_error);
     if (cache_error != NULL) {
         tinypy_error_release(cache_error);
     }
@@ -4333,8 +4380,8 @@ void tinypy_internal_initialize_copy_reg_module(tinypy_vm_t *vm) {
     tinypy_internal_module_add_function(module, vm->internal_constructor_key, __tinypy_copy_reg_constructor, module, NULL);
     tinypy_internal_module_add_function(module, vm->internal_pickle_key, __tinypy_copy_reg_pickle, module, NULL);
     tinypy_internal_module_add_function(module, vm->internal_pickle_complex_key, __tinypy_copy_reg_pickle_complex, module, NULL);
-    tinypy_internal_module_add_function(module, vm->internal_add_extension_key, __tinypy_copy_reg_extension, module, NULL);
-    tinypy_internal_module_add_function(module, vm->internal_remove_extension_key, __tinypy_copy_reg_extension, module, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_add_extension_key, __tinypy_copy_reg_add_extension, module, NULL);
+    tinypy_internal_module_add_function(module, vm->internal_remove_extension_key, __tinypy_copy_reg_remove_extension, module, NULL);
     tinypy_internal_module_add_function(module, vm->internal_clear_extension_cache_key, __tinypy_copy_reg_clear_extension_cache, module, NULL);
     tinypy_internal_module_add_function(module, vm->internal_slotnames_key, __tinypy_copy_reg_slotnames, module, NULL);
     tinypy_value_t *complex_reducer = tinypy_module_get_value_key(module, vm->internal_pickle_complex_key);

@@ -956,9 +956,9 @@ static tinypy_value_t *__tinypy_classic_item_method(tinypy_value_t *function, ti
         result = contained >= 0 ? tinypy_bool_from_i32(vm, contained) : NULL;
         return result;
     }
+    /* instance_setattr takes a str name alone. */
     if (name == vm->internal_special_setattr_key || name == vm->internal_special_delattr_key) {
-        tinypy_value_type_e kind = TINYPY_VALUE_KIND(key);
-        if (kind != TINYPY_VALUE_STRING && kind != TINYPY_VALUE_UNICODE) {
+        if (TINYPY_VALUE_KIND(key) != TINYPY_VALUE_STRING) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "attribute name must be a string", out_error);
             return NULL;
         }

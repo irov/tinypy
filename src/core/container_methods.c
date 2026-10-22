@@ -125,13 +125,25 @@ tinypy_bool_t tinypy_internal_list_extend_iterable(tinypy_value_t *list, tinypy_
         tinypy_bool_t result = tinypy_internal_list_extend_checked(list, items, TINYPY_TUPLE_SIZE(iterable), out_error);
         return result;
     }
+    /* listextend copies a list extending itself with PySequence_Fast, which
+       words the TypeError of a missing iterator and collects the iterator. */
     if (list == iterable) {
-        tinypy_value_t *snapshot = tinypy_list_from_items(vm, NULL, 0U);
+        tinypy_value_t *self_iterator = tinypy_iter(iterable, out_error);
 
-        if (tinypy_internal_list_extend_iterable(snapshot, iterable, negative_hint_message, out_error) == 0) {
-            TINYPY_DECREF(snapshot);
+        if (self_iterator == NULL) {
+            if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error) != 0) {
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument must be iterable", out_error);
+            }
             return TINYPY_FALSE;
         }
+        tinypy_value_t *snapshot = tinypy_list_from_items(vm, NULL, 0U);
+
+        if (tinypy_internal_list_extend_iterable(snapshot, self_iterator, negative_hint_message, out_error) == 0) {
+            TINYPY_DECREF(snapshot);
+            TINYPY_DECREF(self_iterator);
+            return TINYPY_FALSE;
+        }
+        TINYPY_DECREF(self_iterator);
         tinypy_bool_t result = tinypy_internal_list_extend_checked(list, TINYPY_LIST_OBJECT(snapshot)->items, TINYPY_LIST_SIZE(snapshot), out_error);
 
         TINYPY_DECREF(snapshot);
@@ -2022,6 +2034,30 @@ tinypy_value_t *tinypy_internal_container_compare(tinypy_value_t *left, tinypy_v
     if (compatible == 0) {
         tinypy_value_t *not_implemented = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return not_implemented;
+    }
+    if (left_kind == TINYPY_VALUE_UNICODE && __tinypy_internal_text_needs_decode(right) != 0) {
+        tinypy_value_t *decoded = tinypy_internal_text_to_unicode(vm, right, out_error);
+
+        if (decoded == NULL) {
+            /* PyUnicode_RichCompare declines on a TypeError and finds a str
+               that fails to decode unequal. */
+            if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_TYPE_ERROR, out_error) != 0) {
+                tinypy_value_t *not_implemented = TINYPY_RET_NOT_IMPLEMENTED(vm);
+                return not_implemented;
+            }
+            if (operation != TINYPY_COMPARE_EQUAL && operation != TINYPY_COMPARE_NOT_EQUAL) {
+                return NULL;
+            }
+            if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_UNICODE_DECODE_ERROR, out_error) == 0) {
+                return NULL;
+            }
+            tinypy_value_t *unequal = tinypy_bool_from_i32(vm, operation == TINYPY_COMPARE_NOT_EQUAL);
+            return unequal;
+        }
+        tinypy_value_t *result = tinypy_internal_compare_builtin_value(left, decoded, (tinypy_compare_operation_e)operation, out_error);
+
+        TINYPY_DECREF(decoded);
+        return result;
     }
     tinypy_value_t *return_value_1 = tinypy_internal_compare_builtin_value(left, right, (tinypy_compare_operation_e)operation, out_error);
     return return_value_1;

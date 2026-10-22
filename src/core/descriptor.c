@@ -1094,7 +1094,7 @@ tinypy_value_t *tinypy_internal_c_descriptor_get(tinypy_value_t *descriptor_valu
         return TINYPY_RET(fields[descriptor->index]);
     }
     if (field == TINYPY_INTERNAL_C_DESCRIPTOR_OUTPUT_SOFTSPACE) {
-        function_result = tinypy_integer_from_i64(vm, TINYPY_OUTPUT_STREAM_OBJECT(instance)->soft_space != 0 ? INT64_C(1) : INT64_C(0));
+        function_result = tinypy_integer_from_i64(vm, TINYPY_OUTPUT_STREAM_OBJECT(instance)->soft_space);
         return function_result;
     }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC) {
@@ -1510,7 +1510,7 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
         if (tinypy_internal_number_as_i64(value, &flag, out_error) == 0) {
             return TINYPY_FALSE;
         }
-        TINYPY_OUTPUT_STREAM_OBJECT(instance)->soft_space = flag != 0 ? TINYPY_TRUE : TINYPY_FALSE;
+        TINYPY_OUTPUT_STREAM_OBJECT(instance)->soft_space = flag;
         return TINYPY_TRUE;
     }
     if (field >= TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_NAME && field <= TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_DOC) {

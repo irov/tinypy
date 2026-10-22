@@ -268,9 +268,9 @@ tinypy_bool_t tinypy_internal_output_write_object(tinypy_value_t *target, tinypy
 tinypy_bool_t tinypy_internal_output_soft_space(tinypy_value_t *target, tinypy_bool_t new_flag) {
     if (TINYPY_VALUE_KIND(target) == TINYPY_VALUE_OUTPUT_STREAM) {
         tinypy_output_stream_object_t *stream = TINYPY_OUTPUT_STREAM_OBJECT(target);
-        tinypy_bool_t previous = stream->soft_space;
+        tinypy_bool_t previous = stream->soft_space != 0 ? TINYPY_TRUE : TINYPY_FALSE;
 
-        stream->soft_space = new_flag != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
+        stream->soft_space = new_flag != TINYPY_FALSE ? INT64_C(1) : INT64_C(0);
         return previous;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
@@ -371,7 +371,7 @@ static tinypy_value_t *__tinypy_output_write_method(tinypy_value_t *function, ti
     }
     /* file_write and file_writelines reset the softspace of print
        statements once their argument is accepted. */
-    TINYPY_OUTPUT_STREAM_OBJECT(stream)->soft_space = TINYPY_FALSE;
+    TINYPY_OUTPUT_STREAM_OBJECT(stream)->soft_space = INT64_C(0);
     tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(stream)->channel, bytes, size);
     tinypy_value_t *return_value_1 = TINYPY_RET_NONE(vm);
     return return_value_1;
@@ -439,7 +439,7 @@ static tinypy_value_t *__tinypy_output_writelines_method(tinypy_value_t *functio
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "writelines requires strings", out_error);
             return NULL;
         }
-        TINYPY_OUTPUT_STREAM_OBJECT(stream)->soft_space = TINYPY_FALSE;
+        TINYPY_OUTPUT_STREAM_OBJECT(stream)->soft_space = INT64_C(0);
         tinypy_output_emit(vm, TINYPY_OUTPUT_STREAM_OBJECT(stream)->channel, bytes, size);
         TINYPY_DECREF(line);
     }

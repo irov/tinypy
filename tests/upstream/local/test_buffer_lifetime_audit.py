@@ -92,6 +92,19 @@ class BufferLifetimeAudit(unittest.TestCase):
         source.extend('cdefghijklmnop')
         self.assertEqual(str(child), '')
 
+    def test_nested_offsets_past_maxsize_are_rejected(self):
+        # The offsets add up as a Py_ssize_t, which a sum past sys.maxsize
+        # turns negative.
+        self.assertEqual(str(buffer(buffer('abcdef', sys.maxsize), 0)), '')
+        for source, outer, inner in (('abcdef', sys.maxsize, 1),
+                                     ('abcdef', sys.maxsize, sys.maxsize),
+                                     (bytearray('abcdef'), 3, sys.maxsize),
+                                     (u'ab', 1, sys.maxsize)):
+            with self.assertRaises(ValueError) as error:
+                buffer(buffer(source, outer), inner)
+            self.assertEqual(error.exception.args, ('offset must be zero or positive',))
+        sys.exc_clear()
+
     def test_nested_buffer_retains_root_without_intermediate(self):
         events = []
         class Source(bytearray):

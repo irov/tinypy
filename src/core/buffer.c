@@ -50,6 +50,12 @@ tinypy_value_t *tinypy_buffer_from_object(tinypy_value_t *object, size_t offset,
     if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_BUFFER) {
         tinypy_buffer_object_t *source = TINYPY_BUFFER_OBJECT(object);
 
+        /* The offsets add up as a Py_ssize_t, which turns negative past
+           PTRDIFF_MAX. */
+        if (offset > (size_t)PTRDIFF_MAX || source->offset > (size_t)PTRDIFF_MAX - offset) {
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "offset must be zero or positive", NULL);
+            return NULL;
+        }
         if (source->size != TINYPY_BUFFER_TO_END) {
             size_t available = offset < source->size ? source->size - offset : 0U;
 
@@ -1141,7 +1147,7 @@ tinypy_value_t *tinypy_internal_memoryview_field(tinypy_value_t *value, size_t i
         return result;
     }
     if (index == 1U || index == 2U) {
-        tinypy_value_t *result = tinypy_integer_from_i64(vm, INT64_C(1));
+        tinypy_value_t *result = tinypy_long_from_i64(vm, INT64_C(1));
 
         return result;
     }
