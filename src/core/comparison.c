@@ -601,11 +601,8 @@ static tinypy_bool_t __tinypy_comparison_dict_characterize(tinypy_value_t *left,
             entry = &left_dict->table[index];
         }
         left_value = TINYPY_RET(entry->value);
-        if (tinypy_internal_dict_get_optional_index_checked(vm, right, key, NULL, &right_value, out_error) == 0) {
-            TINYPY_DECREF(left_value);
-            TINYPY_DECREF(key);
-            goto fail;
-        }
+        /* PyDict_GetItem reads a failed key comparison as a missing key. */
+        right_value = tinypy_internal_dict_get_optional_suppressed(vm, right, key);
         if (right_value == NULL) {
             equal = 0;
         }
@@ -1995,6 +1992,14 @@ static tinypy_bool_t __tinypy_comparison_three_way_inner(tinypy_value_t *left, t
         }
         else if (kind == TINYPY_VALUE_METHOD) {
             tinypy_bool_t result = tinypy_internal_method_compare_three_way(left, right, out_order, out_error);
+            return result;
+        }
+        else if (kind == TINYPY_VALUE_CELL) {
+            tinypy_bool_t result = tinypy_internal_cell_compare_three_way(left, right, out_order, out_error);
+            return result;
+        }
+        else if (kind == TINYPY_VALUE_CODE) {
+            tinypy_bool_t result = tinypy_internal_code_compare_three_way(left, right, out_order, out_error);
             return result;
         }
     }

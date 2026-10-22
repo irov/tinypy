@@ -26,18 +26,18 @@ tinypy_bool_t tinypy_debugger_set(tinypy_vm_t *vm, const tinypy_debugger_t *debu
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The names of a code object are exact strings. */
 static tinypy_bool_t __tinypy_debugger_frame_name_equal(tinypy_value_t *value, const char *name, size_t name_size) {
-    size_t value_size = 0U;
-    const char *bytes = (const char *)tinypy_string_view(value, &value_size);
-    int32_t equal = value_size == name_size && memcmp(bytes, name, name_size) == 0;
+    int32_t equal = TINYPY_SIZED_SIZE(value) == name_size && memcmp(TINYPY_STRING_OBJECT(value)->bytes, name, name_size) == 0;
 
     return equal != 0 ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The fast slots of a name, as PyFrame_FastToLocals maps them: the cell of
    a cell variable, or of a free variable of an optimized frame, binds the
-   name over an argument of the same name, whose slot comes too, so that a
-   store keeps both as PyFrame_LocalsToFast does. */
+   name over a local of the same name, an argument or a name of a sublist
+   parameter, whose slot comes too, so that a store keeps both as
+   PyFrame_LocalsToFast does. */
 static tinypy_value_t **__tinypy_debugger_frame_slot(tinypy_frame_object_t *frame, const char *name, size_t name_size, tinypy_value_t **out_cell) {
     tinypy_code_object_t *code = TINYPY_CODE_OBJECT(frame->code);
     size_t local_count = (size_t)code->local_count;
@@ -50,11 +50,6 @@ static tinypy_value_t **__tinypy_debugger_frame_slot(tinypy_frame_object_t *fram
             slot = &frame->locals_plus[index];
             break;
         }
-    }
-    /* Only an argument shares its name with a cell. */
-    size_t argument_count = (size_t)code->arg_count + ((code->flags & TINYPY_CODE_VARARGS) != 0 ? 1U : 0U) + ((code->flags & TINYPY_CODE_VAR_KEYWORDS) != 0 ? 1U : 0U);
-    if (slot != NULL && index >= argument_count) {
-        return slot;
     }
     size_t cell_count = TINYPY_TUPLE_SIZE(code->cellvars);
     size_t free_count = (code->flags & TINYPY_CODE_OPTIMIZED) != 0 ? TINYPY_TUPLE_SIZE(code->freevars) : 0U;

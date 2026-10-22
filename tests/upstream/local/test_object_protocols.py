@@ -529,6 +529,23 @@ class ObjectProtocols(unittest.TestCase):
             self.fail("exception items take an index")
         self.assertRaises(IndexError, error.__getitem__, 3)
 
+    def test_exception_getitem_wrapper_counts_from_a_subclass_length(self):
+        class Sized(Exception):
+            def __len__(self):
+                return 10
+        class Failing(Exception):
+            def __len__(self):
+                raise ValueError('length')
+        class Disabled(Exception):
+            __len__ = None
+        self.assertRaises(IndexError, Sized(1, 2, 3).__getitem__, -1)
+        self.assertRaises(IndexError, BaseException.__getitem__, Sized(1, 2), -1)
+        self.assertEqual((Sized(1, 2, 3).__getitem__(-11), Sized(1, 2, 3).__getitem__(-8), Sized(1, 2, 3).__getitem__(0)), (3, 3, 1))
+        self.assertRaises(ValueError, Failing(1).__getitem__, -1)
+        self.assertEqual(Failing(1).__getitem__(0), 1)
+        self.assertRaises(TypeError, Disabled(1).__getitem__, -1)
+        self.assertRaises(IndexError, lambda: Sized(1, 2, 3)[-1])
+
     def test_exception_unicode_follows_str(self):
         class Error(Exception):
             def __str__(self):
@@ -1526,6 +1543,15 @@ class ObjectProtocols(unittest.TestCase):
         del reference
         self.assertIs(meta(), None)
 
+    def test_dictproxy_str_is_the_dictionary_str(self):
+        class Namespace(object):
+            value = 1
+        proxy = Namespace.__dict__
+        expected = sorted(str(dict(proxy)))
+        for text in (str(proxy), '%s' % proxy, type(proxy).__str__(proxy), unicode(proxy)):
+            self.assertEqual((text[0], sorted(text)), ('{', expected))
+        self.assertTrue(repr(proxy).startswith('dict_proxy({'))
+
     def test_dictproxy_inherits_object_new(self):
         dictproxy = type(type.__dict__)
         self.assertIs(dictproxy.__new__, object.__new__)
@@ -2023,6 +2049,147 @@ class ObjectProtocols(unittest.TestCase):
         finally:
             copy_reg._reconstructor, copy_reg._HEAPTYPE = saved
         self.assertEqual(instance.__reduce_ex__(1)[2], {'a': 1})
+
+    def test_copy_reg_hasattr_probes_pass_non_exception_errors(self):
+        import copy_reg
+
+        class Meta(type):
+            failure = None
+
+            def __getattribute__(cls, name):
+                if name == Meta.failure:
+                    raise Meta.error(name)
+                return type.__getattribute__(cls, name)
+
+        class Base(object):
+            __metaclass__ = Meta
+
+        class Child(Base):
+            pass
+
+        class Slotted(object):
+            __metaclass__ = Meta
+            __slots__ = ('a',)
+
+        instance = Slotted()
+        instance.a = 1
+        try:
+            Meta.failure = '__flags__'
+            for error in (KeyboardInterrupt, SystemExit, GeneratorExit):
+                Meta.error = error
+                self.assertRaises(error, copy_reg._reduce_ex, Child(), 0)
+                self.assertRaises(error, object.__reduce_ex__, Child(), 1)
+            Meta.error = ValueError
+            self.assertEqual(copy_reg._reduce_ex(Child(), 0)[1], (Child, object, None))
+            Meta.failure = '__slots__'
+            Meta.error = KeyboardInterrupt
+            self.assertRaises(KeyboardInterrupt, copy_reg._slotnames, Slotted)
+            self.assertRaises(KeyboardInterrupt, object.__reduce_ex__, instance, 2)
+        finally:
+            Meta.failure = None
+        self.assertFalse('__slotnames__' in Slotted.__dict__)
+        self.assertEqual(object.__reduce_ex__(instance, 2)[2], (None, {'a': 1}))
+
+    def test_copy_reg_pickle_reads_class_type_global(self):
+        import copy_reg
+
+        class Registered(object):
+            pass
+
+        class Classic:
+            pass
+
+        def reducer(value):
+            return (Registered, ())
+
+        saved = copy_reg._ClassType
+        try:
+            copy_reg._ClassType = type
+            self.assert_message(TypeError, 'copy_reg is not intended for use with classes', copy_reg.pickle, Registered, reducer)
+            copy_reg.pickle(Classic, reducer)
+            self.assertIs(copy_reg.dispatch_table[Classic], reducer)
+            del copy_reg._ClassType
+            self.assert_message(NameError, "global name '_ClassType' is not defined", copy_reg.pickle, Registered, reducer)
+        finally:
+            copy_reg._ClassType = saved
+            copy_reg.dispatch_table.pop(Classic, None)
+        self.assertFalse(Registered in copy_reg.dispatch_table)
+
+    def test_reduce_ex_formats_the_name_it_cannot_pickle(self):
+        import copy_reg
+
+        class Fake(object):
+            __flags__ = 0
+
+            def __init__(self, name):
+                self.__name__ = name
+                self.__mro__ = (self,)
+
+        cases = (
+            ((1, 2), 'not all arguments converted during string formatting'),
+            (('x',), "can't pickle x objects"),
+            (u'\xe9', u"can't pickle \xe9 objects"),
+        )
+        for name, message in cases:
+            fake = Fake(name)
+
+            class Disguised(object):
+                __class__ = property(lambda self: fake)
+
+            try:
+                copy_reg._reduce_ex(Disguised(), 0)
+            except TypeError as error:
+                self.assertEqual(error.args, (message,))
+                self.assertIs(type(error.args[0]), type(message))
+            else:
+                self.fail(message)
+            finally:
+                fake.__mro__ = ()
+
+    def test_object_reduce_imports_copy_reg_through_builtin_import(self):
+        import __builtin__
+
+        class Plain(object):
+            pass
+
+        imported = []
+        real_import = __builtin__.__import__
+
+        def logging_import(name, *args):
+            imported.append((name,) + args)
+            return real_import(name, *args)
+
+        def refusing_import(name, *args):
+            raise ImportError('import of %s refused' % name)
+
+        try:
+            __builtin__.__import__ = logging_import
+            first = object.__reduce_ex__(Plain(), 0)[1]
+            object.__reduce_ex__(Plain(), 2)
+            __builtin__.__import__ = refusing_import
+            self.assert_message(ImportError, 'import of copy_reg refused', object.__reduce_ex__, Plain(), 1)
+        finally:
+            __builtin__.__import__ = real_import
+        self.assertEqual(first, (Plain, object, None))
+        self.assertEqual([entry[0] for entry in imported], ['copy_reg'] * 3)
+        self.assertIs(imported[0][1], globals())
+        self.assertIs(imported[0][2], globals())
+        self.assertEqual(imported[0][3:], (['__doc__'], 0))
+
+    def test_heap_type_flags_include_checktypes(self):
+        class Plain(object):
+            pass
+
+        class Number(int):
+            pass
+
+        class Mapping(dict):
+            pass
+
+        for cls in (Plain, Number, Mapping):
+            self.assertEqual(cls.__flags__ & (1 << 4), 1 << 4)
+        for cls in (object, dict, type):
+            self.assertEqual(cls.__flags__ & (1 << 4), 0)
 
     def test_reduce_ex_refuses_type_objects(self):
         class Meta(type):

@@ -336,13 +336,11 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
     }
     /* The long kernels do not poll the host while the source compiles: a
        constant fold they stopped would drop the interrupt with its error. */
-    size_t long_poll_steps = vm->long_poll_steps;
-
-    vm->long_poll_steps = SIZE_MAX;
+    vm->compile_depth += 1U;
     if (tinypy_internal_compiler_source_prepare(&ctx, source, source_size, out_error) != 0) {
         code = tinypy_internal_compiler_compile(&ctx, out_error);
     }
-    vm->long_poll_steps = long_poll_steps;
+    vm->compile_depth -= 1U;
     if (code != NULL) {
         tinypy_bool_t attached = tinypy_internal_code_attach_compile_options(code, options->feature_flags, options->optimize_level, options->build_profile, out_error);
 
@@ -400,9 +398,7 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     }
     ctx.out_error = out_error;
     /* As in tinypy_internal_compiler_compile_source. */
-    size_t long_poll_steps = vm->long_poll_steps;
-
-    vm->long_poll_steps = SIZE_MAX;
+    vm->compile_depth += 1U;
     if (tinypy_internal_compiler_source_prepare(&ctx, source, source_size, out_error) == 0) {
         goto complete;
     }
@@ -419,7 +415,7 @@ tinypy_preprocess_result_t *tinypy_preprocess_source(tinypy_vm_t *vm, const void
     }
 
 complete:
-    vm->long_poll_steps = long_poll_steps;
+    vm->compile_depth -= 1U;
     tinypy_internal_compiler_arena_destroy(&ctx);
     return result;
 }

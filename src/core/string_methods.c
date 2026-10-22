@@ -191,7 +191,7 @@ static tinypy_value_t *__tinypy_string_builder_finish(tinypy_string_builder_t *b
         }
         else {
             uint8_t *output;
-            size_t code_point_count = unicode != 0 ? tinypy_internal_utf8_code_point_count(builder->bytes, builder->size) : 0U;
+            size_t code_point_count = unicode != 0 ? __tinypy_internal_utf8_code_point_count(builder->bytes, builder->size) : 0U;
 
             result = tinypy_internal_text_allocate_uninitialized_checked(builder->vm, unicode != 0 ? TINYPY_VALUE_UNICODE : TINYPY_VALUE_STRING, builder->size, code_point_count, &output, out_error);
             if (result != NULL) {
@@ -583,7 +583,7 @@ static tinypy_value_t *__tinypy_string_format_result(tinypy_value_t *result, tin
 //////////////////////////////////////////////////////////////////////////
 /* The spec bytes are a unicode's UTF-8 when spec_unicode is set, and
    special_spec, when given, is the spec object PyObject_Format received. */
-static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, tinypy_value_t *value, int32_t conversion, const uint8_t *spec, size_t spec_size, tinypy_bool_t spec_unicode, tinypy_bool_t allow_special, tinypy_value_t *special_spec, tinypy_bool_t *out_unicode, tinypy_error_t **out_error) {
+static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, tinypy_value_t *value, const uint8_t *spec, size_t spec_size, tinypy_bool_t spec_unicode, tinypy_bool_t allow_special, tinypy_value_t *special_spec, tinypy_bool_t *out_unicode, tinypy_error_t **out_error) {
     size_t offset = 0U;
     uint8_t fill[4] = {(uint8_t)' ', 0U, 0U, 0U};
     size_t fill_size = 1U;
@@ -606,8 +606,8 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
     tinypy_bool_t decode_output = TINYPY_FALSE;
     tinypy_value_type_e value_kind = TINYPY_VALUE_KIND(value);
     tinypy_bool_t integer_kind = value_kind == TINYPY_VALUE_BOOL || value_kind == TINYPY_VALUE_INTEGER || value_kind == TINYPY_VALUE_LONG ? TINYPY_TRUE : TINYPY_FALSE;
-    tinypy_bool_t text_kind = value_kind == TINYPY_VALUE_STRING || value_kind == TINYPY_VALUE_UNICODE || conversion != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-    tinypy_bool_t unicode_formatter = value_kind == TINYPY_VALUE_UNICODE && conversion == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t text_kind = value_kind == TINYPY_VALUE_STRING || value_kind == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t unicode_formatter = value_kind == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_bool_t direct_builtin = __tinypy_string_format_direct_builtin(value);
 
     *out_unicode = spec_unicode;
@@ -616,7 +616,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
     field.vm = vm;
     output.vm = vm;
     tinypy_value_t *method = NULL;
-    if (allow_special != 0 && conversion == 0 && direct_builtin == 0) {
+    if (allow_special != 0 && direct_builtin == 0) {
         int32_t found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_format_key, &method, out_error);
 
         if (found < 0) {
@@ -679,12 +679,12 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
             *out_unicode = result != NULL && TINYPY_VALUE_KIND(result) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
         }
         else {
-            result = __tinypy_internal_string_format_value(vm, text, 0, spec, spec_size, spec_unicode, TINYPY_TRUE, NULL, out_unicode, out_error);
+            result = __tinypy_internal_string_format_value(vm, text, spec, spec_size, spec_unicode, TINYPY_TRUE, NULL, out_unicode, out_error);
         }
         TINYPY_DECREF(text);
         return result;
     }
-    if (spec_unicode != 0 && (conversion == 'r' || (conversion == 0 && value_kind != TINYPY_VALUE_UNICODE))) {
+    if (spec_unicode != 0 && value_kind != TINYPY_VALUE_UNICODE) {
         for (size_t index = 0U; index < spec_size; ++index) {
             if (spec[index] >= 0x80U) {
                 tinypy_value_t *format_spec = tinypy_internal_unicode_from_utf8_checked(vm, (const char *)spec, spec_size, out_error);
@@ -716,7 +716,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
                 if (decoded == NULL) {
                     return NULL;
                 }
-                tinypy_value_t *result = __tinypy_internal_string_format_value(vm, value, conversion, TINYPY_TEXT_BYTES(decoded), TINYPY_TEXT_BYTE_SIZE(decoded), TINYPY_TRUE, allow_special, special_spec, out_unicode, out_error);
+                tinypy_value_t *result = __tinypy_internal_string_format_value(vm, value, TINYPY_TEXT_BYTES(decoded), TINYPY_TEXT_BYTE_SIZE(decoded), TINYPY_TRUE, allow_special, special_spec, out_unicode, out_error);
 
                 TINYPY_DECREF(decoded);
                 return result;
@@ -789,14 +789,14 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
         }
         /* A NUL type is a presentation type of its own, except that it is
            the default type of float and complex. */
-        has_type = type != 0U || conversion != 0 || (value_kind != TINYPY_VALUE_FLOAT && value_kind != TINYPY_VALUE_COMPLEX) ? TINYPY_TRUE : TINYPY_FALSE;
+        has_type = type != 0U || (value_kind != TINYPY_VALUE_FLOAT && value_kind != TINYPY_VALUE_COMPLEX) ? TINYPY_TRUE : TINYPY_FALSE;
     }
-    uint32_t effective_type = has_type != 0 || conversion != 0 ? type : (integer_kind != 0 ? (uint32_t)'d' : (text_kind != 0 ? (uint32_t)'s' : 0U));
+    uint32_t effective_type = has_type != 0 ? type : (integer_kind != 0 ? (uint32_t)'d' : (text_kind != 0 ? (uint32_t)'s' : 0U));
     if (grouping != 0 && effective_type != 0U && __tinypy_string_format_has_code("defgEG%F", effective_type) == 0) {
         __tinypy_string_format_code_error(vm, effective_type, unicode_formatter, NULL, out_error);
         return NULL;
     }
-    if (conversion == 0 && has_type != 0) {
+    if (has_type != 0) {
         const char *codes = text_kind != 0 ? "s" : (value_kind == TINYPY_VALUE_FLOAT ? "eEfFgGn%" : (value_kind == TINYPY_VALUE_COMPLEX ? "eEfFgGn" : "bcdoxXneEfFgG%"));
 
         if (__tinypy_string_format_has_code(codes, type) == 0) {
@@ -804,7 +804,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
             return NULL;
         }
     }
-    if (conversion == 0 && text_kind != 0) {
+    if (text_kind != 0) {
         const char *message = sign_specified != 0 ? "Sign not allowed in string format specifier"
                               : (alternate != 0 ? "Alternate form (#) not allowed in string format specifier"
                               : (align == (uint8_t)'=' ? "'=' alignment not allowed in string format specifier" : NULL));
@@ -814,7 +814,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
             return NULL;
         }
     }
-    if (conversion == 0 && integer_kind != 0 && __tinypy_string_format_has_code("bcdoxXn", effective_type) != 0) {
+    if (integer_kind != 0 && __tinypy_string_format_has_code("bcdoxXn", effective_type) != 0) {
         if (precision >= 0) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "Precision not allowed in integer format specifier", out_error);
             return NULL;
@@ -824,7 +824,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
             return NULL;
         }
     }
-    if (conversion == 0 && type == 0U) {
+    if (type == 0U) {
         if (value_kind == TINYPY_VALUE_INTEGER || value_kind == TINYPY_VALUE_LONG || (value_kind == TINYPY_VALUE_BOOL && spec_size != 0U)) {
             type = (uint32_t)'d';
         }
@@ -832,35 +832,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
             float_default_type = TINYPY_TRUE;
         }
     }
-    if (conversion == 'r' || conversion == 's') {
-        tinypy_value_t *text;
-
-        if (conversion == 's' && spec_unicode != 0) {
-            text = tinypy_internal_object_unicode(value, out_error);
-        }
-        else {
-            text = conversion == 'r' ? tinypy_object_repr(value, out_error) : tinypy_object_str(value, out_error);
-        }
-
-        if (text == NULL) {
-            return NULL;
-        }
-        if (has_type != 0 && type != (uint32_t)'s') {
-            __tinypy_string_format_code_error(vm, type, TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE, text, out_error);
-            TINYPY_DECREF(text);
-            return NULL;
-        }
-        if (TINYPY_VALUE_KIND(text) == TINYPY_VALUE_UNICODE || (conversion == 's' && TINYPY_VALUE_KIND(value) == TINYPY_VALUE_UNICODE)) {
-            *out_unicode = TINYPY_TRUE;
-        }
-        if (*out_unicode != 0 && TINYPY_VALUE_KIND(text) == TINYPY_VALUE_STRING) {
-            decode_output = TINYPY_TRUE;
-            *out_unicode = TINYPY_FALSE;
-        }
-        __tinypy_string_builder_append(&field, TINYPY_TEXT_BYTES(text), TINYPY_TEXT_BYTE_SIZE(text));
-        TINYPY_DECREF(text);
-    }
-    else if (type == (uint32_t)'c') {
+    if (type == (uint32_t)'c') {
         int64_t character;
 
         numeric = TINYPY_TRUE;
@@ -879,7 +851,7 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
         }
         __tinypy_string_builder_character(&field, (uint8_t)character);
     }
-    else if (conversion == 0 && value_kind == TINYPY_VALUE_COMPLEX) {
+    else if (value_kind == TINYPY_VALUE_COMPLEX) {
         double real = TINYPY_COMPLEX_OBJECT(value)->real;
         double imaginary = TINYPY_COMPLEX_OBJECT(value)->imaginary;
         tinypy_bool_t default_type = type == 0U ? TINYPY_TRUE : TINYPY_FALSE;
@@ -1053,13 +1025,13 @@ static tinypy_value_t *__tinypy_internal_string_format_value(tinypy_vm_t *vm, ti
     return decoded;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_string_format_value(tinypy_vm_t *vm, tinypy_value_t *value, int32_t conversion, const uint8_t *spec, size_t spec_size, tinypy_bool_t spec_unicode, tinypy_bool_t *out_unicode, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = __tinypy_internal_string_format_value(vm, value, conversion, spec, spec_size, spec_unicode, TINYPY_TRUE, NULL, out_unicode, out_error);
+tinypy_value_t *tinypy_internal_string_format_value(tinypy_vm_t *vm, tinypy_value_t *value, const uint8_t *spec, size_t spec_size, tinypy_bool_t spec_unicode, tinypy_bool_t *out_unicode, tinypy_error_t **out_error) {
+    tinypy_value_t *return_value_1 = __tinypy_internal_string_format_value(vm, value, spec, spec_size, spec_unicode, TINYPY_TRUE, NULL, out_unicode, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-tinypy_value_t *tinypy_internal_string_format_builtin_value(tinypy_vm_t *vm, tinypy_value_t *value, int32_t conversion, const uint8_t *spec, size_t spec_size, tinypy_bool_t spec_unicode, tinypy_bool_t *out_unicode, tinypy_error_t **out_error) {
-    tinypy_value_t *return_value_1 = __tinypy_internal_string_format_value(vm, value, conversion, spec, spec_size, spec_unicode, TINYPY_FALSE, NULL, out_unicode, out_error);
+tinypy_value_t *tinypy_internal_string_format_builtin_value(tinypy_vm_t *vm, tinypy_value_t *value, const uint8_t *spec, size_t spec_size, tinypy_bool_t spec_unicode, tinypy_bool_t *out_unicode, tinypy_error_t **out_error) {
+    tinypy_value_t *return_value_1 = __tinypy_internal_string_format_value(vm, value, spec, spec_size, spec_unicode, TINYPY_FALSE, NULL, out_unicode, out_error);
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1080,19 +1052,35 @@ tinypy_value_t *tinypy_internal_string_format_object(tinypy_vm_t *vm, tinypy_val
         tinypy_value_t *return_value_1 = __tinypy_string_format_result(formatted, unicode, &result_unicode, out_error);
         return return_value_1;
     }
-    tinypy_value_t *result = __tinypy_internal_string_format_value(vm, value, 0, spec, size, unicode, TINYPY_TRUE, format_spec, &result_unicode, out_error);
+    tinypy_value_t *result = __tinypy_internal_string_format_value(vm, value, spec, size, unicode, TINYPY_TRUE, format_spec, &result_unicode, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The builtin __format__ of a value with the spec whose bytes it formats.
+   An empty spec formats as str() or unicode() of the value, which honours
+   an overriding subtype. */
+static tinypy_value_t *__tinypy_string_format_builtin_spec(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *spec, tinypy_bool_t unicode, tinypy_error_t **out_error) {
+    if (TINYPY_TEXT_BYTE_SIZE(spec) == 0U) {
+        tinypy_value_t *text = unicode != 0 ? tinypy_internal_object_unicode(value, out_error) : tinypy_object_str(value, out_error);
+        return text;
+    }
+    tinypy_bool_t result_unicode;
+    tinypy_value_t *result = __tinypy_internal_string_format_value(vm, value, TINYPY_TEXT_BYTES(spec), TINYPY_TEXT_BYTE_SIZE(spec), unicode, TINYPY_FALSE, NULL, &result_unicode, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* The __format__ of a builtin str, unicode or number: unicode.__format__
    converts the spec with PyObject_Unicode, str.__format__ with PyObject_Str
    and a number's __format__ only a unicode spec with PyObject_Str, so the
-   bytes they format are a unicode's UTF-8 or a byte spec. An empty spec
-   formats as str() or unicode() of the value, which honours an overriding
-   subtype. */
+   bytes they format are a unicode's UTF-8 or a byte spec. Both conversions
+   return a spec of exactly their kind as it is. */
 tinypy_value_t *tinypy_internal_string_format_builtin(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *spec, tinypy_error_t **out_error) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_bool_t unicode = kind == TINYPY_VALUE_UNICODE ? TINYPY_TRUE : TINYPY_FALSE;
+    if (spec->type == &vm->types[unicode != 0 ? TINYPY_VALUE_UNICODE : TINYPY_VALUE_STRING]) {
+        tinypy_value_t *return_value_1 = __tinypy_string_format_builtin_spec(vm, value, spec, unicode, out_error);
+        return return_value_1;
+    }
     tinypy_value_t *format_spec;
     if (unicode != 0) {
         format_spec = tinypy_internal_object_unicode(spec, out_error);
@@ -1106,15 +1094,7 @@ tinypy_value_t *tinypy_internal_string_format_builtin(tinypy_vm_t *vm, tinypy_va
     if (format_spec == NULL) {
         return NULL;
     }
-    tinypy_value_t *result;
-    if (TINYPY_TEXT_BYTE_SIZE(format_spec) == 0U) {
-        result = unicode != 0 ? tinypy_internal_object_unicode(value, out_error) : tinypy_object_str(value, out_error);
-    }
-    else {
-        tinypy_bool_t result_unicode;
-
-        result = __tinypy_internal_string_format_value(vm, value, 0, TINYPY_TEXT_BYTES(format_spec), TINYPY_TEXT_BYTE_SIZE(format_spec), unicode, TINYPY_FALSE, NULL, &result_unicode, out_error);
-    }
+    tinypy_value_t *result = __tinypy_string_format_builtin_spec(vm, value, format_spec, unicode, out_error);
     TINYPY_DECREF(format_spec);
     return result;
 }
@@ -1442,7 +1422,7 @@ static tinypy_value_t *__tinypy_string_format_render(tinypy_vm_t *vm, tinypy_val
                 formatted = TINYPY_RET(converted);
             }
             else {
-                formatted = tinypy_internal_string_format_value(vm, converted, 0, expanded_spec != NULL ? TINYPY_TEXT_BYTES(expanded_spec) : bytes + spec_begin, expanded_spec != NULL ? TINYPY_TEXT_BYTE_SIZE(expanded_spec) : end - spec_begin, unicode, &field_unicode, out_error);
+                formatted = tinypy_internal_string_format_value(vm, converted, expanded_spec != NULL ? TINYPY_TEXT_BYTES(expanded_spec) : bytes + spec_begin, expanded_spec != NULL ? TINYPY_TEXT_BYTE_SIZE(expanded_spec) : end - spec_begin, unicode, &field_unicode, out_error);
             }
             TINYPY_DECREF(converted);
             if (expanded_spec != NULL) {
@@ -5588,7 +5568,7 @@ static tinypy_bool_t __tinypy_percent_is_mapping(tinypy_value_t *value) {
     if (kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
         return TINYPY_FALSE;
     }
-    tinypy_value_t *getitem = __tinypy_internal_object_special_attribute(vm, value, key);
+    tinypy_value_t *getitem = __tinypy_internal_object_mapping_getitem(vm, value);
     if (getitem == NULL || getitem == tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_XRANGE], key) || getitem == tinypy_internal_type_lookup_key(vm, vm->exception_types[TINYPY_EXCEPTION_BASE], key)) {
         return TINYPY_FALSE;
     }

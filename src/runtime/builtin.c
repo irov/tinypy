@@ -1637,8 +1637,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
     size_t iterable_index;
     size_t result_hint = 0U;
     tinypy_value_t *result;
-    tinypy_internal_exception_state_t pending = {NULL, NULL, NULL};
-    uint64_t pending_epoch = 0U;
+    tinypy_internal_exception_state_t pending = {NULL, NULL, NULL, 0U};
 
     (void)user_data;
     if (__tinypy_builtin_no_keywords(function, kwargs, out_error) == 0 || __tinypy_builtin_argument_count_message(vm, args, 2U, SIZE_MAX, "map() requires at least two args", out_error) == 0) {
@@ -1723,7 +1722,6 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
             }
             __tinypy_builtin_exception_state_release(&pending);
             tinypy_internal_exception_preserve_begin(vm, &pending);
-            pending_epoch = vm->raised_epoch;
             continue;
         }
         if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(item, vm->internal_special_length_key) == 0) {
@@ -1762,7 +1760,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
                 if (iterators[iterable_index]->type == &vm->types[TINYPY_VALUE_ITERATOR]) {
                     stopped = TINYPY_TRUE;
                 }
-                if (iteration_error == NULL && stopped == 0 && pending.type != NULL && vm->raised_epoch == pending_epoch) {
+                if (iteration_error == NULL && stopped == 0 && pending.type != NULL && vm->raised_epoch == pending.raised_epoch) {
                     tinypy_internal_exception_preserve_end(vm, &pending);
                     if (tinypy_internal_exception_consume_stop_iteration(vm, NULL) == 0) {
                         tinypy_internal_exception_make_diagnostic(vm, &iteration_error);
@@ -2843,7 +2841,9 @@ static tinypy_bool_t __tinypy_builtin_dir_add_dict(tinypy_value_t *names, tinypy
     return success;
 }
 //////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/* The attribute lookups of _generic_dir and merge_class_dict clear their
+   errors. _dir_object raises an exception pending before them instead, so
+   none of theirs replaces it. */
 static tinypy_value_t *__tinypy_builtin_dir_optional(tinypy_value_t *value, tinypy_value_t *name) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_internal_exception_state_t state;
@@ -2855,12 +2855,12 @@ static tinypy_value_t *__tinypy_builtin_dir_optional(tinypy_value_t *value, tiny
     if (error != NULL) {
         tinypy_error_release(error);
     }
-    tinypy_internal_exception_preserve_end(vm, &state);
+    tinypy_internal_exception_preserve_restore(vm, &state);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
 /* PySequence_Size of bases other than a tuple, -1 when it fails, whose
-   error merge_class_dict clears. */
+   error merge_class_dict clears, as __tinypy_builtin_dir_optional. */
 static TINYPY_NOINLINE int64_t __tinypy_builtin_dir_bases_size(tinypy_vm_t *vm, tinypy_value_t *bases) {
     tinypy_internal_exception_state_t state;
     tinypy_error_t *error = NULL;
@@ -2885,7 +2885,7 @@ static TINYPY_NOINLINE int64_t __tinypy_builtin_dir_bases_size(tinypy_vm_t *vm, 
     if (error != NULL) {
         tinypy_error_release(error);
     }
-    tinypy_internal_exception_preserve_end(vm, &state);
+    tinypy_internal_exception_preserve_restore(vm, &state);
     return size;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3116,17 +3116,13 @@ static tinypy_value_t *__tinypy_builtin_dir(tinypy_value_t *function, tinypy_val
     if (TINYPY_TUPLE_SIZE(args) == 1U) {
         tinypy_value_t *value = TINYPY_TUPLE_GET(args, 0U);
 
-        tinypy_value_t *method = tinypy_internal_object_get_special_key(value, vm->internal_special_dir_key, out_error);
+        tinypy_value_t *method;
+        int32_t found = tinypy_internal_object_lookup_special_key(value, vm->internal_special_dir_key, &method, out_error);
 
-        if (method == NULL && TINYPY_VALUE_KIND(value) == TINYPY_VALUE_OLD_INSTANCE) {
-            if (tinypy_internal_exception_consume_kind(vm, TINYPY_EXCEPTION_ATTRIBUTE_ERROR, out_error) == 0) {
-                return NULL;
-            }
-        }
-        else if (method == NULL && (tinypy_vm_has_error(vm) != 0 || (out_error != NULL && *out_error != NULL))) {
+        if (found < 0) {
             return NULL;
         }
-        if (method != NULL) {
+        if (found > 0) {
             tinypy_value_t *empty;
             tinypy_value_t *result;
 
@@ -3527,7 +3523,7 @@ static tinypy_value_t *__tinypy_builtin_base_repr(tinypy_value_t *function, tiny
     if (integer == NULL) {
         return NULL;
     }
-    formatted = tinypy_internal_string_format_builtin_value(vm, integer, 0, spec, 2U, TINYPY_FALSE, &result_unicode, out_error);
+    formatted = tinypy_internal_string_format_builtin_value(vm, integer, spec, 2U, TINYPY_FALSE, &result_unicode, out_error);
     if (formatted == NULL) {
         TINYPY_DECREF(integer);
         return NULL;
@@ -3978,6 +3974,17 @@ static void __tinypy_builtin_register_items(tinypy_vm_t *vm, tinypy_value_t *nam
 
     tinypy_dict_set(vm->builtins, name, function);
     TINYPY_DECREF(function);
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_builtin_is_import(const tinypy_value_t *value) {
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_NATIVE_FUNCTION) {
+        return TINYPY_FALSE;
+    }
+    const tinypy_native_function_object_t *function = TINYPY_NATIVE_FUNCTION_OBJECT((tinypy_value_t *)value);
+    if (function->callback != __tinypy_builtin_import || function->self != NULL) {
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_builtin_functions(tinypy_vm_t *vm) {

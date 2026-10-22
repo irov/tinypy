@@ -105,6 +105,7 @@
   "core_native_finalizer_nested",
   "core_native_items",
   "core_native_length_errors",
+  "core_native_slot_dispatch",
   "core_native_slot_failures",
   "core_native_slot_wrappers",
   "core_native_type_contracts",

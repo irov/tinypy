@@ -571,28 +571,14 @@ cleanup:
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_code_value_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
-    int32_t equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
-
-    if (equal < 0) {
-        return TINYPY_FALSE;
-    }
-    if (equal != 0) {
-        *out_order = INT32_C(0);
-        return TINYPY_TRUE;
-    }
-    int32_t less = tinypy_compare_bool(left, right, TINYPY_COMPARE_LESS, out_error);
-    if (less < 0) {
-        return TINYPY_FALSE;
-    }
-    *out_order = less != 0 ? -INT32_C(1) : INT32_C(1);
-    return TINYPY_TRUE;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_code_equal(tinypy_value_t *left_value, tinypy_value_t *right_value, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
-
+/* code_richcompare compares the constants by their _PyCode_ConstantKey,
+   which pairs a constant with its type and compares it with == first. An
+   exact int, long, bool, str, unicode or code object is then equal, an exact
+   float or complex by the sign of a zero as well, an exact tuple or frozenset
+   by the keys of its items, and any other constant by its identity alone. */
 static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
-    tinypy_value_type_e kind;
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(left);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(left);
 
     if (left == right) {
         *out_equal = TINYPY_TRUE;
@@ -602,23 +588,25 @@ static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_v
         *out_equal = TINYPY_FALSE;
         return TINYPY_TRUE;
     }
-    kind = TINYPY_VALUE_KIND(left);
+    int32_t equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
+    if (equal < 0) {
+        return TINYPY_FALSE;
+    }
+    *out_equal = TINYPY_FALSE;
+    if (equal == 0 || (size_t)kind >= TINYPY_BUILTIN_TYPE_COUNT || left->type != &vm->types[kind]) {
+        return TINYPY_TRUE;
+    }
     if (kind == TINYPY_VALUE_TUPLE) {
         size_t size = TINYPY_TUPLE_SIZE(left);
         size_t index;
 
-        if (size != TINYPY_TUPLE_SIZE(right)) {
-            *out_equal = TINYPY_FALSE;
-            return TINYPY_TRUE;
-        }
         for (index = 0U; index < size; ++index) {
-            tinypy_bool_t equal;
+            tinypy_bool_t item_equal;
 
-            if (__tinypy_code_constant_equal(TINYPY_TUPLE_GET(left, index), TINYPY_TUPLE_GET(right, index), &equal, out_error) == 0) {
+            if (__tinypy_code_constant_equal(TINYPY_TUPLE_GET(left, index), TINYPY_TUPLE_GET(right, index), &item_equal, out_error) == 0) {
                 return TINYPY_FALSE;
             }
-            if (equal == 0) {
-                *out_equal = TINYPY_FALSE;
+            if (item_equal == 0) {
                 return TINYPY_TRUE;
             }
         }
@@ -628,15 +616,9 @@ static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_v
     if (kind == TINYPY_VALUE_FROZENSET) {
         tinypy_value_t *left_dict = TINYPY_SET_OBJECT(left)->dict;
         tinypy_value_t *right_dict = TINYPY_SET_OBJECT(right)->dict;
-        tinypy_dict_entry_t *left_iterator;
-        tinypy_dict_entry_t *left_end;
+        tinypy_dict_entry_t *left_iterator = TINYPY_DICT_ITERATOR_BEGIN(left_dict);
+        tinypy_dict_entry_t *left_end = TINYPY_DICT_ITERATOR_END(left_dict);
 
-        if (TINYPY_DICT_SIZE(left_dict) != TINYPY_DICT_SIZE(right_dict)) {
-            *out_equal = TINYPY_FALSE;
-            return TINYPY_TRUE;
-        }
-        left_iterator = TINYPY_DICT_ITERATOR_BEGIN(left_dict);
-        left_end = TINYPY_DICT_ITERATOR_END(left_dict);
         for (; left_iterator != left_end; ++left_iterator) {
             tinypy_dict_entry_t *right_iterator;
             tinypy_dict_entry_t *right_end;
@@ -648,21 +630,20 @@ static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_v
             right_iterator = TINYPY_DICT_ITERATOR_BEGIN(right_dict);
             right_end = TINYPY_DICT_ITERATOR_END(right_dict);
             for (; right_iterator != right_end; ++right_iterator) {
-                tinypy_bool_t equal;
+                tinypy_bool_t item_equal;
 
                 if (TINYPY_DICT_ENTRY_IS_ACTIVE(right_iterator) == 0) {
                     continue;
                 }
-                if (__tinypy_code_constant_equal(left_iterator->key, right_iterator->key, &equal, out_error) == 0) {
+                if (__tinypy_code_constant_equal(left_iterator->key, right_iterator->key, &item_equal, out_error) == 0) {
                     return TINYPY_FALSE;
                 }
-                if (equal != 0) {
+                if (item_equal != 0) {
                     found = TINYPY_TRUE;
                     break;
                 }
             }
             if (found == 0) {
-                *out_equal = TINYPY_FALSE;
                 return TINYPY_TRUE;
             }
         }
@@ -670,33 +651,19 @@ static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_v
         return TINYPY_TRUE;
     }
     if (kind == TINYPY_VALUE_FLOAT) {
-        double left_number = TINYPY_FLOAT_OBJECT(left)->value;
-        double right_number = TINYPY_FLOAT_OBJECT(right)->value;
-
-        *out_equal = left_number == right_number && (left_number != 0.0 || signbit(left_number) == signbit(right_number));
+        *out_equal = signbit(TINYPY_FLOAT_OBJECT(left)->value) == signbit(TINYPY_FLOAT_OBJECT(right)->value) ? TINYPY_TRUE : TINYPY_FALSE;
         return TINYPY_TRUE;
     }
     if (kind == TINYPY_VALUE_COMPLEX) {
-        double left_real = TINYPY_COMPLEX_OBJECT(left)->real;
-        double right_real = TINYPY_COMPLEX_OBJECT(right)->real;
-        double left_imaginary = TINYPY_COMPLEX_OBJECT(left)->imaginary;
-        double right_imaginary = TINYPY_COMPLEX_OBJECT(right)->imaginary;
-        tinypy_bool_t real_equal = left_real == right_real && (left_real != 0.0 || signbit(left_real) == signbit(right_real));
-        tinypy_bool_t imaginary_equal = left_imaginary == right_imaginary && (left_imaginary != 0.0 || signbit(left_imaginary) == signbit(right_imaginary));
+        tinypy_bool_t real_sign = signbit(TINYPY_COMPLEX_OBJECT(left)->real) == signbit(TINYPY_COMPLEX_OBJECT(right)->real) ? TINYPY_TRUE : TINYPY_FALSE;
+        tinypy_bool_t imaginary_sign = signbit(TINYPY_COMPLEX_OBJECT(left)->imaginary) == signbit(TINYPY_COMPLEX_OBJECT(right)->imaginary) ? TINYPY_TRUE : TINYPY_FALSE;
 
-        *out_equal = real_equal != 0 && imaginary_equal != 0;
+        *out_equal = real_sign != 0 && imaginary_sign != 0 ? TINYPY_TRUE : TINYPY_FALSE;
         return TINYPY_TRUE;
     }
-    if (kind == TINYPY_VALUE_CODE) {
-        tinypy_bool_t return_value_1 = __tinypy_code_equal(left, right, out_equal, out_error);
-        return return_value_1;
+    if (kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE || kind == TINYPY_VALUE_CODE) {
+        *out_equal = TINYPY_TRUE;
     }
-    int32_t equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
-
-    if (equal < 0) {
-        return TINYPY_FALSE;
-    }
-    *out_equal = equal != 0;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -726,7 +693,8 @@ static tinypy_bool_t __tinypy_code_equal(tinypy_value_t *left_value, tinypy_valu
     return return_value_1;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_code_order(tinypy_value_t *left_value, tinypy_value_t *right_value, int32_t *out_order, tinypy_error_t **out_error) {
+/* code_compare orders the fields with PyObject_Compare. */
+tinypy_bool_t tinypy_internal_code_compare_three_way(tinypy_value_t *left_value, tinypy_value_t *right_value, int32_t *out_order, tinypy_error_t **out_error) {
     tinypy_code_object_t *left = TINYPY_CODE_OBJECT(left_value);
     tinypy_code_object_t *right = TINYPY_CODE_OBJECT(right_value);
     const int32_t left_integers[] = {left->arg_count, left->local_count, left->flags, left->first_line_number};
@@ -735,7 +703,7 @@ static tinypy_bool_t __tinypy_code_order(tinypy_value_t *left_value, tinypy_valu
     tinypy_value_t *right_values[] = {right->bytecode, right->consts, right->names, right->varnames, right->freevars, right->cellvars};
     size_t index;
 
-    if (__tinypy_code_value_order(left->name, right->name, out_order, out_error) == 0) {
+    if (tinypy_internal_compare_three_way(left->name, right->name, out_order, out_error) == 0) {
         return TINYPY_FALSE;
     }
     if (*out_order != 0) {
@@ -748,7 +716,7 @@ static tinypy_bool_t __tinypy_code_order(tinypy_value_t *left_value, tinypy_valu
         }
     }
     for (index = 0U; index < sizeof(left_values) / sizeof(left_values[0]); ++index) {
-        if (__tinypy_code_value_order(left_values[index], right_values[index], out_order, out_error) == 0) {
+        if (tinypy_internal_compare_three_way(left_values[index], right_values[index], out_order, out_error) == 0) {
             return TINYPY_FALSE;
         }
         if (*out_order != 0) {
@@ -778,7 +746,7 @@ tinypy_value_t *tinypy_internal_code_compare(tinypy_value_t *left, tinypy_value_
         tinypy_value_t *return_value_2 = tinypy_bool_from_i32(vm, result);
         return return_value_2;
     }
-    if (__tinypy_code_order(left, right, &order, out_error) == 0) {
+    if (tinypy_internal_code_compare_three_way(left, right, &order, out_error) == 0) {
         return NULL;
     }
     switch (operation) {
@@ -854,7 +822,7 @@ static tinypy_value_t *__tinypy_code_cmp_method(tinypy_value_t *function, tinypy
     if (tinypy_internal_compare_cmp_argument(left, right, TINYPY_VALUE_KIND(right) == TINYPY_VALUE_CODE, out_error) == 0) {
         return NULL;
     }
-    if (__tinypy_code_order(left, right, &order, out_error) == 0) {
+    if (tinypy_internal_code_compare_three_way(left, right, &order, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, order);

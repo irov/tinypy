@@ -738,7 +738,8 @@ tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value
         }
     }
     else {
-        tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, value, name);
+        tinypy_bool_t slot;
+        tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, value, name, &slot);
 
         if (attribute != NULL && tinypy_internal_native_method_applies(attribute, value) != 0) {
             /* The call may drop the method from the type. */

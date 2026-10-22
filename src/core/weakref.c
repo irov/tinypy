@@ -172,7 +172,7 @@ void tinypy_internal_weakref_clear(tinypy_value_t *value, tinypy_bool_t finalize
                 tinypy_internal_output_unraisable(vm, weakref->callback);
                 tinypy_error_release(error);
             }
-            tinypy_internal_exception_preserve_end(vm, &exception_state);
+            tinypy_internal_exception_preserve_restore(vm, &exception_state);
         }
         current = next;
     }

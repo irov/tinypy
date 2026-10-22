@@ -776,7 +776,7 @@ static tinypy_value_t *__tinypy_numeric_integer_base_method(tinypy_value_t *func
     }
     tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
     const uint8_t *spec = base == 8 ? (const uint8_t *)"#o" : (const uint8_t *)"#x";
-    tinypy_value_t *formatted = tinypy_internal_string_format_builtin_value(vm, self, 0, spec, 2U, TINYPY_FALSE, &result_unicode, out_error);
+    tinypy_value_t *formatted = tinypy_internal_string_format_builtin_value(vm, self, spec, 2U, TINYPY_FALSE, &result_unicode, out_error);
     if (formatted == NULL) {
         return NULL;
     }

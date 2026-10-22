@@ -271,8 +271,10 @@ static size_t __tinypy_compiler_restore_text(const tinypy_compile_ctx_t *ctx, co
             output_size += encoded_size;
         }
         else {
+            uint32_t last_code_point = ctx->source_diagnostic_ascii != 0 ? 0x7fU : 0xffU;
+
             if (output != NULL) {
-                output[output_size] = code_point <= 0xffU ? (uint8_t)code_point : (uint8_t)'?';
+                output[output_size] = code_point <= last_code_point ? (uint8_t)code_point : (uint8_t)'?';
             }
             output_size += 1U;
         }
@@ -321,7 +323,7 @@ static void __tinypy_compiler_report(tinypy_compile_ctx_t *ctx, tinypy_error_kin
             column_offset = (int32_t)original_column;
         }
     }
-    if (line_bytes != NULL && line_size != 0U && (ctx->source_diagnostic_latin1 != 0 || ctx->source_diagnostic_utf8 != 0)) {
+    if (line_bytes != NULL && line_size != 0U && (ctx->source_diagnostic_ascii != 0 || ctx->source_diagnostic_latin1 != 0 || ctx->source_diagnostic_utf8 != 0)) {
         size_t restored_size = __tinypy_compiler_restore_text(ctx, (const uint8_t *)line_bytes, line_size, NULL);
         uint8_t *restored = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, restored_size + 1U);
 
@@ -1027,6 +1029,7 @@ static tinypy_bool_t __tinypy_compiler_apply_cookie(tinypy_compile_ctx_t *ctx, c
         return TINYPY_TRUE;
     }
     if (*out_codec == TINYPY_INTERNAL_BUILTIN_CODEC_ASCII) {
+        ctx->source_diagnostic_ascii = TINYPY_TRUE;
         return TINYPY_TRUE;
     }
     *out_codec = TINYPY_INTERNAL_BUILTIN_CODEC_NONE;

@@ -10201,6 +10201,164 @@ static int32_t __test_native_slot_wrappers(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_hash_t __test_native_wrapper_hash(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    (void)instance;
+    (void)payload;
+    (void)user_data;
+    (void)out_error;
+    return 1000;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __test_native_wrapper_set_item(tinypy_value_t *instance, void *payload, tinypy_value_t *key, tinypy_value_t *value, void *user_data, tinypy_error_t **out_error) {
+    test_native_wrapper_state_t *state = (test_native_wrapper_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    (void)value;
+    (void)out_error;
+    tinypy_value_t *entry = __test_native_wrapper_pair(state, "store", key);
+    tinypy_list_append(state->log, entry);
+    tinypy_release(entry);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_type_t *__test_native_dispatch_type(tinypy_value_t *globals, const char *name, const tinypy_type_t *base, const tinypy_native_type_spec_t *spec) {
+    tinypy_vm_t *vm = tinypy_value_vm(globals);
+    const tinypy_type_t *bases[1] = {base};
+    tinypy_type_t *type = tinypy_native_type_new(vm, name, strlen(name), base != NULL ? bases : NULL, base != NULL ? 1U : 0U, NULL, spec, NULL);
+
+    if (type != NULL) {
+        __test_native_contract_add_type(globals, name, type);
+    }
+    return type;
+}
+//////////////////////////////////////////////////////////////////////////
+/* update_one_slot reads a slot wrapper as the slot it wraps only under its
+   own name and for a type that dispatches the callback it runs: an alias
+   under another name, the wrappers of a second host native base of a
+   Python class and the callbacks of the spec of a host native type with a
+   Python base dispatch as in CPython. A type whose spec sets a mapping
+   callback is a mapping, and a spec update touches only the names of the
+   callbacks it adds or removes. */
+static int32_t __test_native_slot_dispatch(void) {
+    static const char base_source[] =
+        "class Base(object):\n"
+        "    def __repr__(self): return 'base'\n"
+        "    def __len__(self): return 99\n"
+        "    def __add__(self, other): return 'base'\n"
+        "    def __getitem__(self, key): return 'base'\n"
+        "    def __call__(self, *args): return 'base'\n";
+    static const char source[] =
+        "class Alias(Pair):\n"
+        "    __radd__ = Pair.__add__\n"
+        "    __len__ = Pair.__hash__\n"
+        "alias = Alias()\n"
+        "check((1 + alias, alias + 2, len(alias)), (('add', 'pair', 1), ('add', 'pair', 2), 1000))\n"
+        "class Both(Left, Right):\n"
+        "    pass\n"
+        "both = Both()\n"
+        "check((repr(both), len(both), both + 1, callable(both), both(2)), ('left', 7, ('add', 'right', 1), True, ('call', 'right', (2,))))\n"
+        "over = Over()\n"
+        "check((repr(over), len(over), over.__len__(), over + 1, over[2], over(3)), ('over', 7, 7, ('add', 'over', 1), ('item', 'over', 2), ('call', 'over', (3,))))\n"
+        "class Hidden(Plain):\n"
+        "    pass\n"
+        "expect_error(TypeError, lambda: len(Hidden()), \"object of type 'Hidden' has no len()\")\n"
+        "lookup = Lookup()\n"
+        "check(('%(a)s' % lookup, eval('a', {}, lookup)), (\"('item', 'lookup', 'a')\", ('item', 'lookup', 'a')))\n"
+        "exec 'b = 1' in {}, lookup\n"
+        "check(log, [('store', 'lookup', 'b')])\n"
+        "moved = Pair.__dict__['__repr__']\n"
+        "Pair.__len__ = moved\n"
+        "del Pair.__add__\n";
+    static const char update_source[] =
+        "check((Pair.__dict__['__len__'] is moved, '__add__' in Pair.__dict__, Pair.__mul__(Pair(), 3)), (True, False, ('add', 'pair', 3)))\n";
+    test_allocator_state_t allocator_state;
+    test_native_wrapper_state_t states[5];
+    static const char *const tags[5] = {"pair", "left", "right", "over", "lookup"};
+    tinypy_native_type_spec_t spec;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *name_key = tinypy_string_from_bytes(vm, "__name__", 8U);
+    tinypy_value_t *module_name = tinypy_string_from_bytes(vm, "contract", 8U);
+    tinypy_dict_set(globals, name_key, module_name);
+    tinypy_release(module_name);
+    tinypy_release(name_key);
+    tinypy_value_t *log = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *log_key = tinypy_string_from_bytes(vm, "log", 3U);
+    tinypy_dict_set(globals, log_key, log);
+    tinypy_release(log_key);
+    for (size_t index = 0U; index < 5U; ++index) {
+        states[index].vm = vm;
+        states[index].log = log;
+        states[index].tag = tags[index];
+    }
+    TEST_CHECK(__test_native_contract_run(vm, globals, base_source) == 0);
+    tinypy_value_t *base_key = tinypy_string_from_bytes(vm, "Base", 4U);
+    tinypy_type_t *base = tinypy_value_as_type(tinypy_dict_get_optional(globals, base_key));
+    tinypy_release(base_key);
+
+    tinypy_native_type_spec_init(&spec);
+    spec.user_data = &states[0];
+    spec.repr = __test_native_wrapper_repr;
+    spec.hash = __test_native_wrapper_hash;
+    spec.add = __test_native_wrapper_add;
+    spec.mapping_length = __test_native_wrapper_length;
+    tinypy_type_t *pair = __test_native_dispatch_type(globals, "Pair", NULL, &spec);
+    tinypy_native_type_spec_t pair_spec = spec;
+    tinypy_native_type_spec_init(&spec);
+    tinypy_type_t *plain = __test_native_dispatch_type(globals, "Plain", pair, &spec);
+    spec.user_data = &states[1];
+    spec.repr = __test_native_wrapper_repr;
+    tinypy_type_t *left = __test_native_dispatch_type(globals, "Left", NULL, &spec);
+    tinypy_native_type_spec_init(&spec);
+    spec.user_data = &states[2];
+    spec.mapping_length = __test_native_wrapper_length;
+    spec.add = __test_native_wrapper_add;
+    spec.call = __test_native_wrapper_call;
+    tinypy_type_t *right = __test_native_dispatch_type(globals, "Right", NULL, &spec);
+    spec.user_data = &states[3];
+    spec.repr = __test_native_wrapper_repr;
+    spec.mapping_get = __test_native_wrapper_get_item;
+    tinypy_type_t *over = __test_native_dispatch_type(globals, "Over", base, &spec);
+    tinypy_native_type_spec_init(&spec);
+    spec.user_data = &states[4];
+    spec.mapping_get = __test_native_wrapper_get_item;
+    spec.mapping_set = __test_native_wrapper_set_item;
+    tinypy_type_t *lookup = __test_native_dispatch_type(globals, "Lookup", NULL, &spec);
+    TEST_CHECK(pair != NULL && plain != NULL && left != NULL && right != NULL && over != NULL && lookup != NULL);
+    TEST_CHECK(__test_native_contract_run(vm, globals, source) == 0);
+
+    /* The updates leave the wrapper moved under __len__ and the deleted
+       __add__ as they are, and publish __mul__. */
+    pair_spec.mapping_length = NULL;
+    TEST_CHECK(tinypy_native_type_update_spec(pair, &pair_spec, &error) != 0 && error == NULL);
+    pair_spec.mapping_length = __test_native_wrapper_length;
+    pair_spec.multiply = __test_native_wrapper_add;
+    TEST_CHECK(tinypy_native_type_update_spec(pair, &pair_spec, &error) != 0 && error == NULL);
+    TEST_CHECK(tinypy_native_type_update_spec(pair, &pair_spec, &error) != 0 && error == NULL);
+    TEST_CHECK(__test_native_contract_run(vm, globals, update_source) == 0);
+
+    tinypy_release(log);
+    tinypy_type_t *releases[] = {lookup, over, right, left, plain, pair};
+    for (size_t index = 0U; index < sizeof(releases) / sizeof(releases[0]); ++index) {
+        tinypy_value_t *type_value = tinypy_type_as_value(releases[index]);
+
+        tinypy_release(type_value);
+    }
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 /* A type change withdraws the versions of the type and of its subclasses.
    The builtin types derived from a builtin type are no registered
    subclasses and follow it all the same, and once the versions run out the
@@ -11069,10 +11227,11 @@ static int32_t __test_debugger_interrupt_scope(void) {
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* As PyFrame_FastToLocals maps them, the debugger finds an argument that a
-   closure captures in its cell, and set and delete rebind the cell as
-   PyFrame_LocalsToFast; the free variables of a class body are not its
-   locals. The expected values are those of CPython. */
+/* As PyFrame_FastToLocals maps them, the debugger finds an argument or a
+   name of a sublist parameter that a closure captures in its cell, and set
+   and delete rebind the cell as PyFrame_LocalsToFast; the free variables of
+   a class body are not its locals. The expected values are those of
+   CPython. */
 static int32_t __test_debugger_frame_cells(void) {
     static const char source[] =
         "import sys\n"
@@ -11092,6 +11251,22 @@ static int32_t __test_debugger_frame_cells(void) {
         "    seen.append(x)\n"
         "    return seen\n"
         "check(captured(1), [5, 7, None, 9])\n"
+        "def sublist((a, b), c):\n"
+        "    def inner():\n"
+        "        return a + b\n"
+        "    frame = sys._getframe()\n"
+        "    seen = [get_local(frame, 'a'), get_local(frame, 'b')]\n"
+        "    check(set_local(frame, 'a', 10), True)\n"
+        "    seen.append(inner())\n"
+        "    check(delete_local(frame, 'b'), True)\n"
+        "    expect_error(NameError, inner, \"free variable 'b' referenced before assignment in enclosing scope\")\n"
+        "    seen.append(get_local(frame, 'b'))\n"
+        "    check(delete_local(frame, 'b'), False)\n"
+        "    seen.append(a)\n"
+        "    return seen\n"
+        "check(sublist((1, 2), 3), [1, 2, 12, None, 10])\n"
+        "pair = lambda (a, b): (get_local(sys._getframe(), 'b'), set_local(sys._getframe(), 'a', 5), (lambda: a + b)())\n"
+        "check(pair((1, 2)), (2, True, 7))\n"
         "def outer():\n"
         "    x = 1\n"
         "    class Body(object):\n"
@@ -11480,6 +11655,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "error_pending_diagnostics") == 0) {
         int result = __test_error_pending_diagnostics();
+        return result;
+    }
+    if (strcmp(argv[1], "native_slot_dispatch") == 0) {
+        int result = __test_native_slot_dispatch();
         return result;
     }
     if (strcmp(argv[1], "native_slot_failures") == 0) {

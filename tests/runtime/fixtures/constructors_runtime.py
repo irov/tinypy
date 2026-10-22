@@ -765,3 +765,36 @@ for reducible_builtin in (
         assert list(rebuilt) == list(reducible_builtin)
     else:
         assert rebuilt == reducible_builtin
+
+# The copy_reg functions read the globals of the module the VM keeps, so
+# they work after the module leaves sys.modules and every other reference,
+# and so do the functions of the module a later import copies them into.
+import sys
+
+retained_module = sys.modules.pop("copy_reg")
+retained_pickle = retained_module.pickle
+retained_reduce_ex = retained_module._reduce_ex
+retained_add_extension = retained_module.add_extension
+retained_remove_extension = retained_module.remove_extension
+retained_clear_extension_cache = retained_module.clear_extension_cache
+del retained_module, copy_reg
+
+
+class RetainedReduction(object):
+    pass
+
+
+assert retained_pickle(RetainedReduction, registered_reduce) is None
+assert retained_reduce_ex(RetainedReduction(), 0)[1] == (RetainedReduction, object, None)
+assert retained_add_extension("tinypy_test", "RetainedReduction", 43) is None
+assert retained_clear_extension_cache() is None
+import copy_reg
+
+assert copy_reg.dispatch_table[RetainedReduction] is registered_reduce
+assert copy_reg._extension_registry[("tinypy_test", "RetainedReduction")] == 43
+assert retained_remove_extension("tinypy_test", "RetainedReduction", 43) is None
+assert copy_reg._extension_registry == {}
+assert RetainedReduction().__reduce_ex__(1)[0] is copy_reg._reconstructor
+del sys.modules["copy_reg"], copy_reg
+assert RetainedReduction().__reduce_ex__(0)[1] == (RetainedReduction, object, None)
+assert retained_reduce_ex(RetainedReduction(), 1)[1] == (RetainedReduction, object, None)

@@ -145,6 +145,12 @@ static tinypy_value_t *__tinypy_dictproxy_repr(tinypy_value_t *instance, void *p
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* dictproxy_str is str() of the dictionary. */
+static tinypy_value_t *__tinypy_dictproxy_string(tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_value_t *result = tinypy_object_str(tinypy_internal_dictproxy_dict(value), out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_hash_t __tinypy_dictproxy_hash(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
     (void)payload;
     (void)user_data;
@@ -303,8 +309,12 @@ static tinypy_value_t *__tinypy_dictproxy_protocol_method(tinypy_value_t *functi
         tinypy_value_t *return_value_4 = tinypy_internal_dict_iterator_new(tinypy_internal_dictproxy_dict(self), INT32_C(0));
         return return_value_4;
     }
-    tinypy_value_t *return_value_5 = __tinypy_dictproxy_repr(self, __tinypy_dictproxy_payload(self), NULL, out_error);
-    return return_value_5;
+    if (operation == 4) {
+        tinypy_value_t *return_value_5 = __tinypy_dictproxy_repr(self, __tinypy_dictproxy_payload(self), NULL, out_error);
+        return return_value_5;
+    }
+    tinypy_value_t *return_value_6 = __tinypy_dictproxy_string(self, out_error);
+    return return_value_6;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_dictproxy_compare_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
@@ -396,6 +406,7 @@ void tinypy_internal_initialize_dictproxy_type(tinypy_vm_t *vm) {
     vm->dictproxy_type = tinypy_internal_native_type_new_key(vm->internal_dictproxy_key, NULL, 0U, NULL, &spec, NULL);
     vm->dictproxy_type->release_references = __tinypy_dictproxy_release_references;
     vm->dictproxy_type->traverse_references = __tinypy_dictproxy_traverse_references;
+    vm->dictproxy_type->string = __tinypy_dictproxy_string;
     vm->dictproxy_type->flags = (vm->dictproxy_type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
     for (index = 0U; index < sizeof(methods) / sizeof(methods[0]); ++index) {
         tinypy_value_t *method_name = methods[index].name;
@@ -406,7 +417,7 @@ void tinypy_internal_initialize_dictproxy_type(tinypy_vm_t *vm) {
     tinypy_internal_type_add_method(vm->dictproxy_type, vm->internal_special_contains_key, __tinypy_dictproxy_protocol_method, (void *)(intptr_t)2, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(vm->dictproxy_type, vm->internal_special_iter_key, __tinypy_dictproxy_protocol_method, (void *)(intptr_t)3, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(vm->dictproxy_type, vm->internal_special_repr_key, __tinypy_dictproxy_protocol_method, (void *)(intptr_t)4, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
-    tinypy_internal_type_add_method(vm->dictproxy_type, vm->internal_special_str_key, __tinypy_dictproxy_protocol_method, (void *)(intptr_t)4, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(vm->dictproxy_type, vm->internal_special_str_key, __tinypy_dictproxy_protocol_method, (void *)(intptr_t)5, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     for (index = 0U; index < sizeof(comparison_names) / sizeof(comparison_names[0]); ++index) {
         tinypy_value_t *method_name = comparison_names[index];
         tinypy_internal_type_add_method(vm->dictproxy_type, method_name, __tinypy_dictproxy_compare_method, (void *)(intptr_t)index, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

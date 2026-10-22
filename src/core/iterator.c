@@ -1170,14 +1170,19 @@ tinypy_value_t *tinypy_internal_enumerate_next(tinypy_value_t *value, tinypy_err
    reads the size alone. */
 static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, tinypy_bool_t check_sequence, size_t *out_size, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
-    tinypy_bool_t has_get_item = check_sequence == 0 || (sequence->type->sequence_slots != NULL && sequence->type->sequence_slots->get_item != NULL) ? TINYPY_TRUE : TINYPY_FALSE;
+    /* PySequence_Check excludes dictionaries outright and otherwise demands an
+       item protocol, so mappings never reach the index-counting path; the
+       sq_item of a native type with sequence_get is one, whereas a weak proxy
+       and a dictproxy subscript like mappings alone. */
+    tinypy_bool_t mapping = check_sequence != 0 && (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || sequence->type == vm->dictproxy_type || __tinypy_internal_weakref_is_proxy(sequence) != TINYPY_FALSE) ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t has_get_item = check_sequence == 0 || (mapping == 0 && sequence->type->sequence_slots != NULL && sequence->type->sequence_slots->get_item != NULL) ? TINYPY_TRUE : TINYPY_FALSE;
 
     /* PySequence_Check asks a classic instance hasattr(sequence,
        '__getitem__'), __getattr__ included. */
     if (has_get_item == 0 && TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_OLD_INSTANCE) {
         has_get_item = tinypy_object_has_attr_value(sequence, vm->internal_special_getitem_key);
     }
-    else if (has_get_item == 0) {
+    else if (has_get_item == 0 && mapping == 0) {
         has_get_item = tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key);
     }
     if (has_get_item == 0) {
@@ -1254,34 +1259,19 @@ static tinypy_bool_t __tinypy_reversed_sequence_size(tinypy_value_t *sequence, t
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t *sequence, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(sequence);
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(sequence);
+    tinypy_bool_t exact = (size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && sequence->type == &vm->types[kind] ? TINYPY_TRUE : TINYPY_FALSE;
     size_t size;
 
-    /* PySequence_Check excludes dictionaries outright and otherwise demands an
-       item protocol, so mappings never reach the index-counting path; the
-       sq_item of a native type with sequence_get is one, whereas a weak proxy
-       and a dictproxy subscript like mappings alone. */
-    tinypy_bool_t mapping = TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || sequence->type == vm->dictproxy_type || __tinypy_internal_weakref_is_proxy(sequence) != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
-    tinypy_bool_t item_slot = sequence->type->sequence_slots != NULL && sequence->type->sequence_slots->get_item != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-    if (mapping != 0 || (TINYPY_VALUE_KIND(sequence) != TINYPY_VALUE_OLD_INSTANCE && item_slot == 0 && tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key) == 0)) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument to reversed() must be a sequence", out_error);
-        return NULL;
-    }
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(sequence);
-    if (kind != TINYPY_VALUE_LIST && ((size_t)kind >= TINYPY_BUILTIN_TYPE_COUNT || sequence->type != &vm->types[kind])) {
-        if (__tinypy_reversed_sequence_size(sequence, TINYPY_TRUE, &size, out_error) == 0) {
-            return NULL;
-        }
-    }
-    else if (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_TUPLE) {
+    /* list.__reversed__ and the exact built-in sequences read their own
+       size; any other sequence is checked and sized as reversed_new does. */
+    if (kind == TINYPY_VALUE_LIST || (exact != 0 && (kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_UNICODE))) {
         size = TINYPY_SIZED_SIZE(sequence);
     }
-    else if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_STRING) {
+    else if (exact != 0 && kind == TINYPY_VALUE_STRING) {
         size = TINYPY_TEXT_BYTE_SIZE(sequence);
     }
-    else if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_UNICODE) {
-        size = TINYPY_SIZED_SIZE(sequence);
-    }
-    else if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_XRANGE) {
+    else if (exact != 0 && kind == TINYPY_VALUE_XRANGE) {
         size = TINYPY_XRANGE_OBJECT(sequence)->length;
     }
     else if (__tinypy_reversed_sequence_size(sequence, TINYPY_TRUE, &size, out_error) == 0) {

@@ -830,13 +830,28 @@ static tinypy_bool_t __tinypy_item_is_exception_sequence(tinypy_value_t *contain
     return method == base_method ? TINYPY_TRUE : TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* getindex and PySequence_GetItem add the sq_length of the container, when
+   its type has one, to a negative sequence index. */
+tinypy_bool_t tinypy_internal_item_sequence_index(tinypy_value_t *container, int64_t *in_out_index, tinypy_error_t **out_error) {
+    int64_t length = 0;
+
+    if (*in_out_index >= 0) {
+        return TINYPY_TRUE;
+    }
+    int32_t measured = __tinypy_item_sequence_length(container, &length, out_error);
+    if (measured < 0) {
+        return TINYPY_FALSE;
+    }
+    *in_out_index += length;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* BaseException has only sq_item: PyObject_GetItem demands an index, adds
    the length of a class defining __len__ to a negative one, and the item is
    read from the arguments. */
 static tinypy_value_t *__tinypy_item_exception_get(tinypy_value_t *container, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     int64_t index;
-    int64_t length;
 
     if (tinypy_internal_index_check(key) == 0) {
         __tinypy_item_sequence_index_error(vm, key, out_error);
@@ -845,15 +860,8 @@ static tinypy_value_t *__tinypy_item_exception_get(tinypy_value_t *container, ti
     if (__tinypy_item_number_as_ssize(key, TINYPY_FALSE, TINYPY_ERROR_INDEX, &index, out_error) == 0) {
         return NULL;
     }
-    if (index < 0) {
-        int32_t measured = __tinypy_item_sequence_length(container, &length, out_error);
-
-        if (measured < 0) {
-            return NULL;
-        }
-        if (measured > 0) {
-            index += length;
-        }
+    if (tinypy_internal_item_sequence_index(container, &index, out_error) == 0) {
+        return NULL;
     }
     tinypy_value_t *position = tinypy_integer_from_i64(vm, index);
     tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &position, 1U, out_error);

@@ -53,6 +53,13 @@ typedef struct test_interrupt_host_t {
     size_t interrupt_after;
 } test_interrupt_host_t;
 
+/* While armed, every request ends the countdown of the long kernels. */
+typedef struct test_countdown_allocator_state_t {
+    test_allocator_state_t accounting;
+    tinypy_vm_t *vm;
+    tinypy_bool_t armed;
+} test_countdown_allocator_state_t;
+
 static tinypy_value_t *__test_dict_get(tinypy_vm_t *vm, tinypy_value_t *dict, const char *name, size_t name_size);
 
 //////////////////////////////////////////////////////////////////////////
@@ -1555,6 +1562,102 @@ static int32_t __test_long_kernel_interrupt_polling(void) {
     tinypy_release(globals);
     tinypy_vm_destroy(vm);
     assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static void *__test_countdown_allocate(void *user_data, size_t size, size_t alignment) {
+    test_countdown_allocator_state_t *state = (test_countdown_allocator_state_t *)user_data;
+
+    if (state->armed != 0) {
+        state->vm->long_poll_steps = 0U;
+    }
+    void *memory = __test_allocate(&state->accounting, size, alignment);
+    return memory;
+}
+//////////////////////////////////////////////////////////////////////////
+static void *__test_countdown_reallocate(void *user_data, void *memory, size_t old_size, size_t new_size, size_t alignment) {
+    test_countdown_allocator_state_t *state = (test_countdown_allocator_state_t *)user_data;
+    void *resized = __test_reallocate(&state->accounting, memory, old_size, new_size, alignment);
+
+    return resized;
+}
+//////////////////////////////////////////////////////////////////////////
+static void __test_countdown_deallocate(void *user_data, void *memory, size_t size, size_t alignment) {
+    test_countdown_allocator_state_t *state = (test_countdown_allocator_state_t *)user_data;
+
+    __test_deallocate(&state->accounting, memory, size, alignment);
+}
+//////////////////////////////////////////////////////////////////////////
+/* A compilation never polls the host, however long its constant folds run:
+   the allocator ends the countdown of the long kernels on every request, as
+   a compilation longer than the whole countdown does on a 32-bit target,
+   and the interrupt the host would have answered reaches the compiled code.
+   A failed compilation and a preprocessing end their suspension as well. */
+static int32_t __test_long_kernel_compile_polling(void) {
+    static const char folded[] = "value = 7 ** 30000\n";
+    static const char failed[] = "value = 7 ** 30000\nvalue = (\n";
+    test_countdown_allocator_state_t state;
+    test_interrupt_host_t interrupt_host = {0U, 1U};
+    tinypy_allocator_t allocator;
+    tinypy_host_t host;
+    tinypy_vm_config_t config;
+    tinypy_compile_options_t options;
+    uint16_t digits[64];
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&state, 0, sizeof(state));
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = &state;
+    allocator.allocate = &__test_countdown_allocate;
+    allocator.reallocate = &__test_countdown_reallocate;
+    allocator.deallocate = &__test_countdown_deallocate;
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &interrupt_host;
+    host.poll_interrupt = &__test_poll_interrupt;
+    (void)memset(&config, 0, sizeof(config));
+    config.abi_version = TINYPY_ABI_VERSION;
+    config.struct_size = (uint32_t)sizeof(config);
+    config.allocator = &allocator;
+    config.host = &host;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    state.vm = vm;
+    state.armed = TINYPY_TRUE;
+    tinypy_value_t *code = tinypy_compile_source(vm, folded, sizeof(folded) - 1U, "interrupt.py", 12U, &options, &error);
+    assert(code != NULL && error == NULL);
+    tinypy_value_t *failed_code = tinypy_compile_source(vm, failed, sizeof(failed) - 1U, "interrupt.py", 12U, &options, &error);
+    assert(failed_code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_preprocess_result_t *preprocessed = tinypy_preprocess_source(vm, folded, sizeof(folded) - 1U, "interrupt.py", 12U, &options, &error);
+    assert(preprocessed != NULL && error == NULL);
+    tinypy_preprocess_result_destroy(preprocessed);
+    state.armed = TINYPY_FALSE;
+    assert(interrupt_host.polls == 0U);
+    tinypy_value_t *result = tinypy_exec_code(code, globals, NULL, &error);
+    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+    assert(interrupt_host.polls == 1U);
+    tinypy_error_release(error);
+    error = NULL;
+    for (size_t index = 0U; index < sizeof(digits) / sizeof(digits[0]); ++index) {
+        digits[index] = 0x7fffU;
+    }
+    tinypy_value_t *value = tinypy_long_from_base15_digits(vm, 1, digits, sizeof(digits) / sizeof(digits[0]));
+    vm->long_poll_steps = 0U;
+    result = tinypy_multiply(value, value, &error);
+    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+    assert(interrupt_host.polls == 2U);
+    tinypy_error_release(error);
+    tinypy_release(value);
+    tinypy_release(code);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.accounting.allocations == 0U && state.accounting.bytes == 0U);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -3212,6 +3315,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_long_kernel_interrupt_polling() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_long_kernel_compile_polling() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_compile_modes_and_optimize() != 0) {

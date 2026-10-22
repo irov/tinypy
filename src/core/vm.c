@@ -2123,6 +2123,7 @@ static void __tinypy_shutdown_collect(tinypy_shutdown_graph_t *graph, tinypy_boo
     __tinypy_shutdown_add(graph, vm->codec_cache);
     __tinypy_shutdown_add(graph, vm->codec_errors);
     __tinypy_shutdown_add(graph, vm->struct_cache);
+    __tinypy_shutdown_add(graph, vm->copy_reg_module);
     __tinypy_shutdown_add(graph, vm->internal_strings);
 #define TINYPY_INTERNAL_KEY_ROOT(field, name, intern_name) __tinypy_shutdown_add(graph, vm->field);
     TINYPY_INTERNAL_KEY_LIST(TINYPY_INTERNAL_KEY_ROOT)

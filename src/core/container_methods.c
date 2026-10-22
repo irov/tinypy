@@ -553,7 +553,11 @@ static tinypy_value_t *__tinypy_container_call_items(tinypy_vm_t *vm, tinypy_val
             return return_value_2;
         }
     }
-    if (tinypy_internal_object_has_special_key(callable, vm->internal_special_call_key) != 0) {
+    /* tinypy_call runs the call slot of a type unless a Python __call__
+       overrides it, so only such a __call__ or that of a classic instance,
+       whose type has no call slot, can bind to a Python function. */
+    tinypy_bool_t slot_call = callable->type->call != NULL && ((callable->type->flags & TINYPY_TYPE_FLAG_HEAP) == 0U || __tinypy_internal_object_overrides_dispatch(callable, TINYPY_INTERNAL_DISPATCH_BIT(CALL)) == 0) ? TINYPY_TRUE : TINYPY_FALSE;
+    if (slot_call == 0 && tinypy_internal_object_has_special_key(callable, vm->internal_special_call_key) != 0) {
         tinypy_value_t *method = tinypy_internal_object_get_special_key(callable, vm->internal_special_call_key, out_error);
 
         if (method == NULL) {

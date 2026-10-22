@@ -463,19 +463,6 @@ size_t tinypy_internal_ascii_prefix(const uint8_t *bytes, size_t size) {
     return offset;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The code points of canonical UTF-8: one per byte of the ASCII run it
-   starts with, then one per lead byte. */
-size_t tinypy_internal_utf8_code_point_count(const uint8_t *bytes, size_t size) {
-    size_t offset = tinypy_internal_ascii_prefix(bytes, size);
-    size_t code_point_count = offset;
-
-    while (offset < size) {
-        offset += __tinypy_unicode_utf8_width(bytes[offset]);
-        code_point_count += 1U;
-    }
-    return code_point_count;
-}
-//////////////////////////////////////////////////////////////////////////
 uint32_t tinypy_internal_unicode_lower(uint32_t code_point) {
     if (code_point >= (uint32_t)'A' && code_point <= (uint32_t)'Z') {
         return code_point + ((uint32_t)'a' - (uint32_t)'A');

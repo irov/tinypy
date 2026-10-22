@@ -122,6 +122,33 @@ class CompilerEdges(unittest.TestCase):
         finally:
             _codecs.register_error('strict', previous)
 
+    def test_unicode_escape_lone_final_backslash_goes_to_handler(self):
+        # A handler that resumes a literal at its last byte, the second
+        # backslash of a pair, leaves the escape decoder a lone backslash it
+        # reports; the raw decoder keeps it.
+        previous = _codecs.lookup_error('strict')
+        events = []
+        def handler(error):
+            events.append((error.encoding, error.start, error.end, error.reason))
+            if len(events) == 3:
+                return u'', error.end
+            return u'<%d>' % len(events), len(error.object) - 1
+        cases = [("u'\\x\\\\'", u'<1><2>', [('unicodeescape', 0, 2, 'truncated \\xXX escape'),
+                                                 ('unicodeescape', 3, 4, '\\ at end of string'),
+                                                 ('unicodeescape', 3, 4, '\\ at end of string')]),
+                 ("u'\xe9\\N\\\\'", u'\xe9<1><2>', [('unicodeescape', 1, 3, 'malformed \\N character escape'),
+                                                         ('unicodeescape', 4, 5, '\\ at end of string'),
+                                                         ('unicodeescape', 4, 5, '\\ at end of string')]),
+                 ("ur'\\u\\\\'", u'<1>\\', [('rawunicodeescape', 0, 2, 'truncated \\uXXXX')])]
+        try:
+            _codecs.register_error('strict', handler)
+            for source, expected, trace in cases:
+                events[:] = []
+                self.assertEqual(eval(compile(source, '<literal>', 'eval')), expected)
+                self.assertEqual(events, trace)
+        finally:
+            _codecs.register_error('strict', previous)
+
     def test_unicode_literal_handler_failure_propagates_unless_unicode_error(self):
         previous = _codecs.lookup_error('strict')
         def handler(error):
@@ -263,6 +290,26 @@ class CompilerEdges(unittest.TestCase):
             exec compile("# coding: ascii\nvalue = u'a\xffb' # \xfe\n", '<source>', 'exec') in namespace
             exec compile("# coding: utf8\nother = 'a\xffb'\n", '<source>', 'exec') in namespace
             self.assertEqual((namespace['value'], namespace['other']), (u'a\xe9b', 'a\xc3\xa9b'))
+        finally:
+            _codecs.register_error('strict', previous)
+
+    def test_ascii_cookie_diagnostic_restores_handler_replacement(self):
+        # PyTokenizer_RestoreEncoding encodes the line of a diagnostic back
+        # to the ASCII of the cookie with 'replace' and counts its offset in
+        # characters.
+        previous = _codecs.lookup_error('strict')
+        def handler(error):
+            return u'\xe9\u20ac', error.end
+        cases = [("# coding: ascii\nx = '\xff' +\n", ('invalid syntax', 2, 11, "x = '??' +\n")),
+                 ("# coding: us-ascii\nx = u'\xff\xfe' $\n", ('invalid syntax', 2, 13, "x = u'????' $\n")),
+                 ("# coding: ascii\nx = '\xff\n", ('EOL while scanning string literal', 2, 8, "x = '??\n"))]
+        try:
+            _codecs.register_error('strict', handler)
+            for source, expected in cases:
+                with self.assertRaises(SyntaxError) as caught:
+                    compile(source, '<source>', 'exec')
+                error = caught.exception
+                self.assertEqual((error.msg, error.lineno, error.offset, error.text), expected)
         finally:
             _codecs.register_error('strict', previous)
 

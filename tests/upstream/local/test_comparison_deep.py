@@ -499,3 +499,34 @@ class ComparisonDeep(unittest.TestCase):
             __ne__ = set.__ne__
         self.assertFalse(Frozen([1]) != Frozen([1]))
         self.assertRaises(TypeError, lambda: Items([1]).__eq__(Items([1])))
+
+    def test_cell_and_code_order_compare_their_contents_three_way(self):
+        calls = []
+        class Ordered(object):
+            def __init__(self, value):
+                self.value = value
+            def __eq__(self, other):
+                return True
+            def __cmp__(self, other):
+                calls.append(self.value)
+                return cmp(self.value, other.value)
+        def cell(value):
+            def read():
+                return value
+            return read.__closure__[0]
+        first, second = cell(Ordered(1)), cell(Ordered(2))
+        self.assertEqual((type(first).__cmp__(first, second), cmp(first, second), first < second, first == second, second > first), (-1, -1, True, False, True))
+        self.assertEqual(calls, [1, 1, 1, 1, 2])
+        def template():
+            return 1
+        source = template.func_code
+        def code(constants):
+            return type(source)(source.co_argcount, source.co_nlocals, source.co_stacksize, source.co_flags, source.co_code, constants, source.co_names, source.co_varnames, source.co_filename, source.co_name, source.co_firstlineno, source.co_lnotab)
+        del calls[:]
+        left, right = code((None, Ordered(1))), code((None, Ordered(2)))
+        self.assertEqual((left == right, cmp(left, right), left < right), (False, 0, False))
+        shared = Ordered(3)
+        class Text(str):
+            pass
+        self.assertEqual((code((None, shared)) == code((None, shared)), code((None, Text('a'))) == code((None, Text('a'))), code((None, (1, 'a'))) == code((None, (1, 'a')))), (True, False, True))
+        self.assertEqual((code((None, 0.0)) == code((None, -0.0)), code((None, 1)) == code((None, 1L)), code((None, frozenset([1, 2]))) == code((None, frozenset([2, 1])))), (False, False, True))

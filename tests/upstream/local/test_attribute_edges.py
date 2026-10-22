@@ -948,3 +948,30 @@ class AttributeEdges(unittest.TestCase):
             del Plain.__getattr__
             self.assertEqual(hasattr(Plain(), 'added'), False)
             del Plain.__getattr__
+
+    def test_generic_getattribute_wrapper_of_another_type_with_a_getattr_hook(self):
+        class Hooked(object):
+            def __getattr__(self, name):
+                return 'hook:' + name
+        class Classic:
+            pass
+        def function():
+            pass
+        for source in (object, Exception, BaseException, KeyError, list, dict, int, str, type(function), type(sys), property, type(iter([]))):
+            Derived = type('Derived', (Hooked,), {'__getattribute__': source.__getattribute__})
+            instance = Derived()
+            instance.value = 1
+            self.assertEqual((instance.value, instance.missing, hasattr(instance, 'value'), getattr(instance, 'other', None)), (1, 'hook:missing', True, 'hook:other'))
+        for source in (type, type(Hooked().__getattr__), type(Classic), type(Classic()), super):
+            Derived = type('Derived', (Hooked,), {'__getattribute__': source.__getattribute__})
+            self.assertRaises(TypeError, getattr, Derived(), 'missing')
+            self.assertEqual(hasattr(Derived(), 'missing'), False)
+        Plain = type('Plain', (object,), {'__getattribute__': Exception.__getattribute__})
+        self.assertRaises(TypeError, getattr, Plain(), '__class__')
+        class Meta(type):
+            def __getattr__(cls, name):
+                return 'meta:' + name
+        Generic = type('Generic', (Meta,), {'__getattribute__': list.__getattribute__})
+        Base = type('Base', (object,), {'inherited': 2})
+        Class = Generic('Class', (Base,), {'own': 1})
+        self.assertEqual((Class.own, Class.inherited, Class.missing), (1, 'meta:inherited', 'meta:missing'))

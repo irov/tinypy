@@ -43,12 +43,11 @@ void tinypy_cell_set(tinypy_value_t *cell_value, tinypy_value_t *content) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-/* The contents are held across both comparisons, which can run code that
-   rebinds either cell. */
-static tinypy_bool_t __tinypy_cell_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
+/* cell_compare orders the contents with PyObject_Compare. They are held
+   across the comparison, which can run code that rebinds either cell. */
+tinypy_bool_t tinypy_internal_cell_compare_three_way(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
     tinypy_value_t *left_content = TINYPY_CELL_OBJECT(left)->content;
     tinypy_value_t *right_content = TINYPY_CELL_OBJECT(right)->content;
-    int32_t less = INT32_C(0);
 
     if (left_content == NULL || right_content == NULL) {
         *out_order = left_content == right_content ? INT32_C(0) : (left_content == NULL ? -INT32_C(1) : INT32_C(1));
@@ -56,17 +55,10 @@ static tinypy_bool_t __tinypy_cell_order(tinypy_value_t *left, tinypy_value_t *r
     }
     TINYPY_INCREF(left_content);
     TINYPY_INCREF(right_content);
-    int32_t equal = tinypy_compare_bool(left_content, right_content, TINYPY_COMPARE_EQUAL, out_error);
-    if (equal == 0) {
-        less = tinypy_compare_bool(left_content, right_content, TINYPY_COMPARE_LESS, out_error);
-    }
+    tinypy_bool_t ordered = tinypy_internal_compare_three_way(left_content, right_content, out_order, out_error);
     TINYPY_DECREF(right_content);
     TINYPY_DECREF(left_content);
-    if (equal < 0 || less < 0) {
-        return TINYPY_FALSE;
-    }
-    *out_order = equal != 0 ? INT32_C(0) : (less != 0 ? -INT32_C(1) : INT32_C(1));
-    return TINYPY_TRUE;
+    return ordered;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_internal_cell_compare(tinypy_value_t *left, tinypy_value_t *right, int32_t operation, tinypy_error_t **out_error) {
@@ -78,7 +70,7 @@ tinypy_value_t *tinypy_internal_cell_compare(tinypy_value_t *left, tinypy_value_
         tinypy_value_t *return_value_1 = TINYPY_RET_NOT_IMPLEMENTED(vm);
         return return_value_1;
     }
-    if (__tinypy_cell_order(left, right, &order, out_error) == 0) {
+    if (tinypy_internal_cell_compare_three_way(left, right, &order, out_error) == 0) {
         return NULL;
     }
     switch (operation) {
@@ -125,7 +117,7 @@ static tinypy_value_t *__tinypy_cell_cmp_method(tinypy_value_t *function, tinypy
     if (tinypy_internal_compare_cmp_argument(left, right, TINYPY_VALUE_KIND(right) == TINYPY_VALUE_CELL, out_error) == 0) {
         return NULL;
     }
-    if (__tinypy_cell_order(left, right, &order, out_error) == 0) {
+    if (tinypy_internal_cell_compare_three_way(left, right, &order, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, order);

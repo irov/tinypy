@@ -627,7 +627,9 @@ Python-visible bundled surface намеренно ограничен memory-only
   `__eq__` подтипов `str` и `unicode`; функции `copy_reg` обращаются к своим
   аргументам через те же протоколы атрибутов, сравнений, `int()` и таблиц,
   что и `copy_reg.py`, без собственных проверок типов (`_reduce_ex`
-  проверяет `proto < 2` как `assert`);
+  проверяет `proto < 2` как `assert`); `object.__reduce_ex__` импортирует
+  `copy_reg`, как `PyImport_Import`, через `__import__` builtins
+  выполняемого кода;
 - `_struct` гарантирует формат `d` с repeat counts и byte-order prefixes, а
   также `Struct`, `pack`, `unpack`, `pack_into` и `unpack_from`; `_struct.error`
   является `ValueError`. `Struct` хранит compiled format в native payload,
@@ -729,15 +731,24 @@ Host native type вызывает только callbacks собственной 
 публикует в своём словаре slot wrapper для каждого callback своей spec под
 именем его special method: `__setattr__` и `__delattr__` для `set_attribute`,
 `__lt__`…`__ge__` для `compare`, `__radd__` и `__iadd__` для reflected и
-in-place callbacks, `__delitem__` для `mapping_set`; mapping callback занимает
-имя, общее с sequence callback. Имя, которое задаёт namespace типа, сохраняет
-своё значение, `tinypy_type_set_attr` заменяет wrapper, а
-`tinypy_native_type_update_spec` публикует и снимает wrappers добавленных и
-удалённых callbacks, не заменяя других значений. Wrapper вызывает callback
-spec опубликовавшего его типа, так что Python-подкласс делегирует ему через
-`super()` или через сам тип; операции над экземпляром по-прежнему идут через
-slots его типа, и поиск special methods видит вместо такого wrapper атрибут
-ближайшей базы, не являющейся host native type. `get_attribute` и
+in-place callbacks, `__delitem__` для `mapping_set`; wrapper имени, общего
+для mapping и sequence callbacks, вызывает mapping callback, а без него
+sequence callback. Имя, которое задаёт namespace типа, сохраняет своё
+значение, `tinypy_type_set_attr` заменяет wrapper, а
+`tinypy_native_type_update_spec` публикует wrappers добавленных callbacks и
+снимает wrappers удалённых, не трогая имён остальных callbacks и других
+значений namespace; та же spec повторно ничего не меняет. Wrapper вызывает
+callback spec опубликовавшего его типа, так что Python-подкласс делегирует
+ему через `super()` или через сам тип. Как `update_one_slot`, операции над
+экземпляром читают wrapper, найденный под собственным именем, как slot его
+типа, если тип вызывает тот же callback с той же user data — это сам тип или
+Python-подкласс, скопировавший его spec; такой slot ничего не переопределяет.
+Wrapper host native базы, callback которой тип (или host native type, чью spec
+скопировал Python-класс) не вызывает, читается как атрибут ближайшей базы
+этого типа, не являющейся host native type. Любой другой wrapper — под другим
+именем или второй host native базы Python-класса — обычный метод, который
+операции вызывают по имени, как в CPython. Spec с `mapping_get` делает
+экземпляры mapping, как `mp_subscript`, для `%` и `eval`/`exec`. `get_attribute` и
 `set_attribute` служат `tp_getattro` и `tp_setattro` типа: `set_attribute`
 получает каждое присваивание атрибута раньше дескрипторов типа и каждое
 удаление с NULL значением, как `mapping_set` получает удаление элемента, а
@@ -1210,7 +1221,11 @@ VM сохраняет имена и значения namespaces своих мо�
 имена не входят. Сохранённые значения живут до `tinypy_vm_destroy`, как копии
 extension modules до `_PyImport_Fini`; поэтому и таблицы `copy_reg`, который в
 CPython написан на Python, с зарегистрированными в них объектами переживают
-очистку namespaces host.
+очистку namespaces host. Функции `copy_reg` читают глобальные имена модуля,
+который создала VM; VM держит этот модуль до `tinypy_vm_destroy`, поэтому
+функции работают и после его удаления из `sys.modules`, в том числе в новом
+модуле, который создаёт import (в CPython глобальные имена освобождённого
+модуля становятся `None`).
 `__main__` входит в `sys.builtin_module_names`, но не создаётся заново:
 `ImportError: Cannot re-init internal module __main__`.
 
@@ -1250,10 +1265,11 @@ LINE, как `maybe_call_line_trace`, отмечает первую инстру
 бы `KeyboardInterrupt` дальше); если раньше завершается внешний frame
 выполнения или `tinypy_debugger_set` снимает debugger, interrupt
 отбрасывается. `tinypy_debugger_frame_get`, `_set` и `_delete`, как
-`PyFrame_FastToLocals`, находят имя аргумента, захваченного замыканием, в его
-cell, а set и delete, как `PyFrame_LocalsToFast`, меняют и cell, и fast slot
-аргумента; free variables frame без `CO_OPTIMIZED` (тела класса) не входят в
-его locals. `tinypy_debugger_frame_sync`, как
+`PyFrame_FastToLocals`, находят local, захваченный замыканием, — аргумент или
+имя sublist-параметра (`def f((a, b))`), — в его cell, а set и delete, как
+`PyFrame_LocalsToFast`, меняют и cell, и fast slot этого имени; free
+variables frame без `CO_OPTIMIZED` (тела класса) не входят в его locals.
+`tinypy_debugger_frame_sync`, как
 `PyFrame_LocalsToFast(frame, 0)`, переносит в fast locals и cells значения
 locals, которые материализовал `tinypy_frame_locals`.
 

@@ -583,12 +583,16 @@ static tinypy_value_t *__tinypy_exception_getitem_method(tinypy_value_t *functio
         return NULL;
     }
     /* wrap_sq_item of BaseException_getitem: the argument is an index into
-       the arguments. */
+       the arguments, counted from the end by a subclass __len__. */
+    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
     int64_t index;
     if (tinypy_internal_number_as_index(TINYPY_TUPLE_GET(args, 1U), TINYPY_ERROR_OVERFLOW, &index, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *exception_args = __tinypy_exception_payload(TINYPY_TUPLE_GET(args, 0U))->args;
+    if (tinypy_internal_item_sequence_index(self, &index, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *exception_args = __tinypy_exception_payload(self)->args;
     tinypy_value_t *position = tinypy_integer_from_i64(vm, index);
     tinypy_value_t *result = tinypy_internal_get_item_builtin(exception_args, position, out_error);
 
@@ -1459,6 +1463,7 @@ void tinypy_internal_exception_preserve_begin(tinypy_vm_t *vm, tinypy_internal_e
     state->type = vm->raised_type;
     state->value = vm->raised_value;
     state->traceback = vm->raised_traceback;
+    state->raised_epoch = vm->raised_epoch;
     vm->raised_type = NULL;
     vm->raised_value = NULL;
     vm->raised_traceback = NULL;
@@ -1472,6 +1477,15 @@ void tinypy_internal_exception_preserve_end(tinypy_vm_t *vm, tinypy_internal_exc
     state->type = NULL;
     state->value = NULL;
     state->traceback = NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+/* PyErr_Restore of the exception PyErr_Fetch set aside around code that runs
+   aside, as a finalizer or the lookup of PyDict_GetItem: no exception raised
+   there replaced it. preserve_end stands for the code that CPython runs with
+   the exception pending, which an exception raised there replaces. */
+void tinypy_internal_exception_preserve_restore(tinypy_vm_t *vm, tinypy_internal_exception_state_t *state) {
+    tinypy_internal_exception_preserve_end(vm, state);
+    vm->raised_epoch = state->raised_epoch;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_set_raised_type(tinypy_vm_t *vm, tinypy_value_t *type_value, tinypy_value_t *value, tinypy_value_t *traceback) {

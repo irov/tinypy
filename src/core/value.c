@@ -328,7 +328,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
     TINYPY_DECREF(&type->base.base);
     if (has_finalizer == 0 && (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_OLD_INSTANCE
         || tinypy_internal_old_instance_has_special_key(value, vm->internal_special_del_key) == 0)) {
-        tinypy_internal_exception_preserve_end(vm, &exception_state);
+        tinypy_internal_exception_preserve_restore(vm, &exception_state);
         value->ref -= 1U;
         return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
     }
@@ -353,7 +353,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize(tinypy_value_t *value) {
         tinypy_internal_exception_clear_raised(vm);
     }
     __tinypy_internal_value_finalizer_leave(vm);
-    tinypy_internal_exception_preserve_end(vm, &exception_state);
+    tinypy_internal_exception_preserve_restore(vm, &exception_state);
     value->ref -= 1U;
     return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
 }
@@ -385,7 +385,7 @@ static tinypy_bool_t __tinypy_internal_value_finalize_generator(tinypy_value_t *
         tinypy_error_release(error);
     }
     __tinypy_internal_value_finalizer_leave(vm);
-    tinypy_internal_exception_preserve_end(vm, &exception_state);
+    tinypy_internal_exception_preserve_restore(vm, &exception_state);
     value->ref -= 1U;
     return value->ref != 0U ? TINYPY_TRUE : TINYPY_FALSE;
 }
@@ -905,7 +905,7 @@ static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_internal_unicode_from_utf8(
         return TINYPY_RET(cached);
     }
 
-    code_point_count = tinypy_internal_utf8_code_point_count((const uint8_t *)utf8, size);
+    code_point_count = __tinypy_internal_utf8_code_point_count((const uint8_t *)utf8, size);
 
     uint8_t *payload;
     tinypy_value_t *result = checked != 0

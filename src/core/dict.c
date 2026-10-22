@@ -563,17 +563,28 @@ tinypy_value_t *tinypy_internal_dict_get_optional_suppressed(tinypy_vm_t *vm, co
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* It sets the existing error aside only when there is one; an error of the
+   lookup replaces none. */
 tinypy_value_t *tinypy_internal_dict_get_optional_suppressed_status(tinypy_vm_t *vm, const tinypy_value_t *dict, const tinypy_value_t *key, tinypy_bool_t *out_succeeded) {
-    tinypy_internal_exception_state_t state;
+    if (vm->raised_type != NULL) {
+        tinypy_internal_exception_state_t state;
+
+        tinypy_internal_exception_preserve_begin(vm, &state);
+        tinypy_value_t *preserved = tinypy_internal_dict_get_optional_suppressed_status(vm, dict, key, out_succeeded);
+        tinypy_internal_exception_preserve_restore(vm, &state);
+        return preserved;
+    }
+    uint64_t raised_epoch = vm->raised_epoch;
     tinypy_error_t *lookup_error = NULL;
     tinypy_value_t *value = NULL;
-
-    tinypy_internal_exception_preserve_begin(vm, &state);
     tinypy_bool_t succeeded = tinypy_internal_dict_get_optional_checked(vm, dict, key, &value, &lookup_error);
     if (lookup_error != NULL) {
         tinypy_error_release(lookup_error);
     }
-    tinypy_internal_exception_preserve_end(vm, &state);
+    if (succeeded == 0) {
+        tinypy_internal_exception_clear_raised(vm);
+    }
+    vm->raised_epoch = raised_epoch;
     if (out_succeeded != NULL) {
         *out_succeeded = succeeded;
     }

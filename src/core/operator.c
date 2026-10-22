@@ -327,7 +327,16 @@ static size_t __tinypy_operator_trim_digits(const uint16_t *digits, size_t count
 #define TINYPY_LONG_KARATSUBA_CUTOFF 60U
 #define TINYPY_LONG_KARATSUBA_SQUARE_CUTOFF 80U
 #define TINYPY_LONG_FIVEARY_CUTOFF 240U
-
+//////////////////////////////////////////////////////////////////////////
+TINYPY_NOINLINE tinypy_bool_t tinypy_internal_long_poll_interrupt(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    vm->long_poll_steps = TINYPY_LONG_POLL_STEPS;
+    if (vm->compile_depth != 0U) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t running = tinypy_internal_eval_poll_interrupt(vm, out_error);
+    return running;
+}
+//////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_operator_long_word_count(size_t digit_count) {
     size_t word_count = digit_count / 2U + (digit_count & 1U);
 
@@ -762,18 +771,16 @@ static uint32_t __tinypy_operator_long_normal_shift(uint32_t top) {
 }
 //////////////////////////////////////////////////////////////////////////
 /* The loop of x_divrem for a normalized divisor of two words or more and a
-   dividend whose top word is below the divisor's: each step replaces a
-   window of the dividend by its remainder, so the remainder ends in the low
-   divisor_count words. quotient, unless NULL, receives dividend_count -
-   divisor_count words. */
-static tinypy_bool_t __tinypy_operator_long_divide_words(tinypy_vm_t *vm, uint32_t *dividend, size_t dividend_count, const uint32_t *divisor, size_t divisor_count, uint32_t *quotient, tinypy_error_t **out_error) {
+   dividend whose top word is below the divisor's, over its windows from
+   offset down to end: each step replaces a window of the dividend by its
+   remainder, so the loop down to the first window leaves the remainder in
+   the low divisor_count words. quotient, unless NULL, receives the words
+   from offset - 1 down to end. */
+static inline void __tinypy_operator_long_divide_words(uint32_t *dividend, size_t offset, size_t end, const uint32_t *divisor, size_t divisor_count, uint32_t *quotient) {
     uint32_t divisor_top = divisor[divisor_count - 1U];
     uint32_t divisor_next = divisor[divisor_count - 2U];
 
-    for (size_t offset = dividend_count - divisor_count; offset != 0U; --offset) {
-        if (__tinypy_internal_long_poll_stride(vm, offset, divisor_count, out_error) == 0) {
-            return TINYPY_FALSE;
-        }
+    for (; offset != end; --offset) {
         uint32_t *window = dividend + offset - 1U;
         uint32_t window_top = window[divisor_count];
         uint64_t numerator = ((uint64_t)window_top << 30U) | window[divisor_count - 1U];
@@ -813,6 +820,23 @@ static tinypy_bool_t __tinypy_operator_long_divide_words(tinypy_vm_t *vm, uint32
             quotient[offset - 1U] = digit;
         }
     }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The SIGCHECK of x_divrem for a division of TINYPY_LONG_POLL_STEPS word
+   steps or more: the host is polled before each run of windows that takes
+   as many. */
+static TINYPY_NOINLINE tinypy_bool_t __tinypy_operator_long_divide_words_polled(tinypy_vm_t *vm, uint32_t *dividend, size_t offset, const uint32_t *divisor, size_t divisor_count, uint32_t *quotient, tinypy_error_t **out_error) {
+    size_t run = TINYPY_LONG_POLL_STEPS / divisor_count + 1U;
+
+    while (offset != 0U) {
+        size_t end = offset > run ? offset - run : 0U;
+
+        if (__tinypy_internal_long_poll(vm, (offset - end) * divisor_count, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        __tinypy_operator_long_divide_words(dividend, offset, end, divisor, divisor_count, quotient);
+        offset = end;
+    }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -820,19 +844,28 @@ static tinypy_bool_t __tinypy_operator_long_divide_words(tinypy_vm_t *vm, uint32
    bits: the dividend, of at least divisor_count words and with room for one
    more, is shifted alike, divided, and its remainder shifted back into the
    low divisor_count words; out_quotient_count receives the number of
-   quotient words. */
-static tinypy_bool_t __tinypy_operator_long_divide_normalized(tinypy_vm_t *vm, uint32_t *dividend, size_t dividend_count, const uint32_t *divisor, size_t divisor_count, uint32_t shift, uint32_t *quotient, size_t *out_quotient_count, tinypy_error_t **out_error) {
+   quotient words. A division of at most TINYPY_LONG_POLL_STEPS word steps
+   accounts for them with one poll before its loop. */
+static inline tinypy_bool_t __tinypy_operator_long_divide_normalized(tinypy_vm_t *vm, uint32_t *dividend, size_t dividend_count, const uint32_t *divisor, size_t divisor_count, uint32_t shift, uint32_t *quotient, size_t *out_quotient_count, tinypy_error_t **out_error) {
     uint32_t carry = __tinypy_operator_long_shift_words_left(dividend, dividend, dividend_count, shift);
 
     if (carry != 0U || dividend[dividend_count - 1U] >= divisor[divisor_count - 1U]) {
         dividend[dividend_count] = carry;
         dividend_count += 1U;
     }
-    if (__tinypy_operator_long_divide_words(vm, dividend, dividend_count, divisor, divisor_count, quotient, out_error) == 0) {
+    size_t quotient_count = dividend_count - divisor_count;
+
+    if (quotient_count <= TINYPY_LONG_POLL_STEPS / divisor_count) {
+        if (__tinypy_internal_long_poll(vm, quotient_count * divisor_count, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
+        __tinypy_operator_long_divide_words(dividend, quotient_count, 0U, divisor, divisor_count, quotient);
+    }
+    else if (__tinypy_operator_long_divide_words_polled(vm, dividend, quotient_count, divisor, divisor_count, quotient, out_error) == 0) {
         return TINYPY_FALSE;
     }
     __tinypy_operator_long_shift_words_right(dividend, dividend, divisor_count, shift);
-    *out_quotient_count = dividend_count - divisor_count;
+    *out_quotient_count = quotient_count;
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2172,7 +2205,8 @@ static tinypy_bool_t __tinypy_operator_same_slot(const tinypy_operator_binary_sp
    naming it when the slot requires the method. */
 static tinypy_value_t *__tinypy_operator_call_type_method(tinypy_value_t *receiver, tinypy_value_t *name, tinypy_value_t *const *arguments, size_t argument_count, tinypy_bool_t required, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
-    tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, receiver, name);
+    tinypy_bool_t slot;
+    tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, receiver, name, &slot);
 
     if (attribute == NULL) {
         if (required != 0) {

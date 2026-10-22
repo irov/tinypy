@@ -1634,7 +1634,7 @@ static void __tinypy_internal_rebase_remove_subclass(tinypy_type_t *base, const 
 }
 //////////////////////////////////////////////////////////////////////////
 /* The nearest base of a class that Python code did not create. */
-static const tinypy_type_t *__tinypy_internal_type_static_base(const tinypy_type_t *type) {
+const tinypy_type_t *tinypy_internal_type_static_base(const tinypy_type_t *type) {
     while ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && type->base_type != NULL) {
         type = type->base_type;
     }
@@ -2982,7 +2982,7 @@ static TINYPY_NOINLINE tinypy_value_t *__tinypy_internal_type_lookup_new_attribu
     }
     *out_object_new = TINYPY_FALSE;
     if ((type->flags & TINYPY_TYPE_FLAG_SLOT_NEW) == 0U) {
-        const tinypy_type_t *static_base = __tinypy_internal_type_static_base(type);
+        const tinypy_type_t *static_base = tinypy_internal_type_static_base(type);
 
         attribute = tinypy_internal_type_lookup_key(vm, static_base, vm->internal_special_new_key);
         *out_object_new = attribute == object_new ? TINYPY_TRUE : TINYPY_FALSE;
@@ -3126,7 +3126,7 @@ static tinypy_value_t *__tinypy_internal_type_call(tinypy_type_t *type, tinypy_v
         /* A type that Python code did not create takes object.__new__ only
            when it is object itself or a host native type: the tp_new of the
            other built-in types without a constructor of their own is NULL. */
-        const tinypy_type_t *static_base = __tinypy_internal_type_static_base(type);
+        const tinypy_type_t *static_base = tinypy_internal_type_static_base(type);
 
         if (static_base != &vm->types[TINYPY_VALUE_INSTANCE] && tinypy_internal_type_is_host_native(static_base) == 0) {
             tinypy_internal_type_uncreatable_error(type, out_error);

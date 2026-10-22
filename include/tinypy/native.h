@@ -62,12 +62,21 @@ typedef tinypy_value_t *(*tinypy_native_compare_t)(tinypy_value_t *instance, voi
  * wrapper for each callback of its spec under the name of its special
  * method, __setattr__ and __delattr__ for set_attribute, __lt__ to __ge__
  * for compare and __radd__ or __iadd__ for the reflected and in-place
- * callbacks; a mapping callback takes a name it shares with a sequence one.
+ * callbacks; the wrapper of a name that a mapping callback shares with a
+ * sequence one runs the mapping callback, or without it the sequence one.
  * A name its namespace defines keeps its value, and tinypy_type_set_attr
  * replaces a wrapper. A wrapper runs the callback of the spec of the type
  * that publishes it, so that a Python subclass delegates through super() or
- * the type, while the operations on an instance keep dispatching the slots
- * of its own type.
+ * the type. As update_one_slot, the operations on an instance read a wrapper
+ * found under its own name as the slot of their type when the type runs the
+ * same callback with the same user data, as the type itself or a Python
+ * subclass that copied its spec. The wrapper of a host native base whose
+ * callback the type, or the host native type a Python class copied its spec
+ * from, does not dispatch reads as the attribute of the nearest base of that
+ * type that is no host native type. Any other wrapper, as one stored under
+ * another name or one of a second host native base of a Python class, is a
+ * method that the operations call by name. A spec with mapping_get makes
+ * instances mappings, as mp_subscript does.
  * payload_alignment accepts any power of two up to alignof(max_align_t). */
 struct tinypy_native_type_spec_t {
     uint32_t abi_version;
@@ -141,8 +150,10 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
 /* Borrows and retains an existing byte-string name from the type VM. */
 tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);
 /* Replaces the dispatch callbacks; a callback the new spec leaves NULL resets
- * its slot. The slot wrappers follow, those of the removed callbacks are
- * withdrawn, and no other value of the namespace of the type is replaced.
+ * its slot. The slot wrappers of the added callbacks are published and those
+ * of the removed ones withdrawn; the names of the other callbacks and the
+ * other values of the namespace of the type stay as they are, and the same
+ * spec again changes nothing.
  * The Python subclasses created earlier keep the callbacks they
  * copied from the type, and host native subtypes keep their own spec. A call
  * that was already dispatching to a removed callback raises TypeError, or

@@ -43,7 +43,7 @@ exception state, callback order and zero outstanding allocations.
 | --- | --- |
 | Bytearray | Extension obtains the iterator before reading a source hint; negative length versus hint errors and bound/unbound diagnostics remain distinct. Constructors/reinit fall back to iteration only after index TypeError. Byte-string encoding still invokes the codec and retains its temporary while copying the original bytes. Append/insert use the entry length before conversion callbacks, checked by defined growth witnesses. |
 | Unicode translation | Deleted runs look ahead and recheck the first retained character. Discarded lookup values are validated and released before retry; second results, lookup failures, mapping mutation and prior handled exceptions remain observable. |
-| Codec handlers | Ignore and decode replacement consume the clamped end without reading start. Wrong-type errors read reported class/name and str, including callbacks, NUL/truncation and user failures. Hex codecs compare errors to strict before source conversion and raise an empty-args AssertionError when false. In the seventh pass `strict` raises a classic instance, which `PyExceptionInstance_Check` accepts, and the UnicodeError of a str or unicode subclass instance holds the exact text the codec read. In the twelfth pass compile() calls the strict handler wherever Python 2's compiler decodes: the escape decoders of a unicode literal share one exception per literal and go on at the returned position, an invalid UTF-8 run of a literal takes the replacement as escapes, a string or file whose cookie names a codec without a fast path tokenizes the decoded text and an ASCII cookie encodes byte literals back strictly; only a UnicodeError becomes the `(unicode error)` SyntaxError, and one whose str() fails reads `unknown error` or `unknown decode error`. Covered by `local.test_compiler_edges` and `local.test_compiler_diagnostics`. In the thirteenth pass a literal decodes into room sized by its prepared escapes, so the replacement of an invalid UTF-8 run decodes whole however much longer than the literal it is, where CPython 2.7 writes its escapes past a buffer sized by the literal; covered by `cli_runtime_exception_codec_runtime`. |
+| Codec handlers | Ignore and decode replacement consume the clamped end without reading start. Wrong-type errors read reported class/name and str, including callbacks, NUL/truncation and user failures. Hex codecs compare errors to strict before source conversion and raise an empty-args AssertionError when false. In the seventh pass `strict` raises a classic instance, which `PyExceptionInstance_Check` accepts, and the UnicodeError of a str or unicode subclass instance holds the exact text the codec read. In the twelfth pass compile() calls the strict handler wherever Python 2's compiler decodes: the escape decoders of a unicode literal share one exception per literal and go on at the returned position, an invalid UTF-8 run of a literal takes the replacement as escapes, a string or file whose cookie names a codec without a fast path tokenizes the decoded text and an ASCII cookie encodes byte literals back strictly; only a UnicodeError becomes the `(unicode error)` SyntaxError, and one whose str() fails reads `unknown error` or `unknown decode error`. Covered by `local.test_compiler_edges` and `local.test_compiler_diagnostics`. In the thirteenth pass a literal decodes into room sized by its prepared escapes, so the replacement of an invalid UTF-8 run decodes whole however much longer than the literal it is, where CPython 2.7 writes its escapes past a buffer sized by the literal; covered by `cli_runtime_exception_codec_runtime`. In the fourteenth pass a lone final backslash that a handler's position leaves a unicode literal goes to the handler as `\ at end of string` (the raw decoder keeps it), and the diagnostic of a source with an ASCII cookie restores the characters of a replacement to `?` with an offset in characters, as `PyTokenizer_RestoreEncoding` does. |
 | Descriptors | Direct get/set/delete/repr methods reuse canonical native argument styles and receiver diagnostics. Omitted/None method owners remain None; classic/new-style rebinding and metaclass subclass checks preserve identity and errors. Instance/subclass consumers reuse one existing algorithm through a single internal helper. |
 
 The frozen inventory contains 52 project-authored modules with 1,594 cases plus
@@ -113,6 +113,38 @@ operands with their own slot rather than the rich comparisons, slice's orders
 the fields with `PyObject_Cmp`, and the wrappers of these types and of set,
 dictproxy, cell and code take only an operand whose type shares the slot or
 derives from the receiver's type, as `wrap_cmpfunc` does.
+
+In the fourteenth pass finalizers (`__del__`, weakref callbacks, the close of
+an abandoned generator, host finalizers), `PyDict_GetItem` lookups and the
+optional lookups of `dir()` restore that pending error with the exception
+they set aside, as `PyErr_Fetch` and `PyErr_Restore` do around the first two
+and `_dir_object` raises a pending exception before the last. Remaining
+differences: CPython raises the pending exception itself from some operations
+inside the mapped function (creating a classic instance without `__init__`,
+`len()` or an attribute load of a classic instance, `dir()`), while tinypy
+reports it when the iteration ends; a lookup miss of a classic instance moves
+it, though `instance_getattr1` raises no AttributeError over a pending
+exception, so the special methods of a classic instance (`bool()`, `repr()`,
+comparisons), `getattr()` with a default and `dir()` of a classic instance
+return where CPython raises the pending error; and where CPython raises and
+clears an exception internally without tinypy raising one, tinypy keeps the
+error pending and reports it while CPython returns the mapped list: the
+generic lookup before a `__getattr__` hook, the TypeError of a missing
+`__len__` in a length hint (`list()`, `tuple()`, `sorted()` or a join of a
+generator, `enumerate`, `reversed`, a call or list iterator), the IndexError
+ending a str, unicode or buffer iterator, and the `__trunc__` probe of `int()`
+and `long()` over text. Dict ordering reads a failed key comparison of the other
+dictionary as a missing key, as `PyDict_GetItem` does; cells and code objects order their contents
+with the three-way comparison, which `cmp()` calls directly as their
+`tp_compare`; and code equality compares constants by `_PyCode_ConstantKey`:
+after `==`, a constant other than an exact int, long, bool, str, unicode,
+float, complex, tuple, frozenset or code object is equal only to itself
+(frozenset constants still compare their items pairwise). A
+`__getattribute__` slot wrapper of the generic lookup assigned to a class
+with `__getattr__` runs the generic lookup whatever type owns the wrapper, as
+`slot_tp_getattr_hook` does; `BaseException.__getitem__` called directly
+counts a negative index from a subclass `__len__`; and `str()` of a dictproxy
+is `str()` of its dictionary.
 
 ASCII and UTF-8 decoding consult registered handlers for every policy name,
 including default strict. ASCII/Latin-1 encoding retains its four builtin
@@ -251,7 +283,12 @@ thirteenth pass `pickle` and `constructor` test `hasattr(obj, '__call__')`,
 `_reduce_ex` reads `_HEAPTYPE` and, after the truth test of the state,
 `_reconstructor` as globals, and protocol 2 refuses type objects, which are
 variable-sized in CPython, and skips slot names that are not strings before
-any hook. The source oracle is CPython 2.7.18
+any hook. In the fourteenth pass the `hasattr` probes of `_reduce_ex` and
+`_slotnames` let errors that are not `Exception` subclasses through, `pickle`
+reads `_ClassType` as a global, `_reduce_ex` %-formats the name it cannot
+pickle, `object.__reduce_ex__` imports `copy_reg` through the running
+`__import__`, and the functions read the globals of the module the VM keeps.
+The source oracle is CPython 2.7.18
 [`typeobject.c`](https://github.com/python/cpython/blob/v2.7.18/Objects/typeobject.c)
 and [`copy_reg.py`](https://github.com/python/cpython/blob/v2.7.18/Lib/copy_reg.py).
 
@@ -485,7 +522,7 @@ that evidence.
 | Star import, mutable `__all__`, fromlist names and host importer names | Hardened: snapshot keys or iterate an owned `__all__`; retain text used by subsequent calls. |
 | Empty package import name | Fixed: avoid indexing an empty name and return the package for an allowed relative empty import. |
 | Partial state replacement | Superseded by the deep audit: validate and canonicalize first, then replace each field before releasing its old value, in CPython's func/args/keywords/attributes order. Finalizers observe the new current field and the still-old later fields. |
-| Native finalizers and debugger callbacks | Hardened: preserve the pending exception around callback entry. Live-VM native finalizers report ignored errors while the object and its children are retained; destruction proceeds only after the callback and any resurrection check. In the tenth pass the debugger reports a RETURN for every frame that leaves, by yield or by an exception too, and an EXCEPTION for one thrown into a generator, as the trace function of CPython does, so CALL and RETURN events pair. In the eleventh pass LINE follows `maybe_call_line_trace` (first instruction of an lnotab line range or a backward jump), EXCEPTION comes after the frame joined the traceback and carries the raised type, a host interrupt that a callback's code received stays pending for the program, and `tinypy_debugger_frame_sync` is `PyFrame_LocalsToFast(frame, 0)`; event streams equal `sys.settrace` on 300 generated flow programs. In the twelfth pass the pending interrupt stays within its execution (dropped when the outermost frame ends or the debugger is removed), the sync and `tinypy_debugger_frame_get`/`set`/`delete` hold what they use across lookups whose key comparisons can finish the generator of the frame, a cell binds a captured argument over its argument slot as in `PyFrame_FastToLocals`, and class-body free variables are not locals. |
+| Native finalizers and debugger callbacks | Hardened: preserve the pending exception around callback entry. Live-VM native finalizers report ignored errors while the object and its children are retained; destruction proceeds only after the callback and any resurrection check. In the tenth pass the debugger reports a RETURN for every frame that leaves, by yield or by an exception too, and an EXCEPTION for one thrown into a generator, as the trace function of CPython does, so CALL and RETURN events pair. In the eleventh pass LINE follows `maybe_call_line_trace` (first instruction of an lnotab line range or a backward jump), EXCEPTION comes after the frame joined the traceback and carries the raised type, a host interrupt that a callback's code received stays pending for the program, and `tinypy_debugger_frame_sync` is `PyFrame_LocalsToFast(frame, 0)`; event streams equal `sys.settrace` on 300 generated flow programs. In the twelfth pass the pending interrupt stays within its execution (dropped when the outermost frame ends or the debugger is removed), the sync and `tinypy_debugger_frame_get`/`set`/`delete` hold what they use across lookups whose key comparisons can finish the generator of the frame, a cell binds a captured argument over its argument slot as in `PyFrame_FastToLocals`, and class-body free variables are not locals. In the fourteenth pass the cell binds a captured name of a sublist parameter, which follows the arguments among the locals, over its slot as well. |
 | Bytearray item/slice/find/in-place addition and memoryview indexing | Hardened: materialize conversions and replacements before rereading current storage; retain exported storage and snapshot overlapping additions. |
 | `_struct` offsets | Superseded by the deep audit: acquire and retain the buffer export before offset/numeric callbacks, matching CPython's resize blocking and observation of in-place changes; release it on every exit. Supported offset protocols and error ordering have oracle regressions. |
 | Overridden encode result; codec module mutation/search growth | Hardened: validate encode result types; retain a private VM codec registry; search with owned callbacks and live bounds. |

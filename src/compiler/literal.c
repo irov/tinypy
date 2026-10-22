@@ -659,7 +659,15 @@ static tinypy_value_t *__tinypy_compiler_parse_string(tinypy_compile_ctx_t *ctx,
             output[output_size++] = byte;
             continue;
         }
+        /* A literal ends in a lone backslash only where the strict handler
+           resumed it: unicodeescape reports it, rawunicodeescape keeps it. */
         if (position == content_end) {
+            if (unicode != 0 && raw == 0) {
+                if (__tinypy_compiler_unicode_escape_error(ctx, &errors, position - 1U, content_end, "\\ at end of string", &output, &capacity, &output_size, &position) == 0) {
+                    return NULL;
+                }
+                continue;
+            }
             output[output_size++] = '\\';
             break;
         }

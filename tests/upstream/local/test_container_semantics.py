@@ -1300,6 +1300,23 @@ class ContainerSemantics(unittest.TestCase):
             set.__cmp__(Ordered(), Sibling())
         self.assertEqual(str(failure.exception), "Ordered.__cmp__(x,y) requires y to be a 'Ordered', not a 'Sibling'")
 
+    def test_dict_order_reads_failed_key_comparisons_as_missing_keys(self):
+        class Key(object):
+            def __init__(self, value, fail=False):
+                self.value = value
+                self.fail = fail
+            def __hash__(self):
+                return 1
+            def __eq__(self, other):
+                if self.fail or other.fail:
+                    raise ValueError('key comparison')
+                return self.value == other.value
+            def __cmp__(self, other):
+                return cmp(self.value, other.value)
+        first = {Key(1, True): 'x'}
+        second = {Key(2): 'x'}
+        self.assertEqual((cmp(first, second), first < second, dict.__cmp__(first, second), sorted([second, first])[0] is first, first == second), (-1, True, -1, True, False))
+
     def test_dictproxy_cmp_wrapper_requires_a_dictproxy(self):
         class First(object):
             x = 1

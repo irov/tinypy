@@ -1565,6 +1565,49 @@ class EvaluationSemantics(unittest.TestCase):
         self.assertRaises(RuntimeError, map, lambda item: getattr(item, 'real', item), BadLength([1, 2]))
         self.assertRaises(RuntimeError, map, lambda item: hasattr(item, 'real'), BadLength([1, 2]))
 
+    def test_map_pending_length_error_survives_finalizers_and_dir(self):
+        import _weakref
+        class BadLength(object):
+            def __init__(self, items):
+                self.items = items
+            def __iter__(self):
+                return iter(self.items)
+            def __len__(self):
+                raise RuntimeError('length')
+        class Finalized(object):
+            def __del__(self):
+                try:
+                    raise KeyError('finalizer')
+                except KeyError:
+                    pass
+        class Target(object):
+            pass
+        def suspended():
+            try:
+                yield 1
+            finally:
+                try:
+                    raise KeyError('close')
+                except KeyError:
+                    pass
+        def forget(reference):
+            try:
+                raise KeyError('callback')
+            except KeyError:
+                pass
+        def collect(item):
+            target = Target()
+            reference = _weakref.ref(target, forget)
+            del target
+            return reference() is None
+        def close(item):
+            generator = suspended()
+            generator.next()
+            del generator
+            return item
+        for function in (lambda item: (Finalized(), item)[1], collect, close, lambda item: dir(item)):
+            self.assertRaises(RuntimeError, map, function, BadLength([1, 2]))
+
     def test_range_long_operands_keep_their_own_protocols(self):
         events = []
         class BadZero(int):

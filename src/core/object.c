@@ -213,7 +213,8 @@ static uint64_t __tinypy_object_type_flags(tinypy_vm_t *vm, const tinypy_type_t 
         flags &= ~(UINT64_C(1) << 12U);
     }
     if ((type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U) {
-        flags |= UINT64_C(1) << 9U;
+        /* Heap types also carry CHECKTYPES: their slots coerce operands. */
+        flags |= (UINT64_C(1) << 9U) | (UINT64_C(1) << 4U);
     }
     if ((type->flags & TINYPY_TYPE_FLAG_BASE_TYPE) != 0U) {
         flags |= UINT64_C(1) << 10U;
@@ -1130,7 +1131,15 @@ tinypy_bool_t tinypy_internal_object_has_special_key(tinypy_value_t *value, tiny
         return result;
     }
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
-    tinypy_bool_t result = __tinypy_internal_object_special_attribute(vm, value, key) != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t slot;
+    tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, value, key, &slot);
+
+    /* The slot of the type defines what object, the built-in base of a
+       native instance, defines. */
+    if (slot != 0) {
+        attribute = tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_INSTANCE], key);
+    }
+    tinypy_bool_t result = attribute != NULL ? TINYPY_TRUE : TINYPY_FALSE;
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1158,6 +1167,7 @@ tinypy_bool_t tinypy_internal_object_has_special_override_key(tinypy_value_t *va
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_value_t *attribute;
     tinypy_value_t *builtin_attribute = NULL;
+    tinypy_bool_t slot;
 
     if (kind == TINYPY_VALUE_OLD_INSTANCE) {
         if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_STRING) {
@@ -1175,8 +1185,8 @@ tinypy_bool_t tinypy_internal_object_has_special_override_key(tinypy_value_t *va
     if (value->type == vm->native_method_descriptor_type || value->type == vm->native_wrapper_descriptor_type || value->type == vm->native_method_wrapper_type || value->type == vm->native_class_method_descriptor_type) {
         return TINYPY_FALSE;
     }
-    attribute = __tinypy_internal_object_special_attribute(vm, value, key);
-    if (attribute == NULL || tinypy_internal_weakref_proxy_slot_wrapper(value, attribute) != 0) {
+    attribute = __tinypy_internal_object_special_attribute(vm, value, key, &slot);
+    if (attribute == NULL || slot != 0 || tinypy_internal_weakref_proxy_slot_wrapper(value, attribute) != 0) {
         return TINYPY_FALSE;
     }
     if ((size_t)kind < TINYPY_BUILTIN_TYPE_COUNT) {
@@ -1480,7 +1490,8 @@ int32_t tinypy_internal_object_lookup_special_key(tinypy_value_t *value, tinypy_
         return status;
     }
     TINYPY_CLEAR_ERROR(out_error);
-    tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, value, key);
+    tinypy_bool_t slot;
+    tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, value, key, &slot);
     if (attribute == NULL) {
         return INT32_C(0);
     }
@@ -1497,7 +1508,8 @@ tinypy_value_t *tinypy_internal_object_get_special_key(tinypy_value_t *value, ti
 
         return result;
     }
-    tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, value, key);
+    tinypy_bool_t slot;
+    tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, value, key, &slot);
 
     if (attribute == NULL) {
         return NULL;
@@ -1609,7 +1621,7 @@ tinypy_bool_t tinypy_internal_object_is_mapping(tinypy_vm_t *vm, tinypy_value_t 
     default:
         break;
     }
-    tinypy_bool_t mapping = __tinypy_internal_object_special_attribute(vm, value, vm->internal_special_getitem_key) != NULL && tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getslice_key) == NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t mapping = __tinypy_internal_object_mapping_getitem(vm, value) != NULL && tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getslice_key) == NULL ? TINYPY_TRUE : TINYPY_FALSE;
 
     return mapping;
 }
@@ -1806,6 +1818,18 @@ tinypy_value_t *tinypy_internal_object_lookup_getattr_hook(tinypy_value_t *value
     return hook;
 }
 //////////////////////////////////////////////////////////////////////////
+/* slot_tp_getattr_hook calls the __getattribute__ it found, but with a
+   __getattr__ hook runs a __getattribute__ entry of the generic lookup
+   itself, though the entry of another type does not apply. */
+static TINYPY_NOINLINE tinypy_value_t *__tinypy_object_call_getattribute(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *hook, tinypy_value_t *getattr_hook, tinypy_value_t *key, tinypy_error_t **out_error) {
+    if (getattr_hook != NULL && tinypy_internal_type_wraps_generic_getattribute(vm, hook) != TINYPY_FALSE) {
+        tinypy_value_t *generic = tinypy_internal_object_generic_get_attr_key(value, key, out_error);
+        return generic;
+    }
+    tinypy_value_t *result = __tinypy_object_call_attribute_hook(vm, value, hook, key, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Calls the __getattr__ hook, which it consumes, after an AttributeError. */
 static tinypy_value_t *__tinypy_object_getattr_fallback(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *result, tinypy_value_t *hook, tinypy_bool_t suppress_missing, tinypy_bool_t *out_missing, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
@@ -1881,7 +1905,7 @@ static tinypy_value_t *__tinypy_object_get_attr_key(tinypy_value_t *value, tinyp
         tinypy_value_t *hook = tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getattribute_key);
 
         if (hook != NULL) {
-            result = __tinypy_object_call_attribute_hook(vm, value, hook, key, out_error);
+            result = __tinypy_object_call_getattribute(vm, value, hook, getattr_hook, key, out_error);
             tinypy_value_t *return_value_1 = __tinypy_object_getattr_fallback(value, key, result, getattr_hook, suppress_missing, out_missing, out_error);
             return return_value_1;
         }
